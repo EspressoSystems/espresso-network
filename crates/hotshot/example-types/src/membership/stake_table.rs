@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt::Debug, ops::Bound};
 
 use hotshot_types::{
+    PeerConfig, PeerConnectInfo,
     drb::DrbResult,
     traits::{
         node_implementation::NodeType,
@@ -9,7 +10,6 @@ use hotshot_types::{
             StateSignatureKey,
         },
     },
-    PeerConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -20,6 +20,7 @@ pub struct TestStakeTableEntry<
     pub signature_key: PubKey,
     pub stake_table_entry: <PubKey as SignatureKey>::StakeTableEntry,
     pub state_ver_key: StatePubKey,
+    pub connect_info: Option<PeerConnectInfo>,
 }
 
 impl<TYPES: NodeType> From<PeerConfig<TYPES>>
@@ -30,6 +31,7 @@ impl<TYPES: NodeType> From<PeerConfig<TYPES>>
             signature_key: SignatureKey::public_key(&peer_config.stake_table_entry),
             stake_table_entry: peer_config.stake_table_entry,
             state_ver_key: peer_config.state_ver_key,
+            connect_info: peer_config.connect_info,
         }
     }
 }
@@ -43,6 +45,7 @@ impl<TYPES: NodeType> From<TestStakeTableEntry<TYPES::SignatureKey, TYPES::State
         PeerConfig {
             stake_table_entry: test_stake_table_entry.stake_table_entry,
             state_ver_key: test_stake_table_entry.state_ver_key,
+            connect_info: test_stake_table_entry.connect_info,
         }
     }
 }
@@ -55,9 +58,9 @@ pub struct TestDaCommittees<
 >(BTreeMap<u64, Vec<TestStakeTableEntry<PubKey, StatePubKey>>>);
 
 impl<
-        PubKey: SignatureKey,
-        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-    > TestDaCommittees<PubKey, StatePubKey>
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+> TestDaCommittees<PubKey, StatePubKey>
 {
     pub fn new() -> Self {
         Self(BTreeMap::new())
@@ -86,9 +89,9 @@ impl<
 }
 
 impl<
-        PubKey: SignatureKey,
-        StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-    > Default for TestDaCommittees<PubKey, StatePubKey>
+    PubKey: SignatureKey,
+    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
+> Default for TestDaCommittees<PubKey, StatePubKey>
 {
     fn default() -> Self {
         Self::new()

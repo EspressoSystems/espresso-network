@@ -13,8 +13,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use cdn_broker::reexports::discovery::{DiscoveryClient, Embedded, Redis};
 use clap::Parser;
-use espresso_types::{SeqTypes, StakeTableWithEpochNumber};
-use hotshot_types::{traits::signature_key::SignatureKey, PeerConfig};
+use espresso_node::api::data_source::StakeTableWithEpochNumber;
+use espresso_types::SeqTypes;
+use hotshot_types::{PeerConfig, traits::signature_key::SignatureKey};
 use tokio::{task::JoinSet, time::timeout};
 use tracing::{error, warn};
 

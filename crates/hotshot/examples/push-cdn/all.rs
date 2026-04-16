@@ -11,8 +11,8 @@ pub mod types;
 use std::path::Path;
 
 use cdn_broker::{
-    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
     Broker,
+    reexports::{crypto::signature::KeyPair, def::hook::NoMessageHook},
 };
 use cdn_marshal::Marshal;
 use hotshot::{
@@ -22,12 +22,12 @@ use hotshot::{
 };
 use hotshot_example_types::state_types::TestTypes;
 use hotshot_examples::infra::{
-    gen_local_address, read_orchestrator_init_config, run_orchestrator, OrchestratorArgs,
-    BUILDER_BASE_PORT,
+    BUILDER_BASE_PORT, OrchestratorArgs, gen_local_address, read_orchestrator_init_config,
+    run_orchestrator,
 };
 use hotshot_orchestrator::client::ValidatorArgs;
 use hotshot_types::traits::node_implementation::NodeType;
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::spawn;
 use tracing::error;
 

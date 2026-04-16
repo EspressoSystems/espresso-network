@@ -1,19 +1,19 @@
 use std::{future::Future, sync::Arc};
 
 use alloy::primitives::U256;
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
 use espresso_types::{Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::CertificatePair,
-    stake_table::{supermajority_threshold, HSStakeTable, StakeTableEntries, StakeTableEntry},
+    stake_table::{HSStakeTable, StakeTableEntries, StakeTableEntry, supermajority_threshold},
     vote::{self, HasViewNumber},
 };
 use tracing::Instrument;
 use vbs::version::{StaticVersion, StaticVersionType, Version};
-use versions::{version, Upgrade, EPOCH_VERSION, MAX_SUPPORTED_VERSION};
+use versions::{EPOCH_VERSION, MAX_SUPPORTED_VERSION, Upgrade, version};
 
 pub type Certificate = CertificatePair<SeqTypes>;
 
@@ -31,10 +31,13 @@ pub trait Quorum: Sync {
                 (0, 3) => self.verify_static::<StaticVersion<0, 3>>(cert).await,
                 (0, 4) => self.verify_static::<StaticVersion<0, 4>>(cert).await,
                 (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
+                (0, 6) => self.verify_static::<StaticVersion<0, 6>>(cert).await,
+                (0, 7) => self.verify_static::<StaticVersion<0, 7>>(cert).await,
+                (0, 8) => self.verify_static::<StaticVersion<0, 8>>(cert).await,
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 5);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -182,7 +185,6 @@ impl StakeTable {
     {
         let upgrade = Upgrade::trivial(version(V::MAJOR, V::MINOR));
         cert.is_valid_cert(&self.entries, self.threshold, &UpgradeLock::new(upgrade))
-            .await
             .context("invalid threshold signature")
     }
 }
@@ -274,9 +276,9 @@ mod test {
 
     use super::*;
     use crate::testing::{
-        custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade, epoch_change_leaf_chain,
-        leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain, AlwaysFalseQuorum,
-        AlwaysTrueQuorum, EpochChangeQuorum, VersionCheckQuorum, ENABLE_EPOCHS, LEGACY_VERSION,
+        AlwaysFalseQuorum, AlwaysTrueQuorum, ENABLE_EPOCHS, EpochChangeQuorum, LEGACY_VERSION,
+        VersionCheckQuorum, custom_epoch_change_leaf_chain, custom_leaf_chain_with_upgrade,
+        epoch_change_leaf_chain, leaf_chain, leaf_chain_with_upgrade, qc_chain_from_leaf_chain,
     };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

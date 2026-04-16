@@ -25,6 +25,7 @@ use tagged_base64::TaggedBase64;
 
 use super::VersionedDataSource;
 use crate::{
+    Header, Payload, QueryResult, Transaction,
     availability::{
         AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
         FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
@@ -38,9 +39,8 @@ use crate::{
         UpdateStateData,
     },
     metrics::PrometheusMetrics,
-    node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+    node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
     status::{HasMetrics, StatusDataSource},
-    Header, Payload, QueryResult, Transaction,
 };
 /// Wrapper to add extensibility to an existing data source.
 ///
@@ -358,7 +358,7 @@ where
     {
         self.data_source.vid_share(id).await
     }
-    async fn sync_status(&self) -> QueryResult<SyncStatus> {
+    async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
         self.data_source.sync_status().await
     }
     async fn get_header_window(
@@ -560,7 +560,7 @@ mod impl_testable_data_source {
 
     use super::*;
     use crate::{
-        data_source::UpdateDataSource,
+        data_source::{UpdateDataSource, fetching::Builder},
         testing::{
             consensus::{DataSourceLifeCycle, TestableDataSource},
             mocks::MockTypes,
@@ -574,13 +574,21 @@ mod impl_testable_data_source {
         U: Clone + Default + Send + Sync + 'static,
     {
         type Storage = D::Storage;
+        type S = D::S;
+        type P = D::P;
 
         async fn create(node_id: usize) -> Self::Storage {
             D::create(node_id).await
         }
 
-        async fn connect(storage: &Self::Storage) -> Self {
-            Self::new(D::connect(storage).await, Default::default())
+        async fn build(
+            storage: &Self::Storage,
+            opt: impl Send
+            + FnOnce(
+                Builder<MockTypes, Self::S, Self::P>,
+            ) -> Builder<MockTypes, Self::S, Self::P>,
+        ) -> Self {
+            Self::new(D::build(storage, opt).await, Default::default())
         }
 
         async fn reset(storage: &Self::Storage) -> Self {

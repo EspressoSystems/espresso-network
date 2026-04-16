@@ -1,9 +1,9 @@
+use espresso_node::SequencerApiVersion;
 use espresso_types::SeqTypes;
 use hotshot_builder_api::v0_1::builder::{
     Error as BuilderApiError, Options as HotshotBuilderApiOptions,
 };
 use hotshot_builder_legacy::service::ProxyGlobalState;
-use sequencer::SequencerApiVersion;
 use tide_disco::{App, Url};
 use tokio::spawn;
 use vbs::version::{StaticVersion, StaticVersionType};
@@ -52,9 +52,10 @@ pub mod testing {
     };
     use async_lock::RwLock;
     use committable::Committable;
+    use espresso_node::{SequencerApiVersion, context::Consensus, network};
     use espresso_types::{
-        traits::SequencerPersistence, v0_3::ChainConfig, Event, FeeAccount, NamespaceId, NodeState,
-        PrivKey, PubKey, Transaction, ValidatedState,
+        Event, FeeAccount, NamespaceId, NodeState, PrivKey, PubKey, Transaction, ValidatedState,
+        traits::SequencerPersistence, v0_3::ChainConfig,
     };
     use futures::stream::{Stream, StreamExt};
     use hotshot::{
@@ -73,20 +74,17 @@ pub mod testing {
         events_source::{EventConsumer, EventsStreamer},
     };
     use hotshot_types::{
+        HotShotConfig, PeerConfig, ValidatorConfig,
         data::{Leaf2, ViewNumber},
         event::LeafInfo,
         light_client::StateKeyPair,
         traits::{
-            block_contents::BlockHeader,
-            node_implementation::{ConsensusTime, NodeType},
+            block_contents::BlockHeader, node_implementation::NodeType,
             signature_key::BuilderSignatureKey as _,
         },
-        HotShotConfig, PeerConfig, ValidatorConfig,
     };
-    use sequencer::{context::Consensus, network, SequencerApiVersion};
     use surf_disco::Client;
     use vbs::version::{StaticVersion, Version};
-    use versions::{Upgrade, VERSION_0_1};
 
     use super::*;
     use crate::non_permissioned::BuilderConfig;
@@ -148,7 +146,6 @@ pub mod testing {
                 stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
                 drb_difficulty: 0,
                 drb_upgrade_difficulty: 0,
-                upgrade: Upgrade::trivial(VERSION_0_1),
             };
 
             Self {
@@ -188,6 +185,7 @@ pub mod testing {
             .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
                 stake_table_entry: pub_key.stake_table_entry(U256::from(stake_value)),
                 state_ver_key: state_key_pair.ver_key(),
+                connect_info: None,
             })
             .collect::<Vec<_>>();
 
@@ -226,6 +224,8 @@ pub mod testing {
                     state_public_key: self.staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None,
                 }
             } else {
                 ValidatorConfig {
@@ -237,6 +237,8 @@ pub mod testing {
                     state_public_key: self.non_staking_nodes_state_key_pairs[i].ver_key(),
                     state_private_key: self.non_staking_nodes_state_key_pairs[i].sign_key(),
                     is_da: true,
+                    x25519_keypair: None,
+                    p2p_addr: None,
                 }
             }
         }

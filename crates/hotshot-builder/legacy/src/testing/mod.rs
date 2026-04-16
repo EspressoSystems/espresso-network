@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, marker::PhantomData, sync::Arc, time::Duration};
 
-use async_broadcast::{broadcast, Sender as BroadcastSender};
+use async_broadcast::{Sender as BroadcastSender, broadcast};
 use async_lock::RwLock;
 use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::{
@@ -15,17 +15,17 @@ use hotshot_builder_shared::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{TestTypes, TEST_VERSIONS},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
     data::{
-        vid_commitment, DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber,
+        DaProposal2, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber, vid_commitment,
     },
     message::Proposal,
     simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
     simple_vote::QuorumData2,
-    traits::{node_implementation::ConsensusTime, EncodeBytes},
+    traits::EncodeBytes,
     utils::{BuilderCommitment, EpochTransitionIndicator},
 };
 use sha2::{Digest, Sha256};
@@ -117,7 +117,7 @@ pub async fn calc_proposal_msg(
     QuorumProposalWrapper<TestTypes>,
     QuorumProposalMessage<TestTypes>,
     DaProposalMessage<TestTypes>,
-    BuilderStateId<TestTypes>,
+    BuilderStateId,
 ) {
     // get transactions submitted in previous rounds, [] for genesis
     // and simulate the block built from those

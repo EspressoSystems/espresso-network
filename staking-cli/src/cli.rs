@@ -5,7 +5,7 @@ use alloy::{
     self,
     eips::BlockId,
     network::{Ethereum, EthereumWallet, NetworkWallet},
-    primitives::Address,
+    primitives::{Address, U256},
     providers::{Provider, ProviderBuilder},
     rpc::types::Log,
     sol_types::SolEventInterface,
@@ -22,27 +22,26 @@ use hotshot_types::{
     light_client::{StateKeyPair, StateVerKey},
     signature_key::BLSPubKey,
 };
-use sysinfo::System;
 
 #[cfg(feature = "testing")]
 use crate::deploy::deploy_contracts_for_testing;
 use crate::{
+    Commands, Config, SignerConfigError, ValidSignerConfig,
     claim::fetch_claim_rewards_inputs,
     demo::{
-        churn_for_demo, delegate_for_demo, stake_for_demo, undelegate_for_demo, ChurnParams,
-        DemoCommands,
+        ChurnParams, DemoCommands, churn_for_demo, delegate_for_demo, stake_for_demo,
+        undelegate_for_demo,
     },
     info::{
-        display_stake_table, fetch_stake_table_version, fetch_token_address, stake_table_info,
-        StakeTableContractVersion,
+        StakeTableContractVersion, display_stake_table, fetch_stake_table_version,
+        fetch_token_address, stake_table_info,
     },
-    metadata::{fetch_metadata, validate_metadata_uri, MetadataUri},
+    metadata::{MetadataUri, fetch_metadata, validate_metadata_uri},
     output::{
-        format_esp, output_calldata, output_error, output_success, output_warn, CalldataInfo,
+        CalldataInfo, format_esp, output_calldata, output_error, output_success, output_warn,
     },
     signature::{NodeSignatureDestination, NodeSignatureInput, NodeSignatures},
     transaction::Transaction,
-    Commands, Config, ValidSignerConfig,
 };
 
 #[derive(Parser)]
@@ -51,6 +50,10 @@ struct Args {
     /// Config file
     #[arg(short, long = "config")]
     config_path: Option<PathBuf>,
+
+    /// Skip loading the config file (takes precedence over -c)
+    #[arg(long)]
+    no_config: bool,
 
     /// Rest of arguments
     #[command(flatten)]
@@ -167,10 +170,10 @@ fn decode_and_display_logs(logs: &[Log]) {
                 EspTokenEvents::Approval(e) => output_success(format!("event: {e:?}")),
                 _ => {},
             }
-        } else if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref()) {
-            if let RewardClaimEvents::RewardsClaimed(e) = &decoded.data {
-                output_success(format!("event: {e:?}"));
-            }
+        } else if let Ok(decoded) = RewardClaimEvents::decode_log(log.as_ref())
+            && let RewardClaimEvents::RewardsClaimed(e) = &decoded.data
+        {
+            output_success(format!("event: {e:?}"));
         }
     }
 }
@@ -185,7 +188,7 @@ fn resolve_node_signatures(
         let input = NodeSignatureInput::try_from((signature_args.clone(), sender_address))?;
         NodeSignatures::try_from(input)
     } else {
-        let wallet = wallet.ok_or_else(|| anyhow::anyhow!("Signer configuration required"))?;
+        let wallet = wallet.ok_or(SignerConfigError::NoSigner)?;
         let address = NetworkWallet::<Ethereum>::default_signer_address(wallet);
         let input = NodeSignatureInput::try_from((signature_args.clone(), Some(address)))?;
         NodeSignatures::try_from((input, wallet))
@@ -200,7 +203,9 @@ pub async fn run() -> Result<()> {
 
     let config_path = cli.config_path();
     // Get config file
-    let config = if let Ok(f) = std::fs::read_to_string(&config_path) {
+    let config = if cli.no_config {
+        Config::from(&mut cli.config)
+    } else if let Ok(f) = std::fs::read_to_string(&config_path) {
         // parse toml
         match toml::from_str::<Config>(&f) {
             Ok(config) => config.merge(&mut cli.config),
@@ -296,10 +301,7 @@ pub async fn run() -> Result<()> {
             return Ok(());
         },
         Commands::Version => {
-            println!("staking-cli version: {}", env!("CARGO_PKG_VERSION"));
-            println!("{}", git_version::git_version!(prefix = "git rev: "));
-            println!("OS: {}", System::long_os_version().unwrap_or_default());
-            println!("Arch: {}", System::cpu_arch());
+            print!("{}", espresso_utils::build_info!().with_header());
             return Ok(());
         },
         Commands::ExportNodeSignatures {
@@ -359,23 +361,23 @@ pub async fn run() -> Result<()> {
 
     // Handle deploy-contracts early since it doesn't require stake table address
     #[cfg(feature = "testing")]
-    if let Commands::Demo(ref demo) = config.commands {
-        if let DemoCommands::DeployContracts { ref output } = demo.command {
-            tracing::info!("Deploying staking contracts for testing");
-            deploy_contracts_for_testing(
-                config.rpc_url.clone(),
-                config
-                    .signer
-                    .mnemonic
-                    .clone()
-                    .expect("mnemonic required for deployment"),
-                config.signer.account_index.unwrap_or(0),
-                output.clone(),
-            )
-            .await
-            .context("failed to deploy contracts")?;
-            return Ok(());
-        }
+    if let Commands::Demo(ref demo) = config.commands
+        && let DemoCommands::DeployContracts { ref output } = demo.command
+    {
+        tracing::info!("Deploying staking contracts for testing");
+        deploy_contracts_for_testing(
+            config.rpc_url.clone(),
+            config
+                .signer
+                .mnemonic
+                .clone()
+                .expect("mnemonic required for deployment"),
+            config.signer.account_index.unwrap_or(0),
+            output.clone(),
+        )
+        .await
+        .context("failed to deploy contracts")?;
+        return Ok(());
     }
 
     // Clap serde will put default value if they aren't set. We check some
@@ -398,17 +400,26 @@ pub async fn run() -> Result<()> {
         Address::ZERO
     };
 
-    let wallet =
-        if let Ok(signer_config) = TryInto::<ValidSignerConfig>::try_into(config.signer.clone()) {
-            signer_config.wallet().await.ok()
-        } else {
-            None
-        };
+    let wallet_result = async {
+        let signer_config = ValidSignerConfig::try_from(config.signer.clone())?;
+        signer_config.wallet().await
+    }
+    .await;
+    let (wallet, signer_error) = match wallet_result {
+        Ok(w) => (Some(w), None),
+        Err(e) => (None, Some(e.to_string())),
+    };
+    let require_wallet = || -> anyhow::Error {
+        match &signer_error {
+            Some(e) => anyhow::anyhow!("{e}"),
+            None => SignerConfigError::NoSigner.into(),
+        }
+    };
 
     // Commands that just read from chain
     if let Commands::Account = config.commands {
         let account = NetworkWallet::<Ethereum>::default_signer_address(
-            wallet.as_ref().context("Signer configuration required")?,
+            wallet.as_ref().ok_or_else(&require_wallet)?,
         );
         println!("{account}");
         return Ok(());
@@ -611,6 +622,9 @@ pub async fn run() -> Result<()> {
                      deprecated."
                 );
             }
+            if !config.export_calldata {
+                wallet.as_ref().ok_or_else(&require_wallet)?;
+            }
             let payload = resolve_node_signatures(
                 signature_args,
                 config.export_calldata,
@@ -620,12 +634,12 @@ pub async fn run() -> Result<()> {
             let metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()?;
 
             // Validate metadata URI if present and validation not skipped
-            if let Some(url) = metadata_uri.url() {
-                if !metadata_uri_args.skip_metadata_validation {
-                    validate_metadata_uri(url, &payload.bls_vk)
-                        .await
-                        .context("use --skip-metadata-validation to skip")?;
-                }
+            if let Some(url) = metadata_uri.url()
+                && !metadata_uri_args.skip_metadata_validation
+            {
+                validate_metadata_uri(url, &payload.bls_vk)
+                    .await
+                    .context("use --skip-metadata-validation to skip")?;
             }
 
             Transaction::RegisterValidator {
@@ -644,7 +658,8 @@ pub async fn run() -> Result<()> {
                      deprecated."
                 );
             }
-            if let Some(w) = wallet.as_ref() {
+            if !config.export_calldata {
+                let w = wallet.as_ref().ok_or_else(&require_wallet)?;
                 let addr = NetworkWallet::<Ethereum>::default_signer_address(w);
                 tracing::info!("Updating validator {} with new keys", addr);
             }
@@ -674,18 +689,18 @@ pub async fn run() -> Result<()> {
             let metadata_uri: MetadataUri = metadata_uri_args.clone().try_into()?;
 
             // Validate metadata URI if present and validation not skipped
-            if let Some(url) = metadata_uri.url() {
-                if !metadata_uri_args.skip_metadata_validation {
-                    let bls_vk = consensus_public_key.ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "--consensus-public-key is required for metadata validation (use \
-                             --skip-metadata-validation to skip)"
-                        )
-                    })?;
-                    validate_metadata_uri(url, &bls_vk)
-                        .await
-                        .context("use --skip-metadata-validation to skip")?;
-                }
+            if let Some(url) = metadata_uri.url()
+                && !metadata_uri_args.skip_metadata_validation
+            {
+                let bls_vk = consensus_public_key.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--consensus-public-key is required for metadata validation (use \
+                         --skip-metadata-validation to skip)"
+                    )
+                })?;
+                validate_metadata_uri(url, &bls_vk)
+                    .await
+                    .context("use --skip-metadata-validation to skip")?;
             }
 
             Transaction::UpdateMetadataUri {
@@ -734,7 +749,7 @@ pub async fn run() -> Result<()> {
                 })?
             } else {
                 NetworkWallet::<Ethereum>::default_signer_address(
-                    wallet.as_ref().context("Signer configuration required")?,
+                    wallet.as_ref().ok_or_else(&require_wallet)?,
                 )
             };
             fetch_claim_rewards_inputs(
@@ -784,14 +799,19 @@ pub async fn run() -> Result<()> {
             })?;
             tx.simulate(&readonly_provider, sender).await?;
         }
-        let (to, data) = tx.calldata();
-        return output_calldata(&CalldataInfo::new(to, data), &config.output);
+        let description = tx.description();
+        let (to, data, fi) = tx.calldata();
+        let chain_id = readonly_provider.get_chain_id().await?;
+        let info = match fi {
+            Some(fi) => CalldataInfo::with_method(to, data, U256::ZERO, fi),
+            None => CalldataInfo::new(to, data),
+        }
+        .with_description(description);
+        return output_calldata(&info, &config.output, chain_id);
     }
 
     // For execution, we need the wallet
-    let wallet = wallet.ok_or_else(|| {
-        anyhow::anyhow!("Signer configuration required for transaction execution")
-    })?;
+    let wallet = wallet.ok_or_else(&require_wallet)?;
     let account = NetworkWallet::<Ethereum>::default_signer_address(&wallet);
 
     // Check that our Ethereum balance isn't zero before proceeding.

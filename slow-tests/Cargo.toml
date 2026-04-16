@@ -2,10 +2,10 @@
 name = "slow-tests"
 version = "0.1.0"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition.workspace = true
 
 [features]
-embedded-db = ["sequencer/embedded-db"]
+embedded-db = ["espresso-node/embedded-db"]
 
 [dependencies]
 alloy = { workspace = true }
@@ -17,6 +17,7 @@ clap = { workspace = true }
 committable = { workspace = true }
 derivative = { workspace = true }
 espresso-contract-deployer = { workspace = true }
+espresso-node = { workspace = true, default-features = false, features = ["testing"] }
 espresso-types = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
@@ -30,11 +31,11 @@ jf-merkle-tree-compat = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
-sequencer = { workspace = true, default-features = false, features = ["testing"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 staking-cli = { workspace = true }
 surf-disco = { workspace = true }
+tagged-base64 = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }

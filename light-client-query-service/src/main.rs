@@ -2,25 +2,26 @@ use std::{cmp::max, fs, path::PathBuf, process::ExitCode, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use espresso_node::{
+    SequencerApiVersion,
+    api::{data_source::SequencerDataSource, sql::DataSource},
+    persistence::sql,
+};
 use espresso_types::parse_duration;
 use hotshot_query_service::{
+    ApiState,
     availability::{self, BlockInfo, LeafId, UpdateAvailabilityData},
     fetching::provider::{AnyProvider, QueryServiceProvider},
-    node, ApiState,
+    node,
 };
 use light_client::{
+    LightClient,
     client::{Client, QueryServiceClient},
     state,
     storage::{LightClientSqliteOptions, Storage},
-    LightClient,
 };
-use light_client_query_service::{init_logging, LogFormat};
+use light_client_query_service::{LogFormat, init_logging};
 use semver::Version;
-use sequencer::{
-    api::{data_source::SequencerDataSource, sql::DataSource},
-    persistence::sql,
-    SequencerApiVersion,
-};
 use tide_disco::{App, Url};
 use tokio::{spawn, time::sleep};
 use tracing::instrument;

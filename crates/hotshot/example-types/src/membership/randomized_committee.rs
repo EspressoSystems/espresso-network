@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Context;
 use hotshot_types::{
     drb::{
-        election::{generate_stake_cdf, select_randomized_leader, RandomizedCommittee},
         DrbResult,
+        election::{RandomizedCommittee, generate_stake_cdf, select_randomized_leader},
     },
     traits::signature_key::{
         LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey,

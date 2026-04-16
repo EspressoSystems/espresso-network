@@ -17,35 +17,41 @@ use std::{cmp::Ordering, future::IntoFuture, iter::once, ops::RangeBounds, sync:
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::From;
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::{BoxFuture, FutureExt, join_all};
 use hotshot_types::{
     data::{VidCommon, VidShare},
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
 };
 
 use super::{
-    header::{fetch_header_and_then, HeaderCallback},
     AvailabilityProvider, FetchRequest, Fetchable, Fetcher, Heights, Notifiers, RangedFetchable,
     Storable,
+    header::{HeaderCallback, fetch_header_and_then},
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{
         BlockId, QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::{
-        storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
-        },
         VersionedDataSource,
+        fetching::{header::fetch_header_range_and_then, leaf::RangeRequest},
+        storage::{
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
+        },
     },
-    fetching::{self, request, Callback},
+    fetching::{
+        self, Callback, NonEmptyRange,
+        request::{self, VidCommonRangeRequest},
+    },
     types::HeightIndexed,
-    Header, Payload, QueryResult,
 };
 
 pub(super) type VidCommonFetcher<Types, S, P> =
     fetching::Fetcher<request::VidCommonRequest, VidCommonCallback<Types, S, P>>;
+pub(super) type VidCommonRangeFetcher<Types, S, P> =
+    fetching::Fetcher<request::VidCommonRangeRequest, VidCommonRangeCallback<Types, S, P>>;
 
 #[derive(Clone, Copy, Debug, From)]
 pub(super) struct VidCommonRequest<Types: NodeType>(BlockId<Types>);
@@ -146,8 +152,8 @@ impl<Types> Storable<Types> for VidCommonQueryData<Types>
 where
     Types: NodeType,
 {
-    fn name() -> &'static str {
-        "VID common"
+    fn debug_name(&self) -> String {
+        format!("VID common {}", self.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -155,8 +161,8 @@ where
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         _leaf_only: bool,
     ) -> anyhow::Result<()> {
         storage.insert_vid(self, None).await
@@ -167,8 +173,8 @@ impl<Types> Storable<Types> for (VidCommonQueryData<Types>, Option<VidShare>)
 where
     Types: NodeType,
 {
-    fn name() -> &'static str {
-        "VID data"
+    fn debug_name(&self) -> String {
+        format!("VID data {}", self.0.height())
     }
 
     async fn notify(&self, notifiers: &Notifiers<Types>) {
@@ -176,11 +182,11 @@ where
     }
 
     async fn store(
-        self,
-        storage: &mut (impl UpdateAvailabilityStorage<Types> + Send),
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
         _leaf_only: bool,
     ) -> anyhow::Result<()> {
-        storage.insert_vid(self.0, self.1).await
+        storage.insert_vid(&self.0, self.1.as_ref()).await
     }
 }
 
@@ -254,7 +260,7 @@ where
 {
     async fn run(self, common: VidCommon) {
         let common = VidCommonQueryData::new(self.header, common);
-        self.fetcher.store_and_notify(common).await;
+        self.fetcher.store_and_notify(&common).await;
     }
 }
 
@@ -332,5 +338,176 @@ where
         R: RangeBounds<usize> + Send + 'static,
     {
         storage.get_vid_common_metadata_range(range).await
+    }
+}
+
+#[async_trait]
+impl<Types> Fetchable<Types> for NonEmptyRange<VidCommonQueryData<Types>>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    type Request = RangeRequest;
+
+    fn satisfies(&self, req: Self::Request) -> bool {
+        req.is_satisfied(self)
+    }
+
+    async fn passive_fetch(
+        notifiers: &Notifiers<Types>,
+        req: Self::Request,
+    ) -> BoxFuture<'static, Option<Self>> {
+        let waits = join_all(req.into_iter().map(|i| {
+            notifiers
+                .vid_common
+                .wait_for(move |vid| vid.satisfies(BlockId::Number(i as usize).into()))
+        }))
+        .await;
+
+        join_all(waits.into_iter().map(|wait| wait.into_future()))
+            .map(|options| NonEmptyRange::new(options.into_iter().flatten()).ok())
+            .boxed()
+    }
+
+    async fn active_fetch<S, P>(
+        tx: &mut impl AvailabilityStorage<Types>,
+        fetcher: Arc<Fetcher<Types, S, P>>,
+        req: Self::Request,
+    ) -> anyhow::Result<()>
+    where
+        S: VersionedDataSource + 'static,
+        for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+        for<'a> S::ReadOnly<'a>:
+            AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+        P: AvailabilityProvider<Types>,
+    {
+        fetch_header_range_and_then(tx, req, HeaderCallback::VidCommon { fetcher }).await
+    }
+
+    async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
+    where
+        S: AvailabilityStorage<Types>,
+    {
+        let vid = storage
+            .get_vid_common_range((req.start as usize)..(req.end as usize))
+            .await?
+            .into_iter()
+            .collect::<QueryResult<Vec<_>>>()?;
+        if vid.len() != req.len() {
+            tracing::debug!(
+                ?req,
+                len = vid.len(),
+                "database returned partial result, unable to load full range"
+            );
+            return Err(QueryError::Missing);
+        }
+        NonEmptyRange::new(vid).map_err(|err| QueryError::Error {
+            message: format!("expected contiguous range, but: {err:#}"),
+        })
+    }
+}
+
+impl<Types> Storable<Types> for NonEmptyRange<VidCommonQueryData<Types>>
+where
+    Types: NodeType,
+{
+    fn debug_name(&self) -> String {
+        format!("VID common range {}..{}", self.start(), self.end())
+    }
+
+    async fn notify(&self, notifiers: &Notifiers<Types>) {
+        for common in self {
+            notifiers.vid_common.notify(common).await;
+        }
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        if leaf_only {
+            return Ok(());
+        }
+
+        storage
+            .insert_vid_range(self.iter().map(|common| (common, None)))
+            .await
+    }
+}
+
+pub(super) fn fetch_vid_common_range_with_headers<Types, S, P>(
+    fetcher: Arc<Fetcher<Types, S, P>>,
+    headers: NonEmptyRange<Header<Types>>,
+) where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    P: AvailabilityProvider<Types>,
+{
+    let Some(vid_common_range_fetcher) = fetcher.vid_common_range_fetcher.as_ref() else {
+        // If we're in light-weight mode, we don't need to fetch the VID common data.
+        return;
+    };
+
+    // Now that we have the header, we only need to retrieve the VID common.
+    tracing::info!(
+        "spawned active fetch for VID common range {}..{}",
+        headers.start(),
+        headers.end()
+    );
+    vid_common_range_fetcher.spawn_fetch(
+        VidCommonRangeRequest::from_headers(&headers),
+        fetcher.provider.clone(),
+        once(VidCommonRangeCallback {
+            fetcher: fetcher.clone(),
+        }),
+    );
+}
+
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+pub(super) struct VidCommonRangeCallback<Types: NodeType, S, P> {
+    #[derivative(Debug = "ignore")]
+    fetcher: Arc<Fetcher<Types, S, P>>,
+}
+
+impl<Types: NodeType, S, P> PartialEq for VidCommonRangeCallback<Types, S, P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl<Types: NodeType, S, P> Eq for VidCommonRangeCallback<Types, S, P> {}
+
+impl<Types: NodeType, S, P> Ord for VidCommonRangeCallback<Types, S, P> {
+    fn cmp(&self, _: &Self) -> Ordering {
+        // All callbacks for a given VID common range request do the same thing: just store the
+        // range.
+        Ordering::Equal
+    }
+}
+
+impl<Types: NodeType, S, P> PartialOrd for VidCommonRangeCallback<Types, S, P> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<Types: NodeType, S, P> Callback<NonEmptyRange<VidCommonQueryData<Types>>>
+    for VidCommonRangeCallback<Types, S, P>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: 'static + VersionedDataSource,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    P: AvailabilityProvider<Types>,
+{
+    async fn run(self, commons: NonEmptyRange<VidCommonQueryData<Types>>) {
+        tracing::info!("fetched VID common {}..{}", commons.start(), commons.end());
+        self.fetcher.store_and_notify(&commons).await;
     }
 }

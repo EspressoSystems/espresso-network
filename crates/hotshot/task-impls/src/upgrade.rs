@@ -12,18 +12,16 @@ use committable::Committable;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::UpgradeProposal,
+    data::{EpochNumber, UpgradeProposal, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
     simple_certificate::UpgradeCertificate,
     simple_vote::{UpgradeProposalData, UpgradeVote},
     traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType},
-        signature_key::SignatureKey,
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
-    utils::{epoch_from_block_number, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, epoch_from_block_number},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -33,7 +31,7 @@ use versions::EPOCH_VERSION;
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
-    vote_collection::{handle_vote, VoteCollectorsMap},
+    vote_collection::{VoteCollectorsMap, handle_vote},
 };
 
 /// Tracks state of an upgrade task
@@ -42,10 +40,10 @@ pub struct UpgradeTaskState<TYPES: NodeType> {
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Membership for Quorum Certs/votes
     pub membership_coordinator: EpochMembershipCoordinator<TYPES>,
@@ -102,11 +100,7 @@ pub struct UpgradeTaskState<TYPES: NodeType> {
 impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
     /// Check if we have decided on an upgrade certificate
     async fn upgraded(&self) -> bool {
-        self.upgrade_lock
-            .decided_upgrade_certificate
-            .read()
-            .await
-            .is_some()
+        self.upgrade_lock.decided_upgrade_cert().is_some()
     }
 
     /// main task event handler
@@ -116,7 +110,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
         event: Arc<HotShotEvent<TYPES>>,
         tx: Sender<Arc<HotShotEvent<TYPES>>>,
     ) -> Result<()> {
-        let upgrade = self.upgrade_lock.upgrade;
+        let upgrade = self.upgrade_lock.upgrade();
         match event.as_ref() {
             HotShotEvent::UpgradeProposalRecv(proposal, sender) => {
                 tracing::info!("Received upgrade proposal: {proposal:?}");
@@ -225,7 +219,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 // cause an overflow error.
                 // TODO Come back to this - we probably don't need this, but we should also never receive a UpgradeCertificate where this fails, investigate block ready so it doesn't make one for the genesis block
                 ensure!(
-                    self.cur_view != TYPES::View::genesis()
+                    self.cur_view != ViewNumber::genesis()
                         && *view >= self.cur_view.saturating_sub(1),
                     warn!(
                         "Discarding old upgrade proposal; the proposal is for view {view}, but \
@@ -273,13 +267,12 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     &self.public_key,
                     &self.private_key,
                     &self.upgrade_lock,
-                )
-                .await?;
+                )?;
 
                 tracing::debug!("Sending upgrade vote {:?}", vote.view_number());
                 broadcast_event(Arc::new(HotShotEvent::UpgradeVoteSend(vote)), &tx).await;
             },
-            HotShotEvent::UpgradeVoteRecv(ref vote) => {
+            HotShotEvent::UpgradeVoteRecv(vote) => {
                 tracing::debug!("Upgrade vote recv, Main Task {:?}", vote.view_number());
 
                 // Check if we are the leader.
@@ -331,7 +324,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     .membership_coordinator
                     .membership_for_epoch(self.cur_epoch)
                     .await?
-                    .leader(TYPES::View::new(
+                    .leader(ViewNumber::new(
                         view + TYPES::UPGRADE_CONSTANTS.propose_offset,
                     ))
                     .await?;
@@ -391,14 +384,14 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                         old_version: upgrade.base,
                         new_version: upgrade.target,
                         new_version_hash: upgrade.hash().into(),
-                        old_version_last_view: TYPES::View::new(old_version_last_view),
-                        new_version_first_view: TYPES::View::new(new_version_first_view),
-                        decide_by: TYPES::View::new(decide_by),
+                        old_version_last_view: ViewNumber::new(old_version_last_view),
+                        new_version_first_view: ViewNumber::new(new_version_first_view),
+                        decide_by: ViewNumber::new(decide_by),
                     };
 
                     let upgrade_proposal = UpgradeProposal {
                         upgrade_proposal: upgrade_proposal_data.clone(),
-                        view_number: TYPES::View::new(
+                        view_number: ViewNumber::new(
                             view + TYPES::UPGRADE_CONSTANTS.propose_offset,
                         ),
                     };

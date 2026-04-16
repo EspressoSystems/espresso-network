@@ -8,27 +8,27 @@
 
 use std::sync::Arc;
 
-use async_broadcast::{broadcast, Receiver, Sender};
+use async_broadcast::{Receiver, Sender, broadcast};
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use committable::Committable;
 use hotshot_types::{
     consensus::OuterConsensus,
-    data::{Leaf2, QuorumProposal, QuorumProposalWrapper},
+    data::{Leaf2, QuorumProposal, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
     simple_certificate::{QuorumCertificate, QuorumCertificate2},
     simple_vote::HasEpoch,
     traits::{
+        ValidatedState,
         block_contents::{BlockHeader, BlockPayload},
         election::Membership,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
-        ValidatedState,
     },
     utils::{
-        epoch_from_block_number, is_epoch_root, is_epoch_transition, is_transition_block,
-        option_epoch_from_block_number, View, ViewInner,
+        View, ViewInner, epoch_from_block_number, is_epoch_root, is_epoch_transition,
+        is_transition_block, option_epoch_from_block_number,
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -91,7 +91,6 @@ pub async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<T
     if validation_info
         .upgrade_lock
         .version(proposal.data.view_number())
-        .await
         .is_ok_and(|v| v >= EPOCH_VERSION)
     {
         let Some(block_number) = proposal.data.justify_qc().data.block_number else {
@@ -120,7 +119,6 @@ pub async fn validate_proposal_liveness<TYPES: NodeType, I: NodeImplementation<T
         && validation_info
             .upgrade_lock
             .version(leaf.view_number())
-            .await
             .is_ok_and(|v| v >= EPOCH_VERSION)
     {
         consensus_writer.update_locked_view(proposal.data.justify_qc().view_number())?;
@@ -142,7 +140,6 @@ async fn validate_epoch_transition_block<TYPES: NodeType, I: NodeImplementation<
     if !validation_info
         .upgrade_lock
         .epochs_enabled(proposal.data.view_number())
-        .await
     {
         return Ok(());
     }
@@ -177,12 +174,10 @@ async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     let upgrade_view = validation_info
         .upgrade_lock
         .upgrade_view()
-        .await
-        .unwrap_or(TYPES::View::new(0));
+        .unwrap_or(ViewNumber::new(0));
     if !validation_info
         .upgrade_lock
         .epochs_enabled(proposal.data.view_number())
-        .await
         || proposal.data.justify_qc().view_number() <= upgrade_view
     {
         return Ok(());
@@ -208,7 +203,7 @@ async fn validate_current_epoch<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         .data
         .block_number
     else {
-        bail!("High QC has no block number");
+        return Ok(());
     };
 
     ensure!(
@@ -266,8 +261,7 @@ pub(crate) async fn handle_quorum_proposal_recv<TYPES: NodeType, I: NodeImplemen
 
     let version = validation_info
         .upgrade_lock
-        .version(proposal.data.view_number())
-        .await?;
+        .version(proposal.data.view_number())?;
 
     if version >= EPOCH_VERSION {
         // Don't vote if the DRB result verification fails.
@@ -280,7 +274,7 @@ pub(crate) async fn handle_quorum_proposal_recv<TYPES: NodeType, I: NodeImplemen
     let maybe_next_epoch_justify_qc = proposal.data.next_epoch_justify_qc().clone();
 
     let proposal_block_number = proposal.data.block_header().block_number();
-    let proposal_epoch = option_epoch_from_block_number::<TYPES>(
+    let proposal_epoch = option_epoch_from_block_number(
         proposal.data.epoch().is_some(),
         proposal_block_number,
         validation_info.epoch_height,

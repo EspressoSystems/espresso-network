@@ -12,9 +12,9 @@ use async_lock::RwLock;
 use bitvec::bitvec;
 use committable::Committable;
 use hotshot::{
+    HotShotInitializer, SystemContext,
     traits::{BlockPayload, NodeImplementation, TestableNodeImplementation},
     types::{SignatureKey, SystemContextHandle},
-    HotShotInitializer, SystemContext,
 };
 use hotshot_example_types::{
     block_types::TestTransaction,
@@ -24,9 +24,11 @@ use hotshot_example_types::{
 };
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
+    ValidatorConfig,
     consensus::ConsensusMetricsValue,
     data::{
-        vid_commitment, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperseAndDuration, VidDisperseShare,
+        ViewNumber, vid_commitment,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal, UpgradeLock},
@@ -34,10 +36,9 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
-    traits::{election::Membership, node_implementation::NodeType, EncodeBytes},
-    utils::{option_epoch_from_block_number, View, ViewInner},
+    traits::{EncodeBytes, election::Membership, node_implementation::NodeType},
+    utils::{View, ViewInner, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber, Vote},
-    ValidatorConfig,
 };
 use serde::Serialize;
 use vbs::version::Version;
@@ -108,7 +109,7 @@ where
         launcher.metadata.test_config.epoch_height,
         launcher.metadata.test_config.epoch_start_block,
         vec![],
-        hotshot_config.upgrade,
+        launcher.metadata.upgrade,
     )
     .await
     .unwrap();
@@ -146,6 +147,7 @@ where
         state_private_key,
         node_id,
         hotshot_config,
+        launcher.metadata.upgrade,
         coordinator,
         network,
         initializer,
@@ -170,7 +172,7 @@ pub async fn build_cert<
 >(
     data: DATAType,
     epoch_membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     public_key: &TYPES::SignatureKey,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
     upgrade_lock: &UpgradeLock<TYPES>,
@@ -190,22 +192,19 @@ pub async fn build_cert<
         private_key,
         upgrade_lock,
     )
-    .await
     .expect("Failed to sign data!");
 
     let vote_commitment =
         VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock)
-            .await
             .expect("Failed to create VersionedVoteData!")
             .commit();
 
-    let cert = CERT::create_signed_certificate(
+    CERT::create_signed_certificate(
         vote_commitment,
         vote.date().clone(),
         real_qc_sig,
         vote.view_number(),
-    );
-    cert
+    )
 }
 
 pub fn vid_share<TYPES: NodeType>(
@@ -233,7 +232,7 @@ pub async fn build_assembled_sig<
 >(
     data: &DATAType,
     epoch_membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     upgrade_lock: &UpgradeLock<TYPES>,
 ) -> <TYPES::SignatureKey as SignatureKey>::QcType {
     let stake_table = CERT::stake_table(epoch_membership).await;
@@ -258,20 +257,17 @@ pub async fn build_assembled_sig<
             &private_key_i,
             upgrade_lock,
         )
-        .await
         .expect("Failed to sign data!");
         let original_signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType =
             vote.signature();
         sig_lists.push(original_signature);
     }
 
-    let real_qc_sig = <TYPES::SignatureKey as SignatureKey>::assemble(
+    <TYPES::SignatureKey as SignatureKey>::assemble(
         &real_qc_pp,
         signers.as_bitslice(),
         &sig_lists[..],
-    );
-
-    real_qc_sig
+    )
 }
 
 /// get the keypair for a node id
@@ -305,7 +301,7 @@ pub async fn da_payload_commitment<TYPES: NodeType>(
 
 pub async fn build_payload_commitment<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view: TYPES::View,
+    view: ViewNumber,
     version: Version,
 ) -> VidCommitment {
     // Make some empty encoded transactions, we just care about having a commitment handy for the
@@ -317,8 +313,8 @@ pub async fn build_payload_commitment<TYPES: NodeType>(
 
 pub async fn build_vid_proposal<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     payload: &TYPES::BlockPayload,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     private_key: &<TYPES::SignatureKey as SignatureKey>::PrivateKey,
@@ -368,8 +364,8 @@ pub async fn build_vid_proposal<TYPES: NodeType>(
 #[allow(clippy::too_many_arguments)]
 pub async fn build_da_certificate<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
-    view_number: TYPES::View,
-    epoch_number: Option<TYPES::Epoch>,
+    view_number: ViewNumber,
+    epoch_number: Option<EpochNumber>,
     transactions: Vec<TestTransaction>,
     metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     public_key: &TYPES::SignatureKey,
@@ -382,11 +378,11 @@ pub async fn build_da_certificate<TYPES: NodeType>(
         &encoded_transactions,
         &metadata.encode(),
         membership.total_nodes().await,
-        upgrade_lock.version_infallible(view_number).await,
+        upgrade_lock.version_infallible(view_number),
     );
 
     let next_epoch_da_payload_commitment =
-        if upgrade_lock.epochs_enabled(view_number).await && membership.epoch().is_some() {
+        if upgrade_lock.epochs_enabled(view_number) && membership.epoch().is_some() {
             Some(vid_commitment(
                 &encoded_transactions,
                 &metadata.encode(),
@@ -395,7 +391,7 @@ pub async fn build_da_certificate<TYPES: NodeType>(
                     .await?
                     .total_nodes()
                     .await,
-                upgrade_lock.version_infallible(view_number).await,
+                upgrade_lock.version_infallible(view_number),
             ))
         } else {
             None
@@ -408,7 +404,7 @@ pub async fn build_da_certificate<TYPES: NodeType>(
     };
 
     anyhow::Ok(
-        build_cert::<TYPES, DaData2<TYPES>, DaVote2<TYPES>, DaCertificate2<TYPES>>(
+        build_cert::<TYPES, DaData2, DaVote2<TYPES>, DaCertificate2<TYPES>>(
             da_data,
             membership,
             view_number,
@@ -459,8 +455,7 @@ pub async fn build_fake_view_with_leaf_and_state(
     _upgrade_lock: &UpgradeLock<TestTypes>,
     epoch_height: u64,
 ) -> View<TestTypes> {
-    let epoch =
-        option_epoch_from_block_number::<TestTypes>(leaf.with_epoch, leaf.height(), epoch_height);
+    let epoch = option_epoch_from_block_number(leaf.with_epoch, leaf.height(), epoch_height);
     View {
         view_inner: ViewInner::Leaf {
             leaf: leaf.commit(),

@@ -14,7 +14,7 @@
 name = "hotshot-query-service"
 version = "0.1.76"
 authors = ["Espresso Systems <hello@espressosys.com>"]
-edition = "2021"
+edition.workspace = true
 license = "GPL-3.0-or-later"
 
 [features]
@@ -34,14 +34,15 @@ metrics-data-source = []
 # Enable the availability data source backed by a Postgres database.
 sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log"]
 
-# Enable extra features useful for writing tests with a query service.
 testing = [
     "espresso-macros",
+    "hotshot-query-service-types/testing",
     "rand",
     "tempfile",
     "test-utils",
     "sql-data-source",
     "file-system-data-source",
+    "pretty_assertions",
 ]
 
 [dependencies]
@@ -50,6 +51,8 @@ anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
+hotshot-query-service-types = { workspace = true }
+light-client = { workspace = true }
 
 # Dependencies enabled by feature "file-system-data-source".
 atomic_store = { workspace = true, optional = true }
@@ -70,6 +73,7 @@ hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
+pretty_assertions = { workspace = true, optional = true }
 
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { workspace = true, optional = true }
@@ -116,13 +120,11 @@ backtrace-on-stack-overflow = { version = "0.3", optional = true }
 
 [dev-dependencies]
 clap = { workspace = true }
-espresso-macros = { workspace = true }
 generic-array = "0.14"
-rand = { workspace = true }
+# Enable our own `testing` feature when building tests.
+hotshot-query-service = { path = ".", features = ["testing"] }
 reqwest = { workspace = true }
-tempfile = { workspace = true }
 test-log = { workspace = true }
-test-utils = { workspace = true }
 
 [[example]]
 name = "simple-server"

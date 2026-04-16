@@ -9,12 +9,9 @@ use either::Either;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{
-        block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeType},
-        BlockPayload,
-    },
+    traits::{BlockPayload, block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
 use hotshot_utils::{
@@ -27,8 +24,8 @@ use time::OffsetDateTime;
 use crate::events::HotShotEvent;
 
 #[derive(Serialize, Deserialize)]
-pub struct LeaderViewStats<TYPES: NodeType> {
-    pub view: TYPES::View,
+pub struct LeaderViewStats {
+    pub view: ViewNumber,
     pub prev_proposal_send: Option<i128>,
     pub proposal_send: Option<i128>,
     pub vote_recv: Option<i128>,
@@ -42,8 +39,8 @@ pub struct LeaderViewStats<TYPES: NodeType> {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct ReplicaViewStats<TYPES: NodeType> {
-    pub view: TYPES::View,
+pub struct ReplicaViewStats {
+    pub view: ViewNumber,
     pub view_change: Option<i128>,
     pub proposal_timestamp: Option<i128>,
     pub proposal_recv: Option<i128>,
@@ -59,8 +56,8 @@ pub struct ReplicaViewStats<TYPES: NodeType> {
     pub vid_share_recv: Option<i128>,
 }
 
-impl<TYPES: NodeType> LeaderViewStats<TYPES> {
-    fn new(view: TYPES::View) -> Self {
+impl LeaderViewStats {
+    fn new(view: ViewNumber) -> Self {
         Self {
             view,
             prev_proposal_send: None,
@@ -77,8 +74,8 @@ impl<TYPES: NodeType> LeaderViewStats<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> ReplicaViewStats<TYPES> {
-    fn new(view: TYPES::View) -> Self {
+impl ReplicaViewStats {
+    fn new(view: ViewNumber) -> Self {
         Self {
             view,
             view_change: None,
@@ -99,23 +96,23 @@ impl<TYPES: NodeType> ReplicaViewStats<TYPES> {
 }
 
 pub struct StatsTaskState<TYPES: NodeType> {
-    view: TYPES::View,
-    epoch: Option<TYPES::Epoch>,
+    view: ViewNumber,
+    epoch: Option<EpochNumber>,
     public_key: TYPES::SignatureKey,
     consensus: OuterConsensus<TYPES>,
     membership_coordinator: EpochMembershipCoordinator<TYPES>,
-    leader_stats: BTreeMap<TYPES::View, LeaderViewStats<TYPES>>,
-    replica_stats: BTreeMap<TYPES::View, ReplicaViewStats<TYPES>>,
-    latencies_by_view: BTreeMap<TYPES::View, i128>,
-    sizes_by_view: BTreeMap<TYPES::View, i128>,
-    epoch_start_times: BTreeMap<TYPES::Epoch, i128>,
-    timeouts: BTreeSet<TYPES::View>,
+    leader_stats: BTreeMap<ViewNumber, LeaderViewStats>,
+    replica_stats: BTreeMap<ViewNumber, ReplicaViewStats>,
+    latencies_by_view: BTreeMap<ViewNumber, i128>,
+    sizes_by_view: BTreeMap<ViewNumber, i128>,
+    epoch_start_times: BTreeMap<EpochNumber, i128>,
+    timeouts: BTreeSet<ViewNumber>,
 }
 
 impl<TYPES: NodeType> StatsTaskState<TYPES> {
     pub fn new(
-        view: TYPES::View,
-        epoch: Option<TYPES::Epoch>,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
         public_key: TYPES::SignatureKey,
         consensus: OuterConsensus<TYPES>,
         membership_coordinator: EpochMembershipCoordinator<TYPES>,
@@ -134,17 +131,17 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
             timeouts: BTreeSet::new(),
         }
     }
-    fn leader_entry(&mut self, view: TYPES::View) -> &mut LeaderViewStats<TYPES> {
+    fn leader_entry(&mut self, view: ViewNumber) -> &mut LeaderViewStats {
         self.leader_stats
             .entry(view)
             .or_insert_with(|| LeaderViewStats::new(view))
     }
-    fn replica_entry(&mut self, view: TYPES::View) -> &mut ReplicaViewStats<TYPES> {
+    fn replica_entry(&mut self, view: ViewNumber) -> &mut ReplicaViewStats {
         self.replica_stats
             .entry(view)
             .or_insert_with(|| ReplicaViewStats::new(view))
     }
-    fn garbage_collect(&mut self, view: TYPES::View) {
+    fn garbage_collect(&mut self, view: ViewNumber) {
         self.leader_stats = self.leader_stats.split_off(&view);
         self.replica_stats = self.replica_stats.split_off(&view);
         self.latencies_by_view = self.latencies_by_view.split_off(&view);
@@ -184,7 +181,7 @@ impl<TYPES: NodeType> StatsTaskState<TYPES> {
         Ok(())
     }
 
-    fn log_basic_stats(&self, now: i128, epoch: &TYPES::Epoch) {
+    fn log_basic_stats(&self, now: i128, epoch: &EpochNumber) {
         let num_views = self.latencies_by_view.len();
         let total_size = self.sizes_by_view.values().sum::<i128>();
 
@@ -253,26 +250,25 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                 self.leader_entry(proposal.data.view_number()).proposal_send = Some(now);
 
                 // If the last view succeeded, add the metric for time between proposals
-                if proposal.data.view_change_evidence().is_none() {
-                    if let Some(previous_proposal_time) = self
+                if proposal.data.view_change_evidence().is_none()
+                    && let Some(previous_proposal_time) = self
                         .replica_entry(proposal.data.view_number() - 1)
                         .proposal_recv
-                    {
-                        self.leader_entry(proposal.data.view_number())
-                            .prev_proposal_send = Some(previous_proposal_time);
+                {
+                    self.leader_entry(proposal.data.view_number())
+                        .prev_proposal_send = Some(previous_proposal_time);
 
-                        // calculate the elapsed time as milliseconds (from nanoseconds)
-                        let elapsed_time = (now - previous_proposal_time) / 1_000_000;
-                        if elapsed_time > 0 {
-                            self.consensus
-                                .read()
-                                .await
-                                .metrics
-                                .previous_proposal_to_proposal_time
-                                .add_point(elapsed_time as f64);
-                        } else {
-                            tracing::warn!("Previous proposal time is in the future");
-                        }
+                    // calculate the elapsed time as milliseconds (from nanoseconds)
+                    let elapsed_time = (now - previous_proposal_time) / 1_000_000;
+                    if elapsed_time > 0 {
+                        self.consensus
+                            .read()
+                            .await
+                            .metrics
+                            .previous_proposal_to_proposal_time
+                            .add_point(elapsed_time as f64);
+                    } else {
+                        tracing::warn!("Previous proposal time is in the future");
                     }
                 }
             },
@@ -342,7 +338,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
                     self.epoch = *epoch;
                     new_epoch = true;
                 }
-                if *view == TYPES::View::new(0) {
+                if *view == ViewNumber::new(0) {
                     return Ok(());
                 }
 
@@ -389,7 +385,7 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
             },
             HotShotEvent::LeavesDecided(leaves) => {
                 for leaf in leaves {
-                    if leaf.view_number() == TYPES::View::genesis() {
+                    if leaf.view_number() == ViewNumber::genesis() {
                         continue;
                     }
                     let view = leaf.view_number();

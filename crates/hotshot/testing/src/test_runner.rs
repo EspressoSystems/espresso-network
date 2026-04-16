@@ -11,13 +11,13 @@ use std::{
     sync::Arc,
 };
 
-use async_broadcast::{broadcast, Receiver, Sender};
+use async_broadcast::{Receiver, Sender, broadcast};
 use async_lock::RwLock;
 use futures::future::join_all;
 use hotshot::{
+    HotShotInitializer, InitializerEpochInfo, SystemContext,
     traits::TestableNodeImplementation,
     types::{Event, SystemContextHandle},
-    HotShotInitializer, InitializerEpochInfo, SystemContext,
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
@@ -26,9 +26,10 @@ use hotshot_example_types::{
 };
 use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
+    HotShotConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EVENT_CHANNEL_SIZE,
-    data::Leaf2,
+    data::{EpochNumber, Leaf2, ViewNumber},
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
     simple_certificate::QuorumCertificate2,
@@ -36,9 +37,8 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
     },
-    HotShotConfig, ValidatorConfig,
 };
 use tide_disco::Url;
 #[allow(deprecated)]
@@ -53,7 +53,7 @@ use crate::{
     spinning_task::{ChangeNode, NodeAction, SpinningTask},
     test_builder::create_test_handle,
     test_launcher::{Network, TestLauncher},
-    test_task::{spawn_timeout_task, TestResult, TestTask},
+    test_task::{TestResult, TestTask, spawn_timeout_task},
     txn_task::TxnTaskDescription,
     view_sync_task::ViewSyncTask,
 };
@@ -63,14 +63,14 @@ pub trait TaskErr: std::error::Error + Sync + Send + 'static {}
 impl<T: std::error::Error + Sync + Send + 'static> TaskErr for T {}
 
 impl<
-        TYPES: NodeType<
+    TYPES: NodeType<
             InstanceState = TestInstanceState,
             ValidatedState = TestValidatedState,
             BlockHeader = TestBlockHeader,
         >,
-        I: TestableNodeImplementation<TYPES>,
-        N: ConnectedNetwork<TYPES::SignatureKey>,
-    > TestRunner<TYPES, I, N>
+    I: TestableNodeImplementation<TYPES>,
+    N: ConnectedNetwork<TYPES::SignatureKey>,
+> TestRunner<TYPES, I, N>
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
@@ -162,11 +162,11 @@ where
 
         // add spinning task
         // map spinning to view
-        let mut changes: BTreeMap<TYPES::View, Vec<ChangeNode>> = BTreeMap::new();
+        let mut changes: BTreeMap<ViewNumber, Vec<ChangeNode>> = BTreeMap::new();
         for (view, mut change) in spinning_changes {
             changes
-                .entry(TYPES::View::new(view))
-                .or_insert_with(Vec::new)
+                .entry(ViewNumber::new(view))
+                .or_default()
                 .append(&mut change);
         }
 
@@ -181,13 +181,13 @@ where
             last_decided_leaf: Leaf2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                launcher.metadata.test_config.upgrade.base,
+                launcher.metadata.upgrade.base,
             )
             .await,
             high_qc: QuorumCertificate2::genesis(
                 &TestValidatedState::default(),
                 &TestInstanceState::default(),
-                launcher.metadata.test_config.upgrade,
+                launcher.metadata.upgrade,
             )
             .await,
             next_epoch_high_qc: None,
@@ -196,6 +196,7 @@ where
             channel_generator: launcher.resource_generators.channel_generator,
             state_cert: None,
             node_stakes: launcher.metadata.node_stakes.clone(),
+            upgrade: launcher.metadata.upgrade,
         };
         let spinning_task = TestTask::<SpinningTask<TYPES, N, I>>::new(
             spinning_task_state,
@@ -376,15 +377,7 @@ where
                 .try_into()
                 .expect("Non-empty by construction");
 
-            let network = (self.launcher.resource_generators.channel_generator)(node_id).await;
             let storage = (self.launcher.resource_generators.storage)(node_id);
-
-            let network_clone = network.clone();
-            let networks_ready_future = async move {
-                network_clone.wait_for_ready().await;
-            };
-
-            networks_ready.push(networks_ready_future);
 
             // See whether or not we should be DA
             let is_da = node_id < config.da_staked_committee_size as u64;
@@ -399,6 +392,17 @@ where
 
             let public_key = validator_config.public_key.clone();
 
+            let network = if late_start.contains(&node_id) && self.launcher.metadata.skip_late {
+                None
+            } else {
+                let net = (self.launcher.resource_generators.channel_generator)(node_id).await;
+                networks_ready.push({
+                    let net = net.clone();
+                    async move { net.wait_for_ready().await }
+                });
+                Some(net)
+            };
+
             if late_start.contains(&node_id) {
                 if self.launcher.metadata.skip_late {
                     self.late_start.insert(
@@ -408,14 +412,6 @@ where
                             context: LateNodeContext::UninitializedContext(
                                 LateNodeContextParameters {
                                     storage: storage.clone(),
-                                    memberships: <TYPES as NodeType>::Membership::new::<I>(
-                                        config.known_nodes_with_stake.clone(),
-                                        config.known_da_nodes.clone(),
-                                        storage.clone(),
-                                        network.clone(),
-                                        public_key.clone(),
-                                        config.epoch_height,
-                                    ),
                                     config,
                                 },
                             ),
@@ -434,14 +430,16 @@ where
                         config.epoch_height,
                         config.epoch_start_block,
                         vec![InitializerEpochInfo::<TYPES> {
-                            epoch: TYPES::Epoch::new(1),
+                            epoch: EpochNumber::new(1),
                             drb_result: INITIAL_DRB_RESULT,
                             block_header: None,
                         }],
-                        config.upgrade,
+                        self.launcher.metadata.upgrade,
                     )
                     .await
                     .unwrap();
+
+                    let network = network.clone().expect("!skip_late => network created");
 
                     let hotshot = Self::add_node_with_config(
                         node_id,
@@ -456,6 +454,7 @@ where
                         ),
                         initializer,
                         config,
+                        self.launcher.metadata.upgrade,
                         validator_config,
                         storage,
                     )
@@ -469,6 +468,7 @@ where
                     );
                 }
             } else {
+                let network = network.expect("!late_start => network created");
                 uninitialized_nodes.push((
                     node_id,
                     network.clone(),
@@ -552,6 +552,7 @@ where
         memberships: TYPES::Membership,
         initializer: HotShotInitializer<TYPES>,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
     ) -> Arc<SystemContext<TYPES, I>> {
@@ -567,6 +568,7 @@ where
             state_private_key,
             node_id,
             config,
+            upgrade,
             EpochMembershipCoordinator::new(
                 Arc::new(RwLock::new(memberships)),
                 epoch_height,
@@ -591,6 +593,7 @@ where
         memberships: Arc<RwLock<TYPES::Membership>>,
         initializer: HotShotInitializer<TYPES>,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
         internal_channel: (
@@ -611,6 +614,7 @@ where
             state_private_key,
             node_id,
             config,
+            upgrade,
             EpochMembershipCoordinator::new(memberships, epoch_height, &storage.clone()),
             network,
             initializer,
@@ -639,9 +643,6 @@ pub struct Node<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
 pub struct LateNodeContextParameters<TYPES: NodeType, I: TestableNodeImplementation<TYPES>> {
     /// The storage trait for Sequencer persistence.
     pub storage: I::Storage,
-
-    /// The memberships of this particular node.
-    pub memberships: TYPES::Membership,
 
     /// The config associated with this node.
     pub config: HotShotConfig<TYPES>,

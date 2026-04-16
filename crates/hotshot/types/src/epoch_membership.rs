@@ -4,41 +4,39 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{broadcast, InactiveReceiver, Receiver, Sender};
+use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
 use async_lock::{Mutex, RwLock};
 use committable::Commitment;
 use hotshot_utils::{anytrace::*, *};
+use sha2::{Digest, Sha256};
+use versions::DRB_FIX_VERSION;
 
 use crate::{
-    data::Leaf2,
-    drb::{compute_drb_result, DrbDifficultySelectorFn, DrbInput, DrbResult},
+    PeerConfig,
+    data::{EpochNumber, Leaf2, ViewNumber},
+    drb::{DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result},
     event::Event,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         storage::{
-            load_drb_progress_fn, store_drb_progress_fn, store_drb_result_fn, LoadDrbProgressFn,
-            Storage, StoreDrbProgressFn, StoreDrbResultFn,
+            LoadDrbProgressFn, Storage, StoreDrbProgressFn, StoreDrbResultFn, load_drb_progress_fn,
+            store_drb_progress_fn, store_drb_result_fn,
         },
     },
-    PeerConfig,
 };
 
-type EpochMap<TYPES> =
-    HashMap<<TYPES as NodeType>::Epoch, InactiveReceiver<Result<EpochMembership<TYPES>>>>;
+type EpochMap<TYPES> = HashMap<EpochNumber, InactiveReceiver<Result<EpochMembership<TYPES>>>>;
 
-type DrbMap<TYPES> = HashSet<<TYPES as NodeType>::Epoch>;
+type DrbMap = HashSet<EpochNumber>;
 
-type EpochSender<TYPES> = (
-    <TYPES as NodeType>::Epoch,
-    Sender<Result<EpochMembership<TYPES>>>,
-);
+type EpochSender<TYPES> = (EpochNumber, Sender<Result<EpochMembership<TYPES>>>);
 
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
-    /// The underlying membhersip
+    /// The underlying membership
     membership: Arc<RwLock<TYPES::Membership>>,
 
     /// Any in progress attempts at catching up are stored in this map
@@ -47,7 +45,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     /// wait for the actual catchup and alert future callers when it's done
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
 
-    drb_calculation_map: Arc<Mutex<DrbMap<TYPES>>>,
+    drb_calculation_map: Arc<Mutex<DrbMap>>,
 
     /// Number of blocks in an epoch
     pub epoch_height: u64,
@@ -57,7 +55,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     load_drb_progress_fn: LoadDrbProgressFn,
 
     /// Callback function to store a drb result in storage when one is calculated during catchup
-    store_drb_result_fn: StoreDrbResultFn<TYPES>,
+    store_drb_result_fn: StoreDrbResultFn,
 
     /// Callback function to select a DRB difficulty based on the view number of the seed
     pub drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
@@ -128,7 +126,7 @@ where
     /// table for the given Epoch
     pub async fn membership_for_epoch(
         &self,
-        maybe_epoch: Option<TYPES::Epoch>,
+        maybe_epoch: Option<EpochNumber>,
     ) -> Result<EpochMembership<TYPES>> {
         let ret_val = EpochMembership {
             epoch: maybe_epoch,
@@ -171,7 +169,7 @@ where
     /// table for the given Epoch
     pub async fn stake_table_for_epoch(
         &self,
-        maybe_epoch: Option<TYPES::Epoch>,
+        maybe_epoch: Option<EpochNumber>,
     ) -> Result<EpochMembership<TYPES>> {
         let ret_val = EpochMembership {
             epoch: maybe_epoch,
@@ -198,7 +196,7 @@ where
         ))
     }
 
-    /// Catches the membership up to the epoch passed as an argument.  
+    /// Catches the membership up to the epoch passed as an argument.
     /// To do this, try to get the stake table for the epoch containing this epoch's root and
     /// the stake table for the epoch containing this epoch's drb result.
     /// If they do not exist, then go one by one back until we find a stake table.
@@ -209,13 +207,13 @@ where
     /// catching up to epoch 20
     async fn catchup(
         mut self,
-        epoch: TYPES::Epoch,
+        epoch: EpochNumber,
         epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
     ) {
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
 
-        let mut try_epoch = TYPES::Epoch::new(epoch.saturating_sub(1));
+        let mut try_epoch = EpochNumber::new(epoch.saturating_sub(1));
         let maybe_first_epoch = self.membership.read().await.first_epoch();
         let Some(first_epoch) = maybe_first_epoch else {
             let err = anytrace::error!(
@@ -231,10 +229,10 @@ where
             let has_stake_table = self.membership.read().await.has_stake_table(try_epoch);
             if has_stake_table {
                 // We have this stake table but we need to make sure we have the epoch root of the requested epoch
-                if try_epoch <= TYPES::Epoch::new(epoch.saturating_sub(2)) {
+                if try_epoch <= EpochNumber::new(epoch.saturating_sub(2)) {
                     break;
                 }
-                try_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
+                try_epoch = EpochNumber::new(try_epoch.saturating_sub(1));
             } else {
                 if try_epoch <= first_epoch + 1 {
                     let err = anytrace::error!(
@@ -247,24 +245,27 @@ where
                 }
                 // Lock the catchup map
                 let mut map_lock = self.catchup_map.lock().await;
-                if let Some(mut rx) = map_lock
+                match map_lock
                     .get(&try_epoch)
                     .map(InactiveReceiver::activate_cloned)
                 {
-                    // Somebody else is already fetching this epoch, drop the lock and wait for them to finish
-                    drop(map_lock);
-                    if let Ok(Ok(_)) = rx.recv_direct().await {
-                        break;
-                    };
-                    // If we didn't receive the epoch then we need to try again
-                } else {
-                    // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
-                    let (mut tx, rx) = broadcast(1);
-                    tx.set_overflow(true);
-                    map_lock.insert(try_epoch, rx.deactivate());
-                    drop(map_lock);
-                    fetch_epochs.push((try_epoch, tx));
-                    try_epoch = TYPES::Epoch::new(try_epoch.saturating_sub(1));
+                    Some(mut rx) => {
+                        // Somebody else is already fetching this epoch, drop the lock and wait for them to finish
+                        drop(map_lock);
+                        if let Ok(Ok(_)) = rx.recv_direct().await {
+                            break;
+                        };
+                        // If we didn't receive the epoch then we need to try again
+                    },
+                    _ => {
+                        // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
+                        let (mut tx, rx) = broadcast(1);
+                        tx.set_overflow(true);
+                        map_lock.insert(try_epoch, rx.deactivate());
+                        drop(map_lock);
+                        fetch_epochs.push((try_epoch, tx));
+                        try_epoch = EpochNumber::new(try_epoch.saturating_sub(1));
+                    },
                 }
             };
         }
@@ -364,7 +365,7 @@ where
     /// If it's not, it will try to return the stake table if already available.
     /// Returns an error if the catchup failed or the catchup is not in progress
     /// and the stake table is not available.
-    pub async fn wait_for_catchup(&self, epoch: TYPES::Epoch) -> Result<EpochMembership<TYPES>> {
+    pub async fn wait_for_catchup(&self, epoch: EpochNumber) -> Result<EpochMembership<TYPES>> {
         let maybe_receiver = self
             .catchup_map
             .lock()
@@ -397,7 +398,7 @@ where
     /// catchup to complete.
     async fn catchup_cleanup(
         &mut self,
-        req_epoch: TYPES::Epoch,
+        req_epoch: EpochNumber,
         epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
         mut cancel_epochs: Vec<EpochSender<TYPES>>,
         err: Error,
@@ -441,8 +442,8 @@ where
     ///
     /// * `Ok(Leaf2<TYPES>)` containing the epoch root leaf if successful.
     /// * `Err(Error)` if the root membership or root leaf cannot be found, or if updating the membership fails.
-    async fn fetch_stake_table(&self, epoch: TYPES::Epoch) -> Result<Leaf2<TYPES>> {
-        let root_epoch = TYPES::Epoch::new(epoch.saturating_sub(2));
+    async fn fetch_stake_table(&self, epoch: EpochNumber) -> Result<Leaf2<TYPES>> {
+        let root_epoch = EpochNumber::new(epoch.saturating_sub(2));
         let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
             return Err(anytrace::error!(
                 "We tried to fetch stake table for epoch {epoch:?} but we don't have its root \
@@ -472,7 +473,7 @@ where
 
     pub async fn compute_drb_result(
         &self,
-        epoch: TYPES::Epoch,
+        epoch: EpochNumber,
         root_leaf: Leaf2<TYPES>,
     ) -> Result<DrbResult> {
         let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
@@ -505,8 +506,14 @@ where
         let drb_difficulty = drb_difficulty_selector(root_leaf.block_header().version()).await;
 
         let mut drb_seed_input = [0u8; 32];
-        let len = drb_seed_input_vec.len().min(32);
-        drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+
+        if root_leaf.block_header().version() >= DRB_FIX_VERSION {
+            drb_seed_input = Sha256::digest(&drb_seed_input_vec).into();
+        } else {
+            let len = drb_seed_input_vec.len().min(32);
+            drb_seed_input[..len].copy_from_slice(&drb_seed_input_vec[..len]);
+        }
+
         let drb_input = DrbInput {
             epoch: *epoch,
             iteration: 0,
@@ -535,7 +542,7 @@ where
 
 fn spawn_catchup<T: NodeType>(
     coordinator: EpochMembershipCoordinator<T>,
-    epoch: T::Epoch,
+    epoch: EpochNumber,
     epoch_tx: Sender<Result<EpochMembership<T>>>,
 ) {
     tokio::spawn(async move {
@@ -546,7 +553,7 @@ fn spawn_catchup<T: NodeType>(
 /// has a stake table
 pub struct EpochMembership<TYPES: NodeType> {
     /// Epoch the `membership` is guaranteed to have a stake table for
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
     /// Underlying membership
     pub coordinator: EpochMembershipCoordinator<TYPES>,
 }
@@ -562,7 +569,7 @@ impl<TYPES: NodeType> Clone for EpochMembership<TYPES> {
 
 impl<TYPES: NodeType> EpochMembership<TYPES> {
     /// Get the epoch this membership is good for
-    pub fn epoch(&self) -> Option<TYPES::Epoch> {
+    pub fn epoch(&self) -> Option<EpochNumber> {
         self.epoch
     }
 
@@ -586,7 +593,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
             .stake_table_for_epoch(self.epoch.map(|e| e + 1))
             .await
     }
-    pub async fn get_new_epoch(&self, epoch: Option<TYPES::Epoch>) -> Result<Self> {
+    pub async fn get_new_epoch(&self, epoch: Option<EpochNumber>) -> Result<Self> {
         self.coordinator.membership_for_epoch(epoch).await
     }
 
@@ -636,7 +643,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     /// Get all participants in the committee for a specific view for a specific epoch
     pub async fn committee_members(
         &self,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     ) -> BTreeSet<TYPES::SignatureKey> {
         self.coordinator
             .membership
@@ -648,7 +655,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     /// Get all participants in the committee for a specific view for a specific epoch
     pub async fn da_committee_members(
         &self,
-        view_number: TYPES::View,
+        view_number: ViewNumber,
     ) -> BTreeSet<TYPES::SignatureKey> {
         self.coordinator
             .membership
@@ -702,7 +709,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     ///
     /// # Errors
     /// Returns an error if the leader cannot be calculated.
-    pub async fn leader(&self, view: TYPES::View) -> Result<TYPES::SignatureKey> {
+    pub async fn leader(&self, view: ViewNumber) -> Result<TYPES::SignatureKey> {
         self.coordinator
             .membership
             .read()
@@ -719,7 +726,7 @@ impl<TYPES: NodeType> EpochMembership<TYPES> {
     /// Returns an error if the leader cannot be calculated
     pub async fn lookup_leader(
         &self,
-        view: TYPES::View,
+        view: ViewNumber,
     ) -> std::result::Result<
         TYPES::SignatureKey,
         <<TYPES as NodeType>::Membership as Membership<TYPES>>::Error,

@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use espresso_types::{Header, NamespaceId, NsProof, Transaction};
 use hotshot_types::data::VidCommon;
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ impl NamespaceProof {
 #[cfg(test)]
 mod test {
     use espresso_types::{Leaf2, NodeState};
-    use hotshot_query_service::availability::TransactionIndex;
+    use hotshot_query_service_types::availability::TransactionIndex;
     use versions::FEE_VERSION;
 
     use super::*;

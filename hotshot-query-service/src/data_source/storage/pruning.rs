@@ -71,10 +71,10 @@ impl PrunerCfg {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        if let Some(pruning_threshold) = self.pruning_threshold {
-            if pruning_threshold == 0 {
-                bail!("pruning_threshold must be greater than 0 or set to None")
-            }
+        if let Some(pruning_threshold) = self.pruning_threshold
+            && pruning_threshold == 0
+        {
+            bail!("pruning_threshold must be greater than 0 or set to None")
         }
 
         if self.max_usage > 10000 {
@@ -187,7 +187,7 @@ impl Default for PrunerCfg {
             minimum_retention: Duration::from_secs(24 * 3600),
             // 7 days
             target_retention: Duration::from_secs(7 * 24 * 3600),
-            batch_size: 30000,
+            batch_size: 1000,
             // 80%
             max_usage: 8000,
             // 1.5 hour

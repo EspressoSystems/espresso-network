@@ -1,6 +1,7 @@
-use alloy::primitives::{utils::format_ether, Address, Bytes, U256};
+use alloy::primitives::{U256, utils::format_ether};
 use anyhow::Result;
-use serde::Serialize;
+pub(crate) use espresso_safe_tx_builder::CalldataInfo;
+use espresso_safe_tx_builder::output_safe_tx_builder;
 
 use crate::signature::{OutputArgs, SerializationFormat};
 
@@ -35,39 +36,30 @@ pub fn output_error(msg: impl AsRef<str>) -> ! {
     std::process::exit(1);
 }
 
-#[derive(Serialize)]
-pub(crate) struct CalldataInfo {
-    to: Address,
-    data: Bytes,
-    /// Included because Safe UI requires this field, even when value is 0.
-    value: U256,
-}
-
-impl CalldataInfo {
-    pub(crate) fn new(to: Address, data: Bytes) -> Self {
-        Self {
-            to,
-            data,
-            value: U256::ZERO,
-        }
-    }
-}
-
-pub(crate) fn output_calldata(info: &CalldataInfo, output: &OutputArgs) -> Result<()> {
-    let text = match output.format {
-        Some(SerializationFormat::Json) => serde_json::to_string_pretty(info)?,
-        Some(SerializationFormat::Toml) => toml::to_string_pretty(info)?,
-        None => format!(
-            "Target: {}\nCalldata: {}\nValue: {}",
-            info.to, info.data, info.value
-        ),
-    };
-
-    if let Some(path) = &output.output {
-        std::fs::write(path, &text)?;
-        output_success(format!("Calldata written to {}", path.display()));
-    } else {
-        output_success(&text);
+pub(crate) fn output_calldata(
+    info: &CalldataInfo,
+    output: &OutputArgs,
+    chain_id: u64,
+) -> Result<()> {
+    let fmt = output.format.unwrap_or(SerializationFormat::Safe);
+    match fmt {
+        SerializationFormat::Safe => {
+            output_safe_tx_builder(info, output.output.as_deref(), chain_id)?;
+        },
+        SerializationFormat::Json | SerializationFormat::Toml => {
+            // CalldataInfo derives Serialize with function_info skipped,
+            // producing the legacy {to, data, value} format.
+            let text = match fmt {
+                SerializationFormat::Toml => toml::to_string_pretty(info)?,
+                _ => serde_json::to_string_pretty(info)?,
+            };
+            if let Some(path) = &output.output {
+                std::fs::write(path, &text)?;
+                output_success(format!("Calldata written to {}", path.display()));
+            } else {
+                output_success(&text);
+            }
+        },
     }
 
     Ok(())

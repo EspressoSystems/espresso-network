@@ -16,19 +16,14 @@
 //! and provides methods for querying and reconstructing the snapshot.
 //!
 
-use std::{cmp::Ordering, fmt::Debug, str::FromStr};
+use std::cmp::Ordering;
 
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::with_trait::Display;
+pub use hotshot_query_service_types::merklized_state::MerklizedState;
 use hotshot_types::traits::node_implementation::NodeType;
-use jf_merkle_tree_compat::{
-    prelude::MerkleProof, DigestAlgorithm, Element, ForgetableMerkleTreeScheme, Index,
-    MerkleCommitment, NodeValue, ToTraversalPath,
-};
-use serde::{de::DeserializeOwned, Serialize};
-use tagged_base64::TaggedBase64;
+use jf_merkle_tree_compat::prelude::MerkleProof;
 
 use crate::QueryResult;
 
@@ -108,55 +103,4 @@ impl<T: MerklizedState<Types, ARITY>, Types: NodeType, const ARITY: usize> Parti
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
-}
-
-/// This trait should be implemented by the MerkleTree that the module is initialized for.
-/// It defines methods utilized by the module.
-pub trait MerklizedState<Types, const ARITY: usize>:
-    ForgetableMerkleTreeScheme<Commitment = Self::Commit> + Send + Sync + Clone + 'static
-where
-    Types: NodeType,
-{
-    type Key: Index
-        + Send
-        + Sync
-        + Serialize
-        + ToTraversalPath<ARITY>
-        + FromStr
-        + DeserializeOwned
-        + Display
-        + CanonicalSerialize
-        + CanonicalDeserialize;
-    type Entry: Element
-        + Send
-        + Sync
-        + Serialize
-        + DeserializeOwned
-        + CanonicalSerialize
-        + CanonicalDeserialize;
-    type T: NodeValue + Send;
-    type Commit: MerkleCommitment<Self::T>
-        + Send
-        + for<'a> TryFrom<&'a TaggedBase64>
-        + Display
-        + Debug
-        + Into<TaggedBase64>;
-    type Digest: DigestAlgorithm<Self::Entry, Self::Key, Self::T>;
-
-    /// Retrieves the name of the state being queried.
-    fn state_type() -> &'static str;
-
-    /// Retrieves the field in the header containing the Merkle tree commitment
-    /// for the state implementing this trait.
-    fn header_state_commitment_field() -> &'static str;
-
-    /// Get the height of the tree
-    fn tree_height() -> usize;
-
-    /// Insert a forgotten path into the tree.
-    fn insert_path(
-        &mut self,
-        key: Self::Key,
-        proof: &MerkleProof<Self::Entry, Self::Key, Self::T, ARITY>,
-    ) -> anyhow::Result<()>;
 }

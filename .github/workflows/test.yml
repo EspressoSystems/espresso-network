@@ -148,7 +148,7 @@ jobs:
             target/debug/cdn-whitelist
             target/debug/state-relay-server
             target/debug/state-prover
-            target/debug/sequencer
+            target/debug/espresso-node
             target/debug/cli
             target/debug/submit-transactions
             target/debug/reset-storage
@@ -163,7 +163,7 @@ jobs:
             target/debug/staking-cli
 
   build-test-bins-sqlite:
-    name: Build sequencer-sqlite test binary
+    name: Build espresso-node-sqlite test binary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -179,9 +179,9 @@ jobs:
           prefix-key: v1-rust
           cache-provider: github
 
-      - name: Build sequencer-sqlite binary
+      - name: Build espresso-node-sqlite binary
         run: |
-          cargo build --locked --profile test -p sequencer-sqlite
+          cargo build --locked --profile test -p espresso-node-sqlite
         timeout-minutes: 30
 
       - name: Upload archive to workflow
@@ -190,7 +190,7 @@ jobs:
           name: test-binaries-sqlite
           if-no-files-found: error
           path: |
-            target/debug/sequencer-sqlite
+            target/debug/espresso-node-sqlite
 
   # The go-sdk test job only needs the dev-node binary, compile it separately.
   build-test-bins-dev-node:
@@ -236,15 +236,6 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: taiki-e/install-action@nextest
 
-      - name: Install node deps
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 3
-          max_attempts: 10
-          retry_wait_seconds: 60
-          retry_on: error
-          command: yarn
-
       - name: Download archive
         uses: actions/download-artifact@v4
         with:
@@ -270,15 +261,6 @@ jobs:
         with:
           version: nightly
       - uses: taiki-e/install-action@nextest
-
-      - name: Install node deps
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 3
-          max_attempts: 10
-          retry_wait_seconds: 60
-          retry_on: error
-          command: yarn
 
       - name: Download archive
         uses: actions/download-artifact@v4
@@ -336,6 +318,7 @@ jobs:
           - test-name: test_native_demo_pos_upgrade
           - test-name: test_native_demo_drb_header_upgrade
           - test-name: test_native_demo_fee_to_drb_header_upgrade
+          - test-name: test_native_demo_epoch_reward_upgrade
           - test-name: test_native_demo_da_committee
 
       fail-fast: false

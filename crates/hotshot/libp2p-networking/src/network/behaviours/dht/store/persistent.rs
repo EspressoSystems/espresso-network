@@ -3,8 +3,8 @@
 
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -418,8 +418,8 @@ impl<R: RecordStore, D: DhtPersistentStorage> RecordStore for PersistentStore<R,
 #[cfg(test)]
 mod tests {
     use libp2p::{
-        kad::{store::MemoryStore, RecordKey},
         PeerId,
+        kad::{RecordKey, store::MemoryStore},
     };
     use tracing_subscriber::EnvFilter;
 

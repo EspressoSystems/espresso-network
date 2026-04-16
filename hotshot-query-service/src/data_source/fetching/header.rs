@@ -18,33 +18,31 @@ use anyhow::bail;
 use async_trait::async_trait;
 use committable::Committable;
 use derivative::Derivative;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use hotshot_types::traits::{block_contents::BlockHeader, node_implementation::NodeType};
 
 use super::{
-    block::fetch_block_with_header, leaf::fetch_leaf_with_callbacks,
-    vid::fetch_vid_common_with_header, AvailabilityProvider, Fetcher,
+    AvailabilityProvider, Fetcher, block::fetch_block_with_header, leaf::fetch_leaf_with_callbacks,
+    vid::fetch_vid_common_with_header,
 };
 use crate::{
+    Header, Payload, QueryError, QueryResult,
     availability::{BlockId, QueryableHeader, QueryablePayload},
     data_source::{
-        fetching::{Fetchable, HeaderQueryData, LeafQueryData, Notifiers},
+        fetching::{
+            Fetchable, HeaderQueryData, LeafQueryData, Notifiers,
+            block::fetch_block_range_with_headers,
+            leaf::{RangeRequest, fetch_leaf_range_with_callbacks},
+            vid::fetch_vid_common_range_with_headers,
+        },
         storage::{
-            pruning::PrunedHeightStorage, AvailabilityStorage, NodeStorage,
-            UpdateAvailabilityStorage,
+            AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
+            pruning::PrunedHeightStorage,
         },
         update::VersionedDataSource,
     },
-    Header, Payload, QueryError, QueryResult,
+    fetching::NonEmptyRange,
 };
-
-impl<Types: NodeType> From<LeafQueryData<Types>> for HeaderQueryData<Types> {
-    fn from(leaf: LeafQueryData<Types>) -> Self {
-        let header = leaf.header().clone();
-
-        Self { header }
-    }
-}
 
 fn satisfies_header_req_from_leaf<Types>(leaf: &LeafQueryData<Types>, req: BlockId<Types>) -> bool
 where
@@ -196,6 +194,27 @@ where
             },
         }
     }
+
+    pub(super) fn run_range(self, headers: NonEmptyRange<Header<Types>>) {
+        match self {
+            Self::Payload { fetcher } => {
+                tracing::info!(
+                    "fetched leaves {}..{}, will now fetch payload",
+                    headers.start(),
+                    headers.end(),
+                );
+                fetch_block_range_with_headers(fetcher, headers);
+            },
+            Self::VidCommon { fetcher } => {
+                tracing::info!(
+                    "fetched leaves {}..{}, will now fetch VID common",
+                    headers.start(),
+                    headers.end(),
+                );
+                fetch_vid_common_range_with_headers(fetcher, headers);
+            },
+        }
+    }
 }
 
 pub(super) async fn fetch_header_and_then<Types, S, P>(
@@ -255,6 +274,44 @@ where
             tracing::debug!("not fetching block with unknown payload {h}");
         },
     }
+
+    Ok(())
+}
+
+pub(super) async fn fetch_header_range_and_then<Types, S, P>(
+    tx: &mut impl AvailabilityStorage<Types>,
+    req: RangeRequest,
+    callback: HeaderCallback<Types, S, P>,
+) -> anyhow::Result<()>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+{
+    // Check if at least the headers are available in local storage.
+    match <NonEmptyRange<LeafQueryData<Types>>>::load(tx, req).await {
+        Ok(leaves) => {
+            callback.run_range(leaves.as_ref_cloned());
+            return Ok(());
+        },
+        Err(QueryError::Missing | QueryError::NotFound) => {
+            // We successfully queried the database, but at least one header wasn't there. Fall
+            // through to fetching it.
+            tracing::debug!(?req, "headers not available locally; trying fetch");
+        },
+        Err(QueryError::Error { message }) => {
+            // An error occurred while querying the database. We don't know if we need to fetch the
+            // headers or not. Return an error so we can try again.
+            bail!("failed to fetch headers for range {req:?}: {message}");
+        },
+    }
+
+    // Fetch the headers (in fact, the entire leaves) first, then fetch the remaining payload data.
+    fetch_leaf_range_with_callbacks(tx, callback.fetcher(), req, [callback.into()]).await?;
 
     Ok(())
 }

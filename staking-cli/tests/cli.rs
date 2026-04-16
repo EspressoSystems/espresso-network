@@ -2,17 +2,17 @@ use std::time::Duration;
 
 use alloy::{
     primitives::{
-        utils::{format_ether, parse_ether},
         Address, U256,
+        utils::{format_ether, parse_ether},
     },
     signers::local::coins_bip39::{English, Mnemonic},
 };
 use anyhow::Result;
-use common::{base_cmd, MetadataCommand, Signer, TestSystemExt};
+use common::{MetadataCommand, Signer, TestSystemExt, base_cmd};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use predicates::{prelude::PredicateBooleanExt, str};
-use rand::{rngs::StdRng, SeedableRng as _};
+use rand::{SeedableRng as _, rngs::StdRng};
 use serde::Deserialize;
 use staking_cli::{
     demo::DelegationConfig,
@@ -62,26 +62,59 @@ fn test_cli_version() -> Result<()> {
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::account(&["account"])]
+#[case::register_validator(&["register-validator", "--node-signatures", "/dev/null", "--commission", "10", "--metadata-uri", "http://x", "--skip-metadata-validation"])]
+#[case::update_consensus_keys(&["update-consensus-keys", "--node-signatures", "/dev/null"])]
+#[case::deregister_validator(&["deregister-validator"])]
+#[case::update_commission(&["update-commission", "--new-commission", "10"])]
+#[case::update_metadata_uri(&["update-metadata-uri", "--metadata-uri", "http://x", "--skip-metadata-validation"])]
+#[case::approve(&["approve", "--amount", "100"])]
+#[case::delegate(&["delegate", "--validator-address", "0x1111111111111111111111111111111111111111", "--amount", "100"])]
+#[case::undelegate(&["undelegate", "--validator-address", "0x1111111111111111111111111111111111111111", "--amount", "100"])]
+#[case::claim_withdrawal(&["claim-withdrawal", "--validator-address", "0x1111111111111111111111111111111111111111"])]
+#[case::claim_validator_exit(&["claim-validator-exit", "--validator-address", "0x1111111111111111111111111111111111111111"])]
+#[case::claim_rewards(&["--espresso-url", "http://localhost:1", "claim-rewards"])]
+#[case::transfer(&["transfer", "--amount", "100", "--to", "0x1111111111111111111111111111111111111111"])]
 #[test_log::test(tokio::test)]
-async fn test_cli_missing_signer_error() -> Result<()> {
+async fn test_cli_missing_signer_error(#[case] args: &[&str]) -> Result<()> {
     let system = deploy::TestSystem::deploy().await?;
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
 
-    // Run a command that requires signing without providing any signer
     base_cmd()
+        .arg("-c")
+        .arg(&config_path)
         .arg("--rpc-url")
         .arg(system.rpc_url.to_string())
         .arg("--stake-table-address")
         .arg(system.stake_table.to_string())
-        .arg("--account-index")
-        .arg("0")
-        .arg("delegate")
-        .arg("--validator-address")
-        .arg("0x1111111111111111111111111111111111111111")
-        .arg("--amount")
-        .arg("100")
+        .args(args)
         .assert()
         .failure()
-        .stderr(str::contains("Signer configuration required"));
+        .stderr(str::contains("--mnemonic, --private-key, or --ledger"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_private_key_without_account_index() -> Result<()> {
+    let system = deploy::TestSystem::deploy().await?;
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("--rpc-url")
+        .arg(system.rpc_url.to_string())
+        .arg("--stake-table-address")
+        .arg(system.stake_table.to_string())
+        .arg("--private-key")
+        .arg(TEST_PRIVATE_KEY)
+        .arg("account")
+        .assert()
+        .success();
 
     Ok(())
 }
@@ -146,6 +179,51 @@ fn test_cli_create_file_ledger() -> anyhow::Result<()> {
     let config: TestConfig = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
     assert!(config.signer.ledger);
     assert_eq!(config.signer.account_index, Some(42));
+
+    Ok(())
+}
+
+/// --no-config takes precedence over -c: config file mnemonic is not loaded
+#[test_log::test]
+fn test_no_config_skips_config_file() -> anyhow::Result<()> {
+    let tmpdir = tempfile::tempdir()?;
+    let config_path = tmpdir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+rpc_url = "http://localhost:8545"
+stake_table_address = "0x0000000000000000000000000000000000000001"
+
+[signer]
+mnemonic = "{}"
+account_index = 0
+ledger = false
+"#,
+            staking_cli::DEV_MNEMONIC,
+        ),
+    )?;
+
+    // With -c, the config is loaded and `account` prints the derived address
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("account")
+        .assert()
+        .success()
+        .stdout(str::contains("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"));
+
+    // With --no-config, the mnemonic from the config file is not loaded
+    base_cmd()
+        .arg("--no-config")
+        .arg("-c")
+        .arg(&config_path)
+        .arg("--stake-table-address")
+        .arg("0x0000000000000000000000000000000000000001")
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("--mnemonic, --private-key, or --ledger"));
 
     Ok(())
 }
@@ -1700,9 +1778,9 @@ async fn test_cli_export_calldata_delegate() -> Result<()> {
         .arg("100")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"))
-        .stdout(str::contains("Value: 0"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"))
+        .stdout(str::contains("\"value\": \"0\""));
 
     Ok(())
 }
@@ -1843,8 +1921,8 @@ async fn test_cli_export_calldata_no_signer() -> Result<()> {
         .arg("1000")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -1866,8 +1944,10 @@ async fn test_cli_export_calldata_register_validator_direct_keys() -> Result<()>
         .arg("--no-metadata-uri")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("\"contractMethod\": null"))
+        .stdout(str::contains("\"data\": \"0x"))
+        .stdout(str::contains("\"description\": \"Register validator"));
 
     Ok(())
 }
@@ -1890,8 +1970,12 @@ async fn test_cli_export_calldata_update_consensus_keys_direct_keys() -> Result<
         .arg(new_state.sign_key().to_tagged_base64()?.to_string())
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("\"contractMethod\": null"))
+        .stdout(str::contains("\"data\": \"0x"))
+        .stdout(str::contains(
+            "\"description\": \"Update consensus keys for",
+        ));
 
     Ok(())
 }
@@ -1939,7 +2023,7 @@ async fn test_cli_skip_simulation_does_not_require_sender_address() -> Result<()
         .arg("1")
         .assert()
         .success()
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -1979,8 +2063,8 @@ async fn test_cli_export_calldata_claim_rewards() -> Result<()> {
         .arg("claim-rewards")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -2000,8 +2084,8 @@ async fn test_cli_export_calldata_validation_succeeds() -> Result<()> {
         .arg("100")
         .assert()
         .success()
-        .stdout(str::contains("Target:"))
-        .stdout(str::contains("Calldata:"));
+        .stdout(str::contains("transactions"))
+        .stdout(str::contains("contractMethod"));
 
     Ok(())
 }
@@ -2011,6 +2095,7 @@ async fn test_cli_export_calldata_validation_succeeds() -> Result<()> {
 /// for visual verification - there are no automated assertions on the output.
 /// Note: V1 export is not supported (deprecated), so this test only runs on V2.
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "manual inspection only"]
 async fn test_cli_export_calldata_all_operations_manual_inspect() -> Result<()> {
     let system = TestSystem::deploy().await?;
 
@@ -2577,4 +2662,47 @@ async fn test_cli_preview_metadata_invalid_both_formats_shows_url() -> Result<()
         .stderr(str::contains("OpenMetrics"));
 
     Ok(())
+}
+
+#[test_log::test]
+fn test_cli_conflicting_signers() {
+    base_cmd()
+        .arg("--stake-table-address")
+        .arg("0x1111111111111111111111111111111111111111")
+        .arg("--mnemonic")
+        .arg("test test test test test test test test test test test junk")
+        .arg("--private-key")
+        .arg("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("cannot be used with"));
+}
+
+#[test_log::test]
+fn test_cli_config_file_conflicting_signers() {
+    let tmpdir = tempfile::tempdir().unwrap();
+    let config_path = tmpdir.path().join("config.toml");
+    let config_content = format!(
+        r#"
+rpc_url = "http://localhost:8545"
+stake_table_address = "0x1111111111111111111111111111111111111111"
+
+[signer]
+mnemonic = "{}"
+private_key = "{}"
+ledger = false
+"#,
+        staking_cli::DEV_MNEMONIC,
+        staking_cli::DEV_PRIVATE_KEY,
+    );
+    std::fs::write(&config_path, config_content).unwrap();
+
+    base_cmd()
+        .arg("-c")
+        .arg(&config_path)
+        .arg("account")
+        .assert()
+        .failure()
+        .stderr(str::contains("Multiple signers"));
 }

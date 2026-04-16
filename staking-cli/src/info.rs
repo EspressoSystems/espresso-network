@@ -1,11 +1,11 @@
 use alloy::{
-    primitives::{utils::format_ether, Address},
+    primitives::{Address, utils::format_ether},
     providers::{Provider, ProviderBuilder},
 };
 use anyhow::{Context as _, Result};
 use espresso_types::{
-    v0_3::{Fetcher, RegisteredValidator},
     L1Client,
+    v0_3::{Fetcher, RegisteredValidator},
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2;
 pub use hotshot_contract_adapter::stake_table::StakeTableContractVersion;

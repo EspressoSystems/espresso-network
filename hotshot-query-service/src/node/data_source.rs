@@ -31,10 +31,11 @@ use derivative::Derivative;
 use derive_more::From;
 use hotshot_types::{data::VidShare, traits::node_implementation::NodeType};
 
-use super::query_data::{BlockHash, BlockId, SyncStatus, TimeWindowQueryData};
+use super::query_data::{BlockHash, BlockId, TimeWindowQueryData};
 use crate::{
-    availability::{NamespaceId, QueryableHeader},
     Header, QueryResult,
+    availability::{NamespaceId, QueryableHeader},
+    node::SyncStatusQueryData,
 };
 
 #[derive(Derivative, From)]
@@ -81,7 +82,22 @@ where
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>>;
 
     /// Search the database for missing objects and generate a report.
-    async fn sync_status(&self) -> QueryResult<SyncStatus>;
+    ///
+    /// # Consistency
+    ///
+    /// Each [`SyncStatusRange`](super::query_data::SyncStatusRange) in the response accurately
+    /// describes the status of that range of objects at a recent point in time. (It is of course
+    /// impossible to consistently describe the status of the range _now_, as this method does not
+    /// require any lock to call, and thus the sync status could change immediately after being
+    /// checked.)
+    ///
+    /// It is not practical to scan the entire database for missing objects in a single atomic
+    /// transaction. Thus, it is possible that different ranges in the response reflect the state of
+    /// that portion of the database at different times. In other words, each range is an atomic
+    /// snapshot of a subset of the database, but there may never have been a time when the entire
+    /// database had the exact state represented by the collection of ranges in response, all at
+    /// once.
+    async fn sync_status(&self) -> QueryResult<SyncStatusQueryData>;
 
     async fn count_transactions(&self) -> QueryResult<usize> {
         self.count_transactions_in_range(0.., None).await

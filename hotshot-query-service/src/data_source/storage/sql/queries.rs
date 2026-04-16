@@ -13,31 +13,19 @@
 
 //! Immutable query functionality of a SQL database.
 
-use std::{
-    fmt::Display,
-    ops::{Bound, RangeBounds},
-};
+use std::ops::{Bound, RangeBounds};
 
-use anyhow::Context;
 use derivative::Derivative;
-use hotshot_types::{
-    simple_certificate::QuorumCertificate2,
-    traits::{
-        block_contents::{BlockHeader, BlockPayload},
-        node_implementation::NodeType,
-    },
+pub(super) use hotshot_query_service_types::availability::sql::DecodeError;
+use hotshot_query_service_types::availability::sql::{
+    BLOCK_COLUMNS, HEADER_COLUMNS, LEAF_COLUMNS, PAYLOAD_COLUMNS, PAYLOAD_METADATA_COLUMNS,
+    VID_COMMON_COLUMNS, VID_COMMON_METADATA_COLUMNS, parse_header,
 };
-use sqlx::{Arguments, FromRow, Row};
+use hotshot_types::traits::node_implementation::NodeType;
+use sqlx::{Arguments, FromRow};
 
 use super::{Database, Db, Query, QueryAs, Transaction};
-use crate::{
-    availability::{
-        BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
-        QueryablePayload, VidCommonQueryData,
-    },
-    data_source::storage::{PayloadMetadata, VidCommonMetadata},
-    Header, Leaf2, Payload, QueryError, QueryResult,
-};
+use crate::{Header, QueryError, QueryResult, availability::BlockId};
 
 pub(super) mod availability;
 pub(super) mod explorer;
@@ -165,188 +153,6 @@ impl QueryBuilder<'_> {
     }
 }
 
-const LEAF_COLUMNS: &str = "leaf, qc";
-
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for LeafQueryData<Types>
-where
-    Types: NodeType,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        let leaf = row.try_get("leaf")?;
-        let leaf: Leaf2<Types> = serde_json::from_value(leaf).decode_error("malformed leaf")?;
-
-        let qc = row.try_get("qc")?;
-        let qc: QuorumCertificate2<Types> =
-            serde_json::from_value(qc).decode_error("malformed QC")?;
-
-        Ok(Self { leaf, qc })
-    }
-}
-
-const BLOCK_COLUMNS: &str =
-    "h.hash AS hash, h.data AS header_data, p.size AS payload_size, p.data AS payload_data";
-
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for BlockQueryData<Types>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        // First, check if we have the payload for this block yet.
-        let size: Option<i32> = row.try_get("payload_size")?;
-        let payload_data: Option<Vec<u8>> = row.try_get("payload_data")?;
-        let (size, payload_data) = size.zip(payload_data).ok_or(sqlx::Error::RowNotFound)?;
-        let size = size as u64;
-
-        // Reconstruct the full header.
-        let header_data = row.try_get("header_data")?;
-        let header: Header<Types> =
-            serde_json::from_value(header_data).decode_error("malformed header")?;
-
-        // Reconstruct the full block payload.
-        let payload = Payload::<Types>::from_bytes(&payload_data, header.metadata());
-
-        // Reconstruct the query data by adding metadata.
-        let hash: String = row.try_get("hash")?;
-        let hash = hash.parse().decode_error("malformed block hash")?;
-
-        Ok(Self {
-            num_transactions: payload.len(header.metadata()) as u64,
-            header,
-            payload,
-            size,
-            hash,
-        })
-    }
-}
-
-const PAYLOAD_COLUMNS: &str = BLOCK_COLUMNS;
-
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for PayloadQueryData<Types>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        <BlockQueryData<Types> as FromRow<<Db as Database>::Row>>::from_row(row).map(Self::from)
-    }
-}
-
-const PAYLOAD_METADATA_COLUMNS: &str = "h.height AS height, h.hash AS hash, h.payload_hash AS \
-                                        payload_hash, p.size AS payload_size, p.num_transactions \
-                                        AS num_transactions";
-
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for PayloadMetadata<Types>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        Ok(Self {
-            height: row.try_get::<i64, _>("height")? as u64,
-            block_hash: row
-                .try_get::<String, _>("hash")?
-                .parse()
-                .decode_error("malformed block hash")?,
-            hash: row
-                .try_get::<String, _>("payload_hash")?
-                .parse()
-                .decode_error("malformed payload hash")?,
-            size: row
-                .try_get::<Option<i32>, _>("payload_size")?
-                .ok_or(sqlx::Error::RowNotFound)? as u64,
-            num_transactions: row
-                .try_get::<Option<i32>, _>("num_transactions")?
-                .ok_or(sqlx::Error::RowNotFound)? as u64,
-
-            // Per-namespace info must be loaded in a separate query.
-            namespaces: Default::default(),
-        })
-    }
-}
-
-const VID_COMMON_COLUMNS: &str = "h.height AS height, h.hash AS block_hash, h.payload_hash AS \
-                                  payload_hash, v.common AS common_data";
-
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for VidCommonQueryData<Types>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        let height = row.try_get::<i64, _>("height")? as u64;
-        let block_hash: String = row.try_get("block_hash")?;
-        let block_hash = block_hash.parse().decode_error("malformed block hash")?;
-        let payload_hash: String = row.try_get("payload_hash")?;
-        let payload_hash = payload_hash
-            .parse()
-            .decode_error("malformed payload hash")?;
-        let common_data: Vec<u8> = row.try_get("common_data")?;
-        let common =
-            bincode::deserialize(&common_data).decode_error("malformed VID common data")?;
-        Ok(Self {
-            height,
-            block_hash,
-            payload_hash,
-            common,
-        })
-    }
-}
-
-const VID_COMMON_METADATA_COLUMNS: &str =
-    "h.height AS height, h.hash AS block_hash, h.payload_hash AS payload_hash";
-
-impl<'r, Types> FromRow<'r, <Db as Database>::Row> for VidCommonMetadata<Types>
-where
-    Types: NodeType,
-    Header<Types>: QueryableHeader<Types>,
-    Payload<Types>: QueryablePayload<Types>,
-{
-    fn from_row(row: &'r <Db as Database>::Row) -> sqlx::Result<Self> {
-        let height = row.try_get::<i64, _>("height")? as u64;
-        let block_hash: String = row.try_get("block_hash")?;
-        let block_hash = block_hash.parse().decode_error("malformed block hash")?;
-        let payload_hash: String = row.try_get("payload_hash")?;
-        let payload_hash = payload_hash
-            .parse()
-            .decode_error("malformed payload hash")?;
-        Ok(Self {
-            height,
-            block_hash,
-            payload_hash,
-        })
-    }
-}
-
-const HEADER_COLUMNS: &str = "h.data AS data";
-
-// We can't implement `FromRow` for `Header<Types>` since `Header<Types>` is not actually a type
-// defined in this crate; it's just an alias for `Types::BlockHeader`. So this standalone function
-// will have to do.
-fn parse_header<Types>(row: <Db as Database>::Row) -> sqlx::Result<Header<Types>>
-where
-    Types: NodeType,
-{
-    // Reconstruct the full header.
-    let data = row.try_get("data")?;
-    serde_json::from_value(data).decode_error("malformed header")
-}
-
-impl From<sqlx::Error> for QueryError {
-    fn from(err: sqlx::Error) -> Self {
-        if matches!(err, sqlx::Error::RowNotFound) {
-            Self::NotFound
-        } else {
-            Self::Error {
-                message: err.to_string(),
-            }
-        }
-    }
-}
-
 impl<Mode> Transaction<Mode> {
     /// Load a header from storage.
     ///
@@ -375,24 +181,8 @@ impl<Mode> Transaction<Mode> {
         );
 
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
-        let header = parse_header::<Types>(row)?;
+        let header = parse_header::<Types, <Db as Database>::Row>(row)?;
 
         Ok(header)
-    }
-}
-
-pub(super) trait DecodeError {
-    type Ok;
-    fn decode_error(self, msg: impl Display) -> sqlx::Result<Self::Ok>;
-}
-
-impl<T, E> DecodeError for Result<T, E>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    type Ok = T;
-    fn decode_error(self, msg: impl Display) -> sqlx::Result<<Self as DecodeError>::Ok> {
-        self.context(msg.to_string())
-            .map_err(|err| sqlx::Error::Decode(err.into()))
     }
 }

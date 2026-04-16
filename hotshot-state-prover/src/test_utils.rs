@@ -3,13 +3,13 @@ use ark_ed_on_bn254::EdwardsConfig;
 use ark_std::rand::{CryptoRng, RngCore};
 use espresso_types::SeqTypes;
 use hotshot_types::{
-    stake_table::{HSStakeTable, StakeTableEntry},
     PeerConfig,
+    stake_table::{HSStakeTable, StakeTableEntry},
 };
 use jf_signature::{
+    SignatureScheme,
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, VerKey as BLSVerKey},
     schnorr::SchnorrSignatureScheme,
-    SignatureScheme,
 };
 
 type SchnorrVerKey = jf_signature::schnorr::VerKey<EdwardsConfig>;
@@ -34,7 +34,6 @@ pub(crate) fn key_pairs_for_testing<R: CryptoRng + RngCore>(
 }
 
 /// Helper function for test
-#[allow(clippy::cast_possible_truncation)]
 pub(crate) fn stake_table_for_testing(
     bls_keys: &[BLSVerKey],
     schnorr_keys: &[(SchnorrSignKey, SchnorrVerKey)],
@@ -49,6 +48,7 @@ pub(crate) fn stake_table_for_testing(
                 stake_amount: U256::from((i + 1) as u32),
             },
             state_ver_key: schnorr_key.clone(),
+            connect_info: None,
         })
         .collect::<Vec<_>>()
         .into()

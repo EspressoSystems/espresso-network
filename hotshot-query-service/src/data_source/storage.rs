@@ -68,6 +68,7 @@ use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
 use crate::{
+    Header, Payload, QueryResult, Transaction,
     availability::{
         BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata,
@@ -84,8 +85,8 @@ use crate::{
         traits::{ExplorerHeader, ExplorerTransaction},
     },
     merklized_state::{MerklizedState, Snapshot},
-    node::{SyncStatus, TimeWindowQueryData, WindowStart},
-    Header, Payload, QueryResult, Transaction,
+    node::{SyncStatusQueryData, TimeWindowQueryData, WindowStart},
+    types::HeightIndexed,
 };
 
 pub mod fail_storage;
@@ -199,30 +200,64 @@ where
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;
 }
 
-pub trait UpdateAvailabilityStorage<Types>
+pub trait UpdateAvailabilityStorage<Types>: Send
 where
     Types: NodeType,
 {
     fn insert_leaf(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        leaf: &LeafQueryData<Types>,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
-        self.insert_leaf_with_qc_chain(leaf, None)
+        self.insert_leaf_range([leaf])
     }
 
     fn insert_leaf_with_qc_chain(
         &mut self,
-        leaf: LeafQueryData<Types>,
+        leaf: &LeafQueryData<Types>,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            self.insert_leaf(leaf).await?;
+            self.insert_qc_chain(leaf.height(), qc_chain).await?;
+            Ok(())
+        }
+    }
+
     fn insert_block(
         &mut self,
-        block: BlockQueryData<Types>,
-    ) -> impl Send + Future<Output = anyhow::Result<()>>;
-    fn insert_vid(
+        block: &BlockQueryData<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        self.insert_block_range([block])
+    }
+
+    fn insert_vid<'a>(
         &mut self,
-        common: VidCommonQueryData<Types>,
-        share: Option<VidShare>,
+        common: &'a VidCommonQueryData<Types>,
+        share: Option<&'a VidShare>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        self.insert_vid_range([(common, share)])
+    }
+
+    fn insert_qc_chain(
+        &mut self,
+        height: u64,
+        qc_chain: Option<[CertificatePair<Types>; 2]>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_leaf_range<'a>(
+        &mut self,
+        leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_block_range<'a>(
+        &mut self,
+        blocks: impl Send + IntoIterator<IntoIter: Send, Item = &'a BlockQueryData<Types>>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>>;
+    fn insert_vid_range<'a>(
+        &mut self,
+        vid: impl Send
+        + IntoIterator<
+            IntoIter: Send,
+            Item = (&'a VidCommonQueryData<Types>, Option<&'a VidShare>),
+        >,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
@@ -255,8 +290,12 @@ where
 
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>>;
 
-    /// Search the database for missing objects and generate a report.
-    async fn sync_status(&mut self) -> QueryResult<SyncStatus>;
+    /// Search the given range of the database for missing objects.
+    async fn sync_status_for_range(
+        &mut self,
+        from: usize,
+        to: usize,
+    ) -> QueryResult<SyncStatusQueryData>;
 }
 
 #[derive(Clone, Debug, Default)]

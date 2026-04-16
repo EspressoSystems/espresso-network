@@ -435,50 +435,15 @@ use derive_more::{Deref, From, Into};
 pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
-use hotshot_types::traits::{
-    node_implementation::{NodeImplementation, NodeType},
-    BlockPayload,
+pub use hotshot_query_service_types::{
+    ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
+    QueryResult, QuorumCertificate, SignatureKey, Transaction,
 };
-pub use hotshot_types::{data::Leaf2, simple_certificate::QuorumCertificate};
+use hotshot_types::traits::node_implementation::{NodeImplementation, NodeType};
 pub use resolvable::Resolvable;
-use serde::{Deserialize, Serialize};
-use snafu::Snafu;
 use task::BackgroundTask;
-use tide_disco::{method::ReadState, App, StatusCode};
+use tide_disco::{App, method::ReadState};
 use vbs::version::StaticVersionType;
-
-pub type Payload<Types> = <Types as NodeType>::BlockPayload;
-pub type Header<Types> = <Types as NodeType>::BlockHeader;
-pub type Metadata<Types> = <Payload<Types> as BlockPayload<Types>>::Metadata;
-/// Item within a [`Payload`].
-pub type Transaction<Types> = <Payload<Types> as BlockPayload<Types>>::Transaction;
-pub type SignatureKey<Types> = <Types as NodeType>::SignatureKey;
-
-#[derive(Clone, Debug, Snafu, Deserialize, Serialize)]
-#[snafu(visibility(pub))]
-pub enum QueryError {
-    /// The requested resource does not exist or is not known to this query service.
-    NotFound,
-    /// The requested resource exists but is not currently available.
-    ///
-    /// In most cases a missing resource can be recovered from DA.
-    Missing,
-    /// There was an error while trying to fetch the requested resource.
-    #[snafu(display("Failed to fetch requested resource: {message}"))]
-    #[snafu(context(suffix(ErrorSnafu)))]
-    Error { message: String },
-}
-
-impl QueryError {
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::NotFound | Self::Missing => StatusCode::NOT_FOUND,
-            Self::Error { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-pub type QueryResult<T> = Result<T, QueryError>;
 
 #[derive(Default)]
 pub struct Options {
@@ -589,7 +554,7 @@ mod test {
 
     use async_lock::RwLock;
     use async_trait::async_trait;
-    use atomic_store::{load_store::BincodeLoadStore, AtomicStore, AtomicStoreLoader, RollingLog};
+    use atomic_store::{AtomicStore, AtomicStoreLoader, RollingLog, load_store::BincodeLoadStore};
     use futures::future::FutureExt;
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{data::VidShare, simple_certificate::QuorumCertificate2};
@@ -609,7 +574,7 @@ mod test {
             VidCommonQueryData,
         },
         metrics::PrometheusMetrics,
-        node::{NodeDataSource, SyncStatus, TimeWindowQueryData, WindowStart},
+        node::{NodeDataSource, SyncStatusQueryData, TimeWindowQueryData, WindowStart},
         status::{HasMetrics, StatusDataSource},
         testing::{
             consensus::MockDataSource,
@@ -804,7 +769,7 @@ mod test {
         {
             self.hotshot_qs.vid_share(id).await
         }
-        async fn sync_status(&self) -> QueryResult<SyncStatus> {
+        async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
             self.hotshot_qs.sync_status().await
         }
         async fn get_header_window(
@@ -834,7 +799,11 @@ mod test {
     async fn test_composition() {
         let dir = TempDir::with_prefix("test_composition").unwrap();
         let mut loader = AtomicStoreLoader::create(dir.path(), "test_composition").unwrap();
-        let hotshot_qs = MockDataSource::create_with_store(&mut loader, Default::default())
+        let hotshot_qs = MockDataSource::create_builder_with_store(&mut loader, Default::default())
+            .await
+            .unwrap()
+            .with_sync_status_ttl(Duration::ZERO)
+            .build()
             .await
             .unwrap();
 
@@ -957,17 +926,11 @@ mod test {
                 .unwrap(),
             1
         );
-        let sync_status: SyncStatus = client.get("node/sync-status").send().await.unwrap();
-        assert_eq!(
-            sync_status,
-            SyncStatus {
-                missing_blocks: 0,
-                missing_leaves: 0,
-                missing_vid_common: 1,
-                missing_vid_shares: 1,
-                pruned_height: None
-            }
-        );
+        let sync_status: SyncStatusQueryData = client.get("node/sync-status").send().await.unwrap();
+        assert_eq!(sync_status.blocks.missing, 0);
+        assert_eq!(sync_status.leaves.missing, 0);
+        assert_eq!(sync_status.vid_common.missing, 1);
+
         assert_eq!(
             client
                 .get::<MockHeader>("availability/header/0")

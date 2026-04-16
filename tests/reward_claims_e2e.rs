@@ -3,11 +3,21 @@ use std::{collections::HashMap, time::Duration};
 use alloy::{
     network::EthereumWallet,
     node_bindings::Anvil,
-    primitives::U256,
+    primitives::{U256, utils::parse_ether},
     providers::{Provider, ProviderBuilder, WalletProvider},
     rpc::client::RpcClient,
 };
-use espresso_contract_deployer::{build_signer, Contract};
+use espresso_contract_deployer::{Contract, build_signer};
+use espresso_node::{
+    SequencerApiVersion,
+    api::{
+        data_source::testing::TestableSequencerDataSource,
+        options,
+        test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
+    },
+    state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
+    testing::{TestConfigBuilder, wait_for_epochs},
+};
 use espresso_types::{L1ClientOptions, SeqTypes};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
@@ -15,27 +25,17 @@ use hotshot_contract_adapter::{
     stake_table::StakeTableContractVersion,
 };
 use hotshot_query_service::data_source::SqlDataSource;
-use hotshot_state_prover::{v3::service::run_prover_once, StateProverConfig};
+use hotshot_state_prover::{StateProverConfig, v3::service::run_prover_once};
 use hotshot_types::{
-    stake_table::{one_honest_threshold, HSStakeTable},
+    stake_table::{HSStakeTable, one_honest_threshold},
     utils::epoch_from_block_number,
-};
-use sequencer::{
-    api::{
-        data_source::testing::TestableSequencerDataSource,
-        options,
-        test_helpers::{TestNetwork, TestNetworkConfigBuilder, STAKE_TABLE_CAPACITY_FOR_TEST},
-    },
-    state_signature::relay_server::{run_relay_server_with_state, StateRelayServerState},
-    testing::{wait_for_epochs, TestConfigBuilder},
-    SequencerApiVersion,
 };
 use staking_cli::demo::DelegationConfig;
 use test_utils::reserve_tcp_port;
 use tokio::spawn;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::{Upgrade, DRB_AND_HEADER_UPGRADE_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, Upgrade};
 
 const TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 const BLOCKS_PER_EPOCH: u64 = 7;
@@ -293,6 +293,46 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         balance_before + claim_input.lifetime_rewards,
         "ESP token balance did not increase correctly"
     );
+
+    // Verify circulating supply API endpoints reflect minted rewards.
+    let initial_supply = parse_ether("100000").unwrap();
+
+    let minted: String = http_client
+        .get(format!("{sequencer_url}token/total-minted-supply"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let minted = parse_ether(&minted).unwrap();
+    assert_eq!(minted, initial_supply + claim_input.lifetime_rewards);
+
+    // Non-mainnet: locked=0, so circulating-supply-ethereum = total-minted-supply.
+    let circulating_ethereum: String = http_client
+        .get(format!("{sequencer_url}token/circulating-supply-ethereum"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let circulating_ethereum = parse_ether(&circulating_ethereum).unwrap();
+    assert_eq!(
+        circulating_ethereum,
+        initial_supply + claim_input.lifetime_rewards
+    );
+
+    let circulating: String = http_client
+        .get(format!("{sequencer_url}token/circulating-supply"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let circulating = parse_ether(&circulating).unwrap();
+    // An exact assertion isn't possible: the endpoint combines the Espresso decided
+    // header (reward_distributed) with the L1 contract (totalSupply), and we can't
+    // get a consistent snapshot across both from outside the node.
+    assert!(circulating >= circulating_ethereum);
 
     println!("Attempting to double-claim rewards");
     let double_claim_result = reward_claim_contract

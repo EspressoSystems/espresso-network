@@ -13,7 +13,7 @@ use std::{
 };
 
 use committable::Committable;
-use futures::{future::BoxFuture, FutureExt, Stream};
+use futures::{FutureExt, Stream, future::BoxFuture};
 use hotshot::types::{BLSPubKey, SignatureKey, SystemContextHandle};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
@@ -35,19 +35,15 @@ use hotshot_types::{
         DaData2, DaVote2, QuorumData2, QuorumVote2, TimeoutData2, TimeoutVote2,
         UpgradeProposalData, UpgradeVote, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
     },
-    traits::{
-        consensus_api::ConsensusApi,
-        node_implementation::{ConsensusTime, NodeType},
-        BlockPayload,
-    },
-    utils::{genesis_epoch_from_version, EpochTransitionIndicator},
+    traits::{BlockPayload, consensus_api::ConsensusApi, node_implementation::NodeType},
+    utils::{EpochTransitionIndicator, genesis_epoch_from_version},
 };
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use sha2::{Digest, Sha256};
 use versions::Upgrade;
 
 use crate::helpers::{
-    build_cert, build_da_certificate, build_vid_proposal, da_payload_commitment, TestNodeKeyMap,
+    TestNodeKeyMap, build_cert, build_da_certificate, build_vid_proposal, da_payload_commitment,
 };
 
 #[derive(Clone)]
@@ -67,10 +63,10 @@ pub struct TestView {
     pub leader_public_key: <TestTypes as NodeType>::SignatureKey,
     pub da_certificate: DaCertificate2<TestTypes>,
     pub transactions: Vec<TestTransaction>,
-    upgrade_data: Option<UpgradeProposalData<TestTypes>>,
+    upgrade_data: Option<UpgradeProposalData>,
     formed_upgrade_certificate: Option<UpgradeCertificate<TestTypes>>,
-    view_sync_finalize_data: Option<ViewSyncFinalizeData2<TestTypes>>,
-    timeout_cert_data: Option<TimeoutData2<TestTypes>>,
+    view_sync_finalize_data: Option<ViewSyncFinalizeData2>,
+    timeout_cert_data: Option<TimeoutData2>,
     upgrade_lock: UpgradeLock<TestTypes>,
 }
 
@@ -78,7 +74,7 @@ impl TestView {
     async fn find_leader_key_pair(
         membership: &EpochMembership<TestTypes>,
         node_key_map: &Arc<TestNodeKeyMap>,
-        view_number: <TestTypes as NodeType>::View,
+        view_number: ViewNumber,
     ) -> (
         <<TestTypes as NodeType>::SignatureKey as SignatureKey>::PrivateKey,
         <TestTypes as NodeType>::SignatureKey,
@@ -101,7 +97,7 @@ impl TestView {
         upgrade: Upgrade,
     ) -> Self {
         let genesis_view = ViewNumber::new(1);
-        let genesis_epoch = genesis_epoch_from_version::<TestTypes>(upgrade.base);
+        let genesis_epoch = genesis_epoch_from_version(upgrade.base);
         let upgrade_lock = UpgradeLock::new(upgrade);
 
         let transactions = Vec::new();
@@ -129,7 +125,7 @@ impl TestView {
 
         let leader_public_key = public_key;
 
-        let genesis_version = upgrade_lock.version_infallible(genesis_view).await;
+        let genesis_version = upgrade_lock.version_infallible(genesis_view);
 
         let payload_commitment = da_payload_commitment::<TestTypes>(
             &epoch_membership,
@@ -311,7 +307,7 @@ impl TestView {
             &metadata,
         );
 
-        let version = self.upgrade_lock.version_infallible(next_view).await;
+        let version = self.upgrade_lock.version_infallible(next_view);
         let membership = self
             .membership
             .membership_for_epoch(self.epoch_number)
@@ -367,7 +363,7 @@ impl TestView {
         let upgrade_certificate = if let Some(ref data) = self.upgrade_data {
             let cert = build_cert::<
                 TestTypes,
-                UpgradeProposalData<TestTypes>,
+                UpgradeProposalData,
                 UpgradeVote<TestTypes>,
                 UpgradeCertificate<TestTypes>,
             >(
@@ -388,7 +384,7 @@ impl TestView {
         let view_sync_certificate = if let Some(ref data) = self.view_sync_finalize_data {
             let cert = build_cert::<
                 TestTypes,
-                ViewSyncFinalizeData2<TestTypes>,
+                ViewSyncFinalizeData2,
                 ViewSyncFinalizeVote2<TestTypes>,
                 ViewSyncFinalizeCertificate2<TestTypes>,
             >(
@@ -409,7 +405,7 @@ impl TestView {
         let timeout_certificate = if let Some(ref data) = self.timeout_cert_data {
             let cert = build_cert::<
                 TestTypes,
-                TimeoutData2<TestTypes>,
+                TimeoutData2,
                 TimeoutVote2<TestTypes>,
                 TimeoutCertificate2<TestTypes>,
             >(
@@ -494,7 +490,7 @@ impl TestView {
             _pd: PhantomData,
         };
 
-        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade);
+        let upgrade_lock = UpgradeLock::new(self.upgrade_lock.upgrade());
 
         TestView {
             quorum_proposal,
@@ -540,13 +536,12 @@ impl TestView {
             handle.private_key(),
             &handle.hotshot.upgrade_lock,
         )
-        .await
         .expect("Failed to generate a signature on QuorumVote")
     }
 
     pub async fn create_upgrade_vote(
         &self,
-        data: UpgradeProposalData<TestTypes>,
+        data: UpgradeProposalData,
         handle: &SystemContextHandle<TestTypes, MemoryImpl>,
     ) -> UpgradeVote<TestTypes> {
         UpgradeVote::<TestTypes>::create_signed_vote(
@@ -556,13 +551,12 @@ impl TestView {
             handle.private_key(),
             &handle.hotshot.upgrade_lock,
         )
-        .await
         .expect("Failed to generate a signature on UpgradVote")
     }
 
     pub async fn create_da_vote(
         &self,
-        data: DaData2<TestTypes>,
+        data: DaData2,
         handle: &SystemContextHandle<TestTypes, MemoryImpl>,
     ) -> DaVote2<TestTypes> {
         DaVote2::create_signed_vote(
@@ -572,7 +566,6 @@ impl TestView {
             handle.private_key(),
             &handle.hotshot.upgrade_lock,
         )
-        .await
         .expect("Failed to sign DaData")
     }
 }
@@ -600,7 +593,7 @@ impl TestViewGenerator {
         }
     }
 
-    pub fn add_upgrade(&mut self, upgrade_proposal_data: UpgradeProposalData<TestTypes>) {
+    pub fn add_upgrade(&mut self, upgrade_proposal_data: UpgradeProposalData) {
         if let Some(ref view) = self.current_view {
             self.current_view = Some(TestView {
                 upgrade_data: Some(upgrade_proposal_data),
@@ -622,10 +615,7 @@ impl TestViewGenerator {
         }
     }
 
-    pub fn add_view_sync_finalize(
-        &mut self,
-        view_sync_finalize_data: ViewSyncFinalizeData2<TestTypes>,
-    ) {
+    pub fn add_view_sync_finalize(&mut self, view_sync_finalize_data: ViewSyncFinalizeData2) {
         if let Some(ref view) = self.current_view {
             self.current_view = Some(TestView {
                 view_sync_finalize_data: Some(view_sync_finalize_data),
@@ -636,7 +626,7 @@ impl TestViewGenerator {
         }
     }
 
-    pub fn add_timeout(&mut self, timeout_data: TimeoutData2<TestTypes>) {
+    pub fn add_timeout(&mut self, timeout_data: TimeoutData2) {
         if let Some(ref view) = self.current_view {
             self.current_view = Some(TestView {
                 timeout_cert_data: Some(timeout_data),

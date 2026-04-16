@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{btree_map::Entry, BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, btree_map::Entry},
     fmt::Debug,
     future::Future,
     marker::PhantomData,
@@ -16,6 +16,7 @@ use async_broadcast::Sender;
 use async_trait::async_trait;
 use either::Either::{Left, Right};
 use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembership,
     message::UpgradeLock,
     simple_certificate::{
@@ -27,7 +28,7 @@ use hotshot_types::{
         DaVote2, EpochRootQuorumVote2, NextEpochQuorumVote2, QuorumVote, QuorumVote2, TimeoutVote2,
         UpgradeVote, ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2,
     },
-    traits::node_implementation::{ConsensusTime, NodeType},
+    traits::node_implementation::NodeType,
     utils::EpochTransitionIndicator,
     vote::{
         Certificate, HasViewNumber, LightClientStateUpdateVoteAccumulator, Vote, VoteAccumulator,
@@ -39,7 +40,7 @@ use crate::{events::HotShotEvent, helpers::broadcast_event};
 
 /// Alias for a map of Vote Collectors
 pub type VoteCollectorsMap<TYPES, VOTE, CERT> =
-    BTreeMap<<TYPES as NodeType>::View, VoteCollectionTaskState<TYPES, VOTE, CERT>>;
+    BTreeMap<ViewNumber, VoteCollectionTaskState<TYPES, VOTE, CERT>>;
 
 /// Task state for collecting votes of one type and emitting a certificate
 pub struct VoteCollectionTaskState<
@@ -57,7 +58,7 @@ pub struct VoteCollectionTaskState<
     pub accumulator: Option<VoteAccumulator<TYPES, VOTE, CERT>>,
 
     /// The view which we are collecting votes for
-    pub view: TYPES::View,
+    pub view: ViewNumber,
 
     /// Node id
     pub id: u64,
@@ -87,10 +88,10 @@ pub trait AggregatableVote<
 }
 
 impl<
-        TYPES: NodeType,
-        VOTE: Vote<TYPES> + AggregatableVote<TYPES, VOTE, CERT>,
-        CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment> + Clone + Debug,
-    > VoteCollectionTaskState<TYPES, VOTE, CERT>
+    TYPES: NodeType,
+    VOTE: Vote<TYPES> + AggregatableVote<TYPES, VOTE, CERT>,
+    CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment> + Clone + Debug,
+> VoteCollectionTaskState<TYPES, VOTE, CERT>
 {
     /// Take one vote and accumulate it. Returns either the cert or the updated state
     /// after the vote is accumulated
@@ -175,7 +176,7 @@ pub struct AccumulatorInfo<TYPES: NodeType> {
     pub membership: EpochMembership<TYPES>,
 
     /// View of the votes we are collecting
-    pub view: TYPES::View,
+    pub view: ViewNumber,
 
     /// This nodes id
     pub id: u64,
@@ -361,7 +362,7 @@ impl<TYPES: NodeType>
     async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         let epoch = membership
             .epoch
-            .map(|e| TYPES::Epoch::new(e.saturating_sub(1)));
+            .map(|e| EpochNumber::new(e.saturating_sub(1)));
         membership
             .get_new_epoch(epoch)
             .await?
@@ -637,7 +638,7 @@ impl<TYPES: NodeType>
 
 /// A map for extended quorum vote collectors
 pub type EpochRootVoteCollectorsMap<TYPES> =
-    BTreeMap<<TYPES as NodeType>::View, EpochRootVoteCollectionTaskState<TYPES>>;
+    BTreeMap<ViewNumber, EpochRootVoteCollectionTaskState<TYPES>>;
 
 pub struct EpochRootVoteCollectionTaskState<TYPES: NodeType> {
     /// Public key for this node.
@@ -653,10 +654,10 @@ pub struct EpochRootVoteCollectionTaskState<TYPES: NodeType> {
     pub state_vote_accumulator: Option<LightClientStateUpdateVoteAccumulator<TYPES>>,
 
     /// The view which we are collecting votes for
-    pub view: TYPES::View,
+    pub view: ViewNumber,
 
     /// The epoch which we are collecting votes for
-    pub epoch: Option<TYPES::Epoch>,
+    pub epoch: Option<EpochNumber>,
 
     /// Node id
     pub id: u64,

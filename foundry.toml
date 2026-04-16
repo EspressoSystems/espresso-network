@@ -36,6 +36,14 @@ show_logs = true
 local = "http://localhost:8545"
 
 
+[lint]
+exclude_lints = [
+    "mixed-case-variable",
+    "named-struct-fields",
+    "asm-keccak256",
+    "pascal-case-struct",
+]
+
 [fmt]
 line_length=100
 bracket_spacing=true

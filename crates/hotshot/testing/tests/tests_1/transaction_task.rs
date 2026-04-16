@@ -9,7 +9,6 @@ use hotshot_task_impls::{
 use hotshot_testing::helpers::build_system_handle;
 use hotshot_types::{
     data::{null_block, EpochNumber, PackedBundle, ViewNumber},
-    traits::node_implementation::ConsensusTime,
 };
 
 #[cfg(test)]

@@ -1,8 +1,10 @@
 //! builder pattern for
 
+use std::path::PathBuf;
+
 use alloy::{
     hex::FromHex,
-    primitives::{Address, Bytes, B256, U256},
+    primitives::{Address, B256, Bytes, U256},
     providers::{Provider, WalletProvider},
 };
 use anyhow::{Context, Result};
@@ -12,21 +14,21 @@ use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSo
 use url::Url;
 
 use crate::{
-    encode_function_call,
+    Contract, Contracts, OwnableContract, encode_function_call,
+    output::output_safe_tx_builder,
     proposals::{
         multisig::{
-            call_propose_transaction_generic_script, transfer_ownership_from_multisig_to_timelock,
-            upgrade_esp_token_v2_multisig_owner, upgrade_fee_contract_multisig_owner,
-            upgrade_light_client_v2_multisig_owner, upgrade_light_client_v3_multisig_owner,
-            upgrade_stake_table_v2_multisig_owner, LightClientV2UpgradeParams,
-            StakeTableV2UpgradeParams, TransferOwnershipParams,
+            LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
+            TransferOwnershipParams, encode_generic_calldata,
+            transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
+            upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
+            upgrade_light_client_v3_multisig_owner, upgrade_stake_table_v2_multisig_owner,
         },
         timelock::{
-            derive_timelock_address_from_contract_type, perform_timelock_operation,
             TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
+            derive_timelock_address_from_contract_type, perform_timelock_operation,
         },
     },
-    Contract, Contracts, OwnableContract,
 };
 
 /// Convenient handler that builds all the input arguments ready to be deployed.
@@ -34,6 +36,7 @@ use crate::{
 /// - `rpc_url`: RPC URL for the L1 network
 /// - `token_recipient`: initial token holder, same as deployer if None.
 /// - `mock_light_client`: flag to indicate whether deploying mocked contract
+/// - `use_multisig`: flag to indicate whether to use multisig for upgrades
 /// - `genesis_lc_state`: Genesis light client state
 /// - `genesis_st_state`: Genesis stake table state
 /// - `permissioned_prover`: permissioned light client prover address
@@ -73,8 +76,6 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     mock_light_client: bool,
     #[builder(default)]
     use_multisig: bool,
-    #[builder(default)]
-    dry_run: bool,
     #[builder(default)]
     genesis_lc_state: Option<LightClientStateSol>,
     #[builder(default)]
@@ -144,7 +145,9 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     #[builder(default)]
     multisig_transaction_value: Option<String>,
     #[builder(default)]
-    ledger: bool,
+    output_path: Option<PathBuf>,
+    #[builder(default)]
+    chain_id: u64,
 }
 
 impl<P: Provider + WalletProvider> DeployerArgs<P> {
@@ -157,18 +160,21 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 if contracts.address(Contract::FeeContractProxy).is_some() {
                     // Upgrade path
                     let use_multisig = self.use_multisig;
-                    let dry_run = self.dry_run;
-                    let rpc_url = self.rpc_url.clone();
 
-                    tracing::info!(?dry_run, ?use_multisig, "Upgrading FeeContract to V1.0.1");
+                    tracing::info!(?use_multisig, "Upgrading FeeContract to V1.0.1");
                     if use_multisig {
-                        upgrade_fee_contract_multisig_owner(
+                        let calldata = upgrade_fee_contract_multisig_owner(
                             provider,
                             contracts,
-                            rpc_url.to_string(),
-                            dry_run,
+                            MultisigOwnerCheck::RequireContract,
                         )
-                        .await?;
+                        .await?
+                        .with_description("Upgrade FeeContract to V1.0.1".to_string());
+                        output_safe_tx_builder(
+                            &calldata,
+                            self.output_path.as_deref(),
+                            self.chain_id,
+                        )?;
                     } else {
                         crate::upgrade_fee_v1(provider, contracts).await?;
                     }
@@ -241,13 +247,14 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 let use_multisig = self.use_multisig;
 
                 if use_multisig {
-                    upgrade_esp_token_v2_multisig_owner(
+                    let calldata = upgrade_esp_token_v2_multisig_owner(
                         provider,
                         contracts,
-                        self.rpc_url.to_string(),
-                        self.dry_run,
+                        MultisigOwnerCheck::RequireContract,
                     )
-                    .await?;
+                    .await?
+                    .with_description("Upgrade EspToken to V2".to_string());
+                    output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     crate::upgrade_esp_token_v2(provider, contracts).await?;
                     let addr = contracts
@@ -320,11 +327,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 );
 
                 let use_mock = self.mock_light_client;
-                let dry_run = self.dry_run;
                 let use_multisig = self.use_multisig;
                 let mut blocks_per_epoch = self.blocks_per_epoch.unwrap();
                 let epoch_start_block = self.epoch_start_block.unwrap();
-                let rpc_url = self.rpc_url.clone();
 
                 // TEST-ONLY: if this config is not yet set, we use u64::MAX
                 // to avoid contract complaining about invalid zero-valued blocks_per_epoch.
@@ -333,9 +338,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 if use_mock && blocks_per_epoch == 0 {
                     blocks_per_epoch = u64::MAX;
                 }
-                tracing::info!(%blocks_per_epoch, ?dry_run, ?use_multisig, "Upgrading LightClientV2 with ");
+                tracing::info!(%blocks_per_epoch, ?use_multisig, "Upgrading LightClientV2 with ");
                 if use_multisig {
-                    upgrade_light_client_v2_multisig_owner(
+                    let calldata = upgrade_light_client_v2_multisig_owner(
                         provider,
                         contracts,
                         LightClientV2UpgradeParams {
@@ -343,10 +348,11 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                             epoch_start_block,
                         },
                         use_mock,
-                        rpc_url.to_string(),
-                        dry_run,
+                        MultisigOwnerCheck::RequireContract,
                     )
-                    .await?;
+                    .await?
+                    .with_description("Upgrade LightClient to V2".to_string());
+                    output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     crate::upgrade_light_client_v2(
                         provider,
@@ -361,20 +367,19 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             },
             Contract::LightClientV3 => {
                 let use_mock = self.mock_light_client;
-                let dry_run = self.dry_run;
                 let use_multisig = self.use_multisig;
-                let rpc_url = self.rpc_url.clone();
 
-                tracing::info!(?dry_run, ?use_multisig, "Upgrading LightClientV3 with ");
+                tracing::info!(?use_multisig, "Upgrading LightClientV3 with ");
                 if use_multisig {
-                    upgrade_light_client_v3_multisig_owner(
+                    let calldata = upgrade_light_client_v3_multisig_owner(
                         provider,
                         contracts,
                         use_mock,
-                        rpc_url.to_string(),
-                        dry_run,
+                        MultisigOwnerCheck::RequireContract,
                     )
-                    .await?;
+                    .await?
+                    .with_description("Upgrade LightClient to V3".to_string());
+                    output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     crate::upgrade_light_client_v3(provider, contracts, use_mock).await?;
 
@@ -438,27 +443,27 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             },
             Contract::StakeTableV2 => {
                 let use_multisig = self.use_multisig;
-                let dry_run = self.dry_run;
                 // Default to deployer address if pauser not explicitly set (for local demos)
                 let multisig_pauser = self.multisig_pauser.unwrap_or(admin);
                 let l1_client = L1Client::new(vec![self.rpc_url.clone()])?;
-                tracing::info!(?dry_run, ?use_multisig, "Upgrading to StakeTableV2 with ");
+                tracing::info!(?use_multisig, "Upgrading to StakeTableV2 with ");
                 if use_multisig {
-                    upgrade_stake_table_v2_multisig_owner(
+                    let calldata = upgrade_stake_table_v2_multisig_owner(
                         provider,
                         l1_client,
                         contracts,
                         StakeTableV2UpgradeParams {
-                            rpc_url: self.rpc_url.to_string(),
                             multisig_address: self.multisig.context(
                                 "Multisig address must be set when upgrading to --use-multisig \
                                  flag is present",
                             )?,
                             pauser: multisig_pauser,
-                            dry_run,
                         },
+                        MultisigOwnerCheck::RequireContract,
                     )
-                    .await?;
+                    .await?
+                    .with_description("Upgrade StakeTable to V2".to_string());
+                    output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
                 } else {
                     // Pick admin from config. StakeTable uses OpsTimelock for faster
                     // emergency updates since it handles critical staking ops.
@@ -703,23 +708,17 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
 
         let params = if let Some(multisig_proposer) = self.multisig {
             // Multisig path
-            let rpc_url = self.rpc_url.to_string();
-            let use_hardware_wallet = self.ledger;
             TimelockOperationParams {
                 multisig_proposer: Some(multisig_proposer),
-                rpc_url: Some(rpc_url),
-                use_hardware_wallet,
                 operation_id,
-                dry_run: self.dry_run,
+                dry_run: false,
             }
         } else {
             // EOA path (for tests/local development)
             TimelockOperationParams {
                 multisig_proposer: None,
-                rpc_url: None,
-                use_hardware_wallet: false,
                 operation_id,
-                dry_run: self.dry_run,
+                dry_run: false,
             }
         };
 
@@ -735,12 +734,13 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         Ok(())
     }
 
-    /// Propose ownership transfer from multisig to timelock
-    pub async fn propose_transfer_ownership_to_timelock(
+    /// Encode ownership transfer from multisig to timelock as calldata
+    pub async fn encode_transfer_ownership_to_timelock(
         &self,
         contracts: &mut Contracts,
     ) -> Result<()> {
-        let multisig = self.multisig.expect(
+        // Validate multisig is set (even though we now encode calldata rather than submit to Safe)
+        let _multisig = self.multisig.expect(
             "Multisig address must be set when proposing ownership transfer. Use \
              --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
         );
@@ -755,40 +755,31 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         let timelock_address =
             derive_timelock_address_from_contract_type(ownable_contract, contracts)?;
 
+        if !crate::is_contract(&self.deployer, timelock_address).await? {
+            anyhow::bail!(
+                "Timelock address is not a contract (expected timelock at {timelock_address:#x})"
+            );
+        }
+
         let contract: Contract = ownable_contract.into();
         tracing::info!(
-            "Proposing transfer of ownership from multisig to timelock for {:?} (timelock: {:?})",
+            "Encoding transfer of ownership from multisig to timelock for {:?} (timelock: {:?})",
             contract,
             timelock_address
         );
-        let rpc_url = self.rpc_url.clone();
-        let dry_run = self.dry_run;
-        let use_hardware_wallet = self.ledger;
-        let result = transfer_ownership_from_multisig_to_timelock(
-            &self.deployer,
+        let calldata = transfer_ownership_from_multisig_to_timelock(
             contracts,
             contract,
             TransferOwnershipParams {
                 new_owner: timelock_address,
-                rpc_url,
-                safe_addr: multisig,
-                use_hardware_wallet,
-                dry_run,
             },
-        )
-        .await?;
-        if !result.status.success() {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-            let stdout = String::from_utf8_lossy(&result.stdout);
-            anyhow::bail!(
-                "Failed to propose ownership transfer for {}: {}\nStdout: {}\nStderr: {}",
-                contract,
-                result.status,
-                stdout,
-                stderr
-            );
-        }
-        tracing::info!("Successfully proposed ownership transfer for {}", contract);
+        )?
+        .with_description(format!(
+            "Transfer {} ownership to timelock {timelock_address}",
+            contract
+        ));
+        output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
+        tracing::info!("Successfully encoded ownership transfer for {}", contract);
         Ok(())
     }
 
@@ -850,8 +841,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         Ok(())
     }
 
-    /// Propose a transaction via Safe multisig
-    pub async fn propose_multisig_transaction(&self) -> Result<()> {
+    /// Encode a multisig transaction as calldata and output it
+    pub async fn encode_multisig_transaction(&self) -> Result<()> {
         let target = self
             .multisig_transaction_target
             .context("Multisig transaction target address not found")?;
@@ -863,25 +854,16 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             .multisig_transaction_function_args
             .clone()
             .unwrap_or_default();
-        let value = self
+        let value: U256 = self
             .multisig_transaction_value
-            .clone()
-            .unwrap_or_else(|| "0".to_string());
-        let multisig = self
-            .multisig
-            .context("Multisig address required for multisig transaction proposal")?;
+            .as_deref()
+            .unwrap_or("0")
+            .parse()
+            .context("Failed to parse multisig transaction value as U256")?;
 
-        call_propose_transaction_generic_script(
-            target,
-            function_signature.clone(),
-            function_args,
-            self.rpc_url.to_string(),
-            multisig,
-            self.ledger,
-            Some(value),
-            self.dry_run,
-        )
-        .await?;
+        let calldata = encode_generic_calldata(target, function_signature, function_args, value)?
+            .with_description(format!("Call {} on {target}", function_signature));
+        output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
 
         Ok(())
     }

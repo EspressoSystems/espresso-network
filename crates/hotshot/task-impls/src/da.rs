@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::{Consensus, OuterConsensus, PayloadWithMetadata},
-    data::{vid_commitment, vid_disperse::vid_total_weight, DaProposal2, PackedBundle},
+    data::{
+        DaProposal2, EpochNumber, PackedBundle, ViewNumber, vid_commitment,
+        vid_disperse::vid_total_weight,
+    },
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType},
     message::{Proposal, UpgradeLock},
@@ -19,13 +22,13 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2},
     storage_metrics::StorageMetricsValue,
     traits::{
+        BlockPayload, EncodeBytes,
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
-        BlockPayload, EncodeBytes,
     },
-    utils::{epoch_from_block_number, is_ge_epoch_root, is_last_block, EpochTransitionIndicator},
+    utils::{EpochTransitionIndicator, epoch_from_block_number, is_ge_epoch_root, is_last_block},
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -36,7 +39,7 @@ use tracing::instrument;
 use crate::{
     events::HotShotEvent,
     helpers::broadcast_event,
-    vote_collection::{handle_vote, VoteCollectorsMap},
+    vote_collection::{VoteCollectorsMap, handle_vote},
 };
 
 /// Tracks state of a DA task
@@ -45,10 +48,10 @@ pub struct DaTaskState<TYPES: NodeType, I: NodeImplementation<TYPES>> {
     pub output_event_stream: async_broadcast::Sender<Event<TYPES>>,
 
     /// View number this view is executing in.
-    pub cur_view: TYPES::View,
+    pub cur_view: ViewNumber,
 
     /// Epoch number this node is executing in.
-    pub cur_epoch: Option<TYPES::Epoch>,
+    pub cur_epoch: Option<EpochNumber>,
 
     /// Reference to consensus. Leader will require a read lock on this.
     pub consensus: OuterConsensus<TYPES>,
@@ -193,7 +196,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 let total_weight =
                     vid_total_weight::<TYPES>(&membership.stake_table().await, epoch_number);
 
-                let version = self.upgrade_lock.version_infallible(view_number).await;
+                let version = self.upgrade_lock.version_infallible(view_number);
 
                 let txns = Arc::clone(&proposal.data.encoded_transactions);
                 let txns_clone = Arc::clone(&txns);
@@ -209,7 +212,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 ) && self
                     .upgrade_lock
                     .epochs_enabled(proposal.data.view_number())
-                    .await
                     && epoch_number.is_some()
                 {
                     let next_epoch_total_weight = vid_total_weight::<TYPES>(
@@ -256,8 +258,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                     &self.public_key,
                     &self.private_key,
                     &self.upgrade_lock,
-                )
-                .await?;
+                )?;
 
                 tracing::debug!("Sending vote to the DA leader {}", vote.view_number());
 
@@ -358,7 +359,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                     });
                 }
             },
-            HotShotEvent::DaVoteRecv(ref vote) => {
+            HotShotEvent::DaVoteRecv(vote) => {
                 tracing::debug!("DA vote recv, Main Task {}", vote.view_number());
                 // Check if we are the leader and the vote is from the sender.
                 let view = vote.view_number();
@@ -445,34 +446,33 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 // And we aren't in an epoch greater than the high qc's epoch.  In other words
                 // we expect to propose to both epochs if the next block after our current high QC is
                 // going to be a transition block.  We most likely will propose the high QC's block height + 1.
-                let epoch_transition_indicator =
-                    if self.upgrade_lock.epochs_enabled(view_number).await {
-                        match (high_qc_block_number, self.cur_epoch) {
-                            (Some(block_number), Some(cur_epoch)) => {
-                                let epoch = epoch_from_block_number(
-                                    block_number,
-                                    self.membership_coordinator.epoch_height,
-                                );
-                                if epoch < *cur_epoch {
-                                    // We are in a new epoch, we can't be in transition
-                                    EpochTransitionIndicator::NotInTransition
-                                } else if !is_last_block(
-                                    block_number,
-                                    self.membership_coordinator.epoch_height,
-                                ) && is_ge_epoch_root(
-                                    block_number,
-                                    self.membership_coordinator.epoch_height,
-                                ) {
-                                    EpochTransitionIndicator::InTransition
-                                } else {
-                                    EpochTransitionIndicator::NotInTransition
-                                }
-                            },
-                            _ => EpochTransitionIndicator::NotInTransition,
-                        }
-                    } else {
-                        EpochTransitionIndicator::NotInTransition
-                    };
+                let epoch_transition_indicator = if self.upgrade_lock.epochs_enabled(view_number) {
+                    match (high_qc_block_number, self.cur_epoch) {
+                        (Some(block_number), Some(cur_epoch)) => {
+                            let epoch = epoch_from_block_number(
+                                block_number,
+                                self.membership_coordinator.epoch_height,
+                            );
+                            if epoch < *cur_epoch {
+                                // We are in a new epoch, we can't be in transition
+                                EpochTransitionIndicator::NotInTransition
+                            } else if !is_last_block(
+                                block_number,
+                                self.membership_coordinator.epoch_height,
+                            ) && is_ge_epoch_root(
+                                block_number,
+                                self.membership_coordinator.epoch_height,
+                            ) {
+                                EpochTransitionIndicator::InTransition
+                            } else {
+                                EpochTransitionIndicator::NotInTransition
+                            }
+                        },
+                        _ => EpochTransitionIndicator::NotInTransition,
+                    }
+                } else {
+                    EpochTransitionIndicator::NotInTransition
+                };
 
                 drop(consensus_reader);
 

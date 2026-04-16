@@ -7,8 +7,6 @@
 //! Libp2p based/production networking implementation
 //! This module provides a libp2p based networking implementation where each node in the
 //! network forms a tcp or udp connection to a subset of other nodes in the network
-#[cfg(feature = "hotshot-testing")]
-use std::str::FromStr;
 use std::{
     cmp::min,
     collections::{BTreeSet, HashSet},
@@ -16,13 +14,15 @@ use std::{
     net::{IpAddr, ToSocketAddrs},
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
+#[cfg(feature = "hotshot-testing")]
+use std::{collections::HashMap, str::FromStr};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use bimap::BiMap;
@@ -32,45 +32,45 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtN
 pub use hotshot_libp2p_networking::network::{GossipConfig, RequestResponseConfig};
 use hotshot_libp2p_networking::{
     network::{
+        DEFAULT_REPLICATION_FACTOR,
+        NetworkEvent::{self, DirectRequest, DirectResponse, GossipMsg},
+        NetworkNodeConfig, NetworkNodeConfigBuilder, NetworkNodeHandle, NetworkNodeReceiver,
         behaviours::dht::{
             record::{Namespace, RecordKey, RecordValue},
             store::persistent::DhtPersistentStorage,
         },
         spawn_network_node,
         transport::construct_auth_message,
-        NetworkEvent::{self, DirectRequest, DirectResponse, GossipMsg},
-        NetworkNodeConfig, NetworkNodeConfigBuilder, NetworkNodeHandle, NetworkNodeReceiver,
-        DEFAULT_REPLICATION_FACTOR,
     },
     reexport::Multiaddr,
 };
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     constants::LOOK_AHEAD,
     data::{EpochNumber, ViewNumber},
     network::NetworkConfig,
     traits::{
         metrics::{Counter, Gauge, Metrics, NoMetrics},
         network::{ConnectedNetwork, NetworkError, Topic},
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::NodeType,
         signature_key::{PrivateSignatureKey, SignatureKey},
     },
-    BoxSyncFuture,
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    PeerConnectInfo,
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
 };
 use libp2p_identity::{
-    ed25519::{self, SecretKey},
     Keypair, PeerId,
+    ed25519::{self, SecretKey},
 };
 use serde::Serialize;
 use tokio::{
     select, spawn,
     sync::{
-        mpsc::{channel, error::TrySendError, Receiver, Sender},
         Mutex,
+        mpsc::{Receiver, Sender, channel, error::TrySendError},
     },
     time::sleep,
 };
@@ -206,6 +206,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Libp2pNetwork<T> {
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        _connect_infos: &mut HashMap<T::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         assert!(
             da_committee_size <= expected_node_count,
@@ -815,7 +816,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         #[cfg(feature = "hotshot-testing")]
         {
             let metrics = self.inner.metrics.clone();
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 let handle = Arc::clone(&self.inner.handle);
 
                 let fut = config.clone().chaos_send_msg(
@@ -908,7 +909,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let pid = match self
             .inner
             .handle
-            .lookup_node(&recipient, self.inner.dht_timeout)
+            .lookup_node(&recipient, Duration::from_secs(2))
             .await
         {
             Ok(pid) => pid,
@@ -923,7 +924,7 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         #[cfg(feature = "hotshot-testing")]
         {
             let metrics = self.inner.metrics.clone();
-            if let Some(ref config) = &self.inner.reliability_config {
+            if let Some(config) = &self.inner.reliability_config {
                 let handle = Arc::clone(&self.inner.handle);
 
                 let fut = config.clone().chaos_send_msg(
@@ -1003,8 +1004,8 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
     ) where
         TYPES: NodeType<SignatureKey = T::SignatureKey>,
     {
-        let future_view = <TYPES as NodeType>::View::new(*view) + LOOK_AHEAD;
-        let epoch = epoch.map(|e| <TYPES as NodeType>::Epoch::new(*e));
+        let future_view = ViewNumber::new(*view) + LOOK_AHEAD;
+        let epoch = epoch.map(|e| EpochNumber::new(*e));
 
         let membership = match membership_coordinator.membership_for_epoch(epoch).await {
             Ok(m) => m,

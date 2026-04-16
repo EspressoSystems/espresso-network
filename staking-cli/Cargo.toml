@@ -19,9 +19,11 @@ derive_more = { workspace = true }
 directories = { workspace = true }
 dotenvy = { workspace = true }
 espresso-contract-deployer = { workspace = true }
+espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true }
 futures-util = { workspace = true }
-git-version = { workspace = true }
+
+espresso-utils = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }
@@ -34,10 +36,9 @@ reqwest = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 rust_decimal = { workspace = true }
-sequencer-utils = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = { workspace = true }
+
 tagged-base64 = { workspace = true }
 test-utils = { path = "../test-utils", optional = true }
 thiserror = { workspace = true }

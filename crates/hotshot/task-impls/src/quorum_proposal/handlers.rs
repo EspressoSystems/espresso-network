@@ -18,7 +18,9 @@ use committable::{Commitment, Committable};
 use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
     consensus::{CommitmentAndMetadata, OuterConsensus},
-    data::{Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2},
+    data::{
+        Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperse, ViewChangeEvidence2, ViewNumber,
+    },
     epoch_membership::EpochMembership,
     message::Proposal,
     simple_certificate::{
@@ -26,11 +28,11 @@ use hotshot_types::{
         UpgradeCertificate,
     },
     traits::{
+        BlockPayload,
         block_contents::BlockHeader,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
         signature_key::SignatureKey,
         storage::Storage,
-        BlockPayload,
     },
     utils::{
         epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block,
@@ -76,10 +78,10 @@ pub(crate) enum ProposalDependency {
 /// Handler for the proposal dependency
 pub struct ProposalDependencyHandle<TYPES: NodeType> {
     /// Latest view number that has been proposed for (proxy for cur_view).
-    pub latest_proposed_view: TYPES::View,
+    pub latest_proposed_view: ViewNumber,
 
     /// The view number to propose for.
-    pub view_number: TYPES::View,
+    pub view_number: ViewNumber,
 
     /// The event sender.
     pub sender: Sender<Arc<HotShotEvent<TYPES>>>,
@@ -207,7 +209,7 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
         )>,
     > {
         ensure!(
-            self.upgrade_lock.epochs_enabled(self.view_number).await,
+            self.upgrade_lock.epochs_enabled(self.view_number),
             error!("Epochs are not enabled yet we tried to wait for Highest QC.")
         );
 
@@ -307,7 +309,7 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
         tracing::debug!("waiting for QC");
         // If we haven't upgraded to Hotstuff 2 just return the high qc right away
         ensure!(
-            self.upgrade_lock.epochs_enabled(self.view_number).await,
+            self.upgrade_lock.epochs_enabled(self.view_number),
             error!("Epochs are not enabled yet we tried to wait for Highest QC.")
         );
 
@@ -485,10 +487,10 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             .upgrade_certificate()
             .or(formed_upgrade_certificate);
 
-        if let Some(cert) = upgrade_certificate.clone() {
-            if cert.is_relevant(self.view_number).await.is_err() {
-                upgrade_certificate = None;
-            }
+        if let Some(cert) = upgrade_certificate.clone()
+            && cert.is_relevant(self.view_number).await.is_err()
+        {
+            upgrade_certificate = None;
         }
 
         let proposal_certificate = view_change_evidence
@@ -501,7 +503,7 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             "Cannot propose because our VID payload commitment and metadata is for an older view."
         );
 
-        let version = self.upgrade_lock.version(self.view_number).await?;
+        let version = self.upgrade_lock.version(self.view_number)?;
 
         let builder_commitment = commitment_and_metadata.builder_commitment.clone();
         let metadata = commitment_and_metadata.metadata.clone();
@@ -511,8 +513,7 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
                 > self
                     .upgrade_lock
                     .upgrade_view()
-                    .await
-                    .unwrap_or(TYPES::View::new(0))
+                    .unwrap_or(ViewNumber::new(0))
         {
             let Some(parent_block_number) = parent_qc.data.block_number else {
                 tracing::error!("Parent QC does not have a block number. Do not propose.");
@@ -560,7 +561,7 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
         .await
         .wrap()
         .context(warn!("Failed to construct block header"))?;
-        let epoch = option_epoch_from_block_number::<TYPES>(
+        let epoch = option_epoch_from_block_number(
             version >= EPOCH_VERSION,
             block_header.block_number(),
             self.epoch_height,
@@ -584,7 +585,7 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             .data
             .block_number
             .is_some_and(|block_number| is_epoch_transition(block_number, self.epoch_height));
-        let next_epoch_qc = if self.upgrade_lock.epochs_enabled(self.view_number).await
+        let next_epoch_qc = if self.upgrade_lock.epochs_enabled(self.view_number)
             && is_high_qc_for_transition_block
         {
             ensure!(
@@ -722,7 +723,7 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             }
         }
 
-        let Ok(version) = self.upgrade_lock.version(self.view_number).await else {
+        let Ok(version) = self.upgrade_lock.version(self.view_number) else {
             bail!(error!(
                 "Failed to get version for view {:?}, not proposing",
                 self.view_number
@@ -862,13 +863,13 @@ impl<TYPES: NodeType> HandleDepOutput for ProposalDependencyHandle<TYPES> {
 }
 
 pub(super) async fn handle_eqc_formed<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    cert_view: TYPES::View,
+    cert_view: ViewNumber,
     leaf_commit: Commitment<Leaf2<TYPES>>,
     block_number: Option<u64>,
     task_state: &mut QuorumProposalTaskState<TYPES, I>,
     event_sender: &Sender<Arc<HotShotEvent<TYPES>>>,
 ) {
-    if !task_state.upgrade_lock.epochs_enabled(cert_view).await {
+    if !task_state.upgrade_lock.epochs_enabled(cert_view) {
         tracing::debug!("QC2 formed but epochs not enabled. Do nothing");
         return;
     }

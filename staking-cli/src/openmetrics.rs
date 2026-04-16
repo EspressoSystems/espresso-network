@@ -44,32 +44,32 @@ pub fn parse_openmetrics(text: &str) -> Result<NodeMetadataContent> {
                 }
             },
             "consensus_node_identity_general" => {
-                if let Some(v) = sample.labels.get("name") {
-                    if !v.is_empty() {
-                        name = Some(v.to_string());
-                    }
+                if let Some(v) = sample.labels.get("name")
+                    && !v.is_empty()
+                {
+                    name = Some(v.to_string());
                 }
-                if let Some(v) = sample.labels.get("description") {
-                    if !v.is_empty() {
-                        description = Some(v.to_string());
-                    }
+                if let Some(v) = sample.labels.get("description")
+                    && !v.is_empty()
+                {
+                    description = Some(v.to_string());
                 }
-                if let Some(v) = sample.labels.get("company_name") {
-                    if !v.is_empty() {
-                        company_name = Some(v.to_string());
-                    }
+                if let Some(v) = sample.labels.get("company_name")
+                    && !v.is_empty()
+                {
+                    company_name = Some(v.to_string());
                 }
-                if let Some(v) = sample.labels.get("company_website") {
-                    if !v.is_empty() {
-                        company_website = Url::parse(v).ok();
-                    }
+                if let Some(v) = sample.labels.get("company_website")
+                    && !v.is_empty()
+                {
+                    company_website = Url::parse(v).ok();
                 }
             },
             "consensus_version" => {
-                if let Some(v) = sample.labels.get("desc") {
-                    if !v.is_empty() {
-                        client_version = Some(v.to_string());
-                    }
+                if let Some(v) = sample.labels.get("desc")
+                    && !v.is_empty()
+                {
+                    client_version = Some(v.to_string());
                 }
             },
             "consensus_node_identity_icon" => {
@@ -215,10 +215,12 @@ consensus_version{desc="1.0.0"} 1
 
         let result = parse_openmetrics(metrics);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing required consensus_node metric"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing required consensus_node metric")
+        );
     }
 
     #[test]

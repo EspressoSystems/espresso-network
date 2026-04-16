@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
 
 use crate::{
-    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
     VidError, VidResult, VidScheme,
+    utils::bytes_to_field::{self, bytes_to_field, field_to_bytes},
 };
 
 mod config;
@@ -237,7 +237,7 @@ impl AvidMScheme {
         payload_byte_len: usize,
     ) -> VidResult<(AvidMCommit, Vec<AvidMShare>)> {
         // let payload_byte_len = payload.len();
-        let total_weights = distribution.iter().sum::<u32>() as usize;
+        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
         if total_weights != param.total_weights {
             return Err(VidError::Argument(
                 "Weight distribution is inconsistent with the given param".to_string(),
@@ -253,10 +253,10 @@ impl AvidMScheme {
         // consecutive raw shares ranging as `ranges[i]`.
         let ranges: Vec<_> = distribution
             .iter()
-            .scan(0, |sum, w| {
+            .scan(0usize, |sum, w| {
                 let prefix_sum = *sum;
-                *sum += w;
-                Some(prefix_sum as usize..*sum as usize)
+                *sum += *w as usize;
+                Some(prefix_sum..*sum)
             })
             .collect();
         let shares: Vec<_> = ranges
@@ -306,7 +306,8 @@ impl AvidMScheme {
         commit: &AvidMCommit,
         share: &RawAvidMShare,
     ) -> VidResult<crate::VerificationResult> {
-        if share.range.end > param.total_weights
+        if share.range.is_empty()
+            || share.range.end > param.total_weights
             || share.range.len() != share.payload.len()
             || share.range.len() != share.mt_proofs.len()
         {
@@ -441,11 +442,11 @@ impl VidScheme for AvidMScheme {
         let mut bytes: Vec<u8> = field_to_bytes(Self::recover_fields(param, shares)?).collect();
         // Remove the trimming zeros and the last 1 to get the actual payload bytes.
         // See `pad_to_fields`.
-        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0) {
-            if bytes[pad_index] == 1u8 {
-                bytes.truncate(pad_index);
-                return Ok(bytes);
-            }
+        if let Some(pad_index) = bytes.iter().rposition(|&b| b != 0)
+            && bytes[pad_index] == 1u8
+        {
+            bytes.truncate(pad_index);
+            return Ok(bytes);
         }
         Err(VidError::Argument(
             "Malformed payload, cannot find the padding position".to_string(),
@@ -456,10 +457,10 @@ impl VidScheme for AvidMScheme {
 /// Unit tests
 #[cfg(test)]
 pub mod tests {
-    use rand::{seq::SliceRandom, RngCore};
+    use rand::{RngCore, seq::SliceRandom};
 
     use super::F;
-    use crate::{avidm::AvidMScheme, utils::bytes_to_field, VidScheme};
+    use crate::{VidScheme, avidm::AvidMScheme, utils::bytes_to_field};
 
     #[test]
     fn test_padding() {

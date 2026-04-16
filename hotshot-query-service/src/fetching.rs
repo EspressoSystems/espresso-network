@@ -22,15 +22,18 @@
 //!
 
 use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, hash_map::Entry},
     fmt::Debug,
     sync::Arc,
     time::Duration,
 };
 
+use anyhow::ensure;
 use async_lock::{Mutex, Semaphore};
-use backoff::{backoff::Backoff, ExponentialBackoff};
+use backoff::{ExponentialBackoff, backoff::Backoff};
 use derivative::Derivative;
+use derive_more::Into;
+use serde::{Deserialize, Serialize};
 use tokio::{spawn, time::sleep};
 
 pub mod provider;
@@ -38,6 +41,8 @@ pub mod request;
 
 pub use provider::Provider;
 pub use request::Request;
+
+use crate::types::HeightIndexed;
 
 /// A callback to process the result of a request.
 ///
@@ -179,5 +184,129 @@ impl<T, C> Fetcher<T, C> {
                 callback.run(res.clone()).await;
             }
         });
+    }
+}
+
+/// Added type safety for objects which are fetched in batches.
+///
+/// A [`NonEmptyRange`] has a similar interface as a [`Vec`], but it enforces, via the methods with
+/// which it can be constructed, that the data it contains is always
+/// * at least one object of type `T`
+/// * a contiguous range of objects ordered by increasing [`height`](HeightIndexed::height).
+#[derive(Clone, Debug, Into, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(
+    // Important: use `try_from` when deserializing so that we perform the necessary invariant
+    // checks.
+    try_from = "Vec<T>",
+    into = "Vec<T>",
+    bound(
+        deserialize = "T: HeightIndexed + serde::de::DeserializeOwned",
+        serialize = "T: Clone + Serialize"
+    )
+)]
+pub struct NonEmptyRange<T>(Vec<T>);
+
+impl<T> NonEmptyRange<T>
+where
+    T: HeightIndexed,
+{
+    /// Construct a [`NonEmptyRange`] from a sequence of elements.
+    ///
+    /// # Errors
+    ///
+    /// This constructor will fail if the given sequence is empty, or if its elements do not
+    /// represent a contiguous range by height.
+    pub fn new(elems: impl IntoIterator<Item = T>) -> anyhow::Result<Self> {
+        elems.into_iter().collect::<Vec<_>>().try_into()
+    }
+
+    /// The inclusive lower bound of the range of heights of objects in this [`NonEmptyRange`].
+    pub fn start(&self) -> u64 {
+        self.0[0].height()
+    }
+
+    /// The exclusive upper bound of the range of heights of objects in this [`NonEmptyRange`].
+    pub fn end(&self) -> u64 {
+        self.start() + (self.len() as u64)
+    }
+
+    /// The number of objects in this [`NonEmptyRange`].
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the [`NonEmptyRange`] is empty.
+    ///
+    /// This function always returns `false`. It is included only because it is idiomatically
+    /// paired with [`Self::len`], as demanded by Clippy.
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.0.iter()
+    }
+
+    /// Convert a range of objects into an equivalent range of sub-objects with the same heights.
+    pub(crate) fn as_ref_cloned<U>(&self) -> NonEmptyRange<U>
+    where
+        T: AsRef<U>,
+        U: Clone,
+    {
+        NonEmptyRange(self.0.iter().map(|t| t.as_ref().clone()).collect())
+    }
+}
+
+impl<T> TryFrom<Vec<T>> for NonEmptyRange<T>
+where
+    T: HeightIndexed,
+{
+    type Error = anyhow::Error;
+
+    fn try_from(elems: Vec<T>) -> Result<Self, Self::Error> {
+        ensure!(
+            !elems.is_empty(),
+            "cannot construct a non-empty range from an empty vector"
+        );
+        for (x, y) in elems.iter().zip(&elems[1..]) {
+            ensure!(
+                x.height() + 1 == y.height(),
+                "cannot construct a non-empty range from a non-contiguous vector"
+            );
+        }
+        Ok(Self(elems))
+    }
+}
+
+impl<T> PartialEq<Vec<T>> for NonEmptyRange<T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Vec<T>) -> bool {
+        self.0.eq(other)
+    }
+}
+
+impl<T> IntoIterator for NonEmptyRange<T> {
+    type IntoIter = <Vec<T> as IntoIterator>::IntoIter;
+    type Item = T;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a NonEmptyRange<T> {
+    type IntoIter = <&'a Vec<T> as IntoIterator>::IntoIter;
+    type Item = &'a T;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<T> AsRef<[T]> for NonEmptyRange<T> {
+    fn as_ref(&self) -> &[T] {
+        self.0.as_ref()
     }
 }

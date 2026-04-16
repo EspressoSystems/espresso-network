@@ -12,9 +12,11 @@ clap = { workspace = true }
 derive_builder = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-types = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 surf-disco = { workspace = true }
 tide-disco = { workspace = true }
@@ -25,8 +27,9 @@ vbs = { workspace = true }
 
 [dev-dependencies]
 espresso-types = { workspace = true, features = ["testing"] }
+espresso-utils = { workspace = true }
 rand = { workspace = true }
-sequencer-utils = { workspace = true }
+tempfile = { workspace = true }
 test-log = { workspace = true }
 
 [lints]

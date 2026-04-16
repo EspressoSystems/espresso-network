@@ -10,7 +10,7 @@ pub mod types;
 
 use hotshot::helpers::initialize_logging;
 use hotshot_example_types::state_types::TestTypes;
-use hotshot_examples::infra::{read_orchestrator_init_config, run_orchestrator, OrchestratorArgs};
+use hotshot_examples::infra::{OrchestratorArgs, read_orchestrator_init_config, run_orchestrator};
 use tracing::instrument;
 
 #[tokio::main]

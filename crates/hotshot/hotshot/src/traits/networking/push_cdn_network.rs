@@ -5,7 +5,10 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 #[cfg(feature = "hotshot-testing")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicBool, Ordering},
+};
 use std::{collections::VecDeque, marker::PhantomData, sync::Arc};
 #[cfg(feature = "hotshot-testing")]
 use std::{path::Path, time::Duration};
@@ -14,27 +17,23 @@ use async_trait::async_trait;
 use bincode::config::Options;
 use cdn_broker::reexports::{
     connection::protocols::{Quic, Tcp},
-    def::{hook::NoMessageHook, ConnectionDef, RunDef, Topic as TopicTrait},
+    def::{ConnectionDef, RunDef, Topic as TopicTrait, hook::NoMessageHook},
     discovery::{Embedded, Redis},
 };
 #[cfg(feature = "hotshot-testing")]
 use cdn_broker::{Broker, Config as BrokerConfig};
 pub use cdn_client::reexports::crypto::signature::KeyPair;
 use cdn_client::{
+    Client, Config as ClientConfig,
     reexports::{
         crypto::signature::{Serializable, SignatureScheme},
         message::{Broadcast, Direct, Message as PushCdnMessage},
     },
-    Client, Config as ClientConfig,
 };
 #[cfg(feature = "hotshot-testing")]
 use cdn_marshal::{Config as MarshalConfig, Marshal};
-#[cfg(feature = "hotshot-testing")]
-use hotshot_types::traits::network::{
-    AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
-};
 use hotshot_types::{
-    boxed_sync,
+    BoxSyncFuture, boxed_sync,
     data::ViewNumber,
     traits::{
         metrics::{Counter, Metrics, NoMetrics},
@@ -42,13 +41,16 @@ use hotshot_types::{
         signature_key::SignatureKey,
     },
     utils::bincode_opts,
-    BoxSyncFuture,
+};
+#[cfg(feature = "hotshot-testing")]
+use hotshot_types::{
+    PeerConnectInfo,
+    traits::network::{AsyncGenerator, NetworkReliability, TestableNetworkingImplementation},
 };
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
-use rand::{rngs::StdRng, RngCore, SeedableRng};
-#[cfg(feature = "hotshot-testing")]
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use test_utils::reserve_tcp_port;
 use tokio::sync::mpsc::error::TrySendError;
 #[cfg(feature = "hotshot-testing")]
@@ -322,6 +324,7 @@ impl<TYPES: NodeType> TestableNetworkingImplementation<TYPES>
         da_committee_size: usize,
         _reliability_config: Option<Box<dyn NetworkReliability>>,
         _secondary_network_delay: Duration,
+        _connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>> {
         // The configuration we are using for testing is 2 brokers & 1 marshal
 

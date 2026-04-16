@@ -3,16 +3,16 @@
 #
 # ./ci-build-binary <binary>
 #
-# where <binary> is one of: sequencer, sequencer-sqlite, espresso-dev-node, other
+# where <binary> is one of: espresso-node, espresso-node-sqlite, espresso-dev-node, other
 #
 set -euo pipefail
 
 case "$1" in
-    "sequencer")
-        cargo build --locked --release --timings -p sequencer --bin sequencer
+    "espresso-node")
+        cargo build --locked --release --timings -p espresso-node --bin espresso-node
         ;;
-    "sequencer-sqlite")
-        cargo build --locked --release --timings -p sequencer-sqlite
+    "espresso-node-sqlite")
+        cargo build --locked --release --timings -p espresso-node-sqlite
         ;;
     "espresso-dev-node")
         cargo build --locked --release --timings -p espresso-dev-node
@@ -20,7 +20,7 @@ case "$1" in
     "other")
         BINS="$(cargo metadata --no-deps --format-version 1 \
         | jq -r '.packages[].targets[] | select(.kind[] == "bin") | .name' \
-        | grep -v '^sequencer$\|^sequencer-sqlite$\|^espresso-dev-node$' \
+        | grep -v '^espresso-node$\|^espresso-node-sqlite$\|^espresso-dev-node$' \
         | xargs -I{} echo --bin {} \
         | tr '\n' ' ')"
         echo "Building other binaries: $BINS"

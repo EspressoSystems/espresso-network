@@ -227,6 +227,18 @@ data, such as VID range proofs.
 To recover the VID share belonging to this node, see the `node` API endpoint `/node/vid/share`.
 """
 
+[route.get_vid_common_range]
+PATH = ["vid/common/:from/:until"]
+":from" = "Integer"
+":until" = "Integer"
+DOC = """
+Get VID common objects based on their position in the ledger,
+the VID common are taken starting from the given :from up until the given :until.
+
+The allowable length of the requested range may be restricted by an implementation-defined limit
+(see `/limits`). Requests for ranges exceeding these limits will fail with a 400 status code.
+"""
+
 [route.stream_vid_common]
 PATH = ["stream/vid/common/:height"]
 METHOD = "SOCKET"
@@ -274,7 +286,7 @@ PATH = [
     "transaction/:height/:index",
     "transaction/hash/:hash",
     "transaction/:height/:index/proof",
-    "transaction/hash/:hash/proof"
+    "transaction/hash/:hash/proof",
 ]
 ":height" = "Integer"
 ":index" = "Integer"

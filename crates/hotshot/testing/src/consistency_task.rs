@@ -12,10 +12,10 @@ use async_trait::async_trait;
 use committable::Committable;
 use hotshot_example_types::block_types::TestBlockHeader;
 use hotshot_types::{
-    data::Leaf2,
+    data::{Leaf2, ViewNumber},
     event::{Event, EventType},
     message::UpgradeLock,
-    traits::node_implementation::{ConsensusTime, NodeType},
+    traits::node_implementation::NodeType,
     vote::HasViewNumber,
 };
 use hotshot_utils::anytrace::*;
@@ -25,14 +25,14 @@ use versions::{Upgrade, VERSION_0_0};
 use crate::{
     overall_safety_task::OverallSafetyPropertiesDescription,
     test_builder::TransactionValidator,
-    test_task::{spawn_timeout_task, TestEvent, TestResult, TestTaskState},
+    test_task::{TestEvent, TestResult, TestTaskState, spawn_timeout_task},
 };
 
 /// Map from views to leaves for a single node, allowing multiple leaves for each view (because the node may a priori send us multiple leaves for a given view).
-pub type NodeMap<TYPES> = BTreeMap<<TYPES as NodeType>::View, Vec<Leaf2<TYPES>>>;
+pub type NodeMap<TYPES> = BTreeMap<ViewNumber, Vec<Leaf2<TYPES>>>;
 
 /// A sanitized map from views to leaves for a single node, with only a single leaf per view.
-pub type NodeMapSanitized<TYPES> = BTreeMap<<TYPES as NodeType>::View, Leaf2<TYPES>>;
+pub type NodeMapSanitized<TYPES> = BTreeMap<ViewNumber, Leaf2<TYPES>>;
 
 /// Validate that the `NodeMap` only has a single leaf per view.
 fn sanitize_node_map<TYPES: NodeType>(
@@ -71,16 +71,16 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
         .map(|((a, b), c)| (a, b, c));
 
     let mut decided_upgrade_certificate = None;
-    let mut view_decided = TYPES::View::new(0);
+    let mut view_decided = ViewNumber::new(0);
 
     for (grandparent, _parent, child) in leaf_triples {
-        if let Some(cert) = grandparent.upgrade_certificate() {
-            if cert.data.decide_by <= child.view_number() {
-                decided_upgrade_certificate = Some(cert);
-                view_decided = child.view_number();
+        if let Some(cert) = grandparent.upgrade_certificate()
+            && cert.data.decide_by <= child.view_number()
+        {
+            decided_upgrade_certificate = Some(cert);
+            view_decided = child.view_number();
 
-                break;
-            }
+            break;
         }
     }
 
@@ -101,8 +101,7 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
         );
 
         child
-            .extends_upgrade(parent, &upgrade_lock.decided_upgrade_certificate)
-            .await
+            .extends_upgrade(parent, &upgrade_lock)
             .context(|e| error!("Leaf {child:?} does not extend its parent {parent:?}: {e}"))?;
 
         ensure!(
@@ -123,11 +122,7 @@ async fn validate_node_map<TYPES: NodeType>(node_map: &NodeMapSanitized<TYPES>) 
         }
 
         if child.view_number() == view_decided {
-            upgrade_lock
-                .decided_upgrade_certificate
-                .write()
-                .await
-                .clone_from(&decided_upgrade_certificate);
+            upgrade_lock.set_decided_upgrade_cert(decided_upgrade_certificate.clone());
         }
     }
 
@@ -157,7 +152,7 @@ fn sanitize_network_map<TYPES: NodeType>(
     Ok(result)
 }
 
-pub type ViewMap<TYPES> = BTreeMap<<TYPES as NodeType>::View, BTreeMap<usize, Leaf2<TYPES>>>;
+pub type ViewMap<TYPES> = BTreeMap<ViewNumber, BTreeMap<usize, Leaf2<TYPES>>>;
 
 // Invert the network map by interchanging the roles of the node_id and view number.
 //
@@ -184,7 +179,7 @@ async fn invert_network_map<TYPES: NodeType>(
 }
 
 /// A view map, sanitized to have exactly one leaf per view.
-pub type ViewMapSanitized<TYPES> = BTreeMap<<TYPES as NodeType>::View, Leaf2<TYPES>>;
+pub type ViewMapSanitized<TYPES> = BTreeMap<ViewNumber, Leaf2<TYPES>>;
 
 fn sanitize_view_map<TYPES: NodeType>(
     view_map: &ViewMap<TYPES>,

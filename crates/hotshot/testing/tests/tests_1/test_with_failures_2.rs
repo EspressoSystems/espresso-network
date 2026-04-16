@@ -10,8 +10,7 @@ use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
-        CombinedImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, CliquenetImpl,
-        TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes, TEST_VERSIONS,
+        CliquenetImpl, CombinedImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes
     },
     state_types::TestTypes,
 };
@@ -28,7 +27,7 @@ use hotshot_types::{
     traits::{
         election::Membership,
         network::TransmitType,
-        node_implementation::{ConsensusTime, NodeType},
+        node_implementation::{NodeType},
     },
     vote::HasViewNumber,
 };
@@ -36,7 +35,7 @@ use hotshot_types::{
 // Test that a good leader can succeed in the view directly after view sync
 cross_tests!(
     TestName: test_with_failures_2,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -73,7 +72,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_with_double_leader_failures,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
     Types: [TestConsecutiveLeaderTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,

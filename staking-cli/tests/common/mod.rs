@@ -1,7 +1,7 @@
 use anyhow::Result;
 use assert_cmd::Command;
 use hotshot_types::signature_key::BLSPubKey;
-use staking_cli::{deploy::TestSystem, DEV_MNEMONIC, DEV_PRIVATE_KEY};
+use staking_cli::{DEV_MNEMONIC, DEV_PRIVATE_KEY, deploy::TestSystem};
 
 // Signer variants are selectively used across different test binaries
 #[allow(dead_code)]
@@ -67,7 +67,7 @@ pub trait TestSystemExt {
     ///
     /// Callers must add metadata-related args (`--metadata-uri`, `--skip-metadata-validation`, etc.)
     async fn setup_metadata_cmd(&self, command: MetadataCommand, signer: Signer)
-        -> Result<Command>;
+    -> Result<Command>;
 }
 
 impl TestSystemExt for TestSystem {
@@ -76,21 +76,25 @@ impl TestSystemExt for TestSystem {
         cmd.arg("--rpc-url")
             .arg(self.rpc_url.to_string())
             .arg("--stake-table-address")
-            .arg(self.stake_table.to_string())
-            .arg("--account-index")
-            .arg("0");
+            .arg(self.stake_table.to_string());
 
         match signer {
             Signer::Ledger => {
-                cmd.arg("--ledger");
+                cmd.arg("--ledger").arg("--account-index").arg("0");
             },
             Signer::Mnemonic => {
-                cmd.arg("--mnemonic").arg(DEV_MNEMONIC);
+                cmd.arg("--mnemonic")
+                    .arg(DEV_MNEMONIC)
+                    .arg("--account-index")
+                    .arg("0");
             },
             Signer::BrokeMnemonic => {
-                cmd.arg("--mnemonic").arg(
-                    "roast term reopen pave choose high rally trouble upon govern hollow stand",
-                );
+                cmd.arg("--mnemonic")
+                    .arg(
+                        "roast term reopen pave choose high rally trouble upon govern hollow stand",
+                    )
+                    .arg("--account-index")
+                    .arg("0");
             },
             Signer::PrivateKey => {
                 cmd.arg("--private-key").arg(DEV_PRIVATE_KEY);

@@ -1,12 +1,13 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use espresso_types::{SeqTypes, StakeTableWithEpochNumber};
-use hotshot_types::{utils::epoch_from_block_number, PeerConfig};
+use espresso_node::api::data_source::StakeTableWithEpochNumber;
+use espresso_types::SeqTypes;
+use hotshot_types::{PeerConfig, utils::epoch_from_block_number};
 use url::Url;
 
 use crate::{
-    common::{load_genesis_file, NativeDemo, TestRequirements},
+    common::{NativeDemo, TestRequirements, load_genesis_file},
     smoke::assert_native_demo_works,
 };
 

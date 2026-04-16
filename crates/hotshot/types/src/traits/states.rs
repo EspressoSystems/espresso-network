@@ -12,16 +12,13 @@
 
 use std::{error::Error, fmt::Debug, future::Future};
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
 
 use super::block_contents::TestableBlock;
 use crate::{
     data::Leaf2,
-    traits::{
-        node_implementation::{ConsensusTime, NodeType},
-        BlockPayload,
-    },
+    traits::{BlockPayload, node_implementation::NodeType},
 };
 
 /// Instance-level state, which allows us to fetch missing validated state.
@@ -52,8 +49,6 @@ pub trait ValidatedState<TYPES: NodeType>:
     type Instance: InstanceState;
     /// The type of the state delta this state is associated with.
     type Delta: StateDelta;
-    /// Time compatibility needed for reward collection
-    type Time: ConsensusTime;
 
     /// Check if the proposed block header is valid and apply it to the state if so.
     ///

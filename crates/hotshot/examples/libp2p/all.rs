@@ -11,8 +11,8 @@ pub mod types;
 use hotshot::helpers::initialize_logging;
 use hotshot_example_types::state_types::TestTypes;
 use hotshot_examples::infra::{
-    gen_local_address, read_orchestrator_init_config, run_orchestrator, OrchestratorArgs,
-    BUILDER_BASE_PORT, VALIDATOR_BASE_PORT,
+    BUILDER_BASE_PORT, OrchestratorArgs, VALIDATOR_BASE_PORT, gen_local_address,
+    read_orchestrator_init_config, run_orchestrator,
 };
 use hotshot_orchestrator::client::ValidatorArgs;
 use tokio::spawn;

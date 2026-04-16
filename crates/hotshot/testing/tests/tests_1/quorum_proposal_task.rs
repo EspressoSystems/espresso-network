@@ -27,7 +27,6 @@ use hotshot_testing::{
 use hotshot_types::{
     data::{null_block, EpochNumber, Leaf2, ViewChangeEvidence2, ViewNumber},
     simple_vote::{TimeoutData2, ViewSyncFinalizeData2},
-    traits::node_implementation::ConsensusTime,
     utils::BuilderCommitment,
 };
 use sha2::Digest;
@@ -54,8 +53,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
     let version = handle
         .hotshot
         .upgrade_lock
-        .version_infallible(ViewNumber::new(node_id))
-        .await;
+        .version_infallible(ViewNumber::new(node_id));
 
     let payload_commitment = build_payload_commitment::<TestTypes>(
         &epoch_1_mem,
@@ -196,11 +194,11 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
     .unwrap();
 
     let upgrade_lock = &handle.hotshot.upgrade_lock;
-    let version_1 = upgrade_lock.version_infallible(ViewNumber::new(1)).await;
-    let version_2 = upgrade_lock.version_infallible(ViewNumber::new(2)).await;
-    let version_3 = upgrade_lock.version_infallible(ViewNumber::new(3)).await;
-    let version_4 = upgrade_lock.version_infallible(ViewNumber::new(4)).await;
-    let version_5 = upgrade_lock.version_infallible(ViewNumber::new(5)).await;
+    let version_1 = upgrade_lock.version_infallible(ViewNumber::new(1));
+    let version_2 = upgrade_lock.version_infallible(ViewNumber::new(2));
+    let version_3 = upgrade_lock.version_infallible(ViewNumber::new(3));
+    let version_4 = upgrade_lock.version_infallible(ViewNumber::new(4));
+    let version_5 = upgrade_lock.version_infallible(ViewNumber::new(5));
 
     let inputs = vec![
         random![
@@ -332,8 +330,7 @@ async fn test_quorum_proposal_task_qc_timeout() {
     let version = handle
         .hotshot
         .upgrade_lock
-        .version_infallible(ViewNumber::new(node_id))
-        .await;
+        .version_infallible(ViewNumber::new(node_id));
 
     let payload_commitment = build_payload_commitment::<TestTypes>(
         &epoch_1_mem,
@@ -429,8 +426,7 @@ async fn test_quorum_proposal_task_view_sync() {
     let version = handle
         .hotshot
         .upgrade_lock
-        .version_infallible(ViewNumber::new(node_id))
-        .await;
+        .version_infallible(ViewNumber::new(node_id));
 
     let payload_commitment = build_payload_commitment::<TestTypes>(
         &epoch_1_mem,
@@ -565,11 +561,11 @@ async fn test_quorum_proposal_task_liveness_check() {
     let genesis_cert = proposals[0].data.justify_qc().clone();
 
     let upgrade_lock = &handle.hotshot.upgrade_lock;
-    let version_1 = upgrade_lock.version_infallible(ViewNumber::new(1)).await;
-    let version_2 = upgrade_lock.version_infallible(ViewNumber::new(2)).await;
-    let version_3 = upgrade_lock.version_infallible(ViewNumber::new(3)).await;
-    let version_4 = upgrade_lock.version_infallible(ViewNumber::new(4)).await;
-    let version_5 = upgrade_lock.version_infallible(ViewNumber::new(5)).await;
+    let version_1 = upgrade_lock.version_infallible(ViewNumber::new(1));
+    let version_2 = upgrade_lock.version_infallible(ViewNumber::new(2));
+    let version_3 = upgrade_lock.version_infallible(ViewNumber::new(3));
+    let version_4 = upgrade_lock.version_infallible(ViewNumber::new(4));
+    let version_5 = upgrade_lock.version_infallible(ViewNumber::new(5));
 
     let inputs = vec![
         random![

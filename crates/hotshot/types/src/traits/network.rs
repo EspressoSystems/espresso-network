@@ -19,7 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use dyn_clone::DynClone;
-use futures::{future::join_all, Future};
+use futures::{Future, future::join_all};
 use rand::{
     distributions::{Bernoulli, Uniform},
     prelude::Distribution,
@@ -30,10 +30,10 @@ use tokio::{sync::mpsc::error::TrySendError, time::sleep};
 
 use super::{node_implementation::NodeType, signature_key::SignatureKey};
 use crate::{
+    BoxSyncFuture, PeerConnectInfo,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::SequencingMessage,
-    BoxSyncFuture,
 };
 
 /// Centralized server specific errors
@@ -121,7 +121,7 @@ pub trait Id: Eq + PartialEq + Hash {}
 /// a message
 pub trait ViewMessage<TYPES: NodeType> {
     /// get the view out of the message
-    fn view_number(&self) -> TYPES::View;
+    fn view_number(&self) -> ViewNumber;
 }
 
 /// A request for some data that the consensus layer is asking for.
@@ -131,7 +131,7 @@ pub struct DataRequest<TYPES: NodeType> {
     /// Request
     pub request: RequestKind<TYPES>,
     /// View this message is for
-    pub view: TYPES::View,
+    pub view: ViewNumber,
     /// signature of the Sha256 hash of the data so outsiders can't use know
     /// public keys with stake.
     pub signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
@@ -141,11 +141,11 @@ pub struct DataRequest<TYPES: NodeType> {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub enum RequestKind<TYPES: NodeType> {
     /// Request VID data by our key and the VID commitment
-    Vid(TYPES::View, TYPES::SignatureKey),
+    Vid(ViewNumber, TYPES::SignatureKey),
     /// Request a DA proposal for a certain view
-    DaProposal(TYPES::View),
+    DaProposal(ViewNumber),
     /// Request for quorum proposal for a view
-    Proposal(TYPES::View),
+    Proposal(ViewNumber),
 }
 
 impl<TYPES: NodeType> std::fmt::Debug for RequestKind<TYPES> {
@@ -173,10 +173,10 @@ pub enum ResponseMessage<TYPES: NodeType> {
     Denied,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 /// When a message should be broadcast to the network.
 ///
 /// Network implementations may or may not respect this, at their discretion.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BroadcastDelay {
     /// Broadcast the message immediately
     None,
@@ -184,11 +184,11 @@ pub enum BroadcastDelay {
     View(u64),
 }
 
-#[async_trait]
 /// represents a networking implmentration
 /// exposes low level API for interacting with a network
 /// intended to be implemented for libp2p, the centralized server,
 /// and memory network
+#[async_trait]
 pub trait ConnectedNetwork<K: SignatureKey + 'static>: Clone + Send + Sync + 'static {
     /// Pauses the underlying network
     fn pause(&self);
@@ -308,6 +308,7 @@ where
         da_committee_size: usize,
         reliability_config: Option<Box<dyn NetworkReliability>>,
         secondary_network_delay: Duration,
+        connect_infos: &mut HashMap<TYPES::SignatureKey, PeerConnectInfo>,
     ) -> AsyncGenerator<Arc<Self>>;
 
     /// Get the number of messages in-flight.

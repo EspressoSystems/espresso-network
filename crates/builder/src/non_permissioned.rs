@@ -3,25 +3,25 @@ use std::{collections::VecDeque, num::NonZeroUsize, sync::Arc, time::Duration};
 use anyhow::Context;
 use async_broadcast::broadcast;
 use async_lock::{Mutex, RwLock};
+use espresso_node::{L1Params, SequencerApiVersion, catchup::StatePeers};
 use espresso_types::{
-    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher, EpochCommittees, FeeAmount,
-    NodeState, Payload, SeqTypes, ValidatedState,
+    EpochCommittees, FeeAmount, NodeState, Payload, SeqTypes, ValidatedState,
+    eth_signature_key::EthKeyPair, v0_1::NoStorage, v0_3::Fetcher,
 };
 use hotshot::traits::BlockPayload;
 use hotshot_builder_legacy::{
     builder_state::{BuilderState, MessageType},
     service::{
-        run_non_permissioned_standalone_builder_service, GlobalState, ProxyGlobalState,
-        ReceivedTransaction,
+        GlobalState, ProxyGlobalState, ReceivedTransaction,
+        run_non_permissioned_standalone_builder_service,
     },
 };
 use hotshot_builder_shared::{block::ParentBlockReferences, utils::EventServiceStream};
 use hotshot_types::{
-    data::{fake_commitment, vid_commitment, ViewNumber},
+    data::{ViewNumber, fake_commitment, vid_commitment},
     epoch_membership::EpochMembershipCoordinator,
-    traits::{block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics, EncodeBytes},
+    traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES, metrics::NoMetrics},
 };
-use sequencer::{catchup::StatePeers, L1Params, SequencerApiVersion};
 use tide_disco::Url;
 use tokio::spawn;
 use vbs::version::Version;
@@ -36,7 +36,7 @@ pub struct BuilderConfig {
 }
 
 pub fn build_instance_state(
-    genesis: sequencer::Genesis,
+    genesis: espresso_node::Genesis,
     l1_params: L1Params,
     state_peers: Vec<Url>,
 ) -> NodeState {
@@ -70,7 +70,7 @@ pub fn build_instance_state(
             genesis.epoch_height.unwrap_or_default(),
         ))),
         genesis.epoch_height.unwrap_or_default(),
-        &Arc::new(sequencer::persistence::no_storage::NoStorage),
+        &Arc::new(espresso_node::persistence::no_storage::NoStorage),
     );
 
     NodeState::new(
@@ -243,22 +243,22 @@ impl BuilderConfig {
 
 #[cfg(test)]
 mod test {
-    use espresso_types::MOCK_SEQUENCER_VERSIONS;
-    use futures::StreamExt;
-    use sequencer::{
+    use espresso_node::{
         api::{
+            Options,
             options::HotshotEvents,
             test_helpers::{TestNetwork, TestNetworkConfigBuilder},
-            Options,
         },
         persistence,
         testing::TestConfigBuilder,
     };
+    use espresso_types::MOCK_SEQUENCER_VERSIONS;
+    use futures::StreamExt;
     use surf_disco::Client;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::testing::{test_builder_impl, NonPermissionedBuilderTestConfig};
+    use crate::testing::{NonPermissionedBuilderTestConfig, test_builder_impl};
 
     /// Test the non-permissioned builder core
     /// It creates a memory hotshot network and launches the hotshot event streaming api

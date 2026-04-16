@@ -29,12 +29,12 @@ pub use crate::bindings::{
     esp_token_v2::EspTokenV2,
     fee_contract::FeeContract::{self, Deposit},
     light_client::{
+        BN254::G1Point as G1PointSol,
         IPlonkVerifier::{PlonkProof as PlonkProofSol, VerifyingKey as VerifyingKeySol},
         LightClient::{
             self, LightClientErrors, LightClientInstance, LightClientState as LightClientStateSol,
             StakeTableState as StakeTableStateSol,
         },
-        BN254::G1Point as G1PointSol,
     },
     light_client_mock::{self, LightClientMock},
     light_client_v2::{self, LightClientV2},
@@ -50,8 +50,8 @@ pub use crate::bindings::{
     safe_exit_timelock::SafeExitTimelock,
     stake_table::StakeTable,
     stake_table_v2::{
-        self, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol, StakeTableV2,
-        BN254::G2Point as G2PointSol,
+        self, BN254::G2Point as G2PointSol, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
+        StakeTableV2,
     },
 };
 
@@ -300,41 +300,6 @@ impl PartialEq for ConsensusKeysUpdatedV2 {
             && self.schnorrVK == other.schnorrVK
             && self.blsSig == other.blsSig
             && self.schnorrSig == other.schnorrSig
-    }
-}
-
-impl Clone for StakeTableV2::StakeTableV2Events {
-    fn clone(&self) -> Self {
-        match self {
-            Self::ValidatorRegistered(v) => Self::ValidatorRegistered(*v),
-            Self::ValidatorRegisteredV2(v) => Self::ValidatorRegisteredV2(v.clone()),
-            Self::ValidatorExit(v) => Self::ValidatorExit(*v),
-            Self::ValidatorExitV2(v) => Self::ValidatorExitV2(v.clone()),
-            Self::Delegated(v) => Self::Delegated(*v),
-            Self::Undelegated(v) => Self::Undelegated(*v),
-            Self::UndelegatedV2(v) => Self::UndelegatedV2(v.clone()),
-            Self::ConsensusKeysUpdated(v) => Self::ConsensusKeysUpdated(*v),
-            Self::ConsensusKeysUpdatedV2(v) => Self::ConsensusKeysUpdatedV2(v.clone()),
-            Self::CommissionUpdated(v) => Self::CommissionUpdated(v.clone()),
-            Self::ExitEscrowPeriodUpdated(v) => Self::ExitEscrowPeriodUpdated(v.clone()),
-            Self::MaxCommissionIncreaseUpdated(v) => Self::MaxCommissionIncreaseUpdated(v.clone()),
-            Self::MinCommissionUpdateIntervalUpdated(v) => {
-                Self::MinCommissionUpdateIntervalUpdated(v.clone())
-            },
-            Self::OwnershipTransferred(v) => Self::OwnershipTransferred(v.clone()),
-            Self::Paused(v) => Self::Paused(v.clone()),
-            Self::Unpaused(v) => Self::Unpaused(v.clone()),
-            Self::Initialized(v) => Self::Initialized(v.clone()),
-            Self::RoleAdminChanged(v) => Self::RoleAdminChanged(v.clone()),
-            Self::RoleGranted(v) => Self::RoleGranted(v.clone()),
-            Self::RoleRevoked(v) => Self::RoleRevoked(v.clone()),
-            Self::WithdrawalClaimed(v) => Self::WithdrawalClaimed(v.clone()),
-            Self::Upgraded(v) => Self::Upgraded(v.clone()),
-            Self::ValidatorExitClaimed(v) => Self::ValidatorExitClaimed(v.clone()),
-            Self::Withdrawal(v) => Self::Withdrawal(v.clone()),
-            Self::MetadataUriUpdated(v) => Self::MetadataUriUpdated(v.clone()),
-            Self::MinDelegateAmountUpdated(v) => Self::MinDelegateAmountUpdated(v.clone()),
-        }
     }
 }
 

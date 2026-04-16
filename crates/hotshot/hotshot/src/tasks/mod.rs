@@ -10,12 +10,13 @@
 pub mod task_state;
 use std::{collections::BTreeMap, fmt::Debug, sync::Arc, time::Duration};
 
-use async_broadcast::{broadcast, RecvError};
+use async_broadcast::{RecvError, broadcast};
 use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{
+    StreamExt,
     future::{BoxFuture, FutureExt},
-    stream, StreamExt,
+    stream,
 };
 use hotshot_task::task::Task;
 #[cfg(feature = "rewind")]
@@ -25,7 +26,7 @@ use hotshot_task_impls::{
     events::HotShotEvent,
     network::{NetworkEventTaskState, NetworkMessageTaskState},
     request::NetworkRequestState,
-    response::{run_response_task, NetworkResponseState},
+    response::{NetworkResponseState, run_response_task},
     stats::StatsTaskState,
     transactions::TransactionTaskState,
     upgrade::UpgradeTaskState,
@@ -35,21 +36,22 @@ use hotshot_task_impls::{
 use hotshot_types::{
     consensus::OuterConsensus,
     constants::EVENT_CHANNEL_SIZE,
-    message::{Message, MessageKind, UpgradeLock, EXTERNAL_MESSAGE_VERSION},
+    data::ViewNumber,
+    message::{EXTERNAL_MESSAGE_VERSION, Message, MessageKind, UpgradeLock},
     storage_metrics::StorageMetricsValue,
     traits::{
         network::ConnectedNetwork,
-        node_implementation::{ConsensusTime, NodeImplementation, NodeType},
+        node_implementation::{NodeImplementation, NodeType},
     },
 };
 use tokio::{spawn, time::sleep};
 use vbs::version::Version;
 
 use crate::{
-    genesis_epoch_from_version, tasks::task_state::CreateTaskState, types::SystemContextHandle,
     ConsensusApi, ConsensusMetricsValue, ConsensusTaskRegistry, EpochMembershipCoordinator,
     HotShotConfig, HotShotInitializer, NetworkTaskRegistry, SignatureKey, StateSignatureKey,
-    SystemContext,
+    SystemContext, genesis_epoch_from_version, tasks::task_state::CreateTaskState,
+    types::SystemContextHandle,
 };
 
 /// event for global event stream
@@ -160,7 +162,7 @@ pub fn add_network_message_task<
                     };
 
                     // Deserialize the message and get the version
-                    let (deserialized_message, version): (Message<TYPES>, Version) = match upgrade_lock.deserialize(&message).await {
+                    let (deserialized_message, version): (Message<TYPES>, Version) = match upgrade_lock.deserialize(&message) {
                         Ok(message) => message,
                         Err(e) => {
                             tracing::error!("Failed to deserialize message: {:?}", e);
@@ -197,8 +199,8 @@ pub fn add_network_event_task<
 ) {
     let network_state: NetworkEventTaskState<_, _, _> = NetworkEventTaskState {
         network,
-        view: TYPES::View::genesis(),
-        epoch: genesis_epoch_from_version::<TYPES>(handle.hotshot.upgrade_lock.upgrade.base),
+        view: ViewNumber::genesis(),
+        epoch: genesis_epoch_from_version(handle.hotshot.upgrade_lock.upgrade().base),
         membership_coordinator: handle.membership_coordinator.clone(),
         storage: handle.storage(),
         storage_metrics: handle.storage_metrics(),
@@ -225,25 +227,18 @@ pub async fn add_consensus_tasks<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     handle.add_task(DaTaskState::<TYPES, I>::create_from(handle).await);
     handle.add_task(TransactionTaskState::<TYPES>::create_from(handle).await);
 
-    let upgrade = handle.hotshot.upgrade_lock.upgrade;
+    let upgrade = handle.hotshot.upgrade_lock.upgrade();
 
-    {
-        let mut upgrade_certificate_lock = handle
-            .hotshot
-            .upgrade_lock
-            .decided_upgrade_certificate
-            .write()
-            .await;
-
-        // clear the loaded certificate if it's now outdated
-        if upgrade_certificate_lock
+    // clear the loaded certificate if it's now outdated
+    handle.hotshot.upgrade_lock.apply(|cert| {
+        if cert
             .as_ref()
-            .is_some_and(|cert| upgrade.base >= cert.data.new_version)
+            .is_some_and(|c| upgrade.base >= c.data.new_version)
         {
             tracing::warn!("Discarding loaded upgrade certificate due to version configuration.");
-            *upgrade_certificate_lock = None;
+            *cert = None
         }
-    }
+    });
 
     // only spawn the upgrade task if we are actually configured to perform an upgrade.
     if upgrade.base < upgrade.target {
@@ -338,6 +333,7 @@ where
         state_private_key: <TYPES::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
         nonce: u64,
         config: HotShotConfig<TYPES>,
+        upgrade: versions::Upgrade,
         memberships: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
@@ -353,6 +349,7 @@ where
             state_private_key,
             nonce,
             config,
+            upgrade,
             memberships.clone(),
             network,
             initializer,

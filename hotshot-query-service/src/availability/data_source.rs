@@ -10,94 +10,27 @@
 // You should have received a copy of the GNU General Public License along with this program. If not,
 // see <https://www.gnu.org/licenses/>.
 
-use std::{
-    cmp::Ordering,
-    ops::{Bound, RangeBounds},
-};
+use std::ops::{Bound, RangeBounds};
 
 use async_trait::async_trait;
-use derivative::Derivative;
-use derive_more::{Display, From};
 use futures::{
     future::Future,
     stream::{BoxStream, StreamExt},
 };
+pub use hotshot_query_service_types::availability::{BlockId, LeafId};
 use hotshot_types::{
-    data::{VidCommitment, VidShare},
-    simple_certificate::CertificatePair,
-    traits::node_implementation::NodeType,
+    data::VidShare, simple_certificate::CertificatePair, traits::node_implementation::NodeType,
 };
 
 use super::{
+    BlockWithTransaction,
     fetch::Fetch,
     query_data::{
-        BlockHash, BlockQueryData, LeafHash, LeafQueryData, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
+        BlockQueryData, LeafQueryData, PayloadMetadata, PayloadQueryData, QueryableHeader,
+        QueryablePayload, TransactionHash, VidCommonMetadata, VidCommonQueryData,
     },
-    BlockWithTransaction,
 };
-use crate::{types::HeightIndexed, Header, Payload};
-
-#[derive(Derivative, From, Display)]
-#[derivative(Ord = "feature_allow_slow_enum")]
-#[derivative(
-    Copy(bound = ""),
-    Debug(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = ""),
-    Ord(bound = ""),
-    Hash(bound = "")
-)]
-pub enum LeafId<Types: NodeType> {
-    #[display("{_0}")]
-    Number(usize),
-    #[display("{_0}")]
-    Hash(LeafHash<Types>),
-}
-
-impl<Types: NodeType> Clone for LeafId<Types> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Types: NodeType> PartialOrd for LeafId<Types> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[derive(Derivative, From, Display)]
-#[derivative(Ord = "feature_allow_slow_enum")]
-#[derivative(
-    Copy(bound = ""),
-    Debug(bound = ""),
-    PartialEq(bound = ""),
-    Eq(bound = ""),
-    Ord(bound = ""),
-    Hash(bound = "")
-)]
-pub enum BlockId<Types: NodeType> {
-    #[display("{_0}")]
-    Number(usize),
-    #[display("{_0}")]
-    Hash(BlockHash<Types>),
-    #[display("{_0}")]
-    #[from(ignore)]
-    PayloadHash(VidCommitment),
-}
-
-impl<Types: NodeType> Clone for BlockId<Types> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<Types: NodeType> PartialOrd for BlockId<Types> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+use crate::{Header, Payload, types::HeightIndexed};
 
 pub type FetchStream<T> = BoxStream<'static, Fetch<T>>;
 

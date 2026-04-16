@@ -49,8 +49,8 @@ contract UpgradeTestHelper is Test {
         require(impl != address(0), "Invalid implementation address");
 
         string[] memory cmds = new string[](4);
-        cmds[0] = "node";
-        cmds[1] = "contracts/test/script/compare-storage-layout-deployed.js";
+        cmds[0] = "python3";
+        cmds[1] = "contracts/test/script/compare-storage-layout-deployed.py";
         cmds[2] = vm.toString(impl);
         cmds[3] = contractName;
 
@@ -130,8 +130,9 @@ contract UpgradeTestHelper is Test {
 
 contract NetworkStorageLayoutSanityTest is UpgradeTestHelper {
     function test_Network_StorageLayout_Sanity_IncompatibleMissingField() public {
-        bool compatible =
-            isLocalLayoutCompatible("sepolia", sepoliaStakeTableProxy, "StakeTableMissingFieldTest");
+        bool compatible = isLocalLayoutCompatible(
+            "sepolia", sepoliaStakeTableProxy, "StakeTableMissingFieldTest"
+        );
         assertFalse(compatible, "Missing field should be incompatible");
     }
 
