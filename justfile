@@ -66,16 +66,14 @@ fix *args:
 lint *args:
     just clippy {{args}} -- -D warnings
 
+# postgres and sqlite variants checked separately to cover all code
 clippy *args:
-    # check all targets in workspace (excluding embedded-db crates)
     cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
-    # check entire workspace (including espresso-node-sqlite crate) with embedded-db feature
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
+# postgres and sqlite variants checked separately to cover all code
 check *args:
-    # postgres (all workspace members except embedded-db crates)
     cargo check --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node {{args}}
-    # embedded-db
     cargo check -p espresso-node-sqlite -p espresso-dev-node {{args}}
 
 build profile="dev" features="":
