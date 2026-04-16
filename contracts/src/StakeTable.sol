@@ -312,10 +312,14 @@ contract StakeTable is Initializable, InitializedAt, OwnableUpgradeable, UUPSUpg
         }
     }
 
-    // @dev We do not perform full Schnorr key validation on-chain, but reject affine encodings with
-    // `x == 0` on EdOnBN254: those are exactly the identity `(0,1)`, the order-2 point `(0,-1)`,
-    // and the off-curve `(0,0)` placeholder — none are suitable verifier keys.
+    // @dev We do not perform full Schnorr key validation on-chain. Reject coordinates outside
+    // [0, P_MOD) so unreduced limbs cannot represent the same field element as the identity with
+    // `x != 0` as uint256 (e.g. `x == P_MOD`). Reject `x == 0`: identity `(0,1)`, order-2 `(0,-1)`,
+    // and off-curve `(0,0)` — none are suitable verifier keys.
     function ensureNonZeroSchnorrKey(EdOnBN254.EdOnBN254Point memory schnorrVK) internal pure {
+        if (schnorrVK.x >= EdOnBN254.P_MOD || schnorrVK.y >= EdOnBN254.P_MOD) {
+            revert InvalidSchnorrVK();
+        }
         if (schnorrVK.x == 0) {
             revert InvalidSchnorrVK();
         }
