@@ -80,10 +80,6 @@ pub enum TestError {
         node: usize,
         view: ViewNumber,
     },
-    UnexpectedTimeout {
-        node: usize,
-        view: ViewNumber,
-    },
     NotEnoughDecided {
         view: ViewNumber,
         decided_count: usize,
@@ -107,12 +103,6 @@ impl fmt::Display for TestError {
                 write!(
                     f,
                     "node {node} decided view {view} which was expected to fail"
-                )
-            },
-            Self::UnexpectedTimeout { node, view } => {
-                write!(
-                    f,
-                    "node {node} timed out on view {view} which was expected to succeed"
                 )
             },
             Self::NotEnoughDecided {
