@@ -1001,9 +1001,7 @@ impl Fetcher {
                 validator,
                 newCommission,
                 ..
-            })
-                if *newCommission > COMMISSION_BASIS_POINTS =>
-            {
+            }) if *newCommission > COMMISSION_BASIS_POINTS => {
                 return Err(StakeTableError::InvalidCommission(
                     *validator,
                     *newCommission,
