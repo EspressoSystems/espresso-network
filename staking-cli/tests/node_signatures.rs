@@ -205,11 +205,7 @@ async fn test_export_node_signatures_command(
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn test_register_validator_with_pre_signed_payload(
-    #[values(
-        StakeTableContractVersion::V1,
-        StakeTableContractVersion::V2,
-        StakeTableContractVersion::V3
-    )]
+    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
     version: StakeTableContractVersion,
     #[values(Extension::Json, Extension::Toml)] format: Extension,
 ) -> Result<()> {
@@ -247,11 +243,7 @@ async fn test_register_validator_with_pre_signed_payload(
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn test_update_consensus_keys_with_pre_signed_payload(
-    #[values(
-        StakeTableContractVersion::V1,
-        StakeTableContractVersion::V2,
-        StakeTableContractVersion::V3
-    )]
+    #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
     version: StakeTableContractVersion,
     #[values(Extension::Json, Extension::Toml)] format: Extension,
 ) -> Result<()> {

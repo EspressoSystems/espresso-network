@@ -201,7 +201,7 @@ impl Transaction {
                     .into(),
                     None,
                 ),
-                StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => (
+                StakeTableContractVersion::V2 => (
                     stake_table,
                     registerValidatorV2Call::from((
                         G2PointSol::from(payload.bls_vk),
@@ -232,7 +232,7 @@ impl Transaction {
                     .into(),
                     None,
                 ),
-                StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => (
+                StakeTableContractVersion::V2 => (
                     stake_table,
                     updateConsensusKeysV2Call::from((
                         G2PointSol::from(payload.bls_vk),
@@ -364,10 +364,7 @@ impl Transaction {
             use hotshot_contract_adapter::sol_types::StakeTableV2;
             let st = StakeTableV2::new(*stake_table, provider);
             let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
-            if matches!(
-                version,
-                StakeTableContractVersion::V2 | StakeTableContractVersion::V3
-            ) {
+            if matches!(version, StakeTableContractVersion::V2) {
                 let min_amount = st.minDelegateAmount().call().await?;
                 if amount < &min_amount {
                     bail!(

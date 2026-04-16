@@ -1450,7 +1450,6 @@ mod tests {
         #[values(
             StakeTableContractVersion::V1,
             StakeTableContractVersion::V2,
-            StakeTableContractVersion::V3
         )]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
@@ -1586,7 +1585,6 @@ mod tests {
         #[values(
             StakeTableContractVersion::V1,
             StakeTableContractVersion::V2,
-            StakeTableContractVersion::V3
         )]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
@@ -1651,9 +1649,7 @@ mod tests {
 
         match stake_table_version {
             StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await,
-            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
-                args.deploy_all(&mut contracts).await
-            },
+            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
         }
         .expect("contracts deployed");
 
