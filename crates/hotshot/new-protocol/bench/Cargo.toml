@@ -1,0 +1,36 @@
+[package]
+name = "hotshot-new-protocol-bench"
+description = "Benchmark binary for the new consensus protocol"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = "MIT"
+
+[[bin]]
+name = "new-protocol-bench-node"
+path = "src/bin/node.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-lock = { workspace = true }
+clap = { workspace = true }
+cliquenet = { workspace = true }
+committable = { workspace = true }
+csv = { workspace = true }
+hotshot = { workspace = true, features = ["hotshot-testing"] }
+hotshot-example-types = { workspace = true }
+hotshot-new-protocol = { workspace = true }
+hotshot-testing = { workspace = true }
+hotshot-types = { workspace = true }
+serde = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+versions = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+test-utils = { workspace = true }
+
+[lints]
+workspace = true

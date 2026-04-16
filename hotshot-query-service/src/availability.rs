@@ -26,9 +26,8 @@
 //! chain which is tabulated by this specific node and not subject to full consensus agreement, try
 //! the [node](crate::node) API.
 
-use std::{fmt::Display, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
-use derive_more::From;
 use futures::{FutureExt, StreamExt, TryFutureExt, TryStreamExt};
 use hotshot_types::{
     data::{Leaf, Leaf2, QuorumProposal, VidCommitment, VidCommon},
@@ -36,17 +35,18 @@ use hotshot_types::{
     traits::node_implementation::NodeType,
 };
 use serde::{Deserialize, Serialize};
-use snafu::{OptionExt, Snafu};
-use tide_disco::{Api, RequestError, RequestParams, StatusCode, api::ApiError, method::ReadState};
+use snafu::OptionExt;
+use tide_disco::{Api, RequestParams, StatusCode, api::ApiError, method::ReadState};
 use vbs::version::StaticVersionType;
 
-use crate::{Header, Payload, QueryError, api::load_api, types::HeightIndexed};
+use crate::{Header, Payload, api::load_api, types::HeightIndexed};
 
 pub(crate) mod data_source;
 mod fetch;
 pub(crate) mod query_data;
 pub use data_source::*;
 pub use fetch::Fetch;
+pub use hotshot_query_service_types::availability::Error;
 pub use query_data::*;
 
 #[derive(Debug)]
@@ -93,83 +93,6 @@ impl Default for Options {
             extensions: vec![],
             large_object_range_limit: 100,
             small_object_range_limit: 500,
-        }
-    }
-}
-
-#[derive(Clone, Debug, From, Snafu, Deserialize, Serialize)]
-#[snafu(visibility(pub))]
-pub enum Error {
-    Request {
-        source: RequestError,
-    },
-    #[snafu(display("leaf {resource} missing or not available"))]
-    #[from(ignore)]
-    FetchLeaf {
-        resource: String,
-    },
-    #[snafu(display("block {resource} missing or not available"))]
-    #[from(ignore)]
-    FetchBlock {
-        resource: String,
-    },
-    #[snafu(display("header {resource} missing or not available"))]
-    #[from(ignore)]
-    FetchHeader {
-        resource: String,
-    },
-    #[snafu(display("transaction {resource} missing or not available"))]
-    #[from(ignore)]
-    FetchTransaction {
-        resource: String,
-    },
-    #[snafu(display("transaction index {index} out of range for block {height}"))]
-    #[from(ignore)]
-    InvalidTransactionIndex {
-        height: u64,
-        index: u64,
-    },
-    #[snafu(display("request for range {from}..{until} exceeds limit {limit}"))]
-    #[from(ignore)]
-    RangeLimit {
-        from: usize,
-        until: usize,
-        limit: usize,
-    },
-    #[snafu(display("{source}"))]
-    Query {
-        source: QueryError,
-    },
-    #[snafu(display("State cert for epoch {epoch} not found"))]
-    #[from(ignore)]
-    FetchStateCert {
-        epoch: u64,
-    },
-    #[snafu(display("error {status}: {message}"))]
-    Custom {
-        message: String,
-        status: StatusCode,
-    },
-}
-
-impl Error {
-    pub fn internal<M: Display>(message: M) -> Self {
-        Self::Custom {
-            message: message.to_string(),
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-
-    pub fn status(&self) -> StatusCode {
-        match self {
-            Self::Request { .. } | Self::RangeLimit { .. } => StatusCode::BAD_REQUEST,
-            Self::FetchLeaf { .. }
-            | Self::FetchBlock { .. }
-            | Self::FetchTransaction { .. }
-            | Self::FetchHeader { .. }
-            | Self::FetchStateCert { .. } => StatusCode::NOT_FOUND,
-            Self::InvalidTransactionIndex { .. } | Self::Query { .. } => StatusCode::NOT_FOUND,
-            Self::Custom { status, .. } => *status,
         }
     }
 }

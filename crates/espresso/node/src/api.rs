@@ -3729,7 +3729,9 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_reward_upgrade() {
-        test_upgrade_helper(Upgrade::new(
+        // Use fewer nodes: epoch mode from view 0 is resource-heavy on CI with
+        // postgres Docker containers, causing view timeouts and consensus stall.
+        test_upgrade_helper_with_nodes::<3>(Upgrade::new(
             versions::DRB_AND_HEADER_UPGRADE_VERSION,
             versions::EPOCH_REWARD_VERSION,
         ))
@@ -3737,11 +3739,13 @@ mod test {
     }
 
     async fn test_upgrade_helper(upgrade: Upgrade) {
+        test_upgrade_helper_with_nodes::<5>(upgrade).await;
+    }
+
+    async fn test_upgrade_helper_with_nodes<const NUM_NODES: usize>(upgrade: Upgrade) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
-        // Number of nodes running in the test network.
-        const NUM_NODES: usize = 5;
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let epoch_start_block = if upgrade.base >= versions::EPOCH_VERSION {
             0

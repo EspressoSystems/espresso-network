@@ -2195,14 +2195,6 @@ trait Storable<Types: NodeType>: Clone {
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 }
 
-impl<Types: NodeType> HeightIndexed
-    for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
-{
-    fn height(&self) -> u64 {
-        self.0.height()
-    }
-}
-
 impl<Types: NodeType> Storable<Types>
     for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
 {

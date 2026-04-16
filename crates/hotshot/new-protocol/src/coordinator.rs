@@ -1,5 +1,5 @@
 pub mod error;
-pub(crate) mod timer;
+pub mod timer;
 
 use bon::Builder;
 use hotshot::traits::NodeImplementation;
@@ -15,13 +15,14 @@ use tokio::select;
 use tracing::{error, warn};
 
 use crate::{
-    block::BlockBuilder,
+    block::{BlockAndHeaderRequest, BlockBuilder},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
+    logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
         Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
@@ -54,10 +55,43 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     public_key: T::SignatureKey,
+    #[builder(default = KeyPrefix::from(&public_key))]
+    node_id: KeyPrefix,
     timer: Timer,
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+    /// Bootstrap the coordinator so the view-1 leader can propose.
+    ///
+    /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
+    /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
+    /// `seed_genesis` on the inner `Consensus` instance.
+    pub async fn start(&mut self) {
+        let view = ViewNumber::new(1);
+        let epoch = EpochNumber::genesis();
+
+        self.outbox
+            .push_back(ConsensusOutput::ViewChanged(view, epoch));
+
+        if let Some(leader) = self.leader(view, epoch).await
+            && leader == self.public_key
+        {
+            let genesis_proposal = self
+                .consensus
+                .proposal_at(ViewNumber::genesis())
+                .expect("genesis proposal must be seeded before start()")
+                .clone();
+            self.outbox
+                .push_back(ConsensusOutput::RequestBlockAndHeader(
+                    BlockAndHeaderRequest {
+                        view,
+                        epoch,
+                        parent_proposal: genesis_proposal,
+                    },
+                ));
+        }
+    }
+
     /// Convenience method to run the coordinator event loop.
     ///
     /// Combines `next_consensus_input`, `apply_consensus` and outbox processing.
@@ -100,7 +134,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     }
                 },
                 () = &mut self.timer => {
-                    let input = ConsensusInput::Timeout(self.timer.view());
+                    let input = ConsensusInput::Timeout(self.timer.view(), self.timer.epoch());
+                    // Timer is only reset so we can resend the timeout vote
+                    // This isn't strictly necessary for the protocol, but it's a good idea to
+                    // resend the timeout vote to avoid a situation where the network is stuck
+                    // view because we fail to form a timeout certificate.
                     self.timer.reset();
                     return Ok(input)
                 }
@@ -113,7 +151,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
                 }
                 Some(out) = self.timeout_one_honest_collector.next() => {
-                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), out.data.epoch))
+                    let Some(epoch) = out.data.epoch else {
+                        let msg = format!("missing epoch in view {}", out.view_number());
+                        return Err(CoordinatorError::regular(msg).context("gc timeout one honest"))
+                    };
+                    return Ok(ConsensusInput::TimeoutOneHonest(out.view_number(), epoch))
                 }
                 Some(cert1) = self.vote1_collector.next() => {
                     return Ok(ConsensusInput::Certificate1(cert1))
@@ -433,7 +475,7 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
-                self.timer.reset_with(view);
+                self.timer.reset_with_epoch(view, epoch);
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;
@@ -495,5 +537,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         self.timeout_one_honest_collector.gc(view, epoch);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
+    }
+
+    pub fn node_id(&self) -> &KeyPrefix {
+        &self.node_id
     }
 }
