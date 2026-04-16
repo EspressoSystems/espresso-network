@@ -1,5 +1,5 @@
 pub mod error;
-pub(crate) mod timer;
+pub mod timer;
 
 use bon::Builder;
 use hotshot::traits::NodeImplementation;
@@ -61,12 +61,11 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
-    /// Bootstrap consensus and emit initial outputs.
+    /// Bootstrap the coordinator so the view-1 leader can propose.
     ///
-    /// Call this once after constructing the coordinator and seeding genesis
-    /// state in the consensus module.  It emits `ViewChanged(1, genesis)`
-    /// and, if this node is the view-1 leader, `RequestBlockAndHeader` so
-    /// the first proposal can be built without any external injection.
+    /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
+    /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
+    /// `seed_genesis` on the inner `Consensus` instance.
     pub async fn start(&mut self) {
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
