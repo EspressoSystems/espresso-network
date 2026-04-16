@@ -577,18 +577,10 @@ where
     ) -> anyhow::Result<()> {
         let height = leaf.height();
 
-        // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring leaf which is already pruned"
-                );
-                return Ok(());
-            }
-        }
+        // We intentionally do not call load_pruned_height() here. Reading pruned_height inside a
+        // SERIALIZABLE write transaction creates a rw-anti-dependency with save_pruned_height
+        // (the pruner's separate Tx1), making this transaction a pivot in SSI abort cycles.
+        // If this data is already pruned, the pruner will delete it again on its next run.
 
         // While we don't necessarily have the full block for this leaf yet, we can initialize the
         // header table with block metadata taken from the leaf.
@@ -665,18 +657,10 @@ where
     async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
 
-        // Ignore the block if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring block which is already pruned"
-                );
-                return Ok(());
-            }
-        }
+        // We intentionally do not call load_pruned_height() here. Reading pruned_height inside a
+        // SERIALIZABLE write transaction creates a rw-anti-dependency with save_pruned_height
+        // (the pruner's separate Tx1), making this transaction a pivot in SSI abort cycles.
+        // If this data is already pruned, the pruner will delete it again on its next run.
 
         // The header and payload tables should already have been initialized when we inserted the
         // corresponding leaf. All we have to do is add the payload itself and its size.
@@ -727,18 +711,10 @@ where
     ) -> anyhow::Result<()> {
         let height = common.height();
 
-        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring VID common which is already pruned"
-                );
-                return Ok(());
-            }
-        }
+        // We intentionally do not call load_pruned_height() here. Reading pruned_height inside a
+        // SERIALIZABLE write transaction creates a rw-anti-dependency with save_pruned_height
+        // (the pruner's separate Tx1), making this transaction a pivot in SSI abort cycles.
+        // If this data is already pruned, the pruner will delete it again on its next run.
 
         let common_data =
             bincode::serialize(common.common()).context("failed to serialize VID common data")?;
