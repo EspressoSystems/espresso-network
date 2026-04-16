@@ -104,6 +104,7 @@ mod tests {
     fn test_client_id_eq() {
         let client_id_1 = ClientId::from_count(1);
 
+        #[allow(deprecated)]
         client_id_1.assert_receiver_is_total_eq();
     }
 
