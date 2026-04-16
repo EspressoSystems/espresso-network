@@ -151,33 +151,37 @@ lazy_static::lazy_static! {
         )
     };
 
+    // $1=pruned_height
     static ref GET_BLOCK_DETAIL_QUERY_FOR_LATEST: String = {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
                 JOIN payload AS p ON h.height = p.height
+                WHERE h.height > $1
                 ORDER BY h.height DESC
                 LIMIT 1"
         )
     };
 
+    // $1=height, $2=pruned_height
     static ref GET_BLOCK_DETAIL_QUERY_FOR_HEIGHT: String = {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
                 JOIN payload AS p ON h.height = p.height
-                WHERE h.height = $1
+                WHERE h.height = $1 AND h.height > $2
                 ORDER BY h.height DESC
                 LIMIT 1"
         )
     };
 
+    // $1=hash, $2=pruned_height
     static ref GET_BLOCK_DETAIL_QUERY_FOR_HASH: String = {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
                 JOIN payload AS p ON h.height = p.height
-                WHERE h.hash = $1
+                WHERE h.hash = $1 AND h.height > $2
                 ORDER BY h.height DESC
                 LIMIT 1"
         )
@@ -234,6 +238,7 @@ lazy_static::lazy_static! {
         )
     };
 
+    // $1=pruned_height
     static ref GET_TRANSACTION_DETAIL_QUERY_FOR_LATEST: String = {
         format!(
             "SELECT {BLOCK_COLUMNS}
@@ -242,11 +247,13 @@ lazy_static::lazy_static! {
                 WHERE h.height = (
                     SELECT MAX(t1.block_height)
                         FROM transactions AS t1
+                        WHERE t1.block_height > $1
                 )
                 ORDER BY h.height DESC"
         )
     };
 
+    // $1=height, $2=offset, $3=pruned_height
     static ref GET_TRANSACTION_DETAIL_QUERY_FOR_HEIGHT_AND_OFFSET: String = {
         format!(
             "SELECT {BLOCK_COLUMNS}
@@ -256,15 +263,16 @@ lazy_static::lazy_static! {
                     SELECT t1.block_height
                         FROM transactions AS t1
                         WHERE t1.block_height = $1
+                          AND t1.block_height > $3
                         ORDER BY t1.block_height, t1.ns_id, t1.position
                         LIMIT 1
                         OFFSET $2
-                       
                 )
                 ORDER BY h.height DESC",
         )
     };
 
+    // $1=hash, $2=pruned_height
     static ref GET_TRANSACTION_DETAIL_QUERY_FOR_HASH: String = {
         format!(
             "SELECT {BLOCK_COLUMNS}
@@ -274,6 +282,7 @@ lazy_static::lazy_static! {
                     SELECT t1.block_height
                         FROM transactions AS t1
                         WHERE t1.hash = $1
+                          AND t1.block_height > $2
                         ORDER BY t1.block_height DESC, t1.ns_id DESC, t1.position DESC
                         LIMIT 1
                 )
@@ -343,14 +352,25 @@ where
         &mut self,
         request: BlockIdentifier<Types>,
     ) -> Result<BlockDetail<Types>, GetBlockDetailError> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         let query_stmt = match request {
-            BlockIdentifier::Latest => query(&GET_BLOCK_DETAIL_QUERY_FOR_LATEST),
-            BlockIdentifier::Height(height) => {
-                query(&GET_BLOCK_DETAIL_QUERY_FOR_HEIGHT).bind(height as i64)
+            BlockIdentifier::Latest => {
+                query(&GET_BLOCK_DETAIL_QUERY_FOR_LATEST).bind(pruned_height)
             },
-            BlockIdentifier::Hash(hash) => {
-                query(&GET_BLOCK_DETAIL_QUERY_FOR_HASH).bind(hash.to_string())
-            },
+            BlockIdentifier::Height(height) => query(&GET_BLOCK_DETAIL_QUERY_FOR_HEIGHT)
+                .bind(height as i64)
+                .bind(pruned_height),
+            BlockIdentifier::Hash(hash) => query(&GET_BLOCK_DETAIL_QUERY_FOR_HASH)
+                .bind(hash.to_string())
+                .bind(pruned_height),
         };
 
         let query_result = query_stmt.fetch_one(self.as_mut()).await?;
@@ -510,18 +530,30 @@ where
         &mut self,
         request: TransactionIdentifier<Types>,
     ) -> Result<TransactionDetailResponse<Types>, GetTransactionDetailError> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         let target = request;
 
         let query_stmt = match target {
-            TransactionIdentifier::Latest => query(&GET_TRANSACTION_DETAIL_QUERY_FOR_LATEST),
+            TransactionIdentifier::Latest => {
+                query(&GET_TRANSACTION_DETAIL_QUERY_FOR_LATEST).bind(pruned_height)
+            },
             TransactionIdentifier::HeightAndOffset(height, offset) => {
                 query(&GET_TRANSACTION_DETAIL_QUERY_FOR_HEIGHT_AND_OFFSET)
                     .bind(height as i64)
                     .bind(offset as i64)
+                    .bind(pruned_height)
             },
-            TransactionIdentifier::Hash(hash) => {
-                query(&GET_TRANSACTION_DETAIL_QUERY_FOR_HASH).bind(hash.to_string())
-            },
+            TransactionIdentifier::Hash(hash) => query(&GET_TRANSACTION_DETAIL_QUERY_FOR_HASH)
+                .bind(hash.to_string())
+                .bind(pruned_height),
         };
 
         let query_row = query_stmt.fetch_one(self.as_mut()).await?;
@@ -674,6 +706,15 @@ where
         &mut self,
         search_query: TaggedBase64,
     ) -> Result<SearchResult<Types>, GetSearchResultsError> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         let search_tag = search_query.tag();
         let header_tag = Commitment::<Header<Types>>::tag();
         let tx_tag = Commitment::<HotshotTransaction<Types>>::tag();
@@ -684,16 +725,18 @@ where
 
         let search_query_string = search_query.to_string();
         if search_tag == header_tag {
+            // $1=hash, $2=pruned_height
             let block_query = format!(
                 "SELECT {BLOCK_COLUMNS}
                     FROM header AS h
                     JOIN payload AS p ON h.height = p.height
-                    WHERE h.hash = $1
+                    WHERE h.hash = $1 AND h.height > $2
                     ORDER BY h.height DESC
                     LIMIT 1"
             );
             let row = query(block_query.as_str())
                 .bind(&search_query_string)
+                .bind(pruned_height)
                 .fetch_one(self.as_mut())
                 .await?;
 
@@ -704,17 +747,19 @@ where
                 transactions: Vec::new(),
             })
         } else {
+            // $1=hash, $2=pruned_height
             let transactions_query = format!(
                 "SELECT {BLOCK_COLUMNS}
                     FROM header AS h
                     JOIN payload AS p ON h.height = p.height
                     JOIN transactions AS t ON h.height = t.block_height
-                    WHERE t.hash = $1
+                    WHERE t.hash = $1 AND t.block_height > $2
                     ORDER BY h.height DESC
                     LIMIT 5"
             );
             let transactions_query_rows = query(transactions_query.as_str())
                 .bind(&search_query_string)
+                .bind(pruned_height)
                 .fetch(self.as_mut());
             let transactions_query_result: Vec<TransactionSummary<Types>> = transactions_query_rows
                 .map(|row| -> Result<Vec<TransactionSummary<Types>>, QueryError>{
