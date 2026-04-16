@@ -1,0 +1,5 @@
+Espresso nodes provide both a HTTP/JSON and gRPC API.
+
+The protobuf message format for the API is defined in `crates/serialization/api`. Rust structs are generated from these files via `prost`, with a JSON representation derived via `serde`. The `serialization-api` crate provides an `ApiSerializations` trait for users (e.g. `espresso-node`) to define conversions to and from internal types to the `prost`-generated structs.
+
+The `axum` (HTTP/JSON) and `tonic` (gRPC) APIs are defined in `crates/espresso/api`. The `espresso-api` crate defines traits for various types of data served at these APIs. Users must provide a representation of the node's state that implements these traits, using their own internal types defined in the `ApiSerializations` trait from the `serialization-api` crate. These implementations are wrapped in handlers that consume and produce gRPC request and response types, which are in turn wrapped in handlers that extract parameters from a URL path and return a JSON response.
