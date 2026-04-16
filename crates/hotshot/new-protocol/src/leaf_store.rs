@@ -50,10 +50,3 @@ impl<T: NodeType> EpochLeafStore<T> {
         *store = store.split_off(&min_height);
     }
 }
-
-/// A pending leaf fetch that the coordinator should fulfill by sending
-/// [`LeafRequest`](crate::message::LeafRequest) messages to peers.
-pub struct LeafFetchRequest<T: NodeType> {
-    pub height: u64,
-    pub response_tx: tokio::sync::oneshot::Sender<DecidedLeafEntry<T>>,
-}

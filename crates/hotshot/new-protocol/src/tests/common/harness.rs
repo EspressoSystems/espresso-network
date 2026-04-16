@@ -46,7 +46,7 @@ impl TestHarness {
         let instance = Arc::new(TestInstanceState::default());
         let membership = mock_membership().await;
 
-        let (epoch_manager, leaf_fetch_rx) = EpochManager::new(10, membership.clone());
+        let epoch_manager = EpochManager::new(10, membership.clone());
 
         let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
         let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
@@ -84,7 +84,6 @@ impl TestHarness {
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
             .epoch_manager(epoch_manager)
-            .leaf_fetch_rx(leaf_fetch_rx)
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
             .membership_coordinator(membership)

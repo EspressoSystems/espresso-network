@@ -11,17 +11,17 @@ use hotshot_types::{
     utils::{is_epoch_root, root_block_in_epoch, transition_block_for_epoch},
 };
 use hotshot_utils::anytrace;
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::{AbortHandle, JoinSet},
-};
-use tracing::{debug, error, warn};
+use tokio::task::{AbortHandle, JoinSet};
+use tracing::{debug, error};
 
-use crate::leaf_store::{DecidedLeafEntry, EpochLeafStore, LeafFetchRequest};
+use crate::leaf_store::EpochLeafStore;
 
 pub enum EpochRootResult {
     DrbResult(EpochNumber, DrbResult),
-    RootAdded(EpochNumber),
+    /// The epoch root leaf at the given height is needed but not available
+    /// locally.  The coordinator should fetch it from peers and call
+    /// [`EpochManager::on_leaf_stored`] when it arrives.
+    NeedLeaf(EpochNumber, u64),
 }
 
 /// Manager for Epoch specific rules and actions
@@ -34,48 +34,53 @@ pub struct EpochManager<T: NodeType> {
     tasks: JoinSet<Result<EpochRootResult, EpochManagerError>>,
     handles: BTreeMap<EpochNumber, Vec<AbortHandle>>,
     leaf_store: EpochLeafStore<T>,
-    /// Sender cloned into spawned tasks so they can request leaves.
-    fetch_tx: mpsc::UnboundedSender<LeafFetchRequest<T>>,
-    /// Pending leaf fetch responses, keyed by block height.
-    pending_fetches: BTreeMap<u64, Vec<oneshot::Sender<DecidedLeafEntry<T>>>>,
     /// Epochs for which a `request_drb_result` task is already in flight,
     /// used to avoid spawning duplicate fetch tasks.
     pending_drb_requests: BTreeSet<EpochNumber>,
+    /// Epochs waiting on a leaf at a given height.  Populated when a task
+    /// returns [`EpochRootResult::NeedLeaf`]; cleared when the leaf arrives
+    /// via [`on_leaf_stored`].
+    pending_leaves: BTreeMap<u64, BTreeSet<EpochNumber>>,
 }
 
 impl<T: NodeType> EpochManager<T> {
-    /// Create a new `EpochManager`.
-    ///
-    /// Returns `(self, fetch_rx)`. The caller (coordinator) owns the
-    /// `fetch_rx` and polls it in its select loop to send leaf requests
-    /// over the network.
-    pub fn new<B>(
-        epoch_height: B,
-        membership_coordinator: EpochMembershipCoordinator<T>,
-    ) -> (Self, mpsc::UnboundedReceiver<LeafFetchRequest<T>>)
+    pub fn new<B>(epoch_height: B, membership_coordinator: EpochMembershipCoordinator<T>) -> Self
     where
         B: Into<BlockNumber>,
     {
-        let (fetch_tx, fetch_rx) = mpsc::unbounded_channel();
-        (
-            Self {
-                epoch_height: epoch_height.into(),
-                membership_coordinator,
-                tasks: JoinSet::new(),
-                handles: BTreeMap::new(),
-                leaf_store: EpochLeafStore::new(),
-                fetch_tx,
-                pending_fetches: BTreeMap::new(),
-                pending_drb_requests: BTreeSet::new(),
-            },
-            fetch_rx,
-        )
+        Self {
+            epoch_height: epoch_height.into(),
+            membership_coordinator,
+            tasks: JoinSet::new(),
+            handles: BTreeMap::new(),
+            leaf_store: EpochLeafStore::new(),
+            pending_drb_requests: BTreeSet::new(),
+            pending_leaves: BTreeMap::new(),
+        }
     }
 
     pub async fn next(&mut self) -> Option<Result<EpochRootResult, EpochManagerError>> {
         loop {
             match self.tasks.join_next().await {
-                Some(Ok(result)) => return Some(result),
+                Some(Ok(result)) => {
+                    // Clear the dedup guard so the epoch can be retried if
+                    // needed (e.g. after a NeedLeaf is fulfilled).
+                    if let Ok(ref r) = result {
+                        match r {
+                            EpochRootResult::DrbResult(epoch, _) => {
+                                self.pending_drb_requests.remove(epoch);
+                            },
+                            EpochRootResult::NeedLeaf(epoch, height) => {
+                                self.pending_drb_requests.remove(epoch);
+                                self.pending_leaves
+                                    .entry(*height)
+                                    .or_default()
+                                    .insert(*epoch);
+                            },
+                        }
+                    }
+                    return Some(result);
+                },
                 Some(Err(err)) => {
                     if !err.is_cancelled() {
                         error!(%err, "epoch manager task panic")
@@ -86,29 +91,19 @@ impl<T: NodeType> EpochManager<T> {
         }
     }
 
-    /// Handle a leaf response received from a peer. Resolves any pending
-    /// oneshot senders waiting for this block height.
-    pub fn handle_leaf_response(&mut self, entry: DecidedLeafEntry<T>) {
-        let height = entry.leaf.height();
-        if let Some(senders) = self.pending_fetches.remove(&height) {
-            for sender in senders {
-                let _ = sender.send(entry.clone());
-            }
-        }
-    }
-
     pub fn leaf_store(&self) -> &EpochLeafStore<T> {
         &self.leaf_store
     }
 
-    /// Register a pending leaf fetch so that [`handle_leaf_response`] can
-    /// resolve it when the response arrives from a peer.
-    pub fn register_pending_fetch(
-        &mut self,
-        height: u64,
-        sender: oneshot::Sender<DecidedLeafEntry<T>>,
-    ) {
-        self.pending_fetches.entry(height).or_default().push(sender);
+    /// Called when a leaf becomes available in the store (e.g. from a peer
+    /// response).  Re-triggers [`request_drb_result`] for any epochs that
+    /// were waiting on this height.
+    pub fn on_leaf_stored(&mut self, height: u64) {
+        if let Some(epochs) = self.pending_leaves.remove(&height) {
+            for epoch in epochs {
+                self.request_drb_result(epoch);
+            }
+        }
     }
 
     pub fn handle_leaf_decided(&mut self, leaf: Leaf2<T>) {
@@ -162,7 +157,6 @@ impl<T: NodeType> EpochManager<T> {
         let membership_coordinator = self.membership_coordinator.clone();
         let leaf_store = self.leaf_store.clone();
         let epoch_height = self.epoch_height;
-        let fetch_tx = self.fetch_tx.clone();
         let handles = self.handles.entry(epoch).or_default();
 
         handles.push(self.tasks.spawn(async move {
@@ -192,15 +186,9 @@ impl<T: NodeType> EpochManager<T> {
             let root_entry = match leaf_store.get(root_height) {
                 Some(entry) => entry,
                 None => {
-                    // Not in local store -- request from peers.
-                    debug!(%epoch, %root_height, "requesting epoch root leaf from peers");
-                    fetch_leaf_from_peers(&fetch_tx, root_height)
-                        .await
-                        .map_err(|_| {
-                            EpochManagerError::Catchup(anyhow::anyhow!(
-                                "Failed to fetch epoch root leaf at height {root_height}"
-                            ))
-                        })?
+                    // Not in local store — tell the coordinator to fetch it.
+                    debug!(%epoch, %root_height, "epoch root leaf not available, requesting from peers");
+                    return Ok(EpochRootResult::NeedLeaf(epoch, root_height));
                 },
             };
 
@@ -211,11 +199,7 @@ impl<T: NodeType> EpochManager<T> {
                 .map_err(EpochManagerError::EpochRoot)?;
 
             // Try to get the DRB from the transition leaf in the local
-            // store (which carries next_drb_result).  We intentionally do
-            // NOT fetch the transition leaf from peers here because it may
-            // not have been decided yet (the transition block is often the
-            // very block we need the DRB to propose), and the 10-second
-            // fetch timeout would block catchup.
+            // store (which carries next_drb_result).
             let drb_epoch = epoch.saturating_sub(1);
             let transition_height = transition_block_for_epoch(drb_epoch, *epoch_height);
 
@@ -240,30 +224,6 @@ impl<T: NodeType> EpochManager<T> {
     }
 }
 
-/// Send a leaf fetch request through the channel and await the response.
-async fn fetch_leaf_from_peers<T: NodeType>(
-    fetch_tx: &mpsc::UnboundedSender<LeafFetchRequest<T>>,
-    height: u64,
-) -> Result<DecidedLeafEntry<T>, ()> {
-    let (response_tx, response_rx) = oneshot::channel();
-    fetch_tx
-        .send(LeafFetchRequest {
-            height,
-            response_tx,
-        })
-        .map_err(|_| {
-            warn!(%height, "leaf fetch channel closed");
-        })?;
-    tokio::time::timeout(std::time::Duration::from_secs(10), response_rx)
-        .await
-        .map_err(|_| {
-            warn!(%height, "leaf fetch timed out");
-        })?
-        .map_err(|_| {
-            warn!(%height, "leaf fetch oneshot dropped");
-        })
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum EpochManagerError {
     #[error("failed to add epoch root: {0}")]
@@ -274,7 +234,4 @@ pub enum EpochManagerError {
 
     #[error("failed to get drb: {0}")]
     DrbLookup(#[source] anytrace::Error),
-
-    #[error("failed to wait for membership catchup: {0}")]
-    Catchup(#[source] anyhow::Error),
 }

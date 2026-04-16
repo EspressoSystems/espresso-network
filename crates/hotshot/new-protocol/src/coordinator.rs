@@ -23,7 +23,6 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    leaf_store::DecidedLeafEntry,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, CatchupMessage, Certificate2, CheckpointCertificate, CheckpointVote,
@@ -52,7 +51,6 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
     epoch_manager: EpochManager<T>,
-    leaf_fetch_rx: tokio::sync::mpsc::UnboundedReceiver<crate::leaf_store::LeafFetchRequest<T>>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
     #[builder(default)]
@@ -229,48 +227,14 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                         self.timeout_one_honest_collector.retry_pending_votes().await;
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
-                    Ok(EpochRootResult::RootAdded(_epoch)) => {
-                        // New epoch root registered — retry buffered votes.
-                        self.vote1_collector.retry_pending_votes().await;
-                        self.vote2_collector.retry_pending_votes().await;
-                        self.timeout_collector.retry_pending_votes().await;
-                        self.timeout_one_honest_collector.retry_pending_votes().await;
+                    Ok(EpochRootResult::NeedLeaf(_epoch, height)) => {
+                        // Epoch manager needs a leaf we don't have locally.
+                        // Request it from peers.
+                        self.request_leaf_from_peers(height).await;
                     }
                     Err(err) => {
                         return Err(CoordinatorError::regular(err))
                     }
-                },
-                Some(fetch_req) = self.leaf_fetch_rx.recv() => {
-                    // A catchup task needs a leaf from peers. Register the
-                    // oneshot sender so handle_leaf_response can resolve it
-                    // when the response arrives.
-                    self.epoch_manager.register_pending_fetch(
-                        fetch_req.height,
-                        fetch_req.response_tx,
-                    );
-
-                    // Send requests to members of the first epoch's stake
-                    // table (always available).
-                    if let Ok(membership) = self.membership_coordinator
-                        .stake_table_for_epoch(Some(EpochNumber::genesis())).await
-                    {
-                        let members = membership.committee_members(ViewNumber::genesis()).await;
-                        for member in members {
-                            if member == self.public_key {
-                                continue;
-                            }
-                            let msg = Message {
-                                sender: self.public_key.clone(),
-                                message_type: MessageType::Catchup(CatchupMessage::LeafRequest(
-                                    LeafRequest { block_height: fetch_req.height }
-                                )),
-                            };
-                            if self.network.unicast(member, msg).await.is_ok() {
-                                break; // Try one peer at a time
-                            }
-                        }
-                    }
-                    // Continue select loop (no ConsensusInput produced)
                 },
                 else => {
                     return Err(CoordinatorError::critical(ErrorSource::NoInput))
@@ -397,8 +361,9 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     CatchupMessage::LeafResponse(resp) => {
                         if let (Some(leaf), Some(cert2)) = (resp.leaf, resp.cert2) {
                             // TODO: verify cert2 decides this leaf before trusting it
-                            self.epoch_manager
-                                .handle_leaf_response(DecidedLeafEntry { leaf, cert2 });
+                            let height = leaf.height();
+                            self.epoch_manager.leaf_store().insert(leaf, cert2);
+                            self.epoch_manager.on_leaf_stored(height);
                         }
                     },
                 }
@@ -643,6 +608,31 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             let epoch_height = *self.consensus.epoch_height;
             let min_height = root_block_in_epoch(epoch.saturating_sub(3), epoch_height);
             self.epoch_manager.leaf_store().gc(min_height);
+        }
+    }
+
+    /// Send a leaf request to peers for the given block height.
+    async fn request_leaf_from_peers(&mut self, height: u64) {
+        if let Ok(membership) = self
+            .membership_coordinator
+            .stake_table_for_epoch(Some(EpochNumber::genesis()))
+            .await
+        {
+            let members = membership.committee_members(ViewNumber::genesis()).await;
+            for member in members {
+                if member == self.public_key {
+                    continue;
+                }
+                let msg = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Catchup(CatchupMessage::LeafRequest(LeafRequest {
+                        block_height: height,
+                    })),
+                };
+                if self.network.unicast(member, msg).await.is_ok() {
+                    break; // Try one peer at a time
+                }
+            }
         }
     }
 

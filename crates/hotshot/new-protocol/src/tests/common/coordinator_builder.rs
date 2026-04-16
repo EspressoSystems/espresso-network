@@ -44,7 +44,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
 
-    let (epoch_manager, leaf_fetch_rx) = EpochManager::new(epoch_height, membership.clone());
+    let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
@@ -107,7 +107,6 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
-        .leaf_fetch_rx(leaf_fetch_rx)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
         .membership_coordinator(membership)
