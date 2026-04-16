@@ -1,5 +1,6 @@
 use committable::{Commitment, Committable};
-use hotshot_types::{data::Leaf2, traits::node_implementation::NodeType};
+use hotshot_types::{data::Leaf2, message::UpgradeLock, traits::node_implementation::NodeType};
+use versions::{CLIQUENET_VERSION, Upgrade};
 
 use crate::message::Proposal;
 
@@ -8,9 +9,7 @@ pub fn proposal_commitment<T: NodeType>(proposal: &Proposal<T>) -> Commitment<Le
     leaf.commit()
 }
 
-#[cfg(test)]
-pub fn test_upgrade_lock<T: NodeType>() -> hotshot_types::message::UpgradeLock<T> {
-    use versions::{CLIQUENET_VERSION, Upgrade};
-
-    hotshot_types::message::UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
+// TODO: Remove this and use the actual upgrade lock
+pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
+    UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
 }

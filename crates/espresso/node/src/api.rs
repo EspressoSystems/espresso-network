@@ -2669,12 +2669,14 @@ mod api_tests {
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
+        use espresso_types::ConsensusEvent;
+
         #[derive(Clone, Copy, Debug)]
         struct FailConsumer;
 
         #[async_trait]
         impl EventConsumer for FailConsumer {
-            async fn handle_event(&self, _: &Event<SeqTypes>) -> anyhow::Result<()> {
+            async fn handle_event(&self, _: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()> {
                 bail!("mock error injection");
             }
         }

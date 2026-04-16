@@ -149,7 +149,8 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        ConsensusEvent, Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes,
+        ValidatedState,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
@@ -245,8 +246,10 @@ mod tests {
 
     #[async_trait]
     impl EventConsumer for EventCollector {
-        async fn handle_event(&self, event: &Event) -> anyhow::Result<()> {
-            self.events.write().await.push(event.clone());
+        async fn handle_event(&self, event: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()> {
+            if let ConsensusEvent::LegacyEvent(event) = event {
+                self.events.write().await.push(event.clone());
+            }
             Ok(())
         }
     }
@@ -256,7 +259,7 @@ mod tests {
 
     #[async_trait]
     impl EventConsumer for FailConsumer {
-        async fn handle_event(&self, _: &Event) -> anyhow::Result<()> {
+        async fn handle_event(&self, _: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()> {
             bail!("mock error injection");
         }
     }

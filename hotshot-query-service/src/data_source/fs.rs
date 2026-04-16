@@ -305,6 +305,7 @@ where
 mod impl_testable_data_source {
     use async_trait::async_trait;
     use hotshot::types::Event;
+    use hotshot_new_protocol::consensus::ConsensusEvent;
     use tempfile::TempDir;
 
     use super::*;
@@ -344,7 +345,9 @@ mod impl_testable_data_source {
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
-            self.update(event).await.unwrap();
+            self.update(&ConsensusEvent::LegacyEvent(event.clone()))
+                .await
+                .unwrap();
         }
     }
 }

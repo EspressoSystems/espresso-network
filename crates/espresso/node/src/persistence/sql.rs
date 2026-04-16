@@ -15,9 +15,9 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use either::Either;
 use espresso_types::{
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
-    NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash, parse_duration,
-    parse_size,
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, ConsensusEvent, FeeMerkleTree, Leaf,
+    Leaf2, NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
+    parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{
@@ -72,6 +72,7 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use sqlx::{Executor, QueryBuilder, Row, query};
+use versions::CLIQUENET_VERSION;
 
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
@@ -940,7 +941,7 @@ impl Persistence {
                         tracing::debug!(?view, "VID share not available at decide");
                     }
 
-                    // Fill in the full block payload using the DA proposals we had persisted.
+                   // Fill in the full block payload using the DA proposals we had persisted.
                     if let Some(proposal) = da_proposals.remove(&view) {
                         let payload =
                             Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
@@ -987,7 +988,7 @@ impl Persistence {
                     None
                 };
                 consumer
-                    .handle_event(&Event {
+                    .handle_event(&ConsensusEvent::LegacyEvent(Event {
                         view_number: to_view,
                         event: EventType::Decide {
                             leaf_chain: Arc::new(leaf_chain),
@@ -995,7 +996,7 @@ impl Persistence {
                             deciding_qc,
                             block_size: None,
                         },
-                    })
+                    }))
                     .await?;
             }
 
@@ -1467,12 +1468,14 @@ impl SequencerPersistence for Persistence {
         let values = leaf_chain
             .into_iter()
             .map(|(info, cert)| {
-                // The leaf may come with a large payload attached. We don't care about this payload
-                // because we already store it separately, as part of the DA proposal. Storing it
-                // here contributes to load on the DB for no reason, so we remove it before
-                // serializing the leaf.
                 let mut leaf = info.leaf.clone();
-                leaf.unfill_block_payload();
+                // In the legacy protocol, the block payload is stored separately
+                // as a DA proposal, so strip it to save space. In the new
+                // protocol (cliquenet) there are no DA proposals — the leaf is
+                // the only source of the block payload, so keep it.
+                if leaf.block_header().version() < CLIQUENET_VERSION {
+                    leaf.unfill_block_payload();
+                }
 
                 let view = cert.view_number().u64() as i64;
                 let leaf_bytes = bincode::serialize(&leaf)?;

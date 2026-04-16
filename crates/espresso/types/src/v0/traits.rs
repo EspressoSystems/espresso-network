@@ -39,7 +39,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    AuthenticatedValidatorMap, BlockMerkleTree, CoordinatorEvent, FeeAccount, FeeAccountProof,
     FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
@@ -787,37 +787,96 @@ pub trait SequencerPersistence:
     }
 
     /// Update storage based on an event from consensus.
-    async fn handle_event(&self, event: &Event, consumer: &(impl EventConsumer + 'static)) {
-        if let EventType::Decide {
-            leaf_chain,
-            committing_qc,
-            deciding_qc,
-            ..
-        } = &event.event
-        {
-            let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-                // No new leaves.
-                return;
-            };
+    async fn handle_event(
+        &self,
+        event: &CoordinatorEvent<SeqTypes>,
+        consumer: &(impl EventConsumer + 'static),
+    ) {
+        match event {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
+                if let EventType::Decide {
+                    leaf_chain,
+                    committing_qc,
+                    deciding_qc,
+                    ..
+                } = &hotshot_event.event
+                {
+                    let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
+                        return;
+                    };
 
-            // Associate each decided leaf with a QC.
-            let chain = leaf_chain.iter().zip(
-                // The first (most recent) leaf corresponds to the QC triggering the decide event.
-                std::iter::once((**committing_qc).clone())
-                    // Moving backwards in the chain, each leaf corresponds with the subsequent
-                    // leaf's justify QC.
-                    .chain(leaf_chain.iter().map(|leaf| CertificatePair::for_parent(&leaf.leaf))),
-            );
+                    let chain = leaf_chain.iter().zip(
+                        std::iter::once((**committing_qc).clone()).chain(
+                            leaf_chain
+                                .iter()
+                                .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
+                        ),
+                    );
 
-            if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, deciding_qc.clone(), consumer)
-                .await
-            {
-                tracing::error!(
-                    "failed to save decided leaves, chain may not be up to date: {err:#}"
-                );
-                return;
-            }
+                    if let Err(err) = self
+                        .append_decided_leaves(
+                            leaf.view_number(),
+                            chain,
+                            deciding_qc.clone(),
+                            consumer,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "failed to save decided leaves, chain may not be up to date: {err:#}"
+                        );
+                    }
+                }
+            },
+            CoordinatorEvent::NewDecide(decide) => {
+                if decide.leaves.is_empty() {
+                    return;
+                }
+
+                // TODO(new-protocol): remove this field once the coordinator has storage
+                for signed in decide.vid_shares.iter().flatten() {
+                    let proposal = convert_proposal(signed.clone());
+                    if let Err(err) = self.append_vid(&proposal).await {
+                        tracing::error!("failed to append VID share from new protocol: {err:#}");
+                    }
+                }
+
+                // Store leaves in persistence. Zip with VID shares from the
+                // new protocol decide event.
+                let leaf_infos: Vec<_> = decide
+                    .leaves
+                    .iter()
+                    .zip(decide.vid_shares.iter())
+                    .map(|(leaf, vid_share)| {
+                        let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
+                        let vid = vid_share
+                            .as_ref()
+                            .map(|s| VidDisperseShare::V2(s.data.clone()));
+                        LeafInfo::new(leaf.clone(), state, None, vid, None)
+                    })
+                    .collect();
+
+                // cert1 certifies leaves[0] (newest); each leaf's justify_qc
+                // certifies the next older leaf.
+                let view_number = decide.leaves[0].view_number();
+                let qcs = std::iter::once(decide.cert1.clone())
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()));
+
+                if let Err(err) = self
+                    .append_decided_leaves(
+                        view_number,
+                        leaf_infos
+                            .iter()
+                            .zip(qcs.map(CertificatePair::non_epoch_change)),
+                        None,
+                        consumer,
+                    )
+                    .await
+                {
+                    tracing::error!("failed to save decided leaves from new protocol: {err:#}");
+                }
+            },
+            _ => {},
         }
     }
 
@@ -974,7 +1033,7 @@ pub trait SequencerPersistence:
 
 #[async_trait]
 pub trait EventConsumer: Debug + Send + Sync {
-    async fn handle_event(&self, event: &Event) -> anyhow::Result<()>;
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -982,7 +1041,7 @@ impl<T> EventConsumer for Box<T>
 where
     T: EventConsumer + ?Sized,
 {
-    async fn handle_event(&self, event: &Event) -> anyhow::Result<()> {
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         (**self).handle_event(event).await
     }
 }
@@ -992,7 +1051,7 @@ pub struct NullEventConsumer;
 
 #[async_trait]
 impl EventConsumer for NullEventConsumer {
-    async fn handle_event(&self, _event: &Event) -> anyhow::Result<()> {
+    async fn handle_event(&self, _event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
     }
 }

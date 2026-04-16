@@ -322,6 +322,7 @@ where
 pub mod testing {
     use async_trait::async_trait;
     use hotshot::types::Event;
+    use hotshot_new_protocol::consensus::ConsensusEvent;
     pub use sql::testing::TmpDb;
 
     use super::*;
@@ -362,7 +363,9 @@ pub mod testing {
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
-            self.update(event).await.unwrap();
+            self.update(&ConsensusEvent::LegacyEvent(event.clone()))
+                .await
+                .unwrap();
         }
     }
 }

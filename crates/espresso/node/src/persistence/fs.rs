@@ -14,8 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
-    SeqTypes, StakeTableHash,
+    AuthenticatedValidatorMap, ConsensusEvent, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
+    RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -502,7 +502,7 @@ impl Inner {
                 };
 
                 consumer
-                    .handle_event(&Event {
+                    .handle_event(&ConsensusEvent::LegacyEvent(Event {
                         view_number: view,
                         event: EventType::Decide {
                             committing_qc: Arc::new(cert),
@@ -510,7 +510,7 @@ impl Inner {
                             leaf_chain: Arc::new(vec![leaf]),
                             block_size: None,
                         },
-                    })
+                    }))
                     .await?;
             }
             if let Some((start, end, current_height)) = current_interval.as_mut() {
