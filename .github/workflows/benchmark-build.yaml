@@ -26,7 +26,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-bench
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build
         # Build in release without `testing` feature, this should work without `hotshot_example` config.
@@ -71,7 +71,7 @@ jobs:
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build
         run: |
