@@ -4,10 +4,10 @@ use rand::RngCore;
 use vid::{VidScheme, avidm_gf2::AvidmGf2Scheme};
 
 fn avidm_gf2_benchmark(c: &mut Criterion) {
-    let param_list = [(34, 100)];
-    let payload_bytes_len_list = [1, 5]; // in MB
+    let param_list = [(3400, 10000)];
+    let payload_bytes_len_list = [5]; // in MB
     let mut payload = vec![0u8; 5 * 1024 * 1024];
-    let distribution = [1u32; 1000];
+    let distribution = [1u32; 10000];
     jf_utils::test_rng().fill_bytes(&mut payload);
 
     let mut avidm_gf2_group = c.benchmark_group("AvidM_GF2");

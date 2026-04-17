@@ -85,8 +85,14 @@ struct Args {
     )]
     global_memory_pool_size: u64,
 }
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async_main(migrated_envs))
+}
+
+async fn async_main(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 
@@ -101,6 +107,7 @@ async fn main() -> Result<()> {
             .with_env_filter(EnvFilter::from_default_env())
             .init();
     }
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     // Generate the broker key from the supplied seed
     let key_hash = sha2::Sha256::digest(args.key_seed.to_le_bytes());

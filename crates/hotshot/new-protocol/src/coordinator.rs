@@ -1,5 +1,5 @@
 pub mod error;
-pub(crate) mod timer;
+pub mod timer;
 
 use bon::Builder;
 use hotshot::traits::NodeImplementation;
@@ -15,7 +15,7 @@ use tokio::select;
 use tracing::{error, warn};
 
 use crate::{
-    block::BlockBuilder,
+    block::{BlockAndHeaderRequest, BlockBuilder},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
@@ -61,6 +61,37 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
 }
 
 impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+    /// Bootstrap the coordinator so the view-1 leader can propose.
+    ///
+    /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
+    /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
+    /// `seed_genesis` on the inner `Consensus` instance.
+    pub async fn start(&mut self) {
+        let view = ViewNumber::new(1);
+        let epoch = EpochNumber::genesis();
+
+        self.outbox
+            .push_back(ConsensusOutput::ViewChanged(view, epoch));
+
+        if let Some(leader) = self.leader(view, epoch).await
+            && leader == self.public_key
+        {
+            let genesis_proposal = self
+                .consensus
+                .proposal_at(ViewNumber::genesis())
+                .expect("genesis proposal must be seeded before start()")
+                .clone();
+            self.outbox
+                .push_back(ConsensusOutput::RequestBlockAndHeader(
+                    BlockAndHeaderRequest {
+                        view,
+                        epoch,
+                        parent_proposal: genesis_proposal,
+                    },
+                ));
+        }
+    }
+
     /// Convenience method to run the coordinator event loop.
     ///
     /// Combines `next_consensus_input`, `apply_consensus` and outbox processing.
