@@ -70,7 +70,7 @@ pub struct L1ClientOptions {
     /// Delay when retrying failed L1 queries.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_RETRY_DELAY",
+        env = "ESPRESSO_L1_RETRY_DELAY",
         default_value = "1s",
         value_parser = parse_duration,
     )]
@@ -79,7 +79,7 @@ pub struct L1ClientOptions {
     /// Request rate when polling L1.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL",
+        env = "ESPRESSO_L1_POLLING_INTERVAL",
         default_value = "7s",
         value_parser = parse_duration,
     )]
@@ -88,7 +88,7 @@ pub struct L1ClientOptions {
     /// Maximum number of L1 blocks to keep in cache at once.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_BLOCKS_CACHE_SIZE",
+        env = "ESPRESSO_L1_BLOCKS_CACHE_SIZE",
         default_value = "100"
     )]
     pub l1_blocks_cache_size: NonZeroUsize,
@@ -96,7 +96,7 @@ pub struct L1ClientOptions {
     /// Number of L1 events to buffer before discarding.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_EVENTS_CHANNEL_CAPACITY",
+        env = "ESPRESSO_L1_EVENTS_CHANNEL_CAPACITY",
         default_value = "100"
     )]
     pub l1_events_channel_capacity: usize,
@@ -104,7 +104,7 @@ pub struct L1ClientOptions {
     /// Maximum number of L1 blocks that can be scanned for events in a single query.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE",
+        env = "ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE",
         default_value = "10000"
     )]
     pub l1_events_max_block_range: u64,
@@ -112,7 +112,7 @@ pub struct L1ClientOptions {
     /// Maximum time to wait for new heads before considering a stream invalid and reconnecting.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_SUBSCRIPTION_TIMEOUT",
+        env = "ESPRESSO_L1_SUBSCRIPTION_TIMEOUT",
         default_value = "1m",
         value_parser = parse_duration,
     )]
@@ -121,7 +121,7 @@ pub struct L1ClientOptions {
     /// Fail over to another provider if the current provider fails twice within this window.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_FREQUENT_FAILURE_TOLERANCE",
+        env = "ESPRESSO_L1_FREQUENT_FAILURE_TOLERANCE",
         default_value = "1m",
         value_parser = parse_duration,
     )]
@@ -131,7 +131,7 @@ pub struct L1ClientOptions {
     /// time window.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_CONSECUTIVE_FAILURE_TOLERANCE",
+        env = "ESPRESSO_L1_CONSECUTIVE_FAILURE_TOLERANCE",
         default_value = "10"
     )]
     pub l1_consecutive_failure_tolerance: usize,
@@ -139,7 +139,7 @@ pub struct L1ClientOptions {
     /// Revert back to the first provider this duration after failing over.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_FAILOVER_REVERT",
+        env = "ESPRESSO_L1_FAILOVER_REVERT",
         default_value = "30m",
         value_parser = parse_duration,
     )]
@@ -150,7 +150,7 @@ pub struct L1ClientOptions {
     /// If not set, the general l1-retry-delay will be used.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_RATE_LIMIT_DELAY",
+        env = "ESPRESSO_L1_RATE_LIMIT_DELAY",
         value_parser = parse_duration,
     )]
     pub l1_rate_limit_delay: Option<Duration>,
@@ -158,7 +158,7 @@ pub struct L1ClientOptions {
     /// Separate provider to use for subscription feeds.
     ///
     /// Typically this would be a WebSockets endpoint while the main provider uses HTTP.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_L1_WS_PROVIDER", value_delimiter = ',')]
+    #[clap(long, env = "ESPRESSO_L1_WS_PROVIDER", value_delimiter = ',')]
     pub l1_ws_provider: Option<Vec<Url>>,
 
     /// Interval at which the background update loop polls the L1 stake table contract for new events
@@ -166,7 +166,7 @@ pub struct L1ClientOptions {
     ///
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL",
+        env = "ESPRESSO_NODE_L1_STAKE_TABLE_UPDATE_INTERVAL",
         default_value = "60m",
         value_parser = parse_duration,
     )]
@@ -181,7 +181,7 @@ pub struct L1ClientOptions {
     /// from the fetched events, and is required for node to participate in consensus.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_RETRY_DURATION",
+        env = "ESPRESSO_L1_EVENTS_MAX_RETRY_DURATION",
         default_value = "20m",
         value_parser = parse_duration,
     )]
@@ -200,7 +200,7 @@ pub struct L1ClientOptions {
     /// the hashes. This is fine and good for blocks very near the finalized head, but for
     /// extremely old blocks it is prohibitively expensive, and these old blocks are extremely
     /// unlikely to be unfinalized anyways.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_L1_FINALIZED_SAFETY_MARGIN")]
+    #[clap(long, env = "ESPRESSO_L1_FINALIZED_SAFETY_MARGIN")]
     pub l1_finalized_safety_margin: Option<u64>,
 
     #[clap(skip = Arc::<Box<dyn Metrics>>::new(Box::new(NoMetrics)))]

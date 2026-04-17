@@ -17,6 +17,7 @@ use crate::{
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
+    logging::KeyPrefix,
     message::Message,
     network::Network,
     outbox::Outbox,
@@ -94,6 +95,7 @@ impl TestHarness {
                 EpochNumber::genesis(),
             ))
             .public_key(public_key)
+            .node_id(KeyPrefix::from(&public_key))
             .build();
         Self {
             coordinator,

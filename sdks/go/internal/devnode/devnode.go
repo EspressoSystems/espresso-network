@@ -119,12 +119,12 @@ func Start(t *testing.T, ctx context.Context, ports Ports, storageDir string) {
 	p.Stderr = logFile
 
 	env := os.Environ()
-	env = append(env, fmt.Sprintf("ESPRESSO_SEQUENCER_API_PORT=%d", ports.SequencerAPI))
+	env = append(env, fmt.Sprintf("ESPRESSO_NODE_API_PORT=%d", ports.SequencerAPI))
 	env = append(env, fmt.Sprintf("ESPRESSO_BUILDER_PORT=%d", ports.Builder))
 	env = append(env, fmt.Sprintf("ESPRESSO_DEV_NODE_PORT=%d", ports.DevNode))
-	env = append(env, "ESPRESSO_SEQUENCER_ETH_MNEMONIC=test test test test test test test test test test test junk")
+	env = append(env, "ESPRESSO_ETH_MNEMONIC=test test test test test test test test test test test junk")
 	env = append(env, "ESPRESSO_DEPLOYER_ACCOUNT_INDEX=0")
-	env = append(env, fmt.Sprintf("ESPRESSO_SEQUENCER_STORAGE_PATH=%s", storageDir))
+	env = append(env, fmt.Sprintf("ESPRESSO_NODE_STORAGE_PATH=%s", storageDir))
 	p.Env = env
 
 	if err := p.Start(); err != nil {
