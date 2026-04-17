@@ -70,3 +70,12 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "$TAG" "${args[@]}"
+
+      # Tag push events triggered by GITHUB_TOKEN don't trigger workflows, but workflow_dispatch does.
+      - name: Dispatch build.yml for the new tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run build.yml --ref "$TAG"

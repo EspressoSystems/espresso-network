@@ -106,6 +106,10 @@ Inputs: `tag` (e.g. `20260408`), `ref` (branch or commit to tag).
 
 `gh workflow run create-release.yml -f tag=20260408 -f ref=release-vid-upgrade`
 
+After the git tag and Release are created, the workflow dispatches `build.yml` against the new tag to build Docker
+images. This is needed because tag pushes made via `GITHUB_TOKEN` do not trigger other workflows, but
+`workflow_dispatch` does.
+
 ## Floating Tag Action
 
 `promote-docker-tag.yml` moves floating Docker tags. Re-tags the existing Docker image (no rebuild, just a manifest
