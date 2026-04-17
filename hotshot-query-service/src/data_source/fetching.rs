@@ -149,6 +149,37 @@ use self::{
     vid::{VidCommonFetcher, VidCommonRequest},
 };
 
+const READ_RETRY_MAX: u32 = 100;
+
+fn is_serialization_conflict(err_msg: &str) -> bool {
+    err_msg.contains("could not serialize access")
+}
+
+async fn retry_read<T, E, F, Fut>(f: F) -> Result<T, E>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    let mut delay = Duration::from_millis(10);
+    let max_delay = Duration::from_millis(500);
+    for attempt in 0..READ_RETRY_MAX {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(err) if is_serialization_conflict(&format!("{err:#}")) => {
+                tracing::warn!(
+                    attempt,
+                    "serialization conflict on read transaction, retrying after {delay:?}"
+                );
+                sleep(delay).await;
+                delay = min(delay * 2, max_delay);
+            },
+            Err(err) => return Err(err),
+        }
+    }
+    f().await
+}
+
 /// Builder for [`FetchingDataSource`] with configuration.
 pub struct Builder<Types, S, P> {
     storage: S,
@@ -626,10 +657,13 @@ where
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.block_height().await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.block_height().await
+        })
+        .await
     }
 }
 
@@ -642,8 +676,11 @@ where
     P: Send + Sync,
 {
     async fn load_pruned_height(&self) -> anyhow::Result<Option<u64>> {
-        let mut tx = self.read().await?;
-        tx.load_pruned_height().await
+        retry_read(|| async {
+            let mut tx = self.read().await?;
+            tx.load_pruned_height().await
+        })
+        .await
     }
 }
 
@@ -1847,10 +1884,13 @@ where
     P: Send + Sync,
 {
     async fn get_last_state_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_last_state_height().await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_last_state_height().await
+        })
+        .await
     }
 }
 
@@ -1864,10 +1904,13 @@ where
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.block_height().await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.block_height().await
+        })
+        .await
     }
 
     async fn count_transactions_in_range(
@@ -1875,10 +1918,24 @@ where
         range: impl RangeBounds<usize> + Send,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.count_transactions_in_range(range, namespace).await
+        let start = match range.start_bound() {
+            Bound::Included(&n) => Bound::Included(n),
+            Bound::Excluded(&n) => Bound::Excluded(n),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(&n) => Bound::Included(n),
+            Bound::Excluded(&n) => Bound::Excluded(n),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.count_transactions_in_range((start, end), namespace)
+                .await
+        })
+        .await
     }
 
     async fn payload_size_in_range(
@@ -1886,27 +1943,47 @@ where
         range: impl RangeBounds<usize> + Send,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.payload_size_in_range(range, namespace).await
+        let start = match range.start_bound() {
+            Bound::Included(&n) => Bound::Included(n),
+            Bound::Excluded(&n) => Bound::Excluded(n),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(&n) => Bound::Included(n),
+            Bound::Excluded(&n) => Bound::Excluded(n),
+            Bound::Unbounded => Bound::Unbounded,
+        };
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.payload_size_in_range((start, end), namespace).await
+        })
+        .await
     }
 
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.vid_share(id).await
+        let id: BlockId<Types> = id.into();
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.vid_share(id).await
+        })
+        .await
     }
 
     async fn sync_status(&self) -> QueryResult<SyncStatus> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.sync_status().await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.sync_status().await
+        })
+        .await
     }
 
     async fn get_header_window(
@@ -1915,10 +1992,14 @@ where
         end: u64,
         limit: usize,
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_header_window(start, end, limit).await
+        let start: WindowStart<Types> = start.into();
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_header_window(start, end, limit).await
+        })
+        .await
     }
 }
 
@@ -1940,10 +2021,13 @@ where
         Vec<explorer::query_data::BlockSummary<Types>>,
         explorer::query_data::GetBlockSummariesError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_block_summaries(request).await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_block_summaries(request.clone()).await
+        })
+        .await
     }
 
     async fn get_block_detail(
@@ -1951,10 +2035,13 @@ where
         request: explorer::query_data::BlockIdentifier<Types>,
     ) -> Result<explorer::query_data::BlockDetail<Types>, explorer::query_data::GetBlockDetailError>
     {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_block_detail(request).await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_block_detail(request.clone()).await
+        })
+        .await
     }
 
     async fn get_transaction_summaries(
@@ -1964,10 +2051,13 @@ where
         Vec<explorer::query_data::TransactionSummary<Types>>,
         explorer::query_data::GetTransactionSummariesError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_transaction_summaries(request).await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_transaction_summaries(request.clone()).await
+        })
+        .await
     }
 
     async fn get_transaction_detail(
@@ -1977,10 +2067,13 @@ where
         explorer::query_data::TransactionDetailResponse<Types>,
         explorer::query_data::GetTransactionDetailError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_transaction_detail(request).await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_transaction_detail(request.clone()).await
+        })
+        .await
     }
 
     async fn get_explorer_summary(
@@ -1989,10 +2082,13 @@ where
         explorer::query_data::ExplorerSummary<Types>,
         explorer::query_data::GetExplorerSummaryError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_explorer_summary().await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_explorer_summary().await
+        })
+        .await
     }
 
     async fn get_search_results(
@@ -2002,10 +2098,13 @@ where
         explorer::query_data::SearchResult<Types>,
         explorer::query_data::GetSearchResultsError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_search_results(query).await
+        retry_read(|| async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_search_results(query.clone()).await
+        })
+        .await
     }
 }
 
