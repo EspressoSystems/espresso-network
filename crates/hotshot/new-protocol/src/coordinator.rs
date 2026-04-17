@@ -37,7 +37,7 @@ use crate::{
 };
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
+pub struct Coordinator<T: NodeType, I: NodeImplementation<T>, B: BlockBuilder<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Network<T, I::Network>,
@@ -50,7 +50,7 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
     epoch_manager: EpochManager<T>,
-    block_builder: BlockBuilder<T>,
+    block_builder: B,
     proposal_validator: ProposalValidator<T>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
@@ -60,7 +60,7 @@ pub struct Coordinator<T: NodeType, I: NodeImplementation<T>> {
     timer: Timer,
 }
 
-impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
+impl<T: NodeType, I: NodeImplementation<T>, B: BlockBuilder<T>> Coordinator<T, I, B> {
     /// Bootstrap the coordinator so the view-1 leader can propose.
     ///
     /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
@@ -346,16 +346,11 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             ConsensusOutput::RequestVidDisperse {
                 view,
-                epoch,
-                payload,
-                metadata,
+                epoch: _,
+                vid_disperse,
             } => {
-                self.vid_disperser.request_vid_disperse(VidDisperseRequest {
-                    view,
-                    epoch,
-                    block: payload,
-                    metadata,
-                });
+                self.vid_disperser
+                    .request_vid_disperse(VidDisperseRequest { view, vid_disperse });
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 self.epoch_manager.request_drb_result(epoch);

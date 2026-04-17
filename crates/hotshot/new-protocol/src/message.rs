@@ -255,9 +255,9 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct DedupManifest<T: NodeType> {
-    pub(crate) view: ViewNumber,
-    pub(crate) epoch: EpochNumber,
-    pub(crate) hashes: Vec<Commitment<T::Transaction>>,
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub hashes: Vec<Commitment<T::Transaction>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]

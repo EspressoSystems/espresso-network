@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber},
+    data::{VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::node_implementation::NodeType,
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
@@ -27,78 +27,41 @@ pub struct VidReconstructOutput<T: NodeType> {
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct VidDisperseRequest<T: NodeType> {
     pub view: ViewNumber,
-    pub epoch: EpochNumber,
-    pub block: T::BlockPayload,
-    pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    pub vid_disperse: VidDisperse2<T>,
 }
 
+/// Accepts pre-computed VID disperse data and returns it as output.
+///
+/// The actual VID computation is performed by the [`BlockBuilder`] so
+/// this component simply queues the result for the coordinator to pick up.
 pub struct VidDisperser<T: NodeType> {
-    calculations: BTreeMap<ViewNumber, AbortHandle>,
-    epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-    tasks: JoinSet<Result<VidDisperseOutput<T>, ()>>,
+    pending: VecDeque<VidDisperseOutput<T>>,
 }
 
 impl<T: NodeType> VidDisperser<T> {
-    pub fn new(epoch_membership_coordinator: EpochMembershipCoordinator<T>) -> Self {
+    pub fn new(_epoch_membership_coordinator: EpochMembershipCoordinator<T>) -> Self {
         Self {
-            calculations: BTreeMap::new(),
-            epoch_membership_coordinator,
-            tasks: JoinSet::new(),
+            pending: VecDeque::new(),
         }
     }
 
-    pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
-        let view = vid_disperse_request.view;
-        if self.calculations.contains_key(&view) {
-            return;
-        }
-        let handle = self.tasks.spawn(Self::handle_vid_disperse_request(
-            self.epoch_membership_coordinator.clone(),
-            vid_disperse_request,
-        ));
-        self.calculations.insert(view, handle);
+    pub fn request_vid_disperse(&mut self, req: VidDisperseRequest<T>) {
+        self.pending.push_back(VidDisperseOutput {
+            view: req.view,
+            payload_commitment: req.vid_disperse.payload_commitment,
+            disperse: req.vid_disperse,
+        });
     }
 
+    /// Returns the next queued VID disperse result.
     pub async fn next(&mut self) -> Option<Result<VidDisperseOutput<T>, ()>> {
-        loop {
-            match self.tasks.join_next().await {
-                Some(Ok(result)) => return Some(result),
-                Some(Err(_)) => continue,
-                None => return None,
-            }
+        if self.pending.is_empty() {
+            std::future::pending::<()>().await;
         }
+        self.pending.pop_front().map(Ok)
     }
 
-    async fn handle_vid_disperse_request(
-        epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-        vid_disperse_request: VidDisperseRequest<T>,
-    ) -> Result<VidDisperseOutput<T>, ()> {
-        let Ok((disperse, _duration)) = VidDisperse2::calculate_vid_disperse(
-            &vid_disperse_request.block,
-            &epoch_membership_coordinator,
-            vid_disperse_request.view,
-            Some(vid_disperse_request.epoch),
-            Some(vid_disperse_request.epoch),
-            &vid_disperse_request.metadata,
-        )
-        .await
-        else {
-            // TODO: Handle error
-            return Err(());
-        };
-        Ok(VidDisperseOutput {
-            view: vid_disperse_request.view,
-            payload_commitment: disperse.payload_commitment,
-            disperse,
-        })
-    }
-    pub fn gc(&mut self, view_number: ViewNumber) {
-        let keep = self.calculations.split_off(&view_number);
-        for handle in self.calculations.values_mut() {
-            handle.abort();
-        }
-        self.calculations = keep;
-    }
+    pub fn gc(&mut self, _view_number: ViewNumber) {}
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
