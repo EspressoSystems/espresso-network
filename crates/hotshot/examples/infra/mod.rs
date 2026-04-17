@@ -222,7 +222,7 @@ pub fn read_orchestrator_init_config<TYPES: NodeType>() -> (NetworkConfig<TYPES>
     if let Some(total_nodes_string) = matches.get_one::<String>("total_nodes") {
         config.config.num_nodes_with_stake = total_nodes_string.parse::<NonZeroUsize>().unwrap();
         config.config.known_nodes_with_stake =
-            vec![PeerConfig::default(); config.config.num_nodes_with_stake.get() as usize];
+            vec![PeerConfig::default(); config.config.num_nodes_with_stake.get()];
         error!(
             "config.config.total_nodes: {:?}",
             config.config.num_nodes_with_stake
