@@ -23,7 +23,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@just
       - id: set-matrix
         run: echo "matrix=$(just hotshot::matrix)" >> "$GITHUB_OUTPUT"
@@ -35,7 +35,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: Checkout Repository
 
       - uses: Swatinem/rust-cache@v2
@@ -43,7 +43,11 @@ jobs:
         with:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
-          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.test_suites == 'test-ci-rest' }}
+          # Save from a hotshot-testing cell so the cache contains its dep graph:
+          # every other matrix cell needs those deps. `test-ci-rest` excludes
+          # hotshot-testing, so its target/ is a poor match for the rest of the
+          # matrix.
+          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.test_suites == 'test-ci tests_1' }}
           prefix-key: v1-hotshot
 
       - uses: taiki-e/install-action@just
@@ -83,7 +87,7 @@ jobs:
   test-new-protocol:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: Checkout Repository
 
       - uses: Swatinem/rust-cache@v2
@@ -121,7 +125,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: Checkout Repository
 
       - uses: Swatinem/rust-cache@v2
@@ -147,7 +151,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download JUnit artifacts
         uses: actions/download-artifact@v4
