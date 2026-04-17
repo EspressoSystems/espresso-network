@@ -309,20 +309,6 @@ impl<T: NodeType> Consensus<T> {
         // An event from the current view or the previous view can trigger a propose
         self.maybe_propose(view + 1, outbox).await;
 
-        // When a DRB result arrives, retry voting on epoch-transition
-        // proposals that were deferred because the DRB wasn't available.
-        if let Some(epoch) = drb_epoch {
-            let views_to_retry: Vec<ViewNumber> = self
-                .proposals
-                .iter()
-                .filter(|(v, p)| p.epoch + 1 == epoch && !self.voted_1_views.contains(v))
-                .map(|(&v, _)| v)
-                .collect();
-            for v in views_to_retry {
-                self.maybe_vote_1(v, outbox).await;
-            }
-        }
-
         // When new epoch data arrives (DRB result or epoch change), retry
         // any pending certificates that were deferred because their epoch
         // membership wasn't available yet.
@@ -1208,53 +1194,17 @@ impl<T: NodeType> Consensus<T> {
         // Retry pending cert1s.
         let pending = std::mem::take(&mut self.pending_certs1);
         for (view, cert) in pending {
-            let Some(epoch) = cert.epoch() else {
-                continue;
-            };
-            match self.try_verify_cert(&cert, epoch).await {
-                CertVerification::Valid => {
-                    self.certs.insert(view, cert);
-                },
-                CertVerification::Invalid => {
-                    warn!(%view, "deferred certificate1 invalid");
-                },
-                CertVerification::EpochUnavailable => {
-                    self.pending_certs1.insert(view, cert);
-                },
-            }
+            self.handle_certificate1(cert.clone(), outbox).await;
+            self.maybe_vote_2_and_update_lock(view, outbox).await;
+            self.maybe_propose(view, outbox).await;
         }
 
         // Retry pending cert2s.
         let pending = std::mem::take(&mut self.pending_certs2);
         for (view, cert) in pending {
-            let Some(epoch) = cert.epoch() else {
-                continue;
-            };
-            match self.try_verify_cert(&cert, epoch).await {
-                CertVerification::Valid => {
-                    self.certs2.insert(view, cert);
-                },
-                CertVerification::Invalid => {
-                    warn!(%view, "deferred certificate2 invalid");
-                },
-                CertVerification::EpochUnavailable => {
-                    self.pending_certs2.insert(view, cert);
-                },
-            }
-        }
-
-        // Process newly verified certs through the consensus pipeline.
-        let views_to_retry: Vec<ViewNumber> = self
-            .certs
-            .keys()
-            .chain(self.certs2.keys())
-            .copied()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        for v in views_to_retry {
-            self.maybe_vote_2_and_update_lock(v, outbox).await;
-            self.maybe_decide(v, outbox);
+            self.handle_certificate2(cert.clone(), outbox).await;
+            self.maybe_decide(view, outbox);
+            self.maybe_propose(view, outbox).await;
         }
     }
 
