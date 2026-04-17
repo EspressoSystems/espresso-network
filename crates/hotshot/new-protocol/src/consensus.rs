@@ -5,7 +5,6 @@ use std::{
 };
 
 use committable::{Commitment, Committable};
-use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
         BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
@@ -46,7 +45,7 @@ pub enum ConsensusInput<T: NodeType> {
         view: ViewNumber,
         epoch: EpochNumber,
         payload: T::BlockPayload,
-        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+        vid_disperse: VidDisperse2<T>,
     },
     BlockReconstructed(ViewNumber, VidCommitment2),
     Certificate1(Certificate1<T>),
@@ -81,8 +80,7 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestVidDisperse {
         view: ViewNumber,
         epoch: EpochNumber,
-        payload: T::BlockPayload,
-        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+        vid_disperse: VidDisperse2<T>,
     },
     LeafDecided(Vec<Leaf2<T>>),
     LockUpdated(Certificate2<T>),
@@ -256,13 +254,12 @@ impl<T: NodeType> Consensus<T> {
                 view,
                 epoch,
                 payload,
-                metadata,
+                vid_disperse,
             } => {
                 outbox.push_back(ConsensusOutput::RequestVidDisperse {
                     view,
                     epoch,
-                    payload: payload.clone(),
-                    metadata,
+                    vid_disperse,
                 });
                 self.blocks.insert(view, payload);
                 Protocol::Continue

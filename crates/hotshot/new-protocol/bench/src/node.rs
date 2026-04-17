@@ -1,18 +1,13 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{
-    traits::{BlockPayload, implementations::Cliquenet},
-    types::BLSPubKey,
-};
+use hotshot::{traits::implementations::Cliquenet, types::BLSPubKey};
 use hotshot_example_types::{
-    block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{CliquenetImpl, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_new_protocol::{
-    block::{BlockBuilder, BlockBuilderConfig},
-    consensus::{Consensus, ConsensusInput, ConsensusOutput},
+    consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
@@ -33,9 +28,12 @@ use hotshot_types::{
 };
 use tracing::{error, info, warn};
 
-use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
+use crate::{
+    config::NodeConfig, membership::make_membership, metrics::MetricsCollector,
+    mock_builder::MockBuilder,
+};
 
-type BenchCoordinator = Coordinator<TestTypes, CliquenetImpl>;
+type BenchCoordinator = Coordinator<TestTypes, CliquenetImpl, MockBuilder>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -119,8 +117,7 @@ async fn build_coordinator(
     let vid_disperser = VidDisperser::new(membership.clone());
     let vid_reconstructor = VidReconstructor::new();
 
-    let block_config = BlockBuilderConfig::default();
-    let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
+    let block_builder = MockBuilder::new(cfg.block_size, membership.clone());
 
     let mut state_manager = StateManager::new(instance.clone());
     let genesis_state = TestValidatedState::default();
@@ -185,7 +182,7 @@ async fn build_coordinator(
     coordinator
 }
 
-/// Run coordinator with metrics instrumentation and block injection.
+/// Run coordinator with metrics instrumentation.
 async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -> Result<()> {
     let mut metrics = MetricsCollector::new(cfg.node_id);
     let output_path = PathBuf::from(&cfg.output_file);
@@ -218,34 +215,6 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
 
-            // Intercept block requests and inject test block (bypassing BlockBuilder).
-            if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
-                && cfg.block_size > 0
-            {
-                let block = build_test_block(cfg.block_size, cfg.total_nodes);
-                let parent_leaf = req.parent_proposal.clone().into();
-                let version = upgrade_lock::<TestTypes>().version_infallible(req.view);
-                let header = TestBlockHeader::new::<TestTypes>(
-                    &parent_leaf,
-                    block.payload_commitment,
-                    block.builder_commitment,
-                    block.metadata,
-                    version,
-                );
-                let header_input = ConsensusInput::HeaderCreated(req.view, header);
-                metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input).await;
-                let block_input = ConsensusInput::BlockBuilt {
-                    view: req.view,
-                    epoch: req.epoch,
-                    payload: block.block,
-                    metadata: block.metadata,
-                };
-                metrics.on_input(&block_input);
-                coordinator.apply_consensus(block_input).await;
-                continue; // skip process_consensus_output for this one
-            }
-
             if let Err(err) = coordinator.process_consensus_output(output).await {
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
                     error!(%err, "critical error processing output");
@@ -267,42 +236,6 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
             metrics.write_csv(&output_path)?;
             return Ok(());
         }
-    }
-}
-
-/// Build a test block with a single transaction of the given size.
-struct TestBlock {
-    block: TestBlockPayload,
-    metadata: TestMetadata,
-    payload_commitment: hotshot_types::data::VidCommitment,
-    builder_commitment: hotshot_types::utils::BuilderCommitment,
-}
-
-fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
-    use hotshot_types::traits::EncodeBytes;
-
-    let tx = TestTransaction::new(vec![0u8; size]);
-    let block = TestBlockPayload {
-        transactions: vec![tx],
-    };
-    let metadata = TestMetadata {
-        num_transactions: 1,
-    };
-    // Use the actual committee size so the commitment matches what
-    // VidDisperse::calculate_vid_disperse will produce.
-    let payload_commitment = hotshot_types::data::vid_commitment(
-        &block.encode(),
-        &metadata.encode(),
-        num_nodes,
-        versions::VID2_UPGRADE_VERSION,
-    );
-    let builder_commitment =
-        <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
-    TestBlock {
-        block,
-        metadata,
-        payload_commitment,
-        builder_commitment,
     }
 }
 

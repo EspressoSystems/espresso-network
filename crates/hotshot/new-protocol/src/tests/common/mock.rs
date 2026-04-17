@@ -19,7 +19,7 @@ pub mod testing {
     use serde::{Deserialize, Serialize};
     use tokio::sync::Mutex;
 
-    use crate::coordinator::Coordinator;
+    use crate::{block::MempoolBuilder, coordinator::Coordinator};
 
     #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
     pub struct MockNetworkImpl;
@@ -29,7 +29,7 @@ pub mod testing {
         type Storage = TestStorage<T>;
     }
 
-    pub type MockCoordinator = Coordinator<TestTypes, MockNetworkImpl>;
+    pub type MockCoordinator = Coordinator<TestTypes, MockNetworkImpl, MempoolBuilder<TestTypes>>;
 
     #[derive(Clone, Default)]
     pub struct MockNetwork {
