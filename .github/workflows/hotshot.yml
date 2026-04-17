@@ -48,7 +48,7 @@ jobs:
           # hotshot-testing, so its target/ is a poor match for the rest of the
           # matrix.
           save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.test_suites == 'test-ci tests_1' }}
-          prefix-key: v1-hotshot
+          prefix-key: v2-hotshot
 
       - uses: taiki-e/install-action@just
 
@@ -96,7 +96,7 @@ jobs:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-          prefix-key: v1-hotshot
+          prefix-key: v2-hotshot
 
       - uses: taiki-e/install-action@nextest
 
@@ -134,7 +134,7 @@ jobs:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-          prefix-key: v1-hotshot
+          prefix-key: v2-hotshot
 
       - uses: taiki-e/install-action@just
 
