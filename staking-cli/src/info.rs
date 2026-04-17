@@ -35,7 +35,7 @@ pub fn display_stake_table(
     compact: bool,
 ) -> Result<()> {
     let mut stake_table = stake_table.clone();
-    stake_table.sort_by(|a, b| a.stake.cmp(&b.stake));
+    stake_table.sort_by_key(|a| a.stake);
 
     for validator in stake_table.iter() {
         let comm: Commission = validator.commission.try_into()?;

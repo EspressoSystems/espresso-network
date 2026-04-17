@@ -1731,7 +1731,7 @@ impl SequencerPersistence for Persistence {
             });
         }
 
-        result.sort_by(|a, b| a.epoch.cmp(&b.epoch));
+        result.sort_by_key(|a| a.epoch);
 
         // Keep only the most recent epochs
         let start = result
