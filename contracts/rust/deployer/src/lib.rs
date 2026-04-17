@@ -1878,7 +1878,7 @@ mod tests {
         sol_types::SolValue,
     };
     use espresso_types::testing::TestValidator;
-    use hotshot_contract_adapter::sol_types::{FeeContract, StakeTableV2};
+    use hotshot_contract_adapter::sol_types::{FeeContract, StakeTableV2, StakeTableV3};
 
     use super::*;
     use crate::{
@@ -2217,8 +2217,8 @@ mod tests {
         )
         .await?;
 
-        // Use V2 interface even for V1 contract (V2 ABI is a superset of V1)
-        let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
+        // Use V3 interface even for older contracts (V3 ABI is a superset)
+        let stake_table = StakeTableV3::new(stake_table_proxy_addr, &provider);
 
         let accounts = provider.get_accounts().await?;
         let validators = [

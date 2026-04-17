@@ -16,9 +16,8 @@ use espresso_safe_tx_builder::FunctionInfo;
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::{
-        EdOnBN254PointSol,
         EspToken::{EspTokenErrors, approveCall, transferCall},
-        G1PointSol, G2PointSol,
+        G1PointSol,
         RewardClaim::{RewardClaimErrors, claimRewardsCall},
         StakeTableV3::{
             StakeTableV3Errors, claimValidatorExitCall, claimWithdrawalCall, delegateCall,
@@ -213,8 +212,8 @@ impl Transaction {
                 StakeTableContractVersion::V1 => (
                     stake_table,
                     registerValidatorCall::from((
-                        G2PointSol::from(payload.bls_vk).into(),
-                        EdOnBN254PointSol::from(payload.schnorr_vk).into(),
+                        payload.bls_vk.into(),
+                        payload.schnorr_vk.into(),
                         G1PointSol::from(payload.bls_signature).into(),
                         commission.to_evm(),
                     ))
@@ -225,8 +224,8 @@ impl Transaction {
                 StakeTableContractVersion::V2 => (
                     stake_table,
                     registerValidatorV2Call::from((
-                        G2PointSol::from(payload.bls_vk).into(),
-                        EdOnBN254PointSol::from(payload.schnorr_vk).into(),
+                        payload.bls_vk.into(),
+                        payload.schnorr_vk.into(),
                         G1PointSol::from(payload.bls_signature).into(),
                         StateSignatureSol::from(payload.schnorr_signature).into(),
                         commission.to_evm(),
@@ -239,8 +238,8 @@ impl Transaction {
                 StakeTableContractVersion::V3 => (
                     stake_table,
                     registerValidatorV3Call {
-                        blsVK: G2PointSol::from(payload.bls_vk).into(),
-                        schnorrVK: EdOnBN254PointSol::from(payload.schnorr_vk).into(),
+                        blsVK: payload.bls_vk.into(),
+                        schnorrVK: payload.schnorr_vk.into(),
                         blsSig: G1PointSol::from(payload.bls_signature).into(),
                         schnorrSig: StateSignatureSol::from(payload.schnorr_signature).into(),
                         commission: commission.to_evm(),
@@ -267,8 +266,8 @@ impl Transaction {
                 StakeTableContractVersion::V1 => (
                     stake_table,
                     updateConsensusKeysCall::from((
-                        G2PointSol::from(payload.bls_vk).into(),
-                        EdOnBN254PointSol::from(payload.schnorr_vk).into(),
+                        payload.bls_vk.into(),
+                        payload.schnorr_vk.into(),
                         G1PointSol::from(payload.bls_signature).into(),
                     ))
                     .abi_encode()
@@ -278,8 +277,8 @@ impl Transaction {
                 StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => (
                     stake_table,
                     updateConsensusKeysV2Call::from((
-                        G2PointSol::from(payload.bls_vk).into(),
-                        EdOnBN254PointSol::from(payload.schnorr_vk).into(),
+                        payload.bls_vk.into(),
+                        payload.schnorr_vk.into(),
                         G1PointSol::from(payload.bls_signature).into(),
                         StateSignatureSol::from(payload.schnorr_signature).into(),
                     ))

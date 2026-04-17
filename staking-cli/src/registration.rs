@@ -111,14 +111,8 @@ mod test {
         assert_eq!(event.commission, system.commission.to_evm());
         assert_eq!(event.metadataUri, "https://example.com/metadata");
 
-        assert_eq!(
-            event.blsVK,
-            G2PointSol::from(system.bls_key_pair.ver_key()).into()
-        );
-        assert_eq!(
-            event.schnorrVK,
-            EdOnBN254PointSol::from(system.state_key_pair.ver_key()).into()
-        );
+        assert_eq!(event.blsVK, system.bls_key_pair.ver_key().into());
+        assert_eq!(event.schnorrVK, system.state_key_pair.ver_key().into());
 
         event.data.authenticate()?;
         Ok(())
@@ -190,11 +184,8 @@ mod test {
             .unwrap();
         assert_eq!(event.account, system.deployer_address);
 
-        assert_eq!(event.blsVK, G2PointSol::from(keys.bls.ver_key()).into());
-        assert_eq!(
-            event.schnorrVK,
-            EdOnBN254PointSol::from(keys.state.ver_key()).into()
-        );
+        assert_eq!(event.blsVK, keys.bls.ver_key().into());
+        assert_eq!(event.schnorrVK, keys.state.ver_key().into());
 
         event.data.authenticate()?;
 
@@ -277,8 +268,8 @@ mod test {
         // register a validator with the schnorr sig from another key
         let receipt = stake_table
             .registerValidatorV2(
-                bls_vk.into(),
-                schnorr_vk.into(),
+                bls_vk,
+                schnorr_vk,
                 bls_sig.into(),
                 schnorr_sig_other_key.into(),
                 Commission::try_from("12.34")?.to_evm(),
@@ -334,12 +325,7 @@ mod test {
 
         // update consensus keys with the schnorr sig from another key
         let receipt = stake_table
-            .updateConsensusKeysV2(
-                bls_vk.into(),
-                schnorr_vk.into(),
-                bls_sig.into(),
-                schnorr_sig_other_key,
-            )
+            .updateConsensusKeysV2(bls_vk, schnorr_vk, bls_sig.into(), schnorr_sig_other_key)
             .send()
             .await
             .maybe_decode_revert::<StakeTableV3Errors>()?

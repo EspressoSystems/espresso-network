@@ -20,7 +20,7 @@ use futures::{
     FutureExt,
     future::{BoxFuture, join_all},
 };
-use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2};
+use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV3};
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 
@@ -223,7 +223,7 @@ impl TestRuntime {
 
         let provider = ProviderBuilder::new().connect_http(config.l1_endpoint.clone());
         let reward_claim_address = async {
-            let stake_table = StakeTableV2::new(config.stake_table_address, &provider);
+            let stake_table = StakeTableV3::new(config.stake_table_address, &provider);
             let token_address = stake_table.token().call().await.ok()?;
 
             let esp_token = EspTokenV2::new(token_address, &provider);
@@ -280,7 +280,7 @@ impl TestRuntime {
     /// Call this after the reward claim contract has been deployed
     pub async fn update_reward_claim_address(&mut self) -> Result<()> {
         let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
-        let stake_table = StakeTableV2::new(self.config.stake_table_address, &provider);
+        let stake_table = StakeTableV3::new(self.config.stake_table_address, &provider);
         let token_address = stake_table.token().call().await?;
 
         let esp_token = EspTokenV2::new(token_address, &provider);

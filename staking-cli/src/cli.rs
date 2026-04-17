@@ -121,16 +121,16 @@ fn decode_and_display_logs(logs: &[Log]) {
                     "event: ValidatorRegistered {{ account: {}, blsVk: {}, schnorrVk: {}, \
                      commission: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVk.clone()),
-                    StateVerKey::from(e.schnorrVk.clone()),
+                    BLSPubKey::from(e.blsVk),
+                    StateVerKey::from(e.schnorrVk),
                     e.commission
                 )),
                 StakeTableV3Events::ValidatorRegisteredV2(e) => output_success(format!(
                     "event: ValidatorRegisteredV2 {{ account: {}, blsVK: {}, schnorrVK: {}, \
                      commission: {}, metadataUri: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK.clone()),
-                    StateVerKey::from(e.schnorrVK.clone()),
+                    BLSPubKey::from(e.blsVK),
+                    StateVerKey::from(e.schnorrVK),
                     e.commission,
                     e.metadataUri
                 )),
@@ -147,14 +147,14 @@ fn decode_and_display_logs(logs: &[Log]) {
                 StakeTableV3Events::ConsensusKeysUpdated(e) => output_success(format!(
                     "event: ConsensusKeysUpdated {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK.clone()),
-                    StateVerKey::from(e.schnorrVK.clone())
+                    BLSPubKey::from(e.blsVK),
+                    StateVerKey::from(e.schnorrVK)
                 )),
                 StakeTableV3Events::ConsensusKeysUpdatedV2(e) => output_success(format!(
                     "event: ConsensusKeysUpdatedV2 {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK.clone()),
-                    StateVerKey::from(e.schnorrVK.clone())
+                    BLSPubKey::from(e.blsVK),
+                    StateVerKey::from(e.schnorrVK)
                 )),
                 StakeTableV3Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),
                 StakeTableV3Events::MetadataUriUpdated(e) => output_success(format!(

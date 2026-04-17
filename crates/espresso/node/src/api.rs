@@ -3006,7 +3006,7 @@ mod test {
     use hotshot::types::EventType;
     use hotshot_contract_adapter::{
         reward::RewardClaimInput,
-        sol_types::{EspToken, StakeTableV2},
+        sol_types::{EspToken, StakeTableV3},
         stake_table::StakeTableContractVersion,
     };
     use hotshot_query_service::{
@@ -6350,7 +6350,7 @@ mod test {
         );
 
         let provider = l1_client.provider;
-        let stake_table = StakeTableV2::new(st_addr, provider.clone());
+        let stake_table = StakeTableV3::new(st_addr, provider.clone());
 
         let stake_table_init_block = stake_table
             .initializedAtBlock()

@@ -17,13 +17,7 @@ use jf_signature::{
     schnorr,
 };
 
-use crate::{
-    bindings::stake_table_v3,
-    sol_types::{
-        StakeTableV2::{self, ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
-        StakeTableV3, *,
-    },
-};
+use crate::sol_types::{StakeTableV3, *};
 
 // Allows us to implement From on existing Bytes type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,14 +37,6 @@ fn version_from_major(major: u8) -> anyhow::Result<StakeTableContractVersion> {
         2 => Ok(StakeTableContractVersion::V2),
         3 => Ok(StakeTableContractVersion::V3),
         _ => anyhow::bail!("Unsupported stake table contract version: {major}"),
-    }
-}
-
-impl TryFrom<getVersionReturn> for StakeTableContractVersion {
-    type Error = anyhow::Error;
-
-    fn try_from(value: getVersionReturn) -> anyhow::Result<Self> {
-        version_from_major(value.majorVersion)
     }
 }
 
@@ -84,18 +70,6 @@ impl From<EdOnBN254PointSol> for StateVerKey {
     fn from(value: EdOnBN254PointSol) -> Self {
         let point: ark_ed_on_bn254::EdwardsAffine = value.into();
         Self::from(point)
-    }
-}
-
-impl From<stake_table_v3::BN254::G2Point> for BLSPubKey {
-    fn from(value: stake_table_v3::BN254::G2Point) -> Self {
-        G2PointSol::from(value).into()
-    }
-}
-
-impl From<stake_table_v3::EdOnBN254::EdOnBN254Point> for StateVerKey {
-    fn from(value: stake_table_v3::EdOnBN254::EdOnBN254Point) -> Self {
-        EdOnBN254PointSol::from(value).into()
     }
 }
 
@@ -201,34 +175,8 @@ pub enum StakeTableSolError {
     InvalidSchnorrSignature(#[from] jf_signature::SignatureError),
 }
 
-impl ValidatorRegisteredV2 {
-    /// verified the BLS and Schnorr signatures in the event
-    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
-        authenticate_stake_table_validator_event(
-            self.account,
-            self.blsVK,
-            self.schnorrVK,
-            self.blsSig.into(),
-            &self.schnorrSig,
-        )
-    }
-}
-
 impl StakeTableV3::ValidatorRegisteredV3 {
     /// Verify the BLS and Schnorr signatures in the event
-    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
-        authenticate_stake_table_validator_event(
-            self.account,
-            self.blsVK.clone().into(),
-            self.schnorrVK.clone().into(),
-            self.blsSig.clone().into(),
-            &self.schnorrSig,
-        )
-    }
-}
-
-impl ConsensusKeysUpdatedV2 {
-    /// verified the BLS and Schnorr signatures in the event
     pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
@@ -244,9 +192,9 @@ impl StakeTableV3::ValidatorRegisteredV2 {
     pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
-            self.blsVK.clone().into(),
-            self.schnorrVK.clone().into(),
-            self.blsSig.clone().into(),
+            self.blsVK,
+            self.schnorrVK,
+            self.blsSig.into(),
             &self.schnorrSig,
         )
     }
@@ -256,20 +204,11 @@ impl StakeTableV3::ConsensusKeysUpdatedV2 {
     pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
-            self.blsVK.clone().into(),
-            self.schnorrVK.clone().into(),
-            self.blsSig.clone().into(),
+            self.blsVK,
+            self.schnorrVK,
+            self.blsSig.into(),
             &self.schnorrSig,
         )
-    }
-}
-
-impl From<StakeTable::ValidatorRegistered> for StakeTableV2::InitialCommission {
-    fn from(value: StakeTable::ValidatorRegistered) -> Self {
-        Self {
-            validator: value.account,
-            commission: value.commission,
-        }
     }
 }
 
@@ -284,7 +223,7 @@ mod test {
     use super::{StateSignatureSol, sign_address_bls, sign_address_schnorr};
     use crate::sol_types::{
         G1PointSol, G2PointSol,
-        StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+        StakeTableV3::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
     };
 
     fn check_round_trip(pk: BLSPubKey) {

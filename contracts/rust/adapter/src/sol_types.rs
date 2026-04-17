@@ -49,11 +49,11 @@ pub use crate::bindings::{
     reward_claim::RewardClaim,
     safe_exit_timelock::SafeExitTimelock,
     stake_table::StakeTable,
-    stake_table_v2::{
+    stake_table_v2::{self, StakeTableV2},
+    stake_table_v3::{
         self, BN254::G2Point as G2PointSol, EdOnBN254::EdOnBN254Point as EdOnBN254PointSol,
-        StakeTableV2,
+        StakeTableV3,
     },
-    stake_table_v3::{self, StakeTableV3},
 };
 
 // For types that we need to interact with some functions but their bindings are not generated
@@ -182,52 +182,10 @@ impl From<LightClientV2Mock::votingStakeTableStateReturn> for StakeTableStateSol
     }
 }
 
-impl From<G1PointSol> for stake_table_v2::BN254::G1Point {
-    fn from(v: G1PointSol) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
-impl From<stake_table_v2::BN254::G1Point> for G1PointSol {
-    fn from(v: stake_table_v2::BN254::G1Point) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
-// Transmute conversions for StakeTableV3 types
-impl From<stake_table_v3::BN254::G2Point> for G2PointSol {
-    fn from(v: stake_table_v3::BN254::G2Point) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
-impl From<stake_table_v3::EdOnBN254::EdOnBN254Point> for EdOnBN254PointSol {
-    fn from(v: stake_table_v3::EdOnBN254::EdOnBN254Point) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
+// G1PointSol comes from light_client::BN254::G1Point, which is a distinct type from
+// stake_table_v3::BN254::G1Point despite having the same layout.
 impl From<stake_table_v3::BN254::G1Point> for G1PointSol {
     fn from(v: stake_table_v3::BN254::G1Point) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
-impl From<stake_table_v3::BN254::G1Point> for stake_table_v2::BN254::G1Point {
-    fn from(v: stake_table_v3::BN254::G1Point) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
-// Reverse conversions: StakeTableV2 types -> StakeTableV3 types
-impl From<G2PointSol> for stake_table_v3::BN254::G2Point {
-    fn from(v: G2PointSol) -> Self {
-        unsafe { std::mem::transmute(v) }
-    }
-}
-
-impl From<EdOnBN254PointSol> for stake_table_v3::EdOnBN254::EdOnBN254Point {
-    fn from(v: EdOnBN254PointSol) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
@@ -235,6 +193,45 @@ impl From<EdOnBN254PointSol> for stake_table_v3::EdOnBN254::EdOnBN254Point {
 impl From<G1PointSol> for stake_table_v3::BN254::G1Point {
     fn from(v: G1PointSol) -> Self {
         unsafe { std::mem::transmute(v) }
+    }
+}
+
+impl PartialEq for StakeTableV3::ValidatorRegistered {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVk == other.blsVk
+            && self.schnorrVk == other.schnorrVk
+            && self.commission == other.commission
+    }
+}
+
+impl PartialEq for StakeTableV3::ValidatorRegisteredV2 {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
+            && self.commission == other.commission
+            && self.blsSig == other.blsSig
+            && self.schnorrSig == other.schnorrSig
+            && self.metadataUri == other.metadataUri
+    }
+}
+
+impl PartialEq for StakeTableV3::ConsensusKeysUpdated {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
+    }
+}
+
+impl PartialEq for StakeTableV3::ConsensusKeysUpdatedV2 {
+    fn eq(&self, other: &Self) -> bool {
+        self.account == other.account
+            && self.blsVK == other.blsVK
+            && self.schnorrVK == other.schnorrVK
+            && self.blsSig == other.blsSig
+            && self.schnorrSig == other.schnorrSig
     }
 }
 
@@ -320,89 +317,11 @@ impl From<LightClientV3Mock::votingStakeTableStateReturn> for StakeTableStateSol
     }
 }
 
-use self::StakeTableV2::{
-    ConsensusKeysUpdated, ConsensusKeysUpdatedV2, ValidatorRegistered, ValidatorRegisteredV2,
-};
-
-impl PartialEq for ValidatorRegistered {
-    fn eq(&self, other: &Self) -> bool {
-        self.account == other.account
-            && self.blsVk == other.blsVk
-            && self.schnorrVk == other.schnorrVk
-            && self.commission == other.commission
-    }
-}
-
-impl PartialEq for ValidatorRegisteredV2 {
-    fn eq(&self, other: &Self) -> bool {
-        self.account == other.account
-            && self.blsVK == other.blsVK
-            && self.schnorrVK == other.schnorrVK
-            && self.commission == other.commission
-            && self.blsSig == other.blsSig
-            && self.schnorrSig == other.schnorrSig
-    }
-}
-
-impl PartialEq for ConsensusKeysUpdated {
-    fn eq(&self, other: &Self) -> bool {
-        self.account == other.account
-            && self.blsVK == other.blsVK
-            && self.schnorrVK == other.schnorrVK
-    }
-}
-
-impl PartialEq for ConsensusKeysUpdatedV2 {
-    fn eq(&self, other: &Self) -> bool {
-        self.account == other.account
-            && self.blsVK == other.blsVK
-            && self.schnorrVK == other.schnorrVK
-            && self.blsSig == other.blsSig
-            && self.schnorrSig == other.schnorrSig
-    }
-}
-
-impl std::fmt::Debug for StakeTableV2::StakeTableV2Events {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::ValidatorRegistered(_) => write!(f, "ValidatorRegistered(_)"),
-            Self::ValidatorRegisteredV2(_) => write!(f, "ValidatorRegisteredV2(_)"),
-            Self::ValidatorExit(v) => write!(f, "ValidatorExit({v:?})"),
-            Self::ValidatorExitV2(v) => write!(f, "ValidatorExitV2({v:?})"),
-            Self::Delegated(v) => write!(f, "Delegated({v:?})"),
-            Self::Undelegated(v) => write!(f, "Undelegated({v:?})"),
-            Self::UndelegatedV2(v) => write!(f, "UndelegatedV2({v:?})"),
-            Self::ConsensusKeysUpdated(_) => write!(f, "ConsensusKeysUpdated(_)"),
-            Self::ConsensusKeysUpdatedV2(_) => write!(f, "ConsensusKeysUpdatedV2(_)"),
-            Self::CommissionUpdated(v) => write!(f, "CommissionUpdated({v:?})"),
-            Self::ExitEscrowPeriodUpdated(v) => write!(f, "ExitEscrowPeriodUpdated({v:?})"),
-            Self::MaxCommissionIncreaseUpdated(v) => {
-                write!(f, "MaxCommissionIncreaseUpdated({v:?})")
-            },
-            Self::MinCommissionUpdateIntervalUpdated(v) => {
-                write!(f, "MinCommissionUpdateIntervalUpdated({v:?})")
-            },
-            Self::OwnershipTransferred(v) => write!(f, "OwnershipTransferred({v:?})"),
-            Self::Paused(v) => write!(f, "Paused({v:?})"),
-            Self::Unpaused(v) => write!(f, "Unpaused({v:?})"),
-            Self::Initialized(v) => write!(f, "Initialized({v:?})"),
-            Self::RoleAdminChanged(v) => write!(f, "RoleAdminChanged({v:?})"),
-            Self::RoleGranted(v) => write!(f, "RoleGranted({v:?})"),
-            Self::RoleRevoked(v) => write!(f, "RoleRevoked({v:?})"),
-            Self::WithdrawalClaimed(v) => write!(f, "WithdrawalClaimed({v:?})"),
-            Self::Upgraded(v) => write!(f, "Upgraded({v:?})"),
-            Self::ValidatorExitClaimed(v) => write!(f, "ValidatorExitClaimed({v:?})"),
-            Self::Withdrawal(v) => write!(f, "Withdrawal({v:?})"),
-            Self::MetadataUriUpdated(v) => write!(f, "MetadataUriUpdated({v:?})"),
-            Self::MinDelegateAmountUpdated(v) => write!(f, "MinDelegateAmountUpdated({v:?})"),
-        }
-    }
-}
 #[cfg(test)]
 mod tests {
     use alloy::{primitives::U256, sol_types::private::Address};
 
-    use crate::sol_types::StakeTableV2::CommissionUpdated;
+    use crate::sol_types::StakeTableV3::CommissionUpdated;
 
     #[test]
     fn test_commission_updated_serde_roundtrip() {

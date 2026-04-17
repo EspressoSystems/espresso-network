@@ -6,7 +6,7 @@ use async_lock::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use async_lock::RwLock;
 use async_trait::async_trait;
-use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV2};
+use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
 use hotshot_types::{
     HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
     traits::states::InstanceState,
@@ -101,7 +101,7 @@ impl NodeState {
                     .context("No stake table contract in chain config")?;
 
                 let stake_table =
-                    StakeTableV2::new(stake_table_address, self.l1_client.provider.clone());
+                    StakeTableV3::new(stake_table_address, self.l1_client.provider.clone());
                 let light_client_contract_address = stake_table.lightClient().call().await?;
 
                 self.light_client_contract_address
@@ -123,7 +123,7 @@ impl NodeState {
                     .context("No stake table contract in chain config")?;
 
                 let stake_table =
-                    StakeTableV2::new(stake_table_address, self.l1_client.provider.clone());
+                    StakeTableV3::new(stake_table_address, self.l1_client.provider.clone());
                 let token_contract_address = stake_table.token().call().await?;
 
                 self.token_contract_address

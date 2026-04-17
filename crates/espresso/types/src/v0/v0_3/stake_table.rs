@@ -8,12 +8,10 @@ use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot::types::SignatureKey;
-use hotshot_contract_adapter::sol_types::{
-    StakeTableV2::{
-        CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
-        UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
-    },
-    StakeTableV3::{P2pAddrUpdated, ValidatorRegisteredV3, X25519KeyUpdated},
+use hotshot_contract_adapter::sol_types::StakeTableV3::{
+    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
+    Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
+    ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
 };
 use hotshot_types::{
     PeerConfig, addr::NetAddr, data::EpochNumber, light_client::StateVerKey,
@@ -344,8 +342,8 @@ pub enum EventSortingError {
     #[error("Missing log index in log")]
     MissingLogIndex,
 
-    #[error("Invalid stake table V2 event")]
-    InvalidStakeTableV2Event,
+    #[error("Invalid stake table event")]
+    InvalidStakeTableEvent,
 }
 
 #[cfg(test)]

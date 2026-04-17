@@ -18,7 +18,7 @@ use espresso_types::{
     StakeTableState, Transaction,
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
-use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
+use hotshot_contract_adapter::sol_types::StakeTableV3::{Delegated, ValidatorRegistered};
 use hotshot_query_service_types::{
     availability::{LeafHash, LeafId, LeafQueryData},
     node::{BlockHash, BlockId},

@@ -162,7 +162,7 @@ mod tests {
         types::{BLSPubKey, SignatureKey},
     };
     use hotshot_contract_adapter::{
-        sol_types::StakeTableV2::Delegated, stake_table::StakeTableContractVersion,
+        sol_types::StakeTableV3::Delegated, stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MOCK_UPGRADE};
