@@ -1149,7 +1149,9 @@ impl Fetcher {
                     return Ok(false);
                 }
             },
-            StakeTableV3Events::CommissionUpdated(evt) if evt.newCommission > COMMISSION_BASIS_POINTS => {
+            StakeTableV3Events::CommissionUpdated(evt)
+                if evt.newCommission > COMMISSION_BASIS_POINTS =>
+            {
                 return Err(StakeTableError::InvalidCommission(
                     evt.validator,
                     evt.newCommission,
