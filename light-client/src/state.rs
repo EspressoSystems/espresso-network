@@ -528,7 +528,7 @@ where
                     StakeTableQuorum::new((prev_quorum, next_quorum.clone()), self.epoch_height)
                 })
                 .await
-                .context("fetching epoch root for {epoch}")?;
+                .context(format!("fetching epoch root for {epoch}"))?;
             if let Some(hash) = root.next_stake_table_hash() {
                 ensure!(
                     hash == stake_table.commit(),
@@ -536,12 +536,9 @@ where
                      reconstructed hash {}",
                     stake_table.commit(),
                 );
-            } else if cfg!(feature = "decaf")
-                && self.opt.decaf
-                && root.version() < DrbAndHeaderUpgradeVersion::VERSION
-            {
+            } else if self.decaf() && root.version() < DrbAndHeaderUpgradeVersion::VERSION {
                 // Decaf briefly ran a version of PoS where epoch root headers did not contain the
-                // hash of the expeected stake table, and so we can not verify that we computed the
+                // hash of the expected stake table, and so we can not verify that we computed the
                 // correct stake table. Since this applies only to Decaf, which is a testnet, it is
                 // acceptable to trust that the server supplied the correct events in this case.
                 tracing::warn!(
@@ -643,6 +640,14 @@ where
         }
 
         cache.entry(epoch).insert_entry(stake_table).get().clone()
+    }
+
+    fn decaf(&self) -> bool {
+        #[cfg(feature = "decaf")]
+        return self.opt.decaf;
+
+        #[cfg(not(feature = "decaf"))]
+        return false;
     }
 }
 
