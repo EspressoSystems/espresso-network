@@ -66,6 +66,18 @@ jobs:
           RUST_BACKTRACE: full
 
   test-new-protocol:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: standard
+            filter: 'not test(/tests::(restarts|failures|cliquenet|memory_network)::/)'
+          - name: restarts
+            filter: 'test(/tests::restarts::/)'
+          - name: failures
+            filter: 'test(/tests::failures::/)'
+          - name: network
+            filter: 'test(/tests::(cliquenet|memory_network)::/)'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,9 +98,9 @@ jobs:
           cargo nextest run -p hotshot-new-protocol --no-run
         timeout-minutes: 60
 
-      - name: Run tests
+      - name: Run tests (${{ matrix.name }})
         run: |
-          cargo nextest run -p hotshot-new-protocol --no-fail-fast
+          cargo nextest run -p hotshot-new-protocol --no-fail-fast --retries 0 --test-threads 4 -E '${{ matrix.filter }}'
         timeout-minutes: 30
         env:
           RUST_BACKTRACE: full
