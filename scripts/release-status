@@ -58,27 +58,16 @@ def run(cmd, check=True):
     return result
 
 
-def gh_json(path, paginate=True):
-    cmd = ["gh", "api", path]
-    if paginate:
-        cmd.append("--paginate")
+def gh_json(path):
     try:
-        result = run(cmd)
+        result = run(["gh", "api", path])
     except subprocess.CalledProcessError as e:
         stderr = (e.stderr or "").strip()
         print(f"error: gh api {path} failed: {stderr}", file=sys.stderr)
         if "HTTP 401" in stderr or "authentication" in stderr.lower():
             print("hint: run `gh auth login`", file=sys.stderr)
         sys.exit(1)
-    text = result.stdout.strip()
-    if not text:
-        return []
-    if paginate:
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return json.loads("[" + text.replace("][", ",") + "]")
-    return json.loads(text)
+    return json.loads(result.stdout) if result.stdout.strip() else None
 
 
 def ago(delta):
@@ -132,26 +121,17 @@ def tag_digest(tag):
 
 
 def fetch_promote_runs():
-    data = gh_json(
-        f"/repos/{ORG}/{REPO}/actions/workflows/{PROMOTE_WORKFLOW}/runs?per_page=100",
-        paginate=True,
-    )
-    if isinstance(data, list):
-        runs = []
-        for chunk in data:
-            runs.extend(chunk.get("workflow_runs", []))
-        return runs
-    return data.get("workflow_runs", []) if isinstance(data, dict) else []
+    data = gh_json(f"/repos/{ORG}/{REPO}/actions/workflows/{PROMOTE_WORKFLOW}/runs?per_page=100")
+    return data.get("workflow_runs", []) if data else []
 
 
 def fetch_release_classification():
-    data = gh_json(f"/repos/{ORG}/{REPO}/releases")
-    out = {}
-    for rel in data:
-        tag = rel.get("tag_name")
-        if tag:
-            out[tag] = "Pre-release" if rel.get("prerelease") else "Release"
-    return out
+    data = gh_json(f"/repos/{ORG}/{REPO}/releases?per_page=100")
+    return {
+        rel["tag_name"]: "Pre-release" if rel.get("prerelease") else "Release"
+        for rel in (data or [])
+        if rel.get("tag_name")
+    }
 
 
 def git_tag_dates():
@@ -203,16 +183,16 @@ def promote_run_for(runs, floating_tag, release_tag):
     return max(matches, key=lambda r: r["created_at"])
 
 
-def section_floating(now, floating_digests, candidate_digests, candidate_tags, promote_runs):
+def section_floating(now, digests, candidate_tags, promote_runs):
     print("Floating Docker tags")
     print("====================")
     targets = {}
     for ft in FLOATING_TAGS:
-        fd = floating_digests.get(ft)
+        fd = digests.get(ft)
         if fd is None:
             targets[ft] = None
-            continue
-        targets[ft] = next((t for t in candidate_tags if candidate_digests.get(t) == fd), "(no matching version tag)")
+        else:
+            targets[ft] = next((t for t in candidate_tags if digests.get(t) == fd), "(no matching version tag)")
     name_w = max(len(t) for t in FLOATING_TAGS)
     target_w = max((len(v or "(not set)") for v in targets.values()), default=12)
     for ft in FLOATING_TAGS:
@@ -352,9 +332,7 @@ def main():
         with timed("gh workflow runs"):
             promote_runs = runs_future.result()
 
-        floating_digests = {t: digests[t] for t in FLOATING_TAGS}
-        candidate_digests = {t: digests[t] for t in candidate_tags}
-        section_floating(now, floating_digests, candidate_digests, candidate_tags, promote_runs)
+        section_floating(now, digests, candidate_tags, promote_runs)
 
         if args.floating:
             log.debug("total %.3fs", time.perf_counter() - t_start)
