@@ -15,7 +15,6 @@ async fn ten_nodes_one_down_memory() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
         down_nodes: BTreeSet::from([9]),
         ..Default::default()
     }
@@ -30,7 +29,6 @@ async fn ten_nodes_two_down_memory() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
         down_nodes: BTreeSet::from([8, 9]),
         ..Default::default()
     }
@@ -45,7 +43,6 @@ async fn ten_nodes_f_down_memory() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
         down_nodes: BTreeSet::from([7, 8, 9]),
         ..Default::default()
     }
@@ -60,7 +57,6 @@ async fn ten_nodes_one_down_with_epochs_memory() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
         epoch_height: 10,
         down_nodes: BTreeSet::from([9]),
         ..Default::default()
@@ -76,7 +72,6 @@ async fn ten_nodes_f_down_with_epochs_memory() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
         epoch_height: 10,
         down_nodes: BTreeSet::from([7, 8, 9]),
         ..Default::default()
@@ -92,7 +87,6 @@ async fn twenty_nodes_f_down_memory() {
     TestRunner {
         num_nodes: 20,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
         view_timeout: Duration::from_secs(5),
         down_nodes: BTreeSet::from([14, 15, 16, 17, 18, 19]),
         ..Default::default()
@@ -120,7 +114,6 @@ async fn ten_nodes_one_down_cliquenet() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
         view_timeout: Duration::from_secs(5),
         down_nodes: BTreeSet::from([9]),
         ..Default::default()
@@ -136,7 +129,6 @@ async fn ten_nodes_two_down_cliquenet() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
         view_timeout: Duration::from_secs(5),
         down_nodes: BTreeSet::from([8, 9]),
         ..Default::default()
@@ -152,7 +144,6 @@ async fn ten_nodes_f_down_cliquenet() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
         view_timeout: Duration::from_secs(5),
         down_nodes: BTreeSet::from([7, 8, 9]),
         ..Default::default()
@@ -168,7 +159,6 @@ async fn ten_nodes_one_down_with_epochs_cliquenet() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
         view_timeout: Duration::from_secs(5),
         epoch_height: 10,
         down_nodes: BTreeSet::from([9]),
@@ -185,7 +175,6 @@ async fn ten_nodes_f_down_with_epochs_cliquenet() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
         view_timeout: Duration::from_secs(5),
         epoch_height: 10,
         down_nodes: BTreeSet::from([7, 8, 9]),

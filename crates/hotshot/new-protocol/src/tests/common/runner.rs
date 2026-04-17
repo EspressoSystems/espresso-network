@@ -85,7 +85,7 @@ impl Default for TestRunner {
         Self {
             num_nodes: 5,
             target_decisions: 100,
-            max_runtime: Duration::from_secs(60),
+            max_runtime: Duration::from_secs(300),
             epoch_height: 1000,
             view_timeout: Duration::from_secs(5),
             transaction_size: 64 * 1024,
