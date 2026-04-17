@@ -13,12 +13,12 @@ import json
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 ORG = "espressosystems"
 REPO = "espresso-network"
-PACKAGE = "espresso-network/espresso-node"
-PACKAGE_ENC = "espresso-network%2Fespresso-node"
+IMAGE = "ghcr.io/espressosystems/espresso-network/espresso-node"
 FLOATING_TAGS = ["mainnet", "mainnet.canary", "decaf", "decaf.canary"]
 PROMOTE_WORKFLOW = "promote-docker-tag.yml"
 
@@ -79,8 +79,24 @@ def parse_ts(s: str) -> datetime:
     return datetime.fromisoformat(s).astimezone(timezone.utc)
 
 
-def fetch_package_versions():
-    return gh_json(f"/orgs/{ORG}/packages/container/{PACKAGE_ENC}/versions")
+def tag_digest(tag):
+    """Return the amd64/linux manifest digest for IMAGE:tag, or None."""
+    try:
+        result = run(["docker", "buildx", "imagetools", "inspect", "--raw", f"{IMAGE}:{tag}"], check=False)
+    except FileNotFoundError:
+        print("error: `docker` not found", file=sys.stderr)
+        sys.exit(1)
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    for m in data.get("manifests", []):
+        platform = m.get("platform", {})
+        if platform.get("architecture") == "amd64" and platform.get("os") == "linux":
+            return m.get("digest")
+    return None
 
 
 def fetch_promote_runs():
@@ -101,21 +117,19 @@ def fetch_promote_runs():
     return runs
 
 
-def floating_tag_targets(versions):
+def floating_tag_targets(candidate_tags):
+    """For each floating tag, find the matching candidate tag with the same digest."""
+    all_tags = list(FLOATING_TAGS) + list(candidate_tags)
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        digests = dict(zip(all_tags, pool.map(tag_digest, all_tags)))
     result = {}
     for ft in FLOATING_TAGS:
-        target = None
-        for v in versions:
-            tags = v.get("metadata", {}).get("container", {}).get("tags", []) or []
-            if ft in tags:
-                for t in tags:
-                    if VERSION_TAG_RE.match(t):
-                        target = t
-                        break
-                if target is None:
-                    target = "(no version tag)"
-                break
-        result[ft] = target
+        fd = digests[ft]
+        if fd is None:
+            result[ft] = None
+            continue
+        match = next((t for t in candidate_tags if digests[t] == fd), None)
+        result[ft] = match or "(no matching version tag)"
     return result
 
 
@@ -141,11 +155,10 @@ def promote_run_for(runs, floating_tag, release_tag):
     return best
 
 
-def section_floating(now):
+def section_floating(now, candidate_tags):
     print("Floating Docker tags")
     print("====================")
-    versions = fetch_package_versions()
-    targets = floating_tag_targets(versions)
+    targets = floating_tag_targets(candidate_tags)
     runs = fetch_promote_runs()
     name_w = max(len(t) for t in FLOATING_TAGS)
     target_w = max((len(v or "(not set)") for v in targets.values()), default=12)
@@ -212,20 +225,24 @@ def section_tags(now, days):
     tag_dates = git_tag_dates()
     classes = fetch_release_classification()
     cutoff = now - timedelta(days=days) if days > 0 else None
-    rows = []
-    for tag, dt in tag_dates.items():
-        if not ANY_DATE_TAG_RE.match(tag):
-            continue
-        if cutoff and dt < cutoff:
-            continue
+    filtered = [
+        (tag, dt) for tag, dt in tag_dates.items()
+        if ANY_DATE_TAG_RE.match(tag) and (cutoff is None or dt >= cutoff)
+    ]
+
+    def resolve_branch(tag):
         branches = release_branches_containing(tag)
         if branches:
-            branch = branches[0]
-        elif main_contains(tag):
-            branch = "main"
-        else:
-            branch = "?"
-        rows.append((tag, classes.get(tag, "?"), branch, dt))
+            return branches[0]
+        return "main" if main_contains(tag) else "?"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        branch_names = list(pool.map(resolve_branch, (t for t, _ in filtered)))
+
+    rows = [
+        (tag, classes.get(tag, "?"), branch, dt)
+        for (tag, dt), branch in zip(filtered, branch_names)
+    ]
     rows.sort(key=lambda r: r[3], reverse=True)
     if not rows:
         print("  (none)")
@@ -317,7 +334,15 @@ def main():
 
     now = datetime.now(timezone.utc)
 
-    section_floating(now)
+    tag_dates = git_tag_dates()
+    cutoff = now - timedelta(days=args.days) if args.days > 0 else None
+    candidate_tags = [
+        t for t, dt in tag_dates.items()
+        if VERSION_TAG_RE.match(t) and (cutoff is None or dt >= cutoff)
+    ]
+    candidate_tags.sort(key=lambda t: tag_dates[t], reverse=True)
+
+    section_floating(now, candidate_tags)
     if args.floating:
         return
     print()
