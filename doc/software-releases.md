@@ -15,20 +15,19 @@
        |
        | create-release.yml
        v
-  YYYYMMDD.rcN   ----build.yml---->  image:YYYYMMDD.rcN
-  (Pre-release)                           |
-       |                                  | promote + approval
-       | create-release.yml               v
-       v                             decaf.rc
   YYYYMMDD       ----build.yml---->  image:YYYYMMDD
   (Release)                               |
+                                          | promote + approval
+                                          v
+                                      decaf.canary
+                                          |
                                           | promote + approval
                                           v
                                         decaf
                                           |
                                           | promote + approval
                                           v
-                                      mainnet.rc
+                                      mainnet.canary
                                           |
                                           | promote + approval
                                           v
@@ -37,21 +36,18 @@
 
 ## Git Tags
 
-Date-based. `-` for internal, `.` for qualifiers.
+Date-based. `-` for internal, `.` for same-day qualifier.
 
-| Git Tag        | GitHub Release | Audience                       |
-| -------------- | -------------- | ------------------------------ |
-| `YYYYMMDD-*`   | Pre-release    | Internal testing               |
-| `YYYYMMDD.rcN` | Pre-release    | Safe to deploy, early adopters |
-| `YYYYMMDD`     | Release        | Recommended for all operators  |
+| Git Tag      | GitHub Release | Audience                      |
+| ------------ | -------------- | ----------------------------- |
+| `YYYYMMDD-*` | Pre-release    | Internal testing              |
+| `YYYYMMDD`   | Release        | Recommended for all operators |
 
-RC pre-releases are tested and safe to deploy. Operators willing to run canary versions are encouraged to use them and
-report issues.
-
-Multiple releases on the same day use `YYYYMMDD.1`, `YYYYMMDD.2`, etc.
+Each version is defined once. If a version is broken mid-rollout, create a new version rather than retagging the same
+commit. Multiple releases on the same day use `YYYYMMDD.1`, `YYYYMMDD.2`, etc. (these are also classified as Release).
 
 Git tags are created via `create-release.yml`, which requires reviewer approval. The workflow validates the tag format,
-classifies it as release or pre-release, and creates both the git tag and GitHub Release with auto-generated notes. This
+classifies it as Release or Pre-release, and creates both the git tag and GitHub Release with auto-generated notes. This
 triggers `build.yml`, which builds Docker images tagged with the git tag (e.g. git tag `20260408` produces Docker image
 `espresso-node:20260408`).
 
@@ -59,12 +55,14 @@ triggers `build.yml`, which builds Docker images tagged with the git tag (e.g. g
 
 Floating Docker tags track network rollout. They are not git tags and are never created by `build.yml`.
 
-| Docker Tag   | Points to     | Audience                 |
-| ------------ | ------------- | ------------------------ |
-| `decaf.rc`   | Latest RC     | Canary decaf operators   |
-| `decaf`      | Latest stable | Decaf operators          |
-| `mainnet.rc` | Latest RC     | Canary mainnet operators |
-| `mainnet`    | Latest stable | Mainnet operators        |
+| Docker Tag       | Points to     | Audience                 |
+| ---------------- | ------------- | ------------------------ |
+| `decaf.canary`   | Latest build  | Canary decaf operators   |
+| `decaf`          | Latest stable | Decaf operators          |
+| `mainnet.canary` | Latest build  | Canary mainnet operators |
+| `mainnet`        | Latest stable | Mainnet operators        |
+
+Canary operators opt into getting new versions first, accepting higher risk. The canary tier is for early feedback.
 
 Floating Docker tags are moved via `promote-docker-tag.yml` (see below).
 
@@ -83,20 +81,21 @@ Release branches start with `release-`.
 ## Process
 
 1. Create `release-*` branch off main. Test and fixup.
-2. Create git tag `YYYYMMDD-description` via `create-release.yml`. Creates GitHub Pre-release.
-3. Optionally create git tag `YYYYMMDD.rcN` via `create-release.yml`. Creates GitHub Pre-release.
-4. Create git tag `YYYYMMDD` via `create-release.yml`. Creates GitHub Release.
-5. Promote the release to `decaf.rc` (requires approval).
-6. After confidence on decaf canaries, promote the release to `decaf` (requires approval).
-7. Promote the release to `mainnet.rc` (requires approval).
-8. After confidence on mainnet canaries, promote the release to `mainnet` (requires approval).
-9. Post on Discord/Telegram with release link.
+2. Optionally create git tag `YYYYMMDD-description` via `create-release.yml` for internal testing. Creates GitHub
+   Pre-release.
+3. Create git tag `YYYYMMDD` via `create-release.yml`. Creates GitHub Release.
+4. Promote the release to `decaf.canary` (requires approval).
+5. After confidence on decaf canaries, promote the release to `decaf` (requires approval).
+6. Promote the release to `mainnet.canary` (requires approval).
+7. After confidence on mainnet canaries, promote the release to `mainnet` (requires approval).
+8. Post on Discord/Telegram with release link.
 
-### Hotfixes
+### Hotfixes and same-day releases
 
-For critical bugfixes that need to skip the full decaf progression, the promote action supports a `skip-progression`
-flag. The `release` environment approval still applies, so a reviewer must sign off. The action's run history records
-that progression was skipped.
+If a version is broken at any stage, create a new version (`YYYYMMDD.1`, `YYYYMMDD.2`, or next day) rather than trying
+to fix it in-flight. For critical bugfixes that need to skip the full canary progression, the promote action supports a
+`skip-progression` flag. The `release` environment approval still applies, so a reviewer must sign off. The action's run
+history records that progression was skipped.
 
 ## Create Release Action
 
@@ -115,11 +114,12 @@ images. This is needed because tag pushes made via `GITHUB_TOKEN` do not trigger
 `promote-docker-tag.yml` moves floating Docker tags. Re-tags the existing Docker image (no rebuild, just a manifest
 pointer). The action's run history serves as the audit trail for which release each network is running.
 
-Inputs: `floating-tag` (one of `decaf.rc`, `decaf`, `mainnet.rc`, `mainnet`), `release-tag` (the git tag to point to).
+Inputs: `floating-tag` (one of `decaf.canary`, `decaf`, `mainnet.canary`, `mainnet`), `release-tag` (the git tag to
+point to). Only `YYYYMMDD` and `YYYYMMDD.qualifier` tags are promotable; internal `YYYYMMDD-*` tags are rejected.
 
-`gh workflow run promote-docker-tag.yml -f floating-tag=decaf.rc -f release-tag=20260408`
+`gh workflow run promote-docker-tag.yml -f floating-tag=decaf.canary -f release-tag=20260408`
 
-Enforces progression: `decaf.rc` -> `decaf` -> `mainnet.rc` -> `mainnet`. Use `skip-progression` for hotfixes.
+Enforces progression: `decaf.canary` -> `decaf` -> `mainnet.canary` -> `mainnet`. Use `skip-progression` for hotfixes.
 
 ### Protection
 
