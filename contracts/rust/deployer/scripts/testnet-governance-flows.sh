@@ -57,7 +57,7 @@ export RUST_LOG=warn
 DEPLOY_CMD="cargo run --bin deploy --"
 if $USE_LEDGER; then
     DEPLOY_CMD="$DEPLOY_CMD --ledger"
-    unset ESPRESSO_SEQUENCER_ETH_MNEMONIC
+    unset ESPRESSO_ETH_MNEMONIC
     unset ESPRESSO_DEPLOYER_ACCOUNT_INDEX
 fi
 
@@ -71,7 +71,7 @@ is_localhost_rpc() {
 }
 
 if is_localhost_rpc "$RPC_URL"; then
-    unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+    unset ESPRESSO_ETH_MULTISIG_ADDRESS
 fi
 
 # Function to prompt user for confirmation on real testnets
@@ -122,7 +122,7 @@ echo "Waiting for timelock delay (${OPS_DELAY} seconds)..."
 sleep "$OPS_DELAY"
 
 # Verify the change
-CURRENT_PERIOD=$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "exitEscrowPeriod()(uint256)" --rpc-url "$RPC_URL")
+CURRENT_PERIOD=$(cast call "$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS" "exitEscrowPeriod()(uint256)" --rpc-url "$RPC_URL")
 echo "Exit escrow period updated to: $CURRENT_PERIOD"
 
 echo ""
@@ -156,9 +156,9 @@ echo ""
 echo "### Test 4: Granting PAUSER_ROLE via timelock ###"
 PAUSER_ROLE="0x65d7a28e3265b37a6474929f336521b332c1681b933f6cb9f3376673440d862a"  # keccak256("PAUSER_ROLE")
 if is_localhost_rpc "$RPC_URL"; then
-    OLD_PAUSER="${ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS:-0xa0Ee7A142d267C1f36714E4a8F75612F20a79720}"
+    OLD_PAUSER="${ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS:-0xa0Ee7A142d267C1f36714E4a8F75612F20a79720}"
 else
-    OLD_PAUSER="${ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS:?ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS must be set for non-localhost deployments}"
+    OLD_PAUSER="${ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS:?ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS must be set for non-localhost deployments}"
 fi
 NEW_PAUSER="0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 GRANT_SALT=$(cast keccak "$(date +%s)grant")
@@ -194,12 +194,12 @@ $DEPLOY_CMD --rpc-url "$RPC_URL" --account-index "$ACCOUNT_INDEX" \
     --timelock-operation-value 0
 
 # Verify the new pauser has the PAUSER_ROLE
-if [[ "$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$NEW_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
+if [[ "$(cast call "$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$NEW_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
     echo "ERROR: New pauser does not have the PAUSER_ROLE"
     exit 1
 fi
 # Verify the previous pauser still has the PAUSER_ROLE
-if [[ "$(cast call "$ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$OLD_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
+if [[ "$(cast call "$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS" "hasRole(bytes32,address)(bool)" "$PAUSER_ROLE" "$OLD_PAUSER" --rpc-url "$RPC_URL")" != "true" ]]; then
     echo "ERROR: Previous pauser does not have the PAUSER_ROLE"
     exit 1
 fi

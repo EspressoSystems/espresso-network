@@ -46,22 +46,9 @@ jobs:
       matrix:
         include:
           - binary: espresso-node
-            shared-key: postgres
-            save-cache: false
-
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
           - binary: espresso-node-sqlite
-            # uses it's own lock file
-            shared-key: espresso-node-embedded
-            save-cache: true
-
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
-            shared-key: espresso-dev-node
-            save-cache: true
 
     steps:
       - uses: actions/checkout@v4
@@ -76,13 +63,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
-          shared-key: ${{ matrix.shared-key }}
+          shared-key: build-${{ matrix.binary }}
           save-if: >
-            ${{ matrix.save-cache && (
-            github.ref == 'refs/heads/main'
+            ${{ github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
-            || github.event_name == 'workflow_dispatch' ) }}
-          cache-provider: github
+            || github.event_name == 'workflow_dispatch' }}
 
       - name: Build ${{ matrix.binary }}
         run: |
@@ -123,22 +108,9 @@ jobs:
       matrix:
         include:
           - binary: espresso-node
-            shared-key: postgres
-            save-cache: false
-
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
           - binary: espresso-node-sqlite
-            # uses it's own lock file
-            shared-key: espresso-node-embedded
-            save-cache: true
-
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
-            shared-key: espresso-dev-node
-            save-cache: true
 
     steps:
       - uses: actions/checkout@v4
@@ -153,12 +125,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
-          shared-key: ${{ matrix.shared-key }}
+          shared-key: build-${{ matrix.binary }}
           save-if: >
-            ${{ matrix.save-cache && (
-            github.ref == 'refs/heads/main'
+            ${{ github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
-            || github.event_name == 'workflow_dispatch' ) }}
+            || github.event_name == 'workflow_dispatch' }}
 
       - name: Build ${{ matrix.binary }}
         run: |

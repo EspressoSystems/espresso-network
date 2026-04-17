@@ -74,7 +74,7 @@ struct Options {
     port: u16,
 
     /// The URL of the query service to connect to.
-    #[clap(env = "ESPRESSO_SEQUENCER_URL")]
+    #[clap(env = "ESPRESSO_API_NODE_URL")]
     url: Url,
 
     #[clap(flatten)]
@@ -1398,10 +1398,17 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async_main(migrated_envs))
+}
+
+async fn async_main(migrated_envs: Vec<(&str, &str)>) {
     let opt = Options::parse();
     opt.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let metrics = PrometheusMetrics::default();
     let total_actions = metrics.create_counter("total_actions".into(), None);

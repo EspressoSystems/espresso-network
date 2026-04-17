@@ -47,12 +47,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main'  }}
-          shared-key: cargo-clippy
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Run clippy
         run: |
-          cargo clippy --workspace --exclude sequencer-sqlite --exclude espresso-dev-node --features testing --all-targets --keep-going -- -D warnings
+          cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets --keep-going -- -D warnings
 
   clippy-embedded:
       name: clippy (embedded-db)
@@ -65,8 +64,7 @@ jobs:
 
         - uses: Swatinem/rust-cache@v2
           with:
-            save-if: false
-            shared-key: cargo-clippy
+            save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
         - name: Run clippy
           run: |
