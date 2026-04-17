@@ -292,10 +292,10 @@ def section_branches(now, days, release_branches, tag_dates, classes, main_tags,
 
 def main():
     p = argparse.ArgumentParser(prog="release-status", description="Show current release status.")
-    p.add_argument("--days", type=int, default=180, help="time window in days (default 180, 0 = no filter)")
+    p.add_argument("--days", type=int, default=60, help="time window in days (default 60, 0 = no filter)")
     p.add_argument("--floating", action="store_true", help="only show floating tags section")
     p.add_argument("--all-branches", action="store_true", help="show release branches even if they have no release tags")
-    p.add_argument("--no-fetch", action="store_true", help="skip 'git fetch --tags' (default fetches first)")
+    p.add_argument("--fetch", action="store_true", help="run 'git fetch --tags' before reading (default: skip)")
     p.add_argument(
         "--loglevel",
         default="warning",
@@ -313,7 +313,7 @@ def main():
 
     t_start = time.perf_counter()
 
-    if not args.no_fetch:
+    if args.fetch:
         with timed("git fetch"):
             run(["git", "fetch", "--tags", "--quiet"], check=False)
 

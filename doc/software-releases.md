@@ -166,5 +166,6 @@ The `scripts/release-status` helper prints a snapshot of the current release sta
 points and when it was last promoted, recent `YYYYMMDD` git tags with their Release/Pre-release classification and
 originating branch, and any active `release-*` branches along with tags reachable from them but not from `main`. It uses
 `gh` (requires `gh auth login`) and local `git` data. Run it with `just release-status` or `./scripts/release-status`;
-pass `--days N` to widen/narrow the window, `--floating` for only the Docker tag section, or `--no-fetch` to skip the
-initial `git fetch --tags`.
+pass `--days N` to widen/narrow the window (default 60), `--floating` for only the Docker tag section, `--fetch` to run
+`git fetch --tags` first (off by default so repeat runs stay fast), or `--all-branches` to include release branches with
+no release tags.
