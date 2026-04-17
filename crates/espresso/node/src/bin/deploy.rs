@@ -29,8 +29,8 @@ use vbs::version::StaticVersion;
 /// containing the addresses of the deployed contracts.
 ///
 /// This script can also be used to do incremental deployments. The only contract addresses
-/// needed to configure the sequencer network are ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS,
-/// ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS and ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS.
+/// needed to configure the sequencer network are ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS,
+/// ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS and ESPRESSO_STAKE_TABLE_ADDRESS.
 /// These contracts, however, have dependencies, and a full deployment involves several
 /// contracts. Some of these contracts, especially libraries may already have been deployed, or
 /// perhaps one of the top-level contracts has been deployed and we only need to deploy the other
@@ -47,7 +47,7 @@ struct Options {
     #[clap(
         short,
         long,
-        env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
+        env = "ESPRESSO_L1_PROVIDER",
         default_value = "http://localhost:8545"
     )]
     rpc_url: Url,
@@ -55,7 +55,7 @@ struct Options {
     /// Request rate when polling L1.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL",
+        env = "ESPRESSO_L1_POLLING_INTERVAL",
         default_value = "7s",
         value_parser = parse_duration,
     )]
@@ -65,7 +65,7 @@ struct Options {
     /// This is used to initialize the stake table.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_URL",
+        env = "ESPRESSO_API_NODE_URL",
         default_value = "http://localhost:24000"
     )]
     pub sequencer_url: Url,
@@ -77,7 +77,7 @@ struct Options {
     #[clap(
         long,
         name = "MNEMONIC",
-        env = "ESPRESSO_SEQUENCER_ETH_MNEMONIC",
+        env = "ESPRESSO_ETH_MNEMONIC",
         default_value = "test test test test test test test test test test test junk",
         conflicts_with = "LEDGER"
     )]
@@ -88,11 +88,7 @@ struct Options {
     /// If provided, this the multisig wallet that will be able to upgrade contracts and execute
     /// admin only functions on contracts. If not provided, admin power for all contracts will be
     /// held by the account used to deploy the contracts (determined from MNEMONIC, ACCOUNT_INDEX).
-    #[clap(
-        long,
-        name = "MULTISIG_ADDRESS",
-        env = "ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS"
-    )]
+    #[clap(long, name = "MULTISIG_ADDRESS", env = "ESPRESSO_ETH_MULTISIG_ADDRESS")]
     multisig_address: Option<Address>,
 
     /// Address for the multisig wallet that will be a pauser
@@ -101,7 +97,7 @@ struct Options {
     #[clap(
         long,
         name = "MULTISIG_PAUSER_ADDRESS",
-        env = "ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS"
+        env = "ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS"
     )]
     multisig_pauser_address: Option<Address>,
 
@@ -239,7 +235,7 @@ struct Options {
     /// For upgrades, uses Safe transaction service to create proposals that
     /// multisig members must approve. This adds a governance layer.
     ///
-    /// Requires: --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+    /// Requires: --multisig-address or ESPRESSO_ETH_MULTISIG_ADDRESS
     #[clap(long, default_value = "false")]
     pub use_multisig: bool,
 
@@ -252,7 +248,7 @@ struct Options {
     pub calldata_out: Option<PathBuf>,
 
     /// Stake table capacity for the prover circuit
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
+    #[clap(short, long, env = "ESPRESSO_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
     pub stake_table_capacity: usize,
 
     /// Option to upgrade fee contract v1 patch version
@@ -269,7 +265,7 @@ struct Options {
     /// will be permissionless.
     ///
     /// If the light client contract is not being deployed, this option is ignored.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_PERMISSIONED_PROVER")]
+    #[clap(long, env = "ESPRESSO_PERMISSIONED_PROVER")]
     permissioned_prover: Option<Address>,
 
     /// Exit escrow period for the stake table contract.
@@ -278,7 +274,7 @@ struct Options {
     /// been requested. It should be set to a value that is at least 3 hotshot epochs plus ample
     /// time to allow for submission of slashing evidence. Initially it will probably be around one
     /// week.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STAKE_TABLE_EXIT_ESCROW_PERIOD", value_parser = parse_duration)]
+    #[clap(long, env = "ESPRESSO_STAKE_TABLE_EXIT_ESCROW_PERIOD", value_parser = parse_duration)]
     exit_escrow_period: Option<Duration>,
 
     /// The address that the tokens will be minted to.
@@ -288,11 +284,11 @@ struct Options {
     initial_token_grant_recipient: Option<Address>,
 
     /// The number of blocks per epoch for the HotShot consensus protocol.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_BLOCKS_PER_EPOCH")]
+    #[clap(long, env = "ESPRESSO_NETWORK_BLOCKS_PER_EPOCH")]
     blocks_per_epoch: Option<u64>,
 
     /// The epoch start block
-    #[clap(long, env = "ESPRESSO_SEQUENCER_EPOCH_START_BLOCK")]
+    #[clap(long, env = "ESPRESSO_NETWORK_EPOCH_START_BLOCK")]
     epoch_start_block: Option<u64>,
 
     /// The initial supply of the tokens.
@@ -469,11 +465,18 @@ enum Command {
     Balance,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async_main(migrated_envs))
+}
+
+async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let opt = Options::parse();
 
     opt.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut contracts = Contracts::from(opt.contracts);
     contracts.set_cooldown(opt.post_deployment_cooldown);

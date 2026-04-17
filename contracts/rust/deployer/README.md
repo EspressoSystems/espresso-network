@@ -51,8 +51,8 @@ export RPC_URL=http://localhost:8545
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
-unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+unset ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
+unset ESPRESSO_ETH_MULTISIG_ADDRESS
 
 # Execute the deployment command
 RUST_LOG=info cargo run --bin deploy -- --deploy-fee-v1 --rpc-url=$RPC_URL
@@ -65,7 +65,7 @@ This section covers transferring ownership directly from an EOA (Externally Owne
 #### Prerequisites
 
 - The contract must be deployed and owned by an EOA (not a multisig or timelock)
-- The `ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS` environment variable is set to the correct proxy address for your
+- The `ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS` environment variable is set to the correct proxy address for your
   current environment.
 - You must have access to the current owner's private key/mnemonic
 - The new owner address must be a valid, non-zero Ethereum address
@@ -93,8 +93,8 @@ export RPC_URL=http://host.docker.internal:8545
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS \
   deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --transfer-ownership-from-eoa \
@@ -117,7 +117,7 @@ After the transfer is completed, verify the ownership change on-chain:
 
 ```bash
 # Verify the new owner is set correctly
-cast call $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER
+cast call $ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER
 ```
 
 ## Multisig Owner
@@ -129,9 +129,9 @@ cast call $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rp
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
+unset ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
 
-# Deploy the fee contract with a multisig owner (requires ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS to be set which occurs in the step above)
+# Deploy the fee contract with a multisig owner (requires ESPRESSO_ETH_MULTISIG_ADDRESS to be set which occurs in the step above)
 RUST_LOG=info cargo run --bin deploy -- --deploy-fee-v1 --rpc-url=$RPC_URL
 ```
 
@@ -147,7 +147,7 @@ The code sets the OpsTimelock as the owner of the FeeContract
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
+unset ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- --deploy-ops-timelock --deploy-fee-v1 --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
@@ -200,8 +200,8 @@ export RPC_URL=http://localhost:8545
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
-unset ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS
+unset ESP_TOKEN_PROXY_ADDRESS
+unset ESPRESSO_ETH_MULTISIG_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 ```
 
@@ -213,7 +213,7 @@ RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+unset ESP_TOKEN_PROXY_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- --deploy-esp-token-v1 --rpc-url=$RPC_URL
 ```
 
@@ -229,7 +229,7 @@ The code sets the OpsTimelock as the owner of the FeeContract
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+unset ESP_TOKEN_PROXY_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- --deploy-safe-exit-timelock --deploy-esp-token-v1 --use-timelock-owner --rpc-url=$RPC_URL
 ```
 
@@ -261,10 +261,10 @@ docker compose run --rm \
 Example output file (.env.mydemo) contents after a successful run
 
 ```text
-ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS=0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba
-ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0x2a264f26859166c5bf3868a54593ee716aebc848
-ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xe1aa25618fa0c7a1cfdab5d6b456af611873b629
-ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS=0xe1da8919f262ee86f9be05059c9280142cf23f48
+ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS=0x0c8e79f3534b00d9a3d4a856b665bf4ebc22f2ba
+ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=0x2a264f26859166c5bf3868a54593ee716aebc848
+ESPRESSO_OPS_TIMELOCK_ADDRESS=0xe1aa25618fa0c7a1cfdab5d6b456af611873b629
+ESPRESSO_FEE_CONTRACT_ADDRESS=0xe1da8919f262ee86f9be05059c9280142cf23f48
 ```
 
 # Timelock Proposals
@@ -280,11 +280,11 @@ Timelock operations can be performed via two execution paths:
 
 2. **Multisig Path** (Safe Multisig): Operations are proposed via Safe multisig wallet
    - Use for: Production environments requiring multiple signatures
-   - Requires: `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` must be set
+   - Requires: `ESPRESSO_ETH_MULTISIG_ADDRESS` must be set
    - Execution: Creates a Safe proposal that requires multisig approval before execution
 
 The deployer automatically routes to the appropriate path based on whether `--multisig-address` or
-`ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` is set.
+`ESPRESSO_ETH_MULTISIG_ADDRESS` is set.
 
 ## Execution Paths
 
@@ -316,12 +316,12 @@ RUST_LOG=info cargo run --bin deploy -- \
 
 ```bash
 # Set multisig address
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
+export ESPRESSO_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
 
 # Example: Schedule operation via multisig
 RUST_LOG=info cargo run --bin deploy -- \
   --rpc-url=$RPC_URL \
-  --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+  --multisig-address $ESPRESSO_ETH_MULTISIG_ADDRESS \
   --perform-timelock-operation \
   --timelock-operation-type schedule \
   --target-contract FeeContract \
@@ -334,7 +334,7 @@ RUST_LOG=info cargo run --bin deploy -- \
 
 **Requirements:**
 
-- `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` must be set
+- `ESPRESSO_ETH_MULTISIG_ADDRESS` must be set
 - Multisig operations output Safe TX Builder JSON to stdout
 - Import the JSON into the Safe UI's
   [Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) to create the transaction
@@ -350,7 +350,7 @@ Let's first deploy the fee contract and its timelock with scheduler/executer add
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
+unset ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
 export ESPRESSO_OPS_TIMELOCK_ADMIN=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_PROPOSERS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
@@ -417,8 +417,8 @@ set +a
 
 ```bash
 docker compose run --rm \
-  -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
   deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
@@ -435,8 +435,8 @@ docker compose run --rm \
 
 ```bash
 docker compose run --rm \
-  -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
   deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
@@ -452,7 +452,7 @@ docker compose run --rm \
 6. Confirm that the contract owner is now the new address (assuming you have Foundry installed)
 
 ```bash
-cast call $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rpc-url http://127.0.0.1:8545
+cast call $ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS "owner()(address)" --rpc-url http://127.0.0.1:8545
 ```
 
 ## Cancel Operation
@@ -500,7 +500,7 @@ Let's first deploy the fee contract and its timelock with scheduler/executer add
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS
+unset ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
 export ESPRESSO_OPS_TIMELOCK_ADMIN=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_PROPOSERS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
 export ESPRESSO_OPS_TIMELOCK_EXECUTORS=0xa0Ee7A142d267C1f36714E4a8F75612F20a79720
@@ -522,7 +522,7 @@ RUST_LOG=info cargo run --bin deploy -- \
 --timelock-operation-type schedule \
 --target-contract FeeContract \
 --function-signature "upgradeToAndCall(address,bytes)" \
---function-values $ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
+--function-values $ESPRESSO_FEE_CONTRACT_ADDRESS \
 --function-values "0x" \
 --timelock-operation-salt 0x \
 --timelock-operation-delay 0 \
@@ -538,7 +538,7 @@ RUST_LOG=info cargo run --bin deploy -- \
 --timelock-operation-type execute \
 --target-contract FeeContract \
 --function-signature "upgradeToAndCall(address,bytes)" \
---function-values $ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
+--function-values $ESPRESSO_FEE_CONTRACT_ADDRESS \
 --function-values 0x \
 --timelock-operation-salt 0x \
 --timelock-operation-delay 0 \
@@ -570,16 +570,16 @@ set +a
 
 ```bash
 docker compose run --rm \
-  -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
+  -e ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_FEE_CONTRACT_ADDRESS \
   deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type schedule \
   --target-contract FeeContract \
   --function-signature "upgradeToAndCall(address,bytes)" \
-  --function-values $ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
+  --function-values $ESPRESSO_FEE_CONTRACT_ADDRESS \
   --function-values "0x" \
   --timelock-operation-salt 0x \
   --timelock-operation-delay 0 \
@@ -590,16 +590,16 @@ docker compose run --rm \
 
 ```bash
 docker compose run --rm \
-  -e ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
+  -e ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_FEE_CONTRACT_ADDRESS \
   deploy-espresso-contracts \
   deploy --rpc-url=$RPC_URL \
   --perform-timelock-operation \
   --timelock-operation-type execute \
   --target-contract FeeContract \
   --function-signature "upgradeToAndCall(address,bytes)" \
-  --function-values $ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS \
+  --function-values $ESPRESSO_FEE_CONTRACT_ADDRESS \
   --function-values "0x" \
   --timelock-operation-salt 0x \
   --timelock-operation-delay 0 \
@@ -609,7 +609,7 @@ docker compose run --rm \
 6. Confirm that the contract was upgraded (assuming you have Foundry installed)
 
 ```bash
-cast storage $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url http://127.0.0.1:8545
+cast storage $ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url http://127.0.0.1:8545
 ```
 
 # Troubleshooting
@@ -649,12 +649,12 @@ If you get errors about missing environment variables, ensure all required varia
 
 ```bash
 # Check if variables are set
-echo $ESPRESSO_SEQUENCER_ETH_MNEMONIC
+echo $ESPRESSO_ETH_MNEMONIC
 echo $RPC_URL
 echo $ESPRESSO_OPS_TIMELOCK_ADMIN
 
 # Set them if missing
-export ESPRESSO_SEQUENCER_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
+export ESPRESSO_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
 export RPC_URL="http://host.docker.internal:8545"
 ```
 
@@ -671,7 +671,7 @@ Before upgrading to ESP Token V2, ensure you have:
 - set the multisig address (the deployer will output Safe TX Builder JSON for multisig operations)
 
 ```bash
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
+export ESPRESSO_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
 ```
 
 ### Upgrading with Cargo
@@ -680,8 +680,8 @@ export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
 set -a
 source .env
 set +a
-unset ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
-# If doing a real run then, export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
+unset ESP_TOKEN_PROXY_ADDRESS
+# If doing a real run then, export ESPRESSO_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
 RUST_LOG=info cargo run --bin deploy -- \
   --deploy-esp-token-v1 \
   --upgrade-esp-token-v2 \
@@ -693,10 +693,10 @@ RUST_LOG=info cargo run --bin deploy -- \
 ### Upgrading with Docker Compose
 
 ```bash
-# If doing a real run then, export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
+# If doing a real run then, export ESPRESSO_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
+  -e ESPRESSO_ETH_MNEMONIC \
   -v $(pwd)/.env.mydemo:/app/.env.mydemo \
   deploy-espresso-contracts \
   deploy --deploy-esp-token-v1 --upgrade-esp-token-v2 --rpc-url=$RPC_URL --use-multisig
@@ -714,10 +714,10 @@ address and version number.
 
 ```bash
 # Check the implementation address
-cast storage $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url http://127.0.0.1:8545
+cast storage $ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url http://127.0.0.1:8545
 
 # Check V2 specific functions (if available)
-cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "version()(string)" --rpc-url http://127.0.0.1:8545
+cast call $ESP_TOKEN_PROXY_ADDRESS "version()(string)" --rpc-url http://127.0.0.1:8545
 ```
 
 ## Upgrade Verification Checklist
@@ -752,17 +752,17 @@ source .env
 set -a
 
 # Re-specify the most important vars if needed
-export ESPRESSO_SEQUENCER_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
-export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS="0x..."      # timelock contract address, select the correct timelock for the contract
+export ESPRESSO_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
+export ESPRESSO_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
+export ESPRESSO_OPS_TIMELOCK_ADDRESS="0x..."      # timelock contract address, select the correct timelock for the contract
 export RPC_URL=""
 
 # Run the ownership transfer proposal
 cargo run --bin deploy -- \
     --propose-transfer-ownership-to-timelock \
     --target-contract FeeContract \
-    --fee-contract-proxy $ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS \
-    --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+    --fee-contract-proxy $ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS \
+    --multisig-address $ESPRESSO_ETH_MULTISIG_ADDRESS \
     --rpc-url $RPC_URL \
 ```
 
@@ -775,17 +775,17 @@ source .env
 set -a
 
 # Re-specify the most important vars if needed
-export ESPRESSO_SEQUENCER_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
-export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS="0x..."      # timelock contract address
+export ESPRESSO_ETH_MNEMONIC="<your-12-word-mnemonic-phrase>"
+export ESPRESSO_ETH_MULTISIG_ADDRESS="<0x...multisig-address>"
+export ESPRESSO_OPS_TIMELOCK_ADDRESS="0x..."      # timelock contract address
 export RPC_URL=""
 
 # Run the ownership transfer proposal
 docker-compose run --rm deploy-espresso-contracts \
     --propose-transfer-ownership-to-timelock \
     --target-contract lightclient \
-    --light-client-proxy $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
-    --multisig-address $ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
+    --light-client-proxy $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS \
+    --multisig-address $ESPRESSO_ETH_MULTISIG_ADDRESS \
     --rpc-url $RPC_URL
 ```
 
@@ -814,10 +814,10 @@ After the ownership transfer is completed, verify the transfer on-chain:
 ```bash
 
 # Verify the timelock address is loaded correctly
-echo "Timelock Address: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+echo "Timelock Address: $ESPRESSO_OPS_TIMELOCK_ADDRESS"
 
 # Verify the timelock is now the owner of the target contract (after it's been signed and executed)
-cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
+cast call $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
 ```
 
 ### Troubleshooting
@@ -921,7 +921,7 @@ cat $OUTPUT_FILE
 Example output file ($OUTPUT_FILE) contents after a successful SafeExitTimelock deployment:
 
 ```text
-ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0x1234567890123456789012345678901234567890
+ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS=0x1234567890123456789012345678901234567890
 ```
 
 6. Verify the timelock configuration on-chain (assuming you have Foundry installed)
@@ -930,30 +930,30 @@ ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0x12345678901234567890123456789012
 source $OUTPUT_FILE
 
 # Verify the variables are loaded correctly
-echo "Timelock Address: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
+echo "Timelock Address: $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS"
 echo "Admin Address: $ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN"
 
 # Check the admin role (DEFAULT_ADMIN_ROLE = 0x00...)
-cast call $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
   0x0000000000000000000000000000000000000000000000000000000000000000 \
   $ESPRESSO_SAFE_EXIT_TIMELOCK_ADMIN --rpc-url $RPC_URL
 
 # Check the proposer roles (check each address individually)
-cast call $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
   0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1 \
   $ESPRESSO_DEVS_ADDRESS_1 --rpc-url $RPC_URL
 
-cast call $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
   0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1 \
   $ESPRESSO_DEVS_ADDRESS_2 --rpc-url $RPC_URL
 
 # Check the executor role
-cast call $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
   0xd8aa0f3194971a2a116679f7c2090f6939c8d4e01a2a8d7e41d55e5351469e63 \
   $ESPRESSO_SAFE_EXIT_TIMELOCK_EXECUTORS --rpc-url $RPC_URL
 
 # Check the timelock delay
-cast call $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS "getMinDelay()(uint256)" --rpc-url $RPC_URL
+cast call $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS "getMinDelay()(uint256)" --rpc-url $RPC_URL
 ```
 
 #### Step 2: Deploy OpsTimelock
@@ -999,7 +999,7 @@ cat $OUTPUT_FILE
 Example output file ($OUTPUT_FILE) contents after a successful OpsTimelock deployment:
 
 ```text
-ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0x1234567890123456789012345678901234567890
+ESPRESSO_OPS_TIMELOCK_ADDRESS=0x1234567890123456789012345678901234567890
 ```
 
 6. Verify the timelock configuration on-chain (assuming you have Foundry installed)
@@ -1009,30 +1009,30 @@ ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0x12345678901234567890123456789012345678
 source $OUTPUT_FILE
 
 # Verify the variables are loaded correctly
-echo "Timelock Address: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+echo "Timelock Address: $ESPRESSO_OPS_TIMELOCK_ADDRESS"
 echo "Admin Address: $ESPRESSO_OPS_TIMELOCK_ADMIN"
 
 # Check the admin role (DEFAULT_ADMIN_ROLE = 0x00...)
-cast call $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
   0x0000000000000000000000000000000000000000000000000000000000000000 \
   $ESPRESSO_OPS_TIMELOCK_ADMIN --rpc-url $RPC_URL
 
 # Check the proposer roles (check each address individually)
-cast call $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
   0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1 \
   $ESPRESSO_DEVS_ADDRESS_1 --rpc-url $RPC_URL
 
-cast call $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
   0xb09aa5aeb3702cfd50b6b62bc4532604938f21248a27a1d5ca736082b6819cc1 \
   $ESPRESSO_DEVS_ADDRESS_2 --rpc-url $RPC_URL
 
 # Check the executor role
-cast call $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_OPS_TIMELOCK_ADDRESS "hasRole(bytes32,address)(bool)" \
   0xd8aa0f3194971a2a116679f7c2090f6939c8d4e01a2a8d7e41d55e5351469e63 \
   $ESPRESSO_OPS_TIMELOCK_EXECUTORS --rpc-url $RPC_URL
 
 # Check the timelock delay
-cast call $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS "getMinDelay()(uint256)" --rpc-url $RPC_URL
+cast call $ESPRESSO_OPS_TIMELOCK_ADDRESS "getMinDelay()(uint256)" --rpc-url $RPC_URL
 ```
 
 #### Step 3: Upgrade LightClientV2
@@ -1046,15 +1046,15 @@ touch $OUTPUT_FILE
 
 ```bash
 # If doing a real run, set the multisig address
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
+export ESPRESSO_ETH_MULTISIG_ADDRESS=YOUR_MULTISIG_ADDRESS
 
 # Set the blocks per epoch and epoch start block
 # These can be fetched from the sequencer URL or set manually
-export ESPRESSO_SEQUENCER_BLOCKS_PER_EPOCH= #example: 1000
-export ESPRESSO_SEQUENCER_EPOCH_START_BLOCK= #example: 1000000
+export ESPRESSO_NETWORK_BLOCKS_PER_EPOCH= #example: 1000
+export ESPRESSO_NETWORK_EPOCH_START_BLOCK= #example: 1000000
 
 # Set the sequencer URL to fetch config (optional, will use env vars if not set)
-export ESPRESSO_SEQUENCER_URL=
+export ESPRESSO_API_NODE_URL=
 ```
 
 4. Run the docker-compose command to upgrade to LightClientV2
@@ -1062,11 +1062,11 @@ export ESPRESSO_SEQUENCER_URL=
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
-  -e ESPRESSO_SEQUENCER_BLOCKS_PER_EPOCH \
-  -e ESPRESSO_SEQUENCER_EPOCH_START_BLOCK \
-  -e ESPRESSO_SEQUENCER_URL \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_ETH_MULTISIG_ADDRESS \
+  -e ESPRESSO_NETWORK_BLOCKS_PER_EPOCH \
+  -e ESPRESSO_NETWORK_EPOCH_START_BLOCK \
+  -e ESPRESSO_API_NODE_URL \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-espresso-contracts \
@@ -1093,20 +1093,20 @@ docker compose run --rm \
 source $OUTPUT_FILE
 
 # Verify the variables are loaded correctly
-echo "LightClient Proxy Address: $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS"
+echo "LightClient Proxy Address: $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS"
 
 # Check the implementation address (should point to LightClientV2)
-cast storage $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
+cast storage $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
 
 # Check V2 specific functions
-cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "getVersion()(uint8,uint8,uint8)" --rpc-url $RPC_URL
+cast call $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS "getVersion()(uint8,uint8,uint8)" --rpc-url $RPC_URL
 
 # Check the epoch configuration
-cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "blocksPerEpoch()(uint64)" --rpc-url $RPC_URL
-cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "epochStartBlock()(uint64)" --rpc-url $RPC_URL
+cast call $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS "blocksPerEpoch()(uint64)" --rpc-url $RPC_URL
+cast call $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS "epochStartBlock()(uint64)" --rpc-url $RPC_URL
 
 # Check if the contract was properly initialized (should return true for V2)
-cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "isInitialized()(bool)" --rpc-url $RPC_URL
+cast call $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS "isInitialized()(bool)" --rpc-url $RPC_URL
 ```
 
 ### Step 4: Multisig Proposal to change admin of LightClientProxy from EspressoSys multisig to OpsTimelock
@@ -1131,13 +1131,13 @@ touch $OUTPUT_FILE
 
 ```bash
 # Set the EspressoSys multisig address (current admin)
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
+export ESPRESSO_ETH_MULTISIG_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
 
 # Set the OpsTimelock address (new admin)
-export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
+export ESPRESSO_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
 
 # Set the LightClientProxy address
-export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
+export ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
 ```
 
 4. Run the docker-compose command to create the multisig proposal for admin transfer
@@ -1145,16 +1145,16 @@ export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRES
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_ETH_MULTISIG_ADDRESS \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-espresso-contracts \
   deploy --propose-transfer-ownership-to-timelock \
   --target-contract lightclient \
-  --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
+  --timelock-address $ESPRESSO_OPS_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
 
@@ -1178,10 +1178,10 @@ docker compose run --rm \
 source $OUTPUT_FILE
 
 # Verify the variables are loaded correctly
-echo "OpsTimelock Address: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+echo "OpsTimelock Address: $ESPRESSO_OPS_TIMELOCK_ADDRESS"
 
 # Verify the OpsTimelock is now the owner
-cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+cast call $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_OPS_TIMELOCK_ADDRESS
 ```
 
 #### Step 5: Deploy EspToken with SafeExitTimelock as Admin
@@ -1195,7 +1195,7 @@ touch $OUTPUT_FILE
 
 ```bash
 # Set the SafeExitTimelock address (will be the admin of EspTokenProxy)
-export ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
+export ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
 
 # Set the initial token supply (optional, will use default if not set)
 export ESP_TOKEN_INITIAL_SUPPLY=3590000000000000000000000000 # 3.59 billion tokens with 18 decimals
@@ -1211,8 +1211,8 @@ export ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ADDRESS=0xRecipientAddress
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS \
   -e ESP_TOKEN_INITIAL_SUPPLY \
   -e ESP_TOKEN_NAME \
   -e ESP_TOKEN_SYMBOL \
@@ -1240,9 +1240,9 @@ cat $OUTPUT_FILE
 Example output file ($OUTPUT_FILE) contents after a successful EspToken deployment:
 
 ```text
-ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0x1234567890123456789012345678901234567890
-ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS=0x0987654321098765432109876543210987654321
-ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0x5555555555555555555555555555555555555555
+ESP_TOKEN_PROXY_ADDRESS=0x1234567890123456789012345678901234567890
+ESP_TOKEN_ADDRESS=0x0987654321098765432109876543210987654321
+ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS=0x5555555555555555555555555555555555555555
 ```
 
 6. Verify the deployment and ownership were successful
@@ -1256,23 +1256,23 @@ You should see output similar to: `EspTokenProxy deployed successfully` `Ownersh
 source $OUTPUT_FILE
 
 # Check the owner/admin of the EspToken proxy (should be SafeExitTimelock)
-cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
 
 # Verify the SafeExitTimelock is the owner
-cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS
+cast call $ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS
 
 # Check the implementation address (should point to EspTokenV1)
-cast storage $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
+cast storage $ESP_TOKEN_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
 
 # Check the token name and symbol
-cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "name()(string)" --rpc-url $RPC_URL
-cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "symbol()(string)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "name()(string)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "symbol()(string)" --rpc-url $RPC_URL
 
 # Check the total supply
-cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "totalSupply()(uint256)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "totalSupply()(uint256)" --rpc-url $RPC_URL
 
 # Check the decimals
-cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "decimals()(uint8)" --rpc-url $RPC_URL
+cast call $ESP_TOKEN_PROXY_ADDRESS "decimals()(uint8)" --rpc-url $RPC_URL
 ```
 
 ### Step 6: Deploy StakeTableProxy & immediately Upgrade to StakeTableV2, setting the EspressoSys Multisig as the pauser
@@ -1296,22 +1296,22 @@ touch $OUTPUT_FILE
 
 ```bash
 # Set the EspressoSys multisig address (will be the pauser of StakeTableV2)
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
+export ESPRESSO_ETH_MULTISIG_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
 
 # Set the pauser address for StakeTableV2
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
+export ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSOSYS_MULTISIG_ADDRESS
 
 # Set the EspToken address (required for StakeTableV2)
-export ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
+export ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
 
 # Set the LightClient proxy address (required for StakeTable initialization)
-export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
+export ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
 
 # Set the OpsTimelock address (will be the admin of StakeTableProxy)
-export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
+export ESPRESSO_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
 
 # Set the SafeExitTimelock address (will be the admin of StakeTableProxy)
-export ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
+export ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
 ```
 
 4. Run the docker-compose command to deploy StakeTableProxy and upgrade to StakeTableV2
@@ -1319,13 +1319,13 @@ export ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRES
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
-  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS \
-  -e ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS \
-  -e ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_ETH_MULTISIG_ADDRESS \
+  -e ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS \
+  -e ESP_TOKEN_PROXY_ADDRESS \
+  -e ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-espresso-contracts \
@@ -1360,24 +1360,24 @@ You should see output similar to: `StakeTable successfully upgraded to 0x...` `T
 source $OUTPUT_FILE
 
 # Check the owner/admin of the StakeTable proxy (should be OpsTimelock)
-cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
+cast call $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL
 
 # Verify the OpsTimelock is the owner
-cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+cast call $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_OPS_TIMELOCK_ADDRESS
 
 # Check the implementation address (should point to StakeTableV2)
-cast storage $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
+cast storage $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc --rpc-url $RPC_URL
 
 # Export the PAUSER_ROLE constant
-export PAUSER_CONSTANT=$(cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "PAUSER_ROLE()(bytes32)" --rpc-url $RPC_URL)
+export PAUSER_CONSTANT=$(cast call $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS "PAUSER_ROLE()(bytes32)" --rpc-url $RPC_URL)
 
 # Check the pauser role (should be EspressoSys multisig)
-cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "hasRole(bytes32,address)(bool)" \
+cast call $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS "hasRole(bytes32,address)(bool)" \
   $PAUSER_CONSTANT \
-  $ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS --rpc-url $RPC_URL
+  $ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS --rpc-url $RPC_URL
 
 # Verify the EspToken address matches
-cast call $ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS "token()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS
+cast call $ESPRESSO_STAKE_TABLE_PROXY_ADDRESS "token()(address)" --rpc-url $RPC_URL | grep -i $ESP_TOKEN_PROXY_ADDRESS
 ```
 
 ### Final Verification Checklist
@@ -1531,13 +1531,13 @@ touch $OUTPUT_FILE
 
 ```bash
 # Set the multisig address (current admin of EspToken proxy)
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
+export ESPRESSO_ETH_MULTISIG_ADDRESS=0xMULTISIG_ADDRESS
 
 # Set the SafeExitTimelock address (new admin)
-export ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
+export ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS=0xSAFE_EXIT_TIMELOCK_ADDRESS
 
 # Set the EspToken proxy address
-export ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
+export ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
 ```
 
 2. **Run the docker-compose command to create the multisig proposal for admin transfer:**
@@ -1545,16 +1545,16 @@ export ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS=0xESP_TOKEN_PROXY_ADDRESS
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
-  -e ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_ETH_MULTISIG_ADDRESS \
+  -e ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS \
+  -e ESP_TOKEN_PROXY_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-espresso-contracts \
   deploy --propose-transfer-ownership-to-timelock \
   --target-contract esptoken \
-  --timelock-address $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS \
+  --timelock-address $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
 
@@ -1577,10 +1577,10 @@ docker compose run --rm \
 source $OUTPUT_FILE
 
 # Verify the variables are loaded correctly
-echo "SafeExitTimelock Address: $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"
+echo "SafeExitTimelock Address: $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS"
 
 # Verify the SafeExitTimelock is now the owner
-cast call $ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS
+cast call $ESP_TOKEN_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS
 ```
 
 ### Step 6: Upgrade to `StakeTableV2`. (Sets the `EspressoSys Multisig` as the pauser)
@@ -1618,16 +1618,16 @@ touch $OUTPUT_FILE
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_ETH_MULTISIG_ADDRESS \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_STAKE_TABLE_PROXY_ADDRESS \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
   deploy-espresso-contracts \
   deploy --propose-transfer-ownership-to-timelock \
   --target-contract staketable \
-  --timelock-address $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
+  --timelock-address $ESPRESSO_OPS_TIMELOCK_ADDRESS \
   --rpc-url=$RPC_URL \
   --out $OUTPUT_FILE
 
@@ -1683,13 +1683,13 @@ touch $OUTPUT_FILE
 
 ```bash
 # Set the OpsTimelock address (new admin)
-export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
+export ESPRESSO_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
 
 # Set the LightClientProxy address
-export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
+export ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
 
 # Set the new owner (OpsTimelock)
-export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_OPS_TIMELOCK_ADDRESS
 ```
 
 3. Run the docker-compose command to transfer ownership from EOA to timelock
@@ -1697,9 +1697,9 @@ export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_SEQUENCER_OPS_TIMELOCK_AD
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS \
   -e ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \
@@ -1725,10 +1725,10 @@ docker compose run --rm \
 source $OUTPUT_FILE
 
 # Verify the variables are loaded correctly
-echo "OpsTimelock Address: $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"
+echo "OpsTimelock Address: $ESPRESSO_OPS_TIMELOCK_ADDRESS"
 
 # Verify the OpsTimelock is now the owner
-cast call $ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+cast call $ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS "owner()(address)" --rpc-url $RPC_URL | grep -i $ESPRESSO_OPS_TIMELOCK_ADDRESS
 ```
 
 ## Water (Ethereum Devnet)
@@ -1797,13 +1797,13 @@ export OUTPUT_FILE=.env.water.lightclient.admin.transfer
 touch $OUTPUT_FILE
 
 # Set the OpsTimelock address (new admin)
-export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
+export ESPRESSO_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
 
 # Set the LightClientProxy address
-export ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
+export ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=0xLIGHT_CLIENT_PROXY_ADDRESS
 
 # Set the new owner (OpsTimelock)
-export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_OPS_TIMELOCK_ADDRESS
 ```
 
 Then proceed with the same docker-compose command as outlined in the Arbitrum Sepolia section above.
@@ -1835,7 +1835,7 @@ export OUTPUT_FILE=.env.water.staketable
 touch $OUTPUT_FILE
 
 # Set StakeTable configuration (use Espresso EOA admin instead of EspressoSys Multisig)
-export ESPRESSO_SEQUENCER_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSO_EOA_ADMIN_ADDRESS
+export ESPRESSO_ETH_MULTISIG_PAUSER_ADDRESS=0xESPRESSO_EOA_ADMIN_ADDRESS
 ```
 
 Then proceed with the same deployment steps as outlined in the Ethereum Mainnet section.
@@ -1852,13 +1852,13 @@ export OUTPUT_FILE=.env.water.staketable.admin.transfer
 touch $OUTPUT_FILE
 
 # Set the OpsTimelock address (new admin)
-export ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
+export ESPRESSO_OPS_TIMELOCK_ADDRESS=0xOPS_TIMELOCK_ADDRESS
 
 # Set the StakeTableProxy address
-export ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=0xSTAKE_TABLE_PROXY_ADDRESS
+export ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=0xSTAKE_TABLE_PROXY_ADDRESS
 
 # Set the new owner (OpsTimelock)
-export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS
+export ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER=$ESPRESSO_OPS_TIMELOCK_ADDRESS
 ```
 
 Then use the same docker-compose command as in Step 4 above, but change the target contract to `staketable`:
@@ -1866,9 +1866,9 @@ Then use the same docker-compose command as in Step 4 above, but change the targ
 ```bash
 docker compose run --rm \
   -e RPC_URL \
-  -e ESPRESSO_SEQUENCER_ETH_MNEMONIC \
-  -e ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS \
-  -e ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS \
+  -e ESPRESSO_ETH_MNEMONIC \
+  -e ESPRESSO_OPS_TIMELOCK_ADDRESS \
+  -e ESPRESSO_STAKE_TABLE_PROXY_ADDRESS \
   -e ESPRESSO_TRANSFER_OWNERSHIP_NEW_OWNER \
   -v $(pwd)/$OUTPUT_FILE:/app/$OUTPUT_FILE \
   \

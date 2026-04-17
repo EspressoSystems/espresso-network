@@ -52,8 +52,14 @@ struct Args {
     global_memory_pool_size: u64,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async_main(migrated_envs))
+}
+
+async fn async_main(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     // Parse command-line arguments
     let args = Args::parse();
 
@@ -68,6 +74,7 @@ async fn main() -> Result<()> {
             .with_env_filter(EnvFilter::from_default_env())
             .init();
     }
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     // Cast the memory pool size to a `usize`
     let global_memory_pool_size =
