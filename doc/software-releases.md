@@ -69,6 +69,10 @@ Floating Docker tags are moved via `promote-docker-tag.yml` (see below).
 - Operator docs reference floating Docker tags so they don't need updating on new releases.
 - Operators who prefer pinned versions use the date-based Docker image tag and watch GitHub Releases.
 
+Operators may set up automation to auto-upgrade from floating tags. **If a release needs manual operator steps or a
+staggered rollout, do not use the floating tags.** Announce on Discord and have operators pin the specific `YYYYMMDD`
+tag instead.
+
 ## Branches
 
 Release branches start with `release-`.
@@ -78,24 +82,51 @@ Release branches start with `release-`.
 - Backports from main are cherry-picked: if possible with existing backport action, otherwise manually (use
   `cherry-pick -x`).
 
-## Process
+## Walkthrough: Cutting a Release
 
-1. Create `release-*` branch off main. Test and fixup.
-2. Optionally create git tag `YYYYMMDD-description` via `create-release.yml` for internal testing. Creates GitHub
-   Pre-release.
-3. Create git tag `YYYYMMDD` via `create-release.yml`. Creates GitHub Release.
-4. Promote the release to `decaf.canary` (requires approval).
-5. After confidence on decaf canaries, promote the release to `decaf` (requires approval).
-6. Promote the release to `mainnet.canary` (requires approval).
-7. After confidence on mainnet canaries, promote the release to `mainnet` (requires approval).
-8. Post on Discord/Telegram with release link.
+1. Create a new release branch from main, e.g. `release-foo`.
 
-### Hotfixes and same-day releases
+2. Create a pre-release tag via
+   [create-release.yml](https://github.com/EspressoSystems/espresso-network/actions/workflows/create-release.yml).
+
+   ![create-release workflow](assets/create-release-action.png)
+
+   Click "Run workflow" and fill in:
+   - **Use workflow from**: always select `main` (this is the branch the workflow itself runs from, not the branch being
+     released). The screenshot may show a different branch.
+   - **tag**: must start with `YYYYMMDD`. Anything with a `-suffix` is a Pre-release; a bare `YYYYMMDD` is the final
+     Release.
+   - **ref**: the branch to create the release from, e.g. `release-foo`.
+
+   Hit the green "Run workflow" button.
+
+3. Wait for the automatically dispatched Docker build to complete (~10 minutes). Watch it
+   [here](https://github.com/EspressoSystems/espresso-network/actions/workflows/build.yml?query=event%3Aworkflow_dispatch).
+
+4. Test and stabilize the release. If you need more iterations, create additional pre-release tags via step 2 (e.g.
+   `YYYYMMDD-test2`, `YYYYMMDD-fix1`).
+
+5. Once stabilized, create the final release tag `YYYYMMDD` via the same
+   [create-release.yml](https://github.com/EspressoSystems/espresso-network/actions/workflows/create-release.yml)
+   action. Unlike the suffixed tags, a bare `YYYYMMDD` creates a **Release**, not a Pre-release.
+
+6. Promote the floating Docker tags as confidence grows. Promotion re-points the floating tag to the release's image
+   (roughly `docker tag $image:YYYYMMDD $image:decaf.canary` + push). Use
+   [promote-docker-tag.yml](https://github.com/EspressoSystems/espresso-network/actions/workflows/promote-docker-tag.yml).
+
+   ![promote-docker-tag workflow](assets/promote-docker-tag-action.png)
+
+   Again, always select `main` in the "Use workflow from" dropdown.
+
+   Progression: `decaf.canary` -> `decaf` -> `mainnet.canary` -> `mainnet`. Each step requires approval. For urgent
+   hotfixes, set `skip-progression` to bypass the order check (approval still required).
+
+7. After each promotion, post a message on Discord (or run a bot for it).
+
+### If Something Goes Wrong
 
 If a version is broken at any stage, create a new version (`YYYYMMDD.1`, `YYYYMMDD.2`, or next day) rather than trying
-to fix it in-flight. For critical bugfixes that need to skip the full canary progression, the promote action supports a
-`skip-progression` flag. The `release` environment approval still applies, so a reviewer must sign off. The action's run
-history records that progression was skipped.
+to fix it in-flight.
 
 ## Create Release Action
 
