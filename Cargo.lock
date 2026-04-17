@@ -3994,6 +3994,7 @@ dependencies = [
  "clap 4.6.1",
  "dotenvy",
  "espresso-contract-deployer",
+ "espresso-utils",
  "hotshot-state-prover",
  "humantime",
  "humantime-serde",
@@ -4780,6 +4781,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "espresso-node",
+ "espresso-utils",
  "tokio",
 ]
 
@@ -8939,6 +8941,7 @@ dependencies = [
  "circular-buffer",
  "clap 4.6.1",
  "espresso-types",
+ "espresso-utils",
  "futures",
  "hotshot",
  "hotshot-example-types",

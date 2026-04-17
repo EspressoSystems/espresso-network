@@ -184,11 +184,11 @@ cargo run --bin deploy -- --help
 You can configure the deployer using CLI flags or environment variables. Most options can be set via environment
 variables (see the code for the full list `crates/espresso/node/src/bin/deploy.rs`). Common environment variables:
 
-- `ESPRESSO_SEQUENCER_L1_PROVIDER` — L1 JSON-RPC endpoint
-- `ESPRESSO_SEQUENCER_ETH_MNEMONIC` — Mnemonic for the deployer wallet
-- `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS` — Multisig admin address
+- `ESPRESSO_L1_PROVIDER` — L1 JSON-RPC endpoint
+- `ESPRESSO_ETH_MNEMONIC` — Mnemonic for the deployer wallet
+- `ESPRESSO_ETH_MULTISIG_ADDRESS` — Multisig admin address
 - `ESPRESSO_DEPLOYER_ACCOUNT_INDEX` — Account index in the wallet
-- `ESPRESSO_SEQUENCER_URL` — Espresso node URL for HotShot config
+- `ESPRESSO_API_NODE_URL` — Espresso node URL for HotShot config
 
 You can use a `.env` file and load it with:
 

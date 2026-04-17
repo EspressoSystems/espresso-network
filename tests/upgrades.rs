@@ -81,7 +81,7 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let _demo = NativeDemo::run(
         None,
         Some(vec![(
-            "ESPRESSO_SEQUENCER_GENESIS_FILE".to_string(),
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
             genesis_path.to_string(),
         )]),
     )?;

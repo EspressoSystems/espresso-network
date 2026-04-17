@@ -91,7 +91,7 @@ pub(crate) struct Config {
     /// [DEPRECATED] Deployed ESP token contract address.
     ///
     /// [DEPRECATED] This is fetched from the stake table contract now.
-    #[clap(long, env = "ESP_TOKEN_ADDRESS")]
+    #[clap(long, env = "ESP_TOKEN_CONTRACT_ADDRESS")]
     pub token_address: Option<Address>,
 
     /// Deployed stake table contract address.
@@ -284,7 +284,7 @@ impl Config {
     pub fn apply_env_var_overrides(self) -> Result<Self> {
         let mut config = self.clone();
         if self.stake_table_address == Address::ZERO {
-            let stake_table_env_var = "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS";
+            let stake_table_env_var = "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS";
             if let Ok(stake_table_address) = std::env::var(stake_table_env_var) {
                 config.stake_table_address = stake_table_address.parse()?;
                 tracing::info!(

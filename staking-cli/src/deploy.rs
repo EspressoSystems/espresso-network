@@ -71,20 +71,12 @@ impl DeployedContracts {
         writeln!(file, "# Deployed contract addresses")?;
         writeln!(
             file,
-            "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS={}",
+            "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS={}",
             self.stake_table
         )?;
-        writeln!(
-            file,
-            "ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS={}",
-            self.token
-        )?;
+        writeln!(file, "ESP_TOKEN_PROXY_ADDRESS={}", self.token)?;
         if let Some(reward_claim) = self.reward_claim {
-            writeln!(
-                file,
-                "ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS={}",
-                reward_claim
-            )?;
+            writeln!(file, "ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS={}", reward_claim)?;
         }
         Ok(())
     }
@@ -186,7 +178,7 @@ pub async fn deploy_contracts_for_testing(
     tracing::info!("contract addresses written to {}", output.display());
 
     println!("STAKE_TABLE_ADDRESS={}", contracts.stake_table);
-    println!("ESP_TOKEN_ADDRESS={}", contracts.token);
+    println!("ESP_TOKEN_CONTRACT_ADDRESS={}", contracts.token);
 
     Ok(contracts)
 }

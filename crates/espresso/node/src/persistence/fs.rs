@@ -86,7 +86,7 @@ fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
 #[derive(Parser, Clone, Debug)]
 pub struct Options {
     /// Storage path for persistent data.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_STORAGE_PATH")]
+    #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
     path: PathBuf,
 
     /// Number of views to retain in consensus storage before data that hasn't been archived is
@@ -102,7 +102,7 @@ pub struct Options {
     /// view time of 2s.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_CONSENSUS_VIEW_RETENTION",
+        env = "ESPRESSO_NODE_CONSENSUS_VIEW_RETENTION",
         default_value = "130000"
     )]
     pub(crate) consensus_view_retention: u64,

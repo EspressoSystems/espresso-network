@@ -11,14 +11,22 @@ struct Args {
     #[clap(
         short,
         long,
-        env = "ESPRESSO_SEQUENCER_ORCHESTRATOR_URL",
+        env = "ESPRESSO_NODE_ORCHESTRATOR_URL",
         default_value = "http://localhost:8080"
     )]
     pub orchestrator_url: Url,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async_main(migrated_envs))
+}
+
+// `migrated_envs` unused because there's no logging in this binary.
+// We have already printed warnings before.
+async fn async_main(_migrated_envs: Vec<(&str, &str)>) {
     let args = Args::parse();
     let pi: (LightClientStateSol, StakeTableStateSol) =
         light_client_genesis(&args.orchestrator_url, DEFAULT_STAKE_TABLE_CAPACITY)

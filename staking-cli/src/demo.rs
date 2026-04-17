@@ -1108,11 +1108,11 @@ pub(crate) async fn stake_for_demo(
         );
 
         let consensus_private_key = parse_bls_priv_key(&dotenvy::var(format!(
-            "ESPRESSO_DEMO_SEQUENCER_STAKING_PRIVATE_KEY_{val_index}"
+            "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
         ))?)?
         .into();
         let state_private_key = parse_state_priv_key(&dotenvy::var(format!(
-            "ESPRESSO_DEMO_SEQUENCER_STATE_PRIVATE_KEY_{val_index}"
+            "ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"
         ))?)?;
         validator_keys.push(StakingKeySet {
             signer,

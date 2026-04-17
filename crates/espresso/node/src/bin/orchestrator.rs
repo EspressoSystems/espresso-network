@@ -115,10 +115,17 @@ fn parse_seed(s: &str) -> Result<[u8; 32], ParseSeedError> {
         .map_err(|vec| ParseSeedError::WrongLength { length: vec.len() })
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async_main(migrated_envs))
+}
+
+async fn async_main(migrated_envs: Vec<(&str, &str)>) {
     let args = Args::parse();
     args.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut config = NetworkConfig::<SeqTypes> {
         manual_start_password: args.manual_start_password,

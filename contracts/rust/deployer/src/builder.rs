@@ -772,7 +772,7 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         // Validate multisig is set (even though we now encode calldata rather than submit to Safe)
         let _multisig = self.multisig.expect(
             "Multisig address must be set when proposing ownership transfer. Use \
-             --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS",
+             --multisig-address or ESPRESSO_ETH_MULTISIG_ADDRESS",
         );
         let ownable_contract = self.target_contract.ok_or_else(|| {
             anyhow::anyhow!(
