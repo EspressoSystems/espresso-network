@@ -28,7 +28,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockBuilderConfig, MempoolBuilder},
     consensus::{Consensus, ConsensusOutput},
     coordinator::{Coordinator, error::Severity, timer::Timer},
     epoch::EpochManager,
@@ -193,7 +193,7 @@ async fn build_coordinator(
     node_index: u64,
     group: Arc<MasterMap<BLSPubKey>>,
     membership: EpochMembershipCoordinator<TestTypes>,
-) -> Coordinator<TestTypes, MemoryNetworkImpl> {
+) -> Coordinator<TestTypes, MemoryNetworkImpl, MempoolBuilder<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
 
@@ -210,7 +210,7 @@ async fn build_coordinator(
     let vid_disperser = VidDisperser::new(membership.clone());
     let vid_reconstructor = VidReconstructor::new();
 
-    let block_builder = BlockBuilder::new(
+    let block_builder = MempoolBuilder::new(
         instance.clone(),
         membership.clone(),
         BlockBuilderConfig::default(),

@@ -23,10 +23,7 @@ use hotshot_testing::{
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
-    data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2, VidDisperseShare2,
-        ViewNumber, vid_commitment,
-    },
+    data::{EpochNumber, Leaf2, VidCommitment, VidDisperse2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
@@ -35,7 +32,6 @@ use hotshot_types::{
         Vote2Data,
     },
     traits::{
-        EncodeBytes,
         block_contents::{BlockHeader, BuilderFee},
         election::Membership,
         network::TestableNetworkingImplementation,
@@ -484,20 +480,28 @@ pub struct MockBlock {
     pub metadata: TestMetadata,
     pub payload_commitment: VidCommitment,
     pub builder_commitment: BuilderCommitment,
+    pub vid_disperse: VidDisperse2<TestTypes>,
 }
 
 impl MockBlock {
-    pub fn new() -> Self {
+    pub async fn new(membership: &EpochMembershipCoordinator<TestTypes>) -> Self {
         let block = TestBlockPayload::genesis();
         let metadata = TestMetadata {
             num_transactions: 0,
         };
-        let payload_commitment = vid_commitment(
-            &block.encode(),
-            &metadata.encode(),
-            10,
-            TEST_VERSIONS.test.base,
-        );
+        let view = ViewNumber::genesis();
+        let epoch = EpochNumber::genesis();
+        let (vid_disperse, _duration) = VidDisperse2::calculate_vid_disperse(
+            &block,
+            membership,
+            view,
+            Some(epoch),
+            Some(epoch),
+            &metadata,
+        )
+        .await
+        .expect("VID disperse failed");
+        let payload_commitment = VidCommitment::V2(vid_disperse.payload_commitment);
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
         Self {
@@ -505,6 +509,7 @@ impl MockBlock {
             metadata,
             payload_commitment,
             builder_commitment,
+            vid_disperse,
         }
     }
 }
@@ -621,7 +626,7 @@ impl ConsensusHarness {
                 self.consensus.apply(input, outbox).await;
             },
             ConsensusOutput::RequestBlockAndHeader(req) => {
-                let mock_block = MockBlock::new();
+                let mock_block = MockBlock::new(&self.membership_coordinator).await;
                 let parent_leaf = req.parent_proposal.clone().into();
                 let header = TestBlockHeader::new(
                     &parent_leaf,
@@ -639,7 +644,7 @@ impl ConsensusHarness {
                             view: req.view,
                             epoch: req.epoch,
                             payload: mock_block.block,
-                            metadata: mock_block.metadata,
+                            vid_disperse: mock_block.vid_disperse,
                         },
                         outbox,
                     )
@@ -647,26 +652,14 @@ impl ConsensusHarness {
             },
             ConsensusOutput::RequestVidDisperse {
                 view,
-                epoch,
-                payload,
-                metadata,
+                epoch: _,
+                vid_disperse,
             } => {
-                let vid_disperse = VidDisperse::calculate_vid_disperse(
-                    payload,
-                    &self.membership_coordinator,
-                    *view,
-                    Some(*epoch),
-                    Some(*epoch),
-                    metadata,
-                    &upgrade_lock(),
-                )
-                .await
-                .unwrap();
-                let VidDisperse::V2(vid) = vid_disperse.disperse else {
-                    panic!("VidDisperse is not a V2");
-                };
                 self.consensus
-                    .apply(ConsensusInput::VidDisperseCreated(*view, vid), outbox)
+                    .apply(
+                        ConsensusInput::VidDisperseCreated(*view, vid_disperse.clone()),
+                        outbox,
+                    )
                     .await;
             },
             ConsensusOutput::RequestDrbResult(epoch) => {

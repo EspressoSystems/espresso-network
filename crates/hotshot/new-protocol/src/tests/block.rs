@@ -7,7 +7,7 @@ use hotshot_example_types::{
 use hotshot_types::data::{EpochNumber, ViewNumber};
 
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockBuilderConfig, MempoolBuilder},
     message::{DedupManifest, TransactionMessage},
     tests::common::utils::mock_membership,
 };
@@ -40,8 +40,8 @@ fn small_config() -> BlockBuilderConfig {
     }
 }
 
-async fn builder() -> BlockBuilder<TestTypes> {
-    BlockBuilder::new(
+async fn builder() -> MempoolBuilder<TestTypes> {
+    MempoolBuilder::new(
         Arc::new(TestInstanceState::default()),
         mock_membership().await,
         small_config(),
@@ -95,7 +95,7 @@ async fn test_leader_buffer_drain() {
 
 #[tokio::test]
 async fn test_dedup_window() {
-    let mut b = BlockBuilder::new(
+    let mut b = MempoolBuilder::new(
         Arc::new(TestInstanceState::default()),
         mock_membership().await,
         BlockBuilderConfig {

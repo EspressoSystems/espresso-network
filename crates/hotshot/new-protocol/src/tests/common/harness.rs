@@ -12,7 +12,7 @@ use hotshot_types::{
 
 use super::utils::mock_membership;
 use crate::{
-    block::{BlockBuilder, BlockBuilderConfig},
+    block::{BlockBuilderConfig, MempoolBuilder},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
@@ -60,7 +60,7 @@ impl TestHarness {
         let vid_reconstruction_task = VidReconstructor::new();
 
         let block_config = BlockBuilderConfig::default();
-        let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
+        let block_builder = MempoolBuilder::new(instance.clone(), membership.clone(), block_config);
 
         let mut state_manager = StateManager::new(instance.clone());
         let genesis_state = TestValidatedState::default();
