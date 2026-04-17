@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use ::light_client::state::LightClientOptions;
 use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_types::{
@@ -363,7 +364,7 @@ impl Options {
     {
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
-            provider(query_opt.peers, &state).await?,
+            provider(query_opt.peers, &state, query_opt.light_client).await?,
             false,
         )
         .await?;
@@ -425,8 +426,10 @@ impl Options {
             .with_block_provider(db_provider.clone())
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
-        provider =
-            provider.with_provider(LightClientProvider::new(query_opt.peers, state.clone()).await?);
+        provider = provider.with_provider(
+            LightClientProvider::new(query_opt.peers, state.clone(), query_opt.light_client)
+                .await?,
+        );
 
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
         let inner_storage = ds.inner();
@@ -692,6 +695,10 @@ pub struct Query {
     /// Peers for fetching missing data for the query service.
     #[clap(long, env = "ESPRESSO_NODE_API_PEERS", value_delimiter = ',')]
     pub peers: Vec<Url>,
+
+    /// Light client configuration, for fetching data from peers.
+    #[clap(flatten)]
+    pub light_client: LightClientOptions,
 }
 
 /// Options for the state API module.

@@ -3,7 +3,7 @@ use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
-    state::Genesis,
+    state::{Genesis, LightClientOptions},
     storage::{SqliteStorage, Storage},
 };
 use alloy::primitives::U256;
@@ -1686,6 +1686,7 @@ impl LightClientProvider {
     pub async fn new<N, P>(
         peers: impl IntoIterator<Item = Url>,
         state: ApiState<N, P>,
+        opt: LightClientOptions,
     ) -> anyhow::Result<Self>
     where
         N: ConnectedNetwork<PubKey>,
@@ -1715,7 +1716,7 @@ impl LightClientProvider {
                     .map(|peer| peer.stake_table_entry)
                     .collect(),
             };
-            LightClient::from_genesis(db, client, genesis)
+            LightClient::from_genesis_with_options(db, client, genesis, opt)
         };
         Ok(Self {
             light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
@@ -5751,6 +5752,10 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                light_client: LightClientOptions {
+                    decaf: true,
+                    ..Default::default()
+                },
             },
             tmp_options(node_0_storage),
         );
@@ -5992,6 +5997,10 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                light_client: LightClientOptions {
+                    decaf: true,
+                    ..Default::default()
+                },
             },
             tmp_options(node_0_storage),
         );
@@ -7229,6 +7238,10 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                light_client: LightClientOptions {
+                    decaf: true,
+                    ..Default::default()
+                },
             },
             tmp_options(&new_storage),
         );

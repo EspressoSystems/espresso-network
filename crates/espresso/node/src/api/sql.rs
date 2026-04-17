@@ -1550,9 +1550,10 @@ where
 pub(crate) mod impl_testable_data_source {
 
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
+    use light_client::state::LightClientOptions;
 
     use super::*;
-    use crate::api::{self, data_source::testing::TestableSequencerDataSource};
+    use crate::api::{self, data_source::testing::TestableSequencerDataSource, options::Query};
 
     pub fn tmp_options(db: &TmpDb) -> Options {
         #[cfg(not(feature = "embedded-db"))]
@@ -1597,7 +1598,17 @@ pub(crate) mod impl_testable_data_source {
         }
 
         fn options(storage: &Self::Storage, opt: api::Options) -> api::Options {
-            opt.query_sql(Default::default(), tmp_options(storage))
+            opt.query_sql(
+                Query {
+                    light_client: LightClientOptions {
+                        // Enable testnet features when running in tests.
+                        decaf: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                tmp_options(storage),
+            )
         }
     }
 }

@@ -32,6 +32,7 @@ use hotshot_types::{
     traits::{network::ConnectedNetwork, node_implementation::NodeType},
 };
 use indexmap::IndexMap;
+use light_client::state::LightClientOptions;
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 
@@ -95,12 +96,14 @@ pub type Provider = AnyProvider<SeqTypes>;
 pub(super) async fn provider<N, P>(
     peers: impl IntoIterator<Item = Url>,
     state: &ApiState<N, P>,
+    opt: LightClientOptions,
 ) -> anyhow::Result<Provider>
 where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    Ok(Provider::default().with_provider(LightClientProvider::new(peers, state.clone()).await?))
+    Ok(Provider::default()
+        .with_provider(LightClientProvider::new(peers, state.clone(), opt).await?))
 }
 
 pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
