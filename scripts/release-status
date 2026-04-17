@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 ORG = "espressosystems"
 REPO = "espresso-network"
+HTTPS_REMOTE = "https://github.com/EspressoSystems/espresso-network.git"
 GHCR_REPO = "espressosystems/espresso-network/espresso-node"
 FLOATING_TAGS = ["mainnet", "mainnet.canary", "decaf", "decaf.canary"]
 PROMOTE_WORKFLOW = "promote-docker-tag.yml"
@@ -295,7 +296,7 @@ def main():
     p.add_argument("--days", type=int, default=60, help="time window in days (default 60, 0 = no filter)")
     p.add_argument("--floating", action="store_true", help="only show floating tags section")
     p.add_argument("--all-branches", action="store_true", help="show release branches even if they have no release tags")
-    p.add_argument("--fetch", action="store_true", help="run 'git fetch --tags' before reading (default: skip)")
+    p.add_argument("--no-fetch", action="store_true", help="skip fetching tags/branches from the remote first")
     p.add_argument(
         "--loglevel",
         default="warning",
@@ -313,9 +314,17 @@ def main():
 
     t_start = time.perf_counter()
 
-    if args.fetch:
+    if not args.no_fetch:
         with timed("git fetch"):
-            run(["git", "fetch", "--tags", "--quiet"], check=False)
+            run(
+                [
+                    "git", "fetch", "--quiet", HTTPS_REMOTE,
+                    "refs/tags/20*:refs/tags/20*",
+                    "refs/heads/release-*:refs/remotes/origin/release-*",
+                    "refs/heads/main:refs/remotes/origin/main",
+                ],
+                check=False,
+            )
 
     now = datetime.now(timezone.utc)
 
