@@ -238,6 +238,14 @@ jobs:
           --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 30
 
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit-postgres-${{ matrix.partition }}
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+
   test-sqlite:
     needs: build-test-artifacts-sqlite
     runs-on: ubuntu-latest
@@ -263,6 +271,14 @@ jobs:
           --workspace-remap $PWD \
           --partition hash:${{ matrix.partition }}/10
         timeout-minutes: 30
+
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit-sqlite-${{ matrix.partition }}
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
 
   test-go-sdk:
     needs: build-test-bins-dev-node
@@ -343,6 +359,14 @@ jobs:
           --workspace-remap $PWD ${{ matrix.test-name }}
         timeout-minutes: 60
 
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit-integration-${{ matrix.test-name }}
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+
       - name: Show end of logs
         if: always()
         run: |
@@ -403,9 +427,41 @@ jobs:
           name: process-compose-logs-test-demo-native
           path: ${{ env.PC_LOG_FILE }}
 
+  nextest-report:
+    needs: [test-postgres, test-sqlite, test-integration]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() }}
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JUnit artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nextest-junit-*
+          path: junit-artifacts
+
+      - name: Render summary
+        run: |
+          python3 scripts/nextest-summary junit-artifacts \
+            --title "Nextest (postgres + sqlite + integration)" \
+            --pr-comment-out junit-artifacts/pr-comment.md \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post/update PR comment
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: nextest-test
+          path: junit-artifacts/pr-comment.md
+          delete: ${{ hashFiles('junit-artifacts/pr-comment.md') == '' }}
+
   # This job enables having a single required status check in github for all GCL tests.
   aggregate-gcl-tests:
-    needs: [test-postgres, test-sqlite, test-go-sdk, demo-native, test-integration]
+    needs: [test-postgres, test-sqlite, test-go-sdk, demo-native, test-integration, nextest-report]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}

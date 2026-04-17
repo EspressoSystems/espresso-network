@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Parse nextest JUnit XML files and emit markdown reports."""
+
+import argparse
+import sys
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class TestCase:
+    test_id: str
+    status: str
+    attempts: int
+    time: float
+
+
+def parse_time(raw: str | None) -> float:
+    return float(raw) if raw else 0.0
+
+
+def derive_status(case: ET.Element) -> str:
+    if case.find("failure") is not None or case.find("error") is not None:
+        return "failed"
+    if case.find("flakyFailure") is not None:
+        return "flaky"
+    if case.find("skipped") is not None:
+        return "skipped"
+    return "passed"
+
+
+def count_attempts(case: ET.Element) -> int:
+    prior = sum(1 for child in case if child.tag in ("rerunFailure", "flakyFailure"))
+    return prior + 1
+
+
+def parse_file(path: Path) -> list[TestCase]:
+    try:
+        tree = ET.parse(path)
+    except ET.ParseError as e:
+        print(f"warning: failed to parse {path}: {e}", file=sys.stderr)
+        return []
+
+    cases: list[TestCase] = []
+    for case in tree.iter("testcase"):
+        classname = case.attrib.get("classname") or ""
+        name = case.attrib.get("name") or ""
+        test_id = f"{classname}::{name}"
+        cases.append(
+            TestCase(
+                test_id=test_id,
+                status=derive_status(case),
+                attempts=count_attempts(case),
+                time=parse_time(case.attrib.get("time")),
+            )
+        )
+    return cases
+
+
+def format_id(test_id: str) -> str:
+    return f"`{test_id.replace('`', '')}`"
+
+
+def render_failure_table(cases: list[TestCase]) -> list[str]:
+    lines = ["| Test | Attempts | Time (s) |", "|------|----------|----------|"]
+    for c in cases:
+        lines.append(f"| {format_id(c.test_id)} | {c.attempts} | {c.time:.2f} |")
+    return lines
+
+
+def render_slowest_table(cases: list[TestCase]) -> list[str]:
+    lines = ["| Test | Time (s) | Status |", "|------|----------|--------|"]
+    for c in cases:
+        lines.append(f"| {format_id(c.test_id)} | {c.time:.2f} | {c.status} |")
+    return lines
+
+
+def build_summary(title: str, cases: list[TestCase]) -> str:
+    out: list[str] = [f"## {title} test results", ""]
+
+    if not cases:
+        out.append("_No JUnit XML files found._")
+        return "\n".join(out) + "\n"
+
+    failing = sorted(
+        (c for c in cases if c.status == "failed"), key=lambda c: c.test_id
+    )
+    flaky = sorted((c for c in cases if c.status == "flaky"), key=lambda c: c.test_id)
+    non_skipped = [c for c in cases if c.status != "skipped"]
+    slowest = sorted(non_skipped, key=lambda c: (-c.time, c.test_id))[:20]
+
+    if failing:
+        out.append(f"### Failing tests ({len(failing)})")
+        out.append("")
+        out.extend(render_failure_table(failing))
+        out.append("")
+
+    if flaky:
+        out.append(f"### Flaky tests ({len(flaky)})")
+        out.append("")
+        out.extend(render_failure_table(flaky))
+        out.append("")
+
+    out.append("### 20 slowest tests")
+    out.append("")
+    if slowest:
+        out.extend(render_slowest_table(slowest))
+    else:
+        out.append("_No test cases found._")
+    out.append("")
+
+    return "\n".join(out) + "\n"
+
+
+def build_pr_comment(failing: list[TestCase]) -> str:
+    if not failing:
+        return ""
+    lines = [f"### Nextest failures ({len(failing)})", ""]
+    lines.extend(render_failure_table(failing))
+    lines.append("")
+    lines.append("See the job step summary for flaky tests and slowest tests.")
+    return "\n".join(lines) + "\n"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("junit_dir", type=Path)
+    parser.add_argument("--title", default="Nextest")
+    parser.add_argument("--pr-comment-out", type=Path)
+    args = parser.parse_args()
+
+    xml_files = sorted(args.junit_dir.rglob("*.xml")) if args.junit_dir.exists() else []
+
+    cases: list[TestCase] = []
+    for path in xml_files:
+        cases.extend(parse_file(path))
+
+    sys.stdout.write(build_summary(args.title, cases))
+
+    failing = sorted(
+        (c for c in cases if c.status == "failed"), key=lambda c: c.test_id
+    )
+
+    # The workflow uses hashFiles() on this file to decide whether to delete the
+    # sticky PR comment. Skip writing it when there are no failures so the hash
+    # is empty and the comment is cleaned up automatically.
+    if args.pr_comment_out is not None and failing:
+        args.pr_comment_out.write_text(build_pr_comment(failing))
+
+
+if __name__ == "__main__":
+    main()

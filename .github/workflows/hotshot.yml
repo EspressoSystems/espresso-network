@@ -65,6 +65,21 @@ jobs:
         env:
           RUST_BACKTRACE: full
 
+      - name: Sanitize artifact name
+        if: always()
+        id: artifact-name
+        run: |
+          name="nextest-junit-hotshot-$(echo '${{ matrix.test_suites }}' | tr ' /' '--')"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact-name.outputs.name }}
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+
   test-new-protocol:
     runs-on: ubuntu-latest
     steps:
@@ -93,6 +108,14 @@ jobs:
         env:
           RUST_BACKTRACE: full
 
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit-hotshot-new-protocol
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+
   test-examples:
     strategy:
       fail-fast: false
@@ -116,9 +139,41 @@ jobs:
           just hotshot::example all-push-cdn -- --config_file ./crates/hotshot/orchestrator/run-config.toml
         timeout-minutes: 20
 
+  nextest-report:
+    needs: [test, test-new-protocol]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() }}
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JUnit artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nextest-junit-*
+          path: junit-artifacts
+
+      - name: Render summary
+        run: |
+          python3 scripts/nextest-summary junit-artifacts \
+            --title "Nextest (hotshot)" \
+            --pr-comment-out junit-artifacts/pr-comment.md \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post/update PR comment
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: nextest-hotshot
+          path: junit-artifacts/pr-comment.md
+          delete: ${{ hashFiles('junit-artifacts/pr-comment.md') == '' }}
+
   # This job enables having a single required status check in github for all hotshot tests.
   aggregate-hotshot-tests:
-    needs: [test, test-new-protocol, test-examples]
+    needs: [test, test-new-protocol, test-examples, nextest-report]
     runs-on: ubuntu-latest
     # explicitly run and fail the job if dependencies failed
     if: ${{ always() && !cancelled() }}
