@@ -419,14 +419,13 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
                     let block_number = leaf.block_header().block_number();
                     // Store epoch root and epoch transition leaves so peers
                     // can fetch them during catchup.
-                    if is_epoch_root(block_number, epoch_height)
-                        || is_epoch_transition(block_number, epoch_height)
+                    if (is_epoch_root(block_number, epoch_height)
+                        || is_epoch_transition(block_number, epoch_height))
+                        && let Some(cert2) = self.consensus.cert2_at(leaf.view_number())
                     {
-                        if let Some(cert2) = self.consensus.cert2_at(leaf.view_number()) {
-                            self.epoch_manager
-                                .leaf_store()
-                                .insert(leaf.clone(), cert2.clone());
-                        }
+                        self.epoch_manager
+                            .leaf_store()
+                            .insert(leaf.clone(), cert2.clone());
                     }
                 }
                 for leaf in leaves {

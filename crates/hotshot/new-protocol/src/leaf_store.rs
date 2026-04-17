@@ -19,7 +19,7 @@ pub struct DecidedLeafEntry<T: NodeType> {
 ///
 /// Each entry includes the [`Certificate2`] that decided the leaf,
 /// enabling peers to verify authenticity during catchup.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct EpochLeafStore<T: NodeType> {
     inner: Arc<RwLock<BTreeMap<u64, DecidedLeafEntry<T>>>>,
 }

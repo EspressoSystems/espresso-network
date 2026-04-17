@@ -863,7 +863,7 @@ impl<T: NodeType> Consensus<T> {
         }
         // we have a second certificate, and matching proposal, it is decided.
         let leaf: Leaf2<T> = proposal.clone().into();
-        self.last_decided_view = max(self.last_decided_view, leaf.view_number());
+        let new_decided_view = max(self.last_decided_view, leaf.view_number());
         let mut gc = None;
         if leaf.block_header().block_number() % *self.garbage_collection_interval == 0 {
             gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
@@ -874,6 +874,9 @@ impl<T: NodeType> Consensus<T> {
         let mut parent_commit = proposal.justify_qc.data.leaf_commit;
 
         while let Some(proposal) = self.proposals.get(&parent_view) {
+            if proposal.view_number() <= self.last_decided_view {
+                break;
+            }
             let proposal_commit = proposal_commitment(proposal);
             if proposal_commit != parent_commit {
                 break;
@@ -888,6 +891,7 @@ impl<T: NodeType> Consensus<T> {
             parent_view = proposal.justify_qc.view_number();
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
+        self.last_decided_view = new_decided_view;
         outbox.push_back(ConsensusOutput::LeafDecided(decided));
         if let Some(gc) = gc {
             let gc_data = CheckpointData {

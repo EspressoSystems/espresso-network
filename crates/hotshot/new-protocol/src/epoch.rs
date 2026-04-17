@@ -170,10 +170,8 @@ impl<T: NodeType> EpochManager<T> {
                     if let Ok(stake_table) = membership_coordinator
                         .membership_for_epoch(Some(epoch))
                         .await
-                    {
-                        if let Ok(drb) = stake_table.get_epoch_drb().await {
+                    && let Ok(drb) = stake_table.get_epoch_drb().await {
                             return Ok(EpochRootResult::DrbResult(epoch, drb));
-                        }
                     }
                 }
             }
@@ -203,15 +201,13 @@ impl<T: NodeType> EpochManager<T> {
             let drb_epoch = epoch.saturating_sub(1);
             let transition_height = transition_block_for_epoch(drb_epoch, *epoch_height);
 
-            if let Some(transition_entry) = leaf_store.get(transition_height) {
-                if let Some(drb) = transition_entry.leaf.next_drb_result {
+            if let Some(transition_entry) = leaf_store.get(transition_height) && let Some(drb) = transition_entry.leaf.next_drb_result {
                     membership_coordinator
                         .membership()
                         .write()
                         .await
                         .add_drb_result(epoch, drb);
                     return Ok(EpochRootResult::DrbResult(epoch, drb));
-                }
             }
 
             // Compute the DRB locally from the epoch root leaf.

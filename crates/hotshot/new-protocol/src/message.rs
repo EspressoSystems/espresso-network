@@ -327,6 +327,7 @@ pub struct LeafResponse<T: NodeType> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
+#[allow(clippy::large_enum_variant)]
 pub enum CatchupMessage<T: NodeType> {
     LeafRequest(LeafRequest),
     LeafResponse(LeafResponse<T>),
