@@ -300,7 +300,7 @@ def section_branches(
 
 def main() -> None:
     p = argparse.ArgumentParser(prog="release-status", description="Show current release status.")
-    p.add_argument("--days", type=int, default=60, help="time window in days (default 60, 0 = no filter)")
+    p.add_argument("--days", type=int, default=45, help="time window in days (default 45, 0 = no filter)")
     p.add_argument("--floating", action="store_true", help="only show floating tags section")
     p.add_argument("--all-branches", action="store_true", help="show release branches even if they have no release tags")
     p.add_argument("--no-fetch", action="store_true", help="skip fetching tags/branches from the remote first")
