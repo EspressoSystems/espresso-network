@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["log_migrated_env_vars","migrate_legacy_env_vars"]};

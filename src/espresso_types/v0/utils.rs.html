@@ -243,7 +243,7 @@
 <a href=#243 id=243 data-nosnippet>243</a>    <span class="doccomment">/// Exponential backoff exponent.
 <a href=#244 id=244 data-nosnippet>244</a>    </span><span class="attr">#[clap(
 <a href=#245 id=245 data-nosnippet>245</a>        long = <span class="string">"catchup-backoff-factor"</span>,
-<a href=#246 id=246 data-nosnippet>246</a>        env = <span class="string">"ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_FACTOR"</span>,
+<a href=#246 id=246 data-nosnippet>246</a>        env = <span class="string">"ESPRESSO_NODE_CATCHUP_BACKOFF_FACTOR"</span>,
 <a href=#247 id=247 data-nosnippet>247</a>        default_value = <span class="string">"4"
 <a href=#248 id=248 data-nosnippet>248</a>    </span>)]
 <a href=#249 id=249 data-nosnippet>249</a>    </span>factor: u32,
@@ -251,7 +251,7 @@
 <a href=#251 id=251 data-nosnippet>251</a>    <span class="doccomment">/// Exponential backoff base delay.
 <a href=#252 id=252 data-nosnippet>252</a>    </span><span class="attr">#[clap(
 <a href=#253 id=253 data-nosnippet>253</a>        long = <span class="string">"catchup-base-retry-delay"</span>,
-<a href=#254 id=254 data-nosnippet>254</a>        env = <span class="string">"ESPRESSO_SEQUENCER_CATCHUP_BASE_RETRY_DELAY"</span>,
+<a href=#254 id=254 data-nosnippet>254</a>        env = <span class="string">"ESPRESSO_NODE_CATCHUP_BASE_RETRY_DELAY"</span>,
 <a href=#255 id=255 data-nosnippet>255</a>        default_value = <span class="string">"200ms"</span>,
 <a href=#256 id=256 data-nosnippet>256</a>        value_parser = parse_duration
 <a href=#257 id=257 data-nosnippet>257</a>    )]
@@ -260,7 +260,7 @@
 <a href=#260 id=260 data-nosnippet>260</a>    <span class="doccomment">/// Exponential max delay.
 <a href=#261 id=261 data-nosnippet>261</a>    </span><span class="attr">#[clap(
 <a href=#262 id=262 data-nosnippet>262</a>        long = <span class="string">"catchup-max-retry-delay"</span>,
-<a href=#263 id=263 data-nosnippet>263</a>        env = <span class="string">"ESPRESSO_SEQUENCER_CATCHUP_MAX_RETRY_DELAY"</span>,
+<a href=#263 id=263 data-nosnippet>263</a>        env = <span class="string">"ESPRESSO_NODE_CATCHUP_MAX_RETRY_DELAY"</span>,
 <a href=#264 id=264 data-nosnippet>264</a>        default_value = <span class="string">"5s"</span>,
 <a href=#265 id=265 data-nosnippet>265</a>        value_parser = parse_duration
 <a href=#266 id=266 data-nosnippet>266</a>    )]
@@ -269,13 +269,13 @@
 <a href=#269 id=269 data-nosnippet>269</a>    <span class="doccomment">/// Exponential backoff jitter as a ratio of the backoff delay, numerator:denominator.
 <a href=#270 id=270 data-nosnippet>270</a>    </span><span class="attr">#[clap(
 <a href=#271 id=271 data-nosnippet>271</a>        long = <span class="string">"catchup-backoff-jitter"</span>,
-<a href=#272 id=272 data-nosnippet>272</a>        env = <span class="string">"ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_JITTER"</span>,
+<a href=#272 id=272 data-nosnippet>272</a>        env = <span class="string">"ESPRESSO_NODE_CATCHUP_BACKOFF_JITTER"</span>,
 <a href=#273 id=273 data-nosnippet>273</a>        default_value = <span class="string">"1:10"
 <a href=#274 id=274 data-nosnippet>274</a>    </span>)]
 <a href=#275 id=275 data-nosnippet>275</a>    </span>jitter: Ratio,
 <a href=#276 id=276 data-nosnippet>276</a>
 <a href=#277 id=277 data-nosnippet>277</a>    <span class="doccomment">/// Disable retries and just fail after one failed attempt.
-<a href=#278 id=278 data-nosnippet>278</a>    </span><span class="attr">#[clap(short, long, env = <span class="string">"ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_DISABLE"</span>)]
+<a href=#278 id=278 data-nosnippet>278</a>    </span><span class="attr">#[clap(short, long, env = <span class="string">"ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE"</span>)]
 <a href=#279 id=279 data-nosnippet>279</a>    </span>disable: bool,
 <a href=#280 id=280 data-nosnippet>280</a>}
 <a href=#281 id=281 data-nosnippet>281</a>

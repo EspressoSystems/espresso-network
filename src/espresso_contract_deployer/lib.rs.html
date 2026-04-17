@@ -201,43 +201,43 @@
 <a href=#201 id=201 data-nosnippet>201</a><span class="doccomment">/// An identifier for a particular contract.
 <a href=#202 id=202 data-nosnippet>202</a></span><span class="attr">#[derive(Clone, Copy, Debug, Display, PartialEq, Eq, Hash)]
 <a href=#203 id=203 data-nosnippet>203</a></span><span class="kw">pub enum </span>Contract {
-<a href=#204 id=204 data-nosnippet>204</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_PLONK_VERIFIER_ADDRESS"</span>)]
+<a href=#204 id=204 data-nosnippet>204</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_PLONK_VERIFIER_ADDRESS"</span>)]
 <a href=#205 id=205 data-nosnippet>205</a>    </span>PlonkVerifier,
-<a href=#206 id=206 data-nosnippet>206</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"</span>)]
+<a href=#206 id=206 data-nosnippet>206</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_OPS_TIMELOCK_ADDRESS"</span>)]
 <a href=#207 id=207 data-nosnippet>207</a>    </span>OpsTimelock,
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"</span>)]
+<a href=#208 id=208 data-nosnippet>208</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS"</span>)]
 <a href=#209 id=209 data-nosnippet>209</a>    </span>SafeExitTimelock,
-<a href=#210 id=210 data-nosnippet>210</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_PLONK_VERIFIER_V2_ADDRESS"</span>)]
+<a href=#210 id=210 data-nosnippet>210</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_PLONK_VERIFIER_V2_ADDRESS"</span>)]
 <a href=#211 id=211 data-nosnippet>211</a>    </span>PlonkVerifierV2,
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_PLONK_VERIFIER_V3_ADDRESS"</span>)]
+<a href=#212 id=212 data-nosnippet>212</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_PLONK_VERIFIER_V3_ADDRESS"</span>)]
 <a href=#213 id=213 data-nosnippet>213</a>    </span>PlonkVerifierV3,
-<a href=#214 id=214 data-nosnippet>214</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_LIGHT_CLIENT_ADDRESS"</span>)]
+<a href=#214 id=214 data-nosnippet>214</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_LIGHT_CLIENT_ADDRESS"</span>)]
 <a href=#215 id=215 data-nosnippet>215</a>    </span>LightClient,
-<a href=#216 id=216 data-nosnippet>216</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_LIGHT_CLIENT_V2_ADDRESS"</span>)]
+<a href=#216 id=216 data-nosnippet>216</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_LIGHT_CLIENT_V2_ADDRESS"</span>)]
 <a href=#217 id=217 data-nosnippet>217</a>    </span>LightClientV2,
-<a href=#218 id=218 data-nosnippet>218</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_LIGHT_CLIENT_V3_ADDRESS"</span>)]
+<a href=#218 id=218 data-nosnippet>218</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_LIGHT_CLIENT_V3_ADDRESS"</span>)]
 <a href=#219 id=219 data-nosnippet>219</a>    </span>LightClientV3,
-<a href=#220 id=220 data-nosnippet>220</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS"</span>)]
+<a href=#220 id=220 data-nosnippet>220</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS"</span>)]
 <a href=#221 id=221 data-nosnippet>221</a>    </span>LightClientProxy,
-<a href=#222 id=222 data-nosnippet>222</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_FEE_CONTRACT_ADDRESS"</span>)]
+<a href=#222 id=222 data-nosnippet>222</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_FEE_CONTRACT_ADDRESS"</span>)]
 <a href=#223 id=223 data-nosnippet>223</a>    </span>FeeContract,
-<a href=#224 id=224 data-nosnippet>224</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS"</span>)]
+<a href=#224 id=224 data-nosnippet>224</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS"</span>)]
 <a href=#225 id=225 data-nosnippet>225</a>    </span>FeeContractProxy,
-<a href=#226 id=226 data-nosnippet>226</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_ESP_TOKEN_ADDRESS"</span>)]
+<a href=#226 id=226 data-nosnippet>226</a>    <span class="attr">#[display(<span class="string">"ESP_TOKEN_ADDRESS"</span>)]
 <a href=#227 id=227 data-nosnippet>227</a>    </span>EspToken,
-<a href=#228 id=228 data-nosnippet>228</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_ESP_TOKEN_V2_ADDRESS"</span>)]
+<a href=#228 id=228 data-nosnippet>228</a>    <span class="attr">#[display(<span class="string">"ESP_TOKEN_V2_ADDRESS"</span>)]
 <a href=#229 id=229 data-nosnippet>229</a>    </span>EspTokenV2,
-<a href=#230 id=230 data-nosnippet>230</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS"</span>)]
+<a href=#230 id=230 data-nosnippet>230</a>    <span class="attr">#[display(<span class="string">"ESP_TOKEN_PROXY_ADDRESS"</span>)]
 <a href=#231 id=231 data-nosnippet>231</a>    </span>EspTokenProxy,
-<a href=#232 id=232 data-nosnippet>232</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_STAKE_TABLE_ADDRESS"</span>)]
+<a href=#232 id=232 data-nosnippet>232</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_STAKE_TABLE_ADDRESS"</span>)]
 <a href=#233 id=233 data-nosnippet>233</a>    </span>StakeTable,
-<a href=#234 id=234 data-nosnippet>234</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_STAKE_TABLE_V2_ADDRESS"</span>)]
+<a href=#234 id=234 data-nosnippet>234</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_STAKE_TABLE_V2_ADDRESS"</span>)]
 <a href=#235 id=235 data-nosnippet>235</a>    </span>StakeTableV2,
-<a href=#236 id=236 data-nosnippet>236</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS"</span>)]
+<a href=#236 id=236 data-nosnippet>236</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_STAKE_TABLE_PROXY_ADDRESS"</span>)]
 <a href=#237 id=237 data-nosnippet>237</a>    </span>StakeTableProxy,
-<a href=#238 id=238 data-nosnippet>238</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_REWARD_CLAIM_ADDRESS"</span>)]
+<a href=#238 id=238 data-nosnippet>238</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_REWARD_CLAIM_ADDRESS"</span>)]
 <a href=#239 id=239 data-nosnippet>239</a>    </span>RewardClaim,
-<a href=#240 id=240 data-nosnippet>240</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS"</span>)]
+<a href=#240 id=240 data-nosnippet>240</a>    <span class="attr">#[display(<span class="string">"ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS"</span>)]
 <a href=#241 id=241 data-nosnippet>241</a>    </span>RewardClaimProxy,
 <a href=#242 id=242 data-nosnippet>242</a>}
 <a href=#243 id=243 data-nosnippet>243</a>
@@ -667,8 +667,8 @@
 <a href=#667 id=667 data-nosnippet>667</a>                        <span class="macro">anyhow::bail!</span>(
 <a href=#668 id=668 data-nosnippet>668</a>                            <span class="string">"LightClientV2 implementation address is already set in cache \
 <a href=#669 id=669 data-nosnippet>669</a>                             ({:#x}). For patch upgrades, the implementation must be redeployed. \
-<a href=#670 id=670 data-nosnippet>670</a>                             Please unset ESPRESSO_SEQUENCER_LIGHT_CLIENT_V2_ADDRESS or remove it \
-<a href=#671 id=671 data-nosnippet>671</a>                             from the cache first."</span>,
+<a href=#670 id=670 data-nosnippet>670</a>                             Please unset ESPRESSO_LIGHT_CLIENT_V2_ADDRESS or remove it from the \
+<a href=#671 id=671 data-nosnippet>671</a>                             cache first."</span>,
 <a href=#672 id=672 data-nosnippet>672</a>                            addr
 <a href=#673 id=673 data-nosnippet>673</a>                        );
 <a href=#674 id=674 data-nosnippet>674</a>                    }

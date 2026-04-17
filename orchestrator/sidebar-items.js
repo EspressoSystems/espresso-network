@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ParseSeedError"],"fn":["main","parse_seed"],"struct":["Args","HexSnafu","WrongLengthSnafu"]};
+window.SIDEBAR_ITEMS = {"enum":["ParseSeedError"],"fn":["async_main","main","parse_seed"],"struct":["Args","HexSnafu","WrongLengthSnafu"]};

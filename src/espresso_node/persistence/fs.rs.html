@@ -86,7 +86,7 @@
 <a href=#86 id=86 data-nosnippet>86</a></span><span class="attr">#[derive(Parser, Clone, Debug)]
 <a href=#87 id=87 data-nosnippet>87</a></span><span class="kw">pub struct </span>Options {
 <a href=#88 id=88 data-nosnippet>88</a>    <span class="doccomment">/// Storage path for persistent data.
-<a href=#89 id=89 data-nosnippet>89</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_STORAGE_PATH"</span>)]
+<a href=#89 id=89 data-nosnippet>89</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_STORAGE_PATH"</span>)]
 <a href=#90 id=90 data-nosnippet>90</a>    </span>path: PathBuf,
 <a href=#91 id=91 data-nosnippet>91</a>
 <a href=#92 id=92 data-nosnippet>92</a>    <span class="doccomment">/// Number of views to retain in consensus storage before data that hasn't been archived is
@@ -102,7 +102,7 @@
 <a href=#102 id=102 data-nosnippet>102</a>    /// view time of 2s.
 <a href=#103 id=103 data-nosnippet>103</a>    </span><span class="attr">#[clap(
 <a href=#104 id=104 data-nosnippet>104</a>        long,
-<a href=#105 id=105 data-nosnippet>105</a>        env = <span class="string">"ESPRESSO_SEQUENCER_CONSENSUS_VIEW_RETENTION"</span>,
+<a href=#105 id=105 data-nosnippet>105</a>        env = <span class="string">"ESPRESSO_NODE_CONSENSUS_VIEW_RETENTION"</span>,
 <a href=#106 id=106 data-nosnippet>106</a>        default_value = <span class="string">"130000"
 <a href=#107 id=107 data-nosnippet>107</a>    </span>)]
 <a href=#108 id=108 data-nosnippet>108</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) consensus_view_retention: u64,

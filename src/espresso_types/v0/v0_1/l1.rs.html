@@ -70,7 +70,7 @@
 <a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// Delay when retrying failed L1 queries.
 <a href=#71 id=71 data-nosnippet>71</a>    </span><span class="attr">#[clap(
 <a href=#72 id=72 data-nosnippet>72</a>        long,
-<a href=#73 id=73 data-nosnippet>73</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_RETRY_DELAY"</span>,
+<a href=#73 id=73 data-nosnippet>73</a>        env = <span class="string">"ESPRESSO_L1_RETRY_DELAY"</span>,
 <a href=#74 id=74 data-nosnippet>74</a>        default_value = <span class="string">"1s"</span>,
 <a href=#75 id=75 data-nosnippet>75</a>        value_parser = parse_duration,
 <a href=#76 id=76 data-nosnippet>76</a>    )]
@@ -79,7 +79,7 @@
 <a href=#79 id=79 data-nosnippet>79</a>    <span class="doccomment">/// Request rate when polling L1.
 <a href=#80 id=80 data-nosnippet>80</a>    </span><span class="attr">#[clap(
 <a href=#81 id=81 data-nosnippet>81</a>        long,
-<a href=#82 id=82 data-nosnippet>82</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_POLLING_INTERVAL"</span>,
+<a href=#82 id=82 data-nosnippet>82</a>        env = <span class="string">"ESPRESSO_L1_POLLING_INTERVAL"</span>,
 <a href=#83 id=83 data-nosnippet>83</a>        default_value = <span class="string">"7s"</span>,
 <a href=#84 id=84 data-nosnippet>84</a>        value_parser = parse_duration,
 <a href=#85 id=85 data-nosnippet>85</a>    )]
@@ -88,7 +88,7 @@
 <a href=#88 id=88 data-nosnippet>88</a>    <span class="doccomment">/// Maximum number of L1 blocks to keep in cache at once.
 <a href=#89 id=89 data-nosnippet>89</a>    </span><span class="attr">#[clap(
 <a href=#90 id=90 data-nosnippet>90</a>        long,
-<a href=#91 id=91 data-nosnippet>91</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_BLOCKS_CACHE_SIZE"</span>,
+<a href=#91 id=91 data-nosnippet>91</a>        env = <span class="string">"ESPRESSO_L1_BLOCKS_CACHE_SIZE"</span>,
 <a href=#92 id=92 data-nosnippet>92</a>        default_value = <span class="string">"100"
 <a href=#93 id=93 data-nosnippet>93</a>    </span>)]
 <a href=#94 id=94 data-nosnippet>94</a>    </span><span class="kw">pub </span>l1_blocks_cache_size: NonZeroUsize,
@@ -96,7 +96,7 @@
 <a href=#96 id=96 data-nosnippet>96</a>    <span class="doccomment">/// Number of L1 events to buffer before discarding.
 <a href=#97 id=97 data-nosnippet>97</a>    </span><span class="attr">#[clap(
 <a href=#98 id=98 data-nosnippet>98</a>        long,
-<a href=#99 id=99 data-nosnippet>99</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_EVENTS_CHANNEL_CAPACITY"</span>,
+<a href=#99 id=99 data-nosnippet>99</a>        env = <span class="string">"ESPRESSO_L1_EVENTS_CHANNEL_CAPACITY"</span>,
 <a href=#100 id=100 data-nosnippet>100</a>        default_value = <span class="string">"100"
 <a href=#101 id=101 data-nosnippet>101</a>    </span>)]
 <a href=#102 id=102 data-nosnippet>102</a>    </span><span class="kw">pub </span>l1_events_channel_capacity: usize,
@@ -104,7 +104,7 @@
 <a href=#104 id=104 data-nosnippet>104</a>    <span class="doccomment">/// Maximum number of L1 blocks that can be scanned for events in a single query.
 <a href=#105 id=105 data-nosnippet>105</a>    </span><span class="attr">#[clap(
 <a href=#106 id=106 data-nosnippet>106</a>        long,
-<a href=#107 id=107 data-nosnippet>107</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE"</span>,
+<a href=#107 id=107 data-nosnippet>107</a>        env = <span class="string">"ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE"</span>,
 <a href=#108 id=108 data-nosnippet>108</a>        default_value = <span class="string">"10000"
 <a href=#109 id=109 data-nosnippet>109</a>    </span>)]
 <a href=#110 id=110 data-nosnippet>110</a>    </span><span class="kw">pub </span>l1_events_max_block_range: u64,
@@ -112,7 +112,7 @@
 <a href=#112 id=112 data-nosnippet>112</a>    <span class="doccomment">/// Maximum time to wait for new heads before considering a stream invalid and reconnecting.
 <a href=#113 id=113 data-nosnippet>113</a>    </span><span class="attr">#[clap(
 <a href=#114 id=114 data-nosnippet>114</a>        long,
-<a href=#115 id=115 data-nosnippet>115</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_SUBSCRIPTION_TIMEOUT"</span>,
+<a href=#115 id=115 data-nosnippet>115</a>        env = <span class="string">"ESPRESSO_L1_SUBSCRIPTION_TIMEOUT"</span>,
 <a href=#116 id=116 data-nosnippet>116</a>        default_value = <span class="string">"1m"</span>,
 <a href=#117 id=117 data-nosnippet>117</a>        value_parser = parse_duration,
 <a href=#118 id=118 data-nosnippet>118</a>    )]
@@ -121,7 +121,7 @@
 <a href=#121 id=121 data-nosnippet>121</a>    <span class="doccomment">/// Fail over to another provider if the current provider fails twice within this window.
 <a href=#122 id=122 data-nosnippet>122</a>    </span><span class="attr">#[clap(
 <a href=#123 id=123 data-nosnippet>123</a>        long,
-<a href=#124 id=124 data-nosnippet>124</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_FREQUENT_FAILURE_TOLERANCE"</span>,
+<a href=#124 id=124 data-nosnippet>124</a>        env = <span class="string">"ESPRESSO_L1_FREQUENT_FAILURE_TOLERANCE"</span>,
 <a href=#125 id=125 data-nosnippet>125</a>        default_value = <span class="string">"1m"</span>,
 <a href=#126 id=126 data-nosnippet>126</a>        value_parser = parse_duration,
 <a href=#127 id=127 data-nosnippet>127</a>    )]
@@ -131,7 +131,7 @@
 <a href=#131 id=131 data-nosnippet>131</a>    /// time window.
 <a href=#132 id=132 data-nosnippet>132</a>    </span><span class="attr">#[clap(
 <a href=#133 id=133 data-nosnippet>133</a>        long,
-<a href=#134 id=134 data-nosnippet>134</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_CONSECUTIVE_FAILURE_TOLERANCE"</span>,
+<a href=#134 id=134 data-nosnippet>134</a>        env = <span class="string">"ESPRESSO_L1_CONSECUTIVE_FAILURE_TOLERANCE"</span>,
 <a href=#135 id=135 data-nosnippet>135</a>        default_value = <span class="string">"10"
 <a href=#136 id=136 data-nosnippet>136</a>    </span>)]
 <a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub </span>l1_consecutive_failure_tolerance: usize,
@@ -139,7 +139,7 @@
 <a href=#139 id=139 data-nosnippet>139</a>    <span class="doccomment">/// Revert back to the first provider this duration after failing over.
 <a href=#140 id=140 data-nosnippet>140</a>    </span><span class="attr">#[clap(
 <a href=#141 id=141 data-nosnippet>141</a>        long,
-<a href=#142 id=142 data-nosnippet>142</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_FAILOVER_REVERT"</span>,
+<a href=#142 id=142 data-nosnippet>142</a>        env = <span class="string">"ESPRESSO_L1_FAILOVER_REVERT"</span>,
 <a href=#143 id=143 data-nosnippet>143</a>        default_value = <span class="string">"30m"</span>,
 <a href=#144 id=144 data-nosnippet>144</a>        value_parser = parse_duration,
 <a href=#145 id=145 data-nosnippet>145</a>    )]
@@ -150,7 +150,7 @@
 <a href=#150 id=150 data-nosnippet>150</a>    /// If not set, the general l1-retry-delay will be used.
 <a href=#151 id=151 data-nosnippet>151</a>    </span><span class="attr">#[clap(
 <a href=#152 id=152 data-nosnippet>152</a>        long,
-<a href=#153 id=153 data-nosnippet>153</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_RATE_LIMIT_DELAY"</span>,
+<a href=#153 id=153 data-nosnippet>153</a>        env = <span class="string">"ESPRESSO_L1_RATE_LIMIT_DELAY"</span>,
 <a href=#154 id=154 data-nosnippet>154</a>        value_parser = parse_duration,
 <a href=#155 id=155 data-nosnippet>155</a>    )]
 <a href=#156 id=156 data-nosnippet>156</a>    </span><span class="kw">pub </span>l1_rate_limit_delay: <span class="prelude-ty">Option</span>&lt;Duration&gt;,
@@ -158,7 +158,7 @@
 <a href=#158 id=158 data-nosnippet>158</a>    <span class="doccomment">/// Separate provider to use for subscription feeds.
 <a href=#159 id=159 data-nosnippet>159</a>    ///
 <a href=#160 id=160 data-nosnippet>160</a>    /// Typically this would be a WebSockets endpoint while the main provider uses HTTP.
-<a href=#161 id=161 data-nosnippet>161</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_L1_WS_PROVIDER"</span>, value_delimiter = <span class="string">','</span>)]
+<a href=#161 id=161 data-nosnippet>161</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_L1_WS_PROVIDER"</span>, value_delimiter = <span class="string">','</span>)]
 <a href=#162 id=162 data-nosnippet>162</a>    </span><span class="kw">pub </span>l1_ws_provider: <span class="prelude-ty">Option</span>&lt;Vec&lt;Url&gt;&gt;,
 <a href=#163 id=163 data-nosnippet>163</a>
 <a href=#164 id=164 data-nosnippet>164</a>    <span class="doccomment">/// Interval at which the background update loop polls the L1 stake table contract for new events
@@ -166,7 +166,7 @@
 <a href=#166 id=166 data-nosnippet>166</a>    ///
 <a href=#167 id=167 data-nosnippet>167</a>    </span><span class="attr">#[clap(
 <a href=#168 id=168 data-nosnippet>168</a>        long,
-<a href=#169 id=169 data-nosnippet>169</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_STAKE_TABLE_UPDATE_INTERVAL"</span>,
+<a href=#169 id=169 data-nosnippet>169</a>        env = <span class="string">"ESPRESSO_NODE_L1_STAKE_TABLE_UPDATE_INTERVAL"</span>,
 <a href=#170 id=170 data-nosnippet>170</a>        default_value = <span class="string">"60m"</span>,
 <a href=#171 id=171 data-nosnippet>171</a>        value_parser = parse_duration,
 <a href=#172 id=172 data-nosnippet>172</a>    )]
@@ -181,7 +181,7 @@
 <a href=#181 id=181 data-nosnippet>181</a>    /// from the fetched events, and is required for node to participate in consensus.
 <a href=#182 id=182 data-nosnippet>182</a>    </span><span class="attr">#[clap(
 <a href=#183 id=183 data-nosnippet>183</a>        long,
-<a href=#184 id=184 data-nosnippet>184</a>        env = <span class="string">"ESPRESSO_SEQUENCER_L1_EVENTS_MAX_RETRY_DURATION"</span>,
+<a href=#184 id=184 data-nosnippet>184</a>        env = <span class="string">"ESPRESSO_L1_EVENTS_MAX_RETRY_DURATION"</span>,
 <a href=#185 id=185 data-nosnippet>185</a>        default_value = <span class="string">"20m"</span>,
 <a href=#186 id=186 data-nosnippet>186</a>        value_parser = parse_duration,
 <a href=#187 id=187 data-nosnippet>187</a>    )]
@@ -200,7 +200,7 @@
 <a href=#200 id=200 data-nosnippet>200</a>    /// the hashes. This is fine and good for blocks very near the finalized head, but for
 <a href=#201 id=201 data-nosnippet>201</a>    /// extremely old blocks it is prohibitively expensive, and these old blocks are extremely
 <a href=#202 id=202 data-nosnippet>202</a>    /// unlikely to be unfinalized anyways.
-<a href=#203 id=203 data-nosnippet>203</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_L1_FINALIZED_SAFETY_MARGIN"</span>)]
+<a href=#203 id=203 data-nosnippet>203</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_L1_FINALIZED_SAFETY_MARGIN"</span>)]
 <a href=#204 id=204 data-nosnippet>204</a>    </span><span class="kw">pub </span>l1_finalized_safety_margin: <span class="prelude-ty">Option</span>&lt;u64&gt;,
 <a href=#205 id=205 data-nosnippet>205</a>
 <a href=#206 id=206 data-nosnippet>206</a>    <span class="attr">#[clap(skip = Arc::&lt;Box&lt;<span class="kw">dyn </span>Metrics&gt;&gt;::new(Box::new(NoMetrics)))]

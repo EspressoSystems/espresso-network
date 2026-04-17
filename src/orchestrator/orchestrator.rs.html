@@ -115,36 +115,43 @@
 <a href=#115 id=115 data-nosnippet>115</a>        .map_err(|vec| ParseSeedError::WrongLength { length: vec.len() })
 <a href=#116 id=116 data-nosnippet>116</a>}
 <a href=#117 id=117 data-nosnippet>117</a>
-<a href=#118 id=118 data-nosnippet>118</a><span class="attr">#[tokio::main]
-<a href=#119 id=119 data-nosnippet>119</a></span><span class="kw">async fn </span>main() {
-<a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">let </span>args = Args::parse();
-<a href=#121 id=121 data-nosnippet>121</a>    args.logging.init();
-<a href=#122 id=122 data-nosnippet>122</a>
-<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">let </span><span class="kw-2">mut </span>config = NetworkConfig::&lt;SeqTypes&gt; {
-<a href=#124 id=124 data-nosnippet>124</a>        manual_start_password: args.manual_start_password,
-<a href=#125 id=125 data-nosnippet>125</a>        indexed_da: <span class="bool-val">false</span>,
-<a href=#126 id=126 data-nosnippet>126</a>        ..Default::default()
-<a href=#127 id=127 data-nosnippet>127</a>    };
-<a href=#128 id=128 data-nosnippet>128</a>
-<a href=#129 id=129 data-nosnippet>129</a>    <span class="comment">// The Libp2p configuration
-<a href=#130 id=130 data-nosnippet>130</a>    </span><span class="kw">let </span>libp2p_config = Libp2pConfig {
-<a href=#131 id=131 data-nosnippet>131</a>        bootstrap_nodes: Vec::new(),
-<a href=#132 id=132 data-nosnippet>132</a>    };
-<a href=#133 id=133 data-nosnippet>133</a>
-<a href=#134 id=134 data-nosnippet>134</a>    config.config.num_nodes_with_stake = args.num_nodes;
-<a href=#135 id=135 data-nosnippet>135</a>    config.config.known_nodes_with_stake = <span class="macro">vec!</span>[PeerConfig::test_default(); args.num_nodes.get()];
-<a href=#136 id=136 data-nosnippet>136</a>    config.config.known_da_nodes = Vec::new();
-<a href=#137 id=137 data-nosnippet>137</a>    config.config.next_view_timeout = args.next_view_timeout.as_millis() <span class="kw">as </span>u64;
-<a href=#138 id=138 data-nosnippet>138</a>    config.libp2p_config = <span class="prelude-val">Some</span>(libp2p_config);
-<a href=#139 id=139 data-nosnippet>139</a>    config.config.start_threshold = args.start_threshold.into();
-<a href=#140 id=140 data-nosnippet>140</a>    config.config.da_staked_committee_size = args.num_nodes.get();
-<a href=#141 id=141 data-nosnippet>141</a>    config.config.builder_urls = Vec1::try_from_vec(args.builder_urls).unwrap();
-<a href=#142 id=142 data-nosnippet>142</a>    config.config.builder_timeout = args.builder_timeout;
-<a href=#143 id=143 data-nosnippet>143</a>    run_orchestrator(
-<a href=#144 id=144 data-nosnippet>144</a>        config,
-<a href=#145 id=145 data-nosnippet>145</a>        <span class="macro">format!</span>(<span class="string">"http://0.0.0.0:{}"</span>, args.port).parse().unwrap(),
-<a href=#146 id=146 data-nosnippet>146</a>    )
-<a href=#147 id=147 data-nosnippet>147</a>    .<span class="kw">await
-<a href=#148 id=148 data-nosnippet>148</a>    </span>.unwrap();
-<a href=#149 id=149 data-nosnippet>149</a>}
+<a href=#118 id=118 data-nosnippet>118</a><span class="kw">fn </span>main() {
+<a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">let </span>migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+<a href=#120 id=120 data-nosnippet>120</a>    tokio::runtime::Runtime::new()
+<a href=#121 id=121 data-nosnippet>121</a>        .unwrap()
+<a href=#122 id=122 data-nosnippet>122</a>        .block_on(async_main(migrated_envs))
+<a href=#123 id=123 data-nosnippet>123</a>}
+<a href=#124 id=124 data-nosnippet>124</a>
+<a href=#125 id=125 data-nosnippet>125</a><span class="kw">async fn </span>async_main(migrated_envs: Vec&lt;(<span class="kw-2">&amp;</span>str, <span class="kw-2">&amp;</span>str)&gt;) {
+<a href=#126 id=126 data-nosnippet>126</a>    <span class="kw">let </span>args = Args::parse();
+<a href=#127 id=127 data-nosnippet>127</a>    args.logging.init();
+<a href=#128 id=128 data-nosnippet>128</a>    espresso_utils::env_compat::log_migrated_env_vars(<span class="kw-2">&amp;</span>migrated_envs);
+<a href=#129 id=129 data-nosnippet>129</a>
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">let </span><span class="kw-2">mut </span>config = NetworkConfig::&lt;SeqTypes&gt; {
+<a href=#131 id=131 data-nosnippet>131</a>        manual_start_password: args.manual_start_password,
+<a href=#132 id=132 data-nosnippet>132</a>        indexed_da: <span class="bool-val">false</span>,
+<a href=#133 id=133 data-nosnippet>133</a>        ..Default::default()
+<a href=#134 id=134 data-nosnippet>134</a>    };
+<a href=#135 id=135 data-nosnippet>135</a>
+<a href=#136 id=136 data-nosnippet>136</a>    <span class="comment">// The Libp2p configuration
+<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">let </span>libp2p_config = Libp2pConfig {
+<a href=#138 id=138 data-nosnippet>138</a>        bootstrap_nodes: Vec::new(),
+<a href=#139 id=139 data-nosnippet>139</a>    };
+<a href=#140 id=140 data-nosnippet>140</a>
+<a href=#141 id=141 data-nosnippet>141</a>    config.config.num_nodes_with_stake = args.num_nodes;
+<a href=#142 id=142 data-nosnippet>142</a>    config.config.known_nodes_with_stake = <span class="macro">vec!</span>[PeerConfig::test_default(); args.num_nodes.get()];
+<a href=#143 id=143 data-nosnippet>143</a>    config.config.known_da_nodes = Vec::new();
+<a href=#144 id=144 data-nosnippet>144</a>    config.config.next_view_timeout = args.next_view_timeout.as_millis() <span class="kw">as </span>u64;
+<a href=#145 id=145 data-nosnippet>145</a>    config.libp2p_config = <span class="prelude-val">Some</span>(libp2p_config);
+<a href=#146 id=146 data-nosnippet>146</a>    config.config.start_threshold = args.start_threshold.into();
+<a href=#147 id=147 data-nosnippet>147</a>    config.config.da_staked_committee_size = args.num_nodes.get();
+<a href=#148 id=148 data-nosnippet>148</a>    config.config.builder_urls = Vec1::try_from_vec(args.builder_urls).unwrap();
+<a href=#149 id=149 data-nosnippet>149</a>    config.config.builder_timeout = args.builder_timeout;
+<a href=#150 id=150 data-nosnippet>150</a>    run_orchestrator(
+<a href=#151 id=151 data-nosnippet>151</a>        config,
+<a href=#152 id=152 data-nosnippet>152</a>        <span class="macro">format!</span>(<span class="string">"http://0.0.0.0:{}"</span>, args.port).parse().unwrap(),
+<a href=#153 id=153 data-nosnippet>153</a>    )
+<a href=#154 id=154 data-nosnippet>154</a>    .<span class="kw">await
+<a href=#155 id=155 data-nosnippet>155</a>    </span>.unwrap();
+<a href=#156 id=156 data-nosnippet>156</a>}
 </code></pre></div></section></main></body></html>

@@ -18,9 +18,9 @@ in this way, one of the first two options may be used to generate the remaining 
 </div><span id="structfield.key_file" class="structfield section-header"><a href="#structfield.key_file" class="anchor field">§</a><code>key_file: <a class="enum" href="https://doc.rust-lang.org/1.95.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.95.0/std/path/struct.PathBuf.html" title="struct std::path::PathBuf">PathBuf</a>&gt;</code></span><div class="docblock"><p>Path to file containing private keys.</p>
 <p>The file should follow the .env format, with keys:</p>
 <ul>
-<li>ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY</li>
-<li>ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY</li>
-<li>ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY (optional)</li>
+<li>ESPRESSO_NODE_PRIVATE_STAKING_KEY</li>
+<li>ESPRESSO_NODE_PRIVATE_STATE_KEY</li>
+<li>ESPRESSO_NODE_PRIVATE_X25519_KEY (optional)</li>
 </ul>
 <p>Appropriate key files can be generated with the <code>keygen</code> utility program.</p>
 </div><span id="structfield.private_staking_key" class="structfield section-header"><a href="#structfield.private_staking_key" class="anchor field">§</a><code>private_staking_key: <a class="enum" href="https://doc.rust-lang.org/1.95.0/core/option/enum.Option.html" title="enum core::option::Option">Option</a>&lt;TaggedBase64&gt;</code></span><div class="docblock"><p>Private staking key.</p>

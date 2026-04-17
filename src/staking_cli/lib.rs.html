@@ -89,7 +89,7 @@
 <a href=#89 id=89 data-nosnippet>89</a>    <span class="doccomment">/// [DEPRECATED] Deployed ESP token contract address.
 <a href=#90 id=90 data-nosnippet>90</a>    ///
 <a href=#91 id=91 data-nosnippet>91</a>    /// [DEPRECATED] This is fetched from the stake table contract now.
-<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESP_TOKEN_ADDRESS"</span>)]
+<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESP_TOKEN_CONTRACT_ADDRESS"</span>)]
 <a href=#93 id=93 data-nosnippet>93</a>    </span><span class="kw">pub </span>token_address: <span class="prelude-ty">Option</span>&lt;Address&gt;,
 <a href=#94 id=94 data-nosnippet>94</a>
 <a href=#95 id=95 data-nosnippet>95</a>    <span class="doccomment">/// Deployed stake table contract address.
@@ -282,7 +282,7 @@
 <a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">pub fn </span>apply_env_var_overrides(<span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>&gt; {
 <a href=#283 id=283 data-nosnippet>283</a>        <span class="kw">let </span><span class="kw-2">mut </span>config = <span class="self">self</span>.clone();
 <a href=#284 id=284 data-nosnippet>284</a>        <span class="kw">if </span><span class="self">self</span>.stake_table_address == Address::ZERO {
-<a href=#285 id=285 data-nosnippet>285</a>            <span class="kw">let </span>stake_table_env_var = <span class="string">"ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS"</span>;
+<a href=#285 id=285 data-nosnippet>285</a>            <span class="kw">let </span>stake_table_env_var = <span class="string">"ESPRESSO_STAKE_TABLE_PROXY_ADDRESS"</span>;
 <a href=#286 id=286 data-nosnippet>286</a>            <span class="kw">if let </span><span class="prelude-val">Ok</span>(stake_table_address) = std::env::var(stake_table_env_var) {
 <a href=#287 id=287 data-nosnippet>287</a>                config.stake_table_address = stake_table_address.parse()<span class="question-mark">?</span>;
 <a href=#288 id=288 data-nosnippet>288</a>                <span class="macro">tracing::info!</span>(

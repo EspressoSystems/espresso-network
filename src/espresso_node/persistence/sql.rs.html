@@ -85,29 +85,29 @@
 <a href=#85 id=85 data-nosnippet>85</a>#[derivative(Debug)]
 <a href=#86 id=86 data-nosnippet>86</a></span><span class="kw">pub struct </span>PostgresOptions {
 <a href=#87 id=87 data-nosnippet>87</a>    <span class="doccomment">/// Hostname for the remote Postgres database server.
-<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_POSTGRES_HOST"</span>)]
+<a href=#88 id=88 data-nosnippet>88</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_POSTGRES_HOST"</span>)]
 <a href=#89 id=89 data-nosnippet>89</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) host: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#90 id=90 data-nosnippet>90</a>
 <a href=#91 id=91 data-nosnippet>91</a>    <span class="doccomment">/// Port for the remote Postgres database server.
-<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_POSTGRES_PORT"</span>)]
+<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_POSTGRES_PORT"</span>)]
 <a href=#93 id=93 data-nosnippet>93</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) port: <span class="prelude-ty">Option</span>&lt;u16&gt;,
 <a href=#94 id=94 data-nosnippet>94</a>
 <a href=#95 id=95 data-nosnippet>95</a>    <span class="doccomment">/// Name of database to connect to.
-<a href=#96 id=96 data-nosnippet>96</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_POSTGRES_DATABASE"</span>)]
+<a href=#96 id=96 data-nosnippet>96</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_POSTGRES_DATABASE"</span>)]
 <a href=#97 id=97 data-nosnippet>97</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) database: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#98 id=98 data-nosnippet>98</a>
 <a href=#99 id=99 data-nosnippet>99</a>    <span class="doccomment">/// Postgres user to connect as.
-<a href=#100 id=100 data-nosnippet>100</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_POSTGRES_USER"</span>)]
+<a href=#100 id=100 data-nosnippet>100</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_POSTGRES_USER"</span>)]
 <a href=#101 id=101 data-nosnippet>101</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) user: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#102 id=102 data-nosnippet>102</a>
 <a href=#103 id=103 data-nosnippet>103</a>    <span class="doccomment">/// Password for Postgres user.
-<a href=#104 id=104 data-nosnippet>104</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_POSTGRES_PASSWORD"</span>)]
+<a href=#104 id=104 data-nosnippet>104</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_POSTGRES_PASSWORD"</span>)]
 <a href=#105 id=105 data-nosnippet>105</a>    </span><span class="comment">// Hide from debug output since may contain sensitive data.
 <a href=#106 id=106 data-nosnippet>106</a>    </span><span class="attr">#[derivative(Debug = <span class="string">"ignore"</span>)]
 <a href=#107 id=107 data-nosnippet>107</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) password: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#108 id=108 data-nosnippet>108</a>
 <a href=#109 id=109 data-nosnippet>109</a>    <span class="doccomment">/// Use TLS for an encrypted connection to the database.
-<a href=#110 id=110 data-nosnippet>110</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_POSTGRES_USE_TLS"</span>)]
+<a href=#110 id=110 data-nosnippet>110</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_POSTGRES_USE_TLS"</span>)]
 <a href=#111 id=111 data-nosnippet>111</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) use_tls: bool,
 <a href=#112 id=112 data-nosnippet>112</a>}
 <a href=#113 id=113 data-nosnippet>113</a>
@@ -124,7 +124,7 @@
 <a href=#124 id=124 data-nosnippet>124</a>    /// The SQLite file will be created in the `sqlite` subdirectory with filename as `database`.
 <a href=#125 id=125 data-nosnippet>125</a>    </span><span class="attr">#[clap(
 <a href=#126 id=126 data-nosnippet>126</a>        long,
-<a href=#127 id=127 data-nosnippet>127</a>        env = <span class="string">"ESPRESSO_SEQUENCER_STORAGE_PATH"</span>,
+<a href=#127 id=127 data-nosnippet>127</a>        env = <span class="string">"ESPRESSO_NODE_STORAGE_PATH"</span>,
 <a href=#128 id=128 data-nosnippet>128</a>        value_parser = build_sqlite_path
 <a href=#129 id=129 data-nosnippet>129</a>    )]
 <a href=#130 id=130 data-nosnippet>130</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) path: PathBuf,
@@ -177,7 +177,7 @@
 <a href=#177 id=177 data-nosnippet>177</a>    /// - batch_size: 1000
 <a href=#178 id=178 data-nosnippet>178</a>    /// - max_usage: 80%
 <a href=#179 id=179 data-nosnippet>179</a>    /// - interval: 1 hour
-<a href=#180 id=180 data-nosnippet>180</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_PRUNE"</span>)]
+<a href=#180 id=180 data-nosnippet>180</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_DATABASE_PRUNE"</span>)]
 <a href=#181 id=181 data-nosnippet>181</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) prune: bool,
 <a href=#182 id=182 data-nosnippet>182</a>
 <a href=#183 id=183 data-nosnippet>183</a>    <span class="doccomment">/// Pruning parameters.
@@ -189,36 +189,36 @@
 <a href=#189 id=189 data-nosnippet>189</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) consensus_pruning: ConsensusPruningOptions,
 <a href=#190 id=190 data-nosnippet>190</a>
 <a href=#191 id=191 data-nosnippet>191</a>    <span class="doccomment">/// Specifies the maximum number of concurrent fetch requests allowed from peers.
-<a href=#192 id=192 data-nosnippet>192</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_FETCH_RATE_LIMIT"</span>)]
+<a href=#192 id=192 data-nosnippet>192</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_FETCH_RATE_LIMIT"</span>)]
 <a href=#193 id=193 data-nosnippet>193</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) fetch_rate_limit: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 <a href=#194 id=194 data-nosnippet>194</a>
 <a href=#195 id=195 data-nosnippet>195</a>    <span class="doccomment">/// The minimum delay between active fetches in a stream.
-<a href=#196 id=196 data-nosnippet>196</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_ACTIVE_FETCH_DELAY"</span>, value_parser = parse_duration)]
+<a href=#196 id=196 data-nosnippet>196</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_ACTIVE_FETCH_DELAY"</span>, value_parser = parse_duration)]
 <a href=#197 id=197 data-nosnippet>197</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) active_fetch_delay: <span class="prelude-ty">Option</span>&lt;Duration&gt;,
 <a href=#198 id=198 data-nosnippet>198</a>
 <a href=#199 id=199 data-nosnippet>199</a>    <span class="doccomment">/// The minimum delay between loading chunks in a stream.
-<a href=#200 id=200 data-nosnippet>200</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_CHUNK_FETCH_DELAY"</span>, value_parser = parse_duration)]
+<a href=#200 id=200 data-nosnippet>200</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_CHUNK_FETCH_DELAY"</span>, value_parser = parse_duration)]
 <a href=#201 id=201 data-nosnippet>201</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) chunk_fetch_delay: <span class="prelude-ty">Option</span>&lt;Duration&gt;,
 <a href=#202 id=202 data-nosnippet>202</a>
 <a href=#203 id=203 data-nosnippet>203</a>    <span class="doccomment">/// The number of items to process in a single transaction when scanning the database for
 <a href=#204 id=204 data-nosnippet>204</a>    /// missing objects.
-<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_SYNC_STATUS_CHUNK_SIZE"</span>)]
+<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_SYNC_STATUS_CHUNK_SIZE"</span>)]
 <a href=#206 id=206 data-nosnippet>206</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) sync_status_chunk_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 <a href=#207 id=207 data-nosnippet>207</a>
 <a href=#208 id=208 data-nosnippet>208</a>    <span class="doccomment">/// Duration to cache sync status results for.
-<a href=#209 id=209 data-nosnippet>209</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_SYNC_STATUS_TTL"</span>, value_parser = parse_duration)]
+<a href=#209 id=209 data-nosnippet>209</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_SYNC_STATUS_TTL"</span>, value_parser = parse_duration)]
 <a href=#210 id=210 data-nosnippet>210</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) sync_status_ttl: <span class="prelude-ty">Option</span>&lt;Duration&gt;,
 <a href=#211 id=211 data-nosnippet>211</a>
 <a href=#212 id=212 data-nosnippet>212</a>    <span class="doccomment">/// The number of items to process at a time when scanning for proactive fetching.
-<a href=#213 id=213 data-nosnippet>213</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_PROACTIVE_SCAN_CHUNK_SIZE"</span>)]
+<a href=#213 id=213 data-nosnippet>213</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_PROACTIVE_SCAN_CHUNK_SIZE"</span>)]
 <a href=#214 id=214 data-nosnippet>214</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) proactive_scan_chunk_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 <a href=#215 id=215 data-nosnippet>215</a>
 <a href=#216 id=216 data-nosnippet>216</a>    <span class="doccomment">/// The time interval between proactive fetching scans.
-<a href=#217 id=217 data-nosnippet>217</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_PROACTIVE_SCAN_INTERVAL"</span>, value_parser = parse_duration)]
+<a href=#217 id=217 data-nosnippet>217</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_PROACTIVE_SCAN_INTERVAL"</span>, value_parser = parse_duration)]
 <a href=#218 id=218 data-nosnippet>218</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) proactive_scan_interval: <span class="prelude-ty">Option</span>&lt;Duration&gt;,
 <a href=#219 id=219 data-nosnippet>219</a>
 <a href=#220 id=220 data-nosnippet>220</a>    <span class="doccomment">/// Disable the proactive scanner task.
-<a href=#221 id=221 data-nosnippet>221</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_DISABLE_PROACTIVE_FETCHING"</span>)]
+<a href=#221 id=221 data-nosnippet>221</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_DISABLE_PROACTIVE_FETCHING"</span>)]
 <a href=#222 id=222 data-nosnippet>222</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) disable_proactive_fetching: bool,
 <a href=#223 id=223 data-nosnippet>223</a>
 <a href=#224 id=224 data-nosnippet>224</a>    <span class="doccomment">/// Disable pruning and reconstruct previously pruned data.
@@ -227,13 +227,13 @@
 <a href=#227 id=227 data-nosnippet>227</a>    /// reconstruct data that was pruned in a previous run where pruning was enabled. This option
 <a href=#228 id=228 data-nosnippet>228</a>    /// instructs the service to run without pruning _and_ reconstruct all previously pruned data by
 <a href=#229 id=229 data-nosnippet>229</a>    /// fetching from peers.
-<a href=#230 id=230 data-nosnippet>230</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_ARCHIVE"</span>, conflicts_with = <span class="string">"prune"</span>)]
+<a href=#230 id=230 data-nosnippet>230</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_ARCHIVE"</span>, conflicts_with = <span class="string">"prune"</span>)]
 <a href=#231 id=231 data-nosnippet>231</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) archive: bool,
 <a href=#232 id=232 data-nosnippet>232</a>
 <a href=#233 id=233 data-nosnippet>233</a>    <span class="doccomment">/// Turns on leaf only data storage
 <a href=#234 id=234 data-nosnippet>234</a>    </span><span class="attr">#[clap(
 <a href=#235 id=235 data-nosnippet>235</a>        long,
-<a href=#236 id=236 data-nosnippet>236</a>        env = <span class="string">"ESPRESSO_SEQUENCER_LIGHTWEIGHT"</span>,
+<a href=#236 id=236 data-nosnippet>236</a>        env = <span class="string">"ESPRESSO_NODE_LIGHTWEIGHT"</span>,
 <a href=#237 id=237 data-nosnippet>237</a>        default_value_t = <span class="bool-val">false</span>,
 <a href=#238 id=238 data-nosnippet>238</a>        conflicts_with = <span class="string">"archive"
 <a href=#239 id=239 data-nosnippet>239</a>    </span>)]
@@ -243,7 +243,7 @@
 <a href=#243 id=243 data-nosnippet>243</a>    ///
 <a href=#244 id=244 data-nosnippet>244</a>    /// Any connection which has been open and unused longer than this duration will be
 <a href=#245 id=245 data-nosnippet>245</a>    /// automatically closed to reduce load on the server.
-<a href=#246 id=246 data-nosnippet>246</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_IDLE_CONNECTION_TIMEOUT"</span>, value_parser = parse_duration, default_value = <span class="string">"10m"</span>)]
+<a href=#246 id=246 data-nosnippet>246</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_DATABASE_IDLE_CONNECTION_TIMEOUT"</span>, value_parser = parse_duration, default_value = <span class="string">"10m"</span>)]
 <a href=#247 id=247 data-nosnippet>247</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) idle_connection_timeout: Duration,
 <a href=#248 id=248 data-nosnippet>248</a>
 <a href=#249 id=249 data-nosnippet>249</a>    <span class="doccomment">/// The maximum lifetime of a database connection.
@@ -252,17 +252,17 @@
 <a href=#252 id=252 data-nosnippet>252</a>    /// (and, if needed, replaced), even if it is otherwise healthy. It is good practice to refresh
 <a href=#253 id=253 data-nosnippet>253</a>    /// even healthy connections once in a while (e.g. daily) in case of resource leaks in the
 <a href=#254 id=254 data-nosnippet>254</a>    /// server implementation.
-<a href=#255 id=255 data-nosnippet>255</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_CONNECTION_TIMEOUT"</span>, value_parser = parse_duration, default_value = <span class="string">"30m"</span>)]
+<a href=#255 id=255 data-nosnippet>255</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_DATABASE_CONNECTION_TIMEOUT"</span>, value_parser = parse_duration, default_value = <span class="string">"30m"</span>)]
 <a href=#256 id=256 data-nosnippet>256</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) connection_timeout: Duration,
 <a href=#257 id=257 data-nosnippet>257</a>
-<a href=#258 id=258 data-nosnippet>258</a>    <span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_SLOW_STATEMENT_THRESHOLD"</span>, value_parser = parse_duration, default_value = <span class="string">"1s"</span>)]
+<a href=#258 id=258 data-nosnippet>258</a>    <span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_DATABASE_SLOW_STATEMENT_THRESHOLD"</span>, value_parser = parse_duration, default_value = <span class="string">"1s"</span>)]
 <a href=#259 id=259 data-nosnippet>259</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) slow_statement_threshold: Duration,
 <a href=#260 id=260 data-nosnippet>260</a>
 <a href=#261 id=261 data-nosnippet>261</a>    <span class="doccomment">/// The maximum time a single SQL statement is allowed to run before being canceled.
 <a href=#262 id=262 data-nosnippet>262</a>    ///
 <a href=#263 id=263 data-nosnippet>263</a>    /// This helps prevent queries from running indefinitely and consuming resources.
 <a href=#264 id=264 data-nosnippet>264</a>    /// Set to 10 minutes by default
-<a href=#265 id=265 data-nosnippet>265</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_STATEMENT_TIMEOUT"</span>, value_parser = parse_duration, default_value = <span class="string">"10m"</span>)]
+<a href=#265 id=265 data-nosnippet>265</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_DATABASE_STATEMENT_TIMEOUT"</span>, value_parser = parse_duration, default_value = <span class="string">"10m"</span>)]
 <a href=#266 id=266 data-nosnippet>266</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) statement_timeout: Duration,
 <a href=#267 id=267 data-nosnippet>267</a>
 <a href=#268 id=268 data-nosnippet>268</a>    <span class="doccomment">/// The minimum number of database connections to maintain at any time.
@@ -272,7 +272,7 @@
 <a href=#272 id=272 data-nosnippet>272</a>    /// connections when at least this many simultaneous connections are frequently needed.
 <a href=#273 id=273 data-nosnippet>273</a>    </span><span class="attr">#[clap(
 <a href=#274 id=274 data-nosnippet>274</a>        long,
-<a href=#275 id=275 data-nosnippet>275</a>        env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_MIN_CONNECTIONS"</span>,
+<a href=#275 id=275 data-nosnippet>275</a>        env = <span class="string">"ESPRESSO_NODE_DATABASE_MIN_CONNECTIONS"</span>,
 <a href=#276 id=276 data-nosnippet>276</a>        default_value = <span class="string">"0"
 <a href=#277 id=277 data-nosnippet>277</a>    </span>)]
 <a href=#278 id=278 data-nosnippet>278</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) min_connections: u32,
@@ -280,7 +280,7 @@
 <a href=#280 id=280 data-nosnippet>280</a>    <span class="doccomment">/// Allows setting a different maximum number of connections for query operations.
 <a href=#281 id=281 data-nosnippet>281</a>    /// Default value of None implies using the min_connections value.
 <a href=#282 id=282 data-nosnippet>282</a>    </span><span class="attr">#[cfg(not(feature = <span class="string">"embedded-db"</span>))]
-<a href=#283 id=283 data-nosnippet>283</a>    #[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_QUERY_MIN_CONNECTIONS"</span>, default_value = <span class="prelude-val">None</span>)]
+<a href=#283 id=283 data-nosnippet>283</a>    #[clap(long, env = <span class="string">"ESPRESSO_NODE_DATABASE_QUERY_MIN_CONNECTIONS"</span>, default_value = <span class="prelude-val">None</span>)]
 <a href=#284 id=284 data-nosnippet>284</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) query_min_connections: <span class="prelude-ty">Option</span>&lt;u32&gt;,
 <a href=#285 id=285 data-nosnippet>285</a>
 <a href=#286 id=286 data-nosnippet>286</a>    <span class="doccomment">/// The maximum number of database connections to maintain at any time.
@@ -289,7 +289,7 @@
 <a href=#289 id=289 data-nosnippet>289</a>    /// (or begin a transaction) will block until one of the existing connections is released.
 <a href=#290 id=290 data-nosnippet>290</a>    </span><span class="attr">#[clap(
 <a href=#291 id=291 data-nosnippet>291</a>        long,
-<a href=#292 id=292 data-nosnippet>292</a>        env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_MAX_CONNECTIONS"</span>,
+<a href=#292 id=292 data-nosnippet>292</a>        env = <span class="string">"ESPRESSO_NODE_DATABASE_MAX_CONNECTIONS"</span>,
 <a href=#293 id=293 data-nosnippet>293</a>        default_value = <span class="string">"25"
 <a href=#294 id=294 data-nosnippet>294</a>    </span>)]
 <a href=#295 id=295 data-nosnippet>295</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) max_connections: u32,
@@ -297,7 +297,7 @@
 <a href=#297 id=297 data-nosnippet>297</a>    <span class="doccomment">/// Allows setting a different maximum number of connections for query operations.
 <a href=#298 id=298 data-nosnippet>298</a>    /// Default value of None implies using the max_connections value.
 <a href=#299 id=299 data-nosnippet>299</a>    </span><span class="attr">#[cfg(not(feature = <span class="string">"embedded-db"</span>))]
-<a href=#300 id=300 data-nosnippet>300</a>    #[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_DATABASE_QUERY_MAX_CONNECTIONS"</span>, default_value = <span class="prelude-val">None</span>)]
+<a href=#300 id=300 data-nosnippet>300</a>    #[clap(long, env = <span class="string">"ESPRESSO_NODE_DATABASE_QUERY_MAX_CONNECTIONS"</span>, default_value = <span class="prelude-val">None</span>)]
 <a href=#301 id=301 data-nosnippet>301</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) query_max_connections: <span class="prelude-ty">Option</span>&lt;u32&gt;,
 <a href=#302 id=302 data-nosnippet>302</a>
 <a href=#303 id=303 data-nosnippet>303</a>    <span class="comment">// Keep the database connection pool when persistence is created,
@@ -504,14 +504,14 @@
 <a href=#504 id=504 data-nosnippet>504</a>    <span class="doccomment">/// Threshold for pruning, specified in bytes.
 <a href=#505 id=505 data-nosnippet>505</a>    /// If the disk usage surpasses this threshold, pruning is initiated for data older than the specified minimum retention period.
 <a href=#506 id=506 data-nosnippet>506</a>    /// Pruning continues until the disk usage drops below the MAX USAGE.
-<a href=#507 id=507 data-nosnippet>507</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_PRUNER_PRUNING_THRESHOLD"</span>, value_parser = parse_size)]
+<a href=#507 id=507 data-nosnippet>507</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_PRUNER_PRUNING_THRESHOLD"</span>, value_parser = parse_size)]
 <a href=#508 id=508 data-nosnippet>508</a>    </span>pruning_threshold: <span class="prelude-ty">Option</span>&lt;u64&gt;,
 <a href=#509 id=509 data-nosnippet>509</a>
 <a href=#510 id=510 data-nosnippet>510</a>    <span class="doccomment">/// Minimum retention period.
 <a href=#511 id=511 data-nosnippet>511</a>    /// Data is retained for at least this duration, even if there's no free disk space.
 <a href=#512 id=512 data-nosnippet>512</a>    </span><span class="attr">#[clap(
 <a href=#513 id=513 data-nosnippet>513</a>        long,
-<a href=#514 id=514 data-nosnippet>514</a>        env = <span class="string">"ESPRESSO_SEQUENCER_PRUNER_MINIMUM_RETENTION"</span>,
+<a href=#514 id=514 data-nosnippet>514</a>        env = <span class="string">"ESPRESSO_NODE_PRUNER_MINIMUM_RETENTION"</span>,
 <a href=#515 id=515 data-nosnippet>515</a>        value_parser = parse_duration,
 <a href=#516 id=516 data-nosnippet>516</a>    )]
 <a href=#517 id=517 data-nosnippet>517</a>    </span>minimum_retention: <span class="prelude-ty">Option</span>&lt;Duration&gt;,
@@ -520,14 +520,14 @@
 <a href=#520 id=520 data-nosnippet>520</a>    /// Data older than this is pruned to free up space.
 <a href=#521 id=521 data-nosnippet>521</a>    </span><span class="attr">#[clap(
 <a href=#522 id=522 data-nosnippet>522</a>        long,
-<a href=#523 id=523 data-nosnippet>523</a>        env = <span class="string">"ESPRESSO_SEQUENCER_PRUNER_TARGET_RETENTION"</span>,
+<a href=#523 id=523 data-nosnippet>523</a>        env = <span class="string">"ESPRESSO_NODE_PRUNER_TARGET_RETENTION"</span>,
 <a href=#524 id=524 data-nosnippet>524</a>        value_parser = parse_duration,
 <a href=#525 id=525 data-nosnippet>525</a>    )]
 <a href=#526 id=526 data-nosnippet>526</a>    </span>target_retention: <span class="prelude-ty">Option</span>&lt;Duration&gt;,
 <a href=#527 id=527 data-nosnippet>527</a>
 <a href=#528 id=528 data-nosnippet>528</a>    <span class="doccomment">/// Batch size for pruning.
 <a href=#529 id=529 data-nosnippet>529</a>    /// This is the number of blocks data to delete in a single transaction.
-<a href=#530 id=530 data-nosnippet>530</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_PRUNER_BATCH_SIZE"</span>)]
+<a href=#530 id=530 data-nosnippet>530</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_PRUNER_BATCH_SIZE"</span>)]
 <a href=#531 id=531 data-nosnippet>531</a>    </span>batch_size: <span class="prelude-ty">Option</span>&lt;u64&gt;,
 <a href=#532 id=532 data-nosnippet>532</a>
 <a href=#533 id=533 data-nosnippet>533</a>    <span class="doccomment">/// Maximum disk usage (in basis points).
@@ -535,13 +535,13 @@
 <a href=#535 id=535 data-nosnippet>535</a>    /// Pruning stops once the disk usage falls below this value, even if
 <a href=#536 id=536 data-nosnippet>536</a>    /// some data older than the `MINIMUM_RETENTION` remains. Values range
 <a href=#537 id=537 data-nosnippet>537</a>    /// from 0 (0%) to 10000 (100%).
-<a href=#538 id=538 data-nosnippet>538</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_PRUNER_MAX_USAGE"</span>)]
+<a href=#538 id=538 data-nosnippet>538</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_PRUNER_MAX_USAGE"</span>)]
 <a href=#539 id=539 data-nosnippet>539</a>    </span>max_usage: <span class="prelude-ty">Option</span>&lt;u16&gt;,
 <a href=#540 id=540 data-nosnippet>540</a>
 <a href=#541 id=541 data-nosnippet>541</a>    <span class="doccomment">/// Interval for running the pruner.
 <a href=#542 id=542 data-nosnippet>542</a>    </span><span class="attr">#[clap(
 <a href=#543 id=543 data-nosnippet>543</a>        long,
-<a href=#544 id=544 data-nosnippet>544</a>        env = <span class="string">"ESPRESSO_SEQUENCER_PRUNER_INTERVAL"</span>,
+<a href=#544 id=544 data-nosnippet>544</a>        env = <span class="string">"ESPRESSO_NODE_PRUNER_INTERVAL"</span>,
 <a href=#545 id=545 data-nosnippet>545</a>        value_parser = parse_duration,
 <a href=#546 id=546 data-nosnippet>546</a>    )]
 <a href=#547 id=547 data-nosnippet>547</a>    </span>interval: <span class="prelude-ty">Option</span>&lt;Duration&gt;,
@@ -549,7 +549,7 @@
 <a href=#549 id=549 data-nosnippet>549</a>    <span class="doccomment">/// Number of SQLite pages to vacuum from the freelist
 <a href=#550 id=550 data-nosnippet>550</a>    /// during each pruner cycle.
 <a href=#551 id=551 data-nosnippet>551</a>    /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
-<a href=#552 id=552 data-nosnippet>552</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES"</span>)]
+<a href=#552 id=552 data-nosnippet>552</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_PRUNER_INCREMENTAL_VACUUM_PAGES"</span>)]
 <a href=#553 id=553 data-nosnippet>553</a>    </span>pages: <span class="prelude-ty">Option</span>&lt;u64&gt;,
 <a href=#554 id=554 data-nosnippet>554</a>}
 <a href=#555 id=555 data-nosnippet>555</a>
@@ -615,7 +615,7 @@
 <a href=#615 id=615 data-nosnippet>615</a>    </span><span class="attr">#[clap(
 <a href=#616 id=616 data-nosnippet>616</a>        name = <span class="string">"TARGET_RETENTION"</span>,
 <a href=#617 id=617 data-nosnippet>617</a>        long = <span class="string">"consensus-storage-target-retention"</span>,
-<a href=#618 id=618 data-nosnippet>618</a>        env = <span class="string">"ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_TARGET_RETENTION"</span>,
+<a href=#618 id=618 data-nosnippet>618</a>        env = <span class="string">"ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_RETENTION"</span>,
 <a href=#619 id=619 data-nosnippet>619</a>        default_value = <span class="string">"302000"
 <a href=#620 id=620 data-nosnippet>620</a>    </span>)]
 <a href=#621 id=621 data-nosnippet>621</a>    </span>target_retention: u64,
@@ -633,7 +633,7 @@
 <a href=#633 id=633 data-nosnippet>633</a>    </span><span class="attr">#[clap(
 <a href=#634 id=634 data-nosnippet>634</a>        name = <span class="string">"MINIMUM_RETENTION"</span>,
 <a href=#635 id=635 data-nosnippet>635</a>        long = <span class="string">"consensus-storage-minimum-retention"</span>,
-<a href=#636 id=636 data-nosnippet>636</a>        env = <span class="string">"ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_MINIMUM_RETENTION"</span>,
+<a href=#636 id=636 data-nosnippet>636</a>        env = <span class="string">"ESPRESSO_NODE_CONSENSUS_STORAGE_MINIMUM_RETENTION"</span>,
 <a href=#637 id=637 data-nosnippet>637</a>        default_value = <span class="string">"130000"
 <a href=#638 id=638 data-nosnippet>638</a>    </span>)]
 <a href=#639 id=639 data-nosnippet>639</a>    </span>minimum_retention: u64,
@@ -645,7 +645,7 @@
 <a href=#645 id=645 data-nosnippet>645</a>    </span><span class="attr">#[clap(
 <a href=#646 id=646 data-nosnippet>646</a>        name = <span class="string">"TARGET_USAGE"</span>,
 <a href=#647 id=647 data-nosnippet>647</a>        long = <span class="string">"consensus-storage-target-usage"</span>,
-<a href=#648 id=648 data-nosnippet>648</a>        env = <span class="string">"ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_TARGET_USAGE"</span>,
+<a href=#648 id=648 data-nosnippet>648</a>        env = <span class="string">"ESPRESSO_NODE_CONSENSUS_STORAGE_TARGET_USAGE"</span>,
 <a href=#649 id=649 data-nosnippet>649</a>        default_value = <span class="string">"1000000000"
 <a href=#650 id=650 data-nosnippet>650</a>    </span>)]
 <a href=#651 id=651 data-nosnippet>651</a>    </span>target_usage: u64,

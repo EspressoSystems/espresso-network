@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Command"],"fn":["balance","deposit","l1_balance","main"],"struct":["Balance","Deposit","L1Balance","Options"]};
+window.SIDEBAR_ITEMS = {"enum":["Command"],"fn":["async_main","balance","deposit","l1_balance","main"],"struct":["Balance","Deposit","L1Balance","Options"]};

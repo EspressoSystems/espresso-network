@@ -11,19 +11,27 @@
 <a href=#11 id=11 data-nosnippet>11</a>    </span><span class="attr">#[clap(
 <a href=#12 id=12 data-nosnippet>12</a>        short,
 <a href=#13 id=13 data-nosnippet>13</a>        long,
-<a href=#14 id=14 data-nosnippet>14</a>        env = <span class="string">"ESPRESSO_SEQUENCER_ORCHESTRATOR_URL"</span>,
+<a href=#14 id=14 data-nosnippet>14</a>        env = <span class="string">"ESPRESSO_NODE_ORCHESTRATOR_URL"</span>,
 <a href=#15 id=15 data-nosnippet>15</a>        default_value = <span class="string">"http://localhost:8080"
 <a href=#16 id=16 data-nosnippet>16</a>    </span>)]
 <a href=#17 id=17 data-nosnippet>17</a>    </span><span class="kw">pub </span>orchestrator_url: Url,
 <a href=#18 id=18 data-nosnippet>18</a>}
 <a href=#19 id=19 data-nosnippet>19</a>
-<a href=#20 id=20 data-nosnippet>20</a><span class="attr">#[tokio::main]
-<a href=#21 id=21 data-nosnippet>21</a></span><span class="kw">async fn </span>main() {
-<a href=#22 id=22 data-nosnippet>22</a>    <span class="kw">let </span>args = Args::parse();
-<a href=#23 id=23 data-nosnippet>23</a>    <span class="kw">let </span>pi: (LightClientStateSol, StakeTableStateSol) =
-<a href=#24 id=24 data-nosnippet>24</a>        light_client_genesis(<span class="kw-2">&amp;</span>args.orchestrator_url, DEFAULT_STAKE_TABLE_CAPACITY)
-<a href=#25 id=25 data-nosnippet>25</a>            .<span class="kw">await
-<a href=#26 id=26 data-nosnippet>26</a>            </span>.unwrap();
-<a href=#27 id=27 data-nosnippet>27</a>    <span class="macro">println!</span>(<span class="string">"{}"</span>, pi.abi_encode_params().encode_hex());
-<a href=#28 id=28 data-nosnippet>28</a>}
+<a href=#20 id=20 data-nosnippet>20</a><span class="kw">fn </span>main() {
+<a href=#21 id=21 data-nosnippet>21</a>    <span class="kw">let </span>migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+<a href=#22 id=22 data-nosnippet>22</a>    tokio::runtime::Runtime::new()
+<a href=#23 id=23 data-nosnippet>23</a>        .unwrap()
+<a href=#24 id=24 data-nosnippet>24</a>        .block_on(async_main(migrated_envs))
+<a href=#25 id=25 data-nosnippet>25</a>}
+<a href=#26 id=26 data-nosnippet>26</a>
+<a href=#27 id=27 data-nosnippet>27</a><span class="comment">// `migrated_envs` unused because there's no logging in this binary.
+<a href=#28 id=28 data-nosnippet>28</a>// We have already printed warnings before.
+<a href=#29 id=29 data-nosnippet>29</a></span><span class="kw">async fn </span>async_main(_migrated_envs: Vec&lt;(<span class="kw-2">&amp;</span>str, <span class="kw-2">&amp;</span>str)&gt;) {
+<a href=#30 id=30 data-nosnippet>30</a>    <span class="kw">let </span>args = Args::parse();
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="kw">let </span>pi: (LightClientStateSol, StakeTableStateSol) =
+<a href=#32 id=32 data-nosnippet>32</a>        light_client_genesis(<span class="kw-2">&amp;</span>args.orchestrator_url, DEFAULT_STAKE_TABLE_CAPACITY)
+<a href=#33 id=33 data-nosnippet>33</a>            .<span class="kw">await
+<a href=#34 id=34 data-nosnippet>34</a>            </span>.unwrap();
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="macro">println!</span>(<span class="string">"{}"</span>, pi.abi_encode_params().encode_hex());
+<a href=#36 id=36 data-nosnippet>36</a>}
 </code></pre></div></section></main></body></html>

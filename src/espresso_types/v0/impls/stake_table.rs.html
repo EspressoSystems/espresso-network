@@ -1067,7 +1067,7 @@
 <a href=#1067 id=1067 data-nosnippet>1067</a>        };
 <a href=#1068 id=1068 data-nosnippet>1068</a>
 <a href=#1069 id=1069 data-nosnippet>1069</a>        <span class="comment">// To avoid making large RPC calls, divide the range into smaller chunks.
-<a href=#1070 id=1070 data-nosnippet>1070</a>        // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
+<a href=#1070 id=1070 data-nosnippet>1070</a>        // chunk size is from env "ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE
 <a href=#1071 id=1071 data-nosnippet>1071</a>        // default value  is `10000` if env variable is not set
 <a href=#1072 id=1072 data-nosnippet>1072</a>        </span><span class="kw">let </span>chunk_size = l1_client.options().l1_events_max_block_range;
 <a href=#1073 id=1073 data-nosnippet>1073</a>        <span class="kw">let </span>chunks = <span class="self">Self</span>::block_range_chunks(from_block, to_block, chunk_size);
@@ -1444,7 +1444,7 @@
 <a href=#1444 id=1444 data-nosnippet>1444</a>
 <a href=#1445 id=1445 data-nosnippet>1445</a>                    Suggested solution:
 <a href=#1446 id=1446 data-nosnippet>1446</a>                    - Reduce the value of the environment variable
-<a href=#1447 id=1447 data-nosnippet>1447</a>                      `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
+<a href=#1447 id=1447 data-nosnippet>1447</a>                      `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
 <a href=#1448 id=1448 data-nosnippet>1448</a>                    - Add multiple RPC providers
 <a href=#1449 id=1449 data-nosnippet>1449</a>                    - Use a different RPC provider with higher rate limits."#</span>,
 <a href=#1450 id=1450 data-nosnippet>1450</a>                        format_duration(max_duration)

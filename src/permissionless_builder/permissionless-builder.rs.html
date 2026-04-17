@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a></span><span class="kw">struct </span>NonPermissionedBuilderOptions {
 <a href=#15 id=15 data-nosnippet>15</a>    <span class="doccomment">/// URL of hotshot events API running on Espresso Sequencer DA committee node
 <a href=#16 id=16 data-nosnippet>16</a>    /// The builder will subscribe to this server to receive hotshot events
-<a href=#17 id=17 data-nosnippet>17</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_URL"</span>)]
+<a href=#17 id=17 data-nosnippet>17</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_API_NODE_URL"</span>)]
 <a href=#18 id=18 data-nosnippet>18</a>    </span>sequencer_api_url: Url,
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a>    <span class="doccomment">/// Mnemonic phrase for builder account.
@@ -38,7 +38,7 @@
 <a href=#38 id=38 data-nosnippet>38</a>    </span>l1_provider_url: Vec&lt;Url&gt;,
 <a href=#39 id=39 data-nosnippet>39</a>
 <a href=#40 id=40 data-nosnippet>40</a>    <span class="doccomment">/// Peer nodes use to fetch missing state
-<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_STATE_PEERS"</span>, value_delimiter = <span class="string">','</span>)]
+<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_STATE_PEERS"</span>, value_delimiter = <span class="string">','</span>)]
 <a href=#42 id=42 data-nosnippet>42</a>    </span>state_peers: Vec&lt;Url&gt;,
 <a href=#43 id=43 data-nosnippet>43</a>
 <a href=#44 id=44 data-nosnippet>44</a>    <span class="doccomment">/// Port to run the builder server on.
@@ -97,58 +97,65 @@
 <a href=#97 id=97 data-nosnippet>97</a>    </span>logging: logging::Config,
 <a href=#98 id=98 data-nosnippet>98</a>}
 <a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a><span class="attr">#[tokio::main]
-<a href=#101 id=101 data-nosnippet>101</a></span><span class="kw">async fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">let </span>opt = NonPermissionedBuilderOptions::parse();
-<a href=#103 id=103 data-nosnippet>103</a>    opt.logging.init();
-<a href=#104 id=104 data-nosnippet>104</a>
-<a href=#105 id=105 data-nosnippet>105</a>    <span class="kw">let </span>genesis = Genesis::from_file(<span class="kw-2">&amp;</span>opt.genesis_file)<span class="question-mark">?</span>;
-<a href=#106 id=106 data-nosnippet>106</a>    <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>genesis, <span class="string">"genesis"</span>);
-<a href=#107 id=107 data-nosnippet>107</a>
-<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">let </span>l1_params = L1Params {
-<a href=#109 id=109 data-nosnippet>109</a>        urls: opt.l1_provider_url,
-<a href=#110 id=110 data-nosnippet>110</a>        options: Default::default(),
-<a href=#111 id=111 data-nosnippet>111</a>    };
-<a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a>    <span class="kw">let </span>builder_key_pair = EthKeyPair::from_mnemonic(<span class="kw-2">&amp;</span>opt.eth_mnemonic, opt.eth_account_index)<span class="question-mark">?</span>;
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">let </span>bootstrapped_view = ViewNumber::new(opt.view_number);
-<a href=#115 id=115 data-nosnippet>115</a>
-<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">let </span>builder_server_url: Url = <span class="macro">format!</span>(<span class="string">"http://0.0.0.0:{}"</span>, opt.port).parse().unwrap();
-<a href=#117 id=117 data-nosnippet>117</a>
-<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">let </span>instance_state = build_instance_state(genesis.clone(), l1_params, opt.state_peers);
+<a href=#100 id=100 data-nosnippet>100</a><span class="kw">fn </span>main() -&gt; anyhow::Result&lt;()&gt; {
+<a href=#101 id=101 data-nosnippet>101</a>    <span class="kw">let </span>migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+<a href=#102 id=102 data-nosnippet>102</a>    tokio::runtime::Runtime::new()
+<a href=#103 id=103 data-nosnippet>103</a>        .unwrap()
+<a href=#104 id=104 data-nosnippet>104</a>        .block_on(async_main(migrated_envs))
+<a href=#105 id=105 data-nosnippet>105</a>}
+<a href=#106 id=106 data-nosnippet>106</a>
+<a href=#107 id=107 data-nosnippet>107</a><span class="kw">async fn </span>async_main(migrated_envs: Vec&lt;(<span class="kw-2">&amp;</span>str, <span class="kw-2">&amp;</span>str)&gt;) -&gt; anyhow::Result&lt;()&gt; {
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">let </span>opt = NonPermissionedBuilderOptions::parse();
+<a href=#109 id=109 data-nosnippet>109</a>    opt.logging.init();
+<a href=#110 id=110 data-nosnippet>110</a>    espresso_utils::env_compat::log_migrated_env_vars(<span class="kw-2">&amp;</span>migrated_envs);
+<a href=#111 id=111 data-nosnippet>111</a>
+<a href=#112 id=112 data-nosnippet>112</a>    <span class="kw">let </span>genesis = Genesis::from_file(<span class="kw-2">&amp;</span>opt.genesis_file)<span class="question-mark">?</span>;
+<a href=#113 id=113 data-nosnippet>113</a>    <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>genesis, <span class="string">"genesis"</span>);
+<a href=#114 id=114 data-nosnippet>114</a>
+<a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">let </span>l1_params = L1Params {
+<a href=#116 id=116 data-nosnippet>116</a>        urls: opt.l1_provider_url,
+<a href=#117 id=117 data-nosnippet>117</a>        options: Default::default(),
+<a href=#118 id=118 data-nosnippet>118</a>    };
 <a href=#119 id=119 data-nosnippet>119</a>
-<a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">let </span>base_fee = genesis.max_base_fee();
-<a href=#121 id=121 data-nosnippet>121</a>    <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>base_fee, <span class="string">"base_fee"</span>);
+<a href=#120 id=120 data-nosnippet>120</a>    <span class="kw">let </span>builder_key_pair = EthKeyPair::from_mnemonic(<span class="kw-2">&amp;</span>opt.eth_mnemonic, opt.eth_account_index)<span class="question-mark">?</span>;
+<a href=#121 id=121 data-nosnippet>121</a>    <span class="kw">let </span>bootstrapped_view = ViewNumber::new(opt.view_number);
 <a href=#122 id=122 data-nosnippet>122</a>
-<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">let </span>validated_state = ValidatedState::genesis(<span class="kw-2">&amp;</span>instance_state).<span class="number">0</span>;
+<a href=#123 id=123 data-nosnippet>123</a>    <span class="kw">let </span>builder_server_url: Url = <span class="macro">format!</span>(<span class="string">"http://0.0.0.0:{}"</span>, opt.port).parse().unwrap();
 <a href=#124 id=124 data-nosnippet>124</a>
-<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">let </span>api_response_timeout_duration = opt.max_api_timeout_duration;
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="kw">let </span>instance_state = build_instance_state(genesis.clone(), l1_params, opt.state_peers);
 <a href=#126 id=126 data-nosnippet>126</a>
-<a href=#127 id=127 data-nosnippet>127</a>    <span class="comment">// make the txn timeout as 1/4 of the api_response_timeout_duration
-<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="kw">let </span>txn_timeout_duration = api_response_timeout_duration / <span class="number">4</span>;
+<a href=#127 id=127 data-nosnippet>127</a>    <span class="kw">let </span>base_fee = genesis.max_base_fee();
+<a href=#128 id=128 data-nosnippet>128</a>    <span class="macro">tracing::info!</span>(<span class="question-mark">?</span>base_fee, <span class="string">"base_fee"</span>);
 <a href=#129 id=129 data-nosnippet>129</a>
-<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">let </span>_builder_config = BuilderConfig::init(
-<a href=#131 id=131 data-nosnippet>131</a>        builder_key_pair,
-<a href=#132 id=132 data-nosnippet>132</a>        bootstrapped_view,
-<a href=#133 id=133 data-nosnippet>133</a>        opt.tx_channel_capacity,
-<a href=#134 id=134 data-nosnippet>134</a>        opt.event_channel_capacity,
-<a href=#135 id=135 data-nosnippet>135</a>        opt.node_count,
-<a href=#136 id=136 data-nosnippet>136</a>        instance_state.clone(),
-<a href=#137 id=137 data-nosnippet>137</a>        validated_state,
-<a href=#138 id=138 data-nosnippet>138</a>        opt.sequencer_api_url,
-<a href=#139 id=139 data-nosnippet>139</a>        builder_server_url,
-<a href=#140 id=140 data-nosnippet>140</a>        api_response_timeout_duration,
-<a href=#141 id=141 data-nosnippet>141</a>        opt.max_block_size_increment_period,
-<a href=#142 id=142 data-nosnippet>142</a>        txn_timeout_duration,
-<a href=#143 id=143 data-nosnippet>143</a>        base_fee,
-<a href=#144 id=144 data-nosnippet>144</a>        opt.tx_status_cache_size,
-<a href=#145 id=145 data-nosnippet>145</a>        genesis.base_version,
-<a href=#146 id=146 data-nosnippet>146</a>    )
-<a href=#147 id=147 data-nosnippet>147</a>    .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#148 id=148 data-nosnippet>148</a>
-<a href=#149 id=149 data-nosnippet>149</a>    <span class="comment">// Sleep forever
-<a href=#150 id=150 data-nosnippet>150</a>    </span>pending::&lt;()&gt;().<span class="kw">await</span>;
-<a href=#151 id=151 data-nosnippet>151</a>
-<a href=#152 id=152 data-nosnippet>152</a>    <span class="prelude-val">Ok</span>(())
-<a href=#153 id=153 data-nosnippet>153</a>}
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="kw">let </span>validated_state = ValidatedState::genesis(<span class="kw-2">&amp;</span>instance_state).<span class="number">0</span>;
+<a href=#131 id=131 data-nosnippet>131</a>
+<a href=#132 id=132 data-nosnippet>132</a>    <span class="kw">let </span>api_response_timeout_duration = opt.max_api_timeout_duration;
+<a href=#133 id=133 data-nosnippet>133</a>
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="comment">// make the txn timeout as 1/4 of the api_response_timeout_duration
+<a href=#135 id=135 data-nosnippet>135</a>    </span><span class="kw">let </span>txn_timeout_duration = api_response_timeout_duration / <span class="number">4</span>;
+<a href=#136 id=136 data-nosnippet>136</a>
+<a href=#137 id=137 data-nosnippet>137</a>    <span class="kw">let </span>_builder_config = BuilderConfig::init(
+<a href=#138 id=138 data-nosnippet>138</a>        builder_key_pair,
+<a href=#139 id=139 data-nosnippet>139</a>        bootstrapped_view,
+<a href=#140 id=140 data-nosnippet>140</a>        opt.tx_channel_capacity,
+<a href=#141 id=141 data-nosnippet>141</a>        opt.event_channel_capacity,
+<a href=#142 id=142 data-nosnippet>142</a>        opt.node_count,
+<a href=#143 id=143 data-nosnippet>143</a>        instance_state.clone(),
+<a href=#144 id=144 data-nosnippet>144</a>        validated_state,
+<a href=#145 id=145 data-nosnippet>145</a>        opt.sequencer_api_url,
+<a href=#146 id=146 data-nosnippet>146</a>        builder_server_url,
+<a href=#147 id=147 data-nosnippet>147</a>        api_response_timeout_duration,
+<a href=#148 id=148 data-nosnippet>148</a>        opt.max_block_size_increment_period,
+<a href=#149 id=149 data-nosnippet>149</a>        txn_timeout_duration,
+<a href=#150 id=150 data-nosnippet>150</a>        base_fee,
+<a href=#151 id=151 data-nosnippet>151</a>        opt.tx_status_cache_size,
+<a href=#152 id=152 data-nosnippet>152</a>        genesis.base_version,
+<a href=#153 id=153 data-nosnippet>153</a>    )
+<a href=#154 id=154 data-nosnippet>154</a>    .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#155 id=155 data-nosnippet>155</a>
+<a href=#156 id=156 data-nosnippet>156</a>    <span class="comment">// Sleep forever
+<a href=#157 id=157 data-nosnippet>157</a>    </span>pending::&lt;()&gt;().<span class="kw">await</span>;
+<a href=#158 id=158 data-nosnippet>158</a>
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="prelude-val">Ok</span>(())
+<a href=#160 id=160 data-nosnippet>160</a>}
 </code></pre></div></section></main></body></html>

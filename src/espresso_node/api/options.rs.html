@@ -597,7 +597,7 @@
 <a href=#597 id=597 data-nosnippet>597</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug)]
 <a href=#598 id=598 data-nosnippet>598</a></span><span class="kw">pub struct </span>Http {
 <a href=#599 id=599 data-nosnippet>599</a>    <span class="doccomment">/// Port that the HTTP API will use.
-<a href=#600 id=600 data-nosnippet>600</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_API_PORT"</span>, default_value = <span class="string">"8080"</span>)]
+<a href=#600 id=600 data-nosnippet>600</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_API_PORT"</span>, default_value = <span class="string">"8080"</span>)]
 <a href=#601 id=601 data-nosnippet>601</a>    </span><span class="kw">pub </span>port: u16,
 <a href=#602 id=602 data-nosnippet>602</a>
 <a href=#603 id=603 data-nosnippet>603</a>    <span class="doccomment">/// Maximum number of concurrent HTTP connections the server will allow.
@@ -605,7 +605,7 @@
 <a href=#605 id=605 data-nosnippet>605</a>    /// Connections exceeding this will receive and immediate 429 response and be closed.
 <a href=#606 id=606 data-nosnippet>606</a>    ///
 <a href=#607 id=607 data-nosnippet>607</a>    /// Leave unset for no connection limit.
-<a href=#608 id=608 data-nosnippet>608</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_MAX_CONNECTIONS"</span>)]
+<a href=#608 id=608 data-nosnippet>608</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_API_MAX_CONNECTIONS"</span>)]
 <a href=#609 id=609 data-nosnippet>609</a>    </span><span class="kw">pub </span>max_connections: <span class="prelude-ty">Option</span>&lt;usize&gt;,
 <a href=#610 id=610 data-nosnippet>610</a>}
 <a href=#611 id=611 data-nosnippet>611</a>
@@ -639,7 +639,7 @@
 <a href=#639 id=639 data-nosnippet>639</a></span><span class="attr">#[derive(Parser, Clone, Debug, Default)]
 <a href=#640 id=640 data-nosnippet>640</a></span><span class="kw">pub struct </span>Query {
 <a href=#641 id=641 data-nosnippet>641</a>    <span class="doccomment">/// Peers for fetching missing data for the query service.
-<a href=#642 id=642 data-nosnippet>642</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_SEQUENCER_API_PEERS"</span>, value_delimiter = <span class="string">','</span>)]
+<a href=#642 id=642 data-nosnippet>642</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_API_PEERS"</span>, value_delimiter = <span class="string">','</span>)]
 <a href=#643 id=643 data-nosnippet>643</a>    </span><span class="kw">pub </span>peers: Vec&lt;Url&gt;,
 <a href=#644 id=644 data-nosnippet>644</a>}
 <a href=#645 id=645 data-nosnippet>645</a>

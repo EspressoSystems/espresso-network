@@ -156,7 +156,7 @@
 <a href=#156 id=156 data-nosnippet>156</a>        // honest peer, and thus never make progress. Thus, we start with a base timeout (default
 <a href=#157 id=157 data-nosnippet>157</a>        // 2s), which is reasonable for an HTTP request. If that fails with all of our peers, we
 <a href=#158 id=158 data-nosnippet>158</a>        // increase the timeout by the base amount for each successive retry, until we eventually
-<a href=#159 id=159 data-nosnippet>159</a>        // succeed. The base timeout is configurable via ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT.
+<a href=#159 id=159 data-nosnippet>159</a>        // succeed. The base timeout is configurable via ESPRESSO_NODE_CATCHUP_BASE_TIMEOUT.
 <a href=#160 id=160 data-nosnippet>160</a>        </span><span class="kw">let </span>timeout_dur = <span class="self">self</span>.base_timeout * (retry <span class="kw">as </span>u32 + <span class="number">1</span>);
 <a href=#161 id=161 data-nosnippet>161</a>
 <a href=#162 id=162 data-nosnippet>162</a>        <span class="comment">// Keep track of which peers we make requests to and which succeed (`true`) or fail (`false`),

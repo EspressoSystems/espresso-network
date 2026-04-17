@@ -41,7 +41,7 @@
 <a href=#41 id=41 data-nosnippet>41</a>        <span class="kw">let </span>permit = REWARD_MERKLE_TREE_V2_MEMORY_LOCK
 <a href=#42 id=42 data-nosnippet>42</a>            .get_or_init(|| {
 <a href=#43 id=43 data-nosnippet>43</a>                <span class="kw">let </span>num_permits: usize =
-<a href=#44 id=44 data-nosnippet>44</a>                    std::env::var(<span class="string">"ESPRESSO_SEQUENCER_REWARD_MERKLE_TREE_PERMITS"</span>)
+<a href=#44 id=44 data-nosnippet>44</a>                    std::env::var(<span class="string">"ESPRESSO_NODE_REWARD_MERKLE_TREE_PERMITS"</span>)
 <a href=#45 id=45 data-nosnippet>45</a>                        .ok()
 <a href=#46 id=46 data-nosnippet>46</a>                        .and_then(|v| v.parse::&lt;usize&gt;().ok())
 <a href=#47 id=47 data-nosnippet>47</a>                        .unwrap_or(<span class="number">1</span>);

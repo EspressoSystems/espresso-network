@@ -3,15 +3,15 @@
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span>alloy::primitives::Address;
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>anyhow::{Context, <span class="prelude-ty">Result</span>, bail};
 <a href=#5 id=5 data-nosnippet>5</a>
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">const </span>STAKE_TABLE_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS"</span>;
-<a href=#7 id=7 data-nosnippet>7</a><span class="kw">const </span>ESP_TOKEN_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SEQUENCER_ESP_TOKEN_PROXY_ADDRESS"</span>;
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">const </span>LIGHT_CLIENT_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS"</span>;
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">const </span>FEE_CONTRACT_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SEQUENCER_FEE_CONTRACT_PROXY_ADDRESS"</span>;
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">const </span>REWARD_CLAIM_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SEQUENCER_REWARD_CLAIM_PROXY_ADDRESS"</span>;
-<a href=#11 id=11 data-nosnippet>11</a><span class="kw">const </span>MULTISIG_PREFIX: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SEQUENCER_MULTISIG_"</span>;
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">const </span>STAKE_TABLE_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_STAKE_TABLE_PROXY_ADDRESS"</span>;
+<a href=#7 id=7 data-nosnippet>7</a><span class="kw">const </span>ESP_TOKEN_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESP_TOKEN_PROXY_ADDRESS"</span>;
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">const </span>LIGHT_CLIENT_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS"</span>;
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">const </span>FEE_CONTRACT_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS"</span>;
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">const </span>REWARD_CLAIM_PROXY_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS"</span>;
+<a href=#11 id=11 data-nosnippet>11</a><span class="kw">const </span>MULTISIG_PREFIX: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_MULTISIG_"</span>;
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">const </span>MULTISIG_SUFFIX: <span class="kw-2">&amp;</span>str = <span class="string">"_ADDRESS"</span>;
-<a href=#13 id=13 data-nosnippet>13</a><span class="kw">const </span>OPS_TIMELOCK_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SEQUENCER_OPS_TIMELOCK_ADDRESS"</span>;
-<a href=#14 id=14 data-nosnippet>14</a><span class="kw">const </span>SAFE_EXIT_TIMELOCK_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SEQUENCER_SAFE_EXIT_TIMELOCK_ADDRESS"</span>;
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">const </span>OPS_TIMELOCK_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_OPS_TIMELOCK_ADDRESS"</span>;
+<a href=#14 id=14 data-nosnippet>14</a><span class="kw">const </span>SAFE_EXIT_TIMELOCK_ADDRESS: <span class="kw-2">&amp;</span>str = <span class="string">"ESPRESSO_SAFE_EXIT_TIMELOCK_ADDRESS"</span>;
 <a href=#15 id=15 data-nosnippet>15</a>
 <a href=#16 id=16 data-nosnippet>16</a><span class="doccomment">/// Contract and governance addresses read from a per-network .env file.
 <a href=#17 id=17 data-nosnippet>17</a></span><span class="attr">#[derive(Debug, Default, Clone, PartialEq)]

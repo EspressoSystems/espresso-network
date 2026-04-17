@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["commitment_to_u256","contract_send","u256_to_commitment","wait_for_http","wait_for_rpc"],"macro":["build_info","impl_serde_from_string_or_integer","impl_to_fixed_bytes"],"mod":["build_info","logging","ser","test_utils"]};
+window.SIDEBAR_ITEMS = {"fn":["commitment_to_u256","contract_send","u256_to_commitment","wait_for_http","wait_for_rpc"],"macro":["build_info","impl_serde_from_string_or_integer","impl_to_fixed_bytes"],"mod":["build_info","env_compat","logging","ser","test_utils"]};

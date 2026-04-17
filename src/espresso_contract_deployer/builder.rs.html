@@ -742,7 +742,7 @@
 <a href=#742 id=742 data-nosnippet>742</a>        <span class="comment">// Validate multisig is set (even though we now encode calldata rather than submit to Safe)
 <a href=#743 id=743 data-nosnippet>743</a>        </span><span class="kw">let </span>_multisig = <span class="self">self</span>.multisig.expect(
 <a href=#744 id=744 data-nosnippet>744</a>            <span class="string">"Multisig address must be set when proposing ownership transfer. Use \
-<a href=#745 id=745 data-nosnippet>745</a>             --multisig-address or ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS"</span>,
+<a href=#745 id=745 data-nosnippet>745</a>             --multisig-address or ESPRESSO_ETH_MULTISIG_ADDRESS"</span>,
 <a href=#746 id=746 data-nosnippet>746</a>        );
 <a href=#747 id=747 data-nosnippet>747</a>        <span class="kw">let </span>ownable_contract = <span class="self">self</span>.target_contract.ok_or_else(|| {
 <a href=#748 id=748 data-nosnippet>748</a>            <span class="macro">anyhow::anyhow!</span>(
