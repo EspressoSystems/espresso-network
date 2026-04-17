@@ -229,10 +229,6 @@ impl TestData {
         Self::new_with_epoch_height(num_views, 0).await
     }
 
-    pub async fn new_with_num_nodes(num_views: usize, num_nodes: usize) -> Self {
-        Self::new_with_epoch_height_and_num_nodes(num_views, 0, num_nodes).await
-    }
-
     /// Create test data with epoch-aware proposals. When `epoch_height > 0`,
     /// epoch transition views will have `next_drb_result` set to
     /// [`TEST_DRB_RESULT`] and all downstream commitments (leaf, cert1, cert2,
@@ -460,7 +456,9 @@ pub async fn mock_membership_with_num_nodes(
         .write()
         .await
         .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
-    let coordinator = EpochMembershipCoordinator::new(membership, 10, &TestStorage::default());
+
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default());
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator
