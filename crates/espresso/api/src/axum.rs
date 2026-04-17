@@ -4,8 +4,7 @@ pub mod routes;
 
 use aide::{
     axum::{ApiRouter, routing::get_with},
-    generate::GenContext,
-    openapi::{Info, MediaType, OpenApi, Operation, Response as OpenApiResponse, SchemaObject},
+    openapi::{Info, OpenApi},
     operation::OperationOutput,
     redoc::Redoc,
     scalar::Scalar,
@@ -51,41 +50,6 @@ impl IntoResponse for ApiError {
 
 impl OperationOutput for ApiError {
     type Inner = Self;
-
-    fn operation_response(
-        ctx: &mut GenContext,
-        _operation: &mut Operation,
-    ) -> Option<OpenApiResponse> {
-        let schema = ctx.schema.subschema_for::<ErrorResponse>();
-        Some(OpenApiResponse {
-            description: "Error response".to_string(),
-            content: [(
-                "application/json".to_string(),
-                MediaType {
-                    schema: Some(SchemaObject {
-                        json_schema: schema,
-                        example: None,
-                        external_docs: None,
-                    }),
-                    ..Default::default()
-                },
-            )]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        })
-    }
-
-    fn inferred_responses(
-        ctx: &mut GenContext,
-        operation: &mut Operation,
-    ) -> Vec<(Option<u16>, OpenApiResponse)> {
-        if let Some(response) = Self::operation_response(ctx, operation) {
-            vec![(Some(400), response.clone()), (Some(500), response)]
-        } else {
-            vec![]
-        }
-    }
 }
 
 /// Serve the OpenAPI spec (extracted from Extension)
