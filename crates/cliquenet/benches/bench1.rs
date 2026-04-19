@@ -1,15 +1,13 @@
-use std::{collections::HashMap, io, net::Ipv4Addr, sync::LazyLock, time::Duration};
+use std::{
+    collections::HashMap, io, net::Ipv4Addr, num::NonZeroUsize, sync::LazyLock, time::Duration,
+};
 
-use cliquenet::{MAX_MESSAGE_SIZE, NetConf, NetworkError, Retry};
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-#[cfg(feature = "metrics")]
-use hotshot_types::traits::metrics::NoMetrics;
-use hotshot_types::{
-    addr::NetAddr,
+use cliquenet::{
+    Config, Network, Slot,
     x25519::{Keypair, PublicKey},
 };
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use rand::Rng;
-use test_utils::reserve_tcp_port;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -17,15 +15,19 @@ use tokio::{
     time::sleep,
 };
 
-const A: u8 = 0;
-const B: u8 = 1;
+const KIBI: usize = 1024;
+const MEBI: usize = KIBI * KIBI;
+const GIBI: usize = MEBI * KIBI;
 
 const SIZES: &[usize] = &[
-    128 * 1024,
-    512 * 1024,
-    1024 * 1024,
-    5 * 1024 * 1024,
-    MAX_MESSAGE_SIZE,
+    1,
+    128 * KIBI,
+    512 * KIBI,
+    MEBI,
+    5 * MEBI,
+    10 * MEBI,
+    50 * MEBI,
+    100 * MEBI,
 ];
 
 static DATA: LazyLock<HashMap<usize, Vec<u8>>> = LazyLock::new(|| {
@@ -36,6 +38,16 @@ static DATA: LazyLock<HashMap<usize, Vec<u8>>> = LazyLock::new(|| {
         (*n, v)
     }))
 });
+
+fn reserve_port() -> u16 {
+    let s = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let a = s.local_addr().unwrap();
+    let _ = std::net::TcpStream::connect(a).unwrap();
+    let _ = s.accept().unwrap();
+    a.port()
+}
+
+// -- TCP baseline ------------------------------------------------------------
 
 async fn setup_tcp() -> (TcpStream, TcpStream) {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -48,68 +60,7 @@ async fn setup_tcp() -> (TcpStream, TcpStream) {
     (a, b)
 }
 
-async fn setup_cliquenet() -> (Retry<u8>, Retry<u8>) {
-    let a = Keypair::generate().unwrap();
-    let b = Keypair::generate().unwrap();
-
-    let port_a = reserve_tcp_port().expect("OS should have ephemeral ports available");
-    let port_b = reserve_tcp_port().expect("OS should have ephemeral ports available");
-
-    let all: [(u8, PublicKey, NetAddr); 2] = [
-        (
-            A,
-            a.public_key(),
-            NetAddr::from((Ipv4Addr::LOCALHOST, port_a)),
-        ),
-        (
-            B,
-            b.public_key(),
-            NetAddr::from((Ipv4Addr::LOCALHOST, port_b)),
-        ),
-    ];
-
-    let net_a = Retry::create({
-        let cfg = NetConf::builder()
-            .name("bench")
-            .label(A)
-            .keypair(a)
-            .bind(all[0].2.clone())
-            .parties(all.clone());
-        #[cfg(not(feature = "metrics"))]
-        {
-            cfg.build()
-        }
-        #[cfg(feature = "metrics")]
-        {
-            cfg.metrics(Box::new(NoMetrics)).build()
-        }
-    })
-    .await
-    .unwrap();
-
-    let net_b = Retry::create({
-        let cfg = NetConf::builder()
-            .name("bench")
-            .label(B)
-            .keypair(b)
-            .bind(all[1].2.clone())
-            .parties(all.clone());
-        #[cfg(not(feature = "metrics"))]
-        {
-            cfg.build()
-        }
-        #[cfg(feature = "metrics")]
-        {
-            cfg.metrics(Box::new(NoMetrics)).build()
-        }
-    })
-    .await
-    .unwrap();
-
-    (net_a, net_b)
-}
-
-async fn tcp(size: usize, srv: &mut TcpStream, clt: &mut TcpStream) {
+async fn tcp_echo(srv: &mut TcpStream, clt: &mut TcpStream, data: &[u8]) {
     async fn echo_server(stream: &mut TcpStream) -> io::Result<()> {
         let len = stream.read_u32().await?;
         let mut v = vec![0; len as usize];
@@ -118,42 +69,17 @@ async fn tcp(size: usize, srv: &mut TcpStream, clt: &mut TcpStream) {
         stream.write_all(&v).await
     }
 
-    async fn echo_client(stream: &mut TcpStream, d: Vec<u8>) -> io::Result<()> {
+    async fn echo_client(stream: &mut TcpStream, d: &[u8]) -> io::Result<()> {
         stream.write_u32(d.len() as u32).await?;
-        stream.write_all(&d).await?;
+        stream.write_all(d).await?;
         let len = stream.read_u32().await?;
-        assert_eq!(len as usize, d.len());
         let mut v = vec![0; len as usize];
         stream.read_exact(&mut v).await?;
-        assert_eq!(&*v, &*d);
+        assert_eq!(v, d);
         Ok(())
     }
 
-    let dat = DATA[&size].clone();
-    let (ra, rb) = tokio::join!(echo_server(srv), echo_client(clt, dat));
-    ra.unwrap();
-    rb.unwrap();
-}
-
-async fn cliquenet(to: u8, size: usize, srv: &mut Retry<u8>, clt: &mut Retry<u8>) {
-    async fn echo_server(net: &mut Retry<u8>) -> Result<(), NetworkError> {
-        let (src, data) = net.receive().await?;
-        let _ = net.unicast(src, 0, data.into()).await?;
-        Ok(())
-    }
-
-    async fn echo_client(to: u8, net: &mut Retry<u8>, d: Vec<u8>) -> Result<(), NetworkError> {
-        let _ = net.unicast(to, 0, d.clone()).await?;
-        let (src, data) = net.receive().await?;
-        assert_eq!(src, to);
-        assert_eq!(&*data, &*d);
-        Ok(())
-    }
-
-    let dat = DATA[&size].clone();
-    let fa = echo_server(srv);
-    let fb = echo_client(to, clt, dat);
-    let (ra, rb) = tokio::join!(fa, fb);
+    let (ra, rb) = tokio::join!(echo_server(srv), echo_client(clt, data));
     ra.unwrap();
     rb.unwrap();
 }
@@ -162,37 +88,210 @@ fn bench_tcp(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let (mut srv, mut clt) = rt.block_on(setup_tcp());
     let mut group = c.benchmark_group("tcp");
-    for n in SIZES {
-        group
-            .throughput(Throughput::Bytes(*n as u64))
-            .bench_with_input(
-                BenchmarkId::from_parameter(format!("{}k", n / 1024)),
-                n,
-                |b, n| b.iter(|| rt.block_on(tcp(*n, &mut srv, &mut clt))),
-            );
+    for &n in SIZES {
+        group.throughput(Throughput::Bytes(n as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| rt.block_on(tcp_echo(&mut srv, &mut clt, data)))
+        });
     }
     group.finish();
+}
+
+// -- Network echo ------------------------------------------------------------
+
+struct Echo {
+    net_a: Network,
+    pkb: PublicKey,
+    _echo_handle: tokio::task::AbortHandle,
+}
+
+async fn setup_echo() -> Echo {
+    let ka = Keypair::generate().unwrap();
+    let kb = Keypair::generate().unwrap();
+    let pka = ka.public_key();
+    let pkb = kb.public_key();
+
+    let port_a = reserve_port();
+    let port_b = reserve_port();
+
+    let addr_a = (Ipv4Addr::LOCALHOST, port_a);
+    let addr_b = (Ipv4Addr::LOCALHOST, port_b);
+
+    let conf_a = Config::builder()
+        .name("bench")
+        .keypair(ka)
+        .bind(addr_a.into())
+        .parties([(pkb, addr_b.into())])
+        .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
+        .receive_timeout(Duration::from_secs(60))
+        .retry_delays(vec![1, 3])
+        .max_retry_delay(Duration::from_secs(5))
+        .build();
+
+    let conf_b = Config::builder()
+        .name("bench")
+        .keypair(kb)
+        .bind(addr_b.into())
+        .parties([(pka, addr_a.into())])
+        .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
+        .receive_timeout(Duration::from_secs(60))
+        .retry_delays(vec![1, 3])
+        .max_retry_delay(Duration::from_secs(5))
+        .build();
+
+    let net_a = Network::create(conf_a).await.unwrap();
+    let mut net_b = Network::create(conf_b).await.unwrap();
+
+    sleep(Duration::from_secs(2)).await;
+
+    let echo = tokio::spawn(async move {
+        while let Some((src, data)) = net_b.receive().await {
+            let _ = net_b.unicast(Slot::MIN, src, data.to_vec());
+        }
+    });
+
+    Echo {
+        net_a,
+        pkb,
+        _echo_handle: echo.abort_handle(),
+    }
 }
 
 fn bench_cliquenet(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let (mut srv, mut clt) = rt.block_on(async {
-        let (a, b) = setup_cliquenet().await;
-        sleep(Duration::from_secs(3)).await;
-        (a, b)
-    });
+    let mut echo = rt.block_on(setup_echo());
+
     let mut group = c.benchmark_group("cliquenet");
-    for n in SIZES {
-        group
-            .throughput(Throughput::Bytes(*n as u64))
-            .bench_with_input(
-                BenchmarkId::from_parameter(format!("{}k", n / 1024)),
-                n,
-                |b, n| b.iter(|| rt.block_on(cliquenet(A, *n, &mut srv, &mut clt))),
-            );
+    for &n in SIZES {
+        group.throughput(Throughput::Bytes(n as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| {
+                echo.net_a
+                    .unicast(Slot::MIN, echo.pkb, data.clone())
+                    .unwrap();
+                let (src, recv) = rt.block_on(async { echo.net_a.receive().await.unwrap() });
+                assert_eq!(src, echo.pkb);
+                assert_eq!(recv.len(), n);
+            });
+        });
     }
     group.finish();
 }
 
-criterion_group!(benches, bench_tcp, bench_cliquenet);
+// -- Bidirectional throughput -------------------------------------------------
+
+struct BiDir {
+    ctrl_a: cliquenet::NetworkController,
+    recv_a: cliquenet::NetworkReceiver,
+    pka: PublicKey,
+    ctrl_b: cliquenet::NetworkController,
+    recv_b: cliquenet::NetworkReceiver,
+    pkb: PublicKey,
+}
+
+async fn setup_bidir() -> BiDir {
+    let ka = Keypair::generate().unwrap();
+    let kb = Keypair::generate().unwrap();
+    let pka = ka.public_key();
+    let pkb = kb.public_key();
+
+    let port_a = reserve_port();
+    let port_b = reserve_port();
+
+    let addr_a = (Ipv4Addr::LOCALHOST, port_a);
+    let addr_b = (Ipv4Addr::LOCALHOST, port_b);
+
+    let conf_a = Config::builder()
+        .name("bench")
+        .keypair(ka)
+        .bind(addr_a.into())
+        .parties([(pkb, addr_b.into())])
+        .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
+        .receive_timeout(Duration::from_secs(60))
+        .retry_delays(vec![1, 3])
+        .max_retry_delay(Duration::from_secs(5))
+        .build();
+
+    let conf_b = Config::builder()
+        .name("bench")
+        .keypair(kb)
+        .bind(addr_b.into())
+        .parties([(pka, addr_a.into())])
+        .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
+        .receive_timeout(Duration::from_secs(60))
+        .retry_delays(vec![1, 3])
+        .max_retry_delay(Duration::from_secs(5))
+        .build();
+
+    let net_a = Network::create(conf_a).await.unwrap();
+    let net_b = Network::create(conf_b).await.unwrap();
+
+    sleep(Duration::from_secs(2)).await;
+
+    let (ctrl_a, recv_a) = net_a.split_into();
+    let (ctrl_b, recv_b) = net_b.split_into();
+
+    BiDir {
+        ctrl_a,
+        recv_a,
+        pka,
+        ctrl_b,
+        recv_b,
+        pkb,
+    }
+}
+
+fn bench_bidirectional(c: &mut Criterion) {
+    const ROUNDS: usize = 10;
+
+    let rt = Runtime::new().unwrap();
+    let mut bd = rt.block_on(setup_bidir());
+
+    let mut group = c.benchmark_group("bidirectional");
+    for &n in SIZES {
+        group.throughput(Throughput::Bytes((2 * ROUNDS * n) as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| {
+                for _ in 0..ROUNDS {
+                    bd.ctrl_a.unicast(Slot::MIN, bd.pkb, data.clone()).unwrap();
+                    bd.ctrl_b.unicast(Slot::MIN, bd.pka, data.clone()).unwrap();
+                }
+                rt.block_on(async {
+                    tokio::join!(
+                        async {
+                            for _ in 0..ROUNDS {
+                                let (src, recv) = bd.recv_a.receive().await.unwrap();
+                                assert_eq!(src, bd.pkb);
+                                assert_eq!(recv.len(), n);
+                            }
+                        },
+                        async {
+                            for _ in 0..ROUNDS {
+                                let (src, recv) = bd.recv_b.receive().await.unwrap();
+                                assert_eq!(src, bd.pka);
+                                assert_eq!(recv.len(), n);
+                            }
+                        },
+                    );
+                });
+            });
+        });
+    }
+    group.finish();
+}
+
+fn show(size: usize) -> String {
+    match size {
+        1 => "1 byte".to_string(),
+        n if n < KIBI => format!("{n} bytes"),
+        n if n < MEBI => format!("{} KiB", n / KIBI),
+        n if n < GIBI => format!("{} MiB", n / MEBI),
+        n => format!("{n} bytes"),
+    }
+}
+
+criterion_group!(benches, bench_tcp, bench_cliquenet, bench_bidirectional);
 criterion_main!(benches);

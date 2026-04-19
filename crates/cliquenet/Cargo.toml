@@ -1,32 +1,34 @@
 [package]
-name = "cliquenet"
-version = "0.1.0"
-edition.workspace = true
+name        = "cliquenet"
+version     = "0.1.0"
+edition     = "2024"
 description = "A fully connected mesh network"
 
 [features]
-metrics = []
+serde = ["dep:serde", "dep:serde_bytes"]
 
 [dependencies]
-bimap = { workspace = true }
-bon = { workspace = true }
-bytes = { workspace = true }
-hotshot-types = { workspace = true }
-nohash-hasher = { workspace = true }
-parking_lot = { workspace = true }
-rand = "0.10.0"
-scopeguard = { workspace = true }
-snow = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
+bon             = { workspace = true }
+bs58            = { workspace = true }
+bytes           = { workspace = true }
+ed25519-compact = { workspace = true }
+parking_lot     = { workspace = true }
+rand            = "0.10.0"
+snow            = { workspace = true }
+thiserror       = { workspace = true }
+tokio           = { workspace = true, features = ["macros", "net", "rt", "time"] }
+tokio-util      = { workspace = true, features = ["join-map"] }
+tracing         = { workspace = true }
+# optional:
+serde           = { workspace = true, features = ["derive"], optional = true }
+serde_bytes     = { workspace = true, optional = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
+criterion  = { workspace = true }
 quickcheck = { workspace = true }
-test-utils = { workspace = true }
-tracing-subscriber = { workspace = true }
+tokio      = { workspace = true }
 
 [[bench]]
-name = "bench1"
+name    = "bench1"
 harness = false
+

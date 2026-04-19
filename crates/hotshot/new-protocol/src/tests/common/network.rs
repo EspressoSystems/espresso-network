@@ -11,7 +11,7 @@ use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    traits::{metrics::NoMetrics, network::Topic, signature_key::SignatureKey},
+    traits::{network::Topic, signature_key::SignatureKey},
     x25519::Keypair,
 };
 use serde::{Deserialize, Serialize};
@@ -123,7 +123,7 @@ impl TestNetwork for CliquenetTestNetwork {
             .map(|i| {
                 let (public_key, private_key) =
                     BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64);
-                let keypair = Keypair::derive_from::<BLSPubKey>(&private_key);
+                let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
                 let port = test_utils::reserve_tcp_port()
                     .expect("OS should have ephemeral ports available");
                 let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
@@ -159,7 +159,6 @@ impl TestNetwork for CliquenetTestNetwork {
                 keypair.clone(),
                 addr.clone(),
                 peer_infos.clone(),
-                Box::new(NoMetrics),
             )
             .await
             .expect("cliquenet creation should succeed");
@@ -171,7 +170,7 @@ impl TestNetwork for CliquenetTestNetwork {
 
     async fn create_client(&self) -> Cliquenet<BLSPubKey> {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([1u8; 32], 9999);
-        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key);
+        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
@@ -181,7 +180,6 @@ impl TestNetwork for CliquenetTestNetwork {
             keypair,
             addr,
             self.peer_infos.clone(),
-            Box::new(NoMetrics),
         )
         .await
         .expect("cliquenet client creation should succeed")

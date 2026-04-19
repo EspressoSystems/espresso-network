@@ -731,7 +731,6 @@ where
             network_params.x25519_secret_key.into(),
             network_params.cliquenet_bind_addr.clone(),
             peers,
-            metrics.clone(),
         )
         .await?;
 

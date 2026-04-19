@@ -20,15 +20,13 @@
 //! - Version (4 bits)
 //! - Type (4 bits)
 //!    - Data (0)
-//!    - Ping (1)
-//!    - Pong (2)
+//!    - Ack  (1)
 //! - Partial (1 bit)
 //! - Reserved (7 bits)
 //! - Payload length (16 bits)
 //!
 //! If the partial bit is set, the frame is only a part of the message and the read task
-//! will assemble all frames to produce the final message. The maximum total message size
-//! is capped to 5 MiB.
+//! will assemble all frames to produce the final message.
 
 use std::fmt;
 
@@ -39,27 +37,33 @@ pub struct Header(u32);
 impl Header {
     pub const SIZE: usize = 4;
 
+    pub fn new(ty: Type, len: u16) -> Self {
+        match ty {
+            Type::Data => Self::data(len),
+            Type::Ack => Self::ack(len),
+        }
+    }
+
+    /// Create a new, unvalidated header from the given bytes.
+    pub fn unvalidated(bytes: [u8; Self::SIZE]) -> Self {
+        Self(u32::from_be_bytes(bytes))
+    }
+
     /// Create a data header with the given payload length.
     pub fn data(len: u16) -> Self {
         Self(len as u32)
     }
 
-    /// Create a ping header with the given payload length.
-    pub fn ping(len: u16) -> Self {
+    /// Create an ack header with the given payload length.
+    pub fn ack(len: u16) -> Self {
         Self(0x1000000 | len as u32)
-    }
-
-    /// Create a pong header with the given payload length.
-    pub fn pong(len: u16) -> Self {
-        Self(0x2000000 | len as u32)
     }
 
     /// The type of the frame following this header.
     pub fn frame_type(self) -> Result<Type, u8> {
         match (self.0 & 0xF000000) >> 24 {
             0 => Ok(Type::Data),
-            1 => Ok(Type::Ping),
-            2 => Ok(Type::Pong),
+            1 => Ok(Type::Ack),
             t => Err(t as u8),
         }
     }
@@ -74,14 +78,9 @@ impl Header {
         self.0 & 0xF000000 == 0
     }
 
-    /// Is this a ping frame header?
-    pub fn is_ping(self) -> bool {
+    /// Is this an ack frame header?
+    pub fn is_ack(self) -> bool {
         self.0 & 0xF000000 == 0x1000000
-    }
-
-    /// Is this a pong frame header?
-    pub fn is_pong(self) -> bool {
-        self.0 & 0xF000000 == 0x2000000
     }
 
     /// Is this a partial frame?
@@ -94,6 +93,11 @@ impl Header {
         (self.0 & 0xFFFF) as u16
     }
 
+    /// Is the payload length 0?
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
     /// Convert this header into a byte array.
     pub fn to_bytes(self) -> [u8; Self::SIZE] {
         self.0.to_be_bytes()
@@ -104,31 +108,12 @@ impl Header {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
     Data,
-    Ping,
-    Pong,
+    Ack,
 }
 
 impl From<Header> for [u8; Header::SIZE] {
     fn from(val: Header) -> Self {
         val.to_bytes()
-    }
-}
-
-impl TryFrom<&[u8]> for Header {
-    type Error = InvalidHeader;
-
-    fn try_from(val: &[u8]) -> Result<Self, Self::Error> {
-        let n = <[u8; Self::SIZE]>::try_from(val)
-            .map_err(|_| InvalidHeader("4-byte slice required"))?;
-        Ok(Self(u32::from_be_bytes(n)))
-    }
-}
-
-impl TryFrom<[u8; Header::SIZE]> for Header {
-    type Error = InvalidHeader;
-
-    fn try_from(val: [u8; Self::SIZE]) -> Result<Self, Self::Error> {
-        Ok(Self(u32::from_be_bytes(val)))
     }
 }
 
@@ -158,38 +143,25 @@ mod tests {
             hdr.is_data() && !hdr.is_partial() && hdr.frame_type() == Ok(Type::Data)
         }
 
-        fn ping(len: u16) -> bool {
-            let hdr = Header::ping(len);
-            hdr.is_ping() && !hdr.is_partial() && hdr.frame_type() == Ok(Type::Ping)
-        }
-
-        fn pong(len: u16) -> bool {
-            let hdr = Header::pong(len);
-            hdr.is_pong() && !hdr.is_partial() && hdr.frame_type() == Ok(Type::Pong)
+        fn ack(len: u16) -> bool {
+            let hdr = Header::ack(len);
+            hdr.is_ack() && !hdr.is_partial() && hdr.frame_type() == Ok(Type::Ack)
         }
 
         fn partial_data(len: u16) -> bool {
             Header::data(len).partial().is_partial()
         }
 
-        fn partial_ping(len: u16) -> bool {
-            Header::ping(len).partial().is_partial()
-        }
-
-        fn partial_pong(len: u16) -> bool {
-            Header::pong(len).partial().is_partial()
+        fn partial_ack(len: u16) -> bool {
+            Header::ack(len).partial().is_partial()
         }
 
         fn data_len(len: u16) -> bool {
             Header::data(len).len() == len
         }
 
-        fn ping_len(len: u16) -> bool {
-            Header::ping(len).len() == len
-        }
-
-        fn pong_len(len: u16) -> bool {
-            Header::pong(len).len() == len
+        fn ack_len(len: u16) -> bool {
+            Header::ack(len).len() == len
         }
     }
 }
