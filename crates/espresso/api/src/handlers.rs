@@ -1,4 +1,4 @@
-//! Shared handler functions for reward API endpoints, 
+//! Shared handler functions for reward API endpoints,
 //! used by both Axum and Tonic APIs.
 
 use serialization_api::v2::*;

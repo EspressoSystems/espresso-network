@@ -89,14 +89,6 @@ async fn redirect_to_docs() -> axum::response::Redirect {
 }
 
 /// Create a combined router serving both v1 and v2 APIs
-///
-/// This is the main entry point for espresso-node. Routes are available at:
-/// - `/v1/reward-state-v2/*` - V1 API (internal types, no OpenAPI docs)
-/// - `/v2/rewards/*` - V2 API (proto types, with OpenAPI docs)
-/// - `/rewards/*` - V2 API (rewritten to /v2/rewards/*)
-/// - `/`, `/v2`, `/v2/` - Swagger documentation UI
-/// - `/v2/scalar` - Scalar documentation UI
-/// - `/v2/redoc` - Redoc documentation UI
 pub fn create_combined_router<S>(state: S) -> Router
 where
     S: v1::RewardApi + v2::RewardApi + Clone + Send + Sync + 'static,
