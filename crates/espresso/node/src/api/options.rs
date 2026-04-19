@@ -35,6 +35,7 @@ use super::{
         SequencerDataSource, StateSignatureDataSource, SubmitDataSource, provider,
     },
     endpoints, fs, light_client, sql,
+    state::NodeApiStateImpl,
     update::ApiEventConsumer,
 };
 use crate::{
@@ -231,6 +232,16 @@ impl Options {
                 self.listen(self.http.port, app, SequencerApiVersion::instance()),
             );
 
+            // Spawn new Axum and gRPC servers if ports are configured
+            // TODO: Use NodeApiStateImpl with real data source once available for status-only mode
+            if self.http.axum_port.is_some() {
+                tracing::warn!("Axum reward API not available in status-only mode");
+            }
+
+            if self.http.tonic_port.is_some() {
+                tracing::warn!("gRPC reward API not available in status-only mode");
+            }
+
             (metrics, Box::new(NullEventConsumer), None)
         } else {
             // If no status or availability API is requested, we don't need metrics or a query
@@ -371,6 +382,17 @@ impl Options {
         }
 
         tasks.spawn("API server", self.listen(self.http.port, app, bind_version));
+
+        // Reward APIs not available with filesystem storage
+        // Note: Filesystem storage doesn't support RewardMerkleTreeDataSource
+        if self.http.axum_port.is_some() {
+            tracing::warn!("Axum reward API not available with filesystem storage");
+        }
+
+        if self.http.tonic_port.is_some() {
+            tracing::warn!("gRPC reward API not available with filesystem storage");
+        }
+
         Ok((
             metrics,
             Box::new(ApiEventConsumer::from(ds)),
@@ -487,6 +509,28 @@ impl Options {
             "API server",
             self.listen(self.http.port, app, SequencerApiVersion::instance()),
         );
+
+        // Spawn new Axum and gRPC servers if ports are configured
+        if let Some(axum_port) = self.http.axum_port {
+            let ds_for_axum = ds.clone();
+            tasks.spawn("Axum API server", async move {
+                let state = NodeApiStateImpl::new(ds_for_axum);
+                if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
+                    tracing::error!("Axum server error: {}", e);
+                }
+            });
+        }
+
+        if let Some(tonic_port) = self.http.tonic_port {
+            let ds_for_tonic = ds.clone();
+            tasks.spawn("Tonic gRPC server", async move {
+                let state = NodeApiStateImpl::new(ds_for_tonic);
+                if let Err(e) = espresso_api::serve_tonic(tonic_port, state).await {
+                    tracing::error!("Tonic gRPC server error: {}", e);
+                }
+            });
+        }
+
         Ok((
             metrics,
             Box::new(ApiEventConsumer::from(ds)),
@@ -607,6 +651,14 @@ pub struct Http {
     /// Leave unset for no connection limit.
     #[clap(long, env = "ESPRESSO_NODE_API_MAX_CONNECTIONS")]
     pub max_connections: Option<usize>,
+
+    /// Optional port for new Axum API server (skeleton implementation).
+    #[clap(long, env = "ESPRESSO_NODE_AXUM_PORT")]
+    pub axum_port: Option<u16>,
+
+    /// Optional port for Tonic gRPC API server.
+    #[clap(long, env = "ESPRESSO_NODE_TONIC_PORT")]
+    pub tonic_port: Option<u16>,
 }
 
 impl Http {
@@ -615,6 +667,8 @@ impl Http {
         Self {
             port,
             max_connections: None,
+            axum_port: None,
+            tonic_port: None,
         }
     }
 }
