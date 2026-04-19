@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["reward_service_client","reward_service_server"]};

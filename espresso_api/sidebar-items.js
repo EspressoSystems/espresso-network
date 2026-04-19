@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_combined_router","create_reward_service","create_router_v1","create_router_v2","serve_axum","serve_tonic"],"mod":["axum","error","handlers","proto","routes","tonic","v1","v2"]};

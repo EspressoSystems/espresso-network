@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["reward_state_v2"]};

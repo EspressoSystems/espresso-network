@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["create_combined_router","create_router_v1","create_router_v2","redirect_to_docs","rewrite_root_to_v2","serve_openapi_spec"],"mod":["routes"],"struct":["ErrorResponse"]};
