@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ::light_client::state::LightClientOptions;
+use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
 use espresso_types::{
@@ -364,7 +364,13 @@ impl Options {
     {
         let ds = <fs::DataSource as SequencerDataSource>::create(
             mod_opt,
-            provider(query_opt.peers, &state, query_opt.light_client).await?,
+            provider(
+                query_opt.peers,
+                &state,
+                query_opt.light_client,
+                query_opt.light_client_db,
+            )
+            .await?,
             false,
         )
         .await?;
@@ -427,8 +433,13 @@ impl Options {
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
         provider = provider.with_provider(
-            LightClientProvider::new(query_opt.peers, state.clone(), query_opt.light_client)
-                .await?,
+            LightClientProvider::new(
+                query_opt.peers,
+                state.clone(),
+                query_opt.light_client,
+                query_opt.light_client_db,
+            )
+            .await?,
         );
 
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
@@ -699,6 +710,23 @@ pub struct Query {
     /// Light client configuration, for fetching data from peers.
     #[clap(flatten)]
     pub light_client: LightClientOptions,
+
+    /// Persistence for the light client, enabling faster startup.
+    #[clap(flatten)]
+    pub light_client_db: LightClientSqliteOptions,
+}
+
+#[cfg(test)]
+impl Query {
+    pub fn test() -> Self {
+        Self {
+            light_client: LightClientOptions {
+                decaf: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
 }
 
 /// Options for the state API module.

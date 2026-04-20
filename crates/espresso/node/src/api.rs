@@ -4,7 +4,7 @@ use ::light_client::{
     LightClient,
     client::{FallbackClient, QueryServiceClient},
     state::{Genesis, LightClientOptions},
-    storage::{SqliteStorage, Storage},
+    storage::{LightClientSqliteOptions, SqliteStorage},
 };
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
@@ -1687,12 +1687,14 @@ impl LightClientProvider {
         peers: impl IntoIterator<Item = Url>,
         state: ApiState<N, P>,
         opt: LightClientOptions,
+        db_opt: LightClientSqliteOptions,
     ) -> anyhow::Result<Self>
     where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
     {
-        let db = SqliteStorage::default()
+        let db = db_opt
+            .connect()
             .await
             .context("creating SQLite database for light client")?;
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
@@ -5756,6 +5758,7 @@ mod test {
                     decaf: true,
                     ..Default::default()
                 },
+                ..Default::default()
             },
             tmp_options(node_0_storage),
         );
@@ -5997,10 +6000,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                light_client: LightClientOptions {
-                    decaf: true,
-                    ..Default::default()
-                },
+                ..Query::test()
             },
             tmp_options(node_0_storage),
         );
@@ -7238,10 +7238,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                light_client: LightClientOptions {
-                    decaf: true,
-                    ..Default::default()
-                },
+                ..Query::test()
             },
             tmp_options(&new_storage),
         );
