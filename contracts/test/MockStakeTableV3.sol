@@ -10,8 +10,8 @@ contract MockStakeTableV3 is StakeTableV3 {
     function registerValidatorV3(
         BN254.G2Point memory blsVK,
         EdOnBN254.EdOnBN254Point memory schnorrVK,
-        BN254.G1Point memory,
-        bytes memory,
+        BN254.G1Point memory blsSig,
+        bytes memory schnorrSig,
         uint16 commission,
         string memory metadataUri,
         bytes32 x25519Key,
@@ -42,8 +42,8 @@ contract MockStakeTableV3 is StakeTableV3 {
             blsVK,
             schnorrVK,
             commission,
-            BN254.G1Point(BN254.BaseField.wrap(0), BN254.BaseField.wrap(0)),
-            "",
+            blsSig,
+            schnorrSig,
             metadataUri,
             x25519Key,
             p2pAddr

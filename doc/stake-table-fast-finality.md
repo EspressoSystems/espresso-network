@@ -334,7 +334,9 @@ pub enum StakeTableEvent {
   - Map `P2pAddrUpdated` to `StakeTableEvent::P2pAddrUpdate`
 
 - `apply_event` handler for `RegisterV3`: same as `RegisterV2` handler but sets `x25519_key` and `p2p_addr` on the
-  `RegisteredValidator`. Parse x25519 key from `bytes32`, parse p2p addr from string via `NetAddr::from_str`.
+  `RegisteredValidator`. Parse x25519 key from `bytes32` (reject `bytes32(0)` with `InvalidX25519Key`, matching the
+  contract's pre-condition — no silent `None` degrade). Parse p2p addr from string via `NetAddr::from_str`; if parse
+  fails, log a warning and set `p2p_addr = None`.
 
 - `apply_event` handler for `X25519KeyUpdate`:
   - Look up validator, error if not found.
@@ -366,6 +368,9 @@ validators keep the same commitment as before.
 This approach was chosen over keeping them out of the commitment entirely because including them ensures all nodes agree
 on the network config for each validator, which matters for fast finality peer discovery.
 
+`StakeTableState::commit` includes the `used_x25519_keys` set alongside `used_bls_keys` and `used_schnorr_keys` so state
+divergence on x25519 uniqueness tracking is detectable via state commitment comparison.
+
 ### Epoch activation delay
 
 Stake table changes take 2-3 epochs to become active in consensus. This applies to x25519 and p2p addr updates as well
@@ -391,8 +396,10 @@ update-p2p-addr --p2p-addr <ADDR>
 - `update-x25519-key`: calls `stake_table.updateX25519Key(x25519Key)`
 - `update-p2p-addr`: calls `stake_table.updateP2pAddr(p2pAddr)`
 - Update `registerValidatorV3` command (or extend existing register command) to include `--x25519-key` and `--p2p-addr`
-  flags.
-- Add event display formatting for `ValidatorRegisteredV3`, `X25519KeyUpdated`, and `P2pAddrUpdated`.
+  flags. The `register-validator` command rejects `--x25519-key`/`--p2p-addr` when the deployed contract is V1 or V2
+  with a message pointing the operator to V3.
+- Add event display formatting for `ValidatorRegisteredV3`, `X25519KeyUpdated`, and `P2pAddrUpdated`. The event display
+  match on `StakeTableV3Events` is exhaustive (no `_` arm) so future event additions fail to compile until handled.
 
 ## 5. Deployment and Upgrade
 
@@ -405,18 +412,25 @@ Add V3 upgrade support following the V2 pattern:
 **`src/lib.rs`:**
 
 - `prepare_stake_table_v3_upgrade()`: verify proxy is at V2, encode `initializeV3()` calldata. No data migration needed.
-- `upgrade_stake_table_v3()`: EOA path: deploy `StakeTableV3` impl, call `proxy.upgradeToAndCall(impl, initData)`,
-  verify post-deploy (version == 3, new functions callable, existing V2 state preserved).
+- `upgrade_stake_table_v3()`: EOA path: check `majorVersion >= 2` and short-circuit if already at V3
+  (`already_initialized(.., 3)` returns true), deploy `StakeTableV3` impl, call
+  `proxy.upgradeToAndCall(impl, initData)`, verify post-deploy (version == 3, new functions callable, existing V2 state
+  preserved). Uses `StakeTableV3::new` for the proxy wrapper (V3 ABI is a superset of V2).
 
 **`src/proposals/multisig.rs`:**
 
-- `upgrade_stake_table_v3_multisig_owner()`: multisig path: deploy impl, encode upgrade calldata, output Safe TX Builder
-  JSON.
+- `upgrade_stake_table_v3_multisig_owner()`: multisig path. Same preconditions as EOA path. Deploys impl, encodes
+  upgrade calldata, outputs Safe TX Builder JSON.
+
+**`src/proposals/` (timelock):**
+
+- `upgrade_stake_table_v3_timelock_proposal()`: timelock path. Deploys impl, encodes `schedule(...)` and `execute(...)`
+  calldata targeting `OpsTimelock`. Used by Decaf and Mainnet (mainnet is also owned by OpsTimelock).
 
 **`src/builder.rs`:**
 
 - Add `--upgrade-stake-table-v3` flag to `DeployerArgs`.
-- Route through timelock or multisig based on existing flags.
+- Route through timelock, multisig, or EOA based on existing flags (`use_timelock_owner` / `use_multisig`).
 
 ### Upgrade path per environment
 
@@ -495,27 +509,27 @@ compatibility concerns.
 
 ### Requirement Tests
 
-| Test                              | Requirement                   | Implementation                                                                                 |
-| --------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------- |
-| TEST:register-v3-ok               | REQ:register-v3               | [`test_RegisterValidatorV3_Success`](../contracts/test/StakeTableV3.t.sol)                     |
-| TEST:update-network-config-ok     | REQ:update-network-config     | [`test_UpdateNetworkConfig_Success`](../contracts/test/StakeTableV3.t.sol)                     |
-| TEST:update-x25519-key-ok         | REQ:update-x25519-key         | [`test_UpdateX25519Key_Success`](../contracts/test/StakeTableV3.t.sol)                         |
-| TEST:update-p2p-addr-ok           | REQ:update-p2p-addr           | [`test_UpdateP2pAddr_Success`](../contracts/test/StakeTableV3.t.sol)                           |
-| TEST:x25519-uniqueness-ok         | REQ:x25519-uniqueness         | [`test_RegisterValidatorV3_DuplicateX25519_Reverts`](../contracts/test/StakeTableV3.t.sol)     |
-| TEST:x25519-nonzero-ok            | REQ:x25519-nonzero            | [`test_RegisterValidatorV3_ZeroX25519_Reverts`](../contracts/test/StakeTableV3.t.sol)          |
-| TEST:p2p-nonempty-ok              | REQ:p2p-nonempty              | [`test_ValidateP2pAddr_Empty`](../contracts/test/StakeTableV3.t.sol)                           |
-| TEST:p2p-maxlength-ok             | REQ:p2p-maxlength             | [`test_ValidateP2pAddr_TooLong`](../contracts/test/StakeTableV3.t.sol)                         |
-| TEST:event-register-v3-ok         | REQ:event-register-v3         | [`test_RegisterValidatorV3_Success`](../contracts/test/StakeTableV3.t.sol)                     |
-| TEST:event-x25519-key-ok          | REQ:event-x25519-key          | [`test_UpdateX25519Key_Success`](../contracts/test/StakeTableV3.t.sol)                         |
-| TEST:event-p2p-addr-ok            | REQ:event-p2p-addr            | [`test_UpdateP2pAddr_Success`](../contracts/test/StakeTableV3.t.sol)                           |
-| TEST:rust-register-v3-ok          | REQ:rust-register-v3          | [`test_register_v3_sets_x25519_and_p2p`](../crates/espresso/types/src/v0/impls/stake_table.rs) |
-| TEST:rust-x25519-key-ok           | REQ:rust-x25519-key           | [`test_x25519_key_update_sets_value`](../crates/espresso/types/src/v0/impls/stake_table.rs)    |
-| TEST:rust-p2p-addr-ok             | REQ:rust-p2p-addr             | [`test_p2p_addr_update_sets_value`](../crates/espresso/types/src/v0/impls/stake_table.rs)      |
-| TEST:upgrade-v2-to-v3-ok          | REQ:upgrade-v2-to-v3          | [`test_UpgradeV2ToV3_PreservesState`](../contracts/test/StakeTableUpgradeToV3.t.sol)           |
-| TEST:upgrade-storage-compat-ok    | REQ:upgrade-storage-compat    | not yet implemented                                                                            |
-| TEST:cli-update-network-config-ok | REQ:cli-update-network-config | [`test_update_network_config`](../staking-cli/src/registration.rs)                             |
-| TEST:cli-update-x25519-key-ok     | REQ:cli-update-x25519-key     | [`test_update_x25519_key`](../staking-cli/src/registration.rs)                                 |
-| TEST:cli-update-p2p-addr-ok       | REQ:cli-update-p2p-addr       | [`test_update_p2p_addr`](../staking-cli/src/registration.rs)                                   |
+| Test                              | Requirement                   | Implementation                                                                                         |
+| --------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------ |
+| TEST:register-v3-ok               | REQ:register-v3               | [`test_RegisterValidatorV3_Success`](../contracts/test/StakeTableV3.t.sol)                             |
+| TEST:update-network-config-ok     | REQ:update-network-config     | [`test_UpdateNetworkConfig_Success`](../contracts/test/StakeTableV3.t.sol)                             |
+| TEST:update-x25519-key-ok         | REQ:update-x25519-key         | [`test_UpdateX25519Key_Success`](../contracts/test/StakeTableV3.t.sol)                                 |
+| TEST:update-p2p-addr-ok           | REQ:update-p2p-addr           | [`test_UpdateP2pAddr_Success`](../contracts/test/StakeTableV3.t.sol)                                   |
+| TEST:x25519-uniqueness-ok         | REQ:x25519-uniqueness         | [`test_RegisterValidatorV3_DuplicateX25519_Reverts`](../contracts/test/StakeTableV3.t.sol)             |
+| TEST:x25519-nonzero-ok            | REQ:x25519-nonzero            | [`test_RegisterValidatorV3_ZeroX25519_Reverts`](../contracts/test/StakeTableV3.t.sol)                  |
+| TEST:p2p-nonempty-ok              | REQ:p2p-nonempty              | [`test_ValidateP2pAddr_Empty`](../contracts/test/StakeTableV3.t.sol)                                   |
+| TEST:p2p-maxlength-ok             | REQ:p2p-maxlength             | [`test_ValidateP2pAddr_TooLong`](../contracts/test/StakeTableV3.t.sol)                                 |
+| TEST:event-register-v3-ok         | REQ:event-register-v3         | [`test_RegisterValidatorV3_Success`](../contracts/test/StakeTableV3.t.sol)                             |
+| TEST:event-x25519-key-ok          | REQ:event-x25519-key          | [`test_UpdateX25519Key_Success`](../contracts/test/StakeTableV3.t.sol)                                 |
+| TEST:event-p2p-addr-ok            | REQ:event-p2p-addr            | [`test_UpdateP2pAddr_Success`](../contracts/test/StakeTableV3.t.sol)                                   |
+| TEST:rust-register-v3-ok          | REQ:rust-register-v3          | [`test_register_v3_sets_x25519_and_p2p`](../crates/espresso/types/src/v0/impls/stake_table.rs)         |
+| TEST:rust-x25519-key-ok           | REQ:rust-x25519-key           | [`test_x25519_key_update_sets_value`](../crates/espresso/types/src/v0/impls/stake_table.rs)            |
+| TEST:rust-p2p-addr-ok             | REQ:rust-p2p-addr             | [`test_p2p_addr_update_sets_value`](../crates/espresso/types/src/v0/impls/stake_table.rs)              |
+| TEST:upgrade-v2-to-v3-ok          | REQ:upgrade-v2-to-v3          | [`test_UpgradeV2ToV3_PreservesState`](../contracts/test/StakeTableUpgradeToV3.t.sol)                   |
+| TEST:upgrade-storage-compat-ok    | REQ:upgrade-storage-compat    | [`test_Network_StorageLayout_StakeTable_Sepolia`](../contracts/test/StorageUpgradeCompatibility.t.sol) |
+| TEST:cli-update-network-config-ok | REQ:cli-update-network-config | [`test_update_network_config`](../staking-cli/src/registration.rs)                                     |
+| TEST:cli-update-x25519-key-ok     | REQ:cli-update-x25519-key     | [`test_update_x25519_key`](../staking-cli/src/registration.rs)                                         |
+| TEST:cli-update-p2p-addr-ok       | REQ:cli-update-p2p-addr       | [`test_update_p2p_addr`](../staking-cli/src/registration.rs)                                           |
 
 ### Contract Edge Cases
 
@@ -554,7 +568,7 @@ compatibility concerns.
 | EDGE:p2p-port-zero                | p2p addr with port 0 (e.g. `host:0`). Must revert.                                                                                                                       |
 | EDGE:p2p-port-overflow            | p2p addr with port > 65535 (e.g. `host:70000`). Must revert.                                                                                                             |
 | EDGE:p2p-port-non-numeric         | p2p addr with non-numeric port (e.g. `host:abc`). Must revert.                                                                                                           |
-| EDGE:p2p-port-leading-zero        | p2p addr with leading zero port (e.g. `host:08080`). Accepted (parses to 8080).                                                                                          |
+| EDGE:p2p-port-leading-zero        | p2p addr with leading zero port (e.g. `host:08080`). Must revert (leading zeros rejected).                                                                               |
 | EDGE:p2p-valid-ipv4               | p2p addr with IPv4 host (e.g. `192.168.1.1:8080`). Must succeed.                                                                                                         |
 | EDGE:p2p-valid-ipv6               | p2p addr with IPv6 host (e.g. `::1:8080`). Must succeed. Last `:` separates port.                                                                                        |
 | EDGE:p2p-valid-hostname           | p2p addr with hostname (e.g. `node.example.com:8080`). Must succeed.                                                                                                     |
@@ -622,14 +636,14 @@ All contract edge case tests are in [`contracts/test/StakeTableV3.t.sol`](../con
 
 All Rust edge case tests are in [`crates/espresso/types/src/v0/impls/stake_table.rs`][rst]:
 
-| Test                                              | Edge Case                            |
-| ------------------------------------------------- | ------------------------------------ |
-| [`test_register_v3_invalid_sig`][rst]             | EDGE:rust-register-v3-invalid-sig    |
-| [`test_register_v3_empty_p2p_sets_none`][rst]     | EDGE:rust-register-v3-bad-p2p        |
-| [`test_x25519_key_update_unknown_validator`][rst] | EDGE:rust-x25519-unknown-validator   |
-| [`test_x25519_key_update_duplicate`][rst]         | EDGE:rust-x25519-duplicate           |
-| [`test_p2p_addr_update_unknown_validator`][rst]   | EDGE:rust-p2p-addr-unknown-validator |
-| [`test_p2p_addr_update_bad_p2p`][rst]             | EDGE:rust-p2p-addr-bad-p2p           |
+| Test                                                        | Edge Case                            |
+| ----------------------------------------------------------- | ------------------------------------ |
+| [`test_register_v3_invalid_sig`][rst]                       | EDGE:rust-register-v3-invalid-sig    |
+| [`test_register_v3_invalid_p2p_addr_degrades_to_none`][rst] | EDGE:rust-register-v3-bad-p2p        |
+| [`test_x25519_key_update_unknown_validator`][rst]           | EDGE:rust-x25519-unknown-validator   |
+| [`test_x25519_key_update_duplicate`][rst]                   | EDGE:rust-x25519-duplicate           |
+| [`test_p2p_addr_update_unknown_validator`][rst]             | EDGE:rust-p2p-addr-unknown-validator |
+| [`test_p2p_addr_unparsable_sets_none`][rst]                 | EDGE:rust-p2p-addr-bad-p2p           |
 
 [rst]: ../crates/espresso/types/src/v0/impls/stake_table.rs
 
@@ -659,15 +673,14 @@ All upgrade tests are in [`contracts/test/StakeTableUpgradeToV3.t.sol`][upt]:
 
 ### Invariant Tests
 
-Add `updateNetworkConfig`, `updateX25519Key`, and `updateP2pAddr` as fuzzing targets to `StakeTableV2PropTestBase`:
+Only `updateX25519Key` is added as a fuzzing target to `StakeTableV2PropTestBase`. The contract stores and deduplicates
+x25519 keys, so fuzzing exercises real state. `updateNetworkConfig` is not fuzzed separately because its x25519 branch
+is equivalent to `updateX25519Key` under the fuzzer; its p2p branch and `updateP2pAddr` are not fuzzed because the
+contract does not store p2p addresses (only emits events), so there is no state invariant to exercise. Structural
+validation is covered by the `validateP2pAddr` unit tests in `StakeTableV3.t.sol`.
 
-- `updateNetworkConfigOk(actorIndex, x25519Key, p2pAddr)`: pick active validator, bound x25519 to unused key, valid p2p
-  addr.
-- `updateX25519KeyOk(actorIndex, x25519Key)`: pick active validator, bound x25519 to unused key.
-- `updateP2pAddrOk(actorIndex, p2pAddr)`: pick active validator, valid p2p addr.
-- `updateNetworkConfigAny(actorIndex, x25519Key, p2pAddr)`: raw fuzz input, expect reverts.
-- `updateX25519KeyAny(actorIndex, x25519Key)`: raw fuzz input, expect reverts.
-- `updateP2pAddrAny(actorIndex, p2pAddr)`: raw fuzz input, expect reverts.
+- `updateX25519KeyOk(valIndex, x25519Key)`: pick active validator, bound x25519 to unused key.
+- `updateX25519KeyAny(valIndex, x25519Key)`: raw fuzz input, expect reverts on invalid/duplicate.
 
 Existing invariants cover the new functions because network config changes do not affect delegation balances,
 `activeStake`, or `totalPendingWithdrawal`.

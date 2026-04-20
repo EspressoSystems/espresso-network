@@ -161,11 +161,6 @@ fn decode_and_display_logs(logs: &[Log]) {
                     "event: MetadataUriUpdated {{ validator: {}, metadataUri: {} }}",
                     e.validator, e.metadataUri
                 )),
-                StakeTableV3Events::Withdrawal(e) => output_success(format!("event: {e:?}")),
-                StakeTableV3Events::WithdrawalClaimed(e) => output_success(format!("event: {e:?}")),
-                StakeTableV3Events::ValidatorExitClaimed(e) => {
-                    output_success(format!("event: {e:?}"))
-                },
                 StakeTableV3Events::X25519KeyUpdated(e) => output_success(format!(
                     "event: X25519KeyUpdated {{ validator: {}, x25519Key: {} }}",
                     e.validator, e.x25519Key
@@ -174,7 +169,25 @@ fn decode_and_display_logs(logs: &[Log]) {
                     "event: P2pAddrUpdated {{ validator: {}, p2pAddr: {} }}",
                     e.validator, e.p2pAddr
                 )),
-                _ => {},
+                StakeTableV3Events::Withdrawal(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::WithdrawalClaimed(e) => output_success(format!("event: {e:?}")),
+                StakeTableV3Events::ValidatorExitClaimed(e) => {
+                    output_success(format!("event: {e:?}"))
+                },
+                // Events we intentionally don't display. Kept exhaustive so that
+                // future additions to `StakeTableV3Events` flag this match at compile time.
+                StakeTableV3Events::Initialized(_)
+                | StakeTableV3Events::OwnershipTransferred(_)
+                | StakeTableV3Events::Paused(_)
+                | StakeTableV3Events::Unpaused(_)
+                | StakeTableV3Events::Upgraded(_)
+                | StakeTableV3Events::RoleAdminChanged(_)
+                | StakeTableV3Events::RoleGranted(_)
+                | StakeTableV3Events::RoleRevoked(_)
+                | StakeTableV3Events::MaxCommissionIncreaseUpdated(_)
+                | StakeTableV3Events::MinCommissionUpdateIntervalUpdated(_)
+                | StakeTableV3Events::ExitEscrowPeriodUpdated(_)
+                | StakeTableV3Events::MinDelegateAmountUpdated(_) => {},
             }
         } else if let Ok(decoded) = EspTokenEvents::decode_log(log.as_ref()) {
             match &decoded.data {

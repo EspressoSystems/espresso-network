@@ -79,9 +79,13 @@ mod test {
         signature::NodeSignatures, transaction::Transaction,
     };
 
+    #[rstest]
+    #[case(StakeTableContractVersion::V1)]
+    #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
-    async fn test_register_validator() -> Result<()> {
-        let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    async fn test_register_validator(#[case] version: StakeTableContractVersion) -> Result<()> {
+        let system = TestSystem::deploy_version(version).await?;
         let validator_address = system.deployer_address;
         let payload = NodeSignatures::create(
             validator_address,
@@ -90,31 +94,60 @@ mod test {
         );
 
         let metadata_uri = "https://example.com/metadata".parse()?;
+        let (x25519_key, p2p_addr): (Option<x25519::PublicKey>, Option<NetAddr>) = match version {
+            StakeTableContractVersion::V3 => (
+                Some(system.x25519_keypair.public_key()),
+                Some("127.0.0.1:8080".parse().unwrap()),
+            ),
+            _ => (None, None),
+        };
         let receipt = Transaction::RegisterValidator {
             stake_table: system.stake_table,
             commission: system.commission,
             metadata_uri,
             payload,
-            version: StakeTableContractVersion::V2,
-            x25519_key: None,
-            p2p_addr: None,
+            version,
+            x25519_key,
+            p2p_addr,
         }
         .send(&system.provider)
         .await?
         .assert_success()
         .await?;
 
-        let event = receipt
-            .decoded_log::<StakeTableV3::ValidatorRegisteredV2>()
-            .unwrap();
-        assert_eq!(event.account, validator_address);
-        assert_eq!(event.commission, system.commission.to_evm());
-        assert_eq!(event.metadataUri, "https://example.com/metadata");
-
-        assert_eq!(event.blsVK, system.bls_key_pair.ver_key().into());
-        assert_eq!(event.schnorrVK, system.state_key_pair.ver_key().into());
-
-        event.data.authenticate()?;
+        match version {
+            StakeTableContractVersion::V1 => {
+                let event = receipt
+                    .decoded_log::<StakeTableV3::ValidatorRegistered>()
+                    .unwrap();
+                assert_eq!(event.account, validator_address);
+                assert_eq!(event.commission, system.commission.to_evm());
+                assert_eq!(event.blsVk, system.bls_key_pair.ver_key().into());
+                assert_eq!(event.schnorrVk, system.state_key_pair.ver_key().into());
+            },
+            StakeTableContractVersion::V2 => {
+                let event = receipt
+                    .decoded_log::<StakeTableV3::ValidatorRegisteredV2>()
+                    .unwrap();
+                assert_eq!(event.account, validator_address);
+                assert_eq!(event.commission, system.commission.to_evm());
+                assert_eq!(event.metadataUri, "https://example.com/metadata");
+                assert_eq!(event.blsVK, system.bls_key_pair.ver_key().into());
+                assert_eq!(event.schnorrVK, system.state_key_pair.ver_key().into());
+                event.data.authenticate()?;
+            },
+            StakeTableContractVersion::V3 => {
+                let event = receipt
+                    .decoded_log::<StakeTableV3::ValidatorRegisteredV3>()
+                    .unwrap();
+                assert_eq!(event.account, validator_address);
+                assert_eq!(event.commission, system.commission.to_evm());
+                assert_eq!(event.metadataUri, "https://example.com/metadata");
+                let expected_key = system.x25519_keypair.public_key();
+                assert_eq!(event.x25519Key, FixedBytes(expected_key.as_bytes()));
+                assert_eq!(event.p2pAddr, "127.0.0.1:8080");
+            },
+        }
         Ok(())
     }
 

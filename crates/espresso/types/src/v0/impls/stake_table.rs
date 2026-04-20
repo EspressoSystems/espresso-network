@@ -250,6 +250,16 @@ impl Committable for StakeTableState {
             builder = builder.var_size_bytes(&schnorr_key_bytes);
         }
 
+        // Only include used_x25519_keys when non-empty to preserve the pre-fast-finality commitment
+        // value for stake tables that have no x25519 keys yet. Same pattern as x25519_key /
+        // p2p_addr on RegisteredValidator.
+        if !self.used_x25519_keys.is_empty() {
+            builder = builder.constant_str("used_x25519_keys");
+            for key in self.used_x25519_keys.iter().sorted() {
+                builder = builder.var_size_bytes(key.as_slice());
+            }
+        }
+
         builder = builder.constant_str("validator_exits");
 
         for key in self.validator_exits.iter().sorted() {
@@ -345,7 +355,7 @@ impl StakeTableState {
         if let Some(key) = &x25519_key
             && self.used_x25519_keys.contains(key)
         {
-            return Err(StakeTableError::X25519KeyAlreadyUsed(format!("{key:?}")));
+            return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
         }
 
         // All checks ok, applying changes
@@ -683,16 +693,11 @@ impl StakeTableState {
                 let stake_table_key: BLSPubKey = (*blsVK).into();
                 let state_ver_key: SchnorrPubKey = (*schnorrVK).into();
 
-                // Parse x25519 key (zero means not provided)
-                let x25519_key = if x25519Key.0 != [0u8; 32] {
-                    Some(
-                        x25519::PublicKey::try_from(x25519Key.0.as_slice()).map_err(|e| {
-                            StakeTableError::InvalidX25519Key(format!("{:?}: {e}", x25519Key))
-                        })?,
-                    )
-                } else {
-                    None
-                };
+                if x25519Key.0 == [0u8; 32] {
+                    return Err(StakeTableError::InvalidX25519Key("zero key".into()));
+                }
+                let x25519_key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
+                    .map_err(|e| StakeTableError::InvalidX25519Key(format!("{e}")))?;
 
                 // Parse p2p addr
                 let p2p_addr = match p2pAddr.parse::<NetAddr>() {
@@ -711,7 +716,7 @@ impl StakeTableState {
                     state_ver_key,
                     *commission,
                     authenticated,
-                    x25519_key,
+                    Some(x25519_key),
                     p2p_addr,
                 );
             },
@@ -725,14 +730,10 @@ impl StakeTableState {
                     .get_mut(&validator)
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
 
-                let key = x25519::PublicKey::try_from(x25519Key.0.as_slice()).map_err(|e| {
-                    StakeTableError::InvalidX25519Key(format!("{:?}: {e}", x25519Key))
-                })?;
+                let key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
+                    .map_err(|e| StakeTableError::InvalidX25519Key(format!("{e}")))?;
                 if self.used_x25519_keys.contains(&key) {
-                    return Err(StakeTableError::X25519KeyAlreadyUsed(format!(
-                        "{:?}",
-                        x25519Key
-                    )));
+                    return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
                 }
                 self.used_x25519_keys.insert(key);
                 val.x25519_key = Some(key);
@@ -4419,6 +4420,79 @@ mod tests {
         let registered = state.validators().get(&val.account).unwrap();
         let expected_p2p: NetAddr = "my-node.example.com:9000".parse().unwrap();
         assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_duplicate_bls_key() -> anyhow::Result<()> {
+        let val1 = TestValidator::random();
+        let mut val2 = TestValidator::random();
+        val2.bls_vk = val1.bls_vk;
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val1).into()))??;
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val2).into()));
+        assert_matches!(result, Err(StakeTableError::BlsKeyAlreadyUsed(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_duplicate_schnorr_key() -> anyhow::Result<()> {
+        let val1 = TestValidator::random();
+        let mut val2 = TestValidator::random();
+        val2.schnorr_vk = val1.schnorr_vk;
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val1).into()))??;
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val2).into()));
+        assert_matches!(result, Err(StakeTableError::SchnorrKeyAlreadyUsed(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_duplicate_x25519_key() -> anyhow::Result<()> {
+        let shared_x25519 = [7u8; 32];
+        let val1 = TestValidator::random().with_x25519_key(shared_x25519);
+        let val2 = TestValidator::random().with_x25519_key(shared_x25519);
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val1).into()))??;
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val2).into()));
+        assert_matches!(result, Err(StakeTableError::X25519KeyAlreadyUsed(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_rejects_exited_validator() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+        state.apply_event(StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+            validator: val.account,
+            unlocksAt: U256::from(1000u64),
+        }))??;
+
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
+        assert_matches!(
+            result,
+            Err(StakeTableError::ValidatorAlreadyExited(addr)) if addr == val.account
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_zero_x25519_errors() -> anyhow::Result<()> {
+        let val = TestValidator::random().with_x25519_key([0u8; 32]);
+
+        let mut state = StakeTableState::default();
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
+        assert_matches!(result, Err(StakeTableError::InvalidX25519Key(_)));
 
         Ok(())
     }

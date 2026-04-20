@@ -26,8 +26,9 @@ use crate::{
             upgrade_stake_table_v3_multisig_owner,
         },
         timelock::{
-            TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
-            derive_timelock_address_from_contract_type, perform_timelock_operation,
+            StakeTableV3TimelockProposalParams, TimelockOperationParams, TimelockOperationPayload,
+            TimelockOperationType, derive_timelock_address_from_contract_type,
+            perform_timelock_operation, upgrade_stake_table_v3_timelock_proposal,
         },
     },
 };
@@ -498,8 +499,71 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
             },
             Contract::StakeTableV3 => {
                 let use_multisig = self.use_multisig;
-                tracing::info!(?use_multisig, "Upgrading to StakeTableV3");
-                if use_multisig {
+                let use_timelock_owner = self.use_timelock_owner.unwrap_or(false);
+                tracing::info!(
+                    ?use_multisig,
+                    ?use_timelock_owner,
+                    "Upgrading to StakeTableV3"
+                );
+                if use_timelock_owner {
+                    // StakeTableV3 upgrade via timelock-owned proxy: deploy the new impl
+                    // and emit `schedule` + `execute` timelock calldata. An operator
+                    // submits `schedule` through a timelock proposer, waits for the
+                    // delay to elapse, then submits `execute` through an executor.
+                    let salt_str = self.timelock_operation_salt.clone().context(
+                        "timelock_operation_salt must be set for StakeTableV3 upgrade with \
+                         --use-timelock-owner",
+                    )?;
+                    let salt_trimmed = salt_str.trim();
+                    let salt = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
+                        B256::ZERO
+                    } else {
+                        let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
+                        B256::from_hex(hex_str).context("Invalid salt hex format")?
+                    };
+                    let delay = self.timelock_operation_delay.context(
+                        "timelock_operation_delay must be set for StakeTableV3 upgrade with \
+                         --use-timelock-owner",
+                    )?;
+
+                    let proposal = upgrade_stake_table_v3_timelock_proposal(
+                        provider,
+                        contracts,
+                        StakeTableV3TimelockProposalParams { salt, delay },
+                    )
+                    .await?;
+
+                    // `output_safe_tx_builder` only writes a single tx per file, so
+                    // when an output path is given we write two files with suffixes.
+                    let (schedule_out, execute_out) = match self.output_path.as_deref() {
+                        Some(base) => {
+                            let stem = base
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "stake_table_v3_timelock".to_string());
+                            let ext = base
+                                .extension()
+                                .map(|s| format!(".{}", s.to_string_lossy()))
+                                .unwrap_or_default();
+                            let parent = base.parent().unwrap_or(std::path::Path::new(""));
+                            (
+                                Some(parent.join(format!("{stem}.schedule{ext}"))),
+                                Some(parent.join(format!("{stem}.execute{ext}"))),
+                            )
+                        },
+                        None => (None, None),
+                    };
+                    output_safe_tx_builder(
+                        &proposal.schedule,
+                        schedule_out.as_deref(),
+                        self.chain_id,
+                    )?;
+                    output_safe_tx_builder(
+                        &proposal.execute,
+                        execute_out.as_deref(),
+                        self.chain_id,
+                    )?;
+                } else if use_multisig {
                     let calldata = upgrade_stake_table_v3_multisig_owner(
                         provider,
                         contracts,

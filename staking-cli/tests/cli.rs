@@ -77,9 +77,9 @@ fn test_cli_version() -> Result<()> {
 #[case::claim_validator_exit(&["claim-validator-exit", "--validator-address", "0x1111111111111111111111111111111111111111"])]
 #[case::claim_rewards(&["--espresso-url", "http://localhost:1", "claim-rewards"])]
 #[case::transfer(&["transfer", "--amount", "100", "--to", "0x1111111111111111111111111111111111111111"])]
-#[case::set_network_config(&["update-network-config", "--x25519-key", "X25519_PK~01L0Noh7twqDRjw9QTuv3HOjsUMB_5HaV9nCSlbzEyXL", "--p2p-addr", "127.0.0.1:8080"])]
-#[case::set_x25519_key(&["update-x25519-key", "--x25519-key", "X25519_PK~01L0Noh7twqDRjw9QTuv3HOjsUMB_5HaV9nCSlbzEyXL"])]
-#[case::set_p2p_addr(&["update-p2p-addr", "--p2p-addr", "127.0.0.1:8080"])]
+#[case::update_network_config(&["update-network-config", "--x25519-key", "X25519_PK~01L0Noh7twqDRjw9QTuv3HOjsUMB_5HaV9nCSlbzEyXL", "--p2p-addr", "127.0.0.1:8080"])]
+#[case::update_x25519_key(&["update-x25519-key", "--x25519-key", "X25519_PK~01L0Noh7twqDRjw9QTuv3HOjsUMB_5HaV9nCSlbzEyXL"])]
+#[case::update_p2p_addr(&["update-p2p-addr", "--p2p-addr", "127.0.0.1:8080"])]
 #[test_log::test(tokio::test)]
 async fn test_cli_missing_signer_error(#[case] args: &[&str]) -> Result<()> {
     let system = deploy::TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
@@ -652,10 +652,15 @@ async fn test_cli_update_commission() -> Result<()> {
     Ok(())
 }
 
+#[rstest::rstest]
+#[case(StakeTableContractVersion::V2)]
+#[case(StakeTableContractVersion::V3)]
 #[test_log::test(tokio::test)]
-async fn test_cli_increase_commission_too_soon() -> Result<()> {
-    // Only test on V2 since V1 doesn't support commission updates
-    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+async fn test_cli_increase_commission_too_soon(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    // V1 doesn't support commission updates, so it is not covered here.
+    let system = TestSystem::deploy_version(version).await?;
     system.register_validator().await?;
 
     let old_commission = system.fetch_commission().await?;
@@ -1009,8 +1014,12 @@ async fn test_cli_transfer(#[case] version: StakeTableContractVersion) -> Result
 #[case::no_balance(None)]
 #[case::with_balance(Some(U256::from(1)))]
 #[tokio::test(flavor = "multi_thread")]
-async fn test_cli_claim_rewards(#[case] reward_balance: Option<U256>) -> Result<()> {
-    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+async fn test_cli_claim_rewards(
+    #[case] reward_balance: Option<U256>,
+    #[values(StakeTableContractVersion::V2, StakeTableContractVersion::V3)]
+    version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
 
     let balance_before = system.balance(system.deployer_address).await?;
 
@@ -1052,8 +1061,10 @@ async fn test_cli_claim_rewards(#[case] reward_balance: Option<U256>) -> Result<
 async fn test_cli_unclaimed_rewards(
     #[case] reward_balance: Option<U256>,
     #[case] expected_output: &str,
+    #[values(StakeTableContractVersion::V2, StakeTableContractVersion::V3)]
+    version: StakeTableContractVersion,
 ) -> Result<()> {
-    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+    let system = TestSystem::deploy_version(version).await?;
 
     let espresso_url = match reward_balance {
         Some(balance) => system.setup_reward_claim_mock(balance).await?,
@@ -1567,6 +1578,49 @@ async fn test_cli_all_operations_manual_inspect(
             .arg("--metadata-uri")
             .arg("https://example.com/updated-metadata")
             .arg("--skip-metadata-validation")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+    }
+
+    if matches!(version, StakeTableContractVersion::V3) {
+        let key = x25519::Keypair::generate().unwrap().public_key();
+
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("update-network-config")
+            .arg("--x25519-key")
+            .arg(key.to_string())
+            .arg("--p2p-addr")
+            .arg("10.0.0.1:9090")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+
+        let new_key = x25519::Keypair::generate().unwrap().public_key();
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("update-x25519-key")
+            .arg("--x25519-key")
+            .arg(new_key.to_string())
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        println!("{}", String::from_utf8_lossy(&output));
+
+        let output = system
+            .cmd(Signer::Mnemonic)
+            .arg("update-p2p-addr")
+            .arg("--p2p-addr")
+            .arg("192.168.1.1:7070")
             .assert()
             .success()
             .get_output()
@@ -2761,6 +2815,30 @@ async fn test_cli_update_p2p_addr() -> Result<()> {
         .arg("192.168.1.1:7070")
         .assert()
         .success();
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_cli_register_v2_rejects_v3_flags() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
+
+    let key = x25519::Keypair::generate().unwrap().public_key();
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
+        .arg("--consensus-private-key")
+        .arg(system.bls_private_key_str()?)
+        .arg("--state-private-key")
+        .arg(system.state_private_key_str()?)
+        .arg("--commission")
+        .arg("12.34")
+        .arg("--no-metadata-uri")
+        .arg("--x25519-key")
+        .arg(key.to_string())
+        .assert()
+        .failure()
+        .stderr(str::contains("V3"));
 
     Ok(())
 }

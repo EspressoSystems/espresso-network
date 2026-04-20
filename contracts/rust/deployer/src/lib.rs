@@ -1387,6 +1387,17 @@ pub async fn upgrade_stake_table_v3(
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
     };
 
+    let proxy = StakeTableV3::new(proxy_addr, &provider);
+
+    // V3 requires V2 as a prerequisite. V1 -> V2 -> V3 is the only supported path.
+    let version = proxy.getVersion().call().await?;
+    if version.majorVersion < 2 {
+        anyhow::bail!(
+            "StakeTableProxy must be at major version >= 2 to upgrade to V3, found {}",
+            version.majorVersion
+        );
+    }
+
     let v3_addr = contracts
         .deploy(
             Contract::StakeTableV3,
@@ -1394,12 +1405,18 @@ pub async fn upgrade_stake_table_v3(
         )
         .await?;
 
-    let init_data = StakeTableV3::new(Address::ZERO, &provider)
-        .initializeV3()
-        .calldata()
-        .to_owned();
+    // If already initialized at V3, skip initializeV3() to avoid the "already
+    // initialized" revert. Mirrors upgrade_light_client_v3 behavior.
+    let init_data = if already_initialized(&provider, proxy_addr, 3).await? {
+        tracing::info!("StakeTableProxy already initialized at V3, skipping initializeV3()");
+        vec![].into()
+    } else {
+        StakeTableV3::new(Address::ZERO, &provider)
+            .initializeV3()
+            .calldata()
+            .to_owned()
+    };
 
-    let proxy = StakeTableV2::new(proxy_addr, &provider);
     let receipt = proxy
         .upgradeToAndCall(v3_addr, init_data)
         .send()
@@ -1408,9 +1425,8 @@ pub async fn upgrade_stake_table_v3(
         .await?;
 
     if receipt.inner.is_success() {
-        let proxy_as_v3 = StakeTableV3::new(proxy_addr, &provider);
         let version_is_v3 = retry_until_true("StakeTableProxy V3 version check", || async {
-            Ok(proxy_as_v3.getVersion().call().await?.majorVersion == 3)
+            Ok(proxy.getVersion().call().await?.majorVersion == 3)
         })
         .await?;
         if !version_is_v3 {

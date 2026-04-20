@@ -422,12 +422,14 @@ pub async fn upgrade_stake_table_v3_multisig_owner(
     params: StakeTableV3UpgradeParams,
     multisig_owner_check: MultisigOwnerCheck,
 ) -> Result<CalldataInfo> {
+    let expected_major_version: u8 = 3;
+
     tracing::info!("Upgrading StakeTableProxy to StakeTableV3 using multisig owner");
     let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
         anyhow::bail!("StakeTableProxy not found, can't upgrade")
     };
 
-    let proxy = StakeTableV2::new(proxy_addr, &provider);
+    let proxy = StakeTableV3::new(proxy_addr, &provider);
     let owner_addr = proxy.owner().call().await?;
 
     if owner_addr != params.multisig_address {
@@ -444,6 +446,15 @@ pub async fn upgrade_stake_table_v3_multisig_owner(
         );
     }
 
+    // V3 requires V2 as a prerequisite. V1 -> V2 -> V3 is the only supported path.
+    let version = proxy.getVersion().call().await?;
+    if version.majorVersion < 2 {
+        anyhow::bail!(
+            "StakeTableProxy must be at major version >= 2 to upgrade to V3, found {}",
+            version.majorVersion
+        );
+    }
+
     let v3_addr = contracts
         .deploy(
             Contract::StakeTableV3,
@@ -451,10 +462,21 @@ pub async fn upgrade_stake_table_v3_multisig_owner(
         )
         .await?;
 
-    let init_data = StakeTableV3::new(Address::ZERO, &provider)
-        .initializeV3()
-        .calldata()
-        .to_owned();
+    // If already initialized at V3, skip initializeV3() to avoid the "already
+    // initialized" revert. Mirrors upgrade_light_client_v3_multisig_owner.
+    let init_data =
+        if crate::already_initialized(&provider, proxy_addr, expected_major_version).await? {
+            tracing::info!(
+                "StakeTableProxy already initialized at V{expected_major_version}, skipping \
+                 initializeV3()"
+            );
+            vec![].into()
+        } else {
+            StakeTableV3::new(Address::ZERO, &provider)
+                .initializeV3()
+                .calldata()
+                .to_owned()
+        };
 
     encode_upgrade_calldata(proxy_addr, v3_addr, init_data)
 }

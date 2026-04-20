@@ -54,8 +54,6 @@ contract FunctionCallTracking {
         FuncStats createActor;
         FuncStats createValidator;
         FuncStats advanceTime;
-        FuncStats updateNetworkConfig;
-        FuncStats updateP2pAddr;
         FuncStats updateX25519Key;
     }
 
@@ -65,8 +63,6 @@ contract FunctionCallTracking {
         FuncStats undelegate;
         FuncStats deregisterValidator;
         FuncStats claimValidatorExit;
-        FuncStats updateNetworkConfig;
-        FuncStats updateP2pAddr;
         FuncStats updateX25519Key;
     }
 
@@ -650,8 +646,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         total += stats.ok.createActor.ok;
         total += stats.ok.createValidator.ok;
         total += stats.ok.advanceTime.ok;
-        total += stats.ok.updateNetworkConfig.ok;
-        total += stats.ok.updateP2pAddr.ok;
         total += stats.ok.updateX25519Key.ok;
         // Any functions
         total += stats.any.registerValidator.ok;
@@ -659,8 +653,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         total += stats.any.undelegate.ok;
         total += stats.any.deregisterValidator.ok;
         total += stats.any.claimValidatorExit.ok;
-        total += stats.any.updateNetworkConfig.ok;
-        total += stats.any.updateP2pAddr.ok;
         total += stats.any.updateX25519Key.ok;
         return total;
     }
@@ -672,8 +664,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         total += stats.any.undelegate.reverts;
         total += stats.any.deregisterValidator.reverts;
         total += stats.any.claimValidatorExit.reverts;
-        total += stats.any.updateNetworkConfig.reverts;
-        total += stats.any.updateP2pAddr.reverts;
         total += stats.any.updateX25519Key.reverts;
         return total;
     }
@@ -741,23 +731,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         }
     }
 
-    function updateNetworkConfigOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
-        x25519KeyCounter++;
-        bytes32 x25519Key = keccak256(abi.encode("x25519", x25519KeyCounter));
-        string memory p2pAddr = "10.0.0.1:8080";
-
-        ivm.prank(validator);
-        stakeTable.updateNetworkConfig(x25519Key, p2pAddr);
-        usedX25519Keys[x25519Key] = true;
-        stats.ok.updateNetworkConfig.ok++;
-    }
-
-    function updateP2pAddrOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
-        ivm.prank(validator);
-        stakeTable.updateP2pAddr("10.0.0.1:9090");
-        stats.ok.updateP2pAddr.ok++;
-    }
-
     function updateX25519KeyOk(uint256 actorIndex) public withActiveValidator(actorIndex) {
         x25519KeyCounter++;
         bytes32 x25519Key = keccak256(abi.encode("x25519-setkey", x25519KeyCounter));
@@ -766,29 +739,6 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         stakeTable.updateX25519Key(x25519Key);
         usedX25519Keys[x25519Key] = true;
         stats.ok.updateX25519Key.ok++;
-    }
-
-    function updateNetworkConfigAny(uint256 actorIndex, bytes32 x25519Key, string memory p2pAddr)
-        public
-        useActor(actorIndex)
-    {
-        try stakeTable.updateNetworkConfig(x25519Key, p2pAddr) {
-            usedX25519Keys[x25519Key] = true;
-            stats.any.updateNetworkConfig.ok++;
-        } catch {
-            stats.any.updateNetworkConfig.reverts++;
-        }
-    }
-
-    function updateP2pAddrAny(uint256 actorIndex, string memory p2pAddr)
-        public
-        useActor(actorIndex)
-    {
-        try stakeTable.updateP2pAddr(p2pAddr) {
-            stats.any.updateP2pAddr.ok++;
-        } catch {
-            stats.any.updateP2pAddr.reverts++;
-        }
     }
 
     function updateX25519KeyAny(uint256 actorIndex, bytes32 x25519Key) public useActor(actorIndex) {

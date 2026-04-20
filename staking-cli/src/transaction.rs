@@ -209,32 +209,48 @@ impl Transaction {
                 x25519_key,
                 p2p_addr,
             } => match version {
-                StakeTableContractVersion::V1 => (
-                    stake_table,
-                    registerValidatorCall::from((
-                        payload.bls_vk.into(),
-                        payload.schnorr_vk.into(),
-                        G1PointSol::from(payload.bls_signature).into(),
-                        commission.to_evm(),
-                    ))
-                    .abi_encode()
-                    .into(),
-                    None,
-                ),
-                StakeTableContractVersion::V2 => (
-                    stake_table,
-                    registerValidatorV2Call::from((
-                        payload.bls_vk.into(),
-                        payload.schnorr_vk.into(),
-                        G1PointSol::from(payload.bls_signature).into(),
-                        StateSignatureSol::from(payload.schnorr_signature).into(),
-                        commission.to_evm(),
-                        metadata_uri.to_string(),
-                    ))
-                    .abi_encode()
-                    .into(),
-                    None,
-                ),
+                StakeTableContractVersion::V1 => {
+                    if x25519_key.is_some() || p2p_addr.is_some() {
+                        bail!(
+                            "--x25519-key and --p2p-addr are only supported on StakeTable V3; the \
+                             deployed contract is V1"
+                        );
+                    }
+                    (
+                        stake_table,
+                        registerValidatorCall::from((
+                            payload.bls_vk.into(),
+                            payload.schnorr_vk.into(),
+                            G1PointSol::from(payload.bls_signature).into(),
+                            commission.to_evm(),
+                        ))
+                        .abi_encode()
+                        .into(),
+                        None,
+                    )
+                },
+                StakeTableContractVersion::V2 => {
+                    if x25519_key.is_some() || p2p_addr.is_some() {
+                        bail!(
+                            "--x25519-key and --p2p-addr are only supported on StakeTable V3; the \
+                             deployed contract is V2"
+                        );
+                    }
+                    (
+                        stake_table,
+                        registerValidatorV2Call::from((
+                            payload.bls_vk.into(),
+                            payload.schnorr_vk.into(),
+                            G1PointSol::from(payload.bls_signature).into(),
+                            StateSignatureSol::from(payload.schnorr_signature).into(),
+                            commission.to_evm(),
+                            metadata_uri.to_string(),
+                        ))
+                        .abi_encode()
+                        .into(),
+                        None,
+                    )
+                },
                 StakeTableContractVersion::V3 => (
                     stake_table,
                     registerValidatorV3Call {

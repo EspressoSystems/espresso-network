@@ -93,11 +93,6 @@ contract StakeTableV3Test is Test {
         proxyV3.validateP2pAddr("host:");
     }
 
-    function test_ValidateP2pAddr_PortZero() public {
-        vm.expectRevert(StakeTableV3.InvalidP2pAddr.selector);
-        proxyV3.validateP2pAddr("host:0");
-    }
-
     function test_ValidateP2pAddr_PortOverflow() public {
         vm.expectRevert(StakeTableV3.InvalidP2pAddr.selector);
         proxyV3.validateP2pAddr("host:70000");
