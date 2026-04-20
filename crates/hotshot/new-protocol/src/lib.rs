@@ -1,4 +1,5 @@
 pub mod block;
+pub mod client;
 pub mod consensus;
 pub mod coordinator;
 pub mod epoch;

@@ -40,7 +40,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     membership: EpochMembershipCoordinator<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> Coordinator<TestTypes, I> {
+) -> Coordinator<TestTypes, I::Network> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
 
@@ -52,10 +52,15 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
     let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
+    let genesis_state = TestValidatedState::default();
+    let genesis_leaf =
+        Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+
     let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
         private_key.clone(),
+        genesis_leaf.clone(),
         epoch_height,
     );
 
@@ -69,9 +74,6 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     );
 
     let mut state_manager = StateManager::new(instance.clone());
-    let genesis_state = TestValidatedState::default();
-    let genesis_leaf =
-        Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
     state_manager.seed_state(
         ViewNumber::genesis(),
         Arc::new(genesis_state),
