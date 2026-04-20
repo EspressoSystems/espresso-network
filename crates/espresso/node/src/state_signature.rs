@@ -1,13 +1,9 @@
 //! Utilities for generating and storing the most recent light client state signatures.
 
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-};
+use std::collections::{HashMap, VecDeque};
 
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
-use espresso_types::{PubKey, traits::SequencerPersistence};
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
@@ -20,7 +16,6 @@ use hotshot_types::{
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
-        network::ConnectedNetwork,
         signature_key::{
             LCV1StateSignatureKey, LCV2StateSignatureKey, LCV3StateSignatureKey,
             StakeTableEntryType,
@@ -33,7 +28,7 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::{SeqTypes, context::Consensus};
+use crate::{SeqTypes, consensus_handle::ConsensusHandle};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;
@@ -95,13 +90,12 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
         self
     }
 
-    pub(super) async fn handle_event<N, P>(
+    pub(super) async fn handle_event<I>(
         &mut self,
         event: &Event<SeqTypes>,
-        consensus_state: Arc<RwLock<Consensus<N, P>>>,
+        consensus_handle: &ConsensusHandle<SeqTypes, I>,
     ) where
-        N: ConnectedNetwork<PubKey>,
-        P: SequencerPersistence,
+        I: hotshot::traits::NodeImplementation<SeqTypes>,
     {
         let EventType::Decide { leaf_chain, .. } = &event.event else {
             return;
@@ -116,9 +110,8 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
             Ok(state) => {
                 tracing::debug!("New leaves decided. Latest block height: {}", leaf.height(),);
 
-                let consensus = consensus_state.read().await;
                 let cur_block_height = state.block_height;
-                let blocks_per_epoch = consensus.epoch_height;
+                let blocks_per_epoch = consensus_handle.epoch_height().await;
 
                 let option_state_epoch = option_epoch_from_block_number(
                     leaf.with_epoch,
@@ -127,8 +120,9 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 );
 
                 if self.voting_stake_table_epoch != option_state_epoch {
-                    let Ok(membership) = consensus
-                        .membership_coordinator
+                    let Ok(membership) = consensus_handle
+                        .membership_coordinator()
+                        .await
                         .stake_table_for_epoch(option_state_epoch)
                         .await
                     else {

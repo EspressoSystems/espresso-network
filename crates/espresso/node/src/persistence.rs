@@ -1521,11 +1521,9 @@ mod tests {
         // Load initial persisted events and validate they exist.
         let membership_coordinator = test_network
             .server
-            .consensus()
-            .read()
-            .await
-            .membership_coordinator
-            .clone();
+            .consensus_handle()
+            .membership_coordinator()
+            .await;
 
         let l1_client = L1Client::new(vec![l1_url]).unwrap();
         let node_state = test_network.server.node_state();

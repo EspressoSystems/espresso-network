@@ -70,7 +70,7 @@ impl MetricsCollector {
                 self.view_mut(v).vid_disperse_ns = Some(ts);
             },
             // Replica: proposal processing
-            ConsensusInput::Proposal(p) => {
+            ConsensusInput::Proposal(_sender, p) => {
                 let v = *p.view_number();
                 self.view_mut(v).proposal_recv_ns = Some(ts);
             },
@@ -123,7 +123,7 @@ impl MetricsCollector {
                 self.view_mut(v).vote2_sent_ns = Some(ts);
             },
             // Decide
-            ConsensusOutput::LeafDecided(leaves) => {
+            ConsensusOutput::LeafDecided { leaves, .. } => {
                 for leaf in leaves {
                     let v = *leaf.view_number();
                     self.view_mut(v).leaf_decided_ns = Some(ts);

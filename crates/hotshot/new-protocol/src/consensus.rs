@@ -53,7 +53,7 @@ pub enum ConsensusInput<T: NodeType> {
     Certificate2(Certificate2<T>),
     EpochChange(EpochChangeMessage<T>),
     HeaderCreated(ViewNumber, T::BlockHeader),
-    Proposal(ProposalMessage<T, Validated>),
+    Proposal(T::SignatureKey, ProposalMessage<T, Validated>),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
     Timeout(ViewNumber, EpochNumber),
@@ -84,9 +84,16 @@ pub enum ConsensusOutput<T: NodeType> {
         payload: T::BlockPayload,
         metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     },
-    LeafDecided(Vec<Leaf2<T>>),
+    LeafDecided {
+        leaves: Vec<Leaf2<T>>,
+        cert2: Certificate2<T>,
+    },
     LockUpdated(Certificate2<T>),
     ViewChanged(ViewNumber, EpochNumber),
+    ProposalValidated {
+        proposal: SignedProposal<T, Proposal<T>>,
+        sender: T::SignatureKey,
+    },
 }
 
 pub struct Consensus<T: NodeType> {
@@ -103,13 +110,16 @@ pub struct Consensus<T: NodeType> {
     view_sync_certs: BTreeMap<ViewNumber, ViewSyncFinalizeCertificate2<T>>,
     locked_cert: Option<Certificate1<T>>,
     headers: BTreeMap<ViewNumber, T::BlockHeader>,
+    leaves: BTreeMap<ViewNumber, Leaf2<T>>,
     last_decided_view: ViewNumber,
+    last_decided_leaf: Leaf2<T>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
 
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
 
     timeout_view: ViewNumber,
+    current_view: ViewNumber,
     current_epoch: Option<EpochNumber>,
 
     // TODO: We need a next epoch stake table to handle the transition
@@ -137,6 +147,7 @@ impl<T: NodeType> Consensus<T> {
         membership_coordinator: EpochMembershipCoordinator<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+        genesis_leaf: Leaf2<T>,
         epoch_height: B,
     ) -> Self
     where
@@ -154,12 +165,15 @@ impl<T: NodeType> Consensus<T> {
             timeout_certs: BTreeMap::new(),
             view_sync_certs: BTreeMap::new(),
             locked_cert: None,
+            leaves: BTreeMap::new(),
             last_decided_view: ViewNumber::genesis(),
+            last_decided_leaf: genesis_leaf,
             headers: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             node_id: KeyPrefix::from(&public_key),
             public_key,
             timeout_view: ViewNumber::genesis(),
+            current_view: ViewNumber::genesis(),
             current_epoch: None,
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
@@ -202,7 +216,9 @@ impl<T: NodeType> Consensus<T> {
     ) {
         let view = input.view_number();
         let proto = match input {
-            ConsensusInput::Proposal(proposal) => self.handle_proposal(proposal, outbox).await,
+            ConsensusInput::Proposal(sender, proposal) => {
+                self.handle_proposal(sender, proposal, outbox).await
+            },
             ConsensusInput::Certificate1(certificate) => {
                 self.handle_certificate1(certificate).await
             },
@@ -229,13 +245,13 @@ impl<T: NodeType> Consensus<T> {
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
-                if let Some(proposal) = self.proposals.remove(&state_response.view)
-                    && proposal_commitment(&proposal) != state_response.commitment
+                if let Some(proposal) = self.proposals.get(&state_response.view)
+                    && proposal_commitment(proposal) != state_response.commitment
                 {
-                    // Proposal we stored didn't match the failed state verification, put it back
-                    self.proposals.insert(state_response.view, proposal);
                     return;
                 }
+                self.proposals.remove(&state_response.view);
+                self.leaves.remove(&state_response.view);
                 self.vid_shares.remove(&state_response.view);
                 return;
             },
@@ -284,6 +300,36 @@ impl<T: NodeType> Consensus<T> {
         self.maybe_propose(view + 1, outbox).await;
     }
 
+    pub fn last_decided_view(&self) -> ViewNumber {
+        self.last_decided_view
+    }
+
+    pub fn last_decided_leaf(&self) -> &Leaf2<T> {
+        &self.last_decided_leaf
+    }
+
+    pub fn undecided_leaves(&self) -> impl Iterator<Item = &Leaf2<T>> {
+        self.leaves
+            .range((
+                std::ops::Bound::Excluded(self.last_decided_view),
+                std::ops::Bound::Unbounded,
+            ))
+            .map(|(_, leaf)| leaf)
+    }
+
+    pub fn current_view(&self) -> ViewNumber {
+        self.current_view
+    }
+
+    pub fn current_epoch(&self) -> Option<EpochNumber> {
+        self.current_epoch
+    }
+
+    pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        self.current_view = view;
+        self.current_epoch = Some(epoch);
+    }
+
     pub fn wants_proposal<S>(&self, p: &ProposalMessage<T, S>) -> bool {
         !(self
             .locked_cert
@@ -303,6 +349,7 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs = self.timeout_certs.split_off(&view);
         self.view_sync_certs = self.view_sync_certs.split_off(&view);
         self.headers = self.headers.split_off(&view);
+        self.leaves = self.leaves.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
         self.last_decided_view = self.last_decided_view.max(view);
@@ -311,6 +358,7 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     async fn handle_proposal(
         &mut self,
+        sender: T::SignatureKey,
         proposal: ProposalMessage<T, Validated>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
@@ -321,6 +369,7 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         }
 
+        let signed_proposal = proposal.proposal.clone();
         let vid_share = proposal.vid_share;
         let proposal = proposal.proposal.data;
         let epoch = proposal.epoch;
@@ -375,6 +424,7 @@ impl<T: NodeType> Consensus<T> {
         let payload_size = vid_share.payload_byte_len();
 
         self.proposals.insert(view, proposal.clone());
+        self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
 
         outbox.push_back(ConsensusOutput::RequestState(StateRequest {
@@ -392,6 +442,11 @@ impl<T: NodeType> Consensus<T> {
         } else {
             epoch
         };
+
+        outbox.push_back(ConsensusOutput::ProposalValidated {
+            proposal: signed_proposal,
+            sender,
+        });
 
         if self.is_leader(view + 1, epoch).await {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
@@ -784,6 +839,7 @@ impl<T: NodeType> Consensus<T> {
         // we have a second certificate, and matching proposal, it is decided.
         let leaf: Leaf2<T> = proposal.clone().into();
         self.last_decided_view = max(self.last_decided_view, leaf.view_number());
+        self.last_decided_leaf = leaf.clone();
         let mut gc = None;
         if leaf.block_header().block_number() % *self.garbage_collection_interval == 0 {
             gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
@@ -808,7 +864,10 @@ impl<T: NodeType> Consensus<T> {
             parent_view = proposal.justify_qc.view_number();
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
-        outbox.push_back(ConsensusOutput::LeafDecided(decided));
+        outbox.push_back(ConsensusOutput::LeafDecided {
+            leaves: decided,
+            cert2: cert2.clone(),
+        });
         if let Some(gc) = gc {
             let gc_data = CheckpointData {
                 view: gc.0,
@@ -1117,7 +1176,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
             ConsensusInput::HeaderCreated(view, _) => *view,
-            ConsensusInput::Proposal(prop) => prop.view_number(),
+            ConsensusInput::Proposal(_, prop) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
             ConsensusInput::Timeout(view, _) => *view,
