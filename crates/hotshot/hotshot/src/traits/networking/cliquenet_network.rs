@@ -228,20 +228,17 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         }
 
         {
+            let to_add = to_add.iter().map(|(_, k, a)| ((*k).into(), a.clone()));
+            let to_del = to_del.iter().map(|(_, k)| (*k).into());
+
             let mut sender = self.sender.lock();
 
-            if let Err(err) = sender.controller.add_peers(
-                Role::Active,
-                to_add.iter().map(|(_, k, a)| ((*k).into(), a.clone())),
-            ) {
+            if let Err(err) = sender.controller.add_peers(Role::Active, to_add) {
                 error!(%epoch, %err, "network down; could not add peers to network");
                 return;
             }
 
-            if let Err(err) = sender
-                .controller
-                .remove_peers(to_del.iter().map(|(_, k)| (*k).into()))
-            {
+            if let Err(err) = sender.controller.remove_peers(to_del) {
                 error!(%epoch, %err, "network down; could not remove peers from network");
                 return;
             }
@@ -379,7 +376,8 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         'a: 'b,
         Self: 'b,
     {
-        if let Ok(future) = self.sender.lock().controller.shutdown() {
+        let result = self.sender.lock().controller.shutdown();
+        if let Ok(future) = result {
             boxed_sync(future)
         } else {
             boxed_sync(ready(()))
