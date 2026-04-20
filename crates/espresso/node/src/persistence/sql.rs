@@ -1306,12 +1306,14 @@ fn is_serialization_error(err: &anyhow::Error) -> bool {
 ///
 /// Enable targeted logging with `RUST_LOG=sequencer::persistence::sql::pg_stat_diag=debug`.
 mod pg_stat_diag {
-    /// Spawn a background task that queries `pg_stat_activity` to identify connections involved
-    /// in a serialization conflict. Best-effort; failures are silently ignored.
+    /// Spawn a background task that queries `pg_stat_activity` and `pg_locks` to identify
+    /// connections and predicate locks involved in a serialization conflict.
+    /// Best-effort; failures are silently ignored.
     #[cfg(not(feature = "embedded-db"))]
     pub(super) fn spawn_pg_stat_activity_log(pool: sqlx::Pool<super::Db>, op: &'static str) {
         use sqlx::Row as _;
         tokio::spawn(async move {
+            // Log concurrent sessions
             match sqlx::query(
                 "SELECT pid, COALESCE(state, 'unknown') AS state, left(COALESCE(query, ''), 200) \
                  AS query FROM pg_stat_activity WHERE pid != pg_backend_pid() AND state IS \
@@ -1338,6 +1340,44 @@ mod pg_stat_diag {
                 },
                 Err(e) => {
                     tracing::debug!(op, "failed to query pg_stat_activity: {e:#}");
+                },
+            }
+
+            // Log SSI predicate locks held by all non-idle sessions
+            match sqlx::query(
+                "SELECT l.pid, l.locktype, CASE WHEN l.relation IS NOT NULL THEN c.relname ELSE \
+                 NULL END AS relation, l.page, l.tuple, left(COALESCE(a.query, ''), 100) AS query \
+                 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid LEFT JOIN pg_class c ON \
+                 c.oid = l.relation WHERE l.mode = 'SIReadLock' AND a.state IS DISTINCT FROM \
+                 'idle' AND l.pid != pg_backend_pid() ORDER BY l.pid, c.relname",
+            )
+            .fetch_all(&pool)
+            .await
+            {
+                Ok(rows) if rows.is_empty() => {
+                    tracing::debug!(op, "serialization conflict: no SIReadLocks held");
+                },
+                Ok(rows) => {
+                    for row in &rows {
+                        let pid: i32 = row.try_get("pid").unwrap_or(-1);
+                        let locktype: String = row.try_get("locktype").unwrap_or_default();
+                        let relation: Option<String> = row.try_get("relation").unwrap_or(None);
+                        let page: Option<i32> = row.try_get("page").unwrap_or(None);
+                        let tuple: Option<i16> = row.try_get("tuple").unwrap_or(None);
+                        let query_text: String = row.try_get("query").unwrap_or_default();
+                        tracing::debug!(
+                            op,
+                            pid,
+                            locktype,
+                            relation,
+                            page,
+                            tuple,
+                            "serialization conflict: SIReadLock: {query_text}",
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::debug!(op, "failed to query pg_locks: {e:#}");
                 },
             }
         });
