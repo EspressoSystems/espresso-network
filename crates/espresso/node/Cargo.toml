@@ -49,8 +49,10 @@ derive_more = { workspace = true }
 dotenvy = { workspace = true }
 either = { workspace = true }
 espresso-contract-deployer = { workspace = true }
+espresso-api = { path = "../api" }
 espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
+serialization-api = { path = "../../serialization/api" }
 futures = { workspace = true }
 generic-tests = { workspace = true }
 hotshot = { workspace = true }
