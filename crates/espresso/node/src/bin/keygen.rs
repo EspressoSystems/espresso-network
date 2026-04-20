@@ -42,8 +42,8 @@ impl Scheme {
                 let priv_key = &keys.staking;
                 let pub_key = BLSPubKey::from_private(priv_key);
                 let priv_key = priv_key.to_tagged_base64()?;
-                writeln!(output, "ESPRESSO_SEQUENCER_PUBLIC_STAKING_KEY={pub_key}")?;
-                writeln!(output, "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={priv_key}")?;
+                writeln!(output, "ESPRESSO_NODE_PUBLIC_STAKING_KEY={pub_key}")?;
+                writeln!(output, "ESPRESSO_NODE_PRIVATE_STAKING_KEY={priv_key}")?;
                 tracing::info!(%pub_key, "generated staking key")
             },
             Self::Schnorr => {
@@ -51,18 +51,18 @@ impl Scheme {
                 let priv_key = key_pair.sign_key_ref().to_tagged_base64()?;
                 writeln!(
                     output,
-                    "ESPRESSO_SEQUENCER_PUBLIC_STATE_KEY={}",
+                    "ESPRESSO_NODE_PUBLIC_STATE_KEY={}",
                     key_pair.ver_key()
                 )?;
-                writeln!(output, "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={priv_key}")?;
+                writeln!(output, "ESPRESSO_NODE_PRIVATE_STATE_KEY={priv_key}")?;
                 tracing::info!(pub_key = %key_pair.ver_key(), "generated state key");
             },
             Self::X25519 => {
                 let kp = x25519::Keypair::from(keys.x25519.clone());
                 let sk = TaggedBase64::try_from(kp.secret_key())?;
                 let pk = kp.public_key();
-                writeln!(output, "ESPRESSO_SEQUENCER_PUBLIC_X25519_KEY={pk}")?;
-                writeln!(output, "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY={sk}")?;
+                writeln!(output, "ESPRESSO_NODE_PUBLIC_X25519_KEY={pk}")?;
+                writeln!(output, "ESPRESSO_NODE_PRIVATE_X25519_KEY={sk}")?;
                 tracing::info!(pub_key = %pk, "generated x25519 key");
             },
         }
@@ -112,8 +112,10 @@ struct Options {
 }
 
 fn main() -> anyhow::Result<()> {
+    let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
     let mut opts = Options::parse();
     opts.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     tracing::debug!(
         "Generating {} keypairs with scheme {}",

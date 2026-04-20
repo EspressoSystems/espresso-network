@@ -30,14 +30,14 @@ use crate::{
 pub struct ProposalFetcherConfig {
     #[clap(
         long = "proposal-fetcher-num-workers",
-        env = "ESPRESSO_SEQUENCER_PROPOSAL_FETCHER_NUM_WORKERS",
+        env = "ESPRESSO_NODE_PROPOSAL_FETCHER_NUM_WORKERS",
         default_value = "2"
     )]
     pub num_workers: usize,
 
     #[clap(
         long = "proposal-fetcher-fetch-timeout",
-        env = "ESPRESSO_SEQUENCER_PROPOSAL_FETCHER_FETCH_TIMEOUT",
+        env = "ESPRESSO_NODE_PROPOSAL_FETCHER_FETCH_TIMEOUT",
         default_value = "2s",
         value_parser = parse_duration,
     )]

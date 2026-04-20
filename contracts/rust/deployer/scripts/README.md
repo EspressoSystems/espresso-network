@@ -25,8 +25,8 @@ cp .env $ENV_FILE
 ```
 
 - and replace the following fields in the `$ENV_FILE` if not deploying to a local network via anvil.
-  - `ESPRESSO_SEQUENCER_ETH_MNEMONIC`
-  - `ESPRESSO_SEQUENCER_ETH_MULTISIG_ADDRESS`
+  - `ESPRESSO_ETH_MNEMONIC`
+  - `ESPRESSO_ETH_MULTISIG_ADDRESS`
 
 - The default ops and safe exit timelock delays in this script is 30 and 60 seconds respectively. If you want to change
   it then also add the following fields to the ENV_FILE:

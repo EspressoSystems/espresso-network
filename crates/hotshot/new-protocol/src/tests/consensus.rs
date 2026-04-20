@@ -41,9 +41,10 @@ async fn test_safety_genesis_no_lock() {
     );
 }
 
-/// Events with view <= timeout_view are silently dropped.
+/// All inputs are processed regardless of timeout_view, but vote1 is
+/// suppressed for views <= timeout_view.
 #[tokio::test]
-async fn test_timeout_filters_stale_events() {
+async fn test_timeout_filters_vote1_not_processing() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(6).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -56,7 +57,8 @@ async fn test_timeout_filters_stale_events() {
         ))
         .await;
 
-    // Send stale proposal (view 2, which is <= timeout_view 3)
+    // Send stale proposal (view 2, which is <= timeout_view 3).
+    // It is still processed (state validation requested) but vote1 is suppressed.
     harness
         .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
@@ -66,7 +68,15 @@ async fn test_timeout_filters_stale_events() {
         .apply(test_data.views[3].proposal_input_consensus(&node_key))
         .await;
 
-    assert_eq!(1, count_matching(harness.outputs(), is_request_state));
+    // Both proposals are processed.
+    assert_eq!(2, count_matching(harness.outputs(), is_request_state));
+
+    // No vote1 for any view — the stale view is suppressed and the fresh
+    // view lacks block reconstruction.
+    assert!(
+        !any(harness.outputs(), is_vote1),
+        "Vote1 should not fire for a timed-out view"
+    );
 }
 
 /// Vote1 fires for sequential views when all preconditions are met.
@@ -406,13 +416,15 @@ async fn test_multi_view_chain_decide() {
     assert!(count_matching(harness.outputs(), is_leaf_decided) >= 2);
 }
 
-/// Timeout event sets timeout_view and prevents processing of that view.
+/// After a timeout, inputs for the timed-out view are still processed (so
+/// the node can decide the leaf via cert2), but vote1 is suppressed.
 #[tokio::test]
-async fn test_timeout_prevents_voting() {
+async fn test_timeout_prevents_vote1_but_allows_vote2() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
+    // Process view 1 to establish state.
     harness
         .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
@@ -420,14 +432,9 @@ async fn test_timeout_prevents_voting() {
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
-    harness
-        .apply(test_data.views[1].proposal_input_consensus(&node_key))
-        .await;
-    harness
-        .apply(test_data.views[1].block_reconstructed_input())
-        .await;
+    let vote1_before = count_matching(harness.outputs(), is_vote1);
 
-    // Timeout view 2 — now cert1 for view 2 should be dropped
+    // Timeout view 2 BEFORE the proposal arrives.
     harness
         .apply(ConsensusInput::Timeout(
             test_data.views[1].view_number,
@@ -439,12 +446,28 @@ async fn test_timeout_prevents_voting() {
         "Timeout should emit timeout vote"
     );
 
-    // Send cert1 for view 2 — should be stale
+    // Now send the proposal and block reconstruction for view 2.
+    // The proposal is still stored (inputs are processed), but vote1 is
+    // suppressed because view 2 <= timeout_view.
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+
+    assert_eq!(
+        vote1_before,
+        count_matching(harness.outputs(), is_vote1),
+        "Vote1 should not fire for a timed-out view"
+    );
+
+    // Send cert1 for view 2 — still processed, enabling vote2.
     harness.apply(test_data.views[1].cert1_input()).await;
 
     assert!(
-        !any(harness.outputs(), is_vote2),
-        "Vote2 should not fire after timeout for that view"
+        any(harness.outputs(), is_vote2),
+        "Vote2 should still fire for a timed-out view when cert1 arrives"
     );
 }
 

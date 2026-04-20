@@ -14,9 +14,10 @@ use super::{
 };
 use crate::keyset::KeySet;
 
-pub async fn main() -> anyhow::Result<()> {
+pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let opt = Options::parse();
     opt.logging.init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
