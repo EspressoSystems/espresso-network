@@ -13,10 +13,11 @@ use committable::Commitment;
 use futures::{StreamExt, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
-    client::{ClientApi, UpdateLeaf},
+    client::ClientApi,
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     message::{Certificate2, Proposal as NewProposal},
+    state::UpdateLeaf,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},

@@ -207,12 +207,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 let _ = respond.send(self.state_manager.get_state_and_delta(&view));
             },
             ClientRequest::UpdateLeaf { update, respond } => {
-                self.state_manager.update_state(
-                    update.state,
-                    update.delta,
-                    update.view,
-                    update.leaf,
-                );
+                self.state_manager.update_state(update);
                 let _ = respond.send(());
             },
         }

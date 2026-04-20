@@ -2,10 +2,12 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
-    traits::{ValidatedState, node_implementation::NodeType},
+    traits::node_implementation::NodeType,
     utils::StateAndDelta,
 };
 use tokio::sync::{mpsc, oneshot};
+
+use crate::state::UpdateLeaf;
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -76,14 +78,6 @@ impl<T: NodeType> ClientApi<T> {
             .map_err(|_| QueryError::ChannelClosed)?;
         rx.await.map_err(|_| QueryError::ResponseDropped)
     }
-}
-
-/// Parameters for updating a leaf in the coordinator's state.
-pub struct UpdateLeaf<T: NodeType> {
-    pub view: ViewNumber,
-    pub leaf: Leaf2<T>,
-    pub state: Arc<T::ValidatedState>,
-    pub delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
 }
 
 /// The coordinator client owns the receive end of the request channel.
