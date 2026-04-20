@@ -24,9 +24,7 @@ use espresso_types::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
-    NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
+    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -1452,7 +1450,7 @@ fn is_serialization_error_with_diag(
                 pg_stat_diag::spawn_pg_stat_activity_log(pool.clone(), op);
             }
             #[cfg(feature = "embedded-db")]
-            let _ = (&pool, op);
+            let _ = (&pool, op, &first);
             true
         } else {
             false
