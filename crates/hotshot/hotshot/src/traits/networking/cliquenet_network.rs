@@ -33,6 +33,7 @@ use tracing::{error, info, warn};
 #[derive(Clone)]
 pub struct Cliquenet<K> {
     my_keys: (K, PublicKey),
+    gc_window: ViewNumber,
     sender: Arc<Mutex<Sender<K>>>,
     receiver: Arc<AsyncMutex<NetworkReceiver>>,
     epoch: Arc<AsyncMutex<EpochNumber>>,
@@ -41,6 +42,7 @@ pub struct Cliquenet<K> {
 struct Sender<K> {
     controller: NetworkController,
     peers: HashMap<K, PeerConnectInfo>,
+    last_gc: ViewNumber,
 }
 
 impl<K: SignatureKey + 'static> Cliquenet<K> {
@@ -82,10 +84,23 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             sender: Arc::new(Mutex::new(Sender {
                 controller: control,
                 peers: parties,
+                last_gc: ViewNumber::genesis(),
             })),
             receiver: Arc::new(AsyncMutex::new(recv)),
             epoch: Arc::new(AsyncMutex::new(EpochNumber::genesis())),
+            gc_window: ViewNumber::new(100),
         })
+    }
+
+    /// How many views should potentially be resend to unresponsive peers?
+    ///
+    /// After that, messages from older views are discarded.
+    ///
+    /// NB: This is a workaround. The `ConnectedNetwork` trait should be
+    /// augmented to have a GC method that is invoked when it is safe to
+    /// discard old views.
+    pub fn set_gc_window(&mut self, v: ViewNumber) {
+        self.gc_window = v
     }
 
     /// Get the current network peers.
@@ -287,6 +302,8 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         for r in recipients {
             if let Some(p) = sender.peers.get(&r) {
                 targets.push(p.x25519_key.into())
+            } else if r == self.my_keys.0 {
+                targets.push(self.my_keys.1.into())
             } else {
                 warn!(node = %self.my_keys.1, recipient = %r, "unknown da broadcast target");
             }
@@ -339,8 +356,13 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
     ) where
         U: NodeType<SignatureKey = K>,
     {
-        let _ = self.sender.lock().controller.gc(Slot::new(*v));
-
+        {
+            let mut sender = self.sender.lock();
+            if v.saturating_sub(*sender.last_gc) >= *self.gc_window {
+                let _ = sender.controller.gc(Slot::new(*v));
+                sender.last_gc = v
+            }
+        }
         if let Some(e) = e {
             self.on_epoch_change(e, &m).await
         }
