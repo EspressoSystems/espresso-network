@@ -1302,54 +1302,65 @@ fn is_serialization_error(err: &anyhow::Error) -> bool {
         .any(|e| e.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE))
 }
 
-/// Spawn a background task that queries `pg_stat_activity` to identify connections involved
-/// in a serialization conflict. Best-effort; failures are silently ignored.
-#[cfg(not(feature = "embedded-db"))]
-fn spawn_pg_stat_activity_log(pool: sqlx::Pool<Db>, op: &'static str) {
-    tokio::spawn(async move {
-        match sqlx::query(
-            "SELECT pid, COALESCE(state, 'unknown') AS state, left(COALESCE(query, ''), 200) AS \
-             query FROM pg_stat_activity WHERE pid != pg_backend_pid() AND state IS DISTINCT FROM \
-             'idle'",
-        )
-        .fetch_all(&pool)
-        .await
-        {
-            Ok(rows) if rows.is_empty() => {
-                tracing::debug!(op, "serialization conflict: no other non-idle DB sessions");
-            },
-            Ok(rows) => {
-                for row in &rows {
-                    let pid: i32 = row.try_get("pid").unwrap_or(-1);
-                    let state: String = row.try_get("state").unwrap_or_default();
-                    let query_text: String = row.try_get("query").unwrap_or_default();
-                    tracing::warn!(
-                        op,
-                        pid,
-                        state,
-                        "serialization conflict: concurrent session: {query_text}",
-                    );
-                }
-            },
-            Err(e) => {
-                tracing::debug!(op, "failed to query pg_stat_activity: {e:#}");
-            },
-        }
-    });
+/// Diagnostics for PostgreSQL serialization conflicts.
+///
+/// Enable targeted logging with `RUST_LOG=sequencer::persistence::sql::pg_stat_diag=debug`.
+mod pg_stat_diag {
+    /// Spawn a background task that queries `pg_stat_activity` to identify connections involved
+    /// in a serialization conflict. Best-effort; failures are silently ignored.
+    #[cfg(not(feature = "embedded-db"))]
+    pub(super) fn spawn_pg_stat_activity_log(pool: sqlx::Pool<super::Db>, op: &'static str) {
+        use sqlx::Row as _;
+        tokio::spawn(async move {
+            match sqlx::query(
+                "SELECT pid, COALESCE(state, 'unknown') AS state, left(COALESCE(query, ''), 200) \
+                 AS query FROM pg_stat_activity WHERE pid != pg_backend_pid() AND state IS \
+                 DISTINCT FROM 'idle'",
+            )
+            .fetch_all(&pool)
+            .await
+            {
+                Ok(rows) if rows.is_empty() => {
+                    tracing::debug!(op, "serialization conflict: no other non-idle DB sessions");
+                },
+                Ok(rows) => {
+                    for row in &rows {
+                        let pid: i32 = row.try_get("pid").unwrap_or(-1);
+                        let state: String = row.try_get("state").unwrap_or_default();
+                        let query_text: String = row.try_get("query").unwrap_or_default();
+                        tracing::debug!(
+                            op,
+                            pid,
+                            state,
+                            "serialization conflict: concurrent session: {query_text}",
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::debug!(op, "failed to query pg_stat_activity: {e:#}");
+                },
+            }
+        });
+    }
 }
 
 /// Like [`is_serialization_error`] but also logs concurrent DB sessions for diagnostics.
 ///
-/// On each serialization failure, spawns a background task that queries `pg_stat_activity`
-/// and logs any non-idle sessions, helping identify which transaction caused the conflict.
+/// On the first serialization failure per `retry_if` invocation, spawns a background task that
+/// queries `pg_stat_activity` and logs any non-idle sessions, helping identify which transaction
+/// caused the conflict. Subsequent retries within the same invocation skip the diagnostic to
+/// avoid log spam.
 fn is_serialization_error_with_diag(
     pool: sqlx::Pool<Db>,
     op: &'static str,
 ) -> impl Fn(&anyhow::Error) -> bool {
+    let first = std::sync::atomic::AtomicBool::new(true);
     move |err| {
         if is_serialization_error(err) {
             #[cfg(not(feature = "embedded-db"))]
-            spawn_pg_stat_activity_log(pool.clone(), op);
+            if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                pg_stat_diag::spawn_pg_stat_activity_log(pool.clone(), op);
+            }
             #[cfg(feature = "embedded-db")]
             let _ = (&pool, op);
             true
