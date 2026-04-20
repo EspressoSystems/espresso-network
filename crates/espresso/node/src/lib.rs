@@ -383,13 +383,13 @@ where
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
     let loaded_network_config_from_persistence = persistence.load_config().await?;
-    let (mut network_config, wait_for_orchestrator) = match (
+    let (mut network_config, wait_for_orchestrator, persist_config) = match (
         loaded_network_config_from_persistence,
         network_params.config_peers,
     ) {
         (Some(config), _) => {
             tracing::warn!("loaded network config from storage, rejoining existing network");
-            (config, false)
+            (config, false, false)
         },
         // If we were told to fetch the config from an already-started peer, do so.
         (None, Some(peers)) => {
@@ -407,8 +407,7 @@ where
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
             );
-            persistence.save_config(&config).await?;
-            (config, false)
+            (config, false, true)
         },
         // Otherwise, this is a fresh network; load from the orchestrator.
         (None, None) => {
@@ -432,9 +431,8 @@ where
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
             );
-            persistence.save_config(&config).await?;
             tracing::warn!("all nodes connected");
-            (config, true)
+            (config, true, true)
         },
     };
 
@@ -473,6 +471,13 @@ where
     if let Some(da_committees) = &genesis.da_committees {
         tracing::warn!("setting da_committees from genesis: {da_committees:?}");
         network_config.config.da_committees = da_committees.clone();
+    }
+
+    // Save *after* the above updates. The orchestrator and peer fetched configs don't include
+    // epoch_height, drb_difficulty, etc. those come from genesis and are applied above.
+    // Saving before these updates would persist zeros for those values
+    if persist_config {
+        persistence.save_config(&network_config).await?;
     }
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
