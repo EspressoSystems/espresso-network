@@ -284,6 +284,15 @@ impl<Mode: TransactionMode> Transaction<Mode> {
     {
         let header_state_commitment_field = State::header_state_commitment_field();
 
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|e| QueryError::Error {
+                message: format!("failed to load pruned height: {e}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         let (created, commit) = match snapshot {
             Snapshot::Commit(commit) => {
                 // Get the block height using the merkle commitment. It is possible that multiple
@@ -295,9 +304,11 @@ impl<Mode: TransactionMode> Transaction<Mode> {
                     "SELECT height
                        FROM header
                       WHERE {header_state_commitment_field} = $1
+                        AND height > $2
                       LIMIT 1"
                 ))
                 .bind(commit.to_string())
+                .bind(pruned_height)
                 .fetch_one(self.as_mut())
                 .await?;
 
@@ -309,9 +320,11 @@ impl<Mode: TransactionMode> Transaction<Mode> {
                     "SELECT {header_state_commitment_field} AS root_commitment
                        FROM header
                       WHERE height = $1
+                        AND height > $2
                       LIMIT 1"
                 ))
                 .bind(created)
+                .bind(pruned_height)
                 .fetch_one(self.as_mut())
                 .await?;
                 let commit = serde_json::from_value(commit.into())
@@ -327,14 +340,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             return Err(QueryError::NotFound);
         }
 
-        let pruned_height = self
-            .load_pruned_height()
-            .await
-            .map_err(|e| QueryError::Error {
-                message: format!("failed to load pruned height: {e}"),
-            })?;
-
-        if pruned_height.is_some_and(|h| height <= h as usize) {
+        if pruned_height >= 0 && height <= pruned_height as usize {
             return Err(QueryError::NotFound);
         }
 

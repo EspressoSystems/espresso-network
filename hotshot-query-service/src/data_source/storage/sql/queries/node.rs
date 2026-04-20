@@ -33,7 +33,8 @@ use super::{
 use crate::{
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
-        Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
+        pruning::PrunedHeightStorage, Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata,
+        UpdateAggregatesStorage,
     },
     node::{BlockId, SyncStatus, TimeWindowQueryData, WindowStart},
     types::HeightIndexed,
@@ -48,7 +49,16 @@ where
     Header<Types>: QueryableHeader<Types>,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
-        match query_as::<(Option<i64>,)>("SELECT max(height) FROM header")
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+        match query_as::<(Option<i64>,)>("SELECT max(height) FROM header WHERE height > $1")
+            .bind(pruned_height)
             .fetch_one(self.as_mut())
             .await?
         {
@@ -132,14 +142,23 @@ where
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id.into())?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT v.share AS share FROM vid2 AS v
                JOIN header AS h ON v.height = h.height
-              WHERE {where_clause}
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height
               LIMIT 1"
         );
@@ -178,10 +197,18 @@ where
         // NULL share.
         let sql = "SELECT l.max_height, l.total_leaves, p.null_payloads, v.total_vid, \
                    vn.null_vid, pruned_height FROM
-                (SELECT max(leaf2.height) AS max_height, count(*) AS total_leaves FROM leaf2) AS l,
-                (SELECT count(*) AS null_payloads FROM payload WHERE data IS NULL) AS p,
-                (SELECT count(*) AS total_vid FROM vid2) AS v,
-                (SELECT count(*) AS null_vid FROM vid2 WHERE share IS NULL) AS vn,
+                (SELECT max(leaf2.height) AS max_height, count(*) AS total_leaves FROM leaf2
+                  WHERE height > COALESCE(
+                    (SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1), -1)) AS l,
+                (SELECT count(*) AS null_payloads FROM payload WHERE data IS NULL
+                  AND height > COALESCE(
+                    (SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1), -1)) AS p,
+                (SELECT count(*) AS total_vid FROM vid2
+                  WHERE height > COALESCE(
+                    (SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1), -1)) AS v,
+                (SELECT count(*) AS null_vid FROM vid2 WHERE share IS NULL
+                  AND height > COALESCE(
+                    (SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1), -1)) AS vn,
                 (SELECT(SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1) as \
                    pruned_height)
             ";
@@ -242,13 +269,22 @@ where
             WindowStart::Hash(h) => self.load_header::<Types>(h).await?.block_number(),
         };
 
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         // Find all blocks starting from `first_block` with timestamps less than `end`. Block
         // timestamps are monotonically increasing, so this query is guaranteed to return a
         // contiguous range of blocks ordered by increasing height.
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.height >= $1 AND h.timestamp < $2
+              WHERE h.height >= $1 AND h.timestamp < $2 AND h.height > $4
               ORDER BY h.height
               LIMIT $3"
         );
@@ -256,6 +292,7 @@ where
             .bind(first_block as i64)
             .bind(end as i64)
             .bind(limit as i64)
+            .bind(pruned_height)
             .fetch(self.as_mut());
         let window = rows
             .map(|row| parse_header::<Types>(row?))
@@ -281,12 +318,13 @@ where
             let sql = format!(
                 "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1
+              WHERE h.timestamp >= $1 AND h.height > $2
               ORDER BY h.timestamp, h.height
               LIMIT 1"
             );
             query(&sql)
                 .bind(end as i64)
+                .bind(pruned_height)
                 .fetch_optional(self.as_mut())
                 .await?
                 .map(parse_header::<Types>)
@@ -468,6 +506,15 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         end: u64,
         limit: usize,
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         // Find all blocks whose timestamps fall within the window [start, end). Block timestamps
         // are monotonically increasing, so this query is guaranteed to return a contiguous range of
         // blocks ordered by increasing height.
@@ -482,7 +529,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1 AND h.timestamp < $2
+              WHERE h.timestamp >= $1 AND h.timestamp < $2 AND h.height > $4
               ORDER BY h.timestamp, h.height
               LIMIT $3"
         );
@@ -490,6 +537,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             .bind(start as i64)
             .bind(end as i64)
             .bind(limit as i64)
+            .bind(pruned_height)
             .fetch(self.as_mut());
         let window: Vec<_> = rows
             .map(|row| parse_header::<Types>(row?))
@@ -501,12 +549,13 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             let sql = format!(
                 "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1
+              WHERE h.timestamp >= $1 AND h.height > $2
               ORDER BY h.timestamp, h.height
               LIMIT 1"
             );
             query(&sql)
                 .bind(end as i64)
+                .bind(pruned_height)
                 .fetch_optional(self.as_mut())
                 .await?
                 .map(parse_header::<Types>)
@@ -534,12 +583,13 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp < $1
+              WHERE h.timestamp < $1 AND h.height > $2
               ORDER BY h.timestamp DESC, h.height DESC
               LIMIT 1"
         );
         let prev = query(&sql)
             .bind(start as i64)
+            .bind(pruned_height)
             .fetch_optional(self.as_mut())
             .await?
             .map(parse_header::<Types>)

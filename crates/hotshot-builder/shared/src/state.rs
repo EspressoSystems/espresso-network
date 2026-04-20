@@ -182,7 +182,7 @@ where
         let mut txn_queue = self.txn_queue.read().await.clone();
         txn_queue.prune(txn_commitments.iter());
 
-        included_txns.extend(txn_commitments.into_iter());
+        included_txns.extend(txn_commitments);
 
         Arc::new(BuilderState {
             parent_block_references,

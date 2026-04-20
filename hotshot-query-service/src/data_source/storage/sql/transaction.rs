@@ -64,7 +64,7 @@ use crate::{
         BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
-        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
+        storage::{pruning::PrunedHeightStorage, UpdateAvailabilityStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},
@@ -164,7 +164,7 @@ impl TransactionMode for Read {
         // transactions in read-only mode, and always has serializable concurrency unless we
         // explicitly opt in to dirty reads with a pragma.
         #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
+        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY")
             .await?;
 
         Ok(())
@@ -447,11 +447,23 @@ impl Transaction<Write> {
     }
 }
 
+/// Returns a delay to inject between pruning DELETE statements, read from the
+/// `PRUNE_SLOW_DELAY_MS` environment variable. Returns `None` when the variable is unset or zero.
+fn prune_slow_delay() -> Option<Duration> {
+    std::env::var("PRUNE_SLOW_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&ms| ms > 0)
+        .map(Duration::from_millis)
+}
+
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Delete a batch of data for pruning.
     #[instrument(skip(self))]
     pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
+        let delay = prune_slow_delay();
+
         // Delete dependent tables individually before deleting headers.
         let res = query("DELETE FROM payload WHERE height <= $1")
             .bind(height as i64)
@@ -459,6 +471,9 @@ impl Transaction<Write> {
             .await
             .context("deleting payloads")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned payloads");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM vid2 WHERE height <= $1")
             .bind(height as i64)
@@ -466,6 +481,9 @@ impl Transaction<Write> {
             .await
             .context("deleting vid")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned vid");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM transactions WHERE block_height <= $1")
             .bind(height as i64)
@@ -473,6 +491,9 @@ impl Transaction<Write> {
             .await
             .context("deleting transactions")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM leaf2 WHERE height <= $1")
             .bind(height as i64)
@@ -480,6 +501,9 @@ impl Transaction<Write> {
             .await
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
@@ -500,6 +524,8 @@ impl Transaction<Write> {
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
+        let delay = prune_slow_delay();
+
         for state_table in state_tables {
             self.execute(
                 query(&format!(
@@ -516,6 +542,9 @@ impl Transaction<Write> {
                 .bind(height as i64),
             )
             .await?;
+            if let Some(d) = delay {
+                sleep(d).await;
+            }
         }
 
         Ok(())
@@ -548,18 +577,10 @@ where
     ) -> anyhow::Result<()> {
         let height = leaf.height();
 
-        // Ignore the leaf if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring leaf which is already pruned"
-                );
-                return Ok(());
-            }
-        }
+        // We intentionally do not call load_pruned_height() here. Reading pruned_height inside a
+        // SERIALIZABLE write transaction creates a rw-anti-dependency with save_pruned_height
+        // (the pruner's separate Tx1), making this transaction a pivot in SSI abort cycles.
+        // If this data is already pruned, the pruner will delete it again on its next run.
 
         // While we don't necessarily have the full block for this leaf yet, we can initialize the
         // header table with block metadata taken from the leaf.
@@ -608,9 +629,20 @@ where
         )
         .await?;
 
-        let block_height = NodeStorage::<Types>::block_height(self).await? as u64;
-        if height + 1 >= block_height {
-            // If this is the latest leaf we know about, also store it's QC chain so that we can
+        // Check whether this is the latest leaf by querying leaf2 directly. We intentionally
+        // avoid calling block_height() here — that would read from the header table inside a
+        // write transaction, creating an SSI rw-anti-dependency with the pruner's
+        // DELETE FROM header WHERE height <= $pruned that can form a serialization cycle.
+        // Reading leaf2 WHERE height > $this_height is safe: it is disjoint from the pruner's
+        // DELETE FROM leaf2 WHERE height <= $pruned (because this height > pruned height, so
+        // anything > this height is definitely > pruned height).
+        let (has_newer_leaf,): (bool,) =
+            query_as::<(bool,)>("SELECT EXISTS (SELECT 1 FROM leaf2 WHERE height > $1)")
+                .bind(height as i64)
+                .fetch_one(self.as_mut())
+                .await?;
+        if !has_newer_leaf {
+            // If this is the latest leaf we know about, also store its QC chain so that we can
             // prove to clients that this leaf is finalized. (If it is not the latest leaf, this
             // is unnecessary, since we can prove it is an ancestor of some later, finalized
             // leaf.)
@@ -625,18 +657,10 @@ where
     async fn insert_block(&mut self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         let height = block.height();
 
-        // Ignore the block if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring block which is already pruned"
-                );
-                return Ok(());
-            }
-        }
+        // We intentionally do not call load_pruned_height() here. Reading pruned_height inside a
+        // SERIALIZABLE write transaction creates a rw-anti-dependency with save_pruned_height
+        // (the pruner's separate Tx1), making this transaction a pivot in SSI abort cycles.
+        // If this data is already pruned, the pruner will delete it again on its next run.
 
         // The header and payload tables should already have been initialized when we inserted the
         // corresponding leaf. All we have to do is add the payload itself and its size.
@@ -687,18 +711,10 @@ where
     ) -> anyhow::Result<()> {
         let height = common.height();
 
-        // Ignore the object if it is below the pruned height. This can happen if, for instance, the
-        // fetcher is racing with the pruner.
-        if let Some(pruned_height) = self.load_pruned_height().await? {
-            if height <= pruned_height {
-                tracing::info!(
-                    height,
-                    pruned_height,
-                    "ignoring VID common which is already pruned"
-                );
-                return Ok(());
-            }
-        }
+        // We intentionally do not call load_pruned_height() here. Reading pruned_height inside a
+        // SERIALIZABLE write transaction creates a rw-anti-dependency with save_pruned_height
+        // (the pruner's separate Tx1), making this transaction a pivot in SSI abort cycles.
+        // If this data is already pruned, the pruner will delete it again on its next run.
 
         let common_data =
             bincode::serialize(common.common()).context("failed to serialize VID common data")?;
