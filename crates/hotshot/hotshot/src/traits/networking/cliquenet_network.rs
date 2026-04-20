@@ -40,7 +40,7 @@ pub struct Cliquenet<K> {
 }
 
 struct Sender<K> {
-    controller: NetworkController,
+    controller: Option<NetworkController>,
     peers: HashMap<K, PeerConnectInfo>,
     last_gc: ViewNumber,
 }
@@ -82,7 +82,7 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         Ok(Self {
             my_keys: this,
             sender: Arc::new(Mutex::new(Sender {
-                controller: control,
+                controller: Some(control),
                 peers: parties,
                 last_gc: ViewNumber::genesis(),
             })),
@@ -101,16 +101,6 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
     /// discard old views.
     pub fn set_gc_window(&mut self, v: ViewNumber) {
         self.gc_window = v
-    }
-
-    /// Get the current network peers.
-    pub fn peers(&self) -> Vec<(PublicKey, Role)> {
-        self.sender
-            .lock()
-            .controller
-            .parties()
-            .map(|(k, r)| ((*k).into(), *r))
-            .collect()
     }
 
     /// Update peers on every epoch change.
@@ -237,30 +227,40 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
             }
         }
 
-        let add_result = self.sender.lock().controller.add_peers(
-            Role::Active,
-            to_add.iter().map(|(_, k, a)| ((*k).into(), a.clone())),
-        );
-
-        if let Err(err) = add_result {
-            error!(%epoch, %err, "network down; could not add peers to network");
-            return;
-        }
-
-        let del_result = self
-            .sender
-            .lock()
-            .controller
-            .remove_peers(to_del.iter().map(|(_, k)| (*k).into()));
-
-        if let Err(err) = del_result {
-            error!(%epoch, %err, "network down; could not remove peers from network");
-            return;
+        {
+            let mut sender = self.sender.lock();
+            let Some(ctrl) = &mut sender.controller else {
+                return;
+            };
+            if let Err(err) = ctrl.add_peers(
+                Role::Active,
+                to_add.iter().map(|(_, k, a)| ((*k).into(), a.clone())),
+            ) {
+                error!(%epoch, %err, "network down; could not add peers to network");
+                return;
+            }
+            if let Err(err) = ctrl.remove_peers(to_del.iter().map(|(_, k)| (*k).into())) {
+                error!(%epoch, %err, "network down; could not remove peers from network");
+                return;
+            }
         }
 
         info!(%epoch, peers = %self.sender.lock().peers.len());
 
         *our_epoch = EpochNumber::from(*epoch);
+    }
+
+    /// Get the current network peers.
+    #[cfg(feature = "hotshot-testing")]
+    pub fn peers(&self) -> Vec<(PublicKey, Role)> {
+        self.sender
+            .lock()
+            .controller
+            .as_mut()
+            .unwrap()
+            .parties()
+            .map(|(k, r)| ((*k).into(), *r))
+            .collect()
     }
 
     #[cfg(feature = "hotshot-testing")]
@@ -283,10 +283,11 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         _: Topic,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        self.sender
-            .lock()
-            .controller
-            .broadcast(Slot::new(*v), m)
+        let mut sender = self.sender.lock();
+        let Some(ctrl) = &mut sender.controller else {
+            return Err(NetworkError::ShutDown);
+        };
+        ctrl.broadcast(Slot::new(*v), m)
             .map_err(|e| NetworkError::MessageSendError(format!("cliquenet broadcast error: {e}")))
     }
 
@@ -308,12 +309,12 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
                 warn!(node = %self.my_keys.1, recipient = %r, "unknown da broadcast target");
             }
         }
-        sender
-            .controller
-            .multicast(Slot::new(*v), targets, m)
-            .map_err(|e| {
-                NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
-            })
+        let Some(ctrl) = &mut sender.controller else {
+            return Err(NetworkError::ShutDown);
+        };
+        ctrl.multicast(Slot::new(*v), targets, m).map_err(|e| {
+            NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
+        })
     }
 
     async fn direct_message(
@@ -331,9 +332,10 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
             warn!(node = %self.my_keys.1, %recipient, "unknown direct message target");
             return Ok(());
         };
-        sender
-            .controller
-            .unicast(Slot::new(*v), target.into(), m)
+        let Some(ctrl) = &mut sender.controller else {
+            return Err(NetworkError::ShutDown);
+        };
+        ctrl.unicast(Slot::new(*v), target.into(), m)
             .map_err(|e| NetworkError::MessageSendError(format!("cliquenet unicast error: {e}")))
     }
 
@@ -358,8 +360,10 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
     {
         {
             let mut sender = self.sender.lock();
-            if v.saturating_sub(*sender.last_gc) >= *self.gc_window {
-                let _ = sender.controller.gc(Slot::new(*v));
+            if v.saturating_sub(*sender.last_gc) >= *self.gc_window
+                && let Some(ctrl) = &mut sender.controller
+            {
+                let _ = ctrl.gc(Slot::new(*v));
                 sender.last_gc = v
             }
         }
@@ -379,6 +383,7 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         'a: 'b,
         Self: 'b,
     {
+        self.sender.lock().controller.take();
         boxed_sync(ready(()))
     }
 }
