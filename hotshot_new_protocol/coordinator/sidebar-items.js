@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["coordinator_builder","error","timer"],"struct":["Coordinator","CoordinatorBuilder"]};
+window.SIDEBAR_ITEMS = {"enum":["CoordinatorOutput"],"mod":["coordinator_builder","coordinator_maker","error","timer"],"struct":["Coordinator","CoordinatorBuilder","CoordinatorMaker"]};

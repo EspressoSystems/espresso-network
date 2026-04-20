@@ -70,7 +70,7 @@
 <a href=#70 id=70 data-nosnippet>70</a>                <span class="self">self</span>.view_mut(v).vid_disperse_ns = <span class="prelude-val">Some</span>(ts);
 <a href=#71 id=71 data-nosnippet>71</a>            },
 <a href=#72 id=72 data-nosnippet>72</a>            <span class="comment">// Replica: proposal processing
-<a href=#73 id=73 data-nosnippet>73</a>            </span>ConsensusInput::Proposal(p) =&gt; {
+<a href=#73 id=73 data-nosnippet>73</a>            </span>ConsensusInput::Proposal(_sender, p) =&gt; {
 <a href=#74 id=74 data-nosnippet>74</a>                <span class="kw">let </span>v = <span class="kw-2">*</span>p.view_number();
 <a href=#75 id=75 data-nosnippet>75</a>                <span class="self">self</span>.view_mut(v).proposal_recv_ns = <span class="prelude-val">Some</span>(ts);
 <a href=#76 id=76 data-nosnippet>76</a>            },
@@ -123,7 +123,7 @@
 <a href=#123 id=123 data-nosnippet>123</a>                <span class="self">self</span>.view_mut(v).vote2_sent_ns = <span class="prelude-val">Some</span>(ts);
 <a href=#124 id=124 data-nosnippet>124</a>            },
 <a href=#125 id=125 data-nosnippet>125</a>            <span class="comment">// Decide
-<a href=#126 id=126 data-nosnippet>126</a>            </span>ConsensusOutput::LeafDecided(leaves) =&gt; {
+<a href=#126 id=126 data-nosnippet>126</a>            </span>ConsensusOutput::LeafDecided { leaves, .. } =&gt; {
 <a href=#127 id=127 data-nosnippet>127</a>                <span class="kw">for </span>leaf <span class="kw">in </span>leaves {
 <a href=#128 id=128 data-nosnippet>128</a>                    <span class="kw">let </span>v = <span class="kw-2">*</span>leaf.view_number();
 <a href=#129 id=129 data-nosnippet>129</a>                    <span class="self">self</span>.view_mut(v).leaf_decided_ns = <span class="prelude-val">Some</span>(ts);

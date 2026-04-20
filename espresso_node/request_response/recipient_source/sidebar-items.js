@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["RecipientSource"],"type":["Consensus"]};
+window.SIDEBAR_ITEMS = {"struct":["RecipientSource"]};

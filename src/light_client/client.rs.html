@@ -495,71 +495,64 @@
 <a href=#495 id=495 data-nosnippet>495</a>
 <a href=#496 id=496 data-nosnippet>496</a>        <span class="comment">// Submit a couple of transactions to form non-empty blocks.
 <a href=#497 id=497 data-nosnippet>497</a>        </span><span class="kw">let </span>ns = NamespaceId::from(<span class="number">1u64</span>);
-<a href=#498 id=498 data-nosnippet>498</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream().<span class="kw">await</span>;
+<a href=#498 id=498 data-nosnippet>498</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
 <a href=#499 id=499 data-nosnippet>499</a>        <span class="kw">let </span><span class="kw-2">mut </span>txs = <span class="macro">vec!</span>[];
 <a href=#500 id=500 data-nosnippet>500</a>        <span class="kw">let </span><span class="kw-2">mut </span>headers = <span class="macro">vec!</span>[];
 <a href=#501 id=501 data-nosnippet>501</a>        <span class="kw">for _ in </span><span class="number">0</span>..<span class="number">2 </span>{
 <a href=#502 id=502 data-nosnippet>502</a>            <span class="kw">let </span><span class="kw-2">mut </span>bytes = <span class="macro">vec!</span>[<span class="number">0</span>; <span class="number">32</span>];
 <a href=#503 id=503 data-nosnippet>503</a>            rand::thread_rng().fill_bytes(<span class="kw-2">&amp;mut </span>bytes);
 <a href=#504 id=504 data-nosnippet>504</a>            <span class="kw">let </span>tx = Transaction::new(ns, bytes);
-<a href=#505 id=505 data-nosnippet>505</a>            network
-<a href=#506 id=506 data-nosnippet>506</a>                .server
-<a href=#507 id=507 data-nosnippet>507</a>                .consensus()
-<a href=#508 id=508 data-nosnippet>508</a>                .read()
-<a href=#509 id=509 data-nosnippet>509</a>                .<span class="kw">await
-<a href=#510 id=510 data-nosnippet>510</a>                </span>.submit_transaction(tx.clone())
-<a href=#511 id=511 data-nosnippet>511</a>                .<span class="kw">await
-<a href=#512 id=512 data-nosnippet>512</a>                </span>.unwrap();
-<a href=#513 id=513 data-nosnippet>513</a>            <span class="kw">let </span>block = wait_for_decide_on_handle(<span class="kw-2">&amp;mut </span>events, <span class="kw-2">&amp;</span>tx).<span class="kw">await</span>.<span class="number">0</span>;
-<a href=#514 id=514 data-nosnippet>514</a>            <span class="macro">tracing::info!</span>(block, hash = %tx.commit(), <span class="question-mark">?</span>tx, <span class="string">"transaction included"</span>);
+<a href=#505 id=505 data-nosnippet>505</a>            network.server.submit_transaction(tx.clone()).<span class="kw">await</span>.unwrap();
+<a href=#506 id=506 data-nosnippet>506</a>            <span class="kw">let </span>block = wait_for_decide_on_handle(<span class="kw-2">&amp;mut </span>events, <span class="kw-2">&amp;</span>tx).<span class="kw">await</span>.<span class="number">0</span>;
+<a href=#507 id=507 data-nosnippet>507</a>            <span class="macro">tracing::info!</span>(block, hash = %tx.commit(), <span class="question-mark">?</span>tx, <span class="string">"transaction included"</span>);
+<a href=#508 id=508 data-nosnippet>508</a>
+<a href=#509 id=509 data-nosnippet>509</a>            <span class="kw">let </span>header: Header = client
+<a href=#510 id=510 data-nosnippet>510</a>                .client
+<a href=#511 id=511 data-nosnippet>511</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/header/{block}"</span>))
+<a href=#512 id=512 data-nosnippet>512</a>                .send()
+<a href=#513 id=513 data-nosnippet>513</a>                .<span class="kw">await
+<a href=#514 id=514 data-nosnippet>514</a>                </span>.unwrap();
 <a href=#515 id=515 data-nosnippet>515</a>
-<a href=#516 id=516 data-nosnippet>516</a>            <span class="kw">let </span>header: Header = client
-<a href=#517 id=517 data-nosnippet>517</a>                .client
-<a href=#518 id=518 data-nosnippet>518</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/header/{block}"</span>))
-<a href=#519 id=519 data-nosnippet>519</a>                .send()
-<a href=#520 id=520 data-nosnippet>520</a>                .<span class="kw">await
-<a href=#521 id=521 data-nosnippet>521</a>                </span>.unwrap();
-<a href=#522 id=522 data-nosnippet>522</a>
-<a href=#523 id=523 data-nosnippet>523</a>            txs.push(tx);
-<a href=#524 id=524 data-nosnippet>524</a>            headers.push(header);
-<a href=#525 id=525 data-nosnippet>525</a>        }
-<a href=#526 id=526 data-nosnippet>526</a>
-<a href=#527 id=527 data-nosnippet>527</a>        <span class="comment">// Query namespaces individually.
-<a href=#528 id=528 data-nosnippet>528</a>        </span><span class="kw">for </span>(tx, header) <span class="kw">in </span>txs.iter().zip(<span class="kw-2">&amp;</span>headers) {
-<a href=#529 id=529 data-nosnippet>529</a>            <span class="kw">let </span>proof = client.namespace_proof(header.height(), ns).<span class="kw">await</span>.unwrap();
-<a href=#530 id=530 data-nosnippet>530</a>            <span class="macro">assert_eq!</span>(proof.verify(header, ns).unwrap(), std::slice::from_ref(tx));
-<a href=#531 id=531 data-nosnippet>531</a>        }
-<a href=#532 id=532 data-nosnippet>532</a>
-<a href=#533 id=533 data-nosnippet>533</a>        <span class="comment">// Query both namespaces by range.
-<a href=#534 id=534 data-nosnippet>534</a>        </span><span class="kw">let </span>proofs = client
-<a href=#535 id=535 data-nosnippet>535</a>            .namespace_proofs_in_range(headers[<span class="number">0</span>].height(), headers[<span class="number">1</span>].height() + <span class="number">1</span>, ns)
-<a href=#536 id=536 data-nosnippet>536</a>            .<span class="kw">await
-<a href=#537 id=537 data-nosnippet>537</a>            </span>.unwrap();
-<a href=#538 id=538 data-nosnippet>538</a>        <span class="macro">assert_eq!</span>(
-<a href=#539 id=539 data-nosnippet>539</a>            proofs.len() <span class="kw">as </span>u64,
-<a href=#540 id=540 data-nosnippet>540</a>            headers[<span class="number">1</span>].height() + <span class="number">1 </span>- headers[<span class="number">0</span>].height()
-<a href=#541 id=541 data-nosnippet>541</a>        );
-<a href=#542 id=542 data-nosnippet>542</a>        <span class="macro">assert_eq!</span>(
-<a href=#543 id=543 data-nosnippet>543</a>            proofs[<span class="number">0</span>].verify(<span class="kw-2">&amp;</span>headers[<span class="number">0</span>], ns).unwrap(),
-<a href=#544 id=544 data-nosnippet>544</a>            std::slice::from_ref(<span class="kw-2">&amp;</span>txs[<span class="number">0</span>])
-<a href=#545 id=545 data-nosnippet>545</a>        );
-<a href=#546 id=546 data-nosnippet>546</a>        <span class="macro">assert_eq!</span>(
-<a href=#547 id=547 data-nosnippet>547</a>            proofs[proofs.len() - <span class="number">1</span>].verify(<span class="kw-2">&amp;</span>headers[<span class="number">1</span>], ns).unwrap(),
-<a href=#548 id=548 data-nosnippet>548</a>            std::slice::from_ref(<span class="kw-2">&amp;</span>txs[<span class="number">1</span>])
-<a href=#549 id=549 data-nosnippet>549</a>        );
-<a href=#550 id=550 data-nosnippet>550</a>        <span class="comment">// All other blocks in the range should be empty.
-<a href=#551 id=551 data-nosnippet>551</a>        </span><span class="kw">for </span>(i, proof) <span class="kw">in </span>proofs.iter().enumerate().take(proofs.len() - <span class="number">1</span>).skip(<span class="number">1</span>) {
-<a href=#552 id=552 data-nosnippet>552</a>            <span class="kw">let </span>header = client
-<a href=#553 id=553 data-nosnippet>553</a>                .client
-<a href=#554 id=554 data-nosnippet>554</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#555 id=555 data-nosnippet>555</a>                    <span class="string">"availability/header/{}"</span>,
-<a href=#556 id=556 data-nosnippet>556</a>                    headers[<span class="number">0</span>].height() + (i <span class="kw">as </span>u64)
-<a href=#557 id=557 data-nosnippet>557</a>                ))
-<a href=#558 id=558 data-nosnippet>558</a>                .send()
-<a href=#559 id=559 data-nosnippet>559</a>                .<span class="kw">await
-<a href=#560 id=560 data-nosnippet>560</a>                </span>.unwrap();
-<a href=#561 id=561 data-nosnippet>561</a>            <span class="macro">assert_eq!</span>(proof.verify(<span class="kw-2">&amp;</span>header, ns).unwrap(), <span class="macro">vec!</span>[]);
-<a href=#562 id=562 data-nosnippet>562</a>        }
-<a href=#563 id=563 data-nosnippet>563</a>    }
-<a href=#564 id=564 data-nosnippet>564</a>}
+<a href=#516 id=516 data-nosnippet>516</a>            txs.push(tx);
+<a href=#517 id=517 data-nosnippet>517</a>            headers.push(header);
+<a href=#518 id=518 data-nosnippet>518</a>        }
+<a href=#519 id=519 data-nosnippet>519</a>
+<a href=#520 id=520 data-nosnippet>520</a>        <span class="comment">// Query namespaces individually.
+<a href=#521 id=521 data-nosnippet>521</a>        </span><span class="kw">for </span>(tx, header) <span class="kw">in </span>txs.iter().zip(<span class="kw-2">&amp;</span>headers) {
+<a href=#522 id=522 data-nosnippet>522</a>            <span class="kw">let </span>proof = client.namespace_proof(header.height(), ns).<span class="kw">await</span>.unwrap();
+<a href=#523 id=523 data-nosnippet>523</a>            <span class="macro">assert_eq!</span>(proof.verify(header, ns).unwrap(), std::slice::from_ref(tx));
+<a href=#524 id=524 data-nosnippet>524</a>        }
+<a href=#525 id=525 data-nosnippet>525</a>
+<a href=#526 id=526 data-nosnippet>526</a>        <span class="comment">// Query both namespaces by range.
+<a href=#527 id=527 data-nosnippet>527</a>        </span><span class="kw">let </span>proofs = client
+<a href=#528 id=528 data-nosnippet>528</a>            .namespace_proofs_in_range(headers[<span class="number">0</span>].height(), headers[<span class="number">1</span>].height() + <span class="number">1</span>, ns)
+<a href=#529 id=529 data-nosnippet>529</a>            .<span class="kw">await
+<a href=#530 id=530 data-nosnippet>530</a>            </span>.unwrap();
+<a href=#531 id=531 data-nosnippet>531</a>        <span class="macro">assert_eq!</span>(
+<a href=#532 id=532 data-nosnippet>532</a>            proofs.len() <span class="kw">as </span>u64,
+<a href=#533 id=533 data-nosnippet>533</a>            headers[<span class="number">1</span>].height() + <span class="number">1 </span>- headers[<span class="number">0</span>].height()
+<a href=#534 id=534 data-nosnippet>534</a>        );
+<a href=#535 id=535 data-nosnippet>535</a>        <span class="macro">assert_eq!</span>(
+<a href=#536 id=536 data-nosnippet>536</a>            proofs[<span class="number">0</span>].verify(<span class="kw-2">&amp;</span>headers[<span class="number">0</span>], ns).unwrap(),
+<a href=#537 id=537 data-nosnippet>537</a>            std::slice::from_ref(<span class="kw-2">&amp;</span>txs[<span class="number">0</span>])
+<a href=#538 id=538 data-nosnippet>538</a>        );
+<a href=#539 id=539 data-nosnippet>539</a>        <span class="macro">assert_eq!</span>(
+<a href=#540 id=540 data-nosnippet>540</a>            proofs[proofs.len() - <span class="number">1</span>].verify(<span class="kw-2">&amp;</span>headers[<span class="number">1</span>], ns).unwrap(),
+<a href=#541 id=541 data-nosnippet>541</a>            std::slice::from_ref(<span class="kw-2">&amp;</span>txs[<span class="number">1</span>])
+<a href=#542 id=542 data-nosnippet>542</a>        );
+<a href=#543 id=543 data-nosnippet>543</a>        <span class="comment">// All other blocks in the range should be empty.
+<a href=#544 id=544 data-nosnippet>544</a>        </span><span class="kw">for </span>(i, proof) <span class="kw">in </span>proofs.iter().enumerate().take(proofs.len() - <span class="number">1</span>).skip(<span class="number">1</span>) {
+<a href=#545 id=545 data-nosnippet>545</a>            <span class="kw">let </span>header = client
+<a href=#546 id=546 data-nosnippet>546</a>                .client
+<a href=#547 id=547 data-nosnippet>547</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#548 id=548 data-nosnippet>548</a>                    <span class="string">"availability/header/{}"</span>,
+<a href=#549 id=549 data-nosnippet>549</a>                    headers[<span class="number">0</span>].height() + (i <span class="kw">as </span>u64)
+<a href=#550 id=550 data-nosnippet>550</a>                ))
+<a href=#551 id=551 data-nosnippet>551</a>                .send()
+<a href=#552 id=552 data-nosnippet>552</a>                .<span class="kw">await
+<a href=#553 id=553 data-nosnippet>553</a>                </span>.unwrap();
+<a href=#554 id=554 data-nosnippet>554</a>            <span class="macro">assert_eq!</span>(proof.verify(<span class="kw-2">&amp;</span>header, ns).unwrap(), <span class="macro">vec!</span>[]);
+<a href=#555 id=555 data-nosnippet>555</a>        }
+<a href=#556 id=556 data-nosnippet>556</a>    }
+<a href=#557 id=557 data-nosnippet>557</a>}
 </code></pre></div></section></main></body></html>

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["CoordinatorEvent"],"fn":["broadcast_event","consensus_event","coordinator_event","run_coordinator"],"struct":["ConsensusHandle","NewDecideEvent"]};
