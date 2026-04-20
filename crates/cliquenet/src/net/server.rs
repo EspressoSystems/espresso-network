@@ -497,6 +497,11 @@ impl Server {
                             }
                         }
                     }
+                    Some(Command::Shutdown(tx)) => {
+                        debug!(name = %self.conf.name, node = %self.key, "shutting down");
+                        let _ = tx.send(());
+                        return
+                    }
                     None => return
                 }
             }

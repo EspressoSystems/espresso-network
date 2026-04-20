@@ -40,7 +40,7 @@ pub struct Cliquenet<K> {
 }
 
 struct Sender<K> {
-    controller: Option<NetworkController>,
+    controller: NetworkController,
     peers: HashMap<K, PeerConnectInfo>,
     last_gc: ViewNumber,
 }
@@ -82,7 +82,7 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         Ok(Self {
             my_keys: this,
             sender: Arc::new(Mutex::new(Sender {
-                controller: Some(control),
+                controller: control,
                 peers: parties,
                 last_gc: ViewNumber::genesis(),
             })),
@@ -229,17 +229,19 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
 
         {
             let mut sender = self.sender.lock();
-            let Some(ctrl) = &mut sender.controller else {
-                return;
-            };
-            if let Err(err) = ctrl.add_peers(
+
+            if let Err(err) = sender.controller.add_peers(
                 Role::Active,
                 to_add.iter().map(|(_, k, a)| ((*k).into(), a.clone())),
             ) {
                 error!(%epoch, %err, "network down; could not add peers to network");
                 return;
             }
-            if let Err(err) = ctrl.remove_peers(to_del.iter().map(|(_, k)| (*k).into())) {
+
+            if let Err(err) = sender
+                .controller
+                .remove_peers(to_del.iter().map(|(_, k)| (*k).into()))
+            {
                 error!(%epoch, %err, "network down; could not remove peers from network");
                 return;
             }
@@ -256,8 +258,6 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         self.sender
             .lock()
             .controller
-            .as_mut()
-            .unwrap()
             .parties()
             .map(|(k, r)| ((*k).into(), *r))
             .collect()
@@ -283,11 +283,10 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         _: Topic,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        let mut sender = self.sender.lock();
-        let Some(ctrl) = &mut sender.controller else {
-            return Err(NetworkError::ShutDown);
-        };
-        ctrl.broadcast(Slot::new(*v), m)
+        self.sender
+            .lock()
+            .controller
+            .broadcast(Slot::new(*v), m)
             .map_err(|e| NetworkError::MessageSendError(format!("cliquenet broadcast error: {e}")))
     }
 
@@ -309,12 +308,12 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
                 warn!(node = %self.my_keys.1, recipient = %r, "unknown da broadcast target");
             }
         }
-        let Some(ctrl) = &mut sender.controller else {
-            return Err(NetworkError::ShutDown);
-        };
-        ctrl.multicast(Slot::new(*v), targets, m).map_err(|e| {
-            NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
-        })
+        sender
+            .controller
+            .multicast(Slot::new(*v), targets, m)
+            .map_err(|e| {
+                NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
+            })
     }
 
     async fn direct_message(
@@ -332,10 +331,9 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
             warn!(node = %self.my_keys.1, %recipient, "unknown direct message target");
             return Ok(());
         };
-        let Some(ctrl) = &mut sender.controller else {
-            return Err(NetworkError::ShutDown);
-        };
-        ctrl.unicast(Slot::new(*v), target.into(), m)
+        sender
+            .controller
+            .unicast(Slot::new(*v), target.into(), m)
             .map_err(|e| NetworkError::MessageSendError(format!("cliquenet unicast error: {e}")))
     }
 
@@ -360,10 +358,8 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
     {
         {
             let mut sender = self.sender.lock();
-            if v.saturating_sub(*sender.last_gc) >= *self.gc_window
-                && let Some(ctrl) = &mut sender.controller
-            {
-                let _ = ctrl.gc(Slot::new(*v));
+            if v.saturating_sub(*sender.last_gc) >= *self.gc_window {
+                let _ = sender.controller.gc(Slot::new(*v));
                 sender.last_gc = v
             }
         }
@@ -383,8 +379,11 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         'a: 'b,
         Self: 'b,
     {
-        self.sender.lock().controller.take();
-        boxed_sync(ready(()))
+        if let Ok(future) = self.sender.lock().controller.shutdown() {
+            boxed_sync(future)
+        } else {
+            boxed_sync(ready(()))
+        }
     }
 }
 

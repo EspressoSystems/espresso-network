@@ -13,7 +13,7 @@ use tokio::{
     sync::{
         OwnedSemaphorePermit,
         mpsc::{self, UnboundedReceiver, UnboundedSender},
-        watch,
+        oneshot, watch,
     },
     task::JoinHandle,
 };
@@ -63,6 +63,8 @@ enum Command {
     Multicast(Slot, Vec<PublicKey>, Vec<u8>),
     /// Send a message to all peers with `Role::Active`.
     Broadcast(Slot, Vec<u8>),
+    /// Shutdown the network.
+    Shutdown(oneshot::Sender<()>),
 }
 
 impl Network {
@@ -233,6 +235,20 @@ impl NetworkController {
             .map_err(|_| NetworkError::ChannelClosed)?;
         self.lower_bound = s;
         Ok(())
+    }
+
+    /// Trigger network shutdown.
+    ///
+    /// The returned future will resolve once the server task finished.
+    pub fn shutdown(&mut self) -> Result<impl Future<Output = ()> + use<>, NetworkError> {
+        debug!("shutdown");
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Shutdown(tx))
+            .map_err(|_| NetworkError::ChannelClosed)?;
+        Ok(async move {
+            let _ = rx.await;
+        })
     }
 
     /// Check the number of message bytes does not exceed the configured maximum.
