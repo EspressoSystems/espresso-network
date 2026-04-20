@@ -153,7 +153,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     };
 
     println!("Waiting for 3 epochs to elapse to ensure rewards accrue...");
-    let mut events = network.peers[0].event_stream().await;
+    let mut events = network.peers[0].event_stream();
     wait_for_epochs(&mut events, BLOCKS_PER_EPOCH, 3).await;
 
     // Now run the prover once to generate and submit a proof for the current state
