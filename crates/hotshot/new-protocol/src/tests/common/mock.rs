@@ -2,11 +2,8 @@ pub mod testing {
     use std::{collections::HashSet, future::pending, sync::Arc};
 
     use async_trait::async_trait;
-    use hotshot::{
-        traits::{NetworkError, NodeImplementation},
-        types::SignatureKey,
-    };
-    use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
+    use hotshot::{traits::NetworkError, types::SignatureKey};
+    use hotshot_example_types::node_types::TestTypes;
     use hotshot_types::{
         BoxSyncFuture,
         data::{EpochNumber, ViewNumber},
@@ -16,20 +13,11 @@ pub mod testing {
             node_implementation::NodeType,
         },
     };
-    use serde::{Deserialize, Serialize};
     use tokio::sync::Mutex;
 
     use crate::coordinator::Coordinator;
 
-    #[derive(Clone, Debug, Deserialize, Serialize, Hash, Eq, PartialEq)]
-    pub struct MockNetworkImpl;
-
-    impl<T: NodeType> NodeImplementation<T> for MockNetworkImpl {
-        type Network = MockNetwork;
-        type Storage = TestStorage<T>;
-    }
-
-    pub type MockCoordinator = Coordinator<TestTypes, MockNetworkImpl>;
+    pub type MockCoordinator = Coordinator<TestTypes, MockNetwork>;
 
     #[derive(Clone, Default)]
     pub struct MockNetwork {

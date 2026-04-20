@@ -5,7 +5,7 @@ use std::{
 };
 
 use committable::Committable;
-use hotshot::{traits::NodeImplementation, types::BLSPubKey};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
     data::ViewNumber,
@@ -326,8 +326,8 @@ impl TestRunner {
 
 /// Event loop for a single node.  Processes coordinator inputs, collects
 /// decided leaf commits, and forwards them to the test runner.
-async fn run_node<I: NodeImplementation<TestTypes>>(
-    mut coord: Coordinator<TestTypes, I>,
+async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
+    mut coord: Coordinator<TestTypes, N>,
     output_tx: UnboundedSender<NodeEvent>,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
@@ -341,7 +341,7 @@ async fn run_node<I: NodeImplementation<TestTypes>>(
         };
 
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let ConsensusOutput::LeafDecided(leaves) = &output {
+            if let ConsensusOutput::LeafDecided { leaves, .. } = &output {
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
                     let view = leaf.view_number();
