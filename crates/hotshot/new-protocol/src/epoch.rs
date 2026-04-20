@@ -9,7 +9,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace;
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::error;
+use tracing::{error, info};
 
 pub enum EpochRootResult {
     DrbResult(EpochNumber, DrbResult),
@@ -55,7 +55,8 @@ impl<T: NodeType> EpochManager<T> {
     }
 
     pub fn handle_leaf_decided(&mut self, leaf: Leaf2<T>) {
-        if !is_epoch_root(leaf.block_header().block_number(), *self.epoch_height) {
+        let block_number = leaf.block_header().block_number();
+        if !is_epoch_root(block_number, *self.epoch_height) {
             return;
         }
 
@@ -64,8 +65,15 @@ impl<T: NodeType> EpochManager<T> {
             return;
         };
 
-        // Root and DRB apply in 2 epochs,
+        // Root and DRB apply in 2 epochs.
         let target_epoch = epoch + 2;
+
+        tracing::debug!(
+            block_number,
+            ?epoch,
+            ?target_epoch,
+            "spawning add_epoch_root and compute_drb_result"
+        );
 
         let membership_coordinator = self.membership_coordinator.clone();
         let handles = self.handles.entry(target_epoch).or_default();
@@ -73,18 +81,30 @@ impl<T: NodeType> EpochManager<T> {
         let membership = membership_coordinator.membership().clone();
 
         handles.push(self.tasks.spawn(async move {
-            T::Membership::add_epoch_root(membership, header.clone())
+            let result = T::Membership::add_epoch_root(membership, header)
                 .await
                 .map_err(EpochManagerError::EpochRoot)
-                .map(|_| EpochRootResult::RootAdded(target_epoch))
+                .map(|_| EpochRootResult::RootAdded(target_epoch));
+            info!(
+                ?target_epoch,
+                is_ok = result.is_ok(),
+                "add_epoch_root completed"
+            );
+            result
         }));
 
         handles.push(self.tasks.spawn(async move {
-            membership_coordinator
+            let result = membership_coordinator
                 .compute_drb_result(target_epoch, leaf)
                 .await
                 .map_err(EpochManagerError::DrbCompute)
-                .map(|drb| EpochRootResult::DrbResult(target_epoch, drb))
+                .map(|drb| EpochRootResult::DrbResult(target_epoch, drb));
+            info!(
+                ?target_epoch,
+                is_ok = result.is_ok(),
+                "compute_drb_result completed"
+            );
+            result
         }));
     }
 
