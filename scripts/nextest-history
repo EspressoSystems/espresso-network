@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+r"""Maintain and fetch rolling nextest failure history for main branch.
+
+Requires the `gh` CLI on PATH, authenticated (GH_TOKEN or `gh auth login`).
+
+Examples:
+    # On main: append current run's JUnit results to the rolling history artifact.
+    scripts/nextest-history update \
+        --junit-dir junit-artifacts \
+        --prev prev-stats.json \
+        --window 20 \
+        --sha "$GITHUB_SHA" \
+        --run-id "$GITHUB_RUN_ID" \
+        --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+        --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --out test-stats.json
+
+    # On a PR: pull the latest main-branch history for annotation.
+    scripts/nextest-history fetch \
+        --workflow test.yml \
+        --artifact-name test-stats-test \
+        --out main-test-stats.json
+
+    # Debug a fetch that appears to do nothing:
+    scripts/nextest-history --log-level debug fetch \
+        --workflow test.yml --artifact-name test-stats-test --out /tmp/foo.json
+"""
+
+import argparse
+import json
+import logging
+import os
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger("nextest-history")
+
+
+def derive_status(case: ET.Element) -> str:
+    if case.find("failure") is not None or case.find("error") is not None:
+        return "failed"
+    if case.find("flakyFailure") is not None:
+        return "flaky"
+    if case.find("skipped") is not None:
+        return "skipped"
+    return "passed"
+
+
+def parse_junit_dir(junit_dir: Path) -> tuple[list[str], list[str], int]:
+    # nextest's partitioning guarantees each test id appears once across all
+    # shards, so set-keyed dedup is correct.
+    failed: set[str] = set()
+    flaky: set[str] = set()
+    total = 0
+    xml_files = sorted(junit_dir.rglob("*.xml")) if junit_dir.exists() else []
+    for path in xml_files:
+        try:
+            tree = ET.parse(path)
+        except ET.ParseError as e:
+            log.warning("failed to parse %s: %s", path, e)
+            continue
+        for case in tree.iter("testcase"):
+            total += 1
+            classname = case.attrib.get("classname") or ""
+            name = case.attrib.get("name") or ""
+            test_id = f"{classname}::{name}"
+            status = derive_status(case)
+            if status == "failed":
+                failed.add(test_id)
+            elif status == "flaky":
+                flaky.add(test_id)
+    return sorted(failed), sorted(flaky), total
+
+
+def write_empty(out: Path) -> None:
+    out.write_text(json.dumps({"runs": []}))
+
+
+def gh_json(args: list[str]) -> Any:
+    cmd = ["gh", *args]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` exited {e.returncode}: {(e.stderr or '').strip()}"
+        ) from e
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        stdout = result.stdout.strip() or "<empty>"
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` returned non-JSON output: {stdout[:200]} ({e})"
+        ) from e
+
+
+def resolve_repo() -> str:
+    env_repo = os.environ.get("GITHUB_REPOSITORY")
+    if env_repo:
+        return env_repo
+    cmd = ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` exited {e.returncode}: {(e.stderr or '').strip()}"
+        ) from e
+    repo = result.stdout.strip()
+    if not repo:
+        raise RuntimeError(f"`{' '.join(cmd)}` returned empty output")
+    return repo
+
+
+def cmd_fetch(args: argparse.Namespace) -> int:
+    try:
+        repo = resolve_repo()
+        log.info(
+            "fetching %s from main runs of %s in %s",
+            args.artifact_name,
+            args.workflow,
+            repo,
+        )
+        runs_data = gh_json(
+            [
+                "api",
+                "-X",
+                "GET",
+                f"repos/{repo}/actions/workflows/{args.workflow}/runs",
+                "-F",
+                "branch=main",
+                "-F",
+                "event=push",
+                "-F",
+                "status=success",
+                "-F",
+                f"per_page={args.max_runs}",
+            ]
+        )
+        if not isinstance(runs_data, dict):
+            raise RuntimeError(f"unexpected runs response: {runs_data!r}")
+        workflow_runs = runs_data.get("workflow_runs", [])
+        log.info("found %d successful main runs", len(workflow_runs))
+        for run in workflow_runs:
+            run_id = run["id"]
+            artifacts_data = gh_json(
+                ["api", f"repos/{repo}/actions/runs/{run_id}/artifacts"]
+            )
+            artifacts = (
+                artifacts_data.get("artifacts", [])
+                if isinstance(artifacts_data, dict)
+                else []
+            )
+            match = next(
+                (
+                    a
+                    for a in artifacts
+                    if a.get("name") == args.artifact_name
+                    and not a.get("expired", False)
+                ),
+                None,
+            )
+            if match is None:
+                log.debug("run %s has no matching artifact", run_id)
+                continue
+            log.info("found artifact in run %s; downloading", run_id)
+            with tempfile.TemporaryDirectory(
+                dir="./tmp" if Path("./tmp").exists() else None
+            ) as td:
+                subprocess.run(
+                    [
+                        "gh",
+                        "run",
+                        "download",
+                        str(run_id),
+                        "--repo",
+                        repo,
+                        "--name",
+                        args.artifact_name,
+                        "--dir",
+                        td,
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                json_files = sorted(Path(td).rglob("*.json"))
+                if not json_files:
+                    log.warning(
+                        "artifact %s from run %s had no JSON files",
+                        args.artifact_name,
+                        run_id,
+                    )
+                    continue
+                args.out.write_bytes(json_files[0].read_bytes())
+                log.info("wrote %s", args.out)
+                return 0
+        log.info(
+            "no matching artifact in recent runs; writing empty stats to %s", args.out
+        )
+        write_empty(args.out)
+        return 0
+    except (
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+        RuntimeError,
+        OSError,
+    ) as e:
+        log.warning("fetch failed: %s", e)
+        write_empty(args.out)
+        return 0
+
+
+def load_prev(path: Path) -> dict:
+    if not path.exists():
+        return {"runs": []}
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        log.warning("failed to parse prev stats %s: %s; starting fresh", path, e)
+        return {"runs": []}
+    if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
+        log.warning("prev stats %s has unexpected shape; starting fresh", path)
+        return {"runs": []}
+    return data
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    prev = load_prev(args.prev)
+    failed, flaky, total = parse_junit_dir(args.junit_dir)
+    if total == 0:
+        log.error("no JUnit testcases parsed; refusing to overwrite stats")
+        return 1
+    entry = {
+        "sha": args.sha,
+        "timestamp": args.timestamp,
+        "run_id": args.run_id,
+        "run_url": args.run_url,
+        "failed": failed,
+        "flaky": flaky,
+    }
+    runs = [entry, *prev["runs"]][: args.window]
+    payload = {"updated_at": args.timestamp, "window": args.window, "runs": runs}
+    args.out.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n")
+    log.info(
+        "wrote %s: %d runs in window, %d failed and %d flaky in current run",
+        args.out,
+        len(runs),
+        len(failed),
+        len(flaky),
+    )
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("NEXTEST_HISTORY_LOG", "INFO"),
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    fetch = sub.add_parser("fetch", help="download latest main stats artifact")
+    fetch.add_argument("--workflow", required=True)
+    fetch.add_argument("--artifact-name", required=True)
+    fetch.add_argument("--out", required=True, type=Path)
+    fetch.add_argument(
+        "--max-runs",
+        type=int,
+        default=20,
+        help="max recent main runs to scan for the artifact (default: 20, max: 100)",
+    )
+    fetch.set_defaults(func=cmd_fetch)
+
+    update = sub.add_parser("update", help="append current run to rolling stats")
+    update.add_argument("--junit-dir", required=True, type=Path)
+    update.add_argument("--prev", required=True, type=Path)
+    update.add_argument("--window", required=True, type=int)
+    update.add_argument("--sha", required=True)
+    update.add_argument("--run-id", required=True)
+    update.add_argument("--run-url", required=True)
+    update.add_argument("--timestamp", required=True)
+    update.add_argument("--out", required=True, type=Path)
+    update.set_defaults(func=cmd_update)
+
+    args = parser.parse_args()
+    logging.basicConfig(
+        level=args.log_level,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

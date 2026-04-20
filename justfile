@@ -1,4 +1,5 @@
 mod hotshot
+mod py "scripts/py.just"
 
 default:
     just --list
