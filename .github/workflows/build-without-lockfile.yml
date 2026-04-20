@@ -32,6 +32,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v6
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       # NOTE: no rust cache, this isn't a time critical job
 
       - name: Build without committed Cargo.lock

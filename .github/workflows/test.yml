@@ -33,6 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest,just
@@ -71,6 +77,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest,just
@@ -109,6 +121,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
@@ -165,6 +182,11 @@ jobs:
       - uses: rui314/setup-mold@v1
       - uses: ./.github/actions/free-disk-space
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
@@ -193,6 +215,11 @@ jobs:
       - uses: ./.github/actions/free-disk-space
       - uses: rui314/setup-mold@v1
       - uses: ./.github/actions/free-disk-space
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2

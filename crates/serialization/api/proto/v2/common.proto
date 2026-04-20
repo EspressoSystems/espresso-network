@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+// Common types for Espresso API v2
+// This file is intentionally minimal - domain-specific types live in their own proto files
