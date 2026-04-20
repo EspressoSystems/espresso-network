@@ -36,8 +36,7 @@ use crate::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
         QueryablePayload, VidCommonQueryData,
     },
-    data_source::storage::{pruning::PrunedHeightStorage, PayloadMetadata, VidCommonMetadata},
-    Header, Leaf2, Payload, QueryError, QueryResult,
+    data_source::storage::{PayloadMetadata, VidCommonMetadata, pruning::PrunedHeightStorage},
 };
 
 pub(super) mod availability;

@@ -34,8 +34,8 @@ use crate::{
     Header, MissingSnafu, QueryError, QueryResult,
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
-        pruning::PrunedHeightStorage, Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata,
-        UpdateAggregatesStorage,
+        Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
+        pruning::PrunedHeightStorage,
     },
     node::{
         BlockId, ResourceSyncStatus, SyncStatus, SyncStatusQueryData, SyncStatusRange,

@@ -29,7 +29,7 @@ use super::{
 use crate::{
     Header, Payload, QueryError, QueryResult, Transaction as HotshotTransaction,
     availability::{BlockQueryData, QueryableHeader, QueryablePayload},
-    data_source::storage::{pruning::PrunedHeightStorage, ExplorerStorage, NodeStorage},
+    data_source::storage::{ExplorerStorage, NodeStorage, pruning::PrunedHeightStorage},
     explorer::{
         self, BalanceAmount, BlockDetail, BlockIdentifier, BlockRange, BlockSummary,
         ExplorerHistograms, ExplorerSummary, GenesisOverview, GetBlockDetailError,

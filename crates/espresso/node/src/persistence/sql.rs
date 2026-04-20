@@ -16,7 +16,7 @@ use derive_more::derive::{From, Into};
 use either::Either;
 use espresso_types::{
     AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
-    NetworkConfig, Payload, PubKey, RegisteredValidatorMap, StakeTableHash, parse_duration,
+    NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash, parse_duration,
     parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
@@ -24,9 +24,7 @@ use espresso_types::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-    v0_4::{RewardAccountV2, RewardMerkleTreeV2, REWARD_MERKLE_TREE_V2_HEIGHT},
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
-    NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
+    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -893,24 +891,24 @@ impl Persistence {
                     };
                     let height = leaf.block_header().block_number();
 
-                // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
-                // garbage collect any views for which we missed a leaf or decide event; at least
-                // not right away, in case we need to recover that data later.
-                if let Some(parent) = parent
-                    && height != parent + 1
-                {
-                    tracing::debug!(
-                        height,
-                        parent,
-                        "ending decide event at non-consecutive leaf"
-                    );
-                    break;
+                    // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
+                    // garbage collect any views for which we missed a leaf or decide event; at least
+                    // not right away, in case we need to recover that data later.
+                    if let Some(parent) = parent
+                        && height != parent + 1
+                    {
+                        tracing::debug!(
+                            height,
+                            parent,
+                            "ending decide event at non-consecutive leaf"
+                        );
+                        break;
+                    }
+                    parent = Some(height);
+                    leaves.push(leaf);
+                    final_qc = Some(CertificatePair::new(qc, next_epoch_qc));
                 }
-                parent = Some(height);
-                leaves.push(leaf);
-                final_qc = Some(CertificatePair::new(qc, next_epoch_qc));
-            }
-            drop(rows);
+                drop(rows);
 
                 let Some(final_qc) = final_qc else {
                     // End event processing when there are no more decided views.
@@ -1402,7 +1400,7 @@ fn is_serialization_error_with_diag(
                 pg_stat_diag::spawn_pg_stat_activity_log(pool.clone(), op);
             }
             #[cfg(feature = "embedded-db")]
-            let _ = (&pool, op);
+            let _ = (&pool, op, &first);
             true
         } else {
             false

@@ -18,7 +18,11 @@
 //! database connection, so that the updated state of the database can be queried midway through a
 //! transaction.
 
-use std::{collections::HashMap, marker::PhantomData, time::Instant};
+use std::{
+    collections::HashMap,
+    marker::PhantomData,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
@@ -41,6 +45,7 @@ use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
 use sqlx::{Encode, Execute, FromRow, QueryBuilder, Type, pool::Pool, query_builder::Separated};
+use tokio::time::sleep;
 use tracing::instrument;
 
 #[cfg(not(feature = "embedded-db"))]
@@ -60,7 +65,7 @@ use crate::{
         BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
     },
     data_source::{
-        storage::{pruning::PrunedHeightStorage, NodeStorage, UpdateAvailabilityStorage},
+        storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
         update,
     },
     merklized_state::{MerklizedState, UpdateStateData},

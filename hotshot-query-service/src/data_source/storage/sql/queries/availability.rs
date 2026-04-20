@@ -32,8 +32,8 @@ use crate::{
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::storage::{
-        pruning::PrunedHeightStorage, sql::sqlx::Row, AvailabilityStorage, PayloadMetadata,
-        VidCommonMetadata,
+        AvailabilityStorage, PayloadMetadata, VidCommonMetadata, pruning::PrunedHeightStorage,
+        sql::sqlx::Row,
     },
     types::HeightIndexed,
 };

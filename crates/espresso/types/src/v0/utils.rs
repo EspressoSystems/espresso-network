@@ -11,9 +11,8 @@ use bytesize::ByteSize;
 use clap::Parser;
 use committable::Committable;
 use derive_more::{From, Into};
-use futures::future::{BoxFuture, Future};
 use espresso_utils::{impl_serde_from_string_or_integer, ser::FromStringOrInteger};
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, Future};
 use hotshot_types::{
     consensus::CommitmentMap,
     data::{Leaf, Leaf2},
