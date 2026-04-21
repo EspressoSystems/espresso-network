@@ -37,10 +37,10 @@ pub struct Header(u32);
 impl Header {
     pub const SIZE: usize = 4;
 
-    pub fn new(ty: Type, len: u16) -> Self {
+    pub fn new(ty: HeaderType, len: u16) -> Self {
         match ty {
-            Type::Data => Self::data(len),
-            Type::Ack => Self::ack(len),
+            HeaderType::Data => Self::data(len),
+            HeaderType::Ack => Self::ack(len),
         }
     }
 
@@ -60,10 +60,10 @@ impl Header {
     }
 
     /// The type of the frame following this header.
-    pub fn frame_type(self) -> Result<Type, u8> {
+    pub fn frame_type(self) -> Result<HeaderType, u8> {
         match (self.0 & 0xF000000) >> 24 {
-            0 => Ok(Type::Data),
-            1 => Ok(Type::Ack),
+            0 => Ok(HeaderType::Data),
+            1 => Ok(HeaderType::Ack),
             t => Err(t as u8),
         }
     }
@@ -106,7 +106,7 @@ impl Header {
 
 /// The type of a frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Type {
+pub enum HeaderType {
     Data,
     Ack,
 }
@@ -135,17 +135,17 @@ pub struct InvalidHeader(&'static str);
 mod tests {
     use quickcheck::quickcheck;
 
-    use super::{Header, Type};
+    use super::{Header, HeaderType};
 
     quickcheck! {
         fn data(len: u16) -> bool {
             let hdr = Header::data(len);
-            hdr.is_data() && !hdr.is_partial() && hdr.frame_type() == Ok(Type::Data)
+            hdr.is_data() && !hdr.is_partial() && hdr.frame_type() == Ok(HeaderType::Data)
         }
 
         fn ack(len: u16) -> bool {
             let hdr = Header::ack(len);
-            hdr.is_ack() && !hdr.is_partial() && hdr.frame_type() == Ok(Type::Ack)
+            hdr.is_ack() && !hdr.is_partial() && hdr.frame_type() == Ok(HeaderType::Ack)
         }
 
         fn partial_data(len: u16) -> bool {

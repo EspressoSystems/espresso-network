@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+use bon::Builder;
 use bytes::Bytes;
 use tokio::{
     net::TcpListener,
@@ -51,20 +52,53 @@ pub struct NetworkController {
 /// Server task instructions.
 #[derive(Debug)]
 enum Command {
+    Peer(PeerCommand),
+    Send(SendCommand),
+    Shutdown(oneshot::Sender<()>),
+}
+
+/// Update network peers.
+#[derive(Debug)]
+enum PeerCommand {
     /// Add the given peers.
     Add(Role, Vec<(PublicKey, NetAddr)>),
     /// Remove the given peers.
     Remove(Vec<PublicKey>),
     /// Assign a `Role` to the given peers.
     Assign(Role, Vec<PublicKey>),
+}
+
+/// Send to peer(s).
+#[derive(Clone, Debug, Builder)]
+pub struct SendCommand {
+    slot: Slot,
+    action: SendAction,
+    #[builder(default)]
+    retry: RetryPolicy,
+}
+
+/// Specify if a message should be retried if no ACK is received.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum RetryPolicy {
+    #[default]
+    Default,
+    NoRetry,
+}
+
+impl RetryPolicy {
+    pub fn is_retry(self) -> bool {
+        matches!(self, Self::Default)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SendAction {
     /// Send a message to one peer.
-    Unicast(Slot, PublicKey, Vec<u8>),
+    Unicast(PublicKey, Vec<u8>),
     /// Send a message to some peers.
-    Multicast(Slot, Vec<PublicKey>, Vec<u8>),
+    Multicast(Vec<PublicKey>, Vec<u8>),
     /// Send a message to all peers with `Role::Active`.
-    Broadcast(Slot, Vec<u8>),
-    /// Shutdown the network.
-    Shutdown(oneshot::Sender<()>),
+    Broadcast(Vec<u8>),
 }
 
 impl Network {
@@ -154,8 +188,12 @@ impl NetworkController {
     pub fn unicast(&mut self, s: Slot, to: PublicKey, msg: Vec<u8>) -> Result<(), NetworkError> {
         debug!(slot = %s, %to, "unicast");
         self.length_check(&msg)?;
+        let cmd = SendCommand::builder()
+            .slot(s)
+            .action(SendAction::Unicast(to, msg))
+            .build();
         self.tx
-            .send(Command::Unicast(s, to, msg))
+            .send(Command::Send(cmd))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
@@ -163,8 +201,12 @@ impl NetworkController {
     pub fn broadcast(&mut self, s: Slot, msg: Vec<u8>) -> Result<(), NetworkError> {
         debug!(slot = %s, "broadcast");
         self.length_check(&msg)?;
+        let cmd = SendCommand::builder()
+            .slot(s)
+            .action(SendAction::Broadcast(msg))
+            .build();
         self.tx
-            .send(Command::Broadcast(s, msg))
+            .send(Command::Send(cmd))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
@@ -175,8 +217,21 @@ impl NetworkController {
     {
         debug!(slot = %s, "multicast");
         self.length_check(&msg)?;
+        let cmd = SendCommand::builder()
+            .slot(s)
+            .action(SendAction::Multicast(to.into_iter().collect(), msg))
+            .build();
         self.tx
-            .send(Command::Multicast(s, to.into_iter().collect(), msg))
+            .send(Command::Send(cmd))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    /// General send operation, supporting custom retry policies.
+    pub fn send(&mut self, cmd: SendCommand) -> Result<(), NetworkError> {
+        debug!(slot = %cmd.slot, "send");
+        self.length_check(msg_bytes(&cmd))?;
+        self.tx
+            .send(Command::Send(cmd))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
@@ -189,7 +244,7 @@ impl NetworkController {
         let peers = peers.into_iter().collect::<Vec<_>>();
         self.parties.extend(peers.iter().map(|(p, ..)| (*p, r)));
         self.tx
-            .send(Command::Add(r, peers))
+            .send(Command::Peer(PeerCommand::Add(r, peers)))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
@@ -204,7 +259,7 @@ impl NetworkController {
             self.parties.remove(p);
         }
         self.tx
-            .send(Command::Remove(peers))
+            .send(Command::Peer(PeerCommand::Remove(peers)))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
@@ -221,7 +276,7 @@ impl NetworkController {
             }
         }
         self.tx
-            .send(Command::Assign(r, peers))
+            .send(Command::Peer(PeerCommand::Assign(r, peers)))
             .map_err(|_| NetworkError::ChannelClosed)
     }
 
@@ -264,6 +319,14 @@ impl NetworkController {
             return Err(NetworkError::MessageTooLarge);
         }
         Ok(())
+    }
+}
+
+fn msg_bytes(cmd: &SendCommand) -> &[u8] {
+    match &cmd.action {
+        SendAction::Unicast(_, b) => b,
+        SendAction::Multicast(_, b) => b,
+        SendAction::Broadcast(b) => b,
     }
 }
 
