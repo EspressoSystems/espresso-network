@@ -1,13 +1,13 @@
 //! builder pattern for
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use alloy::{
     hex::FromHex,
     primitives::{Address, B256, Bytes, U256},
     providers::{Provider, WalletProvider},
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use derive_builder::Builder;
 use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
@@ -148,6 +148,8 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     multisig_transaction_value: Option<String>,
     #[builder(default)]
     output_path: Option<PathBuf>,
+    #[builder(default)]
+    output_dir: Option<PathBuf>,
     #[builder(default)]
     chain_id: u64,
 }
@@ -515,12 +517,12 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                          --use-timelock-owner",
                     )?;
                     let salt_trimmed = salt_str.trim();
-                    let salt = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
-                        B256::ZERO
-                    } else {
-                        let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
-                        B256::from_hex(hex_str).context("Invalid salt hex format")?
-                    };
+                    let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
+                    let salt = B256::from_hex(hex_str).context("Invalid salt hex format")?;
+                    ensure!(
+                        salt != B256::ZERO,
+                        "timelock_operation_salt must be non-zero"
+                    );
                     let delay = self.timelock_operation_delay.context(
                         "timelock_operation_delay must be set for StakeTableV3 upgrade with \
                          --use-timelock-owner",
@@ -533,34 +535,21 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     )
                     .await?;
 
-                    // `output_safe_tx_builder` only writes a single tx per file, so
-                    // when an output path is given we write two files with suffixes.
-                    let (schedule_out, execute_out) = match self.output_path.as_deref() {
-                        Some(base) => {
-                            let stem = base
-                                .file_stem()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| "stake_table_v3_timelock".to_string());
-                            let ext = base
-                                .extension()
-                                .map(|s| format!(".{}", s.to_string_lossy()))
-                                .unwrap_or_default();
-                            let parent = base.parent().unwrap_or(std::path::Path::new(""));
-                            (
-                                Some(parent.join(format!("{stem}.schedule{ext}"))),
-                                Some(parent.join(format!("{stem}.execute{ext}"))),
-                            )
-                        },
-                        None => (None, None),
-                    };
+                    let output_dir = self
+                        .output_dir
+                        .as_deref()
+                        .context("--calldata-out-dir required for StakeTableV3 timelock upgrade")?;
+                    fs::create_dir_all(output_dir).with_context(|| {
+                        format!("failed to create output dir {}", output_dir.display())
+                    })?;
                     output_safe_tx_builder(
                         &proposal.schedule,
-                        schedule_out.as_deref(),
+                        Some(&output_dir.join("schedule.json")),
                         self.chain_id,
                     )?;
                     output_safe_tx_builder(
                         &proposal.execute,
-                        execute_out.as_deref(),
+                        Some(&output_dir.join("execute.json")),
                         self.chain_id,
                     )?;
                 } else if use_multisig {
@@ -780,14 +769,13 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 encode_function_call(function_signature, function_values.clone())
                     .context("Failed to encode function data")?;
 
-            // Parse salt from string to B256
             let salt_trimmed = salt.trim();
-            let salt_bytes = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
-                B256::ZERO
-            } else {
-                let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
-                B256::from_hex(hex_str).context("Invalid salt hex format")?
-            };
+            let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
+            let salt_bytes = B256::from_hex(hex_str).context("Invalid salt hex format")?;
+            ensure!(
+                salt_bytes != B256::ZERO,
+                "timelock_operation_salt must be non-zero"
+            );
 
             let operation = TimelockOperationPayload {
                 target: target_addr,

@@ -462,7 +462,8 @@ async fn perform_timelock_operation_via_multisig(
     // Determine function signature and arguments based on operation type
     let (function_signature, function_args) = match operation_type {
         TimelockOperationType::Schedule => (
-            "schedule(address,uint256,bytes,bytes32,bytes32,uint256)",
+            "schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 \
+             salt, uint256 delay)",
             vec![
                 operation.target.to_string(),
                 operation.value.to_string(),
@@ -473,7 +474,8 @@ async fn perform_timelock_operation_via_multisig(
             ],
         ),
         TimelockOperationType::Execute => (
-            "execute(address,uint256,bytes,bytes32,bytes32)",
+            "execute(address target, uint256 value, bytes payload, bytes32 predecessor, bytes32 \
+             salt)",
             vec![
                 operation.target.to_string(),
                 operation.value.to_string(),
@@ -482,7 +484,7 @@ async fn perform_timelock_operation_via_multisig(
                 operation.salt.to_string(),
             ],
         ),
-        TimelockOperationType::Cancel => ("cancel(bytes32)", vec![operation_id.to_string()]),
+        TimelockOperationType::Cancel => ("cancel(bytes32 id)", vec![operation_id.to_string()]),
     };
 
     tracing::info!(
@@ -550,7 +552,8 @@ pub fn encode_stake_table_v3_timelock_proposal(
 
     let schedule = encode_generic_calldata(
         timelock_addr,
-        "schedule(address,uint256,bytes,bytes32,bytes32,uint256)",
+        "schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, \
+         uint256 delay)",
         vec![
             proxy_addr.to_string(),
             U256::ZERO.to_string(),
@@ -568,7 +571,7 @@ pub fn encode_stake_table_v3_timelock_proposal(
 
     let execute = encode_generic_calldata(
         timelock_addr,
-        "execute(address,uint256,bytes,bytes32,bytes32)",
+        "execute(address target, uint256 value, bytes payload, bytes32 predecessor, bytes32 salt)",
         vec![
             proxy_addr.to_string(),
             U256::ZERO.to_string(),

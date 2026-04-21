@@ -466,6 +466,30 @@ After deploying V3, the deployment-info tool will automatically detect the versi
 Steps 7-8 can happen well before step 9. The gap between contract upgrade and fast finality activation gives validators
 time to register and for values to propagate through epoch transitions.
 
+### Deploy CLI examples
+
+Multisig-owned proxy (Decaf testnet path):
+
+```bash
+cargo run -p espresso-node --bin deploy -- \
+    --rpc-url "$RPC_URL" \
+    --upgrade-stake-table-v3 \
+    --use-multisig \
+    --calldata-out ./tmp/st_v3.json
+```
+
+Timelock-owned proxy (Mainnet path) emits both `schedule.json` and `execute.json` into the given directory:
+
+```bash
+cargo run -p espresso-node --bin deploy -- \
+    --rpc-url "$RPC_URL" \
+    --upgrade-stake-table-v3 \
+    --use-timelock-owner \
+    --timelock-operation-salt "0x$(openssl rand -hex 32)" \
+    --timelock-operation-delay 172800 \
+    --calldata-out-dir ./tmp/st_v3_timelock/
+```
+
 ## 6. Forward Compatibility
 
 ### Interaction with re-delegation (V3 on other branch)
