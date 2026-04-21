@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Committable;
-use hotshot_query_service::availability::{QueryablePayload, VidCommonQueryData};
+use hotshot_query_service_types::availability::{QueryablePayload, VidCommonQueryData};
 use hotshot_types::{
     data::ViewNumber,
     traits::{BlockPayload, EncodeBytes},

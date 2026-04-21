@@ -19,7 +19,7 @@ use espresso_types::{
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
 use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
-use hotshot_query_service::{
+use hotshot_query_service_types::{
     availability::{LeafHash, LeafId, LeafQueryData},
     node::{BlockHash, BlockId},
 };
@@ -560,9 +560,6 @@ impl TestClient {
             first_epoch_with_dynamic_stake_table: EpochNumber::new(
                 inner.first_epoch_with_dynamic_stake_table,
             ),
-
-            #[cfg(feature = "decaf")]
-            decaf_first_pos_epoch: None,
         }
     }
 

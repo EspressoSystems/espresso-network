@@ -1,4 +1,4 @@
-# fetched at block 2271945 (2026-02-20T09:42:12Z)
+# fetched at block 2655684 (2026-04-20T12:25:48Z)
 network = "hoodi"
 
 [multisigs.espresso_labs]
@@ -17,19 +17,50 @@ status = "deployed"
 address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
 min_delay = "5m"
 
+[[ops_timelock.proposers]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[ops_timelock.executors]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[ops_timelock.cancellers]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[ops_timelock.default_admins]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[ops_timelock.default_admins]]
+address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
+name = "ops_timelock"
+
 [safe_exit_timelock]
 status = "deployed"
 address = "0xe34cdddf2271492809728c83eb347b36ba001438"
 min_delay = "10m"
 
-[stake_table]
-status = "deployed"
-address = "0x6e9c2dce0cb780a06c811ca245b8d497ef6e96c5"
-default_admin_address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
-default_admin_name = "ops_timelock"
-version = "2.0.0"
-pauser_address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
-pauser_name = "espresso_labs"
+[[safe_exit_timelock.proposers]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[safe_exit_timelock.executors]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[safe_exit_timelock.cancellers]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[safe_exit_timelock.default_admins]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[safe_exit_timelock.default_admins]]
+address = "0xe34cdddf2271492809728c83eb347b36ba001438"
+name = "safe_exit_timelock"
 
 [esp_token]
 status = "deployed"
@@ -38,13 +69,6 @@ owner_address = "0xe34cdddf2271492809728c83eb347b36ba001438"
 owner_name = "safe_exit_timelock"
 version = "2.0.0"
 
-[light_client]
-status = "deployed"
-address = "0x578767719287386043d3aaf2f5a68993c3a42cd5"
-owner_address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
-owner_name = "ops_timelock"
-version = "3.0.0"
-
 [fee_contract]
 status = "deployed"
 address = "0xe6548625c4d5441872820e5af3e809f5b839d914"
@@ -52,11 +76,27 @@ owner_address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
 owner_name = "ops_timelock"
 version = "1.0.0"
 
+[light_client]
+status = "deployed"
+address = "0x578767719287386043d3aaf2f5a68993c3a42cd5"
+owner_address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
+owner_name = "ops_timelock"
+version = "3.0.0"
+
 [reward_claim]
 status = "deployed"
 address = "0xf6fcfd30f1b22bf6e78ade09c54566594c703183"
 default_admin_address = "0xe34cdddf2271492809728c83eb347b36ba001438"
 default_admin_name = "safe_exit_timelock"
 version = "1.0.0"
+pauser_address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+pauser_name = "espresso_labs"
+
+[stake_table]
+status = "deployed"
+address = "0x6e9c2dce0cb780a06c811ca245b8d497ef6e96c5"
+default_admin_address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
+default_admin_name = "ops_timelock"
+version = "2.0.0"
 pauser_address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
 pauser_name = "espresso_labs"

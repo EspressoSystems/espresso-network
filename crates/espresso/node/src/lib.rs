@@ -5,6 +5,7 @@ mod request_response;
 
 pub mod api;
 pub mod catchup;
+pub mod consensus_handle;
 pub mod context;
 pub mod genesis;
 pub mod keyset;
@@ -36,9 +37,9 @@ pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, CompatNetwork, GossipConfig,
-        KeyPair, Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig,
-        WrappedSignatureKey, derive_libp2p_multiaddr, derive_libp2p_peer_id,
+        CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, GossipConfig, KeyPair,
+        Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
+        derive_libp2p_multiaddr, derive_libp2p_peer_id,
     },
     types::SignatureKey,
 };
@@ -382,13 +383,13 @@ where
     info!("Starting Libp2p with PeerID: {libp2p_public_key}");
 
     let loaded_network_config_from_persistence = persistence.load_config().await?;
-    let (mut network_config, wait_for_orchestrator) = match (
+    let (mut network_config, wait_for_orchestrator, persist_config) = match (
         loaded_network_config_from_persistence,
         network_params.config_peers,
     ) {
         (Some(config), _) => {
             tracing::warn!("loaded network config from storage, rejoining existing network");
-            (config, false)
+            (config, false, false)
         },
         // If we were told to fetch the config from an already-started peer, do so.
         (None, Some(peers)) => {
@@ -406,8 +407,7 @@ where
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
             );
-            persistence.save_config(&config).await?;
-            (config, false)
+            (config, false, true)
         },
         // Otherwise, this is a fresh network; load from the orchestrator.
         (None, None) => {
@@ -431,9 +431,8 @@ where
                 stake_table = ?config.config.known_nodes_with_stake,
                 "loaded config",
             );
-            persistence.save_config(&config).await?;
             tracing::warn!("all nodes connected");
-            (config, true)
+            (config, true, true)
         },
     };
 
@@ -472,6 +471,13 @@ where
     if let Some(da_committees) = &genesis.da_committees {
         tracing::warn!("setting da_committees from genesis: {da_committees:?}");
         network_config.config.da_committees = da_committees.clone();
+    }
+
+    // Save *after* the above updates. The orchestrator and peer fetched configs don't include
+    // epoch_height, drb_difficulty, etc. those come from genesis and are applied above.
+    // Saving before these updates would persist zeros for those values
+    if persist_config {
+        persistence.save_config(&network_config).await?;
     }
 
     // If the `Libp2p` bootstrap nodes were supplied via the command line, override those
@@ -715,7 +721,13 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    let network = {
+    // Legacy HotShot uses CombinedNetworks (CDN + libp2p).
+    // The new Coordinator uses CliqueNet directly.
+    // Each protocol gets its own dedicated network
+    // If we later upgrade to CliqueNet before the Fast Finality upgrade, we can
+    // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
+    // for the fast finality consensus upgrade i.e Coordinator.
+    let cliquenet = {
         let peers = coordinator
             .stake_table_for_epoch(None)
             .await?
@@ -725,7 +737,7 @@ where
             .into_iter()
             .filter_map(|cfg| Some((cfg.stake_table_entry.stake_key, cfg.connect_info?)));
 
-        let c = Cliquenet::<PubKey>::create(
+        Cliquenet::<PubKey>::create(
             "sequencer",
             pub_key,
             network_params.x25519_secret_key.into(),
@@ -733,10 +745,10 @@ where
             peers,
             metrics.clone(),
         )
-        .await?;
-
-        Arc::new(CompatNetwork::new(c, combined_network).await)
+        .await?
     };
+
+    let network = Arc::new(combined_network);
 
     let mut ctx = SequencerContext::init(
         network_config,
@@ -748,6 +760,7 @@ where
         state_catchup_providers,
         persistence,
         network.clone(),
+        cliquenet,
         Some(network_params.state_relay_server_url),
         &*metrics,
         genesis.stake_table.capacity,
@@ -755,8 +768,6 @@ where
         proposal_fetcher_config,
     )
     .await?;
-
-    network.set_upgrade_lock(ctx.upgrade_lock().await);
 
     if wait_for_orchestrator {
         ctx = ctx.wait_for_orchestrator(orchestrator_client);
@@ -815,7 +826,7 @@ pub mod testing {
             BlockPayload,
             implementations::{MasterMap, MemoryNetwork},
         },
-        types::EventType::{self, Decide},
+        types::EventType,
     };
     use hotshot_builder_refactored::service::{
         BuilderConfig as LegacyBuilderConfig, GlobalState as LegacyGlobalState,
@@ -845,6 +856,7 @@ pub mod testing {
     use super::*;
     use crate::{
         catchup::ParallelStateCatchup,
+        consensus_handle::CoordinatorEvent,
         persistence::no_storage::{self, NoStorage},
     };
 
@@ -1472,6 +1484,16 @@ pub mod testing {
                 "starting node",
             );
 
+            // The coordinator needs its own separate MemoryNetwork so it doesn't
+            // steal messages from HotShot's network. We use a separate MasterMap
+            // to avoid overwriting HotShot's entry in the shared master map.
+            let coordinator_master_map = Arc::new(MasterMap::new());
+            let coordinator_network = MemoryNetwork::new(
+                &my_peer_config.stake_table_entry.stake_key,
+                &coordinator_master_map,
+                &topics,
+                None,
+            );
             SequencerContext::init(
                 NetworkConfig {
                     config,
@@ -1487,6 +1509,7 @@ pub mod testing {
                 catchup_providers,
                 persistence,
                 network,
+                coordinator_network,
                 self.state_relay_url.clone(),
                 metrics,
                 stake_table_capacity,
@@ -1505,7 +1528,7 @@ pub mod testing {
     // Wait for decide event, make sure it matches submitted transaction. Return the block number
     // containing the transaction and the block payload size
     pub async fn wait_for_decide_on_handle(
-        events: &mut (impl Stream<Item = Event> + Unpin),
+        events: &mut (impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin),
         submitted_txn: &Transaction,
     ) -> (u64, usize) {
         let commitment = submitted_txn.commit();
@@ -1515,7 +1538,11 @@ pub mod testing {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let Decide { leaf_chain, .. } = event.event {
+            if let CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 if let Some((height, size)) =
                     leaf_chain.iter().find_map(|LeafInfo { leaf, .. }| {
                         if leaf
@@ -1543,15 +1570,17 @@ pub mod testing {
     /// Waits until a node has reached the given target epoch (exclusive).
     /// The function returns once the first event indicates an epoch higher than `target_epoch`.
     pub async fn wait_for_epochs(
-        events: &mut (
-                 impl futures::Stream<Item = hotshot_types::event::Event<SeqTypes>> + std::marker::Unpin
-             ),
+        events: &mut (impl futures::Stream<Item = CoordinatorEvent<SeqTypes>> + std::marker::Unpin),
         epoch_height: u64,
         target_epoch: u64,
     ) {
         tracing::info!(target_epoch, "waiting for epoch");
         while let Some(event) = events.next().await {
-            if let EventType::Decide { leaf_chain, .. } = event.event {
+            if let CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            {
                 let leaf = leaf_chain[0].leaf.clone();
                 let epoch = leaf.epoch(epoch_height);
                 tracing::debug!(
@@ -1573,7 +1602,7 @@ mod test {
     use alloy::node_bindings::Anvil;
     use espresso_types::{Header, MOCK_SEQUENCER_VERSIONS, NamespaceId, Payload, Transaction};
     use futures::StreamExt;
-    use hotshot::types::EventType::Decide;
+    use hotshot::types::{Event, EventType};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         event::LeafInfo,
@@ -1583,6 +1612,7 @@ mod test {
 
     use self::testing::run_test_builder;
     use super::*;
+    use crate::consensus_handle::CoordinatorEvent;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {
@@ -1603,9 +1633,16 @@ mod test {
         let handle_0 = &handles[0];
 
         // Hook the builder up to the event stream from the first node
-        builder_task.start(Box::new(handle_0.event_stream().await));
+        builder_task.start(Box::new(
+            handle_0
+                .consensus_handle()
+                .legacy_consensus()
+                .read()
+                .await
+                .event_stream(),
+        ));
 
-        let mut events = handle_0.event_stream().await;
+        let mut events = handle_0.event_stream();
 
         for handle in handles.iter() {
             handle.start_consensus().await;
@@ -1640,10 +1677,17 @@ mod test {
 
         let handle_0 = &handles[0];
 
-        let mut events = handle_0.event_stream().await;
+        let mut events = handle_0.event_stream();
 
         // Hook the builder up to the event stream from the first node
-        builder_task.start(Box::new(handle_0.event_stream().await));
+        builder_task.start(Box::new(
+            handle_0
+                .consensus_handle()
+                .legacy_consensus()
+                .read()
+                .await
+                .event_stream(),
+        ));
 
         for handle in handles.iter() {
             handle.start_consensus().await;
@@ -1668,7 +1712,11 @@ mod test {
         loop {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
-            let Decide { leaf_chain, .. } = event.event else {
+            let CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             tracing::info!("Got decide {leaf_chain:?}");

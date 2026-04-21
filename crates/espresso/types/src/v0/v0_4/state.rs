@@ -41,7 +41,7 @@ impl PermittedRewardMerkleTreeV2 {
         let permit = REWARD_MERKLE_TREE_V2_MEMORY_LOCK
             .get_or_init(|| {
                 let num_permits: usize =
-                    std::env::var("ESPRESSO_SEQUENCER_REWARD_MERKLE_TREE_PERMITS")
+                    std::env::var("ESPRESSO_NODE_REWARD_MERKLE_TREE_PERMITS")
                         .ok()
                         .and_then(|v| v.parse::<usize>().ok())
                         .unwrap_or(1);

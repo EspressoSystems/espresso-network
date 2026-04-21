@@ -14,8 +14,8 @@ path = "src/bin/node.rs"
 anyhow = { workspace = true }
 async-lock = { workspace = true }
 clap = { workspace = true }
-committable = { workspace = true }
 cliquenet = { workspace = true }
+committable = { workspace = true }
 csv = { workspace = true }
 hotshot = { workspace = true, features = ["hotshot-testing"] }
 hotshot-example-types = { workspace = true }

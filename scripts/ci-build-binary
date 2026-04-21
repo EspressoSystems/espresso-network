@@ -9,13 +9,13 @@ set -euo pipefail
 
 case "$1" in
     "espresso-node")
-        cargo build --locked --release -p espresso-node --bin espresso-node
+        cargo build --locked --release --timings -p espresso-node --bin espresso-node
         ;;
     "espresso-node-sqlite")
-        cargo build --locked --release -p espresso-node-sqlite
+        cargo build --locked --release --timings -p espresso-node-sqlite
         ;;
     "espresso-dev-node")
-        cargo build --locked --release -p espresso-dev-node
+        cargo build --locked --release --timings -p espresso-dev-node
         ;;
     "other")
         BINS="$(cargo metadata --no-deps --format-version 1 \
@@ -24,7 +24,7 @@ case "$1" in
         | xargs -I{} echo --bin {} \
         | tr '\n' ' ')"
         echo "Building other binaries: $BINS"
-        cargo build --locked --release $BINS
+        cargo build --locked --release --timings $BINS
         ;;
     *)
         echo "Unknown binary: $1"

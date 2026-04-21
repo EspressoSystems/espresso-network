@@ -195,11 +195,12 @@ fn resolve_node_signatures(
     }
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     let mut cli = Args::parse();
 
     // initialize the logging ASAP so we don't accidentally hide any messages.
     cli.config.logging.clone().unwrap_or_default().init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let config_path = cli.config_path();
     // Get config file

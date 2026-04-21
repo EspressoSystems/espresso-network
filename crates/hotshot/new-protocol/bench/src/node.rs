@@ -7,7 +7,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
-    node_types::{CliquenetImpl, TestTypes},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_new_protocol::{
@@ -35,7 +35,7 @@ use tracing::{error, info, warn};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, CliquenetImpl>;
+type BenchCoordinator = Coordinator<TestTypes, Cliquenet<BLSPubKey>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -106,7 +106,17 @@ async fn build_coordinator(
     let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
 
-    let mut consensus = Consensus::new(membership.clone(), public_key, private_key, epoch_height);
+    let genesis_state = TestValidatedState::default();
+    let genesis_leaf =
+        Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+
+    let mut consensus = Consensus::new(
+        membership.clone(),
+        public_key,
+        private_key,
+        genesis_leaf.clone(),
+        epoch_height,
+    );
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
@@ -123,13 +133,6 @@ async fn build_coordinator(
     let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
 
     let mut state_manager = StateManager::new(instance.clone());
-    let genesis_state = TestValidatedState::default();
-    let genesis_leaf = Leaf2::<TestTypes>::genesis(
-        &genesis_state,
-        &instance,
-        hotshot_example_types::node_types::TEST_VERSIONS.test.base,
-    )
-    .await;
     state_manager.seed_state(
         ViewNumber::genesis(),
         Arc::new(genesis_state),

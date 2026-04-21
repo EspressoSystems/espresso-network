@@ -32,8 +32,7 @@ flag `--all-features` when building the espresso-node binary target.
 "#
 );
 
-#[tokio::main]
-pub async fn main() -> anyhow::Result<()> {
+pub fn main() -> anyhow::Result<()> {
     // If we compiled with the embedded-db feature **and** are running it now
     // something is wrong.
     #[cfg(feature = "embedded-db")]
@@ -46,6 +45,7 @@ pub async fn main() -> anyhow::Result<()> {
 
     #[cfg(not(feature = "embedded-db"))]
     {
-        espresso_node::main().await
+        let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+        tokio::runtime::Runtime::new()?.block_on(espresso_node::main(migrated_envs))
     }
 }
