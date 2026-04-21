@@ -11,6 +11,24 @@ network configuration on-chain. The stake table becomes the single source of tru
 
 No UI changes. Only stake table contract, Rust event processing, and staking CLI.
 
+### Architecture
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CLI as staking-cli
+    participant SC as StakeTable V3
+    participant F as Fetcher
+    participant VM as ValidatorMap
+    participant Net as cliquenet
+
+    CLI->>SC: registerValidatorV3 / updateNetworkConfig /<br/>updateX25519Key / updateP2pAddr
+    SC-->>F: ValidatorRegisteredV3 / X25519KeyUpdated /<br/>P2pAddrUpdated (finalized on Ethereum)
+    F->>VM: update RegisteredValidator
+    Note over VM: active at epoch N+2
+    VM->>Net: PeerConfig.connect_info<br/>(x25519_key, p2p_addr)
+```
+
 ## 2. Contract Changes (StakeTableV3)
 
 ### Versioning
