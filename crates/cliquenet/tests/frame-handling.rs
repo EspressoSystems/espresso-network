@@ -7,7 +7,7 @@ use rand::Rng;
 /// Send and receive 5 MiB messages.
 #[tokio::test]
 async fn multiple_frames() {
-    const PARTIES: u16 = 10;
+    const PARTIES: u16 = 30;
 
     let parties = (0..PARTIES)
         .map(|i| {

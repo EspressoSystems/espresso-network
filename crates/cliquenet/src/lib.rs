@@ -13,7 +13,10 @@ use std::{fmt, num::NonZeroUsize, time::Duration};
 pub use addr::NetAddr;
 use bon::Builder;
 pub use msg::Slot;
-pub use net::{Network, NetworkController, NetworkReceiver};
+pub use net::{
+    Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
+    SendCommandBuilder,
+};
 
 use crate::x25519::{Keypair, PublicKey};
 

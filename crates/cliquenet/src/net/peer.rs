@@ -24,8 +24,8 @@ use crate::{
     Config, PublicKey,
     connection::Connection,
     error::{Empty, NetworkError},
-    msg::{Ack, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, Slot, Trailer, Type},
-    net::PeerMessage,
+    msg::{Ack, Header, HeaderType, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, Slot, Trailer},
+    net::{PeerMessage, RetryPolicy},
     queue::Queue,
     time::Countdown,
 };
@@ -51,7 +51,7 @@ pub struct Peer {
     conn: Connection,
 
     /// Messages the application wants to be sent to the remote.
-    msgs: Queue<Bytes>,
+    msgs: Queue<(RetryPolicy, Bytes)>,
 
     /// Messages waiting to be retried if no ACK has been received.
     retry: DelayQueue,
@@ -94,7 +94,7 @@ impl Peer {
     pub fn new(
         config: Arc<Config>,
         budget: NonZeroUsize,
-        messages: Queue<Bytes>,
+        messages: Queue<(RetryPolicy, Bytes)>,
         inbound: UnboundedSender<PeerMessage>,
         next_slot: watch::Receiver<Slot>,
         connection: Connection,
@@ -273,8 +273,10 @@ impl Peer {
                 // delay queue to grow unbounded.
                 m = self.msgs.dequeue(), if wstate.is_idle() && self.retry.len() < self.conf.peer_budget.get() => {
                     trace!(name = %self.conf.name, peer = %self.conn.key, "next outbound message");
-                    let (slot, id, bytes) = m;
-                    self.retry.add(slot, id, bytes.clone());
+                    let (slot, id, (policy, bytes)) = m;
+                    if policy.is_retry() {
+                        self.retry.add(slot, id, bytes.clone());
+                    }
                     let chunk = min(bytes.len(), MAX_PAYLOAD_SIZE);
                     wstate = WriteState::data_frame(
                         &bytes[..chunk],
@@ -476,7 +478,7 @@ impl Peer {
                                         continue
                                     }
                                     match hdr.frame_type() {
-                                        Ok(Type::Data) => {
+                                        Ok(HeaderType::Data) => {
                                             let n = self.conn.state.read_message(buf, &mut *rbuf)?;
                                             ibound_msg.extend_from_slice(&rbuf[..n]);
                                             if ibound_msg.len() > self.max_message_size {
@@ -494,7 +496,9 @@ impl Peer {
                                                     );
                                                     return Err(NetworkError::InvalidTrailer);
                                                 };
-                                                obound_acks.push_back(Ack::from((t.slot, t.id)));
+                                                if t.ty.is_ack() {
+                                                    obound_acks.push_back(Ack::from((t.slot, t.id)));
+                                                }
                                                 if t.slot >= self.lower_bound {
                                                     let p = read_permit.take();
                                                     debug_assert!(p.is_some());
@@ -512,10 +516,10 @@ impl Peer {
                                             }
                                             rstate = ReadState::Header { off: 0, buf: [0; _] };
                                         }
-                                        Ok(Type::Ack) if hdr.is_partial() => {
+                                        Ok(HeaderType::Ack) if hdr.is_partial() => {
                                             return Err(NetworkError::InvalidAck)
                                         }
-                                        Ok(Type::Ack) => {
+                                        Ok(HeaderType::Ack) => {
                                             let n = self.conn.state.read_message(buf, &mut *rbuf)?;
                                             let Ok(a) = Ack::try_from(&rbuf[..n]) else {
                                                 return Err(NetworkError::InvalidAck)

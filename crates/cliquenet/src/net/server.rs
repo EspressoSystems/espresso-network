@@ -18,8 +18,8 @@ use crate::{
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
-    msg::{MsgId, Slot, Trailer},
-    net::{Command, PeerMessage, peer::Peer},
+    msg::{MsgId, Slot, Trailer, TrailerType},
+    net::{Command, PeerCommand, PeerMessage, RetryPolicy, SendAction, peer::Peer},
     queue::Queue,
 };
 
@@ -41,7 +41,7 @@ pub struct Server {
 struct Party {
     role: Role,
     addr: NetAddr,
-    outbox: Queue<Bytes>,
+    outbox: Queue<(RetryPolicy, Bytes)>,
     peer: PeerState,
 }
 
@@ -354,7 +354,7 @@ impl Server {
                 }
 
                 cmd = self.obound.recv() => match cmd {
-                    Some(Command::Add(role, parties)) => {
+                    Some(Command::Peer(PeerCommand::Add(role, parties))) => {
                         for (k, a) in parties {
                             if self.parties.contains_key(&k) {
                                 warn!(
@@ -370,7 +370,7 @@ impl Server {
                             self.spawn_connect(k, a)
                         }
                     }
-                    Some(Command::Remove(peers)) => {
+                    Some(Command::Peer(PeerCommand::Remove(peers))) => {
                         for k in &peers {
                             info!(
                                 name = %self.conf.name,
@@ -383,7 +383,7 @@ impl Server {
                             self.peer_tasks.abort(k);
                         }
                     }
-                    Some(Command::Assign(role, peers)) => {
+                    Some(Command::Peer(PeerCommand::Assign(role, peers))) => {
                         for k in &peers {
                             if let Some(p) = self.parties.get_mut(k) {
                                 p.role = role
@@ -398,102 +398,104 @@ impl Server {
                             }
                         }
                     }
-                    Some(Command::Unicast(slot, to, m)) => {
-                        if slot < self.lower_bound {
-                            continue
-                        }
-
-                        if to == self.key {
-                            trace!(name = %self.conf.name, node = %self.key, "sending message");
-                            if let Err(err) = self.ibound.send((self.key, m.into(), None)) {
-                                warn!(
-                                    name = %self.conf.name,
-                                    node = %self.key,
-                                    err  = %err,
-                                    "channel closed"
-                                );
-                                return
-                            }
-                            trace!(name = %self.conf.name, node = %self.key, "message delivered");
-                            continue
-                        }
-
-                        let msgid = self.next_msgid();
-                        let bytes = append_trailer(slot, msgid, m);
-
-                        if let Some(party) = self.parties.get(&to) {
-                            party.outbox.enqueue(slot, msgid, bytes);
-                        } else {
-                            warn!(
-                                name = %self.conf.name,
-                                node = %self.key,
-                                peer = %to,
-                                "unicast target not found"
-                            );
-                        }
-                    }
-                    Some(Command::Multicast(slot, parties, m)) => {
-                        if slot < self.lower_bound {
-                            continue
-                        }
-
-                        let msgid = self.next_msgid();
-                        let bytes = append_trailer(slot, msgid, m);
-
-                        if parties.contains(&self.key) {
-                            let bytes = remove_trailer(bytes.clone());
-                            trace!(name = %self.conf.name, node = %self.key, "sending message");
-                            if let Err(err) = self.ibound.send((self.key, bytes, None)) {
-                                warn!(
-                                    name = %self.conf.name,
-                                    node = %self.key,
-                                    err  = %err,
-                                    "channel closed"
-                                );
-                                return
-                            }
-                            trace!(name = %self.conf.name, node = %self.key, "message delivered");
-                        }
-
-                        for (to, party) in &self.parties {
-                            if !parties.contains(to) {
+                    Some(Command::Send(cmd)) => match cmd.action {
+                        SendAction::Unicast(to, m) => {
+                            if cmd.slot < self.lower_bound {
                                 continue
                             }
-                            trace!(name = %self.conf.name, node = %self.key, %to, "sending message");
-                            party.outbox.enqueue(slot, msgid, bytes.clone());
-                        }
-                    }
-                    Some(Command::Broadcast(slot, m)) => {
-                        if slot < self.lower_bound {
-                            continue
-                        }
 
-                        let msgid = self.next_msgid();
-                        let bytes = append_trailer(slot, msgid, m);
+                            if to == self.key {
+                                trace!(name = %self.conf.name, node = %self.key, "sending message");
+                                if let Err(err) = self.ibound.send((self.key, m.into(), None)) {
+                                    warn!(
+                                        name = %self.conf.name,
+                                        node = %self.key,
+                                        err  = %err,
+                                        "channel closed"
+                                    );
+                                    return
+                                }
+                                trace!(name = %self.conf.name, node = %self.key, "message delivered");
+                                continue
+                            }
 
-                        if self.role.is_active() {
-                            let bytes = remove_trailer(bytes.clone());
-                            trace!(name = %self.conf.name, node = %self.key, "sending message");
-                            if let Err(err) = self.ibound.send((self.key, bytes, None)) {
+                            let msgid = self.next_msgid();
+                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+
+                            if let Some(party) = self.parties.get(&to) {
+                                party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes));
+                            } else {
                                 warn!(
                                     name = %self.conf.name,
                                     node = %self.key,
-                                    err  = %err,
-                                    "channel closed"
+                                    peer = %to,
+                                    "unicast target not found"
                                 );
-                                return
                             }
-                            trace!(name = %self.conf.name, node = %self.key, "message delivered");
                         }
-                        for (key, party) in &self.parties {
-                            if party.role.is_active() {
-                                trace!(
-                                    name  = %self.conf.name,
-                                    node  = %self.key,
-                                    to    = %key,
-                                    "sending message"
-                                );
-                                party.outbox.enqueue(slot, msgid, bytes.clone());
+                        SendAction::Multicast(parties, m) => {
+                            if cmd.slot < self.lower_bound {
+                                continue
+                            }
+
+                            let msgid = self.next_msgid();
+                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+
+                            if parties.contains(&self.key) {
+                                let bytes = remove_trailer(bytes.clone());
+                                trace!(name = %self.conf.name, node = %self.key, "sending message");
+                                if let Err(err) = self.ibound.send((self.key, bytes, None)) {
+                                    warn!(
+                                        name = %self.conf.name,
+                                        node = %self.key,
+                                        err  = %err,
+                                        "channel closed"
+                                    );
+                                    return
+                                }
+                                trace!(name = %self.conf.name, node = %self.key, "message delivered");
+                            }
+
+                            for (to, party) in &self.parties {
+                                if !parties.contains(to) {
+                                    continue
+                                }
+                                trace!(name = %self.conf.name, node = %self.key, %to, "sending message");
+                                party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
+                            }
+                        }
+                        SendAction::Broadcast(m) => {
+                            if cmd.slot < self.lower_bound {
+                                continue
+                            }
+
+                            let msgid = self.next_msgid();
+                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+
+                            if self.role.is_active() {
+                                let bytes = remove_trailer(bytes.clone());
+                                trace!(name = %self.conf.name, node = %self.key, "sending message");
+                                if let Err(err) = self.ibound.send((self.key, bytes, None)) {
+                                    warn!(
+                                        name = %self.conf.name,
+                                        node = %self.key,
+                                        err  = %err,
+                                        "channel closed"
+                                    );
+                                    return
+                                }
+                                trace!(name = %self.conf.name, node = %self.key, "message delivered");
+                            }
+                            for (key, party) in &self.parties {
+                                if party.role.is_active() {
+                                    trace!(
+                                        name  = %self.conf.name,
+                                        node  = %self.key,
+                                        to    = %key,
+                                        "sending message"
+                                    );
+                                    party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
+                                }
                             }
                         }
                     }
@@ -583,8 +585,8 @@ impl PeerState {
     }
 }
 
-fn append_trailer(s: Slot, i: MsgId, bytes: Vec<u8>) -> Bytes {
-    let trailer = Trailer::new(s, i);
+fn append_trailer(s: Slot, t: TrailerType, i: MsgId, bytes: Vec<u8>) -> Bytes {
+    let trailer = Trailer::new(t, s, i);
     let mut msg = BytesMut::from(Bytes::from(bytes));
     msg.extend_from_slice(&trailer.to_bytes());
     msg.freeze()
@@ -593,4 +595,11 @@ fn append_trailer(s: Slot, i: MsgId, bytes: Vec<u8>) -> Bytes {
 fn remove_trailer(mut bytes: Bytes) -> Bytes {
     let _ = Trailer::from_bytes(&mut bytes);
     bytes
+}
+
+fn trailer_type(p: &RetryPolicy) -> TrailerType {
+    match p {
+        RetryPolicy::Default => TrailerType::Std,
+        RetryPolicy::NoRetry => TrailerType::NoAck,
+    }
 }

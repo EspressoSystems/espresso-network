@@ -12,8 +12,8 @@ use crate::{
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
-    msg::{MAX_PAYLOAD_SIZE, MsgId, Slot, Trailer},
-    net::peer::Peer,
+    msg::{MAX_PAYLOAD_SIZE, MsgId, Slot, Trailer, TrailerType},
+    net::{RetryPolicy, peer::Peer},
     queue::Queue,
 };
 
@@ -55,12 +55,12 @@ async fn connection_pair(
 }
 
 /// Build a payload with the trailer appended.
-fn payload(slot: Slot, id: MsgId, data: &[u8]) -> Bytes {
-    let trailer = Trailer::new(slot, id).to_bytes();
+fn payload(slot: Slot, id: MsgId, data: &[u8]) -> (RetryPolicy, Bytes) {
+    let trailer = Trailer::new(TrailerType::Std, slot, id).to_bytes();
     let mut buf = BytesMut::with_capacity(data.len() + Trailer::SIZE);
     buf.extend_from_slice(data);
     buf.extend_from_slice(&trailer);
-    buf.freeze()
+    (RetryPolicy::Default, buf.freeze())
 }
 
 /// Create a `Peer` and its inbound message receiver + outbox + slot sender.
@@ -68,7 +68,7 @@ fn make_peer(
     conf: Arc<Config>,
     conn: Connection,
     budget: usize,
-) -> (Peer, Rx, Queue<Bytes>, watch::Sender<Slot>) {
+) -> (Peer, Rx, Queue<(RetryPolicy, Bytes)>, watch::Sender<Slot>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let (slot_tx, slot_rx) = watch::channel(Slot::MIN);
     let outbox = Queue::new();

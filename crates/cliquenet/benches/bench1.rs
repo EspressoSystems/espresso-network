@@ -3,7 +3,7 @@ use std::{
 };
 
 use cliquenet::{
-    Config, Network, Slot,
+    Config, Network, RetryPolicy, SendAction, SendCommand, Slot,
     x25519::{Keypair, PublicKey},
 };
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -178,6 +178,26 @@ fn bench_cliquenet(c: &mut Criterion) {
         });
     }
     group.finish();
+
+    let mut group = c.benchmark_group("cliquenet[no-retry]");
+    for &n in SIZES {
+        group.throughput(Throughput::Bytes(n as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| {
+                let cmd = SendCommand::builder()
+                    .slot(Slot::MIN)
+                    .retry(RetryPolicy::NoRetry)
+                    .action(SendAction::Unicast(echo.pkb, data.clone()))
+                    .build();
+                echo.net_a.send(cmd).unwrap();
+                let (src, recv) = rt.block_on(async { echo.net_a.receive().await.unwrap() });
+                assert_eq!(src, echo.pkb);
+                assert_eq!(recv.len(), n);
+            });
+        });
+    }
+    group.finish();
 }
 
 // -- Bidirectional throughput -------------------------------------------------
@@ -247,22 +267,18 @@ fn bench_bidirectional(c: &mut Criterion) {
     const ROUNDS: usize = 10;
 
     let rt = Runtime::new().unwrap();
-    let mut bd = rt.block_on(setup_bidir());
 
     let mut group = c.benchmark_group("bidirectional");
     for &n in SIZES {
-        group.throughput(Throughput::Bytes((2 * ROUNDS * n) as u64));
+        let mut bd = rt.block_on(setup_bidir());
         group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
             let data = &DATA[&n];
             b.iter(|| {
-                for _ in 0..ROUNDS {
-                    bd.ctrl_a.unicast(Slot::MIN, bd.pkb, data.clone()).unwrap();
-                    bd.ctrl_b.unicast(Slot::MIN, bd.pka, data.clone()).unwrap();
-                }
                 rt.block_on(async {
                     tokio::join!(
                         async {
                             for _ in 0..ROUNDS {
+                                bd.ctrl_a.unicast(Slot::MIN, bd.pkb, data.clone()).unwrap();
                                 let (src, recv) = bd.recv_a.receive().await.unwrap();
                                 assert_eq!(src, bd.pkb);
                                 assert_eq!(recv.len(), n);
@@ -270,6 +286,48 @@ fn bench_bidirectional(c: &mut Criterion) {
                         },
                         async {
                             for _ in 0..ROUNDS {
+                                bd.ctrl_b.unicast(Slot::MIN, bd.pka, data.clone()).unwrap();
+                                let (src, recv) = bd.recv_b.receive().await.unwrap();
+                                assert_eq!(src, bd.pka);
+                                assert_eq!(recv.len(), n);
+                            }
+                        },
+                    );
+                });
+            });
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("bidirectional[no-retry]");
+    for &n in SIZES {
+        let mut bd = rt.block_on(setup_bidir());
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| {
+                rt.block_on(async {
+                    tokio::join!(
+                        async {
+                            for _ in 0..ROUNDS {
+                                let cmd = SendCommand::builder()
+                                    .slot(Slot::MIN)
+                                    .retry(RetryPolicy::NoRetry)
+                                    .action(SendAction::Unicast(bd.pkb, data.clone()))
+                                    .build();
+                                bd.ctrl_a.send(cmd).unwrap();
+                                let (src, recv) = bd.recv_a.receive().await.unwrap();
+                                assert_eq!(src, bd.pkb);
+                                assert_eq!(recv.len(), n);
+                            }
+                        },
+                        async {
+                            for _ in 0..ROUNDS {
+                                let cmd = SendCommand::builder()
+                                    .slot(Slot::MIN)
+                                    .retry(RetryPolicy::NoRetry)
+                                    .action(SendAction::Unicast(bd.pka, data.clone()))
+                                    .build();
+                                bd.ctrl_b.send(cmd).unwrap();
                                 let (src, recv) = bd.recv_b.receive().await.unwrap();
                                 assert_eq!(src, bd.pka);
                                 assert_eq!(recv.len(), n);

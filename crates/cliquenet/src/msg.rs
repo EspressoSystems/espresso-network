@@ -3,8 +3,8 @@ mod trailer;
 
 use std::fmt;
 
-pub use frame::{Header, InvalidHeader, Type};
-pub use trailer::Trailer;
+pub use frame::{Header, HeaderType, InvalidHeader};
+pub use trailer::{Trailer, TrailerType};
 
 /// Max. message size using noise protocol.
 pub const MAX_NOISE_MESSAGE_SIZE: usize = 64 * 1024;
