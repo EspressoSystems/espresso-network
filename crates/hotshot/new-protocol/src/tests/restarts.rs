@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Duration};
 
 use hotshot_types::data::ViewNumber;
 
@@ -125,6 +125,7 @@ async fn late_start_one_node_with_epochs() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 50,
+        max_runtime: Duration::from_secs(500),
         epoch_height: 15,
         expected_failed_views: views([9, 19, 29, 39]),
         node_changes: vec![(
@@ -150,6 +151,7 @@ async fn late_start_f_nodes_with_epochs() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 50,
+        max_runtime: Duration::from_secs(500),
         epoch_height: 15,
         expected_failed_views: views([7, 8, 9, 17, 18, 19, 27, 28, 29, 37, 38, 39]),
         node_changes: vec![
