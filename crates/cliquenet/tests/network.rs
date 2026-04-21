@@ -560,3 +560,68 @@ async fn reconnect_after_restart() {
     assert_eq!(src, pka);
     assert_eq!(data, Bytes::from("queued"));
 }
+
+/// Updating a party's address via `add_peers` reconnects to the new address
+/// and preserves the peer's retry state (messages queued before the update
+/// are still delivered after reconnecting).
+#[tokio::test]
+async fn update_party_address() {
+    let a = Node::new(reserve_port());
+    let b1 = Node::new(reserve_port());
+    let pka = a.key;
+    let pkb = b1.key;
+
+    // A knows B at its first address.
+    let all = [&a, &b1];
+    let mut net_a = Network::create(make_config(&a, &all)).await.unwrap();
+    let mut net_b1 = Network::create(make_config(&b1, &all)).await.unwrap();
+
+    sleep(SETTLE).await;
+
+    // Verify the connection works.
+    net_a.unicast(Slot::MIN, pkb, b"before".to_vec()).unwrap();
+    let (src, data) = timeout(TIMEOUT, net_b1.receive())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(src, pka);
+    assert_eq!(data, Bytes::from("before"));
+
+    // B shuts down and comes back on a new port (same keys).
+    drop(net_b1);
+
+    let b2_port = reserve_port();
+    let b2 = Node {
+        key: b1.key,
+        port: b2_port,
+        keypair: b1.keypair.clone(),
+    };
+    let all_b2 = [&a, &b2];
+    let mut net_b2 = Network::create(make_config(&b2, &all_b2)).await.unwrap();
+
+    // Send a message while B is down — it goes into A's retry queue.
+    net_a.unicast(Slot::MIN, pkb, b"during".to_vec()).unwrap();
+
+    // Tell A that B has moved to the new address.
+    net_a
+        .add_peers(Role::Active, [(pkb, b2.addr().into())])
+        .unwrap();
+
+    // The message queued before the address update should be delivered
+    // via retry on the new connection (peer state preserved).
+    let (src, data) = timeout(Duration::from_secs(15), net_b2.receive())
+        .await
+        .expect("timed out — peer state may have been lost on address update")
+        .expect("channel closed");
+    assert_eq!(src, pka);
+    assert_eq!(data, Bytes::from("during"));
+
+    // New messages should also work.
+    net_a.unicast(Slot::MIN, pkb, b"after".to_vec()).unwrap();
+    let (src, data) = timeout(TIMEOUT, net_b2.receive())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(src, pka);
+    assert_eq!(data, Bytes::from("after"));
+}

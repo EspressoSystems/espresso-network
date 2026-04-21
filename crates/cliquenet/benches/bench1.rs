@@ -270,73 +270,87 @@ fn bench_bidirectional(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("bidirectional");
     for &n in SIZES {
+        if n > 10 * MEBI {
+            continue;
+        }
         let mut bd = rt.block_on(setup_bidir());
-        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
-            let data = &DATA[&n];
-            b.iter(|| {
-                rt.block_on(async {
-                    tokio::join!(
-                        async {
-                            for _ in 0..ROUNDS {
-                                bd.ctrl_a.unicast(Slot::MIN, bd.pkb, data.clone()).unwrap();
-                                let (src, recv) = bd.recv_a.receive().await.unwrap();
-                                assert_eq!(src, bd.pkb);
-                                assert_eq!(recv.len(), n);
-                            }
-                        },
-                        async {
-                            for _ in 0..ROUNDS {
-                                bd.ctrl_b.unicast(Slot::MIN, bd.pka, data.clone()).unwrap();
-                                let (src, recv) = bd.recv_b.receive().await.unwrap();
-                                assert_eq!(src, bd.pka);
-                                assert_eq!(recv.len(), n);
-                            }
-                        },
-                    );
+        group.bench_with_input(
+            BenchmarkId::from_parameter(show(n * ROUNDS)),
+            &n,
+            |b, &n| {
+                let data = &DATA[&n];
+                b.iter(|| {
+                    rt.block_on(async {
+                        tokio::join!(
+                            async {
+                                for _ in 0..ROUNDS {
+                                    bd.ctrl_a.unicast(Slot::MIN, bd.pkb, data.clone()).unwrap();
+                                    let (src, recv) = bd.recv_a.receive().await.unwrap();
+                                    assert_eq!(src, bd.pkb);
+                                    assert_eq!(recv.len(), n);
+                                }
+                            },
+                            async {
+                                for _ in 0..ROUNDS {
+                                    bd.ctrl_b.unicast(Slot::MIN, bd.pka, data.clone()).unwrap();
+                                    let (src, recv) = bd.recv_b.receive().await.unwrap();
+                                    assert_eq!(src, bd.pka);
+                                    assert_eq!(recv.len(), n);
+                                }
+                            },
+                        );
+                    });
                 });
-            });
-        });
+            },
+        );
     }
     group.finish();
 
     let mut group = c.benchmark_group("bidirectional[no-retry]");
     for &n in SIZES {
+        if n > 10 * MEBI {
+            continue;
+        }
         let mut bd = rt.block_on(setup_bidir());
-        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
-            let data = &DATA[&n];
-            b.iter(|| {
-                rt.block_on(async {
-                    tokio::join!(
-                        async {
-                            for _ in 0..ROUNDS {
-                                let cmd = SendCommand::builder()
-                                    .slot(Slot::MIN)
-                                    .retry(RetryPolicy::NoRetry)
-                                    .action(SendAction::Unicast(bd.pkb, data.clone()))
-                                    .build();
-                                bd.ctrl_a.send(cmd).unwrap();
-                                let (src, recv) = bd.recv_a.receive().await.unwrap();
-                                assert_eq!(src, bd.pkb);
-                                assert_eq!(recv.len(), n);
-                            }
-                        },
-                        async {
-                            for _ in 0..ROUNDS {
-                                let cmd = SendCommand::builder()
-                                    .slot(Slot::MIN)
-                                    .retry(RetryPolicy::NoRetry)
-                                    .action(SendAction::Unicast(bd.pka, data.clone()))
-                                    .build();
-                                bd.ctrl_b.send(cmd).unwrap();
-                                let (src, recv) = bd.recv_b.receive().await.unwrap();
-                                assert_eq!(src, bd.pka);
-                                assert_eq!(recv.len(), n);
-                            }
-                        },
-                    );
+        group.bench_with_input(
+            BenchmarkId::from_parameter(show(n * ROUNDS)),
+            &n,
+            |b, &n| {
+                let data = &DATA[&n];
+                b.iter(|| {
+                    rt.block_on(async {
+                        tokio::join!(
+                            async {
+                                for _ in 0..ROUNDS {
+                                    let cmd = SendCommand::builder()
+                                        .slot(Slot::MIN)
+                                        .retry(RetryPolicy::NoRetry)
+                                        .action(SendAction::Unicast(bd.pkb, data.clone()))
+                                        .build();
+                                    bd.ctrl_a.send(cmd).unwrap();
+                                    let (src, recv) = bd.recv_a.receive().await.unwrap();
+                                    assert_eq!(src, bd.pkb);
+                                    assert_eq!(recv.len(), n);
+                                }
+                            },
+                            async {
+                                for _ in 0..ROUNDS {
+                                    let cmd = SendCommand::builder()
+                                        .slot(Slot::MIN)
+                                        .retry(RetryPolicy::NoRetry)
+                                        .action(SendAction::Unicast(bd.pka, data.clone()))
+                                        .build();
+                                    bd.ctrl_b.send(cmd).unwrap();
+                                    let (src, recv) = bd.recv_b.receive().await.unwrap();
+                                    assert_eq!(src, bd.pka);
+                                    assert_eq!(recv.len(), n);
+                                }
+                            },
+                        );
+                    });
                 });
-            });
-        });
+            },
+        );
     }
     group.finish();
 }

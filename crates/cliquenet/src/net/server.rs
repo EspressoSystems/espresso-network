@@ -356,14 +356,26 @@ impl Server {
                 cmd = self.obound.recv() => match cmd {
                     Some(Command::Peer(PeerCommand::Add(role, parties))) => {
                         for (k, a) in parties {
-                            if self.parties.contains_key(&k) {
-                                warn!(
-                                    name = %self.conf.name,
-                                    node = %self.key,
-                                    peer = %k,
-                                    addr = %a,
-                                    "peer to add already exists"
-                                );
+                            if let Some(p) = self.parties.get_mut(&k) {
+                                if p.addr == a {
+                                    p.role = role;
+                                } else {
+                                    info!(
+                                        name = %self.conf.name,
+                                        node = %self.key,
+                                        peer = %k,
+                                        addr = %a,
+                                        "updating party address"
+                                    );
+                                    p.addr = a.clone();
+                                    p.role = role;
+                                    self.connect_tasks.abort(&k);
+                                    if let PeerState::Connected(cancel) = &p.peer {
+                                        cancel.cancel()
+                                    } else {
+                                        self.spawn_connect(k, a)
+                                    }
+                                }
                                 continue
                             }
                             self.parties.insert(k, Party::new(role, a.clone()));
