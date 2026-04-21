@@ -605,7 +605,8 @@ fn append_trailer(s: Slot, t: TrailerType, i: MsgId, bytes: Vec<u8>) -> Bytes {
 }
 
 fn remove_trailer(mut bytes: Bytes) -> Bytes {
-    let _ = Trailer::from_bytes(&mut bytes);
+    let _t = Trailer::from_bytes(&mut bytes);
+    debug_assert!(_t.is_some());
     bytes
 }
 
