@@ -253,16 +253,20 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
         _broadcast_delay: BroadcastDelay,
     ) -> Result<(), NetworkError> {
         trace!(?message, "Broadcasting message");
-        for node in self
+        // Snapshot the recipient list and release the DashMap shard write
+        // lock before awaiting. Holding the lock across `.await` serializes
+        // every broadcast on this topic and, under a small tokio runtime
+        // (e.g. CI with a 4-core CPU quota), can deadlock all worker threads
+        // while waiting on a full recipient channel.
+        let nodes: Vec<(K, MemoryNetwork<K>)> = self
             .inner
             .master_map
             .subscribed_map
             .entry(topic)
             .or_default()
-            .iter()
-        {
+            .clone();
+        for (key, node) in &nodes {
             // TODO delay/drop etc here
-            let (key, node) = node;
             trace!(?key, "Sending message to node");
             if let Some(config) = &self.inner.reliability_config {
                 {
@@ -304,20 +308,21 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
         _broadcast_delay: BroadcastDelay,
     ) -> Result<(), NetworkError> {
         trace!(?message, "Broadcasting message to DA");
-        for node in self
+        // See `broadcast_message`: clone the recipient list out of DashMap
+        // so the shard lock is not held across the awaits below.
+        let nodes: Vec<(K, MemoryNetwork<K>)> = self
             .inner
             .master_map
             .subscribed_map
             .entry(Topic::Da)
             .or_default()
-            .iter()
-        {
-            if !recipients.contains(&node.0) {
-                tracing::trace!("Skipping node because not in recipient list: {:?}", node.0);
+            .clone();
+        for (key, node) in &nodes {
+            if !recipients.contains(key) {
+                tracing::trace!("Skipping node because not in recipient list: {:?}", key);
                 continue;
             }
             // TODO delay/drop etc here
-            let (key, node) = node;
             trace!(?key, "Sending message to node");
             if let Some(config) = &self.inner.reliability_config {
                 {
@@ -360,8 +365,15 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
         // debug!(?message, ?recipient, "Sending direct message");
         // Bincode the message
         trace!("Message bincoded, finding recipient");
-        if let Some(node) = self.inner.master_map.map.get(&recipient) {
-            let node = node.value().clone();
+        // Clone the target network and drop the DashMap read guard before
+        // awaiting, matching the rationale in `broadcast_message`.
+        let node = self
+            .inner
+            .master_map
+            .map
+            .get(&recipient)
+            .map(|entry| entry.value().clone());
+        if let Some(node) = node {
             if let Some(config) = &self.inner.reliability_config {
                 {
                     let fut = config.chaos_send_msg(
