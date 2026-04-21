@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["address_link","contract_row","format_header_comment","generate_updated_readme","replace_between_markers","update_readme_from_deployment_files"]};
+window.SIDEBAR_ITEMS = {"fn":["address_link","contract_row","format_header_comment","format_role_holder_names","generate_updated_readme","replace_between_markers","update_readme_from_deployment_files"]};
