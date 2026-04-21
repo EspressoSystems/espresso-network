@@ -50,12 +50,6 @@ pub trait TestNetwork {
     where
         Self: Sized;
 
-    /// Create a "client" network that can broadcast messages to the nodes
-    /// but does not participate in consensus.
-    fn create_client(
-        &self,
-    ) -> impl std::future::Future<Output = <Self::Impl as NodeImplementation<TestTypes>>::Network>;
-
     /// Create a network for a single node.  Used to bring a node online
     /// mid-test (restart or late-start).
     fn create_node(
@@ -129,11 +123,6 @@ impl TestNetwork for MemoryTestNetwork {
             },
             networks,
         )
-    }
-
-    async fn create_client(&self) -> MemoryNetwork<BLSPubKey> {
-        let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9999);
-        MemoryNetwork::new(&pk, &self.group, &[], None)
     }
 
     async fn create_node(&self, node_index: usize) -> MemoryNetwork<BLSPubKey> {
@@ -248,24 +237,6 @@ impl TestNetwork for CliquenetTestNetwork {
             },
             networks,
         )
-    }
-
-    async fn create_client(&self) -> Cliquenet<BLSPubKey> {
-        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([1u8; 32], 9999);
-        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key);
-        let port =
-            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
-        Cliquenet::create(
-            "test-client",
-            public_key,
-            keypair,
-            addr,
-            self.peer_infos.clone(),
-            Box::new(NoMetrics),
-        )
-        .await
-        .expect("cliquenet client creation should succeed")
     }
 
     async fn create_node(&self, node_index: usize) -> Cliquenet<BLSPubKey> {

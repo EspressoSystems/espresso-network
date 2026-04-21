@@ -6,13 +6,8 @@ use std::{
 
 use committable::Committable;
 use hotshot::types::BLSPubKey;
-use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
-use hotshot_types::{
-    data::ViewNumber,
-    traits::{network::ConnectedNetwork, signature_key::SignatureKey},
-    vote::HasViewNumber,
-};
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use hotshot_example_types::node_types::TestTypes;
+use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
@@ -23,9 +18,6 @@ use tracing::{debug, info};
 use crate::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, error::Severity},
-    helpers::upgrade_lock,
-    message::{BlockMessage, Message, MessageType, TransactionMessage, Validated},
-    network::Network,
     tests::common::{coordinator_builder::build_test_coordinator, network::TestNetwork},
 };
 
@@ -64,8 +56,6 @@ pub struct TestRunner {
     pub epoch_height: u64,
     /// Per-node view timeout duration.
     pub view_timeout: Duration,
-    /// Size (in bytes) of each random transaction.
-    pub transaction_size: usize,
     /// Views that are expected to timeout.  If a node times out in a view
     /// not in this set the test fails.  If a node decides a leaf for a view
     /// in this set the test also fails.
@@ -88,7 +78,6 @@ impl Default for TestRunner {
             max_runtime: Duration::from_secs(300),
             epoch_height: 1000,
             view_timeout: Duration::from_secs(5),
-            transaction_size: 64 * 1024,
             expected_failed_views: BTreeSet::new(),
             down_nodes: BTreeSet::new(),
             node_changes: Vec::new(),
@@ -211,8 +200,7 @@ impl TestRunner {
     ///
     /// Spins up `self.num_nodes` coordinators connected via `N`.  Each
     /// coordinator self-starts via the genesis bootstrap (no side-channel
-    /// injection needed).  Transactions are broadcast over the network using
-    /// a dedicated client network instance.
+    /// injection needed).
     ///
     /// When `node_changes` is non-empty, nodes are dynamically started,
     /// restarted, or shut down at the specified views.  Verification is
@@ -254,14 +242,6 @@ impl TestRunner {
             node_handles.push(Some(tokio::spawn(run_node(coord, output_tx))));
         }
 
-        // Create a client network for broadcasting transactions.
-        let client_net = network_state.create_client().await;
-        let client_membership = network_state
-            .create_membership(self.num_nodes, self.epoch_height)
-            .await;
-        let mut client_network =
-            Network::<TestTypes, _>::new(client_net, client_membership, upgrade_lock());
-
         // Build pending changes sorted by view.
         let mut pending_changes: BTreeMap<u64, Vec<NodeChange>> = BTreeMap::new();
         for (view, changes) in &self.node_changes {
@@ -278,7 +258,6 @@ impl TestRunner {
             vec![BTreeMap::new(); self.num_nodes];
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut max_decided_view: u64 = 0;
-        let mut tx_nonce: u64 = 0;
 
         let deadline = tokio::time::Instant::now() + self.max_runtime;
         while node_commits
@@ -345,10 +324,6 @@ impl TestRunner {
                     }
                 }
             }
-
-            // Broadcast a transaction over the network.
-            tx_nonce = tx_nonce.wrapping_add(1);
-            broadcast_transaction(&mut client_network, tx_nonce, self.transaction_size).await;
 
             // Collect events from each live node.
             for (idx, rx_opt) in output_channels.iter_mut().enumerate() {
@@ -514,33 +489,4 @@ async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
             }
         }
     }
-}
-
-/// Broadcast a random transaction over the network.
-async fn broadcast_transaction<N: ConnectedNetwork<BLSPubKey>>(
-    client: &mut Network<TestTypes, N>,
-    nonce: u64,
-    size: usize,
-) {
-    let tx = random_transaction(nonce, size);
-    let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9999);
-    let msg: Message<TestTypes, Validated> = Message {
-        sender: pk,
-        message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
-            view: ViewNumber::genesis(),
-            transactions: vec![tx],
-        })),
-    };
-    // Best-effort: ignore send errors (network may not be fully ready yet).
-    let _ = client.broadcast(msg).await;
-}
-
-fn random_transaction(nonce: u64, size: usize) -> TestTransaction {
-    let mut bytes = vec![0u8; size];
-    let mut rng = StdRng::seed_from_u64(nonce);
-    rng.fill_bytes(&mut bytes);
-    if size >= 8 {
-        bytes[size - 8..].copy_from_slice(&nonce.to_le_bytes());
-    }
-    TestTransaction::new(bytes)
 }
