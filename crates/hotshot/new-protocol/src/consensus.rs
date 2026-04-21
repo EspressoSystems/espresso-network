@@ -9,7 +9,7 @@ use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
         BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
-        VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        VidDisperseShare2, ViewNumber,
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
@@ -656,10 +656,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        let mut view_change_evidence = None;
-        if let Some(timeout_cert) = self.timeout_certs.get(&view) {
-            view_change_evidence = Some(ViewChangeEvidence2::Timeout(timeout_cert.clone()));
-        }
+        let view_change_evidence = self.timeout_certs.get(&view).cloned();
         let parent_cert = if view_change_evidence.is_some() {
             let Some(cert) = &self.locked_cert else {
                 debug!("no locked qc");

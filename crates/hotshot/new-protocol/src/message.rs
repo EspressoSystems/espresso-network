@@ -57,7 +57,7 @@ pub struct Proposal<T: NodeType> {
     ///
     /// If the `justify_qc` is not for a proposal in the immediately preceding
     /// view, then either a timeout or view sync certificate must be attached.
-    pub view_change_evidence: Option<ViewChangeEvidence2<T>>,
+    pub view_change_evidence: Option<TimeoutCertificate<T>>,
 
     /// The DRB result for the next epoch.
     ///
@@ -93,7 +93,10 @@ impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
             justify_qc: qp.justify_qc,
             next_epoch_justify_qc: None,
             upgrade_certificate: qp.upgrade_certificate,
-            view_change_evidence: qp.view_change_evidence,
+            view_change_evidence: qp.view_change_evidence.and_then(|e| match e {
+                ViewChangeEvidence2::Timeout(tc) => Some(tc),
+                ViewChangeEvidence2::ViewSync(_) => None,
+            }),
             next_drb_result: qp.next_drb_result,
             state_cert: qp.state_cert,
         }
@@ -109,7 +112,7 @@ impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
             justify_qc: p.justify_qc,
             next_epoch_justify_qc: None,
             upgrade_certificate: p.upgrade_certificate,
-            view_change_evidence: p.view_change_evidence,
+            view_change_evidence: p.view_change_evidence.map(ViewChangeEvidence2::Timeout),
             next_drb_result: p.next_drb_result,
             state_cert: p.state_cert,
         };
