@@ -252,7 +252,8 @@ impl Committable for StakeTableState {
 
         // Only include used_x25519_keys when non-empty to preserve the pre-fast-finality commitment
         // value for stake tables that have no x25519 keys yet. Same pattern as x25519_key /
-        // p2p_addr on RegisteredValidator.
+        // p2p_addr on RegisteredValidator. Backward compatibility is cross-checked by
+        // REFERENCE_V4_HEADER_COMMITMENT in reference_tests.rs.
         if !self.used_x25519_keys.is_empty() {
             builder = builder.constant_str("used_x25519_keys");
             for key in self.used_x25519_keys.iter().sorted() {
@@ -4492,6 +4493,25 @@ mod tests {
         let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
         assert_matches!(result, Err(StakeTableError::InvalidX25519Key(_)));
 
+        Ok(())
+    }
+
+    /// `used_x25519_keys` must be part of the state commitment. Without this,
+    /// nodes diverging on x25519 uniqueness tracking would produce identical
+    /// state hashes and the divergence would go undetected.
+    #[test]
+    fn test_state_commit_includes_used_x25519_keys() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state_without = StakeTableState::default();
+        state_without.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        let mut state_with = state_without.clone();
+        state_with
+            .used_x25519_keys
+            .insert(x25519::PublicKey::try_from([7u8; 32].as_slice()).unwrap());
+
+        assert_ne!(state_without.commit(), state_with.commit());
         Ok(())
     }
 }
