@@ -24,7 +24,7 @@ use crate::{
     Config, PublicKey,
     connection::Connection,
     error::{Empty, NetworkError},
-    msg::{Ack, Header, HeaderType, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, Slot, Trailer},
+    msg::{Ack, FrameType, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, Slot, Trailer},
     net::{PeerMessage, RetryPolicy},
     queue::Queue,
     time::Countdown,
@@ -478,7 +478,7 @@ impl Peer {
                                         continue
                                     }
                                     match hdr.frame_type() {
-                                        Ok(HeaderType::Data) => {
+                                        Ok(FrameType::Data) => {
                                             let n = self.conn.state.read_message(buf, &mut *rbuf)?;
                                             ibound_msg.extend_from_slice(&rbuf[..n]);
                                             if ibound_msg.len() > self.max_message_size {
@@ -516,10 +516,10 @@ impl Peer {
                                             }
                                             rstate = ReadState::Header { off: 0, buf: [0; _] };
                                         }
-                                        Ok(HeaderType::Ack) if hdr.is_partial() => {
+                                        Ok(FrameType::Ack) if hdr.is_partial() => {
                                             return Err(NetworkError::InvalidAck)
                                         }
-                                        Ok(HeaderType::Ack) => {
+                                        Ok(FrameType::Ack) => {
                                             let n = self.conn.state.read_message(buf, &mut *rbuf)?;
                                             let Ok(a) = Ack::try_from(&rbuf[..n]) else {
                                                 return Err(NetworkError::InvalidAck)
