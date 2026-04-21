@@ -1001,13 +1001,11 @@ impl Fetcher {
                 validator,
                 newCommission,
                 ..
-            }) => {
-                if *newCommission > COMMISSION_BASIS_POINTS {
-                    return Err(StakeTableError::InvalidCommission(
-                        *validator,
-                        *newCommission,
-                    ));
-                }
+            }) if *newCommission > COMMISSION_BASIS_POINTS => {
+                return Err(StakeTableError::InvalidCommission(
+                    *validator,
+                    *newCommission,
+                ));
             },
             _ => {},
         }
@@ -1069,7 +1067,7 @@ impl Fetcher {
         };
 
         // To avoid making large RPC calls, divide the range into smaller chunks.
-        // chunk size is from env "ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE
+        // chunk size is from env "ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE
         // default value  is `10000` if env variable is not set
         let chunk_size = l1_client.options().l1_events_max_block_range;
         let chunks = Self::block_range_chunks(from_block, to_block, chunk_size);
@@ -1446,7 +1444,7 @@ where
 
                     Suggested solution:
                     - Reduce the value of the environment variable
-                      `ESPRESSO_SEQUENCER_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
+                      `ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE` to query smaller ranges.
                     - Add multiple RPC providers
                     - Use a different RPC provider with higher rate limits."#,
                         format_duration(max_duration)

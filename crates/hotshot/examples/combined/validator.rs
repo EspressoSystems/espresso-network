@@ -18,10 +18,6 @@ use crate::types::{Network, NodeImpl, ThisRun};
 /// types used for this example
 pub mod types;
 
-/// general infra used for this example
-#[path = "../infra/mod.rs"]
-pub mod infra;
-
 #[tokio::main]
 #[instrument]
 async fn main() {
@@ -35,5 +31,5 @@ async fn main() {
     args.advertise_address = Some(args.advertise_address.unwrap_or(format!("{local_ip}:8000")));
 
     debug!("connecting to orchestrator at {:?}", args.url);
-    infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(args).await;
+    hotshot_examples::infra::main_entry_point::<TestTypes, Network, NodeImpl, ThisRun>(args).await;
 }

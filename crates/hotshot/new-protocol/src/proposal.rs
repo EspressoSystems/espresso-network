@@ -25,10 +25,16 @@ use crate::{
 
 type Result<T> = std::result::Result<T, ValidationError>;
 
+/// A validated proposal.
+pub struct ValidatedProposal<T: NodeType> {
+    pub sender: T::SignatureKey,
+    pub message: ProposalMessage<T, Validated>,
+}
+
 /// A proposal validator checks proposal signature and integrity.
 pub struct ProposalValidator<T: NodeType> {
     /// Validation tasks.
-    tasks: JoinSet<Result<ProposalMessage<T, Validated>>>,
+    tasks: JoinSet<Result<ValidatedProposal<T>>>,
 
     /// The actual validation logic.
     validator: Arc<Validator<T>>,
@@ -53,13 +59,16 @@ impl<T: NodeType> ProposalValidator<T> {
         self.tasks.spawn(async move {
             v.commitments(&p.vid_share, &p.proposal.data)?;
             v.vid_share(&p.vid_share, p.proposal.data.epoch).await?;
-            v.signature(&p.proposal).await?;
+            let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
-            Ok(ProposalMessage::validated(p.proposal, p.vid_share))
+            Ok(ValidatedProposal {
+                sender,
+                message: ProposalMessage::validated(p.proposal, p.vid_share),
+            })
         });
     }
 
-    pub async fn next(&mut self) -> Option<Result<ProposalMessage<T, Validated>>> {
+    pub async fn next(&mut self) -> Option<Result<ValidatedProposal<T>>> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(prop)) => return Some(prop),
@@ -96,8 +105,11 @@ impl<T: NodeType> Validator<T> {
         }
     }
 
-    /// Verify the proposal signature.
-    async fn signature(&self, proposal: &SignedProposal<T, Proposal<T>>) -> Result<()> {
+    /// Verify the proposal signature and return the leader
+    async fn signature(
+        &self,
+        proposal: &SignedProposal<T, Proposal<T>>,
+    ) -> Result<T::SignatureKey> {
         let view = proposal.data.view_number();
         let epoch = proposal.data.epoch;
         let membership = self.membership(epoch).await?;
@@ -107,7 +119,7 @@ impl<T: NodeType> Validator<T> {
         };
         let leaf: Leaf2<T> = proposal.data.clone().into();
         if leader.validate(&proposal.signature, leaf.commit().as_ref()) {
-            Ok(())
+            Ok(leader)
         } else {
             Err(ValidationError::InvalidProposalSignature)
         }

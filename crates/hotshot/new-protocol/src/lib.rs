@@ -1,4 +1,5 @@
 pub mod block;
+pub mod client;
 pub mod consensus;
 pub mod coordinator;
 pub mod epoch;
@@ -11,7 +12,7 @@ pub mod state;
 pub mod vid;
 pub mod vote;
 
-mod proposal;
+pub mod proposal;
 
 #[cfg(test)]
 mod tests;

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
 use espresso_types::{Leaf2, SeqTypes};
-use hotshot_query_service::availability::LeafQueryData;
+use hotshot_query_service_types::availability::LeafQueryData;
 use hotshot_types::{data::EpochNumber, epoch_membership::EpochMembership, vote::HasViewNumber};
 use serde::{Deserialize, Serialize};
 use versions::EPOCH_VERSION;

@@ -15,7 +15,7 @@ use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
     node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
-    state_types::TestValidatedState,
+    state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
 use hotshot_testing::{
@@ -77,7 +77,7 @@ pub struct TestView {
 }
 
 impl TestView {
-    /// Build a ProposalMessage suitable for sending as a ConsensusEvent::Proposal.
+    /// Build a ProposalMessage suitable for sending as a CoordinatorEvent::Proposal.
     /// `recipient_key` is the public key of the node that will receive the VID share.
     pub fn proposal_message(
         &self,
@@ -112,7 +112,7 @@ impl TestView {
         }
     }
     pub fn proposal_input_consensus(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Proposal(self.proposal_message(recipient_key))
+        ConsensusInput::Proposal(self.leader_public_key, self.proposal_message(recipient_key))
     }
 
     /// Build an Event for block reconstructed.
@@ -227,10 +227,6 @@ pub struct TestData {
 impl TestData {
     pub async fn new(num_views: usize) -> Self {
         Self::new_with_epoch_height(num_views, 0).await
-    }
-
-    pub async fn new_with_num_nodes(num_views: usize, num_nodes: usize) -> Self {
-        Self::new_with_epoch_height_and_num_nodes(num_views, 0, num_nodes).await
     }
 
     /// Create test data with epoch-aware proposals. When `epoch_height > 0`,
@@ -460,7 +456,9 @@ pub async fn mock_membership_with_num_nodes(
         .write()
         .await
         .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
-    let coordinator = EpochMembershipCoordinator::new(membership, 10, &TestStorage::default());
+
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, num_nodes as u64, &TestStorage::default());
     // Set the DRB difficulty selector so compute_drb_result can run.
     // Difficulty 0 makes the computation instant for tests.
     coordinator
@@ -587,7 +585,20 @@ impl ConsensusHarness {
     pub async fn new_with_epoch_height(node_index: u64, epoch_height: u64) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
-        let consensus = Consensus::new(membership.clone(), public_key, private_key, epoch_height);
+        let instance = Arc::new(TestInstanceState::default());
+        let genesis_leaf = Leaf2::<TestTypes>::genesis(
+            &TestValidatedState::default(),
+            &instance,
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        let consensus = Consensus::new(
+            membership.clone(),
+            public_key,
+            private_key,
+            genesis_leaf,
+            epoch_height,
+        );
         Self {
             consensus,
             membership_coordinator: membership,
@@ -674,13 +685,15 @@ impl ConsensusHarness {
                     .apply(ConsensusInput::DrbResult(*epoch, TEST_DRB_RESULT), outbox)
                     .await;
             },
-            ConsensusOutput::LeafDecided(leaves) => {
+            ConsensusOutput::LeafDecided { leaves, .. } => {
                 // Mirror the EpochManager: when an epoch-root block is decided,
                 // register the future epoch in the membership (add_epoch_root)
                 // and store a DRB result for it (compute_drb_result).
                 let epoch_height = self.consensus.epoch_height;
                 for leaf in leaves {
-                    let block_number = BlockHeader::<TestTypes>::block_number(leaf.block_header());
+                    let block_number = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(
+                        leaf.block_header(),
+                    );
                     if !is_epoch_root(block_number, *epoch_height) {
                         continue;
                     }

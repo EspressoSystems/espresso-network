@@ -289,7 +289,7 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     // doesn't kill the in-progress proposal), but short enough to actually
     // fire for view 2 during the test.
     let mut harness =
-        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(100)).await;
+        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(500)).await;
 
     // View 1: process fully to establish locked_qc
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &leader_for_view_3).await;

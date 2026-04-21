@@ -2,20 +2,21 @@
 
 use std::{collections::BTreeMap, future::Future, sync::Arc};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState, Transaction,
-    select_active_validator_set,
+    DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState,
+    Transaction, select_active_validator_set,
 };
-use hotshot_query_service::{
+use hotshot_query_service_types::{
+    HeightIndexed,
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
     node::BlockId,
-    types::HeightIndexed,
 };
 use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
 use serde::{Deserialize, Serialize};
+use vbs::version::StaticVersionType;
 
 use crate::{
     client::Client,
@@ -44,17 +45,6 @@ pub struct Genesis {
 
     /// The fixed stake table used before epochs begin.
     pub stake_table: Vec<StakeTableEntry<PubKey>>,
-
-    /// Enable special cases for Decaf testnet.
-    ///
-    /// On Decaf, `first_epoch_with_dynamic_stake_table` is not actually the first epoch of PoS, but
-    /// the first Epoch after the upgrade to version 0.4 (version 0.3 is completely unsupported
-    /// since it will never be deployed on Mainnet). Thus, when we perform stake table catchup on
-    /// Decaf, we need to replay all events from epochs between the upgrade to proof-of-stake (this
-    /// number) and the upgrade to version 0.4.
-    #[cfg(feature = "decaf")]
-    #[serde(default)]
-    pub decaf_first_pos_epoch: Option<EpochNumber>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,12 +60,26 @@ pub struct LightClientOptions {
         )
     )]
     pub num_stake_tables_in_memory: usize,
+
+    /// Enable unsafe behavior for Decaf testnet.
+    ///
+    /// This flag allows the light client to skip certain safety checks that are not possible to
+    /// evaluate on Decaf. It is NOT SAFE to provide this flag in a Mainnet environment.
+    #[cfg(feature = "decaf")]
+    #[cfg_attr(
+        feature = "clap",
+        clap(long = "light-client-decaf", env = "LIGHT_CLIENT_DECAF")
+    )]
+    pub decaf: bool,
 }
 
 impl Default for LightClientOptions {
     fn default() -> Self {
         Self {
             num_stake_tables_in_memory: 100,
+
+            #[cfg(feature = "decaf")]
+            decaf: false,
         }
     }
 }
@@ -96,9 +100,6 @@ pub struct LightClient<P, S> {
     epoch_height: u64,
     first_epoch_with_dynamic_stake_table: EpochNumber,
     genesis_stake_table: Arc<StakeTable>,
-
-    #[cfg(feature = "decaf")]
-    decaf_first_pos_epoch: Option<EpochNumber>,
 
     // We cache stake tables in memory since they are large and expensive to load from the database.
     stake_tables: RwLock<BTreeMap<EpochNumber, Arc<StakeTable>>>,
@@ -139,9 +140,6 @@ where
             genesis_stake_table: Arc::new(genesis.stake_table.into()),
             first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
             stake_tables: Default::default(),
-
-            #[cfg(feature = "decaf")]
-            decaf_first_pos_epoch: genesis.decaf_first_pos_epoch,
         }
     }
 
@@ -506,34 +504,6 @@ where
             };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
 
-        // On decaf, replay the events from epochs on version 0.3 without checking stake table
-        // hashes (since these were only added in version 0.4). We will effectively check all this
-        // work at once when we check the stake table hash after the first epoch of version 0.4
-        #[cfg(feature = "decaf")]
-        if lower_bound < self.first_epoch_with_dynamic_stake_table
-            && let Some(first_pos_epoch) = self.decaf_first_pos_epoch
-        {
-            tracing::info!(
-                %first_pos_epoch,
-                to = %lower_bound,
-                "performing Decaf catchup through version 0.3",
-            );
-            for epoch in *first_pos_epoch..=*lower_bound {
-                let events = self
-                    .server
-                    .stake_table_events(EpochNumber::new(epoch))
-                    .await?;
-                tracing::debug!(epoch, num_events = events.len(), "reconstruct stake table");
-                for event in events {
-                    tracing::debug!(epoch, ?event, "replay event");
-                    if let Err(err) = stake_table.apply_event(event).context("applying event")? {
-                        tracing::warn!("allowed error in event: {err:#}");
-                    }
-                }
-            }
-            prev_quorum = Arc::new(stake_table_state_to_quorum(stake_table.clone())?);
-        }
-
         // Replay one epoch at a time from the lower bound stake table to the requested epoch.
         for epoch in *lower_bound + 1..=*epoch {
             let events = self
@@ -558,16 +528,28 @@ where
                     StakeTableQuorum::new((prev_quorum, next_quorum.clone()), self.epoch_height)
                 })
                 .await
-                .context("fetching epoch root for {epoch}")?;
-            let hash = root.next_stake_table_hash().context(format!(
-                "epoch {epoch} root {root_height} does not have next stake table hash"
-            ))?;
-            ensure!(
-                hash == stake_table.commit(),
-                "epoch {epoch} root {root_height} stake table hash {hash} does not match \
-                 reconstructed hash {}",
-                stake_table.commit(),
-            );
+                .context(format!("fetching epoch root for {epoch}"))?;
+            if let Some(hash) = root.next_stake_table_hash() {
+                ensure!(
+                    hash == stake_table.commit(),
+                    "epoch {epoch} root {root_height} stake table hash {hash} does not match \
+                     reconstructed hash {}",
+                    stake_table.commit(),
+                );
+            } else if self.decaf() && root.version() < DrbAndHeaderUpgradeVersion::VERSION {
+                // Decaf briefly ran a version of PoS where epoch root headers did not contain the
+                // hash of the expected stake table, and so we can not verify that we computed the
+                // correct stake table. Since this applies only to Decaf, which is a testnet, it is
+                // acceptable to trust that the server supplied the correct events in this case.
+                tracing::warn!(
+                    ?epoch,
+                    root_height,
+                    computed_hash = %stake_table.commit(),
+                    "trusting stake table prior to DRB upgrade on Decaf",
+                );
+            } else {
+                bail!("epoch {epoch} root {root_height} does not have next stake table hash");
+            }
 
             // Cache the reconstructed stake table in the database.
             if let Err(err) = self
@@ -659,6 +641,14 @@ where
 
         cache.entry(epoch).insert_entry(stake_table).get().clone()
     }
+
+    fn decaf(&self) -> bool {
+        #[cfg(feature = "decaf")]
+        return self.opt.decaf;
+
+        #[cfg(not(feature = "decaf"))]
+        return false;
+    }
 }
 
 fn stake_table_state_to_quorum(state: StakeTableState) -> Result<StakeTable> {
@@ -709,7 +699,7 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 #[cfg(test)]
 mod test {
     use espresso_types::NsIndex;
-    use hotshot_query_service::availability::TransactionIndex;
+    use hotshot_query_service_types::availability::TransactionIndex;
     use pretty_assertions::assert_eq;
     use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
@@ -1097,6 +1087,7 @@ mod test {
             genesis.clone(),
             LightClientOptions {
                 num_stake_tables_in_memory: 2,
+                ..Default::default()
             },
         );
 

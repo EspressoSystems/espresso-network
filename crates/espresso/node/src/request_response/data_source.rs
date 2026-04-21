@@ -12,7 +12,7 @@ use espresso_types::{
     v0_3::{RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
-use hotshot::{SystemContext, traits::NodeImplementation};
+use hotshot::traits::NodeImplementation;
 use hotshot_query_service::{
     data_source::{
         VersionedDataSource,
@@ -35,6 +35,7 @@ use crate::{
         CatchupStorage, add_fee_accounts_to_state, add_v1_reward_accounts_to_state,
         add_v2_reward_accounts_to_state,
     },
+    consensus_handle::ConsensusHandle,
 };
 
 /// Query Service Storage types that can be used for request-response data source
@@ -44,17 +45,14 @@ pub enum Storage {
     Fs(Arc<FileSystemStorage<SeqTypes>>),
 }
 
-/// A type alias for the consensus handle
-type Consensus<I> = Arc<SystemContext<SeqTypes, I>>;
-
 #[derive(Clone)]
 pub struct DataSource<
     I: NodeImplementation<SeqTypes>,
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 > {
-    /// The consensus handle
-    pub consensus: Consensus<I>,
+    /// The consensus adapter handle
+    pub consensus_handle: Arc<ConsensusHandle<SeqTypes, I>>,
     /// The node's state
     pub node_state: NodeState,
     /// The storage
@@ -74,7 +72,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
         match request {
             Request::Accounts(height, view, accounts) => {
                 // Try to get accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await
                     && let Ok(accounts) =
                         retain_accounts(&state.fee_merkle_tree, accounts.iter().copied())
                 {
@@ -93,8 +91,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_fee_accounts_to_state::<N, P>(
-                    &self.consensus.consensus(),
+                if let Err(err) = add_fee_accounts_to_state(
+                    &*self.consensus_handle,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -110,7 +108,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
             Request::Leaf(height) => {
                 // Try to get the leaves from memory first, then fall back to storage
-                let mut leaves = self.consensus.consensus().read().await.undecided_leaves();
+                let mut leaves = self.consensus_handle.undecided_leaves().await;
                 leaves.sort_by_key(|l| l.view_number());
 
                 if let Some((position, mut last_leaf)) =
@@ -158,7 +156,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
             Request::ChainConfig(commitment) => {
                 // Try to get the chain config from memory first, then fall back to storage
-                let chain_config_from_memory = self.consensus.decided_state().await.chain_config;
+                let chain_config_from_memory =
+                    self.consensus_handle.decided_state().await.chain_config;
                 if chain_config_from_memory.commit() == *commitment
                     && let Some(chain_config) = chain_config_from_memory.resolve()
                 {
@@ -180,7 +179,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             Request::BlocksFrontier(height, view) => {
                 // First try to respond from memory
                 let blocks_frontier_from_memory: Option<Result<BlocksFrontier>> = self
-                    .consensus
+                    .consensus_handle
                     .state(ViewNumber::new(*view))
                     .await
                     .map(|state| {
@@ -209,7 +208,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
             Request::RewardAccountsV2(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await
                     && let Ok(reward_accounts) = retain_v2_reward_accounts(
                         &state.reward_merkle_tree_v2,
                         accounts.iter().copied(),
@@ -237,8 +236,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_v2_reward_accounts_to_state::<N, P>(
-                    &self.consensus.consensus(),
+                if let Err(err) = add_v2_reward_accounts_to_state(
+                    &*self.consensus_handle,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -254,7 +253,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
             Request::RewardAccountsV1(height, view, accounts) => {
                 // Try to get the reward accounts from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await
+                if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await
                     && let Ok(reward_accounts) = retain_v1_reward_accounts(
                         &state.reward_merkle_tree_v1,
                         accounts.iter().copied(),
@@ -282,8 +281,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
                 // If we successfully fetched accounts from storage, try to add them back into the in-memory
                 // state.
-                if let Err(err) = add_v1_reward_accounts_to_state::<N, P>(
-                    &self.consensus.consensus(),
+                if let Err(err) = add_v1_reward_accounts_to_state(
+                    &*self.consensus_handle,
                     &ViewNumber::new(*view),
                     accounts,
                     &merkle_tree,
@@ -340,7 +339,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
-                if let Some(state) = self.consensus.state(ViewNumber::new(*view)).await {
+                if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await {
                     let merkle_tree_bytes = bincode::serialize(
                         &TryInto::<RewardMerkleTreeV2Data>::try_into(&state.reward_merkle_tree_v2)?,
                     )

@@ -17,6 +17,7 @@ use crate::{
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
+    logging::KeyPrefix,
     message::Message,
     network::Network,
     outbox::Outbox,
@@ -36,9 +37,9 @@ pub(crate) struct TestHarness {
 
 impl TestHarness {
     pub async fn new(node_index: u64) -> Self {
-        // Default timer is long enough to not fire during normal tests,
-        // which complete in ~100-200ms.
-        Self::new_with_timer(node_index, Duration::from_millis(500)).await
+        // Default timer must be long enough to not fire during tests even
+        // under heavy CPU load (e.g. full test suite running in parallel).
+        Self::new_with_timer(node_index, Duration::from_secs(2)).await
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
@@ -54,7 +55,17 @@ impl TestHarness {
         let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
         let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
-        let consensus = Consensus::new(membership.clone(), public_key, private_key.clone(), 10);
+        let genesis_state = TestValidatedState::default();
+        let genesis_leaf =
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+
+        let consensus = Consensus::new(
+            membership.clone(),
+            public_key,
+            private_key.clone(),
+            genesis_leaf.clone(),
+            10,
+        );
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
@@ -63,9 +74,6 @@ impl TestHarness {
         let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
 
         let mut state_manager = StateManager::new(instance.clone());
-        let genesis_state = TestValidatedState::default();
-        let genesis_leaf =
-            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
         let proposal_validator = ProposalValidator::new(membership.clone());
@@ -94,6 +102,7 @@ impl TestHarness {
                 EpochNumber::genesis(),
             ))
             .public_key(public_key)
+            .node_id(KeyPrefix::from(&public_key))
             .build();
         Self {
             coordinator,

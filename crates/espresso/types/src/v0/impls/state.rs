@@ -4,7 +4,7 @@ use alloy::primitives::{Address, U256};
 use anyhow::{Context, bail};
 use committable::{Commitment, Committable};
 use either::Either;
-use hotshot_query_service::merklized_state::MerklizedState;
+use hotshot_query_service_types::merklized_state::MerklizedState;
 use hotshot_types::{
     data::{BlockError, EpochNumber, ViewNumber},
     traits::{

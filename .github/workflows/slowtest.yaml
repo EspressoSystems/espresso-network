@@ -46,17 +46,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk-space
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: taiki-e/install-action@just
       - uses: taiki-e/install-action@nextest
       - uses: rui314/setup-mold@v1
 
-      - name: Collect Workflow Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
+      - name: Enable Rust Caching
+        uses: Swatinem/rust-cache@v2
         with:
-          comment_on_pr: false
-
-      # NOTE: no rust cache, these tests are very slow anyway
+          shared-key: ${{ matrix.name }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
       - name: Build slow test
         run: ${{ matrix.build-cmd }}
