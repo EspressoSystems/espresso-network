@@ -52,8 +52,8 @@ where
 
 type PayloadProvider<Types> = Arc<dyn DebugProvider<Types, PayloadRequest>>;
 type PayloadRangeProvider<Types> = Arc<dyn DebugProvider<Types, BlockRangeRequest>>;
-type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest<Types>>>;
-type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest<Types>>>;
+type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest>>;
+type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest>>;
 type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
 type VidCommonRangeProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRangeRequest>>;
 
@@ -130,24 +130,21 @@ where
 }
 
 #[async_trait]
-impl<Types> Provider<Types, LeafRequest<Types>> for AnyProvider<Types>
+impl<Types> Provider<Types, LeafRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
+    async fn fetch(&self, req: LeafRequest) -> Option<LeafQueryData<Types>> {
         any_fetch(&self.leaf_providers, req).await
     }
 }
 
 #[async_trait]
-impl<Types> Provider<Types, LeafRangeRequest<Types>> for AnyProvider<Types>
+impl<Types> Provider<Types, LeafRangeRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(
-        &self,
-        req: LeafRangeRequest<Types>,
-    ) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
+    async fn fetch(&self, req: LeafRangeRequest) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
         any_fetch(&self.leaf_range_providers, req).await
     }
 }
@@ -215,7 +212,7 @@ where
     /// Add a sub-provider which fetches leaves.
     pub fn with_leaf_provider<P>(mut self, provider: P) -> Self
     where
-        P: Provider<Types, LeafRequest<Types>> + Debug + 'static,
+        P: Provider<Types, LeafRequest> + Debug + 'static,
     {
         self.leaf_providers.push(Arc::new(provider));
         self
@@ -224,7 +221,7 @@ where
     /// Add a sub-provider which fetches leaf ranges.
     pub fn with_leaf_range_provider<P>(mut self, provider: P) -> Self
     where
-        P: Provider<Types, LeafRangeRequest<Types>> + Debug + 'static,
+        P: Provider<Types, LeafRangeRequest> + Debug + 'static,
     {
         self.leaf_range_providers.push(Arc::new(provider));
         self
@@ -295,7 +292,7 @@ mod test {
         ApiState, Error,
         availability::{AvailabilityDataSource, UpdateAvailabilityData, define_api},
         data_source::storage::sql::testing::TmpDb,
-        fetching::provider::{NoFetching, QueryServiceProvider},
+        fetching::provider::{NoFetching, TrustedQueryServiceProvider},
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
@@ -331,13 +328,12 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider =
-            Provider::default()
-                .with_provider(NoFetching)
-                .with_provider(QueryServiceProvider::new(
-                    format!("http://localhost:{port}").parse().unwrap(),
-                    MockBase::instance(),
-                ));
+        let provider = Provider::default().with_provider(NoFetching).with_provider(
+            TrustedQueryServiceProvider::new(
+                format!("http://localhost:{port}").parse().unwrap(),
+                MockBase::instance(),
+            ),
+        );
         let data_source = db.config().connect(provider.clone()).await.unwrap();
 
         // Start consensus.

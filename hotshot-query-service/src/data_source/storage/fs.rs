@@ -615,13 +615,6 @@ where
             .context(NotFoundSnafu)?;
         self.inner.get_block((*height as usize).into())
     }
-
-    async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
-        // The file system backend doesn't index by whether a leaf is present, so we can't
-        // efficiently seek to the first leaf with height >= `from`. Our best effort is to return
-        // `from` itself if we can, or fail.
-        self.get_leaf((from as usize).into()).await
-    }
 }
 
 impl<Types: NodeType> UpdateAvailabilityStorage<Types>

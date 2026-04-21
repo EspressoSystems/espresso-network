@@ -7,7 +7,7 @@ use hotshot_query_service::{
     fetching::{
         NonEmptyRange, Provider,
         request::{
-            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest, RangeRequest,
+            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -18,12 +18,12 @@ use hotshot_types::data::VidCommon;
 use crate::{LightClient, client::Client, storage::Storage};
 
 #[async_trait]
-impl<P, S> Provider<SeqTypes, LeafRequest<SeqTypes>> for LightClient<P, S>
+impl<P, S> Provider<SeqTypes, LeafRequest> for LightClient<P, S>
 where
     P: Storage,
     S: Client,
 {
-    async fn fetch(&self, req: LeafRequest<SeqTypes>) -> Option<LeafQueryData<SeqTypes>> {
+    async fn fetch(&self, req: LeafRequest) -> Option<LeafQueryData<SeqTypes>> {
         match self.fetch_leaf(LeafId::Number(req.height as usize)).await {
             Ok(leaf) => Some(leaf),
             Err(err) => {
@@ -69,15 +69,12 @@ where
 }
 
 #[async_trait]
-impl<P, S> Provider<SeqTypes, LeafRangeRequest<SeqTypes>> for LightClient<P, S>
+impl<P, S> Provider<SeqTypes, LeafRangeRequest> for LightClient<P, S>
 where
     P: Storage,
     S: Client,
 {
-    async fn fetch(
-        &self,
-        req: LeafRangeRequest<SeqTypes>,
-    ) -> Option<NonEmptyRange<LeafQueryData<SeqTypes>>> {
+    async fn fetch(&self, req: LeafRangeRequest) -> Option<NonEmptyRange<LeafQueryData<SeqTypes>>> {
         let leaves = match self
             .fetch_leaves_in_range(req.start as usize, req.end as usize)
             .await
@@ -108,7 +105,6 @@ where
         &self,
         req: BlockRangeRequest,
     ) -> Option<NonEmptyRange<BlockQueryData<SeqTypes>>> {
-        let req = RangeRequest::from(req);
         let blocks = match self
             .fetch_blocks_in_range(req.start as usize, req.end as usize)
             .await
@@ -139,7 +135,6 @@ where
         &self,
         req: VidCommonRangeRequest,
     ) -> Option<NonEmptyRange<VidCommonQueryData<SeqTypes>>> {
-        let req = RangeRequest::from(req);
         let vid_common = match self
             .fetch_vid_common_in_range(req.start as usize, req.end as usize)
             .await

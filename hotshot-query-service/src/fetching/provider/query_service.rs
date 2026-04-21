@@ -14,18 +14,8 @@ use std::fmt::Debug;
 
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
-use committable::Committable;
 use futures::{TryFutureExt, future::try_join_all};
-use hotshot_types::{
-    data::{VidCommitment, VidCommon, ns_table},
-    traits::{EncodeBytes, node_implementation::NodeType},
-    vid::{
-        advz::{ADVZScheme, advz_scheme},
-        avidm::{AvidMScheme, init_avidm_param},
-        avidm_gf2::AvidmGf2Scheme,
-    },
-};
-use jf_advz::VidScheme;
+use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 use surf_disco::{Client, Url};
 use vbs::version::StaticVersionType;
 
@@ -36,7 +26,7 @@ use crate::{
     fetching::{
         NonEmptyRange,
         request::{
-            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest, RangeRequest,
+            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -47,12 +37,21 @@ use crate::{
 ///
 /// This fetcher implements the [`Provider`] interface by querying the REST API provided by another
 /// instance of this query service to try and retrieve missing objects.
+///
+/// This provider trusts the external query service is connected to: it does not verify the
+/// responses it receives. Instantiating this provider adds a trust assumption not only on the
+/// external service, but on the correctness of this node's local TLS configuration, etc.: anything
+/// needed to ensure that the HTTP client is connected to the intended, trusted server.
+///
+/// To avoid adding additional trust dependencies, do not use this provider; instead, use a provider
+/// implementation that verifies the data it receives, for example using a light client for the
+/// protocol.
 #[derive(Clone, Debug)]
-pub struct QueryServiceProvider<Ver: StaticVersionType> {
+pub struct TrustedQueryServiceProvider<Ver: StaticVersionType> {
     client: Client<Error, Ver>,
 }
 
-impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
     pub fn new(url: Url, _: Ver) -> Self {
         Self {
             client: Client::new(url),
@@ -60,37 +59,17 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
     }
 }
 
-impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
     pub async fn fetch_payload<Types: NodeType>(
         &self,
         req: PayloadRequest,
     ) -> anyhow::Result<Payload<Types>> {
-        let req_hash = req.0;
-
-        // Fetch the payload and the VID common data. We need the common data to recompute the VID
-        // commitment, to ensure the payload we received is consistent with the commitment we
-        // requested.
         let block = self
             .client
-            .get::<BlockQueryData<Types>>(&format!("availability/block/payload-hash/{req_hash}"))
+            .get::<BlockQueryData<Types>>(&format!("availability/block/payload-hash/{}", req.0))
             .send()
             .await
             .context("fetching block")?;
-        let common = self
-            .client
-            .get::<VidCommonQueryData<Types>>(&format!(
-                "availability/vid/common/payload-hash/{req_hash}",
-            ))
-            .send()
-            .await
-            .context("fetching VID common")?;
-
-        let comm =
-            recompute_payload_commitment(&block, &common).context("computing VID commitment")?;
-        ensure!(
-            comm == req_hash,
-            "VID commitment {comm} does not match request"
-        );
 
         Ok(block.payload)
     }
@@ -99,11 +78,6 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         &self,
         req: BlockRangeRequest,
     ) -> anyhow::Result<NonEmptyRange<BlockQueryData<Types>>> {
-        let req = RangeRequest::from(req);
-
-        // Fetch the payload and the VID common data. We need the common data to recompute the VID
-        // commitment, to ensure the payloads we received are consistent with the expected
-        // commitments.
         let blocks = self
             .client
             .get::<NonEmptyRange<BlockQueryData<Types>>>(&format!(
@@ -113,33 +87,12 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             .send()
             .await
             .context("fetching blocks")?;
-        let common = self
-            .fetch_vid_common_range_with_fallback(req.start, req.end)
-            .await?;
 
         ensure!(
             blocks.start() == req.start && blocks.end() == req.end,
             "wrong block range ({}..{})",
             blocks.start(),
             blocks.end()
-        );
-        ensure!(
-            common.start() == req.start && common.end() == req.end,
-            "wrong VID common range (expected {}..{})",
-            common.start(),
-            common.end()
-        );
-
-        let commits = blocks
-            .iter()
-            .zip(&common)
-            .map(|(block, common)| recompute_payload_commitment(block, common))
-            .collect::<Result<Vec<VidCommitment>, _>>()
-            .context("computing VID commitments")?;
-        let hash = RangeRequest::hash_payloads(commits.iter().copied());
-        ensure!(
-            hash == req.expected_hash,
-            "server returned blocks with wrong payload hash ({hash}, commits {commits:?})",
         );
 
         Ok(blocks)
@@ -157,7 +110,8 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest> for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, PayloadRequest>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
@@ -167,7 +121,8 @@ where
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, BlockRangeRequest> for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, BlockRangeRequest>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
@@ -176,57 +131,10 @@ where
     }
 }
 
-fn recompute_payload_commitment<Types>(
-    block: &BlockQueryData<Types>,
-    common: &VidCommonQueryData<Types>,
-) -> anyhow::Result<VidCommitment>
-where
-    Types: NodeType,
-{
-    match common.common() {
-        VidCommon::V0(common) => {
-            let num_storage_nodes = ADVZScheme::get_num_storage_nodes(common) as usize;
-            let bytes = block.payload().encode();
-            advz_scheme(num_storage_nodes)
-                .commit_only(bytes)
-                .map(VidCommitment::V0)
-                .context("failed to compute VID commitment (V0)")
-        },
-        VidCommon::V1(common) => {
-            let bytes = block.payload().encode();
-            let avidm_param = init_avidm_param(common.total_weights).context(format!(
-                "failed to initialize AVIDM params. total_weight={}",
-                common.total_weights
-            ))?;
-            let metadata = block.metadata().encode();
-            AvidMScheme::commit(
-                &avidm_param,
-                &bytes,
-                ns_table::parse_ns_table(bytes.len(), &metadata),
-            )
-            .map(VidCommitment::V1)
-            .map_err(anyhow::Error::msg)
-            .context("failed to compute AVIDM commitment")
-        },
-        VidCommon::V2(common) => {
-            let bytes = block.payload().encode();
-            let metadata = block.metadata().encode();
-            AvidmGf2Scheme::commit(
-                &common.param,
-                &bytes,
-                ns_table::parse_ns_table(bytes.len(), &metadata),
-            )
-            .map(|(commit, _)| VidCommitment::V2(commit))
-            .map_err(anyhow::Error::msg)
-            .context("failed to compute AvidmGf2 commitment")
-        },
-    }
-}
-
-impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
     pub async fn fetch_leaf<Types: NodeType>(
         &self,
-        req: LeafRequest<Types>,
+        req: LeafRequest,
     ) -> anyhow::Result<LeafQueryData<Types>> {
         let leaf = self
             .client
@@ -240,23 +148,13 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             "received leaf with the wrong height ({})",
             leaf.height(),
         );
-        ensure!(
-            leaf.hash() == req.expected_leaf,
-            "received leaf with the wrong hash ({})",
-            leaf.hash()
-        );
-        ensure!(
-            leaf.qc().commit() == req.expected_qc,
-            "received leaf with the wrong QC ({})",
-            leaf.qc().commit()
-        );
 
         Ok(leaf)
     }
 
     pub async fn fetch_leaf_range<Types: NodeType>(
         &self,
-        req: LeafRangeRequest<Types>,
+        req: LeafRangeRequest,
     ) -> anyhow::Result<NonEmptyRange<LeafQueryData<Types>>> {
         let leaves = self
             .client
@@ -275,56 +173,33 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             leaves.end()
         );
 
-        // Verify hash chaining.
-        let mut expected_leaf = req.last_leaf;
-        let mut expected_qc = req.last_qc;
-        for leaf in leaves.iter().rev() {
-            let leaf_hash = leaf.hash();
-            let qc_hash = leaf.qc().commit();
-            ensure!(
-                leaf_hash == expected_leaf,
-                "received leaf {} with wrong hash {leaf_hash}",
-                leaf.height(),
-            );
-            ensure!(
-                qc_hash == expected_qc,
-                "received leaf {} with wrong QC {qc_hash}",
-                leaf.height()
-            );
-            expected_leaf = leaf.leaf().parent_commitment();
-            expected_qc = leaf.leaf().justify_qc().commit();
-        }
-
         Ok(leaves)
     }
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest<Types>>
-    for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, LeafRequest>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
+    async fn fetch(&self, req: LeafRequest) -> Option<LeafQueryData<Types>> {
         self.handle_result(req, self.fetch_leaf(req).await)
     }
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest<Types>>
-    for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, LeafRangeRequest>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
-    async fn fetch(
-        &self,
-        req: LeafRangeRequest<Types>,
-    ) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
+    async fn fetch(&self, req: LeafRangeRequest) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
         self.handle_result(req, self.fetch_leaf_range(req).await)
     }
 }
 
-impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+impl<Ver: StaticVersionType> TrustedQueryServiceProvider<Ver> {
     pub async fn fetch_vid_common<Types: NodeType>(
         &self,
         req: VidCommonRequest,
@@ -339,11 +214,6 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             .await
             .context("fetching VID common")?;
 
-        ensure!(
-            res.common().is_consistent(&req.0),
-            "inconsistent VID common data {:?}",
-            res.common,
-        );
         Ok(res.common)
     }
 
@@ -390,7 +260,6 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
         &self,
         req: VidCommonRangeRequest,
     ) -> anyhow::Result<NonEmptyRange<VidCommonQueryData<Types>>> {
-        let req = RangeRequest::from(req);
         let common = self
             .fetch_vid_common_range_with_fallback(req.start, req.end)
             .await?;
@@ -402,32 +271,13 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             common.end()
         );
 
-        let commits = common
-            .iter()
-            .map(|common| {
-                // Check that the given `VidCommon` matches the claimed payload commitment.
-                ensure!(
-                    common.common().is_consistent(&common.payload_hash()),
-                    "server returned VID common with inconsistent commitment {common:?}"
-                );
-
-                // Yield the payload commitment for hashing, to check that the full sequence of payloads
-                // is consistent with the request.
-                Ok(common.payload_hash())
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let hash = RangeRequest::hash_payloads(commits.iter().copied());
-        ensure!(
-            hash == req.expected_hash,
-            "server returned wrong VID common (hash {hash}, commits {commits:?})"
-        );
-
         Ok(common)
     }
 }
 
 #[async_trait]
-impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRequest> for QueryServiceProvider<Ver>
+impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRequest>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
@@ -438,7 +288,7 @@ where
 
 #[async_trait]
 impl<Types, Ver: StaticVersionType> Provider<Types, VidCommonRangeRequest>
-    for QueryServiceProvider<Ver>
+    for TrustedQueryServiceProvider<Ver>
 where
     Types: NodeType,
 {
@@ -455,26 +305,20 @@ where
 mod test {
     use std::{future::IntoFuture, time::Duration};
 
-    use committable::{Commitment, Committable};
+    use committable::Committable;
     use futures::{
         future::{FutureExt, join},
         stream::StreamExt,
     };
-    // generic-array 0.14.x is deprecated, but VidCommitment requires this version
-    // for From<Output<H>> impl in jf-merkle-tree
-    #[allow(deprecated)]
-    use generic_array::GenericArray;
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
-    use rand::RngCore;
     use test_utils::reserve_tcp_port;
-    use tide_disco::{Api, App, error::ServerError};
+    use tide_disco::{Api, App};
     use toml::toml;
     use vbs::version::StaticVersion;
 
     use super::*;
     use crate::{
         ApiState,
-        api::load_api,
         availability::{
             self, AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
             Fetch, UpdateAvailabilityData, define_api,
@@ -500,8 +344,8 @@ mod test {
         types::HeightIndexed,
     };
 
-    type Provider = TestProvider<QueryServiceProvider<MockBase>>;
-    type EpochProvider = TestProvider<QueryServiceProvider<EpochVersion>>;
+    type Provider = TestProvider<TrustedQueryServiceProvider<MockBase>>;
+    type EpochProvider = TestProvider<TrustedQueryServiceProvider<EpochVersion>>;
 
     fn ignore<T>(_: T) {}
 
@@ -552,7 +396,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -783,7 +627,7 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer.
         // Use our special test provider that handles epoch version transitions
         let db = TmpDb::init().await;
-        let provider = EpochProvider::new(QueryServiceProvider::new(
+        let provider = EpochProvider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             EpochVersion::instance(),
         ));
@@ -1008,7 +852,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1069,7 +913,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1134,7 +978,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1196,7 +1040,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1334,7 +1178,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1383,249 +1227,6 @@ mod test {
         );
     }
 
-    // Uses deprecated generic-array 0.14.x via digest, required for VidCommitment compatibility
-    #[allow(deprecated)]
-    fn random_vid_commit() -> VidCommitment {
-        let mut bytes = [0; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        VidCommitment::V0(GenericArray::from(bytes).into())
-    }
-
-    fn random_leaf_request() -> LeafRequest<MockTypes> {
-        let mut bytes = [0; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        LeafRequest {
-            height: 1,
-            expected_leaf: Commitment::from_raw(bytes),
-            expected_qc: Commitment::from_raw(bytes),
-        }
-    }
-
-    async fn malicious_server(port: u16) {
-        let mut api = load_api::<(), ServerError, MockBase>(
-            None::<std::path::PathBuf>,
-            include_str!("../../../api/availability.toml"),
-            vec![],
-        )
-        .unwrap();
-
-        api.get("get_leaf", move |req, _| {
-            async move {
-                let height = req.integer_param("height")?;
-
-                // Respond with a leaf of the correct height, but with a dummy hash.
-                let mut leaf = LeafQueryData::<MockTypes>::genesis(
-                    &Default::default(),
-                    &Default::default(),
-                    TEST_VERSIONS.test,
-                )
-                .await;
-                leaf.leaf.block_header_mut().block_number = height;
-                leaf.qc.data.leaf_commit = leaf.hash();
-                Ok(leaf)
-            }
-            .boxed()
-        })
-        .unwrap()
-        .get("get_leaf_range", move |req, _| {
-            async move {
-                let start = req.integer_param("from")?;
-                let end = req.integer_param("until")?;
-
-                // Respond with the correct range, but using leaves with dummy data.
-                let leaf = LeafQueryData::<MockTypes>::genesis(
-                    &Default::default(),
-                    &Default::default(),
-                    TEST_VERSIONS.test,
-                )
-                .await;
-                let leaves = (start..end)
-                    .map(|i| {
-                        let mut leaf = leaf.clone();
-                        leaf.leaf.block_header_mut().block_number = i;
-                        leaf.qc.data.leaf_commit = leaf.hash();
-                        leaf
-                    })
-                    .collect::<Vec<_>>();
-
-                Ok(leaves)
-            }
-            .boxed()
-        })
-        .unwrap()
-        .get("get_block", move |_, _| {
-            async move {
-                // No matter what data we are asked for, always respond with dummy data.
-                Ok(BlockQueryData::<MockTypes>::genesis(
-                    &Default::default(),
-                    &Default::default(),
-                    TEST_VERSIONS.test.base,
-                )
-                .await)
-            }
-            .boxed()
-        })
-        .unwrap()
-        .get("get_block_range", move |req, _| {
-            async move {
-                let start = req.integer_param("from")?;
-                let end = req.integer_param("until")?;
-
-                // Respond with the correct range, but using blocks with dummy data.
-                let block = BlockQueryData::<MockTypes>::genesis(
-                    &Default::default(),
-                    &Default::default(),
-                    TEST_VERSIONS.test.base,
-                )
-                .await;
-                let blocks = (start..end)
-                    .map(|i| {
-                        let mut block = block.clone();
-                        block.header.block_number = i;
-                        block
-                    })
-                    .collect::<Vec<_>>();
-
-                Ok(blocks)
-            }
-            .boxed()
-        })
-        .unwrap()
-        .get("get_vid_common", move |_, _| {
-            async move {
-                // No matter what data we are asked for, always respond with dummy data.
-                Ok(VidCommonQueryData::<MockTypes>::genesis(
-                    &Default::default(),
-                    &Default::default(),
-                    TEST_VERSIONS.test.base,
-                )
-                .await)
-            }
-            .boxed()
-        })
-        .unwrap()
-        .get("get_vid_common_range", move |req, _| {
-            async move {
-                let start = req.integer_param("from")?;
-                let end = req.integer_param("until")?;
-
-                // Respond with the correct range, but using VID with dummy data.
-                let vid = VidCommonQueryData::<MockTypes>::genesis(
-                    &Default::default(),
-                    &Default::default(),
-                    TEST_VERSIONS.test.base,
-                )
-                .await;
-                let vids = (start..end)
-                    .map(|i| {
-                        let mut vid = vid.clone();
-                        vid.height = i;
-                        vid
-                    })
-                    .collect::<Vec<_>>();
-
-                Ok(vids)
-            }
-            .boxed()
-        })
-        .unwrap();
-
-        let mut app = App::<(), ServerError>::with_state(());
-        app.register_module("availability", api).unwrap();
-        app.serve(format!("0.0.0.0:{port}"), MockBase::instance())
-            .await
-            .ok();
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_fetch_from_malicious_server() {
-        let port = reserve_tcp_port().unwrap();
-        let _server = BackgroundTask::spawn("malicious server", malicious_server(port));
-
-        let provider = QueryServiceProvider::new(
-            format!("http://localhost:{port}").parse().unwrap(),
-            MockBase::instance(),
-        );
-        provider.client.connect(None).await;
-
-        // Query for a random leaf, the server will respond with a different leaf, and we should
-        // detect the error.
-        tracing::info!("fetch leaf");
-        let err = provider
-            .fetch_leaf(random_leaf_request())
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("wrong hash"), "{err:#}");
-
-        // Ranged leaf request.
-        tracing::info!("fetch leaf range");
-        let req = random_leaf_request();
-        let err = provider
-            .fetch_leaf_range(LeafRangeRequest {
-                start: 0,
-                end: req.height + 1,
-                last_leaf: req.expected_leaf,
-                last_qc: req.expected_qc,
-            })
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("wrong hash"), "{err:#}");
-
-        // Query for a random payload, the server will respond with a different payload, and we
-        // should detect the error.
-        tracing::info!("fetch payload");
-        let err = provider
-            .fetch_payload::<MockTypes>(PayloadRequest(random_vid_commit()))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("does not match request"),
-            "{err:#}"
-        );
-
-        // Payload range request.
-        tracing::info!("fetch payload range");
-        let err = provider
-            .fetch_payload_range::<MockTypes>(BlockRangeRequest::from(RangeRequest {
-                start: 0,
-                end: 2,
-                expected_hash: RangeRequest::hash_payloads([
-                    random_vid_commit(),
-                    random_vid_commit(),
-                ]),
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("wrong payload hash"), "{err:#}");
-
-        // Query for a random VID common, the server will respond with a different one, and we
-        // should detect the error.
-        tracing::info!("fetch VID");
-        let err = provider
-            .fetch_vid_common::<MockTypes>(VidCommonRequest(random_vid_commit()))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string().contains("inconsistent VID common"),
-            "{err:#}"
-        );
-
-        // VID range request.
-        tracing::info!("fetch VID range");
-        let err = provider
-            .fetch_vid_common_range::<MockTypes>(VidCommonRangeRequest::from(RangeRequest {
-                start: 0,
-                end: 2,
-                expected_hash: RangeRequest::hash_payloads([
-                    random_vid_commit(),
-                    random_vid_commit(),
-                ]),
-            }))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("wrong VID common"), "{err:#}");
-    }
-
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_archive_recovery() {
         // Create the consensus network.
@@ -1652,7 +1253,7 @@ mod test {
         // Start a data source which is not receiving events from consensus, only from a peer. The
         // data source is at first configured to aggressively prune data.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1739,6 +1340,7 @@ mod test {
             .await
             .unwrap()
             .with_proactive_interval(Duration::from_secs(1))
+            .with_sync_status_ttl(Duration::from_secs(1))
             .build()
             .await
             .unwrap();
@@ -1804,7 +1406,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -1910,7 +1512,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2010,7 +1612,7 @@ mod test {
 
         // Start a data source which is not receiving events from consensus.
         let db = TmpDb::init().await;
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2078,7 +1680,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2143,7 +1745,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2226,7 +1828,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2331,7 +1933,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2405,7 +2007,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2484,7 +2086,7 @@ mod test {
         );
 
         // Start a data source which is not receiving events from consensus, only from a peer.
-        let provider = Provider::new(QueryServiceProvider::new(
+        let provider = Provider::new(TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         ));
@@ -2625,7 +2227,7 @@ mod test {
             .await;
 
         // Connect a fetching provider.
-        let provider = QueryServiceProvider::new(
+        let provider = TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             MockBase::instance(),
         );
@@ -2634,32 +2236,23 @@ mod test {
         tracing::info!("fetch leaf range");
         assert_eq!(
             provider
-                .fetch(LeafRangeRequest {
-                    start: 0,
-                    end: 5,
-                    last_leaf: leaves[4].hash(),
-                    last_qc: leaves[4].qc().commit(),
-                })
+                .fetch(LeafRangeRequest { start: 0, end: 5 })
                 .await
                 .unwrap(),
             leaves
         );
-        let headers = NonEmptyRange::new(leaves.iter().map(|leaf| leaf.header().clone())).unwrap();
-        tracing::info!(?headers, "fetch block range");
+        tracing::info!("fetch block range");
         assert_eq!(
-            ProviderTrait::<MockTypes, _>::fetch(
-                &provider,
-                BlockRangeRequest::from(RangeRequest::from_headers::<MockTypes>(&headers))
-            )
-            .await
-            .unwrap(),
+            ProviderTrait::<MockTypes, _>::fetch(&provider, BlockRangeRequest { start: 0, end: 5 })
+                .await
+                .unwrap(),
             blocks
         );
-        tracing::info!(?headers, "fetch VID common range");
+        tracing::info!("fetch VID common range");
         assert_eq!(
             ProviderTrait::<MockTypes, _>::fetch(
                 &provider,
-                VidCommonRangeRequest::from(RangeRequest::from_headers::<MockTypes>(&headers))
+                VidCommonRangeRequest { start: 0, end: 5 }
             )
             .await
             .unwrap(),
@@ -2703,7 +2296,7 @@ mod test {
     async fn test_vid_common_fallback() {
         let port = reserve_tcp_port().unwrap();
         let _server = BackgroundTask::spawn("old server", old_server(port));
-        let provider = QueryServiceProvider::new(
+        let provider = TrustedQueryServiceProvider::new(
             format!("http://localhost:{port}").parse().unwrap(),
             StaticVersion::<1, 0>::instance(),
         );
@@ -2719,20 +2312,10 @@ mod test {
         .unwrap();
 
         // Now fetch the whole thing as a range.
-        let expected_hash =
-            RangeRequest::hash_payloads(common.iter().map(|common| common.payload_hash));
-        let req = RangeRequest {
-            start: 0,
-            end: 5,
-            expected_hash,
-        };
+        let req = VidCommonRangeRequest { start: 0, end: 5 };
         assert_eq!(
             common.as_slice(),
-            provider
-                .fetch_vid_common_range(req.into())
-                .await
-                .unwrap()
-                .as_ref()
+            provider.fetch_vid_common_range(req).await.unwrap().as_ref()
         );
     }
 }

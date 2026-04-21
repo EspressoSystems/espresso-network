@@ -46,7 +46,7 @@ mod query_service;
 mod testing;
 
 pub use any::AnyProvider;
-pub use query_service::QueryServiceProvider;
+pub use query_service::TrustedQueryServiceProvider;
 #[cfg(any(test, feature = "testing"))]
 pub use testing::TestProvider;
 

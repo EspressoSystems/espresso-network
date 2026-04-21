@@ -21,14 +21,12 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::bail;
 use async_trait::async_trait;
-use committable::Committable;
 use derivative::Derivative;
 use derive_more::From;
 use futures::future::{BoxFuture, FutureExt, join_all};
 use hotshot_types::traits::node_implementation::NodeType;
-use tokio::spawn;
+use tokio::task::spawn;
 use tracing::Instrument;
 
 use super::{
@@ -53,10 +51,10 @@ use crate::{
 };
 
 pub(super) type LeafFetcher<Types, S, P> =
-    fetching::Fetcher<request::LeafRequest<Types>, LeafCallback<Types, S, P>>;
+    fetching::Fetcher<request::LeafRequest, LeafCallback<Types, S, P>>;
 
 pub(super) type LeafRangeFetcher<Types, S, P> =
-    fetching::Fetcher<LeafRangeRequest<Types>, LeafCallback<Types, S, P>>;
+    fetching::Fetcher<LeafRangeRequest, LeafCallback<Types, S, P>>;
 
 impl<Types> FetchRequest for LeafId<Types>
 where
@@ -100,7 +98,7 @@ where
     }
 
     async fn active_fetch<S, P>(
-        tx: &mut impl AvailabilityStorage<Types>,
+        _tx: &mut impl AvailabilityStorage<Types>,
         fetcher: Arc<Fetcher<Types, S, P>>,
         req: Self::Request,
     ) -> anyhow::Result<()>
@@ -111,7 +109,7 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_leaf_with_callbacks(tx, fetcher, req, None).await
+        fetch_leaf_with_callbacks(fetcher, req, None).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
@@ -123,7 +121,6 @@ where
 }
 
 pub(super) async fn fetch_leaf_with_callbacks<Types, S, P, I>(
-    tx: &mut impl AvailabilityStorage<Types>,
     fetcher: Arc<Fetcher<Types, S, P>>,
     req: LeafId<Types>,
     callbacks: I,
@@ -141,75 +138,9 @@ where
 {
     match req {
         LeafId::Number(n) => {
-            // We need the next leaf in the chain so we can figure out what hash we expect for this
-            // leaf, so we can fetch it securely from an untrusted provider.
-            let next = (n + 1) as u64;
-            let next = match tx.first_available_leaf(next).await {
-                Ok(leaf) if leaf.height() == next => leaf,
-                Ok(leaf) => {
-                    // If we don't have the immediate successor leaf, but we have some later leaf,
-                    // then we can't trigger this exact fetch, but we can fetch the (apparently)
-                    // missing parent of the leaf we do have, which will trigger a chain of fetches
-                    // that eventually reaches all the way back to the desired leaf.
-                    tracing::debug!(
-                        n,
-                        fetching = leaf.height() - 1,
-                        "do not have necessary leaf; trigger fetch of a later leaf"
-                    );
-
-                    let mut callbacks = vec![LeafCallback::Leaf {
-                        fetcher: fetcher.clone(),
-                    }];
-
-                    if !fetcher.leaf_only {
-                        callbacks.push(
-                            HeaderCallback::Payload {
-                                fetcher: fetcher.clone(),
-                            }
-                            .into(),
-                        );
-                        callbacks.push(
-                            HeaderCallback::VidCommon {
-                                fetcher: fetcher.clone(),
-                            }
-                            .into(),
-                        );
-                    }
-
-                    fetcher.leaf_fetcher.clone().spawn_fetch(
-                        request::LeafRequest::new(
-                            leaf.height() - 1,
-                            leaf.leaf().parent_commitment(),
-                            leaf.leaf().justify_qc().commit(),
-                        ),
-                        fetcher.provider.clone(),
-                        // After getting the leaf, grab the other data as well; that will be missing
-                        // whenever the leaf was.
-                        callbacks,
-                    );
-                    return Ok(());
-                },
-                Err(QueryError::Missing | QueryError::NotFound) => {
-                    // We successfully queried the database, but the next leaf wasn't there. We
-                    // know for sure that based on the current state of the DB, we cannot fetch this
-                    // leaf.
-                    tracing::debug!(n, "not fetching leaf with unknown successor");
-                    return Ok(());
-                },
-                Err(QueryError::Error { message }) => {
-                    // An error occurred while querying the database. We don't know if we need to
-                    // fetch the leaf or not. Return an error so we can try again.
-                    bail!("failed to fetch successor for leaf {n}: {message}");
-                },
-            };
-
             let fetcher = fetcher.clone();
             fetcher.leaf_fetcher.clone().spawn_fetch(
-                request::LeafRequest::new(
-                    n as u64,
-                    next.leaf().parent_commitment(),
-                    next.leaf().justify_qc().commit(),
-                ),
+                request::LeafRequest::new(n as u64),
                 fetcher.provider.clone(),
                 once(LeafCallback::Leaf { fetcher }).chain(callbacks),
             );
@@ -227,13 +158,9 @@ where
 
 /// Trigger a fetch of the parent of the given `leaf`, if it is missing.
 ///
-/// Leaves have a unique constraint among fetchable objects: we cannot fetch a given leaf at height
-/// `h` unless we have its child at height `h + 1`. This is because the child, through its
-/// `parent_commitment`, tells us what the hash of the parent should be, which lets us authenticate
-/// it when fetching from an untrusted provider. Thus, requests for leaf `h` might block if `h + 1`
-/// is not available. To ensure all these requests are eventually unblocked, and all leaves are
-/// eventually fetched, we call this function whenever we receive leaf `h + 1` to check if we need
-/// to then fetch leaf `h`.
+/// This ensures that a passive fetch for a leaf will always resolve eventually, even if we miss the
+/// decide event for that leaf: we will eventually get a decide for a later leaf, and then fetch the
+/// chain backwards.
 pub(super) fn trigger_fetch_for_parent<Types, S, P>(
     fetcher: &Arc<Fetcher<Types, S, P>>,
     leaf: &LeafQueryData<Types>,
@@ -247,8 +174,6 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
     P: AvailabilityProvider<Types>,
 {
     let height = leaf.height();
-    let parent = leaf.leaf().parent_commitment();
-    let parent_qc = leaf.leaf().justify_qc().commit();
 
     // Check that there is a parent to fetch.
     if height == 0 {
@@ -258,7 +183,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
     // Spawn an async task; we're triggering a fire-and-forget fetch of a leaf that might now be
     // available; we don't need to block the caller on this.
     let fetcher = fetcher.clone();
-    let span = tracing::info_span!("fetch parent leaf", height, %parent, %parent_qc);
+    let span = tracing::info_span!("fetch parent leaf", height);
     spawn(
         async move {
             // Check if we already have the parent.
@@ -281,15 +206,14 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
                     // parent, so we fall through to fetching it just to be safe.
                     tracing::warn!(
                         height,
-                        %parent,
                         "error opening transaction to check for parent leaf: {err:#}",
                     );
                 },
             }
 
-            tracing::info!(height, %parent, "received new leaf; fetching missing parent");
+            tracing::info!(height, "received new leaf; fetching missing parent");
             fetcher.leaf_fetcher.clone().spawn_fetch(
-                request::LeafRequest::new(height - 1, parent, parent_qc),
+                request::LeafRequest::new(height - 1),
                 fetcher.provider.clone(),
                 // After getting the leaf, grab the other data as well; that will be missing
                 // whenever the leaf was.
@@ -440,7 +364,7 @@ where
                 // continue bulk fetching, rather than kick of a chain reaction of individual
                 // fetches, which will end up fetching the same data, slower.
             },
-            Self::Continuation { callback } => callback.run_range(leaves.as_ref_cloned()),
+            Self::Continuation { callback } => callback.run_range(leaves.start(), leaves.end()),
         }
     }
 }
@@ -507,7 +431,7 @@ where
     }
 
     async fn active_fetch<S, P>(
-        tx: &mut impl AvailabilityStorage<Types>,
+        _tx: &mut impl AvailabilityStorage<Types>,
         fetcher: Arc<Fetcher<Types, S, P>>,
         req: Self::Request,
     ) -> anyhow::Result<()>
@@ -518,7 +442,7 @@ where
             AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
         P: AvailabilityProvider<Types>,
     {
-        fetch_leaf_range_with_callbacks(tx, fetcher, req, None).await
+        fetch_leaf_range_with_callbacks(fetcher, req, None).await
     }
 
     async fn load<S>(storage: &mut S, req: Self::Request) -> QueryResult<Self>
@@ -568,7 +492,6 @@ where
 }
 
 pub(super) async fn fetch_leaf_range_with_callbacks<Types, S, P, I>(
-    tx: &mut impl AvailabilityStorage<Types>,
     fetcher: Arc<Fetcher<Types, S, P>>,
     req: RangeRequest,
     callbacks: I,
@@ -584,76 +507,11 @@ where
     I: IntoIterator<Item = LeafCallback<Types, S, P>> + Send + 'static,
     I::IntoIter: Send,
 {
-    // We need the next leaf after the chain so we can figure out what hash we expect for the last
-    // leaf in the chain, so we can fetch it securely from an untrusted provider.
-    let next = match tx.first_available_leaf(req.end).await {
-        Ok(leaf) if leaf.height() == req.end => leaf,
-        Ok(leaf) => {
-            // If we don't have the immediate successor leaf, but we have some later leaf,
-            // then we can't trigger this exact fetch, but we can fetch the (apparently)
-            // missing parent of the leaf we do have, which will trigger a chain of fetches
-            // that eventually reaches all the way back to the desired leaf.
-            tracing::debug!(
-                req.end,
-                fetching = leaf.height() - 1,
-                "do not have necessary leaf; trigger fetch of a later leaf"
-            );
-
-            let mut callbacks = vec![LeafCallback::Leaf {
-                fetcher: fetcher.clone(),
-            }];
-
-            if !fetcher.leaf_only {
-                callbacks.push(
-                    HeaderCallback::Payload {
-                        fetcher: fetcher.clone(),
-                    }
-                    .into(),
-                );
-                callbacks.push(
-                    HeaderCallback::VidCommon {
-                        fetcher: fetcher.clone(),
-                    }
-                    .into(),
-                );
-            }
-
-            fetcher.leaf_fetcher.clone().spawn_fetch(
-                request::LeafRequest::new(
-                    leaf.height() - 1,
-                    leaf.leaf().parent_commitment(),
-                    leaf.leaf().justify_qc().commit(),
-                ),
-                fetcher.provider.clone(),
-                // After getting the leaf, grab the other data as well; that will be missing
-                // whenever the leaf was.
-                callbacks,
-            );
-            return Ok(());
-        },
-        Err(QueryError::Missing | QueryError::NotFound) => {
-            // We successfully queried the database, but the next leaf wasn't there. We know for
-            // sure that based on the current state of the DB, we cannot fetch this leaf.
-            tracing::debug!(req.end, "not fetching leaf chain with unknown successor");
-            return Ok(());
-        },
-        Err(QueryError::Error { message }) => {
-            // An error occurred while querying the database. We don't know if we need to fetch the
-            // leaf or not. Return an error so we can try again.
-            bail!(
-                "failed to fetch successor for leaf chain {}: {message}",
-                req.end
-            );
-        },
-    };
-
     let fetcher = fetcher.clone();
     fetcher.leaf_range_fetcher.clone().spawn_fetch(
         LeafRangeRequest {
             start: req.start,
             end: req.end,
-            last_leaf: next.leaf().parent_commitment(),
-            last_qc: next.leaf().justify_qc().commit(),
         },
         fetcher.provider.clone(),
         once(LeafCallback::Leaf { fetcher }).chain(callbacks),

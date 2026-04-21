@@ -428,7 +428,6 @@ impl Options {
         // missing from the query service from ephemeral consensus storage.
         let db_provider = mod_opt.clone().create().await?;
         provider = provider
-            .with_leaf_provider(db_provider.clone())
             .with_block_provider(db_provider.clone())
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
