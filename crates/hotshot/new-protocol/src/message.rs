@@ -53,10 +53,10 @@ pub struct Proposal<T: NodeType> {
     /// Possible upgrade certificate, which the leader may optionally attach.
     pub upgrade_certificate: Option<UpgradeCertificate<T>>,
 
-    /// Possible timeout or view sync certificate.
+    /// Possible timeout certificate.
     ///
     /// If the `justify_qc` is not for a proposal in the immediately preceding
-    /// view, then either a timeout or view sync certificate must be attached.
+    /// view, then a timeout certificate must be attached.
     pub view_change_evidence: Option<TimeoutCertificate<T>>,
 
     /// The DRB result for the next epoch.
