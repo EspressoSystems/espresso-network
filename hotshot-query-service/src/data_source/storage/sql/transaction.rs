@@ -18,7 +18,11 @@
 //! database connection, so that the updated state of the database can be queried midway through a
 //! transaction.
 
-use std::{collections::HashMap, marker::PhantomData, time::Instant};
+use std::{
+    collections::HashMap,
+    marker::PhantomData,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
@@ -41,6 +45,7 @@ use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
 use sqlx::{Encode, Execute, FromRow, QueryBuilder, Type, pool::Pool, query_builder::Separated};
+use tokio::time::sleep;
 use tracing::instrument;
 
 #[cfg(not(feature = "embedded-db"))]
@@ -159,7 +164,7 @@ impl TransactionMode for Read {
         // transactions in read-only mode, and always has serializable concurrency unless we
         // explicitly opt in to dirty reads with a pragma.
         #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
+        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY")
             .await?;
 
         Ok(())
@@ -416,58 +421,43 @@ impl Transaction<Write> {
     }
 }
 
+/// Returns a delay to inject between pruning DELETE statements, read from the
+/// `PRUNE_SLOW_DELAY_MS` environment variable. Returns `None` when the variable is unset or zero.
+fn prune_slow_delay() -> Option<Duration> {
+    std::env::var("PRUNE_SLOW_DELAY_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&ms| ms > 0)
+        .map(Duration::from_millis)
+}
+
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Delete a batch of data for pruning.
     #[instrument(skip(self))]
     pub(super) async fn delete_batch(&mut self, height: u64) -> anyhow::Result<()> {
-        // Delete payloads which are only referenced by the headers we're going to delete.
-        let res = query(
-            "WITH to_delete AS (
-                SELECT h.payload_hash, h.ns_table FROM header AS h
-                 WHERE (h.payload_hash, h.ns_table) IN (
-                    SELECT range.payload_hash, range.ns_table
-                      FROM header AS range
-                     WHERE range.height <= $1
-                 )
-                GROUP BY h.payload_hash, h.ns_table
-                HAVING count(*) <= 1
-            )
-            DELETE FROM payload AS p
-             WHERE (p.hash, p.ns_table) IN (SELECT * FROM to_delete)",
-        )
-        .bind(height as i64)
-        .execute(self.as_mut())
-        .await
-        .context("deleting payloads")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected payloads"
-        );
+        let delay = prune_slow_delay();
 
-        // Delete VID common which are only referenced by the headers we're going to delete.
-        let res = query(
-            "WITH to_delete AS (
-                SELECT h.payload_hash FROM header AS h
-                 WHERE h.payload_hash IN (
-                    SELECT range.payload_hash
-                      FROM header AS range
-                     WHERE range.height <= $1
-                 )
-                GROUP BY h.payload_hash
-                HAVING count(*) <= 1
-            )
-            DELETE FROM vid_common AS v
-             WHERE v.hash IN (SELECT * FROM to_delete)",
-        )
-        .bind(height as i64)
-        .execute(self.as_mut())
-        .await
-        .context("deleting VID common")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected VID common"
-        );
+        // Delete dependent tables individually before deleting headers.
+        let res = query("DELETE FROM payload WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting payloads")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned payloads");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
+
+        let res = query("DELETE FROM vid2 WHERE height <= $1")
+            .bind(height as i64)
+            .execute(self.as_mut())
+            .await
+            .context("deleting vid")?;
+        tracing::debug!(rows_affected = res.rows_affected(), "pruned vid");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         // Delete dependent tables individually before deleting headers.
         let res = query("DELETE FROM transactions WHERE block_height <= $1")
@@ -476,6 +466,9 @@ impl Transaction<Write> {
             .await
             .context("deleting transactions")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM leaf2 WHERE height <= $1")
             .bind(height as i64)
@@ -483,6 +476,9 @@ impl Transaction<Write> {
             .await
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
 
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
@@ -503,6 +499,8 @@ impl Transaction<Write> {
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
+        let delay = prune_slow_delay();
+
         for state_table in state_tables {
             self.execute(
                 query(&format!(
@@ -519,6 +517,9 @@ impl Transaction<Write> {
                 .bind(height as i64),
             )
             .await?;
+            if let Some(d) = delay {
+                sleep(d).await;
+            }
         }
 
         Ok(())
@@ -709,9 +710,10 @@ where
     ) -> anyhow::Result<()> {
         let vid = vid.into_iter();
 
-        // Ignore objects below the pruned height.
-        let pruned_height = self.load_pruned_height().await?;
-        let vid = vid.skip_while(|(common, _)| pruned_height.is_some_and(|h| common.height() <= h));
+        // We intentionally do not call load_pruned_height() here. Reading pruned_height inside a
+        // SERIALIZABLE write transaction creates a rw-anti-dependency with save_pruned_height
+        // (the pruner's separate Tx1), making this transaction a pivot in SSI abort cycles.
+        // If this data is already pruned, the pruner will delete it again on its next run.
 
         let (common_rows, share_rows): (Vec<_>, Vec<_>) = vid
             .map(|(common, share)| {

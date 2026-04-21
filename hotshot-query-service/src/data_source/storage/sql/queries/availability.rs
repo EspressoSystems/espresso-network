@@ -32,7 +32,8 @@ use crate::{
         PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::storage::{
-        AvailabilityStorage, PayloadMetadata, VidCommonMetadata, sql::sqlx::Row,
+        AvailabilityStorage, PayloadMetadata, VidCommonMetadata, pruning::PrunedHeightStorage,
+        sql::sqlx::Row,
     },
     types::HeightIndexed,
 };
@@ -46,14 +47,23 @@ where
     Header<Types>: QueryableHeader<Types>,
 {
     async fn get_leaf(&mut self, id: LeafId<Types>) -> QueryResult<LeafQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = match id {
             LeafId::Number(n) => format!("height = {}", query.bind(n as i64)?),
             LeafId::Hash(h) => format!("hash = {}", query.bind(h.to_string())?),
         };
+        let ph = query.bind(pruned_height)?;
         let row = query
             .query(&format!(
-                "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE {where_clause} LIMIT 1"
+                "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE {where_clause} AND height > {ph} LIMIT 1"
             ))
             .fetch_one(self.as_mut())
             .await?;
@@ -62,15 +72,24 @@ where
     }
 
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {BLOCK_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
-              WHERE {where_clause}
+              JOIN payload AS p ON h.height = p.height
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height
               LIMIT 1"
         );
@@ -84,15 +103,24 @@ where
     }
 
     async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {PAYLOAD_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
-              WHERE {where_clause}
+              JOIN payload AS p ON h.height = p.height
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height
               LIMIT 1"
         );
@@ -105,15 +133,24 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<PayloadMetadata<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {PAYLOAD_METADATA_COLUMNS}
               FROM header AS h
-              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
-              WHERE {where_clause}
+              JOIN payload AS p ON h.height = p.height
+              WHERE {where_clause} AND h.height > {ph} AND p.num_transactions IS NOT NULL
               ORDER BY h.height ASC
               LIMIT 1"
         );
@@ -133,15 +170,24 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<VidCommonQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {VID_COMMON_COLUMNS}
               FROM header AS h
-              JOIN vid_common AS v ON h.payload_hash = v.hash
-              WHERE {where_clause}
+              JOIN vid2 AS v ON h.height = v.height
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height
               LIMIT 1"
         );
@@ -154,15 +200,24 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<VidCommonMetadata<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {VID_COMMON_METADATA_COLUMNS}
               FROM header AS h
-              JOIN vid_common AS v ON h.payload_hash = v.hash
-              WHERE {where_clause}
+              JOIN vid2 AS v ON h.height = v.height
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height ASC
               LIMIT 1"
         );
@@ -178,9 +233,25 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.bounds_to_where_clause(range, "height")?;
-        let sql = format!("SELECT {LEAF_COLUMNS} FROM leaf2 {where_clause} ORDER BY height ASC");
+        let ph = query.bind(pruned_height)?;
+        let sql = if where_clause.is_empty() {
+            format!("SELECT {LEAF_COLUMNS} FROM leaf2 WHERE height > {ph} ORDER BY height ASC")
+        } else {
+            format!(
+                "SELECT {LEAF_COLUMNS} FROM leaf2 {where_clause} AND height > {ph} ORDER BY \
+                 height ASC"
+            )
+        };
         Ok(query
             .query(&sql)
             .fetch(self.as_mut())
@@ -197,15 +268,34 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
-        let sql = format!(
-            "SELECT {BLOCK_COLUMNS}
-              FROM header AS h
-              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
-              {where_clause}
-              ORDER BY h.height"
-        );
+        let ph = query.bind(pruned_height)?;
+        let sql = if where_clause.is_empty() {
+            format!(
+                "SELECT {BLOCK_COLUMNS}
+                  FROM header AS h
+                  JOIN payload AS p ON h.height = p.height
+                  WHERE h.height > {ph}
+                  ORDER BY h.height"
+            )
+        } else {
+            format!(
+                "SELECT {BLOCK_COLUMNS}
+                  FROM header AS h
+                  JOIN payload AS p ON h.height = p.height
+                  {where_clause} AND h.height > {ph}
+                  ORDER BY h.height"
+            )
+        };
         Ok(query
             .query(&sql)
             .fetch(self.as_mut())
@@ -222,16 +312,34 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
-
-        let headers = query
-            .query(&format!(
+        let ph = query.bind(pruned_height)?;
+        let sql = if where_clause.is_empty() {
+            format!(
                 "SELECT data
                   FROM header AS h
-                  {where_clause}
+                  WHERE h.height > {ph}
                   ORDER BY h.height"
-            ))
+            )
+        } else {
+            format!(
+                "SELECT data
+                  FROM header AS h
+                  {where_clause} AND h.height > {ph}
+                  ORDER BY h.height"
+            )
+        };
+        let headers = query
+            .query(&sql)
             .fetch(self.as_mut())
             .map(|res| serde_json::from_value(res?.get("data")).unwrap())
             .collect()
@@ -247,15 +355,34 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
-        let sql = format!(
-            "SELECT {PAYLOAD_COLUMNS}
-              FROM header AS h
-              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
-              {where_clause}
-              ORDER BY h.height"
-        );
+        let ph = query.bind(pruned_height)?;
+        let sql = if where_clause.is_empty() {
+            format!(
+                "SELECT {PAYLOAD_COLUMNS}
+                  FROM header AS h
+                  JOIN payload AS p ON h.height = p.height
+                  WHERE h.height > {ph}
+                  ORDER BY h.height"
+            )
+        } else {
+            format!(
+                "SELECT {PAYLOAD_COLUMNS}
+                  FROM header AS h
+                  JOIN payload AS p ON h.height = p.height
+                  {where_clause} AND h.height > {ph}
+                  ORDER BY h.height"
+            )
+        };
         Ok(query
             .query(&sql)
             .fetch(self.as_mut())
@@ -272,15 +399,34 @@ where
     where
         R: RangeBounds<usize> + Send + 'static,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
-        let sql = format!(
-            "SELECT {PAYLOAD_METADATA_COLUMNS}
-              FROM header AS h
-              JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
-              {where_clause}
-              ORDER BY h.height ASC"
-        );
+        let ph = query.bind(pruned_height)?;
+        let sql = if where_clause.is_empty() {
+            format!(
+                "SELECT {PAYLOAD_METADATA_COLUMNS}
+                  FROM header AS h
+                  JOIN payload AS p ON h.height = p.height
+                  WHERE h.height > {ph} AND p.num_transactions IS NOT NULL
+                  ORDER BY h.height ASC"
+            )
+        } else {
+            format!(
+                "SELECT {PAYLOAD_METADATA_COLUMNS}
+                  FROM header AS h
+                  JOIN payload AS p ON h.height = p.height
+                  {where_clause} AND h.height > {ph} AND p.num_transactions IS NOT NULL
+                  ORDER BY h.height ASC"
+            )
+        };
         let rows = query
             .query(&sql)
             .fetch(self.as_mut())
@@ -308,15 +454,34 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
-        let sql = format!(
-            "SELECT {VID_COMMON_COLUMNS}
-              FROM header AS h
-              JOIN vid_common AS v ON h.payload_hash = v.hash
-              {where_clause}
-              ORDER BY h.height"
-        );
+        let ph = query.bind(pruned_height)?;
+        let sql = if where_clause.is_empty() {
+            format!(
+                "SELECT {VID_COMMON_COLUMNS}
+                  FROM header AS h
+                  JOIN vid2 AS v ON h.height = v.height
+                  WHERE h.height > {ph}
+                  ORDER BY h.height"
+            )
+        } else {
+            format!(
+                "SELECT {VID_COMMON_COLUMNS}
+                  FROM header AS h
+                  JOIN vid2 AS v ON h.height = v.height
+                  {where_clause} AND h.height > {ph}
+                  ORDER BY h.height"
+            )
+        };
         Ok(query
             .query(&sql)
             .fetch(self.as_mut())
@@ -333,15 +498,34 @@ where
     where
         R: RangeBounds<usize> + Send,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.bounds_to_where_clause(range, "h.height")?;
-        let sql = format!(
-            "SELECT {VID_COMMON_METADATA_COLUMNS}
-              FROM header AS h
-              JOIN vid_common AS v ON h.payload_hash = v.hash
-              {where_clause}
-              ORDER BY h.height ASC"
-        );
+        let ph = query.bind(pruned_height)?;
+        let sql = if where_clause.is_empty() {
+            format!(
+                "SELECT {VID_COMMON_METADATA_COLUMNS}
+                  FROM header AS h
+                  JOIN vid2 AS v ON h.height = v.height
+                  WHERE h.height > {ph}
+                  ORDER BY h.height ASC"
+            )
+        } else {
+            format!(
+                "SELECT {VID_COMMON_METADATA_COLUMNS}
+                  FROM header AS h
+                  JOIN vid2 AS v ON h.height = v.height
+                  {where_clause} AND h.height > {ph}
+                  ORDER BY h.height ASC"
+            )
+        };
         Ok(query
             .query(&sql)
             .fetch(self.as_mut())
@@ -355,8 +539,17 @@ where
         &mut self,
         hash: TransactionHash<Types>,
     ) -> QueryResult<BlockQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let hash_param = query.bind(hash.to_string())?;
+        let ph = query.bind(pruned_height)?;
 
         // ORDER BY ASC ensures that if there are duplicate transactions, we return the first
         // one.
@@ -365,7 +558,7 @@ where
                 FROM header AS h
                 JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 JOIN transactions AS t ON t.block_height = h.height
-                WHERE t.hash = {hash_param}
+                WHERE t.hash = {hash_param} AND h.height > {ph}
                 ORDER BY t.block_height, t.ns_id, t.position
                 LIMIT 1"
         );
@@ -374,10 +567,20 @@ where
     }
 
     async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let row = query(&format!(
-            "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE height >= $1 ORDER BY height ASC LIMIT 1"
+            "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE height >= $1 AND height > $2 ORDER BY height \
+             ASC LIMIT 1"
         ))
         .bind(from as i64)
+        .bind(pruned_height)
         .fetch_one(self.as_mut())
         .await?;
         let leaf = LeafQueryData::from_row(&row)?;

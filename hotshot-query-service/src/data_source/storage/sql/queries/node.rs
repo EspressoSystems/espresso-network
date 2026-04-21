@@ -35,6 +35,7 @@ use crate::{
     availability::{NamespaceId, QueryableHeader},
     data_source::storage::{
         Aggregate, AggregatesStorage, NodeStorage, PayloadMetadata, UpdateAggregatesStorage,
+        pruning::PrunedHeightStorage,
     },
     node::{
         BlockId, ResourceSyncStatus, SyncStatus, SyncStatusQueryData, SyncStatusRange,
@@ -51,7 +52,16 @@ where
     Header<Types>: QueryableHeader<Types>,
 {
     async fn block_height(&mut self) -> QueryResult<usize> {
-        match query_as::<(Option<i64>,)>("SELECT max(height) FROM header")
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+        match query_as::<(Option<i64>,)>("SELECT max(height) FROM header WHERE height > $1")
+            .bind(pruned_height)
             .fetch_one(self.as_mut())
             .await?
         {
@@ -135,13 +145,22 @@ where
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id.into())?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT vid_share FROM header AS h
-              WHERE {where_clause}
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height
               LIMIT 1"
         );
@@ -221,13 +240,22 @@ where
             WindowStart::Hash(h) => self.load_header::<Types>(h).await?.block_number(),
         };
 
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         // Find all blocks starting from `first_block` with timestamps less than `end`. Block
         // timestamps are monotonically increasing, so this query is guaranteed to return a
         // contiguous range of blocks ordered by increasing height.
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.height >= $1 AND h.timestamp < $2
+              WHERE h.height >= $1 AND h.timestamp < $2 AND h.height > $4
               ORDER BY h.height
               LIMIT $3"
         );
@@ -235,6 +263,7 @@ where
             .bind(first_block as i64)
             .bind(end as i64)
             .bind(limit as i64)
+            .bind(pruned_height)
             .fetch(self.as_mut());
         let window = rows
             .map(|row| parse_header::<Types>(row?))
@@ -260,12 +289,13 @@ where
             let sql = format!(
                 "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1
+              WHERE h.timestamp >= $1 AND h.height > $2
               ORDER BY h.timestamp, h.height
               LIMIT 1"
             );
             query(&sql)
                 .bind(end as i64)
+                .bind(pruned_height)
                 .fetch_optional(self.as_mut())
                 .await?
                 .map(parse_header::<Types>)
@@ -658,6 +688,15 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         end: u64,
         limit: usize,
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>> {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         // Find all blocks whose timestamps fall within the window [start, end). Block timestamps
         // are monotonically increasing, so this query is guaranteed to return a contiguous range of
         // blocks ordered by increasing height.
@@ -672,7 +711,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1 AND h.timestamp < $2
+              WHERE h.timestamp >= $1 AND h.timestamp < $2 AND h.height > $4
               ORDER BY h.timestamp, h.height
               LIMIT $3"
         );
@@ -680,6 +719,7 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             .bind(start as i64)
             .bind(end as i64)
             .bind(limit as i64)
+            .bind(pruned_height)
             .fetch(self.as_mut());
         let window: Vec<_> = rows
             .map(|row| parse_header::<Types>(row?))
@@ -691,12 +731,13 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             let sql = format!(
                 "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp >= $1
+              WHERE h.timestamp >= $1 AND h.height > $2
               ORDER BY h.timestamp, h.height
               LIMIT 1"
             );
             query(&sql)
                 .bind(end as i64)
+                .bind(pruned_height)
                 .fetch_optional(self.as_mut())
                 .await?
                 .map(parse_header::<Types>)
@@ -724,12 +765,13 @@ impl<Mode: TransactionMode> Transaction<Mode> {
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE h.timestamp < $1
+              WHERE h.timestamp < $1 AND h.height > $2
               ORDER BY h.timestamp DESC, h.height DESC
               LIMIT 1"
         );
         let prev = query(&sql)
             .bind(start as i64)
+            .bind(pruned_height)
             .fetch_optional(self.as_mut())
             .await?
             .map(parse_header::<Types>)

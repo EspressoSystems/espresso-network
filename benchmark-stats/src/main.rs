@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
 };
@@ -190,7 +191,7 @@ fn plot_replica_stats(
 
     // Aggregate first event stats for bar chart
     let mut first_events: Vec<_> = first_event_counts.into_iter().collect();
-    first_events.sort_by(|a, b| b.1.cmp(&a.1));
+    first_events.sort_by_key(|a| Reverse(a.1));
     let (bar_labels, bar_values): (Vec<_>, Vec<_>) = first_events
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))

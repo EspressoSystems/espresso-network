@@ -29,14 +29,14 @@ use hotshot_types::{
 };
 use sqlx::{Arguments, FromRow, Row};
 
-use super::{Database, Db, Query, QueryAs, Transaction};
+use super::{Database, Db, Query, QueryAs, Transaction, TransactionMode};
 use crate::{
     Header, Leaf2, Payload, QueryError, QueryResult,
     availability::{
         BlockId, BlockQueryData, LeafQueryData, PayloadQueryData, QueryableHeader,
         QueryablePayload, VidCommonQueryData,
     },
-    data_source::storage::{PayloadMetadata, VidCommonMetadata},
+    data_source::storage::{PayloadMetadata, VidCommonMetadata, pruning::PrunedHeightStorage},
 };
 
 pub(super) mod availability;
@@ -355,15 +355,28 @@ impl<Mode> Transaction<Mode> {
     pub async fn load_header<Types: NodeType>(
         &mut self,
         id: impl Into<BlockId<Types>> + Send,
-    ) -> QueryResult<Header<Types>> {
+    ) -> QueryResult<Header<Types>>
+    where
+        Mode: TransactionMode,
+    {
+        let pruned_height: i64 = self
+            .load_pruned_height()
+            .await
+            .map_err(|err| QueryError::Error {
+                message: format!("{err:#}"),
+            })?
+            .map(|h| h as i64)
+            .unwrap_or(-1);
+
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id.into())?;
+        let ph = query.bind(pruned_height)?;
         // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
         // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
-              WHERE {where_clause}
+              WHERE {where_clause} AND h.height > {ph}
               ORDER BY h.height
               LIMIT 1"
         );

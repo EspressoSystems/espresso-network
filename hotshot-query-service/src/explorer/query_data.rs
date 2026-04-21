@@ -429,12 +429,12 @@ where
 /// GetBlockSummariesRequest is a struct that represents an incoming request
 /// for Block Summaries.  This isn't sent on the line, but an endpoint will
 /// be mapped to this struct in order for the request to be processed.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetBlockSummariesRequest<Types: NodeType>(pub BlockRange<Types>);
 
 /// [TransactionSummaryFilter] represents the various filters that can be
 /// applied when retrieving a list of [TransactionSummary] entries.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(bound = "")]
 pub enum TransactionSummaryFilter<Types>
 where
@@ -450,7 +450,7 @@ where
 /// request for Transaction Summaries.  This isn't sent on the line, but an
 /// endpoint will be mapped to this struct in order for the request to be
 /// processed.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GetTransactionSummariesRequest<Types>
 where
     Types: NodeType,

@@ -190,7 +190,7 @@ impl ValidTest {
     }
 
     pub fn all_txs(&self) -> Vec<Transaction> {
-        self.nss.iter().flat_map(|(_, txs)| txs.clone()).collect()
+        self.nss.values().flat_map(|txs| txs.clone()).collect()
     }
 }
 
