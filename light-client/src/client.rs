@@ -495,21 +495,14 @@ mod test {
 
         // Submit a couple of transactions to form non-empty blocks.
         let ns = NamespaceId::from(1u64);
-        let mut events = network.server.event_stream().await;
+        let mut events = network.server.event_stream();
         let mut txs = vec![];
         let mut headers = vec![];
         for _ in 0..2 {
             let mut bytes = vec![0; 32];
             rand::thread_rng().fill_bytes(&mut bytes);
             let tx = Transaction::new(ns, bytes);
-            network
-                .server
-                .consensus()
-                .read()
-                .await
-                .submit_transaction(tx.clone())
-                .await
-                .unwrap();
+            network.server.submit_transaction(tx.clone()).await.unwrap();
             let block = wait_for_decide_on_handle(&mut events, &tx).await.0;
             tracing::info!(block, hash = %tx.commit(), ?tx, "transaction included");
 

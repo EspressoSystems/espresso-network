@@ -2,28 +2,28 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_channel::{Receiver, Sender};
-use async_lock::RwLock;
 use clap::Parser;
 use committable::Commitment;
 use derivative::Derivative;
 use espresso_types::{PubKey, ValidatedState, parse_duration, v0::traits::SequencerPersistence};
 use futures::stream::StreamExt;
-use hotshot::types::EventType;
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::{Leaf2, QuorumProposalWrapper, ViewNumber},
+    event::{Event, EventType},
+    message::Proposal,
     traits::{
         ValidatedState as _,
         metrics::{Counter, Gauge, Metrics},
         network::ConnectedNetwork,
     },
-    utils::{View, ViewInner},
 };
 use tokio::time::{sleep, timeout};
 use tracing::Instrument;
 
 use crate::{
     SeqTypes,
-    context::{Consensus, TaskList},
+    consensus_handle::{ConsensusHandle, CoordinatorEvent},
+    context::{ConsensusNode, TaskList},
 };
 
 #[derive(Clone, Copy, Debug, Parser)]
@@ -54,7 +54,7 @@ impl ProposalFetcherConfig {
     pub(crate) fn spawn<N, P>(
         self,
         tasks: &mut TaskList,
-        consensus: Arc<RwLock<Consensus<N, P>>>,
+        consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
         persistence: Arc<P>,
         metrics: &(impl Metrics + ?Sized),
     ) where
@@ -64,7 +64,7 @@ impl ProposalFetcherConfig {
         let (sender, receiver) = async_channel::unbounded();
         let fetcher = ProposalFetcher {
             sender,
-            consensus,
+            consensus_handle,
             persistence,
             cfg: self,
             metrics: ProposalFetcherMetrics::new(metrics),
@@ -117,7 +117,7 @@ where
 {
     sender: Sender<Request>,
     #[derivative(Debug = "ignore")]
-    consensus: Arc<RwLock<Consensus<N, P>>>,
+    consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     #[derivative(Debug = "ignore")]
     persistence: Arc<P>,
     cfg: ProposalFetcherConfig,
@@ -131,9 +131,13 @@ where
 {
     #[tracing::instrument(skip_all)]
     async fn scan(self) {
-        let mut events = self.consensus.read().await.event_stream();
+        let mut events = self.consensus_handle.event_stream();
         while let Some(event) = events.next().await {
-            let EventType::QuorumProposal { proposal, .. } = event.event else {
+            let CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::QuorumProposal { proposal, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
             // Whenever we see a quorum proposal, ensure we have the chain of proposals stretching back
@@ -185,31 +189,25 @@ where
                 },
             }
 
-            let future = self.consensus.read().await.request_proposal(view, leaf)?;
-            let proposal = timeout(self.cfg.fetch_timeout, future)
-                .await
-                .context("timed out fetching proposal")?
-                .context("error fetching proposal")?;
+            let future = self.consensus_handle.request_proposal(view, leaf).await?;
+            let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
+                timeout(self.cfg.fetch_timeout, future)
+                    .await
+                    .context("timed out fetching proposal")?
+                    .context("error fetching proposal")?;
             self.persistence
                 .append_quorum_proposal2(&proposal)
                 .await
                 .context("error saving fetched proposal")?;
 
-            // Add the fetched leaf to HotShot state, so consensus can make use of it.
+            // Add the fetched leaf to consensus state, so consensus can make use of it.
+            // Only update if the view is missing or DA-only (state() returns None for
+            // both cases) — don't overwrite an existing Leaf view.
             let leaf = Leaf2::from_quorum_proposal(&proposal.data);
-            let handle = self.consensus.read().await;
-            let consensus = handle.consensus();
-            let mut consensus = consensus.write().await;
-            if matches!(
-                consensus.validated_state_map().get(&view),
-                None | Some(View {
-                    // Replace a Da-only view with a Leaf view, which has strictly more information.
-                    view_inner: ViewInner::Da { .. }
-                })
-            ) {
+            if self.consensus_handle.state(view).await.is_none() {
                 let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
-                if let Err(err) = consensus.update_leaf(leaf, state, None) {
-                    tracing::warn!("unable to update leaf: {err:#}");
+                if let Err(err) = self.consensus_handle.update_leaf(leaf, state, None).await {
+                    tracing::info!("unable to update leaf: {err:#}");
                 }
             }
 

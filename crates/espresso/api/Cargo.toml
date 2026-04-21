@@ -1,0 +1,27 @@
+[package]
+name = "espresso-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serialization-api = { path = "../../serialization/api" }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tonic = { workspace = true }
+tonic-reflection = { workspace = true }
+tonic-prost = { workspace = true }
+prost = { workspace = true }
+tracing = { workspace = true }
+aide = { workspace = true }
+schemars = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+hex = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
