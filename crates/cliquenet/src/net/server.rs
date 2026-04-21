@@ -568,7 +568,7 @@ impl Server {
 
     fn next_msgid(&mut self) -> MsgId {
         let current = self.msgid;
-        self.msgid = MsgId::new(self.msgid.0.saturating_add(1));
+        self.msgid = MsgId::new(self.msgid.0.wrapping_add(1));
         current
     }
 }
