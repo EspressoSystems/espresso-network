@@ -116,7 +116,7 @@ jobs:
 
       - name: Run tests (${{ matrix.name }})
         run: |
-          cargo nextest run -p hotshot-new-protocol --no-fail-fast --retries 0 --test-threads 4 -E '${{ matrix.filter }}'
+          cargo nextest run -p hotshot-new-protocol --profile new-protocol --no-fail-fast --test-threads 4 -E '${{ matrix.filter }}'
         timeout-minutes: 30
         env:
           RUST_BACKTRACE: full
