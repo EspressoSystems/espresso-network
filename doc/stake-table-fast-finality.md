@@ -490,6 +490,30 @@ cargo run -p espresso-node --bin deploy -- \
     --calldata-out-dir ./tmp/st_v3_timelock/
 ```
 
+### Testing the Safe TX output against a mainnet fork
+
+In one terminal, run a mainnet fork:
+
+```bash
+anvil --fork-url https://ethereum-rpc.publicnode.com
+```
+
+In another terminal, generate the Safe TX Builder JSON against the fork:
+
+```bash
+ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=0xcef474d372b5b09defe2af187bf17338dc704451 \
+ESPRESSO_OPS_TIMELOCK_ADDRESS=0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700 \
+cargo run -p espresso-node --bin deploy -- \
+    --rpc-url http://localhost:8545 \
+    --upgrade-stake-table-v3 --use-timelock-owner \
+    --timelock-operation-salt "0x$(openssl rand -hex 32)" \
+    --timelock-operation-delay 172800 \
+    --calldata-out-dir ./tmp/st_v3_timelock_mainnet/
+```
+
+Import `schedule.json` (and later `execute.json`) into the Safe UI's
+[Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) to inspect the decoded call.
+
 ## 6. Forward Compatibility
 
 ### Interaction with re-delegation (V3 on other branch)
