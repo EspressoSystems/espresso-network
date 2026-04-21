@@ -10,10 +10,7 @@ use hotshot_types::{
     traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
     utils::EpochTransitionIndicator,
 };
-use tokio::{
-    task::{AbortHandle, JoinSet},
-    time::sleep,
-};
+use tokio::{spawn, task::JoinHandle, time::sleep};
 use tracing::{error, warn};
 
 use crate::message::Proposal;
@@ -23,8 +20,7 @@ const RETRY_DELAY: Duration = Duration::from_millis(300);
 pub struct Storage<T: NodeType, S: StorageTrait<T>> {
     storage: S,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
-    tasks: JoinSet<()>,
-    handles: BTreeMap<ViewNumber, Vec<AbortHandle>>,
+    handles: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
 }
 
 impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
@@ -32,7 +28,6 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
         Self {
             storage,
             private_key,
-            tasks: JoinSet::new(),
             handles: BTreeMap::new(),
         }
     }
@@ -41,7 +36,7 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
         let view = vid_share.view_number;
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
-        let handle = self.tasks.spawn(async move {
+        let handle = spawn(async move {
             let share: VidDisperseShare<T> = VidDisperseShare::V2(vid_share);
             let Some(proposal) = share.to_proposal(&private_key) else {
                 error!("failed to sign VID share for storage");
@@ -70,7 +65,7 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
     ) {
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
-        let handle = self.tasks.spawn(async move {
+        let handle = spawn(async move {
             let data = DaProposal2 {
                 encoded_transactions: block_payload.encode(),
                 metadata,
@@ -104,7 +99,7 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
         let view = proposal.view_number;
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
-        let handle = self.tasks.spawn(async move {
+        let handle = spawn(async move {
             let data = QuorumProposal2 {
                 block_header: proposal.block_header,
                 view_number: proposal.view_number,
