@@ -7429,15 +7429,10 @@ mod test {
             .unwrap();
         let x25519_key = x25519::Keypair::generate().unwrap().public_key();
         let p2p_addr: NetAddr = "127.0.0.1:9000".parse().unwrap();
-        update_network_config(
-            validator_provider,
-            st_addr,
-            x25519_key.clone(),
-            p2p_addr.clone(),
-        )
-        .await?
-        .get_receipt()
-        .await?;
+        update_network_config(validator_provider, st_addr, x25519_key, p2p_addr.clone())
+            .await?
+            .get_receipt()
+            .await?;
 
         let current_epoch = network.peers[0]
             .decided_leaf()
