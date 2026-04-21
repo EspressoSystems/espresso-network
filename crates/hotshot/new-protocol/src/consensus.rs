@@ -105,7 +105,6 @@ pub enum ConsensusOutput<T: NodeType> {
 /// to persist and broadcast them. Emitted by the coordinator.
 #[derive(Clone, Debug)]
 pub struct NewDecideEvent<T: NodeType> {
-    pub view_number: ViewNumber,
     pub leaves: Vec<Leaf2<T>>,
     /// Certificate1 (QC) that certifies the most recent (first) leaf in the chain.
     /// Each older leaf's cert1 is the next leaf's `justify_qc`.
@@ -118,7 +117,7 @@ pub struct NewDecideEvent<T: NodeType> {
 /// High-level event emitted by the coordinator adapter. Covers both legacy HotShot
 /// events and new-protocol coordinator events.
 #[derive(Clone, Debug)]
-pub enum ConsensusEvent<T: NodeType> {
+pub enum CoordinatorEvent<T: NodeType> {
     LegacyEvent(hotshot::types::Event<T>),
     NewDecide(NewDecideEvent<T>),
     ViewChanged {
@@ -134,14 +133,19 @@ pub enum ConsensusEvent<T: NodeType> {
     },
 }
 
-impl<T: NodeType> std::fmt::Display for ConsensusEvent<T> {
+impl<T: NodeType> std::fmt::Display for CoordinatorEvent<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::LegacyEvent(event) => {
                 write!(f, "Legacy: {} view={}", event.event, event.view_number)
             },
             Self::NewDecide(event) => {
-                write!(f, "NewDecide: view={}", event.view_number)
+                let view = event
+                    .leaves
+                    .first()
+                    .map(|leaf| *leaf.view_number())
+                    .unwrap_or_default();
+                write!(f, "NewDecide: view={view}")
             },
             Self::ViewChanged { view_number } => {
                 write!(f, "ViewChanged: view={view_number}")
@@ -930,8 +934,8 @@ impl<T: NodeType> Consensus<T> {
         if let Some(payload) = self.blocks.get(&view) {
             leaf.fill_block_payload_unchecked(payload.clone());
         }
-        self.last_decided_view = max(self.last_decided_view, leaf.view_number());
-        self.last_decided_leaf = leaf.clone();
+        let new_decided_view = max(self.last_decided_view, leaf.view_number());
+        let last_decided_leaf = leaf.clone();
         let mut gc = None;
         if leaf.block_header().block_number() % *self.garbage_collection_interval == 0 {
             gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
@@ -963,6 +967,8 @@ impl<T: NodeType> Consensus<T> {
             parent_view = proposal.justify_qc.view_number();
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
+        self.last_decided_view = new_decided_view;
+        self.last_decided_leaf = last_decided_leaf;
         let cert1 = self
             .certs
             .get(&view)

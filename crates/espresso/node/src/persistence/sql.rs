@@ -15,7 +15,7 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use either::Either;
 use espresso_types::{
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, ConsensusEvent, FeeMerkleTree, Leaf,
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, CoordinatorEvent, FeeMerkleTree, Leaf,
     Leaf2, NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
@@ -988,7 +988,7 @@ impl Persistence {
                     None
                 };
                 consumer
-                    .handle_event(&ConsensusEvent::LegacyEvent(Event {
+                    .handle_event(&CoordinatorEvent::LegacyEvent(Event {
                         view_number: to_view,
                         event: EventType::Decide {
                             leaf_chain: Arc::new(leaf_chain),

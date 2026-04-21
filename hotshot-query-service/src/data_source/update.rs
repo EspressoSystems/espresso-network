@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use committable::Committable;
 use futures::future::Future;
 use hotshot::types::EventType;
-use hotshot_new_protocol::consensus::ConsensusEvent;
+use hotshot_new_protocol::consensus::CoordinatorEvent;
 use hotshot_types::{
     data::{Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ns_table::parse_ns_table},
     event::LeafInfo,
@@ -62,7 +62,7 @@ pub trait UpdateDataSource<Types: NodeType>: UpdateAvailabilityData<Types> {
     /// If all provided data is successfully inserted into the database, returns `Ok(())`. If any
     /// error occurred, the error is logged, and the return value is the height of the first leaf
     /// which failed to be inserted.
-    async fn update(&self, event: &ConsensusEvent<Types>) -> Result<(), u64>;
+    async fn update(&self, event: &CoordinatorEvent<Types>) -> Result<(), u64>;
 }
 
 #[async_trait]
@@ -72,9 +72,9 @@ where
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
 {
-    async fn update(&self, event: &ConsensusEvent<Types>) -> Result<(), u64> {
+    async fn update(&self, event: &CoordinatorEvent<Types>) -> Result<(), u64> {
         match event {
-            ConsensusEvent::LegacyEvent(event) => {
+            CoordinatorEvent::LegacyEvent(event) => {
                 let EventType::Decide {
                     leaf_chain,
                     committing_qc,
@@ -186,7 +186,7 @@ where
                     }
                 }
             },
-            ConsensusEvent::NewDecide(decide) => {
+            CoordinatorEvent::NewDecide(decide) => {
                 // cert1 certifies leaves[0] (newest); each leaf's justify_qc
                 // certifies the next older leaf.
                 let qcs = once(decide.cert1.clone())

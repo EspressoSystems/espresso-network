@@ -929,6 +929,7 @@ impl Header {
         let epoch_height = instance_state
             .epoch_height
             .context("epoch_height not configured")?;
+        ensure!(epoch_height > 0, "epoch_height must be > 0");
         let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
         let prev_epoch = EpochNumber::new(*epoch - 1);
         let coordinator = instance_state.coordinator.clone();

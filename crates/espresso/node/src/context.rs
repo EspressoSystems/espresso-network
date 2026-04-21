@@ -518,10 +518,9 @@ async fn handle_events<N, P>(
                 if let hotshot_types::event::EventType::ExternalMessageReceived {
                     ref data, ..
                 } = hotshot_event.event
+                    && let Err(err) = external_event_handler.handle_event(data).await
                 {
-                    if let Err(err) = external_event_handler.handle_event(data).await {
-                        tracing::warn!("Failed to handle legacy external message: {:?}", err);
-                    }
+                    tracing::warn!("Failed to handle legacy external message: {:?}", err);
                 }
             },
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
@@ -544,14 +543,14 @@ async fn handle_events<N, P>(
 
         // Events streamer: only forward legacy events for now.
         // TODO: translate NewDecide to legacy Event for events streamer subscribers.
-        if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event {
-            if let Some(events_streamer) = events_streamer.as_ref() {
-                events_streamer
-                    .write()
-                    .await
-                    .handle_event(hotshot_event.clone())
-                    .await;
-            }
+        if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event
+            && let Some(events_streamer) = events_streamer.as_ref()
+        {
+            events_streamer
+                .write()
+                .await
+                .handle_event(hotshot_event.clone())
+                .await;
         }
     }
 }

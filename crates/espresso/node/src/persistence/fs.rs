@@ -14,7 +14,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, ConsensusEvent, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
+    AuthenticatedValidatorMap, CoordinatorEvent, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
     RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
@@ -502,7 +502,7 @@ impl Inner {
                 };
 
                 consumer
-                    .handle_event(&ConsensusEvent::LegacyEvent(Event {
+                    .handle_event(&CoordinatorEvent::LegacyEvent(Event {
                         view_number: view,
                         event: EventType::Decide {
                             committing_qc: Arc::new(cert),

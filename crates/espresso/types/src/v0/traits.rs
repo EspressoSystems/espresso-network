@@ -39,7 +39,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, ConsensusEvent, FeeAccount, FeeAccountProof,
+    AuthenticatedValidatorMap, BlockMerkleTree, CoordinatorEvent, FeeAccount, FeeAccountProof,
     FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
@@ -789,11 +789,11 @@ pub trait SequencerPersistence:
     /// Update storage based on an event from consensus.
     async fn handle_event(
         &self,
-        event: &ConsensusEvent<SeqTypes>,
+        event: &CoordinatorEvent<SeqTypes>,
         consumer: &(impl EventConsumer + 'static),
     ) {
         match event {
-            ConsensusEvent::LegacyEvent(hotshot_event) => {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let EventType::Decide {
                     leaf_chain,
                     committing_qc,
@@ -828,7 +828,7 @@ pub trait SequencerPersistence:
                     }
                 }
             },
-            ConsensusEvent::NewDecide(decide) => {
+            CoordinatorEvent::NewDecide(decide) => {
                 if decide.leaves.is_empty() {
                     return;
                 }
@@ -858,12 +858,13 @@ pub trait SequencerPersistence:
 
                 // cert1 certifies leaves[0] (newest); each leaf's justify_qc
                 // certifies the next older leaf.
+                let view_number = decide.leaves[0].view_number();
                 let qcs = std::iter::once(decide.cert1.clone())
                     .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()));
 
                 if let Err(err) = self
                     .append_decided_leaves(
-                        decide.view_number,
+                        view_number,
                         leaf_infos
                             .iter()
                             .zip(qcs.map(CertificatePair::non_epoch_change)),
@@ -1032,7 +1033,7 @@ pub trait SequencerPersistence:
 
 #[async_trait]
 pub trait EventConsumer: Debug + Send + Sync {
-    async fn handle_event(&self, event: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()>;
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -1040,7 +1041,7 @@ impl<T> EventConsumer for Box<T>
 where
     T: EventConsumer + ?Sized,
 {
-    async fn handle_event(&self, event: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()> {
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         (**self).handle_event(event).await
     }
 }
@@ -1050,7 +1051,7 @@ pub struct NullEventConsumer;
 
 #[async_trait]
 impl EventConsumer for NullEventConsumer {
-    async fn handle_event(&self, _event: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()> {
+    async fn handle_event(&self, _event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
     }
 }

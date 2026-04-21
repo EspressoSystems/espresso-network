@@ -30,7 +30,7 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     SeqTypes,
-    consensus_handle::{CoordinatorEvent as ConsensusEvent, ConsensusHandle},
+    consensus_handle::{ConsensusHandle, CoordinatorEvent},
 };
 
 /// A relay server that's collecting and serving the light client state signatures
@@ -95,20 +95,20 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 
     pub(super) async fn handle_event<I>(
         &mut self,
-        event: &ConsensusEvent<SeqTypes>,
+        event: &CoordinatorEvent<SeqTypes>,
         consensus_handle: &ConsensusHandle<SeqTypes, I>,
     ) where
         I: hotshot::traits::NodeImplementation<SeqTypes>,
     {
         let leaf: &Leaf2<SeqTypes> = match event {
-            ConsensusEvent::LegacyEvent(Event {
+            CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) => match leaf_chain.first() {
                 Some(LeafInfo { leaf, .. }) => leaf,
                 None => return,
             },
-            ConsensusEvent::NewDecide(decide) => match decide.leaves.first() {
+            CoordinatorEvent::NewDecide(decide) => match decide.leaves.first() {
                 Some(leaf) => leaf,
                 None => return,
             },

@@ -90,7 +90,7 @@ impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
         Self {
             block_header: qp.block_header,
             view_number: qp.view_number,
-            epoch: qp.epoch.unwrap_or(EpochNumber::new(0)),
+            epoch: qp.epoch.unwrap_or_else(EpochNumber::genesis),
             justify_qc: qp.justify_qc,
             next_epoch_justify_qc: None,
             upgrade_certificate: qp.upgrade_certificate,

@@ -357,12 +357,32 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<SeqTypes>
     for ApiState<N, P>
 {
-    /// Get the stake table for a given epoch
+    /// Get the stake table for a given epoch.
+    ///
+    /// Requests for epochs below the first epoch are rejected rather than
+    /// triggering a failing catchup.
     async fn get_stake_table(
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let handle = self.consensus_handle().await;
+        if let Some(requested) = epoch {
+            let first_epoch = handle
+                .membership_coordinator()
+                .await
+                .membership()
+                .read()
+                .await
+                .first_epoch();
+            if let Some(first_epoch) = first_epoch
+                && requested < first_epoch
+            {
+                return Err(anyhow::anyhow!(
+                    "requested stake table for epoch {requested:?} is below the first epoch \
+                     {first_epoch:?}"
+                ));
+            }
+        }
         let highest_epoch = handle.current_epoch().await.map(|e| e + 1);
         if epoch > highest_epoch {
             return Err(anyhow::anyhow!(
@@ -2616,14 +2636,14 @@ mod api_tests {
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
-        use espresso_types::ConsensusEvent;
+        use espresso_types::CoordinatorEvent;
 
         #[derive(Clone, Copy, Debug)]
         struct FailConsumer;
 
         #[async_trait]
         impl EventConsumer for FailConsumer {
-            async fn handle_event(&self, _: &ConsensusEvent<SeqTypes>) -> anyhow::Result<()> {
+            async fn handle_event(&self, _: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
                 bail!("mock error injection");
             }
         }

@@ -168,7 +168,7 @@ pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
 
 pub type Event = hotshot::types::Event<SeqTypes>;
 
-pub use hotshot_new_protocol::consensus::{ConsensusEvent, NewDecideEvent};
+pub use hotshot_new_protocol::consensus::{CoordinatorEvent, NewDecideEvent};
 
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
