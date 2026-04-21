@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt, time::Duration};
 
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, FixedBytes},
+    primitives::{Address, FixedBytes, keccak256},
     providers::Provider,
     sol,
 };
@@ -88,7 +88,7 @@ impl fmt::Display for AccessControlRole {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct RoleHolder {
     pub(crate) address: Address,
     pub(crate) name: String,
@@ -135,6 +135,17 @@ pub(crate) enum TimelockDeployment {
         address: Address,
         #[serde(with = "humantime_serde")]
         min_delay: Duration,
+        /// Accounts with `PROPOSER_ROLE` (from `KnownAddresses` via `hasRole`).
+        #[serde(default)]
+        proposers: Vec<RoleHolder>,
+        /// Accounts with `EXECUTOR_ROLE`. Includes `address(0)` with `name == "open_executor"`
+        /// when OpenZeppelin's open executor role is enabled.
+        #[serde(default)]
+        executors: Vec<RoleHolder>,
+        #[serde(default)]
+        cancellers: Vec<RoleHolder>,
+        #[serde(default)]
+        default_admins: Vec<RoleHolder>,
     },
     NotYetDeployed,
 }
@@ -320,6 +331,8 @@ impl<'a, P: Provider> DeploymentQuerier<'a, P> {
     }
 
     pub(crate) async fn query_timelock(&self, addr: Address) -> Result<TimelockDeployment> {
+        tracing::info!("querying Timelock at {addr}");
+
         let min_delay_secs: u64 = ITimelock::new(addr, self.provider)
             .getMinDelay()
             .block(self.block_id)
@@ -329,11 +342,110 @@ impl<'a, P: Provider> DeploymentQuerier<'a, P> {
             .context("min_delay exceeds u64")?;
         let min_delay = Duration::from_secs(min_delay_secs);
 
+        let proposers = self
+            .timelock_role_holders(addr, timelock_proposer_role())
+            .await
+            .context("timelock PROPOSER_ROLE")?;
+        let executors = self
+            .timelock_role_holders(addr, timelock_executor_role())
+            .await
+            .context("timelock EXECUTOR_ROLE")?;
+        let cancellers = self
+            .timelock_role_holders(addr, timelock_canceller_role())
+            .await
+            .context("timelock CANCELLER_ROLE")?;
+        let default_admins = self
+            .timelock_role_holders(addr, timelock_default_admin_role())
+            .await
+            .context("timelock DEFAULT_ADMIN_ROLE")?;
+
+        tracing::info!(
+            "  min_delay={min_delay:?} proposers={} executors={} cancellers={} default_admins={}",
+            proposers.len(),
+            executors.len(),
+            cancellers.len(),
+            default_admins.len(),
+        );
+
         Ok(TimelockDeployment::Deployed {
             address: addr,
             min_delay,
+            proposers,
+            executors,
+            cancellers,
+            default_admins,
         })
     }
+
+    /// [`TimelockController`](https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/governance/TimelockController.sol)
+    /// inherits non-enumerable `AccessControl`, so members are discovered by calling `hasRole`
+    /// for each address in [`KnownAddresses`], plus `hasRole(role, address(0))` for the executor
+    /// role (OZ “open executor”).
+    async fn timelock_role_holders(
+        &self,
+        timelock: Address,
+        role: FixedBytes<32>,
+    ) -> Result<Vec<RoleHolder>> {
+        let contract = IAccessControl::new(timelock, self.provider);
+        let mut holders: BTreeMap<Address, RoleHolder> = BTreeMap::new();
+
+        for account in self.known.keys() {
+            if !contract
+                .hasRole(role, *account)
+                .block(self.block_id)
+                .call()
+                .await?
+            {
+                continue;
+            }
+            let name = self
+                .known
+                .resolve(*account)
+                .with_context(|| format!("role holder {account} for timelock {timelock}"))?;
+            holders.insert(
+                *account,
+                RoleHolder {
+                    address: *account,
+                    name,
+                },
+            );
+        }
+
+        if role == timelock_executor_role() {
+            let open = contract
+                .hasRole(role, Address::ZERO)
+                .block(self.block_id)
+                .call()
+                .await?;
+            if open {
+                holders.insert(
+                    Address::ZERO,
+                    RoleHolder {
+                        address: Address::ZERO,
+                        name: "open_executor".to_string(),
+                    },
+                );
+            }
+        }
+
+        Ok(holders.into_values().collect())
+    }
+}
+
+fn timelock_proposer_role() -> FixedBytes<32> {
+    keccak256("PROPOSER_ROLE")
+}
+
+fn timelock_executor_role() -> FixedBytes<32> {
+    keccak256("EXECUTOR_ROLE")
+}
+
+fn timelock_canceller_role() -> FixedBytes<32> {
+    keccak256("CANCELLER_ROLE")
+}
+
+fn timelock_default_admin_role() -> FixedBytes<32> {
+    FixedBytes::ZERO
 }
 
 pub(crate) struct CollectedDeployment {
@@ -369,6 +481,22 @@ impl DeploymentInfo {
             ops_timelock: TimelockDeployment::Deployed {
                 address: addr3,
                 min_delay: Duration::from_secs(172800),
+                proposers: vec![RoleHolder {
+                    address: addr2,
+                    name: "espresso_labs".to_string(),
+                }],
+                executors: vec![RoleHolder {
+                    address: addr2,
+                    name: "espresso_labs".to_string(),
+                }],
+                cancellers: vec![RoleHolder {
+                    address: addr2,
+                    name: "espresso_labs".to_string(),
+                }],
+                default_admins: vec![RoleHolder {
+                    address: addr3,
+                    name: "ops_timelock".to_string(),
+                }],
             },
             safe_exit_timelock: TimelockDeployment::NotYetDeployed,
             esp_token: OwnableDeployment::NotYetDeployed,
