@@ -53,7 +53,7 @@ pub use metadata::fetch_metadata;
 // Used by staking-cli integration tests.
 pub use parse::Commission;
 // Used by sequencer tests.
-pub use registration::{fetch_commission, update_commission};
+pub use registration::{fetch_commission, update_commission, update_network_config};
 // Used by staking-cli integration tests.
 pub use signature::NodeSignatures;
 // Used by staking-cli integration tests.

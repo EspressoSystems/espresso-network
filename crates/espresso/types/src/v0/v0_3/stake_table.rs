@@ -353,27 +353,30 @@ mod tests {
     use alloy::primitives::{Address, U256};
     use committable::Committable;
     use hotshot::types::{BLSPubKey, SignatureKey};
-    use hotshot_types::light_client::StateVerKey;
+    use hotshot_types::{addr::NetAddr, light_client::StateVerKey, x25519};
 
     use super::RegisteredValidator;
 
-    /// When x25519_key and p2p_addr are None (pre-V3), the commitment must remain unchanged.
-    /// Setting these fields must produce a different commitment.
+    /// Both x25519_key and p2p_addr must independently affect the commitment.
     #[test]
-    fn test_commitment_backwards_compat_none_fields() {
-        use hotshot_types::{addr::NetAddr, x25519};
+    fn test_commitment_changes_with_x25519_and_p2p_fields() {
+        let base = RegisteredValidator::<BLSPubKey>::mock();
+        assert!(base.x25519_key.is_none());
+        assert!(base.p2p_addr.is_none());
+        let commit_base = base.commit();
 
-        let val = RegisteredValidator::<BLSPubKey>::mock();
-        assert!(val.x25519_key.is_none());
-        assert!(val.p2p_addr.is_none());
-        let commit_without = val.commit();
+        let mut with_x25519 = base.clone();
+        with_x25519.x25519_key =
+            Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
+        let commit_x25519 = with_x25519.commit();
 
-        let mut val_with = val.clone();
-        val_with.x25519_key = Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
-        val_with.p2p_addr = Some("127.0.0.1:8080".parse::<NetAddr>().unwrap());
-        let commit_with = val_with.commit();
+        let mut with_p2p = base.clone();
+        with_p2p.p2p_addr = Some("127.0.0.1:8080".parse::<NetAddr>().unwrap());
+        let commit_p2p = with_p2p.commit();
 
-        assert_ne!(commit_without, commit_with);
+        assert_ne!(commit_base, commit_x25519);
+        assert_ne!(commit_base, commit_p2p);
+        assert_ne!(commit_x25519, commit_p2p);
     }
 
     /// Unauthenticated validators must produce a different commitment than authenticated ones.

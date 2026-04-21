@@ -681,8 +681,8 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         Ok(())
     }
 
-    /// Deploy all contracts up to and including V2.
-    pub async fn deploy_to_v2(&self, contracts: &mut Contracts) -> Result<()> {
+    /// Deploy all contracts up to and including stake table V2.
+    pub async fn deploy_to_stake_table_v2(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
         self.deploy(contracts, Contract::LightClientV3).await?;
@@ -691,9 +691,9 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         Ok(())
     }
 
-    /// Deploy all contracts including V3.
-    pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
-        self.deploy_to_v2(contracts).await?;
+    /// Deploy all contracts up to and including stake table V3.
+    pub async fn deploy_to_stake_table_v3(&self, contracts: &mut Contracts) -> Result<()> {
+        self.deploy_to_stake_table_v2(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV3).await?;
         Ok(())
     }

@@ -1097,7 +1097,7 @@ pub mod testing {
                         .safe_exit_timelock_executors(vec![self.signer.address()])
                         .build()
                         .unwrap();
-                    args.deploy_all(&mut contracts)
+                    args.deploy_to_stake_table_v3(&mut contracts)
                         .await
                         .expect("failed to deploy all contracts");
 

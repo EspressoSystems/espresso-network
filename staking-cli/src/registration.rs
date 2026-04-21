@@ -1,6 +1,6 @@
 use alloy::{
     network::Ethereum,
-    primitives::Address,
+    primitives::{Address, FixedBytes},
     providers::{PendingTransactionBuilder, Provider},
 };
 use anyhow::Result;
@@ -9,6 +9,7 @@ use hotshot_contract_adapter::{
     sol_types::StakeTableV3::{self, StakeTableV3Errors},
     stake_table::StakeTableContractVersion,
 };
+use hotshot_types::{addr::NetAddr, x25519};
 
 use crate::parse::Commission;
 
@@ -23,6 +24,23 @@ pub async fn update_commission(
     let stake_table = StakeTableV3::new(stake_table_addr, provider);
     stake_table
         .updateCommission(new_commission.to_evm())
+        .send()
+        .await
+        .maybe_decode_revert::<StakeTableV3Errors>()
+}
+
+/// Update validator x25519 key and p2p address.
+///
+/// Used by sequencer tests.
+pub async fn update_network_config(
+    provider: impl Provider,
+    stake_table_addr: Address,
+    x25519_key: x25519::PublicKey,
+    p2p_addr: NetAddr,
+) -> Result<PendingTransactionBuilder<Ethereum>> {
+    let stake_table = StakeTableV3::new(stake_table_addr, provider);
+    stake_table
+        .updateNetworkConfig(FixedBytes(x25519_key.as_bytes()), p2p_addr.to_string())
         .send()
         .await
         .maybe_decode_revert::<StakeTableV3Errors>()

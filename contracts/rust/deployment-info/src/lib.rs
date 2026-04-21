@@ -307,7 +307,7 @@ mod tests {
             .build()
             .unwrap();
 
-        args.deploy_all(&mut contracts).await?;
+        args.deploy_to_stake_table_v3(&mut contracts).await?;
 
         let stake_table_addr = contracts
             .address(Contract::StakeTableProxy)
