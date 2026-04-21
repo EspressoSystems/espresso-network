@@ -262,9 +262,9 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             .inner
             .master_map
             .subscribed_map
-            .entry(topic)
-            .or_default()
-            .clone();
+            .get(&topic)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default();
         for (key, node) in &nodes {
             // TODO delay/drop etc here
             trace!(?key, "Sending message to node");
@@ -314,9 +314,9 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             .inner
             .master_map
             .subscribed_map
-            .entry(Topic::Da)
-            .or_default()
-            .clone();
+            .get(&Topic::Da)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default();
         for (key, node) in &nodes {
             if !recipients.contains(key) {
                 tracing::trace!("Skipping node because not in recipient list: {:?}", key);
