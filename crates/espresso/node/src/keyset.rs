@@ -25,27 +25,28 @@ pub struct KeySetOptions {
     #[clap(
         long,
         name = "MNEMONIC",
-        env = "ESPRESSO_SEQUENCER_KEY_MNEMONIC",
+        env = "ESPRESSO_NODE_KEY_MNEMONIC",
         conflicts_with = "KEY_FILE"
     )]
     #[derivative(Debug = "ignore")]
     pub mnemonic: Option<Mnemonic<English>>,
 
     /// Optional index to enable generating multiple keysets from the same mnemonic.
-    #[clap(long, env = "ESPRESSO_SEQUENCER_KEY_INDEX", requires = "MNEMONIC")]
+    #[clap(long, env = "ESPRESSO_NODE_KEY_INDEX", requires = "MNEMONIC")]
     pub index: Option<u64>,
 
     /// Path to file containing private keys.
     ///
-    /// The file should follow the .env format, with two keys:
-    /// * ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY
-    /// * ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY
+    /// The file should follow the .env format, with keys:
+    /// * ESPRESSO_NODE_PRIVATE_STAKING_KEY
+    /// * ESPRESSO_NODE_PRIVATE_STATE_KEY
+    /// * ESPRESSO_NODE_PRIVATE_X25519_KEY (optional)
     ///
     /// Appropriate key files can be generated with the `keygen` utility program.
     #[clap(
         long,
         name = "KEY_FILE",
-        env = "ESPRESSO_SEQUENCER_KEY_FILE",
+        env = "ESPRESSO_NODE_KEY_FILE",
         conflicts_with = "MNEMONIC"
     )]
     pub key_file: Option<PathBuf>,
@@ -55,7 +56,7 @@ pub struct KeySetOptions {
     /// This can be used as an alternative to MNEMONIC or KEY_FILE.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY",
+        env = "ESPRESSO_NODE_PRIVATE_STAKING_KEY",
         conflicts_with = "KEY_FILE"
     )]
     #[derivative(Debug = "ignore")]
@@ -66,7 +67,7 @@ pub struct KeySetOptions {
     /// This can be used as an alternative to MNEMONIC or KEY_FILE.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY",
+        env = "ESPRESSO_NODE_PRIVATE_STATE_KEY",
         conflicts_with = "KEY_FILE"
     )]
     #[derivative(Debug = "ignore")]
@@ -77,7 +78,7 @@ pub struct KeySetOptions {
     /// This can be used as an alternative to MNEMONIC or KEY_FILE.
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY",
+        env = "ESPRESSO_NODE_PRIVATE_X25519_KEY",
         conflicts_with = "KEY_FILE"
     )]
     #[derivative(Debug = "ignore")]
@@ -148,26 +149,49 @@ impl TryFrom<KeySetOptions> for KeySet {
             if staking.is_none() {
                 staking = Some(read_from_key_file(
                     &vars,
-                    "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY",
+                    "ESPRESSO_NODE_PRIVATE_STAKING_KEY",
                 )?);
             }
             if state.is_none() {
                 state = Some(read_from_key_file(
                     &vars,
-                    "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY",
+                    "ESPRESSO_NODE_PRIVATE_STATE_KEY",
                 )?);
             }
-            if x25519.is_none() {
-                x25519 = Some(read_from_key_file(
-                    &vars,
-                    "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY",
-                )?);
+            // Tolerate missing x25519 key (falls through to random generation)
+            // but still fail on malformed.
+            if x25519.is_none()
+                && let Some(raw) = lookup_key_file_var(&vars, "ESPRESSO_NODE_PRIVATE_X25519_KEY")
+            {
+                x25519 = Some(
+                    TaggedBase64::parse(raw)
+                        .and_then(|tb64| tb64.try_into())
+                        .context("key file has malformed ESPRESSO_NODE_PRIVATE_X25519_KEY")?,
+                );
             }
         }
 
-        let (Some(staking), Some(state), Some(x25519)) = (staking, state, x25519) else {
+        let (Some(staking), Some(state)) = (staking, state) else {
             bail!("neither mnemonic, key file nor full set of private keys was provided")
         };
+
+        // TODO: remove this fallback once the network upgrades to CLIQUENET_VERSION and x25519
+        // keys become required. For now, generate a random key so existing deployments without an
+        // x25519 key configured can still start.
+        let x25519 = match x25519 {
+            Some(key) => key,
+            None => {
+                tracing::warn!(
+                    "No x25519 key provided, generating a random ephemeral key. A persistent key \
+                     (via ESPRESSO_NODE_PRIVATE_X25519_KEY or mnemonic) will be required for the \
+                     Cliquenet protocol upgrade."
+                );
+                x25519::Keypair::generate()
+                    .context("generating random x25519 key")?
+                    .secret_key()
+            },
+        };
+
         Ok(Self {
             staking,
             state,
@@ -180,10 +204,183 @@ fn read_from_key_file<
     T: TryFrom<TaggedBase64, Error: Send + Sync + std::error::Error + 'static>,
 >(
     vars: &HashMap<String, String>,
-    env: &str,
+    key: &str,
 ) -> anyhow::Result<T> {
-    TaggedBase64::parse(vars.get(env).context(format!("key file missing {env}"))?)
-        .context(format!("key file has malformed {env}"))?
+    let val = lookup_key_file_var(vars, key).context(format!("key file missing {key}"))?;
+    TaggedBase64::parse(val)
+        .context(format!("key file has malformed {key}"))?
         .try_into()
-        .context(format!("key file has malformed {env}"))
+        .context(format!("key file has malformed {key}"))
+}
+
+/// Look up a key file variable by new name, falling back to the deprecated
+/// `ESPRESSO_SEQUENCER_` prefix if the new name is not found.
+fn lookup_key_file_var<'a>(vars: &'a HashMap<String, String>, key: &str) -> Option<&'a String> {
+    vars.get(key).or_else(|| {
+        let legacy = key.replacen("ESPRESSO_NODE_", "ESPRESSO_SEQUENCER_", 1);
+        vars.get(&legacy).inspect(|_| {
+            tracing::warn!("Key file uses deprecated {legacy}, please rename to {key}");
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    fn generate_keys() -> KeySet {
+        let mnemonic: Mnemonic<English> = Mnemonic::new(&mut rand::rngs::OsRng);
+        KeySet::try_from(KeySetOptions {
+            mnemonic: Some(mnemonic),
+            index: None,
+            key_file: None,
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        })
+        .unwrap()
+    }
+
+    fn staking_tb64(keys: &KeySet) -> TaggedBase64 {
+        keys.staking.to_tagged_base64().unwrap()
+    }
+
+    fn state_tb64(keys: &KeySet) -> TaggedBase64 {
+        StateKeyPair::from_sign_key(keys.state.clone())
+            .sign_key_ref()
+            .to_tagged_base64()
+            .unwrap()
+    }
+
+    fn x25519_tb64(keys: &KeySet) -> TaggedBase64 {
+        TaggedBase64::try_from(keys.x25519.clone()).unwrap()
+    }
+
+    fn write_key_file(lines: &[String]) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        for line in lines {
+            writeln!(f, "{line}").unwrap();
+        }
+        f
+    }
+
+    #[test]
+    fn env_vars_without_x25519_succeeds() {
+        let keys = generate_keys();
+        let opts = KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: None,
+            private_staking_key: Some(staking_tb64(&keys)),
+            private_state_key: Some(state_tb64(&keys)),
+            private_x25519_key: None,
+        };
+        KeySet::try_from(opts).unwrap();
+    }
+
+    #[test]
+    fn env_vars_with_x25519_uses_provided() {
+        let keys = generate_keys();
+        let opts = KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: None,
+            private_staking_key: Some(staking_tb64(&keys)),
+            private_state_key: Some(state_tb64(&keys)),
+            private_x25519_key: Some(x25519_tb64(&keys)),
+        };
+        let result = KeySet::try_from(opts).unwrap();
+        assert_eq!(result.x25519, keys.x25519);
+    }
+
+    #[test]
+    fn key_file_without_x25519_succeeds() {
+        let keys = generate_keys();
+        let f = write_key_file(&[
+            format!("ESPRESSO_NODE_PRIVATE_STAKING_KEY={}", staking_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
+        ]);
+        let opts = KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: Some(f.path().to_path_buf()),
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        };
+        KeySet::try_from(opts).unwrap();
+    }
+
+    #[test]
+    fn key_file_with_x25519_uses_provided() {
+        let keys = generate_keys();
+        let f = write_key_file(&[
+            format!("ESPRESSO_NODE_PRIVATE_STAKING_KEY={}", staking_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_X25519_KEY={}", x25519_tb64(&keys)),
+        ]);
+        let opts = KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: Some(f.path().to_path_buf()),
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        };
+        let result = KeySet::try_from(opts).unwrap();
+        assert_eq!(result.x25519, keys.x25519);
+    }
+
+    #[test]
+    fn key_file_with_malformed_x25519_fails() {
+        let keys = generate_keys();
+        let f = write_key_file(&[
+            format!("ESPRESSO_NODE_PRIVATE_STAKING_KEY={}", staking_tb64(&keys)),
+            format!("ESPRESSO_NODE_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
+            "ESPRESSO_NODE_PRIVATE_X25519_KEY=not-a-valid-key".to_string(),
+        ]);
+        let opts = KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: Some(f.path().to_path_buf()),
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        };
+        assert!(
+            KeySet::try_from(opts)
+                .unwrap_err()
+                .to_string()
+                .contains("malformed")
+        );
+    }
+
+    #[test]
+    fn key_file_with_legacy_sequencer_names() {
+        let keys = generate_keys();
+        let f = write_key_file(&[
+            format!(
+                "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY={}",
+                staking_tb64(&keys)
+            ),
+            format!("ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY={}", state_tb64(&keys)),
+            format!(
+                "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY={}",
+                x25519_tb64(&keys)
+            ),
+        ]);
+        let opts = KeySetOptions {
+            mnemonic: None,
+            index: None,
+            key_file: Some(f.path().to_path_buf()),
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        };
+        let result = KeySet::try_from(opts).unwrap();
+        assert_eq!(result.staking, keys.staking);
+        assert_eq!(result.x25519, keys.x25519);
+    }
 }

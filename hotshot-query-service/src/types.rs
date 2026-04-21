@@ -12,7 +12,4 @@
 
 //! Common functionality provided by types used in this crate.
 
-/// Types which have a notion of "height" within a chain.
-pub trait HeightIndexed {
-    fn height(&self) -> u64;
-}
+pub use hotshot_query_service_types::HeightIndexed;

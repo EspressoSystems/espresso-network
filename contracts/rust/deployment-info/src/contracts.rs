@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt, time::Duration};
 
 use alloy::{
-    eips::BlockId,
+    eips::{BlockId, BlockNumberOrTag},
     primitives::{Address, FixedBytes},
     providers::Provider,
     sol,
@@ -400,15 +400,12 @@ impl CollectedDeployment {
     ) -> Result<Self> {
         let provider = alloy::providers::ProviderBuilder::new().connect_http(rpc_url);
 
-        let block_number = provider
-            .get_block_number()
-            .await
-            .context("Failed to get block number")?;
         let block = provider
-            .get_block_by_number(block_number.into())
+            .get_block_by_number(BlockNumberOrTag::Latest)
             .await
-            .context("Failed to get block")?
-            .context("Block not found")?;
+            .context("Failed to get latest block")?
+            .context("Latest block not found")?;
+        let block_number = block.header.number;
         let block_timestamp = block.header.timestamp;
 
         let known = KnownAddresses::from_deployment(&addresses);

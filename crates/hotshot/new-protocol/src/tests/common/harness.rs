@@ -6,7 +6,7 @@ use hotshot_example_types::{
     state_types::{TestInstanceState, TestValidatedState},
 };
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     traits::signature_key::SignatureKey,
 };
 
@@ -14,9 +14,10 @@ use super::utils::mock_membership;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    coordinator::timer::Timer,
+    coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
+    logging::KeyPrefix,
     message::Message,
     network::Network,
     outbox::Outbox,
@@ -36,8 +37,8 @@ pub(crate) struct TestHarness {
 
 impl TestHarness {
     pub async fn new(node_index: u64) -> Self {
-        // Default timer is long enough to not fire during normal tests,
-        // which complete in ~100-200ms.
+        // Default timer must be long enough to not fire during tests even
+        // under heavy CPU load (e.g. full test suite running in parallel).
         Self::new_with_timer(node_index, Duration::from_secs(2)).await
     }
 
@@ -54,7 +55,17 @@ impl TestHarness {
         let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
         let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
 
-        let consensus = Consensus::new(membership.clone(), public_key, private_key.clone(), 10);
+        let genesis_state = TestValidatedState::default();
+        let genesis_leaf =
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+
+        let consensus = Consensus::new(
+            membership.clone(),
+            public_key,
+            private_key.clone(),
+            genesis_leaf.clone(),
+            10,
+        );
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
@@ -63,9 +74,6 @@ impl TestHarness {
         let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
 
         let mut state_manager = StateManager::new(instance.clone());
-        let genesis_state = TestValidatedState::default();
-        let genesis_leaf =
-            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
         let proposal_validator = ProposalValidator::new(membership.clone());
@@ -88,8 +96,13 @@ impl TestHarness {
             .proposal_validator(proposal_validator)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
-            .timer(Timer::new(timer_duration, ViewNumber::genesis()))
+            .timer(Timer::new(
+                timer_duration,
+                ViewNumber::genesis(),
+                EpochNumber::genesis(),
+            ))
             .public_key(public_key)
+            .node_id(KeyPrefix::from(&public_key))
             .build();
         Self {
             coordinator,
@@ -127,9 +140,14 @@ impl TestHarness {
     /// This avoids any assumption about the order or number of events
     /// produced by asynchronous coordinator subsystems (proposal validator,
     /// VID reconstructor, vote collectors, state manager, timer).
-    pub async fn process_until<P>(&mut self, pred: P) -> Vec<ConsensusInput<TestTypes>>
+    pub async fn process_until<P, F>(
+        &mut self,
+        pred: P,
+        fail_pred: F,
+    ) -> Vec<ConsensusInput<TestTypes>>
     where
         P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
+        F: Fn(&[ConsensusInput<TestTypes>]) -> bool,
     {
         let mut inputs = Vec::new();
         while !pred(&inputs) {
@@ -138,7 +156,16 @@ impl TestHarness {
                     self.apply_and_process(input.clone()).await;
                     inputs.push(input);
                 },
-                Err(err) => panic!("Unexpected error: {err}"),
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {
+                    // Non-critical errors (e.g., epoch root computation failures
+                    // in the test environment) are expected and skipped.
+                },
+            }
+            if fail_pred(&inputs) {
+                panic!("Received Failure inputs: {inputs:?}");
             }
         }
         inputs

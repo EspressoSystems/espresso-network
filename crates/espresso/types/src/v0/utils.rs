@@ -243,7 +243,7 @@ pub struct BackoffParams {
     /// Exponential backoff exponent.
     #[clap(
         long = "catchup-backoff-factor",
-        env = "ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_FACTOR",
+        env = "ESPRESSO_NODE_CATCHUP_BACKOFF_FACTOR",
         default_value = "4"
     )]
     factor: u32,
@@ -251,7 +251,7 @@ pub struct BackoffParams {
     /// Exponential backoff base delay.
     #[clap(
         long = "catchup-base-retry-delay",
-        env = "ESPRESSO_SEQUENCER_CATCHUP_BASE_RETRY_DELAY",
+        env = "ESPRESSO_NODE_CATCHUP_BASE_RETRY_DELAY",
         default_value = "200ms",
         value_parser = parse_duration
     )]
@@ -260,7 +260,7 @@ pub struct BackoffParams {
     /// Exponential max delay.
     #[clap(
         long = "catchup-max-retry-delay",
-        env = "ESPRESSO_SEQUENCER_CATCHUP_MAX_RETRY_DELAY",
+        env = "ESPRESSO_NODE_CATCHUP_MAX_RETRY_DELAY",
         default_value = "5s",
         value_parser = parse_duration
     )]
@@ -269,13 +269,13 @@ pub struct BackoffParams {
     /// Exponential backoff jitter as a ratio of the backoff delay, numerator:denominator.
     #[clap(
         long = "catchup-backoff-jitter",
-        env = "ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_JITTER",
+        env = "ESPRESSO_NODE_CATCHUP_BACKOFF_JITTER",
         default_value = "1:10"
     )]
     jitter: Ratio,
 
     /// Disable retries and just fail after one failed attempt.
-    #[clap(short, long, env = "ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_DISABLE")]
+    #[clap(short, long, env = "ESPRESSO_NODE_CATCHUP_BACKOFF_DISABLE")]
     disable: bool,
 }
 
@@ -286,6 +286,16 @@ impl Default for BackoffParams {
 }
 
 impl BackoffParams {
+    pub const fn new(base: Duration, max: Duration, factor: u32, jitter: Ratio) -> Self {
+        Self {
+            base,
+            max,
+            factor,
+            jitter,
+            disable: false,
+        }
+    }
+
     pub fn disabled() -> Self {
         Self {
             disable: true,
@@ -312,6 +322,41 @@ impl BackoffParams {
                     sleep(delay).await;
                     delay = self.backoff(delay);
                 },
+            }
+        }
+        unreachable!()
+    }
+
+    /// Like [`retry`](Self::retry) but stops after `max_retries` retries and only retries when
+    /// `should_retry` returns `true` for the error. The closure takes no arguments; capture any
+    /// needed state in the closure itself.
+    pub async fn retry_if<Fut, T>(
+        &self,
+        max_retries: u32,
+        should_retry: impl Fn(&anyhow::Error) -> bool,
+        f: impl Fn() -> Fut,
+    ) -> anyhow::Result<T>
+    where
+        Fut: Future<Output = anyhow::Result<T>>,
+    {
+        let mut delay = self.base;
+        for i in 0usize.. {
+            match f().await {
+                Ok(res) => return Ok(res),
+                Err(err) if self.disable => {
+                    return Err(err.context("Retryable operation failed; retries disabled"));
+                },
+                Err(err) if (i as u32) < max_retries && should_retry(&err) => {
+                    tracing::warn!(
+                        attempt = i + 1,
+                        max_retries,
+                        delay_ms = delay.as_millis(),
+                        "Retryable operation failed, will retry after {delay:?}: {err:#}"
+                    );
+                    sleep(delay).await;
+                    delay = self.backoff(delay);
+                },
+                Err(err) => return Err(err),
             }
         }
         unreachable!()

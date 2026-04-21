@@ -39,7 +39,18 @@ impl PermittedRewardMerkleTreeV2 {
         balances: Vec<(RewardAccountV2, RewardAmount)>,
     ) -> anyhow::Result<Self> {
         let permit = REWARD_MERKLE_TREE_V2_MEMORY_LOCK
-            .get_or_init(|| Arc::new(Semaphore::new(1)))
+            .get_or_init(|| {
+                let num_permits: usize =
+                    std::env::var("ESPRESSO_NODE_REWARD_MERKLE_TREE_PERMITS")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(1);
+
+                tracing::warn!(
+                    "Initializing RewardMerkleTreeV2 semaphore with {num_permits} permits"
+                );
+                Arc::new(Semaphore::new(num_permits))
+            })
             .clone()
             .acquire_owned()
             .await

@@ -85,7 +85,7 @@ func (c *BuilderSubmitter) SubmitTransaction(ctx context.Context, tx types.Trans
 
 		var hash types.TaggedBase64
 		if err := json.Unmarshal(body, &hash); err != nil {
-			c.previousSubmitErrors = append(c.previousSubmitErrors, fmt.Errorf("%w: %v", ErrPermanent, err))
+			c.previousSubmitErrors = append(c.previousSubmitErrors, fmt.Errorf("%w: %v", ErrEphemeral, err))
 			response.Body.Close()
 			continue
 		}

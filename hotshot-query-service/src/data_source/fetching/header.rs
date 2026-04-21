@@ -44,14 +44,6 @@ use crate::{
     fetching::NonEmptyRange,
 };
 
-impl<Types: NodeType> From<LeafQueryData<Types>> for HeaderQueryData<Types> {
-    fn from(leaf: LeafQueryData<Types>) -> Self {
-        let header = leaf.header().clone();
-
-        Self { header }
-    }
-}
-
 fn satisfies_header_req_from_leaf<Types>(leaf: &LeafQueryData<Types>, req: BlockId<Types>) -> bool
 where
     Types: NodeType,
