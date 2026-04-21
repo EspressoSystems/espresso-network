@@ -7,14 +7,14 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::HotShotInitializer;
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
         block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
-        signature_key::SignatureKey,
+        signature_key::SignatureKey, storage::Storage as StorageTrait,
     },
     vote::HasViewNumber,
 };
@@ -41,6 +41,7 @@ use crate::{
     outbox::Outbox,
     proposal::ProposalValidator,
     state::{HeaderRequest, StateManager, StateManagerOutput},
+    storage::Storage,
     vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -54,7 +55,7 @@ pub enum CoordinatorOutput<T: NodeType> {
 }
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, N> {
+pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Network<T, N>,
@@ -71,6 +72,7 @@ pub struct Coordinator<T: NodeType, N> {
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
+    storage: Storage<T, S>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     #[builder(default)]
@@ -84,7 +86,7 @@ pub struct Coordinator<T: NodeType, N> {
 }
 
 #[bon]
-impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
+impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coordinator<T, N, S> {
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     pub fn maker(
         membership_coordinator: EpochMembershipCoordinator<T>,
@@ -94,12 +96,13 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         timeout_duration: Duration,
+        storage: S,
     ) -> Self {
         let consensus = Consensus::new(
             membership_coordinator.clone(),
             public_key.clone(),
-            private_key,
             upgrade_lock.clone(),
+            private_key.clone(),
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
         );
@@ -151,6 +154,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 membership_coordinator.clone(),
                 upgrade_lock,
             ))
+            .storage(Storage::new(storage, private_key))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(
                 timeout_duration,
@@ -317,7 +321,9 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     Ok(validated) => {
                         let s = validated.message.vid_share.clone();
                         let m = validated.message.proposal.data.block_header.metadata().clone();
-                        self.vid_reconstructor.handle_vid_share(s, m);
+                        self.vid_reconstructor.handle_vid_share(s.clone(), m);
+                        self.storage.append_vid(s);
+                        self.storage.append_proposal(validated.message.proposal.data.clone());
                         return Ok(ConsensusInput::Proposal(validated.sender, validated.message))
                     }
                     Err(e) => {
@@ -337,6 +343,13 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
+                        self.storage.append_da(
+                            block.view,
+                            block.epoch,
+                            block.payload.payload.clone(),
+                            block.payload.metadata.clone(),
+                            block.payload_commitment,
+                        );
                         self.unicast_to_leader(
                             next_view,
                             epoch,
@@ -360,6 +373,13 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
                         self.block_builder.on_block_reconstructed(out.tx_commitments);
+                        self.storage.append_da(
+                            out.view,
+                            out.epoch,
+                            out.payload,
+                            out.metadata,
+                            VidCommitment::V2(out.payload_commitment),
+                        );
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
                     Err(()) => {
@@ -574,10 +594,14 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 self.block_builder.request_block(request);
             },
             ConsensusOutput::SendProposal(proposal, vid_disperse) => {
+                self.storage.append_proposal(proposal.data.clone());
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
                 for vid_share in vid_disperse.to_shares() {
                     let recipient_key = vid_share.recipient_key.clone();
+                    if recipient_key == self.public_key {
+                        self.storage.append_vid(vid_share.clone());
+                    }
                     let message = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::Consensus(ConsensusMessage::Proposal(
@@ -731,6 +755,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
         self.pending_proposal_fetches.gc(view);
+        self.storage.gc(view);
     }
 
     pub fn node_id(&self) -> &KeyPrefix {

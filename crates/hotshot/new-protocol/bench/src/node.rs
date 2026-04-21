@@ -9,6 +9,7 @@ use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    storage_types::TestStorage,
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
@@ -36,7 +37,7 @@ use versions::{CLIQUENET_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<BLSPubKey>>;
+type BenchCoordinator = Coordinator<TestTypes, Cliquenet<BLSPubKey>, TestStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -115,8 +116,8 @@ async fn build_coordinator(
     let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
-        private_key,
         upgrade_lock.clone(),
+        private_key.clone(),
         genesis_leaf.clone(),
         epoch_height,
     );
@@ -177,6 +178,10 @@ async fn build_coordinator(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .storage(hotshot_new_protocol::storage::Storage::new(
+            TestStorage::default(),
+            private_key,
+        ))
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(timer)

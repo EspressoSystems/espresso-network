@@ -5,6 +5,7 @@ use hotshot::{traits::NodeImplementation, types::BLSPubKey};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    storage_types::TestStorage,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
@@ -40,7 +41,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     membership: EpochMembershipCoordinator<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> Coordinator<TestTypes, I::Network> {
+) -> Coordinator<TestTypes, I::Network, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
     let upgrade_lock = test_upgrade_lock();
@@ -106,6 +107,10 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .storage(crate::storage::Storage::new(
+            TestStorage::default(),
+            private_key,
+        ))
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(Timer::new(
