@@ -225,7 +225,7 @@ impl Peer {
 
         // An outgoing message. The integer tracks the chunk size as we need
         // to break the message into frames that fit into a noise package.
-        let mut obound_msg: Option<(Bytes, usize)> = None;
+        let mut obound_msg: Option<(RetryPolicy, Bytes, usize)> = None;
 
         // Pending outbound ACK messages. This is appended when we received a
         // message and picked up and interleaved when sending frames or else
@@ -284,7 +284,7 @@ impl Peer {
                         &mut self.conn.state,
                         &mut wbuf
                     )?;
-                    obound_msg = Some((bytes, chunk))
+                    obound_msg = Some((policy, bytes, chunk))
                 }
 
                 // Pick up an ACK and send it if possible.
@@ -338,7 +338,7 @@ impl Peer {
                         &mut self.conn.state,
                         &mut wbuf
                     )?;
-                    obound_msg = Some((bytes, chunk))
+                    obound_msg = Some((RetryPolicy::Default, bytes, chunk))
                 }
 
                 // Continue an ongoing write operation.
@@ -355,19 +355,25 @@ impl Peer {
                                     if *off < *len {
                                         continue
                                     }
-                                    if let Some((bytes, chunk)) = &mut obound_msg && *chunk < bytes.len() {
-                                        let end = min(*chunk + MAX_PAYLOAD_SIZE, bytes.len());
-                                        wstate = WriteState::data_frame(
-                                            &bytes[*chunk..end],
-                                            end < bytes.len(),
-                                            &mut self.conn.state,
-                                            &mut wbuf
-                                        )?;
-                                        *chunk = end;
+                                    if let Some((policy, bytes, chunk)) = &mut obound_msg {
+                                        if *chunk < bytes.len() {
+                                            let end = min(*chunk + MAX_PAYLOAD_SIZE, bytes.len());
+                                            wstate = WriteState::data_frame(
+                                                &bytes[*chunk..end],
+                                                end < bytes.len(),
+                                                &mut self.conn.state,
+                                                &mut wbuf
+                                            )?;
+                                            *chunk = end;
+                                        } else {
+                                            if policy.is_retry() {
+                                                self.countdown.start(self.conf.receive_timeout)
+                                            }
+                                            obound_msg = None;
+                                            wstate = WriteState::Idle;
+                                        }
                                     } else {
-                                        obound_msg = None;
                                         wstate = WriteState::Idle;
-                                        self.countdown.start(self.conf.receive_timeout)
                                     }
                                 }
                                 Err(e) => if e.kind() != io::ErrorKind::WouldBlock {
@@ -384,19 +390,25 @@ impl Peer {
                                     }
                                     if let Some(ack) = obound_acks.pop_front() {
                                         wstate = WriteState::ack_frame(ack, &mut self.conn.state, &mut wbuf)?
-                                    } else if let Some((bytes, chunk)) = &mut obound_msg && *chunk < bytes.len() {
-                                        let end = min(*chunk + MAX_PAYLOAD_SIZE, bytes.len());
-                                        wstate = WriteState::data_frame(
-                                            &bytes[*chunk..end],
-                                            end < bytes.len(),
-                                            &mut self.conn.state,
-                                            &mut wbuf
-                                        )?;
-                                        *chunk = end;
+                                    } else if let Some((policy, bytes, chunk)) = &mut obound_msg {
+                                        if *chunk < bytes.len() {
+                                            let end = min(*chunk + MAX_PAYLOAD_SIZE, bytes.len());
+                                            wstate = WriteState::data_frame(
+                                                &bytes[*chunk..end],
+                                                end < bytes.len(),
+                                                &mut self.conn.state,
+                                                &mut wbuf
+                                            )?;
+                                            *chunk = end;
+                                        } else {
+                                            if policy.is_retry() {
+                                                self.countdown.start(self.conf.receive_timeout)
+                                            }
+                                            obound_msg = None;
+                                            wstate = WriteState::Idle;
+                                        }
                                     } else {
-                                        obound_msg = None;
                                         wstate = WriteState::Idle;
-                                        self.countdown.start(self.conf.receive_timeout)
                                     }
                                 }
                                 Err(e) => if e.kind() != io::ErrorKind::WouldBlock {
