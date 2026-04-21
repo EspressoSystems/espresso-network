@@ -245,7 +245,8 @@ impl TestData {
         epoch_height: u64,
         num_nodes: usize,
     ) -> Self {
-        let membership = mock_membership_with_num_nodes(num_nodes).await;
+        crate::logging::init_test_logging();
+        let membership = mock_membership_with_num_nodes(num_nodes, epoch_height).await;
         let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
         let upgrade = TEST_VERSIONS.vid2;
@@ -420,13 +421,14 @@ impl TestData {
 }
 
 pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
-    mock_membership_with_num_nodes(10).await
+    mock_membership_with_num_nodes(10, 10).await
 }
 
 pub async fn mock_membership_with_num_nodes(
     num_nodes: usize,
+    epoch_height: u64,
 ) -> EpochMembershipCoordinator<TestTypes> {
-    mock_membership_with_network(num_nodes, None).await
+    mock_membership_with_network(num_nodes, epoch_height, None).await
 }
 
 /// Create a mock membership coordinator for `num_nodes` validators.
@@ -437,6 +439,7 @@ pub async fn mock_membership_with_num_nodes(
 /// is used (sufficient when no catchup is needed).
 pub async fn mock_membership_with_network(
     num_nodes: usize,
+    epoch_height: u64,
     master_map: Option<Arc<MasterMap<BLSPubKey>>>,
 ) -> EpochMembershipCoordinator<TestTypes> {
     let network = match master_map {
@@ -474,7 +477,7 @@ pub async fn mock_membership_with_network(
         TestStorage::default(),
         network,
         members[0].stake_table_entry.public_key(),
-        10,
+        epoch_height,
     )));
     // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.)
     membership

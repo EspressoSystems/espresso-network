@@ -1,9 +1,9 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::collections::BTreeSet;
 
 use hotshot_types::data::ViewNumber;
 
 use crate::tests::common::{
-    network::MemoryTestNetwork,
+    network::{CliquenetTestNetwork, MemoryTestNetwork},
     runner::{NodeAction, NodeChange, TestRunner},
 };
 
@@ -16,7 +16,7 @@ fn views(iter: impl IntoIterator<Item = u64>) -> BTreeSet<ViewNumber> {
 // Restart from blank state (with epochs)
 // ---------------------------------------------------------------------------
 
-/// 10 nodes, 1 restarts from blank state at view 15, epoch_height=10.
+/// 10 nodes, 1 restarts from blank state at view 11, epoch_height=10.
 ///
 /// Verifies that a single node can restart from genesis while the rest of
 /// the network continues, and that it catches up and participates across
@@ -26,10 +26,9 @@ async fn restart_one_node_with_epochs() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
         epoch_height: 10,
         node_changes: vec![(
-            15,
+            11,
             vec![NodeChange {
                 idx: 5,
                 action: NodeAction::Restart,
@@ -37,7 +36,7 @@ async fn restart_one_node_with_epochs() {
         )],
         ..Default::default()
     }
-    .run::<MemoryTestNetwork>()
+    .run::<CliquenetTestNetwork>()
     .await
     .unwrap();
 }
@@ -57,10 +56,9 @@ async fn restart_f_nodes_with_epochs() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
         epoch_height: 10,
         node_changes: vec![(
-            13,
+            11,
             vec![
                 NodeChange {
                     idx: 7,
@@ -78,7 +76,7 @@ async fn restart_f_nodes_with_epochs() {
         )],
         ..Default::default()
     }
-    .run::<MemoryTestNetwork>()
+    .run::<CliquenetTestNetwork>()
     .await
     .unwrap();
 }
@@ -122,15 +120,15 @@ async fn restart_f_nodes_with_epochs() {
 /// node 9 was leader while offline are expected to fail.
 #[tokio::test(flavor = "multi_thread")]
 async fn late_start_one_node_with_epochs() {
-    // Node 9 is leader at views 9, 19 (both before it joins at view 23).
+    // Node 9 is leader for 9, 19, 29, 39.  It rejoins right after
+    // it would have led for view 39 and should propose at view 49 in epoch 3
     TestRunner {
         num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
-        epoch_height: 10,
-        expected_failed_views: views([9, 19]),
+        target_decisions: 50,
+        epoch_height: 15,
+        expected_failed_views: views([9, 19, 29, 39]),
         node_changes: vec![(
-            23,
+            39,
             vec![NodeChange {
                 idx: 9,
                 action: NodeAction::Start,
@@ -149,31 +147,33 @@ async fn late_start_one_node_with_epochs() {
 /// minimum quorum for n=10).  At view 23 they all join simultaneously.
 #[tokio::test(flavor = "multi_thread")]
 async fn late_start_f_nodes_with_epochs() {
-    // Nodes 7, 8, 9 are leaders at views 7, 8, 9, 17, 18, 19 while
-    // offline.
     TestRunner {
         num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
-        epoch_height: 10,
-        expected_failed_views: views([7, 8, 9, 17, 18, 19]),
-        node_changes: vec![(
-            23,
-            vec![
-                NodeChange {
-                    idx: 7,
-                    action: NodeAction::Start,
-                },
-                NodeChange {
-                    idx: 8,
-                    action: NodeAction::Start,
-                },
-                NodeChange {
+        target_decisions: 50,
+        epoch_height: 15,
+        expected_failed_views: views([7, 8, 9, 17, 18, 19, 27, 28, 29, 37, 38, 39]),
+        node_changes: vec![
+            (
+                37,
+                vec![
+                    NodeChange {
+                        idx: 7,
+                        action: NodeAction::Start,
+                    },
+                    NodeChange {
+                        idx: 8,
+                        action: NodeAction::Start,
+                    },
+                ],
+            ),
+            (
+                39,
+                vec![NodeChange {
                     idx: 9,
                     action: NodeAction::Start,
-                },
-            ],
-        )],
+                }],
+            ),
+        ],
         ..Default::default()
     }
     .run::<MemoryTestNetwork>()

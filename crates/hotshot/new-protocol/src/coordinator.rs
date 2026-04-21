@@ -415,17 +415,32 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
             },
             ConsensusOutput::LeafDecided(leaves) => {
                 let epoch_height = *self.consensus.epoch_height;
-                for leaf in &leaves {
-                    let block_number = leaf.block_header().block_number();
-                    // Store epoch root and epoch transition leaves so peers
-                    // can fetch them during catchup.
-                    if (is_epoch_root(block_number, epoch_height)
-                        || is_epoch_transition(block_number, epoch_height))
-                        && let Some(cert2) = self.consensus.cert2_at(leaf.view_number())
-                    {
-                        self.epoch_manager
-                            .leaf_store()
-                            .insert(leaf.clone(), cert2.clone());
+                // `leaves` comes ordered top-first from the chain-decide.  Only
+                // the top leaf is guaranteed to have its own cert2 in
+                // consensus; parent leaves inherit authority through the
+                // chain.  Use the deciding cert2 for every leaf we store so
+                // peers can serve any epoch-relevant leaf in the chain, not
+                // just the one that triggered the decide.
+                let deciding_cert2 = leaves
+                    .first()
+                    .and_then(|top| self.consensus.cert2_at(top.view_number()))
+                    .cloned();
+                if let Some(cert2) = deciding_cert2.as_ref() {
+                    for leaf in &leaves {
+                        let block_number = leaf.block_header().block_number();
+                        if is_epoch_root(block_number, epoch_height)
+                            || is_epoch_transition(block_number, epoch_height)
+                        {
+                            self.epoch_manager
+                                .leaf_store()
+                                .insert(leaf.clone(), cert2.clone());
+                            // Wake any epochs whose DRB task returned NeedLeaf
+                            // for this height.  Must happen before
+                            // handle_leaf_decided so its request_drb_result
+                            // call isn't swallowed by the still-set pending
+                            // guard.
+                            self.epoch_manager.on_leaf_stored(block_number);
+                        }
                     }
                 }
                 for leaf in leaves {
@@ -610,29 +625,21 @@ impl<T: NodeType, I: NodeImplementation<T>> Coordinator<T, I> {
         }
     }
 
-    /// Send a leaf request to peers for the given block height.
+    /// Broadcast a leaf request to the network.
+    ///
+    /// Broadcasting (rather than unicasting to a small subset) matters
+    /// during late-start catchup: newly connected nodes may not yet have
+    /// live TCP sessions to all peers, so a narrow unicast fan-out can
+    /// silently fail.  The response is small (one leaf + cert), so the
+    /// bandwidth cost is negligible.
     async fn request_leaf_from_peers(&mut self, height: u64) {
-        if let Ok(membership) = self
-            .membership_coordinator
-            .stake_table_for_epoch(Some(EpochNumber::genesis()))
-            .await
-        {
-            let members = membership.committee_members(ViewNumber::genesis()).await;
-            for member in members {
-                if member == self.public_key {
-                    continue;
-                }
-                let msg = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Catchup(CatchupMessage::LeafRequest(LeafRequest {
-                        block_height: height,
-                    })),
-                };
-                if self.network.unicast(member, msg).await.is_ok() {
-                    break; // Try one peer at a time
-                }
-            }
-        }
+        let msg = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::Catchup(CatchupMessage::LeafRequest(LeafRequest {
+                block_height: height,
+            })),
+        };
+        let _ = self.network.broadcast(msg).await;
     }
 
     pub fn node_id(&self) -> &KeyPrefix {

@@ -319,11 +319,19 @@ impl<T: NodeType> Consensus<T> {
     }
 
     pub fn wants_proposal<S>(&self, p: &ProposalMessage<T, S>) -> bool {
-        !(self
+        let view = p.view_number();
+        let locked_too_new = self
             .locked_cert
             .as_ref()
-            .is_some_and(|l| l.view_number() > p.view_number())
-            || self.proposals.contains_key(&p.view_number()))
+            .is_some_and(|l| l.view_number() > view);
+        // A proposal may already be in `self.proposals` because we received
+        // an EpochChangeMessage for it (which carries the proposal but no
+        // vid_share and does not trigger state validation).  In that case we
+        // still want to process the real proposal message so handle_proposal
+        // runs — it populates vid_shares and emits RequestState.
+        let fully_processed =
+            self.proposals.contains_key(&view) && self.vid_shares.contains_key(&view);
+        !(locked_too_new || fully_processed)
     }
 
     pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {

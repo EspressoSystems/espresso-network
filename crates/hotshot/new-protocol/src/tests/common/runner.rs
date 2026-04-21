@@ -218,6 +218,7 @@ impl TestRunner {
     /// restarted, or shut down at the specified views.  Verification is
     /// adjusted to account for the dynamic topology.
     pub async fn run<N: TestNetwork>(&self) -> Result<(), TestError> {
+        crate::logging::init_test_logging();
         let initially_down = self.initially_down_nodes();
         let (network_state, networks) = N::create(self.num_nodes, &initially_down).await;
 
@@ -238,7 +239,9 @@ impl TestRunner {
             let (output_tx, output_rx) = mpsc::unbounded_channel();
             output_channels.push(Some(output_rx));
 
-            let membership = network_state.create_membership(self.num_nodes).await;
+            let membership = network_state
+                .create_membership(self.num_nodes, self.epoch_height)
+                .await;
             let coord = build_test_coordinator::<N::Impl>(
                 i as u64,
                 network,
@@ -253,7 +256,9 @@ impl TestRunner {
 
         // Create a client network for broadcasting transactions.
         let client_net = network_state.create_client().await;
-        let client_membership = network_state.create_membership(self.num_nodes).await;
+        let client_membership = network_state
+            .create_membership(self.num_nodes, self.epoch_height)
+            .await;
         let mut client_network =
             Network::<TestTypes, _>::new(client_net, client_membership, upgrade_lock());
 
@@ -312,8 +317,9 @@ impl TestRunner {
                                 // Create a fresh coordinator from genesis.
                                 let net = network_state.create_node(change.idx).await;
                                 let (tx, rx) = mpsc::unbounded_channel();
-                                let membership =
-                                    network_state.create_membership(self.num_nodes).await;
+                                let membership = network_state
+                                    .create_membership(self.num_nodes, self.epoch_height)
+                                    .await;
                                 let coord = build_test_coordinator::<N::Impl>(
                                     change.idx as u64,
                                     net,

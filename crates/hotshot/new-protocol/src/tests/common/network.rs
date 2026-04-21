@@ -74,6 +74,7 @@ pub trait TestNetwork {
     fn create_membership(
         &self,
         num_nodes: usize,
+        epoch_height: u64,
     ) -> impl std::future::Future<Output = EpochMembershipCoordinator<TestTypes>>;
 }
 
@@ -152,8 +153,17 @@ impl TestNetwork for MemoryTestNetwork {
         }
     }
 
-    async fn create_membership(&self, num_nodes: usize) -> EpochMembershipCoordinator<TestTypes> {
-        super::utils::mock_membership_with_network(num_nodes, Some(self.group.clone())).await
+    async fn create_membership(
+        &self,
+        num_nodes: usize,
+        epoch_height: u64,
+    ) -> EpochMembershipCoordinator<TestTypes> {
+        super::utils::mock_membership_with_network(
+            num_nodes,
+            epoch_height,
+            Some(self.group.clone()),
+        )
+        .await
     }
 }
 
@@ -169,6 +179,9 @@ impl NodeImplementation<TestTypes> for CliquenetImpl {
 
 pub struct CliquenetTestNetwork {
     peer_infos: Vec<(BLSPubKey, PeerConnectInfo)>,
+    /// Live networks keyed by node index.  On restart we shut these down
+    /// (freeing the listener port) before rebinding to the same address.
+    node_networks: tokio::sync::Mutex<BTreeMap<usize, Cliquenet<BLSPubKey>>>,
 }
 
 impl TestNetwork for CliquenetTestNetwork {
@@ -208,6 +221,7 @@ impl TestNetwork for CliquenetTestNetwork {
         // Create each Cliquenet node (skip down nodes — sends to them
         // fail gracefully over TCP).
         let mut networks = Vec::with_capacity(num_nodes);
+        let mut stored = BTreeMap::new();
         for (i, (keypair, public_key, addr)) in parties.iter().enumerate() {
             if skip_nodes.contains(&i) {
                 networks.push(None);
@@ -223,10 +237,17 @@ impl TestNetwork for CliquenetTestNetwork {
             )
             .await
             .expect("cliquenet creation should succeed");
+            stored.insert(i, net.clone());
             networks.push(Some(net));
         }
 
-        (Self { peer_infos }, networks)
+        (
+            Self {
+                peer_infos,
+                node_networks: tokio::sync::Mutex::new(stored),
+            },
+            networks,
+        )
     }
 
     async fn create_client(&self) -> Cliquenet<BLSPubKey> {
@@ -251,10 +272,10 @@ impl TestNetwork for CliquenetTestNetwork {
         let (public_key, private_key) =
             BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
         let keypair = Keypair::derive_from::<BLSPubKey>(&private_key);
-        let port =
-            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
-        Cliquenet::create(
+        // Reuse the node's original address so peers (whose parties list
+        // was fixed at startup) can still reach the restarted node.
+        let addr = self.peer_infos[node_index].1.p2p_addr.clone();
+        let net = Cliquenet::create(
             "test",
             public_key,
             keypair,
@@ -263,17 +284,29 @@ impl TestNetwork for CliquenetTestNetwork {
             Box::new(NoMetrics),
         )
         .await
-        .expect("cliquenet node creation should succeed")
+        .expect("cliquenet node creation should succeed");
+        self.node_networks
+            .lock()
+            .await
+            .insert(node_index, net.clone());
+        net
     }
 
-    async fn shutdown_node(&self, _node_index: usize) {
-        // Cliquenet uses TCP; when the coordinator task is aborted the TCP
-        // listener closes and subsequent sends fail gracefully.  No
-        // explicit cleanup needed.
+    async fn shutdown_node(&self, node_index: usize) {
+        let net = self.node_networks.lock().await.remove(&node_index);
+        if let Some(net) = net {
+            // Await shutdown so the TCP listener releases the port
+            // before `create_node` rebinds to the same address.
+            net.shut_down().await;
+        }
     }
 
-    async fn create_membership(&self, num_nodes: usize) -> EpochMembershipCoordinator<TestTypes> {
+    async fn create_membership(
+        &self,
+        num_nodes: usize,
+        epoch_height: u64,
+    ) -> EpochMembershipCoordinator<TestTypes> {
         // Cliquenet doesn't have a MasterMap; use an isolated network.
-        super::utils::mock_membership_with_num_nodes(num_nodes).await
+        super::utils::mock_membership_with_num_nodes(num_nodes, epoch_height).await
     }
 }
