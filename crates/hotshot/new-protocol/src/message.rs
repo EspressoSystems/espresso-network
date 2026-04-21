@@ -11,11 +11,10 @@ use hotshot_types::{
     simple_certificate::{
         LightClientStateUpdateCertificateV2, OneHonestThreshold, QuorumCertificate2,
         SimpleCertificate, SuccessThreshold, TimeoutCertificate2, UpgradeCertificate,
-        ViewSyncCommitCertificate2, ViewSyncFinalizeCertificate2, ViewSyncPreCommitCertificate2,
     },
     simple_vote::{
         CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
-        ViewSyncCommitVote2, ViewSyncFinalizeVote2, ViewSyncPreCommitVote2, Vote2Data,
+        Vote2Data,
     },
     traits::node_implementation::NodeType,
     vote::HasViewNumber,
@@ -284,36 +283,11 @@ impl<T: NodeType> HasViewNumber for BlockMessage<T> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub enum ViewSyncMessage<T: NodeType> {
-    ViewSyncPreCommitVote(ViewSyncPreCommitVote2<T>),
-    ViewSyncCommitVote(ViewSyncCommitVote2<T>),
-    ViewSyncFinalizeVote(ViewSyncFinalizeVote2<T>),
-    ViewSyncPreCommitCertificate(ViewSyncPreCommitCertificate2<T>),
-    ViewSyncCommitCertificate(ViewSyncCommitCertificate2<T>),
-    ViewSyncFinalizeCertificate(ViewSyncFinalizeCertificate2<T>),
-}
-
-impl<T: NodeType> HasViewNumber for ViewSyncMessage<T> {
-    fn view_number(&self) -> ViewNumber {
-        match self {
-            ViewSyncMessage::ViewSyncPreCommitVote(vote) => vote.view_number(),
-            ViewSyncMessage::ViewSyncCommitVote(vote) => vote.view_number(),
-            ViewSyncMessage::ViewSyncFinalizeVote(vote) => vote.view_number(),
-            ViewSyncMessage::ViewSyncPreCommitCertificate(certificate) => certificate.view_number(),
-            ViewSyncMessage::ViewSyncCommitCertificate(certificate) => certificate.view_number(),
-            ViewSyncMessage::ViewSyncFinalizeCertificate(certificate) => certificate.view_number(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
 #[allow(clippy::large_enum_variant)]
 pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
     Block(BlockMessage<T>),
-    ViewSync(ViewSyncMessage<T>),
     External(Vec<u8>),
 }
 
@@ -323,7 +297,6 @@ impl<T: NodeType, S> MessageType<T, S> {
         match self {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
             Self::Block(b) => MessageType::Block(b),
-            Self::ViewSync(m) => MessageType::ViewSync(m),
             Self::External(v) => MessageType::External(v),
         }
     }
@@ -355,7 +328,6 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
         match &self.message_type {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
             MessageType::Block(block_message) => block_message.view_number(),
-            MessageType::ViewSync(view_sync_message) => view_sync_message.view_number(),
             MessageType::External(_) => ViewNumber::new(0), // TODO: This can become a problem
         }
     }
