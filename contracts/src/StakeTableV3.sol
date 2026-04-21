@@ -239,11 +239,11 @@ contract StakeTableV3 is StakeTableV2 {
 
         require(x25519Key != bytes32(0), InvalidX25519Key());
         require(!x25519Keys[x25519Key], X25519KeyAlreadyUsed());
+        validateP2pAddr(p2pAddr);
+
         // Old x25519 keys are intentionally not freed. Key operations are rare for ~100 validators.
         x25519Keys[x25519Key] = true;
         emit X25519KeyUpdated(msg.sender, x25519Key);
-
-        validateP2pAddr(p2pAddr);
         emit P2pAddrUpdated(msg.sender, p2pAddr);
     }
 }
