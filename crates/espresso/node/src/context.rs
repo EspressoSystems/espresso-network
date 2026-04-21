@@ -141,13 +141,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = initializer.epoch_height;
 
-        let coordinator = Coordinator::<SeqTypes, CN>::maker()
+        let coordinator = Coordinator::<SeqTypes, CN, Arc<P>>::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer)
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .timeout_duration(Duration::from_secs(10))
+            .storage(Arc::clone(&persistence))
             .make();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(

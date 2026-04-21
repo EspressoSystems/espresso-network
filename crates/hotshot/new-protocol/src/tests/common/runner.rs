@@ -6,7 +6,7 @@ use std::{
 
 use committable::Committable;
 use hotshot::types::BLSPubKey;
-use hotshot_example_types::node_types::TestTypes;
+use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
@@ -436,7 +436,7 @@ impl TestRunner {
 /// Event loop for a single node.  Processes coordinator inputs, collects
 /// decided leaf commits, and forwards them to the test runner.
 async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
-    mut coord: Coordinator<TestTypes, N>,
+    mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
     output_tx: UnboundedSender<NodeEvent>,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
