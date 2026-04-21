@@ -505,14 +505,14 @@ ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=0xcef474d372b5b09defe2af187bf17338dc704451 \
 ESPRESSO_OPS_TIMELOCK_ADDRESS=0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700 \
 cargo run -p espresso-node --bin deploy -- \
     --rpc-url http://localhost:8545 \
-    --upgrade-stake-table-v3 --use-timelock-owner \
+    --upgrade-stake-table-v3 \
+    --use-timelock-owner \
     --timelock-operation-salt "0x$(openssl rand -hex 32)" \
     --timelock-operation-delay 172800 \
     --calldata-out-dir ./tmp/st_v3_timelock_mainnet/
 ```
 
-Import `schedule.json` (and later `execute.json`) into the Safe UI's
-[Transaction Builder](https://help.safe.global/en/articles/40795-transaction-builder) to inspect the decoded call.
+Import `schedule.json` (and later `execute.json`) into the Safe UI's Transaction Builder to inspect the decoded call.
 
 ## 6. Forward Compatibility
 
