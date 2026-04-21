@@ -46,42 +46,41 @@ jobs:
       matrix:
         include:
           - binary: espresso-node
-            shared-key: postgres
-            save-cache: false
-
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
           - binary: espresso-node-sqlite
-            # uses it's own lock file
-            shared-key: espresso-node-embedded
-            save-cache: true
-
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
-            shared-key: espresso-dev-node
-            save-cache: true
 
     steps:
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
-          shared-key: ${{ matrix.shared-key }}
+          shared-key: build-${{ matrix.binary }}
           save-if: >
-            ${{ matrix.save-cache && (
-            github.ref == 'refs/heads/main'
+            ${{ github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
-            || github.event_name == 'workflow_dispatch' ) }}
-          cache-provider: github
+            || github.event_name == 'workflow_dispatch' }}
 
       - name: Build ${{ matrix.binary }}
         run: |
           scripts/ci-build-binary ${{ matrix.binary }}
+
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-build-amd-${{ matrix.binary }}
+          path: target/cargo-timings/cargo-timing.html
+
+      - name: Cargo timing summary
+        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Move binaries to upload directory
         shell: bash
@@ -109,41 +108,41 @@ jobs:
       matrix:
         include:
           - binary: espresso-node
-            shared-key: postgres
-            save-cache: false
-
           - binary: other
-            shared-key: postgres
-            save-cache: true
-
           - binary: espresso-node-sqlite
-            # uses it's own lock file
-            shared-key: espresso-node-embedded
-            save-cache: true
-
           - binary: espresso-dev-node
-            # uses different features testing,emdbedded-db
-            shared-key: espresso-dev-node
-            save-cache: true
 
     steps:
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
-          shared-key: ${{ matrix.shared-key }}
+          shared-key: build-${{ matrix.binary }}
           save-if: >
-            ${{ matrix.save-cache && (
-            github.ref == 'refs/heads/main'
+            ${{ github.ref == 'refs/heads/main'
             || startsWith(github.ref, 'refs/heads/release-')
-            || github.event_name == 'workflow_dispatch' ) }}
+            || github.event_name == 'workflow_dispatch' }}
 
       - name: Build ${{ matrix.binary }}
         run: |
           scripts/ci-build-binary ${{ matrix.binary }}
+
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings-build-arm-${{ matrix.binary }}
+          path: target/cargo-timings/cargo-timing.html
+
+      - name: Cargo timing summary
+        run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Move binaries to upload directory
         run: |

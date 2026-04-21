@@ -80,6 +80,7 @@ pub mod fs;
 pub mod light_client;
 pub mod options;
 pub mod sql;
+pub mod state;
 pub mod unlock_schedule;
 mod update;
 
@@ -1227,7 +1228,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateSignatureDataSou
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Representation of the RewardMerkleTreeV2 as a set of key-value pairs
-pub(crate) struct RewardMerkleTreeV2Data {
+pub struct RewardMerkleTreeV2Data {
     pub balances: Vec<(RewardAccountV2, RewardAmount)>,
 }
 
@@ -1571,6 +1572,92 @@ where
     }
 }
 
+// Implement Reward MerkleTreeDataSource for Arc<D> to allow shared ownership
+impl<D> RewardMerkleTreeDataSource for Arc<D>
+where
+    D: RewardMerkleTreeDataSource,
+{
+    async fn load_v1_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV1,
+    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+        (**self).load_v1_reward_account_proof(height, account).await
+    }
+
+    fn persist_tree(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).persist_tree(height, merkle_tree).await }
+    }
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_tree(height).await }
+    }
+
+    fn load_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<PermittedRewardMerkleTreeV2>> {
+        async move { (**self).load_reward_merkle_tree_v2(height).await }
+    }
+
+    fn load_reward_account_proof_v2(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move { (**self).load_reward_account_proof_v2(height, account).await }
+    }
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).persist_proofs(height, proofs).await }
+    }
+
+    fn persist_reward_proofs(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            (**self)
+                .persist_reward_proofs(node_state, height, version)
+                .await
+        }
+    }
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+        epoch_height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_proof(height, account, epoch_height).await }
+    }
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
+        async move { (**self).proof_exists(height).await }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_latest_proof(account).await }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).garbage_collect(height).await }
+    }
+}
+
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
     use std::{cmp::max, time::Duration};
@@ -1613,7 +1700,7 @@ pub mod test_helpers {
     use super::*;
     use crate::{
         catchup::NullStateCatchup,
-        consensus_handle::ConsensusEvent,
+        consensus_handle::CoordinatorEvent,
         network,
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
@@ -2160,7 +2247,7 @@ pub mod test_helpers {
         // Wait for a few blocks to be decided.
         let mut events = network.server.event_stream();
         loop {
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = events.next().await.unwrap()
@@ -2965,7 +3052,7 @@ mod test {
         sql::DataSource as SqlDataSource,
     };
     use super::*;
-    use crate::consensus_handle::ConsensusEvent;
+    use crate::consensus_handle::CoordinatorEvent;
 
     async fn wait_until_block_height(
         client: &Client<ServerError, StaticVersion<0, 1>>,
@@ -3152,7 +3239,7 @@ mod test {
         let mut events = network.peers[0].event_stream();
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -3178,7 +3265,7 @@ mod test {
             .filter(|event| {
                 future::ready(matches!(
                     event,
-                    ConsensusEvent::LegacyEvent(Event {
+                    CoordinatorEvent::LegacyEvent(Event {
                         event: EventType::Decide { .. },
                         ..
                     })
@@ -3216,7 +3303,7 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -3272,7 +3359,7 @@ mod test {
         let mut events = network.peers[0].event_stream();
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -3298,7 +3385,7 @@ mod test {
             .filter(|event| {
                 future::ready(matches!(
                     event,
-                    ConsensusEvent::LegacyEvent(Event {
+                    CoordinatorEvent::LegacyEvent(Event {
                         event: EventType::Decide { .. },
                         ..
                     })
@@ -3331,7 +3418,7 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -3377,7 +3464,7 @@ mod test {
         let mut events = network.peers[0].event_stream();
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -3406,7 +3493,7 @@ mod test {
             .filter(|event| {
                 future::ready(matches!(
                     event,
-                    ConsensusEvent::LegacyEvent(Event {
+                    CoordinatorEvent::LegacyEvent(Event {
                         event: EventType::Decide { .. },
                         ..
                     })
@@ -3439,7 +3526,7 @@ mod test {
         let mut proposers = [false; NUM_NODES];
         loop {
             let event = events.next().await.unwrap();
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -3506,7 +3593,7 @@ mod test {
             .filter(|event| {
                 future::ready(matches!(
                     event,
-                    ConsensusEvent::LegacyEvent(Event {
+                    CoordinatorEvent::LegacyEvent(Event {
                         event: EventType::Decide { .. },
                         ..
                     })
@@ -3563,6 +3650,8 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
+                axum_port: None,
+                tonic_port: None,
             }))
             .states(states)
             .catchups(std::array::from_fn(|_| {
@@ -3585,7 +3674,7 @@ mod test {
             .filter(|event| {
                 future::ready(matches!(
                     event,
-                    ConsensusEvent::LegacyEvent(Event {
+                    CoordinatorEvent::LegacyEvent(Event {
                         event: EventType::Decide { .. },
                         ..
                     })
@@ -3612,7 +3701,9 @@ mod test {
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_reward_upgrade() {
-        test_upgrade_helper(Upgrade::new(
+        // Use fewer nodes: epoch mode from view 0 is resource-heavy on CI with
+        // postgres Docker containers, causing view timeouts and consensus stall.
+        test_upgrade_helper_with_nodes::<3>(Upgrade::new(
             versions::DRB_AND_HEADER_UPGRADE_VERSION,
             versions::EPOCH_REWARD_VERSION,
         ))
@@ -3620,11 +3711,13 @@ mod test {
     }
 
     async fn test_upgrade_helper(upgrade: Upgrade) {
+        test_upgrade_helper_with_nodes::<5>(upgrade).await;
+    }
+
+    async fn test_upgrade_helper_with_nodes<const NUM_NODES: usize>(upgrade: Upgrade) {
         // wait this number of views beyond the configured first view
         // before asserting anything.
         let wait_extra_views = 10;
-        // Number of nodes running in the test network.
-        const NUM_NODES: usize = 5;
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         let epoch_start_block = if upgrade.base >= versions::EPOCH_VERSION {
             0
@@ -3690,7 +3783,7 @@ mod test {
         // voting and finally the actual upgrade.
         // Use the raw HotShot event stream for upgrade testing, since
         // UpgradeProposal events are HotShot-specific and not surfaced
-        // through the ConsensusEvent adapter.
+        // through the CoordinatorEvent adapter.
         let mut hotshot_events = network
             .server
             .consensus_handle()
@@ -4464,7 +4557,7 @@ mod test {
         // Wait for the chain to progress beyond epoch 3 so rewards start being distributed.
         let mut events = network.peers[0].event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -5258,7 +5351,7 @@ mod test {
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -5278,7 +5371,7 @@ mod test {
         // Wait for epochs to progress with node 1 offline
         let mut events = network.server.event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -5403,7 +5496,7 @@ mod test {
         // Wait for the peer 0 (node 1) to advance past three epochs
         let mut events = network.peers[0].event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -5423,7 +5516,7 @@ mod test {
         // Wait for epochs to progress with node 1 offline
         let mut events = network.server.event_stream();
         while let Some(event) = events.next().await {
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -6912,7 +7005,7 @@ mod test {
             let event = events.next().await.unwrap();
             tracing::info!("Received event from handle: {event:?}");
 
-            if let ConsensusEvent::LegacyEvent(Event {
+            if let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -7624,6 +7717,8 @@ mod test {
             .api_config(Options::from(options::Http {
                 port,
                 max_connections: None,
+                axum_port: None,
+                tonic_port: None,
             }))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<SequencerApiVersion>::from_urls(

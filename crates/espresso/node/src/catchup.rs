@@ -156,7 +156,7 @@ impl<ApiVer: StaticVersionType> StatePeers<ApiVer> {
         // honest peer, and thus never make progress. Thus, we start with a base timeout (default
         // 2s), which is reasonable for an HTTP request. If that fails with all of our peers, we
         // increase the timeout by the base amount for each successive retry, until we eventually
-        // succeed. The base timeout is configurable via ESPRESSO_SEQUENCER_CATCHUP_BASE_TIMEOUT.
+        // succeed. The base timeout is configurable via ESPRESSO_NODE_CATCHUP_BASE_TIMEOUT.
         let timeout_dur = self.base_timeout * (retry as u32 + 1);
 
         // Keep track of which peers we make requests to and which succeed (`true`) or fail (`false`),

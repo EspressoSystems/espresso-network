@@ -30,7 +30,7 @@ use vbs::version::StaticVersionType;
 
 use crate::{
     SeqTypes,
-    consensus_handle::{ConsensusEvent, ConsensusHandle},
+    consensus_handle::{CoordinatorEvent as ConsensusEvent, ConsensusHandle},
 };
 
 /// A relay server that's collecting and serving the light client state signatures

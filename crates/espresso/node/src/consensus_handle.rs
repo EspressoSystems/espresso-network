@@ -9,33 +9,31 @@ use std::{
 use async_broadcast::InactiveReceiver;
 use async_lock::RwLock;
 use committable::Commitment;
-pub use espresso_types::{ConsensusEvent, NewDecideEvent};
+pub use espresso_types::{ConsensusEvent as CoordinatorEvent, NewDecideEvent};
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
+    client::ClientApi,
     consensus::ConsensusOutput,
-    coordinator::{Coordinator, error::Severity},
-    query::CoordinatorQuery,
+    coordinator::{Coordinator, CoordinatorOutput, error::Severity},
+    state::UpdateLeaf,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
-    message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
+    message::{Proposal as SignedProposal, UpgradeLock},
     traits::{
         ValidatedState, network::ConnectedNetwork, node_implementation::NodeType,
         signature_key::SignatureKey,
     },
     utils::StateAndDelta,
 };
-use tokio::{
-    spawn,
-    sync::{mpsc, oneshot},
-};
+use tokio::spawn;
 use tokio_util::task::AbortOnDropHandle;
 use versions::version;
 
-pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<ConsensusEvent<T>> {
+fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<CoordinatorEvent<T>> {
     match output {
         ConsensusOutput::LeafDecided {
             leaves,
@@ -47,7 +45,7 @@ pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Con
                 tracing::warn!("coordinator emitted LeafDecided with empty leaves");
                 return None;
             };
-            Some(ConsensusEvent::NewDecide(NewDecideEvent {
+            Some(CoordinatorEvent::NewDecide(NewDecideEvent {
                 view_number: first_leaf.view_number(),
                 leaves: leaves.clone(),
                 cert1: cert1.clone(),
@@ -56,45 +54,52 @@ pub fn event_from_output<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Con
             }))
         },
         ConsensusOutput::ViewChanged(view, _epoch) => {
-            Some(ConsensusEvent::ViewChanged { view_number: *view })
+            Some(CoordinatorEvent::ViewChanged { view_number: *view })
         },
         ConsensusOutput::ProposalValidated { proposal, sender } => {
-            Some(ConsensusEvent::QuorumProposal {
+            Some(CoordinatorEvent::QuorumProposal {
                 proposal: proposal.clone(),
                 sender: sender.clone(),
-            })
-        },
-        ConsensusOutput::ExternalMessageReceived { sender, data } => {
-            Some(ConsensusEvent::ExternalMessageReceived {
-                sender: sender.clone(),
-                data: data.clone(),
             })
         },
         _ => None,
     }
 }
 
+fn coordinator_event<T: NodeType>(output: &CoordinatorOutput<T>) -> Option<CoordinatorEvent<T>> {
+    match output {
+        CoordinatorOutput::Consensus(inner) => consensus_event(inner),
+        CoordinatorOutput::ExternalMessageReceived { sender, data } => {
+            Some(CoordinatorEvent::ExternalMessageReceived {
+                sender: sender.clone(),
+                data: data.clone(),
+            })
+        },
+    }
+}
+
 pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T>> {
     legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-    query_tx: mpsc::Sender<CoordinatorQuery<T>>,
+    client_api: ClientApi<T>,
     coordinator_task: AbortOnDropHandle<()>,
-    coordinator_epoch_height: u64,
+    epoch_height: u64,
     new_protocol_active: AtomicBool,
     legacy_event_rx: InactiveReceiver<Event<T>>,
-    event_rx: InactiveReceiver<ConsensusEvent<T>>,
+    event_rx: InactiveReceiver<CoordinatorEvent<T>>,
 }
 
 impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, I> {
     pub fn new<CN: ConnectedNetwork<T::SignatureKey>>(
         legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
         coordinator: Coordinator<T, CN>,
-        query_tx: mpsc::Sender<CoordinatorQuery<T>>,
-        coordinator_epoch_height: u64,
+        epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
     ) -> Self {
+        let client_api = coordinator.client_api().clone();
+
         let (mut event_tx, mut event_rx) =
-            async_broadcast::broadcast::<ConsensusEvent<T>>(event_channel_capacity);
+            async_broadcast::broadcast::<CoordinatorEvent<T>>(event_channel_capacity);
         event_tx.set_await_active(false);
         event_rx.set_overflow(true);
 
@@ -103,9 +108,9 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
         Self {
             legacy_handle,
-            query_tx,
+            client_api,
             coordinator_task,
-            coordinator_epoch_height,
+            epoch_height,
             new_protocol_active: AtomicBool::new(false),
             legacy_event_rx,
             event_rx: event_rx.deactivate(),
@@ -116,16 +121,8 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         self.legacy_handle.clone()
     }
 
-    async fn query<R>(
-        &self,
-        make_query: impl FnOnce(oneshot::Sender<R>) -> CoordinatorQuery<T>,
-    ) -> R {
-        let (tx, rx) = oneshot::channel();
-        self.query_tx
-            .send(make_query(tx))
-            .await
-            .expect("coordinator channel closed");
-        rx.await.expect("coordinator dropped response sender")
+    pub fn client_api(&self) -> &ClientApi<T> {
+        &self.client_api
     }
 
     async fn new_protocol_at(&self, view: ViewNumber) -> bool {
@@ -154,11 +151,11 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         self.new_protocol_at(view).await
     }
 
-    pub fn event_stream(&self) -> BoxStream<'static, ConsensusEvent<T>> {
+    pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
         let old_stream = self
             .legacy_event_rx
             .activate_cloned()
-            .map(ConsensusEvent::LegacyEvent);
+            .map(CoordinatorEvent::LegacyEvent);
 
         let new_stream = self.event_rx.activate_cloned();
 
@@ -167,14 +164,22 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn current_view(&self) -> ViewNumber {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::CurrentView).await;
+            return self
+                .client_api
+                .current_view()
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle.read().await.cur_view().await
     }
 
     pub async fn decided_leaf(&self) -> Leaf2<T> {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::DecidedLeaf).await;
+            return self
+                .client_api
+                .decided_leaf()
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle.read().await.decided_leaf().await
     }
@@ -182,8 +187,10 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     pub async fn decided_state(&self) -> Arc<T::ValidatedState> {
         if self.new_protocol().await {
             return self
-                .query(CoordinatorQuery::DecidedState)
+                .client_api
+                .decided_state()
                 .await
+                .expect("coordinator channel closed")
                 .expect("decided state must exist");
         }
         self.legacy_handle.read().await.decided_state().await
@@ -192,8 +199,10 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
         if self.new_protocol_at(view).await {
             return self
-                .query(|tx| CoordinatorQuery::GetState { view, respond: tx })
-                .await;
+                .client_api
+                .state(view)
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle.read().await.state(view).await
     }
@@ -201,8 +210,10 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
         if self.new_protocol_at(view).await {
             return self
-                .query(|tx| CoordinatorQuery::GetStateAndDelta { view, respond: tx })
-                .await;
+                .client_api
+                .state_and_delta(view)
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle
             .read()
@@ -216,7 +227,11 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::UndecidedLeaves).await;
+            return self
+                .client_api
+                .undecided_leaves()
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle
             .read()
@@ -230,14 +245,18 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
         if self.new_protocol().await {
-            return self.query(CoordinatorQuery::CurrentEpoch).await;
+            return self
+                .client_api
+                .current_epoch()
+                .await
+                .expect("coordinator channel closed");
         }
         self.legacy_handle.read().await.cur_epoch().await
     }
 
     pub async fn epoch_height(&self) -> u64 {
         if self.new_protocol().await {
-            return self.coordinator_epoch_height;
+            return self.epoch_height;
         }
         self.legacy_handle.read().await.epoch_height
     }
@@ -317,21 +336,7 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     ) -> anyhow::Result<
         BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
-        if self.new_protocol_at(view).await {
-            let result = self
-                .query(|tx| CoordinatorQuery::RequestProposal {
-                    view,
-                    leaf_commitment,
-                    respond: tx,
-                })
-                .await;
-            return Ok(async move {
-                result
-                    .map(convert_proposal)
-                    .ok_or_else(|| anyhow::anyhow!("proposal not found for view {view}"))
-            }
-            .boxed());
-        }
+        // TODO: route through client_api once new protocol supports RequestProposal.
         let future = self
             .legacy_handle
             .read()
@@ -360,14 +365,15 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         let view = leaf.view_number();
         if self.new_protocol_at(view).await {
             return self
-                .query(|tx| CoordinatorQuery::UpdateLeaf {
+                .client_api
+                .update_leaf(UpdateLeaf {
                     view,
                     leaf,
                     state,
                     delta,
-                    respond: tx,
                 })
-                .await;
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"));
         }
         self.legacy_handle
             .read()
@@ -402,7 +408,7 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 
 async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
     mut coordinator: Coordinator<T, CN>,
-    event_sender: async_broadcast::Sender<ConsensusEvent<T>>,
+    event_sender: async_broadcast::Sender<CoordinatorEvent<T>>,
 ) {
     coordinator.start().await;
     loop {
@@ -417,19 +423,8 @@ async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
             },
         }
         while let Some(output) = coordinator.outbox_mut().pop_front() {
-            if let Some(event) = event_from_output(&output) {
-                match event_sender.broadcast_direct(event).await {
-                    Ok(None) => {},
-                    Ok(Some(overflowed)) => {
-                        tracing::warn!(
-                            %overflowed,
-                            "coordinator event channel overflow, oldest event dropped"
-                        );
-                    },
-                    Err(err) => {
-                        tracing::warn!(%err, "failed to broadcast consensus event");
-                    },
-                }
+            if let Some(event) = consensus_event(&output) {
+                broadcast_event(&event_sender, event).await;
             }
             if let Err(err) = coordinator.process_consensus_output(output).await {
                 if err.severity == Severity::Critical {
@@ -440,5 +435,28 @@ async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
                 }
             }
         }
+        while let Some(output) = coordinator.coordinator_outbox_mut().pop_front() {
+            if let Some(event) = coordinator_event(&output) {
+                broadcast_event(&event_sender, event).await;
+            }
+        }
+    }
+}
+
+async fn broadcast_event<T: NodeType>(
+    sender: &async_broadcast::Sender<CoordinatorEvent<T>>,
+    event: CoordinatorEvent<T>,
+) {
+    match sender.broadcast_direct(event).await {
+        Ok(None) => {},
+        Ok(Some(overflowed)) => {
+            tracing::warn!(
+                %overflowed,
+                "coordinator event channel overflow, oldest event dropped"
+            );
+        },
+        Err(err) => {
+            tracing::warn!(%err, "failed to broadcast consensus event");
+        },
     }
 }

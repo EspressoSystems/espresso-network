@@ -25,8 +25,11 @@ use crate::{
 
 type Result<T> = std::result::Result<T, ValidationError>;
 
-/// A validated proposal
-type ValidatedProposal<T> = (<T as NodeType>::SignatureKey, ProposalMessage<T, Validated>);
+/// A validated proposal.
+pub struct ValidatedProposal<T: NodeType> {
+    pub sender: T::SignatureKey,
+    pub message: ProposalMessage<T, Validated>,
+}
 
 /// A proposal validator checks proposal signature and integrity.
 pub struct ProposalValidator<T: NodeType> {
@@ -58,7 +61,10 @@ impl<T: NodeType> ProposalValidator<T> {
             v.vid_share(&p.vid_share, p.proposal.data.epoch).await?;
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
-            Ok((sender, ProposalMessage::validated(p.proposal, p.vid_share)))
+            Ok(ValidatedProposal {
+                sender,
+                message: ProposalMessage::validated(p.proposal, p.vid_share),
+            })
         });
     }
 

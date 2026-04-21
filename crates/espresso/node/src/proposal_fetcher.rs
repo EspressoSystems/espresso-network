@@ -22,7 +22,7 @@ use tracing::Instrument;
 
 use crate::{
     SeqTypes,
-    consensus_handle::{ConsensusEvent, ConsensusHandle},
+    consensus_handle::{ConsensusHandle, CoordinatorEvent},
     context::{ConsensusNode, TaskList},
 };
 
@@ -30,14 +30,14 @@ use crate::{
 pub struct ProposalFetcherConfig {
     #[clap(
         long = "proposal-fetcher-num-workers",
-        env = "ESPRESSO_SEQUENCER_PROPOSAL_FETCHER_NUM_WORKERS",
+        env = "ESPRESSO_NODE_PROPOSAL_FETCHER_NUM_WORKERS",
         default_value = "2"
     )]
     pub num_workers: usize,
 
     #[clap(
         long = "proposal-fetcher-fetch-timeout",
-        env = "ESPRESSO_SEQUENCER_PROPOSAL_FETCHER_FETCH_TIMEOUT",
+        env = "ESPRESSO_NODE_PROPOSAL_FETCHER_FETCH_TIMEOUT",
         default_value = "2s",
         value_parser = parse_duration,
     )]
@@ -136,14 +136,14 @@ where
             // Whenever we see a quorum proposal, ensure we have the chain of proposals stretching
             // back to the anchor. This allows state replay from the decided state.
             let (parent_view, parent_leaf) = match event {
-                ConsensusEvent::LegacyEvent(Event {
+                CoordinatorEvent::LegacyEvent(Event {
                     event: EventType::QuorumProposal { proposal, .. },
                     ..
                 }) => {
                     let qc = proposal.data.justify_qc();
                     (qc.view_number, qc.data.leaf_commit)
                 },
-                ConsensusEvent::QuorumProposal { proposal, .. } => {
+                CoordinatorEvent::QuorumProposal { proposal, .. } => {
                     let qc = &proposal.data.justify_qc;
                     (qc.view_number, qc.data.leaf_commit)
                 },

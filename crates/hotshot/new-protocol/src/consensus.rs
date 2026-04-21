@@ -84,8 +84,6 @@ pub enum ConsensusOutput<T: NodeType> {
         payload: T::BlockPayload,
         metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     },
-    Certificate1Formed(Certificate1<T>),
-    Certificate2Formed(Certificate2<T>),
     LeafDecided {
         leaves: Vec<Leaf2<T>>,
         /// Certificate1 (QC) that certifies the most recent (first) leaf in the chain.
@@ -101,13 +99,10 @@ pub enum ConsensusOutput<T: NodeType> {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
     },
-    ExternalMessageReceived {
-        sender: T::SignatureKey,
-        data: Vec<u8>,
-    },
 }
 
-/// A decided leaf with its Certificate1 (QC).
+/// Decided leaves plus the certificates and VID shares needed by the node adapter
+/// to persist and broadcast them. Emitted by the coordinator.
 #[derive(Clone, Debug)]
 pub struct NewDecideEvent<T: NodeType> {
     pub view_number: ViewNumber,
@@ -116,14 +111,12 @@ pub struct NewDecideEvent<T: NodeType> {
     /// Each older leaf's cert1 is the next leaf's `justify_qc`.
     pub cert1: Certificate1<T>,
     pub cert2: Option<Certificate2<T>>,
-    /// VID shares for decided leaves, parallel to `leaves`. Pre-signed so the
     // TODO(new-protocol): remove this field once the coordinator has storage
     pub vid_shares: Vec<Option<SignedProposal<T, VidDisperseShare2<T>>>>,
 }
 
-/// Events emitted by the consensus coordinator.
-///
-/// This enum covers both legacy HotShot events and new protocol events.
+/// High-level event emitted by the coordinator adapter. Covers both legacy HotShot
+/// events and new-protocol coordinator events.
 #[derive(Clone, Debug)]
 pub enum ConsensusEvent<T: NodeType> {
     LegacyEvent(hotshot::types::Event<T>),
@@ -191,7 +184,7 @@ pub struct Consensus<T: NodeType> {
     voted_2_views: BTreeSet<ViewNumber>,
 
     timeout_view: ViewNumber,
-    cur_view: ViewNumber,
+    current_view: ViewNumber,
     current_epoch: Option<EpochNumber>,
 
     // TODO: We need a next epoch stake table to handle the transition
@@ -246,7 +239,7 @@ impl<T: NodeType> Consensus<T> {
             node_id: KeyPrefix::from(&public_key),
             public_key,
             timeout_view: ViewNumber::genesis(),
-            cur_view: ViewNumber::genesis(),
+            current_view: ViewNumber::genesis(),
             current_epoch: None,
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
@@ -304,15 +297,6 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
         let view = input.view_number();
-        // Ignore old inputs unless it's a DRB result
-        // TODO: This isn't correct, I think we need to process vote2 for views
-        // that haven't timed out, but are before the timeout view
-        if !matches!(input, ConsensusInput::DrbResult(_, _))
-            && !matches!(input, ConsensusInput::Timeout(..))
-            && view <= self.timeout_view
-        {
-            return;
-        }
         let proto = match input {
             ConsensusInput::Proposal(sender, proposal) => {
                 self.handle_proposal(sender, proposal, outbox).await
@@ -406,26 +390,25 @@ impl<T: NodeType> Consensus<T> {
         &self.last_decided_leaf
     }
 
-    pub fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
+    pub fn undecided_leaves(&self) -> impl Iterator<Item = &Leaf2<T>> {
         self.leaves
             .range((
                 std::ops::Bound::Excluded(self.last_decided_view),
                 std::ops::Bound::Unbounded,
             ))
-            .map(|(_, leaf)| leaf.clone())
-            .collect()
+            .map(|(_, leaf)| leaf)
     }
 
-    pub fn cur_view(&self) -> ViewNumber {
-        self.cur_view
+    pub fn current_view(&self) -> ViewNumber {
+        self.current_view
     }
 
-    pub fn cur_epoch(&self) -> Option<EpochNumber> {
+    pub fn current_epoch(&self) -> Option<EpochNumber> {
         self.current_epoch
     }
 
     pub fn set_view(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        self.cur_view = view;
+        self.current_view = view;
         self.current_epoch = Some(epoch);
     }
 
@@ -535,7 +518,7 @@ impl<T: NodeType> Consensus<T> {
 
         outbox.push_back(ConsensusOutput::RequestState(StateRequest {
             view: proposal.view_number(),
-            parent_view: proposal.view_number().saturating_sub(1).into(),
+            parent_view: proposal.justify_qc.view_number(),
             epoch,
             block: proposal.block_header.block_number().into(),
             proposal: proposal.clone(),
@@ -1015,6 +998,9 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     async fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if view <= self.timeout_view {
+            return;
+        }
         if self.voted_1_views.contains(&view) {
             return;
         }

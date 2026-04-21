@@ -1,0 +1,72 @@
+# STATUS: draft, in testing
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name (e.g. 20260408, 20260408.rc1, 20260408-testing)"
+        required: true
+        type: string
+      ref:
+        description: "Branch or commit to tag (e.g. release-vid-upgrade, main, abc1234)"
+        required: true
+        type: string
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.classify.outputs.prerelease }}
+    steps:
+      - name: Validate tag format
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! echo "$TAG" | grep -qE '^20[0-9]{2}[01][0-9][0-3][0-9](\..+|-.*)?$'; then
+            echo "::error::Tag must match YYYYMMDD, YYYYMMDD.qualifier, or YYYYMMDD-description"
+            exit 1
+          fi
+
+      - name: Classify release type
+        id: classify
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if echo "$TAG" | grep -qE '^20[0-9]{2}[01][0-9][0-3][0-9]$'; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  create:
+    needs: validate
+    runs-on: ubuntu-latest
+    # TODO: re-enable after testing
+    # environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Resolve ref to SHA
+        id: resolve
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ steps.resolve.outputs.sha }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=(--target "$SHA" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}"

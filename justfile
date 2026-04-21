@@ -66,16 +66,14 @@ fix *args:
 lint *args:
     just clippy {{args}} -- -D warnings
 
+# postgres and sqlite variants checked separately to cover all code
 clippy *args:
-    # check all targets in default workspace members
-    cargo clippy --features testing --all-targets {{args}}
-    # check entire workspace (including espresso-node-sqlite crate) with embedded-db feature
+    cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets {{args}}
     cargo clippy --workspace --features "embedded-db testing" --all-targets {{args}}
 
+# postgres and sqlite variants checked separately to cover all code
 check *args:
-    # postgres
-    cargo check {{args}}
-    # embedded-db
+    cargo check --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node {{args}}
     cargo check -p espresso-node-sqlite -p espresso-dev-node {{args}}
 
 build profile="dev" features="":
@@ -85,31 +83,31 @@ build profile="dev" features="":
     cargo build --profile {{profile}} -p espresso-node-sqlite -p espresso-dev-node {{features}}
 
 demo-native-fee *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-pos *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-pos.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-pos-base *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-pos-base.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-drb-header-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-drb-header *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-drb-header.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-drb-header.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-fee-to-drb-header-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-fee-to-drb-header-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-da-committees *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-da-committees.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-epoch-reward *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
-    ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-ff *args: (build "test" "--no-default-features")
     ESPRESSO_SEQUENCER_GENESIS_FILE=data/genesis/demo-v8.toml scripts/demo-native -f process-compose.yaml {{args}}
@@ -135,13 +133,14 @@ anvil *args:
 # espresso-node-sqlite: no tests, enables embedded-db feature
 # slow-tests: slow and serial tests
 # espresso-dev-node: enables embedded-db
-nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node"
+# espresso-crypto-helper: vendored openssl leaks to workspace via feature unification
+nextest_excludes := "--exclude espresso-node-sqlite --exclude hotshot-testing --exclude hotshot-new-protocol --exclude slow-tests --exclude espresso-dev-node --exclude hotshot-examples --exclude espresso-crypto-helper"
 
 nextest *args:
-    cargo nextest run --locked --workspace {{nextest_excludes}} --verbose {{args}}
+    cargo nextest run --locked --workspace {{nextest_excludes}} --lib --bins --tests --verbose {{args}}
 
 nextest-archive archive-file *args:
-    cargo nextest archive --locked --workspace {{nextest_excludes}} --archive-file {{archive-file}} {{args}}
+    cargo nextest archive --locked --workspace {{nextest_excludes}} --lib --bins --tests --archive-file {{archive-file}} {{args}}
 
 test *args:
     @echo 'Omitting slow tests. Use `test-slow` for those. Or `test-all` for all tests.'
@@ -166,7 +165,7 @@ test-all:
     just nextest --profile all
 
 test-integration: (build "test")
-	INTEGRATION_TEST_SEQUENCER_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
+	INTEGRATION_TEST_NODE_VERSION=2 cargo nextest run -p tests --nocapture --profile integration test_native_demo_basic
 
 # Run process-compose integration tests with minimal features
 # Examples: just test-demo pos-base, just test-demo drb-header-base

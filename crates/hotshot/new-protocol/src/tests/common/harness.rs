@@ -17,6 +17,7 @@ use crate::{
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
+    logging::KeyPrefix,
     message::Message,
     network::Network,
     outbox::Outbox,
@@ -36,9 +37,9 @@ pub(crate) struct TestHarness {
 
 impl TestHarness {
     pub async fn new(node_index: u64) -> Self {
-        // Default timer is long enough to not fire during normal tests,
-        // which complete in ~100-200ms.
-        Self::new_with_timer(node_index, Duration::from_millis(500)).await
+        // Default timer must be long enough to not fire during tests even
+        // under heavy CPU load (e.g. full test suite running in parallel).
+        Self::new_with_timer(node_index, Duration::from_secs(2)).await
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
@@ -79,12 +80,10 @@ impl TestHarness {
 
         let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
 
-        let (_query_tx, query_rx) = tokio::sync::mpsc::channel(64);
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
             .network(network)
             .state_manager(state_manager)
-            .query_rx(query_rx)
             .vote1_collector(vote1_collector)
             .vote2_collector(vote2_collector)
             .timeout_collector(timeout_collector)
@@ -103,6 +102,7 @@ impl TestHarness {
                 EpochNumber::genesis(),
             ))
             .public_key(public_key)
+            .node_id(KeyPrefix::from(&public_key))
             .build();
         Self {
             coordinator,

@@ -41,7 +41,7 @@ use url::Url;
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
-    consensus_handle::{ConsensusEvent, ConsensusHandle},
+    consensus_handle::{ConsensusHandle, CoordinatorEvent},
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -141,14 +141,14 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = initializer.epoch_height;
 
-        let (coordinator, query_tx) = Coordinator::<SeqTypes, CN>::new(
-            membership_coordinator.clone(),
-            coordinator_network,
-            &initializer,
-            validator_config.public_key,
-            validator_config.private_key.clone(),
-            Duration::from_secs(10),
-        );
+        let coordinator = Coordinator::<SeqTypes, CN>::maker()
+            .membership_coordinator(membership_coordinator.clone())
+            .network(coordinator_network)
+            .initializer(&initializer)
+            .public_key(validator_config.public_key)
+            .private_key(validator_config.private_key.clone())
+            .timeout_duration(Duration::from_secs(10))
+            .make();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
@@ -176,7 +176,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         let consensus_handle = Arc::new(ConsensusHandle::new(
             hotshot_handle.clone(),
             coordinator,
-            query_tx,
             epoch_height,
             legacy_event_rx,
             EXTERNAL_EVENT_CHANNEL_SIZE,
@@ -344,7 +343,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
     }
 
     /// Stream consensus events.
-    pub fn event_stream(&self) -> BoxStream<'static, ConsensusEvent<SeqTypes>> {
+    pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<SeqTypes>> {
         self.consensus_handle.event_stream()
     }
 
@@ -486,7 +485,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
 async fn handle_events<N, P>(
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     node_id: u64,
-    mut events: impl Stream<Item = ConsensusEvent<SeqTypes>> + Unpin,
+    mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
@@ -515,7 +514,7 @@ async fn handle_events<N, P>(
 
         // Handle external messages from either protocol.
         match &event {
-            ConsensusEvent::LegacyEvent(hotshot_event) => {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let hotshot_types::event::EventType::ExternalMessageReceived {
                     ref data, ..
                 } = hotshot_event.event
@@ -525,7 +524,7 @@ async fn handle_events<N, P>(
                     }
                 }
             },
-            ConsensusEvent::ExternalMessageReceived { data, .. } => {
+            CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
@@ -536,16 +535,16 @@ async fn handle_events<N, P>(
         // Persistence: handles both legacy and new protocol events.
         persistence.handle_event(&event, &event_consumer).await;
 
-        // State signer: accepts ConsensusEvent directly.
+        // State signer: accepts CoordinatorEvent directly.
         state_signer
             .write()
             .await
-            .handle_event(&event, &consensus_handle)
+            .handle_event(&event, consensus_handle.as_ref())
             .await;
 
         // Events streamer: only forward legacy events for now.
         // TODO: translate NewDecide to legacy Event for events streamer subscribers.
-        if let ConsensusEvent::LegacyEvent(ref hotshot_event) = event {
+        if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event {
             if let Some(events_streamer) = events_streamer.as_ref() {
                 events_streamer
                     .write()

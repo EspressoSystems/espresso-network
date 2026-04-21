@@ -32,7 +32,7 @@ use espresso_node::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
         test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
     },
-    consensus_handle::ConsensusEvent,
+    consensus_handle::CoordinatorEvent,
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
@@ -404,7 +404,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
-    async fn event_stream(&self) -> Option<BoxStream<'_, ConsensusEvent<SeqTypes>>> {
+    async fn event_stream(&self) -> Option<BoxStream<'_, CoordinatorEvent<SeqTypes>>> {
         if let Some(ctx) = &self.context {
             Some(ctx.event_stream().boxed())
         } else {
@@ -472,7 +472,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         // (getting Decide events) and participating (able to propose).
         let mut events = context.event_stream();
         while let Some(event) = events.next().await {
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -517,7 +517,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let mut state_write = self.reference_state.write().await;
 
         while let Some(event) = events.next().await {
-            let ConsensusEvent::LegacyEvent(Event {
+            let CoordinatorEvent::LegacyEvent(Event {
                 event: EventType::Decide { leaf_chain, .. },
                 ..
             }) = event
@@ -564,7 +564,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .await;
         task.start(Box::new(ctx.event_stream().filter_map(|event| {
             futures::future::ready(match event {
-                ConsensusEvent::LegacyEvent(e) => Some(e),
+                CoordinatorEvent::LegacyEvent(e) => Some(e),
                 _ => None,
             })
         })));
@@ -609,7 +609,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let timeout_duration = Duration::from_secs(60);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
-                let ConsensusEvent::LegacyEvent(Event {
+                let CoordinatorEvent::LegacyEvent(Event {
                     event:
                         EventType::Decide {
                             committing_qc: qc, ..
@@ -1032,7 +1032,7 @@ impl TestNetwork {
                     .next()
                     .await
                     .expect("event stream terminated unexpectedly");
-                let ConsensusEvent::LegacyEvent(Event {
+                let CoordinatorEvent::LegacyEvent(Event {
                     event: EventType::Decide { leaf_chain, .. },
                     ..
                 }) = event
@@ -1107,7 +1107,7 @@ impl TestNetwork {
                             .next()
                             .await
                             .expect("event stream terminated unexpectedly");
-                        let ConsensusEvent::LegacyEvent(Event {
+                        let CoordinatorEvent::LegacyEvent(Event {
                             event: EventType::Decide { leaf_chain, .. },
                             ..
                         }) = event
