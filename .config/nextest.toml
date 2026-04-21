@@ -72,7 +72,7 @@ retries = 3
 # and late-start tests have max_runtime up to 500s, so we give them more
 # headroom than the default profile's 360s termination.
 [profile.new-protocol]
-slow-timeout = { period = "2m", terminate-after = 5 }
+slow-timeout = { period = "2m", terminate-after = 3 }
 default-filter = 'package(hotshot-new-protocol)'
 retries = 0
 
