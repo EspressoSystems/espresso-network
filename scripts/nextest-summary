@@ -18,14 +18,19 @@ Examples:
     scripts/nextest-summary target/nextest --log-level warning
 """
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import argparse
 import json
 import logging
 import os
-import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from pathlib import Path
+
+from _nextest_parse import derive_status
 
 log = logging.getLogger("nextest-summary")
 
@@ -40,16 +45,6 @@ class TestCase:
 
 def parse_time(raw: str | None) -> float:
     return float(raw) if raw else 0.0
-
-
-def derive_status(case: ET.Element) -> str:
-    if case.find("failure") is not None or case.find("error") is not None:
-        return "failed"
-    if case.find("flakyFailure") is not None:
-        return "flaky"
-    if case.find("skipped") is not None:
-        return "skipped"
-    return "passed"
 
 
 def count_attempts(case: ET.Element) -> int:

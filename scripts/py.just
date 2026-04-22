@@ -1,4 +1,4 @@
-scripts := "nextest-history nextest-summary"
+scripts := "nextest-history nextest-summary _nextest_parse.py"
 
 fmt *args:
     ruff format {{scripts}} {{args}}

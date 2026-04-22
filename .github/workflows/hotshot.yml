@@ -230,21 +230,10 @@ jobs:
           pattern: nextest-junit-*
           path: junit-artifacts
 
-      - name: Fetch previous stats
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Export stats
         run: |
-          python3 scripts/nextest-history fetch \
-            --workflow hotshot.yml \
-            --artifact-name test-stats-hotshot \
-            --out prev-stats.json
-
-      - name: Build new stats
-        run: |
-          python3 scripts/nextest-history update \
+          python3 scripts/nextest-history write \
             --junit-dir junit-artifacts \
-            --prev prev-stats.json \
-            --window 20 \
             --sha "${{ github.sha }}" \
             --run-id "${{ github.run_id }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
