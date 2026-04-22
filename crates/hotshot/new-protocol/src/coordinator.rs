@@ -88,7 +88,7 @@ impl<T: NodeType, N: Network<T>> Coordinator<T, N> {
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         timeout_duration: Duration,
-        lock: UpgradeLock<T>,
+        upgrade_lock: UpgradeLock<T>,
     ) -> Self {
         let consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -96,11 +96,13 @@ impl<T: NodeType, N: Network<T>> Coordinator<T, N> {
             private_key,
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
-            lock.clone(),
+            upgrade_lock.clone(),
         );
 
-        let state_manager =
-            StateManager::new(Arc::new(initializer.instance_state.clone()), lock.clone());
+        let state_manager = StateManager::new(
+            Arc::new(initializer.instance_state.clone()),
+            upgrade_lock.clone(),
+        );
 
         Self::builder()
             .consensus(consensus)
@@ -110,23 +112,23 @@ impl<T: NodeType, N: Network<T>> Coordinator<T, N> {
             .vid_reconstructor(VidReconstructor::new())
             .vote1_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .vote2_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .timeout_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .timeout_one_honest_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .checkpoint_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
@@ -136,11 +138,11 @@ impl<T: NodeType, N: Network<T>> Coordinator<T, N> {
                 Arc::new(initializer.instance_state.clone()),
                 membership_coordinator.clone(),
                 BlockBuilderConfig::default(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(
@@ -597,7 +599,7 @@ impl<T: NodeType, N: Network<T>> Coordinator<T, N> {
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
-    async fn leader(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+    async fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let membership = self
             .membership_coordinator
             .membership_for_epoch(Some(epoch))

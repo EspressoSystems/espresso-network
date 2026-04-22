@@ -7,16 +7,17 @@ use std::{
     },
 };
 
-use async_broadcast::InactiveReceiver;
+use async_broadcast::{InactiveReceiver, Sender};
 use async_lock::RwLock;
 use committable::Commitment;
 use futures::{StreamExt, stream::BoxStream};
-use hotshot::types::SystemContextHandle;
+use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
     client::ClientApi,
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     message::{Certificate2, Proposal as NewProposal},
+    network::Network,
     state::UpdateLeaf,
 };
 use hotshot_types::{
@@ -24,10 +25,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::{Proposal as SignedProposal, UpgradeLock},
-    traits::{
-        ValidatedState, network::ConnectedNetwork, node_implementation::NodeType,
-        signature_key::SignatureKey,
-    },
+    traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
 use tokio::spawn;
@@ -126,10 +124,14 @@ pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
 }
 
-impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, I> {
-    pub fn new<CN: ConnectedNetwork<T::SignatureKey>>(
+impl<T, I> ConsensusHandle<T, I>
+where
+    T: NodeType,
+    I: NodeImplementation<T>,
+{
+    pub fn new<N: Network<T> + Send + 'static>(
         legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-        coordinator: Coordinator<T, CN>,
+        coordinator: Coordinator<T, N>,
         epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
@@ -440,13 +442,14 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     }
 }
 
-async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
-    mut coordinator: Coordinator<T, CN>,
-    event_sender: async_broadcast::Sender<CoordinatorEvent<T>>,
-) {
+async fn run_coordinator<T, N>(mut coord: Coordinator<T, N>, tx: Sender<CoordinatorEvent<T>>)
+where
+    T: NodeType,
+    N: Network<T>,
+{
     loop {
-        match coordinator.next_consensus_input().await {
-            Ok(input) => coordinator.apply_consensus(input).await,
+        match coord.next_consensus_input().await {
+            Ok(input) => coord.apply_consensus(input).await,
             Err(err) if err.severity == Severity::Critical => {
                 tracing::error!(%err, "coordinator: critical error");
                 return;
@@ -455,11 +458,11 @@ async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
                 tracing::warn!(%err, "coordinator: non-critical error");
             },
         }
-        while let Some(output) = coordinator.outbox_mut().pop_front() {
+        while let Some(output) = coord.outbox_mut().pop_front() {
             if let Some(event) = consensus_event(&output) {
-                broadcast_event(&event_sender, event).await;
+                broadcast_event(&tx, event).await;
             }
-            if let Err(err) = coordinator.process_consensus_output(output).await {
+            if let Err(err) = coord.process_consensus_output(output).await {
                 if err.severity == Severity::Critical {
                     tracing::error!(%err, "coordinator: critical error processing output");
                     return;
@@ -468,9 +471,9 @@ async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
                 }
             }
         }
-        while let Some(output) = coordinator.coordinator_outbox_mut().pop_front() {
+        while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
             if let Some(event) = coordinator_event(&output) {
-                broadcast_event(&event_sender, event).await;
+                broadcast_event(&tx, event).await;
             }
         }
     }

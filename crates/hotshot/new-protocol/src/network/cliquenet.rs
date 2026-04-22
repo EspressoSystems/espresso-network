@@ -124,14 +124,12 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         Ok(())
     }
 
-    fn receive(&mut self) -> impl Future<Output = Result<Message<T, Unchecked>, NetworkError>> {
-        async {
-            let (_src, bytes) = self.inner.receive().await.ok_or_else(|| {
-                NetworkError::MessageReceiveError("cliquenet receive channel closed".to_string())
-            })?;
-            let m = self.deserialize(&bytes)?;
-            Ok(m)
-        }
+    async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
+        let (_src, bytes) = self.inner.receive().await.ok_or_else(|| {
+            NetworkError::MessageReceiveError("cliquenet receive channel closed".to_string())
+        })?;
+        let m = self.deserialize(&bytes)?;
+        Ok(m)
     }
 
     fn gc(&mut self, v: ViewNumber) -> Result<(), NetworkError> {

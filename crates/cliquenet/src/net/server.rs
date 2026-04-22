@@ -549,7 +549,7 @@ impl Server {
             "spawning peer task"
         );
         let node = self.key;
-        let name = self.conf.name;
+        let name = self.conf.name.clone();
         self.peer_tasks.spawn(key, async move {
             let Err(err) = peer.start().await;
             if !matches!(err, NetworkError::PeerInterrupt) {

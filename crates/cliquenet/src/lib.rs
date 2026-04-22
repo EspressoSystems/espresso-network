@@ -8,7 +8,7 @@ mod time;
 pub mod error;
 pub mod x25519;
 
-use std::{fmt, num::NonZeroUsize, time::Duration};
+use std::{fmt, num::NonZeroUsize, sync::Arc, time::Duration};
 
 pub use addr::NetAddr;
 use bon::Builder;
@@ -23,7 +23,8 @@ use crate::x25519::{Keypair, PublicKey};
 #[derive(Debug, Builder)]
 pub struct Config {
     /// Network name.
-    name: &'static str,
+    #[builder(with = |s: impl Into<String>| Arc::new(s.into()))]
+    name: Arc<String>,
 
     /// DH keypair
     keypair: Keypair,

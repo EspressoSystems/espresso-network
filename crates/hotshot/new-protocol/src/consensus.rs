@@ -980,7 +980,7 @@ impl<T: NodeType> Consensus<T> {
             view,
             &self.public_key,
             &self.private_key,
-            &&self.upgrade_lock,
+            &self.upgrade_lock,
         ) {
             Ok(vote) => vote,
             Err(err) => {
