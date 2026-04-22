@@ -24,11 +24,11 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2, VidDisperseShare2,
-        ViewNumber, vid_commitment,
+        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidDisperse, VidDisperse2,
+        VidDisperseShare2, ViewNumber, vid_commitment,
     },
     epoch_membership::EpochMembershipCoordinator,
-    message::Proposal as SignedProposal,
+    message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     simple_vote::{
         QuorumVote2, TimeoutData2, TimeoutVote2, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
@@ -39,6 +39,7 @@ use hotshot_types::{
         block_contents::{BlockHeader, BuilderFee},
         election::Membership,
         network::TestableNetworkingImplementation,
+        node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
     utils::{
@@ -46,10 +47,11 @@ use hotshot_types::{
         is_last_block,
     },
 };
+use versions::VID2_UPGRADE_VERSION;
 
 use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    helpers::{proposal_commitment, upgrade_lock},
+    helpers::proposal_commitment,
     message::{
         Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
         ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
@@ -416,6 +418,10 @@ impl TestData {
     }
 }
 
+pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
+    UpgradeLock::new(VID2_UPGRADE_VERSION.into())
+}
+
 pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
     mock_membership_with_num_nodes(10).await
 }
@@ -575,6 +581,7 @@ pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
+    epoch_height: BlockNumber,
 }
 
 impl ConsensusHarness {
@@ -582,7 +589,10 @@ impl ConsensusHarness {
         Self::new_with_epoch_height(node_index, 10).await
     }
 
-    pub async fn new_with_epoch_height(node_index: u64, epoch_height: u64) -> Self {
+    pub async fn new_with_epoch_height<B>(node_index: u64, epoch_height: B) -> Self
+    where
+        B: Into<BlockNumber>,
+    {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let membership = mock_membership().await;
         let instance = Arc::new(TestInstanceState::default());
@@ -592,17 +602,20 @@ impl ConsensusHarness {
             TEST_VERSIONS.test.base,
         )
         .await;
+        let epoch_height = epoch_height.into();
         let consensus = Consensus::new(
             membership.clone(),
             public_key,
             private_key,
             genesis_leaf,
             epoch_height,
+            upgrade_lock(),
         );
         Self {
             consensus,
             membership_coordinator: membership,
             collected: Outbox::new(),
+            epoch_height,
         }
     }
 
@@ -689,7 +702,7 @@ impl ConsensusHarness {
                 // Mirror the EpochManager: when an epoch-root block is decided,
                 // register the future epoch in the membership (add_epoch_root)
                 // and store a DRB result for it (compute_drb_result).
-                let epoch_height = self.consensus.epoch_height;
+                let epoch_height = self.epoch_height;
                 for leaf in leaves {
                     let block_number = <TestBlockHeader as BlockHeader<TestTypes>>::block_number(
                         leaf.block_header(),

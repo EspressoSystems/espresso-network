@@ -1,89 +1,52 @@
+pub mod cliquenet;
+
 use hotshot::traits::NetworkError;
-use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
-    epoch_membership::EpochMembershipCoordinator,
-    message::{EXTERNAL_MESSAGE_VERSION, UpgradeLock},
-    traits::{
-        network::{BroadcastDelay, ConnectedNetwork, Topic},
-        node_implementation::NodeType,
-    },
-    vote::HasViewNumber,
-};
+use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
 
 use crate::message::{Message, Unchecked, Validated};
 
-pub type Result<T> = std::result::Result<T, NetworkError>;
+pub trait Network<T: NodeType> {
+    fn unicast(
+        &mut self,
+        v: ViewNumber,
+        to: &T::SignatureKey,
+        m: &Message<T, Validated>,
+    ) -> Result<(), NetworkError>;
 
-pub struct Network<T: NodeType, N> {
-    network: N,
-    membership_coordinator: EpochMembershipCoordinator<T>,
-    upgrade_lock: UpgradeLock<T>,
+    fn multicast(
+        &mut self,
+        v: ViewNumber,
+        to: Vec<&T::SignatureKey>,
+        m: &Message<T, Validated>,
+    ) -> Result<(), NetworkError>;
+
+    fn broadcast(&mut self, v: ViewNumber, m: &Message<T, Validated>) -> Result<(), NetworkError>;
+
+    fn receive(
+        &mut self,
+    ) -> impl Future<Output = Result<Message<T, Unchecked>, NetworkError>> + Send;
+
+    fn gc(&mut self, v: ViewNumber) -> Result<(), NetworkError>;
 }
 
-impl<T, N> Network<T, N>
-where
-    T: NodeType,
-    N: ConnectedNetwork<T::SignatureKey>,
-{
-    pub fn new(n: N, m: EpochMembershipCoordinator<T>, u: UpgradeLock<T>) -> Self {
-        Self {
-            network: n,
-            membership_coordinator: m,
-            upgrade_lock: u,
-        }
-    }
-    pub fn gc(&mut self, _view_number: ViewNumber, _epoch: EpochNumber) {
-        // TODO: Implement
-    }
+pub trait PeerManagement<T: NodeType> {
+    type Data;
 
-    pub async fn receive(&mut self) -> Result<Message<T, Unchecked>> {
-        let m = self.network.recv_message().await?;
-        self.deserialize(m)
-    }
+    fn add_peers(
+        &mut self,
+        r: PeerRole,
+        ps: Vec<(T::SignatureKey, Self::Data)>,
+    ) -> Result<(), NetworkError>;
 
-    pub async fn broadcast(&mut self, msg: Message<T, Validated>) -> Result<()> {
-        let view = msg.view_number();
-        let bytes = self.serialize(&msg)?;
-        self.network
-            .broadcast_message(view, bytes, Topic::Global, BroadcastDelay::None)
-            .await?;
-        Ok(())
-    }
+    fn remove_peers(&mut self, ps: Vec<&T::SignatureKey>) -> Result<(), NetworkError>;
 
-    pub async fn unicast(&mut self, to: T::SignatureKey, msg: Message<T, Validated>) -> Result<()> {
-        let view = msg.view_number();
-        let bytes = self.serialize(&msg)?;
-        self.network.direct_message(view, bytes, to).await?;
-        Ok(())
-    }
+    fn assign_role(&mut self, r: PeerRole, ps: Vec<&T::SignatureKey>) -> Result<(), NetworkError>;
+}
 
-    pub async fn update_view(&mut self, v: ViewNumber, e: EpochNumber) {
-        self.network
-            .update_view(v, Some(e), self.membership_coordinator.clone())
-            .await;
-    }
-
-    fn deserialize(&self, bytes: Vec<u8>) -> Result<Message<T, Unchecked>> {
-        match self
-            .upgrade_lock
-            .deserialize::<Message<T, Unchecked>>(&bytes)
-        {
-            Ok((m, v)) => {
-                if v == EXTERNAL_MESSAGE_VERSION && !m.is_external() {
-                    let e = "received a non-external message with version 0.0".to_string();
-                    return Err(NetworkError::FailedToDeserialize(e));
-                }
-                Ok(m)
-            },
-            Err(err) => Err(NetworkError::FailedToDeserialize(err.to_string())),
-        }
-    }
-
-    fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>> {
-        self.upgrade_lock
-            .serialize(m)
-            .map_err(|e| NetworkError::FailedToSerialize(e.to_string()))
-    }
+#[derive(Clone, Copy, Debug)]
+pub enum PeerRole {
+    Active,
+    Passive,
 }
 
 pub fn is_critical(e: &NetworkError) -> bool {

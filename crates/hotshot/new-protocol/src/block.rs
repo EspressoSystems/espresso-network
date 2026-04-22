@@ -11,6 +11,7 @@ use hotshot_types::{
         EpochNumber, VidCommitment, ViewNumber, vid_commitment, vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
     traits::{
         EncodeBytes,
         block_contents::{BuilderFee, Transaction},
@@ -24,7 +25,6 @@ use tracing::{error, warn};
 
 use crate::{
     consensus::ConsensusInput,
-    helpers::upgrade_lock,
     message::{DedupManifest, Proposal, TransactionMessage},
     state::HeaderRequest,
 };
@@ -94,6 +94,7 @@ pub struct BlockBuilder<T: NodeType> {
     current_view: ViewNumber,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
+    upgrade_lock: UpgradeLock<T>,
 }
 
 impl<T: NodeType> BlockBuilder<T> {
@@ -101,6 +102,7 @@ impl<T: NodeType> BlockBuilder<T> {
         instance: Arc<T::InstanceState>,
         membership: EpochMembershipCoordinator<T>,
         config: BlockBuilderConfig,
+        upgrade_lock: UpgradeLock<T>,
     ) -> Self {
         Self {
             instance,
@@ -115,6 +117,7 @@ impl<T: NodeType> BlockBuilder<T> {
             current_view: ViewNumber::genesis(),
             calculations: BTreeMap::new(),
             tasks: JoinSet::new(),
+            upgrade_lock,
         }
     }
 
@@ -123,7 +126,7 @@ impl<T: NodeType> BlockBuilder<T> {
         if self.calculations.contains_key(&view) {
             return;
         }
-        let Ok(version) = upgrade_lock::<T>().version(view) else {
+        let Ok(version) = self.upgrade_lock.version(view) else {
             warn!(%view, "unsupported version");
             return;
         };

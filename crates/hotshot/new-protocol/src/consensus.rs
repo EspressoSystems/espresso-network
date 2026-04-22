@@ -13,7 +13,7 @@ use hotshot_types::{
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    message::Proposal as SignedProposal,
+    message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
     simple_vote::{
         CheckpointData, HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
@@ -29,7 +29,7 @@ use tracing::{debug, instrument, warn};
 
 use crate::{
     block::BlockAndHeaderRequest,
-    helpers::{proposal_commitment, upgrade_lock},
+    helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
         Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal, ProposalMessage,
@@ -131,7 +131,8 @@ pub struct Consensus<T: NodeType> {
     node_id: KeyPrefix,
 
     garbage_collection_interval: BlockNumber,
-    pub(crate) epoch_height: BlockNumber,
+    epoch_height: BlockNumber,
+    upgrade_lock: UpgradeLock<T>,
 }
 
 /// Protocol flow directive.
@@ -149,6 +150,7 @@ impl<T: NodeType> Consensus<T> {
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         genesis_leaf: Leaf2<T>,
         epoch_height: B,
+        upgrade_lock: UpgradeLock<T>,
     ) -> Self
     where
         B: Into<BlockNumber>,
@@ -183,6 +185,7 @@ impl<T: NodeType> Consensus<T> {
             // TODO: make this configurable or Constant
             garbage_collection_interval: 100.into(),
             epoch_height: epoch_height.into(),
+            upgrade_lock,
         }
     }
 
@@ -518,7 +521,7 @@ impl<T: NodeType> Consensus<T> {
             view,
             &self.public_key,
             &self.private_key,
-            &upgrade_lock::<T>(),
+            &self.upgrade_lock,
         ) {
             Ok(vote) => vote,
             Err(err) => {
@@ -881,7 +884,7 @@ impl<T: NodeType> Consensus<T> {
                 view,
                 &self.public_key,
                 &self.private_key,
-                &upgrade_lock::<T>(),
+                &self.upgrade_lock,
             ) {
                 Ok(vote) => vote,
                 Err(err) => {
@@ -977,7 +980,7 @@ impl<T: NodeType> Consensus<T> {
             view,
             &self.public_key,
             &self.private_key,
-            &upgrade_lock::<T>(),
+            &&self.upgrade_lock,
         ) {
             Ok(vote) => vote,
             Err(err) => {
@@ -1061,7 +1064,7 @@ impl<T: NodeType> Consensus<T> {
             view,
             &self.public_key,
             &self.private_key,
-            &upgrade_lock::<T>(),
+            &self.upgrade_lock,
         ) {
             Ok(vote) => vote,
             Err(err) => {
@@ -1087,14 +1090,14 @@ impl<T: NodeType> Consensus<T> {
         }
 
         let liveness_check = proposal.justify_qc.view_number() > locked_cert.view_number();
-        let parent_commit = match proposal.justify_qc.data_commitment(&upgrade_lock::<T>()) {
+        let parent_commit = match proposal.justify_qc.data_commitment(&self.upgrade_lock) {
             Ok(c) => c,
             Err(err) => {
                 warn!(%err, "failed to compute justify qc data commitment");
                 return false;
             },
         };
-        let locked_commit = match locked_cert.data_commitment(&upgrade_lock::<T>()) {
+        let locked_commit = match locked_cert.data_commitment(&self.upgrade_lock) {
             Ok(c) => c,
             Err(err) => {
                 warn!(%err, "failed to compute locked certificate data");
@@ -1120,7 +1123,7 @@ impl<T: NodeType> Consensus<T> {
             Ok(stake_table) => {
                 let entries = StakeTableEntries::<T>::from(stake_table.stake_table().await).0;
                 let threshold = stake_table.success_threshold().await;
-                match cert.is_valid_cert(&entries, threshold, &upgrade_lock::<T>()) {
+                match cert.is_valid_cert(&entries, threshold, &self.upgrade_lock) {
                     Ok(()) => true,
                     Err(err) => {
                         warn!(%epoch, %err, "invalid threshold signature");

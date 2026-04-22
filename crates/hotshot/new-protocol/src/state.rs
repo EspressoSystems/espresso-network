@@ -7,6 +7,7 @@ use committable::{Commitment, Committable};
 use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    message::UpgradeLock,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::NodeType,
@@ -17,10 +18,7 @@ use hotshot_types::{
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
 
-use crate::{
-    helpers::{proposal_commitment, upgrade_lock},
-    message::Proposal,
-};
+use crate::{helpers::proposal_commitment, message::Proposal};
 
 pub struct UpdateLeaf<T: NodeType> {
     pub view: ViewNumber,
@@ -95,6 +93,7 @@ pub struct StateManager<T: NodeType> {
     header_requests: HashMap<ViewNumber, AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
     tasks: JoinSet<Completed<T>>,
+    upgrade_lock: UpgradeLock<T>,
 }
 
 enum Pending<T: NodeType> {
@@ -114,7 +113,7 @@ enum Completed<T: NodeType> {
 }
 
 impl<T: NodeType> StateManager<T> {
-    pub fn new(instance: Arc<T::InstanceState>) -> Self {
+    pub fn new(instance: Arc<T::InstanceState>, lock: UpgradeLock<T>) -> Self {
         Self {
             instance,
             validated_states: BTreeMap::new(),
@@ -122,6 +121,7 @@ impl<T: NodeType> StateManager<T> {
             header_requests: HashMap::new(),
             pending_requests: HashMap::new(),
             tasks: JoinSet::new(),
+            upgrade_lock: lock,
         }
     }
 
@@ -171,7 +171,7 @@ impl<T: NodeType> StateManager<T> {
         let view = request.view;
         let payload_size = request.payload_size;
 
-        let Ok(upgrade_lock) = upgrade_lock::<T>().version(view) else {
+        let Ok(upgrade_lock) = self.upgrade_lock.version(view) else {
             error!(%view, "unsupported version");
             return;
         };
@@ -243,7 +243,7 @@ impl<T: NodeType> StateManager<T> {
         let epoch = request.epoch;
         let parent_proposal = request.parent_proposal;
 
-        let Ok(version) = upgrade_lock::<T>().version(view) else {
+        let Ok(version) = self.upgrade_lock.version(view) else {
             error!(%view, "unsupported version");
             return;
         };

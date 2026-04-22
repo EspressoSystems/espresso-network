@@ -8,11 +8,11 @@ use hotshot::HotShotInitializer;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
-        block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
-        signature_key::SignatureKey,
+        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
     },
     vote::HasViewNumber,
 };
@@ -28,7 +28,6 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    helpers::upgrade_lock,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
@@ -55,7 +54,7 @@ pub enum CoordinatorOutput<T: NodeType> {
 pub struct Coordinator<T: NodeType, N> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
-    network: Network<T, N>,
+    network: N,
     state_manager: StateManager<T>,
     #[builder(default)]
     client: CoordinatorClient<T>,
@@ -80,7 +79,7 @@ pub struct Coordinator<T: NodeType, N> {
 }
 
 #[bon]
-impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
+impl<T: NodeType, N: Network<T>> Coordinator<T, N> {
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     pub fn maker(
         membership_coordinator: EpochMembershipCoordinator<T>,
@@ -89,6 +88,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         timeout_duration: Duration,
+        lock: UpgradeLock<T>,
     ) -> Self {
         let consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -96,17 +96,15 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             private_key,
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
+            lock.clone(),
         );
-        let state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
 
-        let lock = upgrade_lock();
+        let state_manager =
+            StateManager::new(Arc::new(initializer.instance_state.clone()), lock.clone());
+
         Self::builder()
             .consensus(consensus)
-            .network(Network::new(
-                network,
-                membership_coordinator.clone(),
-                lock.clone(),
-            ))
+            .network(network)
             .state_manager(state_manager)
             .vid_disperser(VidDisperser::new(membership_coordinator.clone()))
             .vid_reconstructor(VidReconstructor::new())
@@ -126,7 +124,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
-            .checkpoint_collector(VoteCollector::new(membership_coordinator.clone(), lock))
+            .checkpoint_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
                 membership_coordinator.clone(),
@@ -135,8 +136,12 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 Arc::new(initializer.instance_state.clone()),
                 membership_coordinator.clone(),
                 BlockBuilderConfig::default(),
+                lock.clone(),
             ))
-            .proposal_validator(ProposalValidator::new(membership_coordinator.clone()))
+            .proposal_validator(ProposalValidator::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(
                 timeout_duration,
@@ -145,10 +150,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             ))
             .public_key(public_key)
             .build()
-    }
-
-    pub fn client_api(&self) -> &ClientApi<T> {
-        self.client.handle()
     }
 
     /// Bootstrap the coordinator so the view-1 leader can propose.
@@ -182,37 +183,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         }
     }
 
-    fn handle_request(&mut self, request: ClientRequest<T>) {
-        match request {
-            ClientRequest::CurrentView(tx) => {
-                let _ = tx.send(self.consensus.current_view());
-            },
-            ClientRequest::CurrentEpoch(tx) => {
-                let _ = tx.send(self.consensus.current_epoch());
-            },
-            ClientRequest::DecidedLeaf(tx) => {
-                let _ = tx.send(self.consensus.last_decided_leaf().clone());
-            },
-            ClientRequest::DecidedState(tx) => {
-                let view = self.consensus.last_decided_leaf().view_number();
-                let _ = tx.send(self.state_manager.get_state(&view));
-            },
-            ClientRequest::UndecidedLeaves(tx) => {
-                let _ = tx.send(self.consensus.undecided_leaves().cloned().collect());
-            },
-            ClientRequest::GetState { view, respond } => {
-                let _ = respond.send(self.state_manager.get_state(&view));
-            },
-            ClientRequest::GetStateAndDelta { view, respond } => {
-                let _ = respond.send(self.state_manager.get_state_and_delta(&view));
-            },
-            ClientRequest::UpdateLeaf { update, respond } => {
-                self.state_manager.update_state(update);
-                let _ = respond.send(());
-            },
-        }
-    }
-
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
         loop {
             select! {
@@ -241,7 +211,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     }
                 }
                 Some(request) = self.client.next_request() => {
-                    self.handle_request(request);
+                    self.on_client_request(request);
                 }
                 Some(tcert) = self.timeout_collector.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
@@ -346,6 +316,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
 
     pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<CoordinatorOutput<T>> {
         &mut self.coordinator_outbox
+    }
+
+    pub fn client_api(&self) -> &ClientApi<T> {
+        self.client.handle()
     }
 
     pub async fn on_state_manager_output(
@@ -479,8 +453,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     )),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
             ConsensusOutput::LeafDecided { leaves, .. } => {
@@ -504,7 +477,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                             ProposalMessage::validated(proposal.clone(), vid_share),
                         )),
                     };
-                    if let Err(err) = self.network.unicast(recipient_key, message).await {
+                    if let Err(err) =
+                        self.network
+                            .unicast(message.view_number(), &recipient_key, &message)
+                    {
                         let err = CoordinatorError::from(err).context("vid share unicast");
                         if err.severity == Severity::Critical {
                             return Err(err);
@@ -522,8 +498,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     )),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
@@ -535,8 +510,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                         )),
                     };
                     self.network
-                        .unicast(leader, message)
-                        .await
+                        .unicast(message.view_number(), &leader, &message)
                         .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
                 }
             },
@@ -546,8 +520,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
             },
             ConsensusOutput::SendVote2(vote2) => {
@@ -556,8 +529,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
             },
             ConsensusOutput::SendEpochChange(epoch_change) => {
@@ -568,8 +540,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     )),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
@@ -581,8 +552,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     )),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
             },
             ConsensusOutput::ProposalValidated { .. } => {},
@@ -623,8 +593,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             message_type: MessageType::Block(msg),
         };
         self.network
-            .unicast(leader, message)
-            .await
+            .unicast(message.view_number(), &leader, &message)
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
@@ -637,10 +606,45 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         membership.leader(view).await.ok()
     }
 
+    fn on_client_request(&mut self, request: ClientRequest<T>) {
+        match request {
+            ClientRequest::CurrentView(tx) => {
+                let _ = tx.send(self.consensus.current_view());
+            },
+            ClientRequest::CurrentEpoch(tx) => {
+                let _ = tx.send(self.consensus.current_epoch());
+            },
+            ClientRequest::DecidedLeaf(tx) => {
+                let _ = tx.send(self.consensus.last_decided_leaf().clone());
+            },
+            ClientRequest::DecidedState(tx) => {
+                let view = self.consensus.last_decided_leaf().view_number();
+                let _ = tx.send(self.state_manager.get_state(&view));
+            },
+            ClientRequest::UndecidedLeaves(tx) => {
+                let _ = tx.send(self.consensus.undecided_leaves().cloned().collect());
+            },
+            ClientRequest::GetState { view, respond } => {
+                let _ = respond.send(self.state_manager.get_state(&view));
+            },
+            ClientRequest::GetStateAndDelta { view, respond } => {
+                let _ = respond.send(self.state_manager.get_state_and_delta(&view));
+            },
+            ClientRequest::UpdateLeaf { update, respond } => {
+                self.state_manager.update_state(update);
+                let _ = respond.send(());
+            },
+            #[cfg(test)]
+            ClientRequest::SubmitTransaction(tx) => {
+                self.block_builder.on_submit_transaction(tx);
+            },
+        }
+    }
+
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.consensus.gc(view, epoch);
         self.checkpoint_collector.gc(view, epoch);
-        self.network.gc(view, epoch);
+        let _ = self.network.gc(view); // TODO
         self.state_manager.gc(view);
         self.vid_disperser.gc(view);
         self.vid_reconstructor.gc(view);

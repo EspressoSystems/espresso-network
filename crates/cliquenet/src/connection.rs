@@ -94,7 +94,11 @@ impl Connection {
                 .expect("valid noise params yield valid handshake state")
         };
 
-        let mut delays = once(Duration::from_millis(rand::rng().random_range(0..1000)))
+        let mut delays = conf
+            .random_initial_connect_delay
+            .then(|| once(Duration::from_millis(rand::rng().random_range(0..1000))))
+            .into_iter()
+            .flatten()
             .chain(
                 conf.retry_delays
                     .iter()

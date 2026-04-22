@@ -114,15 +114,6 @@ where
     items.into_iter().filter(|it| pred(it)).count()
 }
 
-pub(crate) fn has_epoch_change<'a, I>(outputs: I) -> bool
-where
-    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
-{
-    outputs
-        .into_iter()
-        .any(|e| matches!(e, ConsensusOutput::SendEpochChange(_)))
-}
-
 pub(crate) fn has_request_drb_for_epoch<'a, I>(
     outputs: I,
     epoch: hotshot_types::data::EpochNumber,

@@ -67,6 +67,14 @@ impl<T: NodeType> ClientApi<T> {
         .await
     }
 
+    #[cfg(test)]
+    pub async fn submit_transaction(&self, tx: T::Transaction) -> Result<(), QueryError> {
+        self.tx
+            .send(ClientRequest::SubmitTransaction(tx))
+            .await
+            .map_err(|_| QueryError::ChannelClosed)
+    }
+
     async fn call<A>(
         &self,
         request: ClientRequest<T>,
@@ -132,6 +140,8 @@ pub(crate) enum ClientRequest<T: NodeType> {
         update: UpdateLeaf<T>,
         respond: oneshot::Sender<()>,
     },
+    #[cfg(test)]
+    SubmitTransaction(T::Transaction),
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1115,8 +1115,8 @@ pub struct InitializerEpochInfo<TYPES: NodeType> {
     pub block_header: Option<TYPES::BlockHeader>,
 }
 
-#[derive(Clone, Debug)]
 /// initializer struct for creating starting block
+#[derive(Clone, Debug)]
 pub struct HotShotInitializer<TYPES: NodeType> {
     /// Instance-level state.
     pub instance_state: TYPES::InstanceState,

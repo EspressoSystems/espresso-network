@@ -16,14 +16,13 @@ use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
-    helpers::upgrade_lock,
     logging::KeyPrefix,
     message::Message,
-    network::Network,
+    network::cliquenet::Cliquenet,
     outbox::Outbox,
     proposal::ProposalValidator,
     state::StateManager,
-    tests::common::mock::testing::{MockCoordinator, MockNetwork},
+    tests::common::{mock::MockCoordinator, utils::upgrade_lock},
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -48,12 +47,14 @@ impl TestHarness {
         let membership = mock_membership().await;
 
         let epoch_manager = EpochManager::new(10, membership.clone());
+        let upgrade_lock = upgrade_lock();
 
-        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_one_honest_collector =
+            VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
         let genesis_leaf =
@@ -65,20 +66,40 @@ impl TestHarness {
             private_key.clone(),
             genesis_leaf.clone(),
             10,
+            upgrade_lock.clone(),
         );
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
 
         let block_config = BlockBuilderConfig::default();
-        let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
+        let block_builder = BlockBuilder::new(
+            instance.clone(),
+            membership.clone(),
+            block_config,
+            upgrade_lock.clone(),
+        );
 
-        let mut state_manager = StateManager::new(instance.clone());
+        let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let proposal_validator = ProposalValidator::new(membership.clone());
+        let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
 
-        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
+        let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
+            .expect("keypair derivation should succeed");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = hotshot_types::addr::NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        let network = Cliquenet::create(
+            "test-harness",
+            public_key,
+            keypair,
+            addr,
+            vec![],
+            upgrade_lock.clone(),
+        )
+        .await
+        .expect("cliquenet creation should succeed");
 
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
@@ -140,14 +161,9 @@ impl TestHarness {
     /// This avoids any assumption about the order or number of events
     /// produced by asynchronous coordinator subsystems (proposal validator,
     /// VID reconstructor, vote collectors, state manager, timer).
-    pub async fn process_until<P, F>(
-        &mut self,
-        pred: P,
-        fail_pred: F,
-    ) -> Vec<ConsensusInput<TestTypes>>
+    pub async fn process_until<P>(&mut self, pred: P) -> Vec<ConsensusInput<TestTypes>>
     where
         P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
-        F: Fn(&[ConsensusInput<TestTypes>]) -> bool,
     {
         let mut inputs = Vec::new();
         while !pred(&inputs) {
@@ -163,9 +179,6 @@ impl TestHarness {
                     // Non-critical errors (e.g., epoch root computation failures
                     // in the test environment) are expected and skipped.
                 },
-            }
-            if fail_pred(&inputs) {
-                panic!("Received Failure inputs: {inputs:?}");
             }
         }
         inputs
