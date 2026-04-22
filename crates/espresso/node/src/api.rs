@@ -1297,7 +1297,7 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
             // Never garbage collect beyond the previous block or the finalized L1 height.
             // It is extremely important to retain the previous block, in the event that
             // the current iteration of the loop needs to be retried.
-            let mut gc_height = (height - 1).min(finalized_hotshot_height);
+            let mut gc_height = height.saturating_sub(1).min(finalized_hotshot_height);
 
             // For epoch reward versions, also retain the last 4 epochs
             if version >= versions::EPOCH_REWARD_VERSION
