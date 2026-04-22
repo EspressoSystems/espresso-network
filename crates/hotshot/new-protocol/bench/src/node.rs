@@ -174,6 +174,10 @@ async fn build_coordinator(
             TestStorage::default(),
             private_key,
         ))
+        .external_events({
+            let (tx, _rx) = async_broadcast::broadcast(16);
+            tx
+        })
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(timer)

@@ -307,32 +307,6 @@ impl<T: NodeType> HasViewNumber for ViewSyncMessage<T> {
     }
 }
 
-// -- Catchup messages (epoch membership catchup) ----------------------------
-
-/// Request a decided leaf at a specific block height (for epoch catchup).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct LeafRequest {
-    pub block_height: u64,
-}
-
-/// Response containing a decided leaf and the Certificate2 that decided it.
-/// The cert2 allows the requester to verify the leaf was actually decided.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct LeafResponse<T: NodeType> {
-    pub block_height: u64,
-    pub leaf: Option<Leaf2<T>>,
-    pub cert2: Option<Certificate2<T>>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-#[allow(clippy::large_enum_variant)]
-pub enum CatchupMessage<T: NodeType> {
-    LeafRequest(LeafRequest),
-    LeafResponse(LeafResponse<T>),
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
 #[allow(clippy::large_enum_variant)]
@@ -340,7 +314,6 @@ pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
     Block(BlockMessage<T>),
     ViewSync(ViewSyncMessage<T>),
-    Catchup(CatchupMessage<T>),
     External(Vec<u8>),
 }
 
@@ -351,7 +324,6 @@ impl<T: NodeType, S> MessageType<T, S> {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
             Self::Block(b) => MessageType::Block(b),
             Self::ViewSync(m) => MessageType::ViewSync(m),
-            Self::Catchup(c) => MessageType::Catchup(c),
             Self::External(v) => MessageType::External(v),
         }
     }
@@ -366,10 +338,7 @@ pub struct Message<T: NodeType, S> {
 
 impl<T: NodeType, S> Message<T, S> {
     pub fn is_external(&self) -> bool {
-        matches!(
-            self.message_type,
-            MessageType::External(_) | MessageType::Catchup(_)
-        )
+        matches!(self.message_type, MessageType::External(_))
     }
 
     #[cfg(test)]
@@ -387,7 +356,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ViewSync(view_sync_message) => view_sync_message.view_number(),
-            MessageType::Catchup(_) | MessageType::External(_) => ViewNumber::new(0),
+            MessageType::External(_) => ViewNumber::new(0),
         }
     }
 }

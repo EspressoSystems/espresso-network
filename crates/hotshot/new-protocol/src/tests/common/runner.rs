@@ -227,13 +227,14 @@ impl TestRunner {
             let (output_tx, output_rx) = mpsc::unbounded_channel();
             output_channels.push(Some(output_rx));
 
-            let membership = network_state
-                .create_membership(self.num_nodes, self.epoch_height)
+            let (membership, storage) = network_state
+                .create_membership(i, self.num_nodes, self.epoch_height)
                 .await;
             let coord = build_test_coordinator::<N::Impl>(
                 i as u64,
                 network,
                 membership,
+                storage,
                 self.epoch_height,
                 self.view_timeout,
             )
@@ -296,13 +297,18 @@ impl TestRunner {
                                 // Create a fresh coordinator from genesis.
                                 let net = network_state.create_node(change.idx).await;
                                 let (tx, rx) = mpsc::unbounded_channel();
-                                let membership = network_state
-                                    .create_membership(self.num_nodes, self.epoch_height)
+                                let (membership, storage) = network_state
+                                    .create_membership(
+                                        change.idx,
+                                        self.num_nodes,
+                                        self.epoch_height,
+                                    )
                                     .await;
                                 let coord = build_test_coordinator::<N::Impl>(
                                     change.idx as u64,
                                     net,
                                     membership,
+                                    storage,
                                     self.epoch_height,
                                     self.view_timeout,
                                 )

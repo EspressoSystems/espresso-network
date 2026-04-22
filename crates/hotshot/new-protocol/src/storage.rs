@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, marker::PhantomData, time::Duration};
 use hotshot::{traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     data::{
-        DaProposal2, EpochNumber, QuorumProposal2, VidCommitment, VidDisperseShare,
-        VidDisperseShare2, ViewNumber,
+        DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+        VidDisperseShare, VidDisperseShare2, ViewNumber,
     },
     message::Proposal as SignedProposal,
     traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
@@ -100,16 +100,18 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
         let handle = spawn(async move {
-            let data = QuorumProposal2 {
-                block_header: proposal.block_header,
-                view_number: proposal.view_number,
-                epoch: Some(proposal.epoch),
-                justify_qc: proposal.justify_qc,
-                next_epoch_justify_qc: None,
-                upgrade_certificate: proposal.upgrade_certificate,
-                view_change_evidence: proposal.view_change_evidence,
-                next_drb_result: proposal.next_drb_result,
-                state_cert: proposal.state_cert,
+            let data = QuorumProposalWrapper {
+                proposal: QuorumProposal2 {
+                    block_header: proposal.block_header,
+                    view_number: proposal.view_number,
+                    epoch: Some(proposal.epoch),
+                    justify_qc: proposal.justify_qc,
+                    next_epoch_justify_qc: None,
+                    upgrade_certificate: proposal.upgrade_certificate,
+                    view_change_evidence: proposal.view_change_evidence,
+                    next_drb_result: proposal.next_drb_result,
+                    state_cert: proposal.state_cert,
+                },
             };
             let Ok(signature) = T::SignatureKey::sign(&private_key, &[]) else {
                 error!("failed to sign quorum proposal for storage");
@@ -121,7 +123,7 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
                 _pd: PhantomData,
             };
             loop {
-                match storage.append_proposal2(&signed).await {
+                match storage.append_proposal_wrapper(&signed).await {
                     Ok(()) => return,
                     Err(err) => {
                         warn!(%err, "failed to append proposal, retrying");

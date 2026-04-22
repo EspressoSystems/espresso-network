@@ -8,10 +8,11 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    message::Proposal as SignedProposal,
     simple_vote::QuorumData2,
-    traits::signature_key::SignatureKey,
+    traits::{signature_key::SignatureKey, storage::Storage as StorageTrait},
 };
 
 use crate::{
@@ -20,7 +21,7 @@ use crate::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     helpers::upgrade_lock,
-    message::{Certificate1, Certificate2, Proposal},
+    message::{Certificate1, Proposal},
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
@@ -38,12 +39,23 @@ use crate::{
 pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     node_index: u64,
     network: I::Network,
-    membership: EpochMembershipCoordinator<TestTypes>,
+    mut membership: EpochMembershipCoordinator<TestTypes>,
+    storage: TestStorage<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
 ) -> Coordinator<TestTypes, I::Network, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
+
+    // Channel used by the Coordinator to forward ExternalMessageReceived
+    // events to the Membership's Leaf2Fetcher.  The fetcher drives epoch
+    // catchup (leaf request/response over external messages).  Overflow
+    // is enabled so slow listeners don't stall the Coordinator.
+    let (mut external_events_tx, mut external_events_rx) =
+        async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
+    external_events_tx.set_overflow(true);
+    external_events_rx.set_overflow(true);
+    membership.set_external_channel(external_events_rx).await;
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -83,16 +95,34 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
 
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
-    let genesis_cert2 = build_genesis_cert2(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
-    consensus.seed_genesis(genesis_cert1, genesis_proposal);
+    consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
 
-    // Store the genesis leaf in the leaf store so that epoch catchup can
-    // find it.  The genesis block is the epoch root for the earliest
-    // epochs and must be available for peers requesting catchup data.
-    epoch_manager
-        .leaf_store()
-        .insert(genesis_leaf.clone(), genesis_cert2);
+    // Seed the genesis proposal into the backing TestStorage so that
+    // peers can serve the genesis block to late-joiners during
+    // `EpochMembershipCoordinator::catchup` (epoch 0 root block == 0).
+    let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
+        proposal: QuorumProposal2 {
+            block_header: genesis_leaf.block_header().clone(),
+            view_number: ViewNumber::genesis(),
+            epoch: Some(EpochNumber::genesis()),
+            justify_qc: genesis_cert1.clone(),
+            next_epoch_justify_qc: None,
+            upgrade_certificate: None,
+            view_change_evidence: None,
+            next_drb_result: None,
+            state_cert: None,
+        },
+    };
+    let genesis_signed = SignedProposal::<TestTypes, QuorumProposalWrapper<TestTypes>> {
+        data: genesis_wrapper,
+        signature: BLSPubKey::sign(&private_key, &[]).expect("sign genesis"),
+        _pd: PhantomData,
+    };
+    storage
+        .append_proposal_wrapper(&genesis_signed)
+        .await
+        .expect("seed genesis proposal");
 
     let proposal_validator = ProposalValidator::new(membership.clone());
 
@@ -112,10 +142,8 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
-        .storage(crate::storage::Storage::new(
-            TestStorage::default(),
-            private_key,
-        ))
+        .storage(crate::storage::Storage::new(storage, private_key))
+        .external_events(external_events_tx)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(Timer::new(
@@ -149,24 +177,6 @@ fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestType
         block_number: Some(0),
     };
     Certificate1::new(
-        data.clone(),
-        data.commit(),
-        ViewNumber::genesis(),
-        None,
-        PhantomData,
-    )
-}
-
-/// Create a genesis `Certificate2` that references the genesis leaf.
-fn build_genesis_cert2(genesis_leaf: &Leaf2<TestTypes>) -> Certificate2<TestTypes> {
-    use hotshot_types::simple_vote::Vote2Data;
-
-    let data = Vote2Data {
-        leaf_commit: genesis_leaf.commit(),
-        epoch: EpochNumber::genesis(),
-        block_number: 0,
-    };
-    Certificate2::new(
         data.clone(),
         data.commit(),
         ViewNumber::genesis(),

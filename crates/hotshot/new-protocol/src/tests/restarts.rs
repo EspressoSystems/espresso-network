@@ -76,7 +76,7 @@ async fn restart_f_nodes_with_epochs() {
         )],
         ..Default::default()
     }
-    .run::<CliquenetTestNetwork>()
+    .run::<MemoryTestNetwork>()
     .await
     .unwrap();
 }

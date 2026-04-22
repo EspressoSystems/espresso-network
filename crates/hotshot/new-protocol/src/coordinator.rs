@@ -3,18 +3,19 @@ pub mod timer;
 
 use std::{sync::Arc, time::Duration};
 
+use async_broadcast::Sender as BroadcastSender;
 use bon::{Builder, bon};
 use hotshot::{HotShotInitializer, types::SignatureKey};
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    event::{Event, EventType},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
         block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
         storage::Storage as StorageTrait,
     },
-    utils::{is_epoch_root, is_epoch_transition, root_block_in_epoch},
     vote::HasViewNumber,
 };
 use tokio::select;
@@ -32,9 +33,9 @@ use crate::{
     helpers::upgrade_lock,
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, CatchupMessage, Certificate2, CheckpointCertificate, CheckpointVote,
-        ConsensusMessage, LeafRequest, LeafResponse, Message, MessageType, ProposalMessage,
-        TimeoutOneHonest, TransactionMessage, Unchecked, Vote2,
+        self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
+        Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
+        Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -72,6 +73,14 @@ pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
     storage: Storage<T, S>,
+    /// Broadcast sink for external messages forwarded to the membership.
+    ///
+    /// Every incoming `MessageType::External(data)` is re-published as a
+    /// `hotshot_types::event::Event` with `ExternalMessageReceived` so the
+    /// membership's `Leaf2Fetcher` (fed via
+    /// `EpochMembershipCoordinator::set_external_channel`) can answer leaf
+    /// requests during catchup exactly as it does in the old protocol.
+    external_events: BroadcastSender<Event<T>>,
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     #[builder(default)]
@@ -104,6 +113,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
         let state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
 
         let lock = upgrade_lock();
+        // Production share the membership with old-protocol hotshot, which
+        // already owns the external channel.  Create a local sender here so
+        // `MessageType::External` handling has somewhere to publish; it has
+        // no receivers attached, which makes sends no-ops.
+        let (external_events, _rx) = async_broadcast::broadcast(16);
         Self::builder()
             .consensus(consensus)
             .network(Network::new(
@@ -142,6 +156,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
             ))
             .proposal_validator(ProposalValidator::new(membership_coordinator.clone()))
             .storage(Storage::new(storage, private_key))
+            .external_events(external_events)
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(
                 timeout_duration,
@@ -270,7 +285,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                         let m = validated.message.proposal.data.block_header.metadata().clone();
                         self.vid_reconstructor.handle_vid_share(s.clone(), m);
                         self.storage.append_vid(s);
-                        self.storage.append_proposal(validated.message.proposal.data.clone());
+                        self.storage.append_proposal(validated.message.proposal.data.clone()).await;
                         return Ok(ConsensusInput::Proposal(validated.sender, validated.message))
                     }
                     Err(e) => {
@@ -343,13 +358,13 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                         self.timeout_one_honest_collector.retry_pending_votes().await;
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
-                    Ok(EpochRootResult::NeedLeaf(_epoch, height)) => {
-                        // Epoch manager needs a leaf we don't have locally.
-                        // Request it from peers.
-                        self.request_leaf_from_peers(height).await;
-                    }
-                    Err(err) => {
-                        return Err(CoordinatorError::regular(err))
+                    Err(failure) => {
+                        // Catchup/compute failed. The epoch manager clears
+                        // the pending guard; consensus's `maybe_propose`
+                        // will re-request the DRB when it next tries to
+                        // build a transition proposal and finds it missing.
+                        warn!(%failure.error, epoch = %failure.epoch, "DRB request failed");
+                        continue;
                     }
                 },
                 else => {
@@ -466,35 +481,22 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                 }
                 None
             },
-            MessageType::Catchup(msg) => {
-                match msg {
-                    CatchupMessage::LeafRequest(req) => {
-                        let entry = self.epoch_manager.leaf_store().get(req.block_height);
-                        let response = Message {
-                            sender: self.public_key.clone(),
-                            message_type: MessageType::Catchup(CatchupMessage::LeafResponse(
-                                LeafResponse {
-                                    block_height: req.block_height,
-                                    leaf: entry.as_ref().map(|e| e.leaf.clone()),
-                                    cert2: entry.map(|e| e.cert2),
-                                },
-                            )),
-                        };
-                        let _ = self.network.unicast(message.sender, response).await;
-                    },
-                    CatchupMessage::LeafResponse(resp) => {
-                        if let (Some(leaf), Some(cert2)) = (resp.leaf, resp.cert2) {
-                            // TODO: verify cert2 decides this leaf before trusting it
-                            let height = leaf.height();
-                            self.epoch_manager.leaf_store().insert(leaf, cert2);
-                            self.epoch_manager.on_leaf_stored(height);
-                        }
-                    },
-                }
-                None
-            },
             MessageType::ViewSync(_) => todo!(),
             MessageType::External(data) => {
+                // Forward to the membership's external channel so the
+                // `Leaf2Fetcher` inside `Membership::get_epoch_root` sees
+                // catchup requests/responses.  `broadcast_direct` with no
+                // active receivers returns an error we ignore — in
+                // production the shared membership's external channel is
+                // owned by old-protocol hotshot.
+                let event = Event {
+                    view_number: self.consensus.current_view(),
+                    event: EventType::ExternalMessageReceived {
+                        sender: message.sender.clone(),
+                        data: data.clone(),
+                    },
+                };
+                let _ = self.external_events.broadcast_direct(event).await;
                 self.coordinator_outbox
                     .push_back(CoordinatorOutput::ExternalMessageReceived {
                         sender: message.sender,
@@ -542,35 +544,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                     .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
             ConsensusOutput::LeafDecided { leaves, cert2: _ } => {
-                let epoch_height = *self.consensus.epoch_height;
-                // `leaves` comes ordered top-first from the chain-decide.  Only
-                // the top leaf is guaranteed to have its own cert2 in
-                // consensus; parent leaves inherit authority through the
-                // chain.  Use the deciding cert2 for every leaf we store so
-                // peers can serve any epoch-relevant leaf in the chain, not
-                // just the one that triggered the decide.
-                let deciding_cert2 = leaves
-                    .first()
-                    .and_then(|top| self.consensus.cert2_at(top.view_number()))
-                    .cloned();
-                if let Some(cert2) = deciding_cert2.as_ref() {
-                    for leaf in &leaves {
-                        let block_number = leaf.block_header().block_number();
-                        if is_epoch_root(block_number, epoch_height)
-                            || is_epoch_transition(block_number, epoch_height)
-                        {
-                            self.epoch_manager
-                                .leaf_store()
-                                .insert(leaf.clone(), cert2.clone());
-                            // Wake any epochs whose DRB task returned NeedLeaf
-                            // for this height.  Must happen before
-                            // handle_leaf_decided so its request_drb_result
-                            // call isn't swallowed by the still-set pending
-                            // guard.
-                            self.epoch_manager.on_leaf_stored(block_number);
-                        }
-                    }
-                }
                 for leaf in leaves {
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
@@ -581,7 +554,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
             },
             ConsensusOutput::RequestProposal(..) => {}, // TODO
             ConsensusOutput::SendProposal(proposal, vid_disperse) => {
-                self.storage.append_proposal(proposal.data.clone());
+                self.storage.append_proposal(proposal.data.clone()).await;
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
                 for vid_share in vid_disperse.to_shares() {
@@ -752,30 +725,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
         self.storage.gc(view);
-
-        // Keep epoch leaves for a few epochs back in case peers need them.
-        if *epoch > 3 {
-            let epoch_height = *self.consensus.epoch_height;
-            let min_height = root_block_in_epoch(epoch.saturating_sub(3), epoch_height);
-            self.epoch_manager.leaf_store().gc(min_height);
-        }
-    }
-
-    /// Broadcast a leaf request to the network.
-    ///
-    /// Broadcasting (rather than unicasting to a small subset) matters
-    /// during late-start catchup: newly connected nodes may not yet have
-    /// live TCP sessions to all peers, so a narrow unicast fan-out can
-    /// silently fail.  The response is small (one leaf + cert), so the
-    /// bandwidth cost is negligible.
-    async fn request_leaf_from_peers(&mut self, height: u64) {
-        let msg = Message {
-            sender: self.public_key.clone(),
-            message_type: MessageType::Catchup(CatchupMessage::LeafRequest(LeafRequest {
-                block_height: height,
-            })),
-        };
-        let _ = self.network.broadcast(msg).await;
     }
 
     pub fn node_id(&self) -> &KeyPrefix {

@@ -265,35 +265,34 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             .entry(topic)
             .or_default()
             .clone();
-        for (key, node) in &nodes {
-            // TODO delay/drop etc here
+        // Spawn per-recipient sends so a slow/full recipient channel does
+        // not backpressure the rest of the broadcast. When a node restarts
+        // its new coordinator starts draining its input channel from
+        // scratch; an awaited sequential send could block the sender on a
+        // full 128-slot channel, stalling consensus for other peers.
+        for (key, node) in nodes {
             trace!(?key, "Sending message to node");
             if let Some(config) = &self.inner.reliability_config {
-                {
-                    let node2 = node.clone();
-                    let fut = config.chaos_send_msg(
-                        message.clone(),
-                        Arc::new(move |msg: Vec<u8>| {
-                            let node3 = (node2).clone();
-                            boxed_sync(async move {
-                                let _res = node3.input(msg).await;
-                                // NOTE we're dropping metrics here but this is only for testing
-                                // purposes. I think that should be okay
-                            })
-                        }),
-                    );
-                    spawn(fut);
-                }
+                let node2 = node.clone();
+                let fut = config.chaos_send_msg(
+                    message.clone(),
+                    Arc::new(move |msg: Vec<u8>| {
+                        let node3 = (node2).clone();
+                        boxed_sync(async move {
+                            let _res = node3.input(msg).await;
+                            // NOTE we're dropping metrics here but this is only for testing
+                            // purposes. I think that should be okay
+                        })
+                    }),
+                );
+                spawn(fut);
             } else {
-                let res = node.input(message.clone()).await;
-                match res {
-                    Ok(()) => {
-                        trace!(?key, "Delivered message to remote");
-                    },
-                    Err(e) => {
+                let msg = message.clone();
+                spawn(async move {
+                    if let Err(e) = node.input(msg).await {
                         warn!(?e, ?key, "Error sending broadcast message to node");
-                    },
-                }
+                    }
+                });
             }
         }
         Ok(())
@@ -317,39 +316,35 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             .entry(Topic::Da)
             .or_default()
             .clone();
-        for (key, node) in &nodes {
-            if !recipients.contains(key) {
+        // Spawn per-recipient sends so a slow/full recipient channel does
+        // not backpressure the rest of the broadcast (see `broadcast_message`).
+        for (key, node) in nodes {
+            if !recipients.contains(&key) {
                 tracing::trace!("Skipping node because not in recipient list: {:?}", key);
                 continue;
             }
-            // TODO delay/drop etc here
             trace!(?key, "Sending message to node");
             if let Some(config) = &self.inner.reliability_config {
-                {
-                    let node2 = node.clone();
-                    let fut = config.chaos_send_msg(
-                        message.clone(),
-                        Arc::new(move |msg: Vec<u8>| {
-                            let node3 = (node2).clone();
-                            boxed_sync(async move {
-                                let _res = node3.input(msg).await;
-                                // NOTE we're dropping metrics here but this is only for testing
-                                // purposes. I think that should be okay
-                            })
-                        }),
-                    );
-                    spawn(fut);
-                }
+                let node2 = node.clone();
+                let fut = config.chaos_send_msg(
+                    message.clone(),
+                    Arc::new(move |msg: Vec<u8>| {
+                        let node3 = (node2).clone();
+                        boxed_sync(async move {
+                            let _res = node3.input(msg).await;
+                            // NOTE we're dropping metrics here but this is only for testing
+                            // purposes. I think that should be okay
+                        })
+                    }),
+                );
+                spawn(fut);
             } else {
-                let res = node.input(message.clone()).await;
-                match res {
-                    Ok(()) => {
-                        trace!(?key, "Delivered message to remote");
-                    },
-                    Err(e) => {
+                let msg = message.clone();
+                spawn(async move {
+                    if let Err(e) = node.input(msg).await {
                         warn!(?e, ?key, "Error sending broadcast message to node");
-                    },
-                }
+                    }
+                });
             }
         }
         Ok(())

@@ -240,7 +240,16 @@ impl<T: NodeType> Consensus<T> {
             ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
             _ => None,
         };
-        let view = input.view_number();
+        // DRB results arrive asynchronously with no specific view attached.
+        // Use `current_view` so that the post-apply retries (`maybe_propose`,
+        // `maybe_vote_*`) target the view the node is actually on — in
+        // particular, a leader blocked on `self.drb_results` for an
+        // epoch-transition proposal retries that proposal here.
+        let view = if matches!(&input, ConsensusInput::DrbResult(..)) {
+            self.current_view
+        } else {
+            input.view_number()
+        };
         let proto = match input {
             ConsensusInput::Proposal(sender, proposal) => {
                 self.handle_proposal(sender, proposal, outbox).await
@@ -458,8 +467,11 @@ impl<T: NodeType> Consensus<T> {
         // Request the DRB if we don't have it yet.  A mismatching DRB is
         // a hard failure (invalid leader), but a missing DRB is
         // recoverable — the proposal is stored and voting will proceed
-        // once the DRB arrives.
-        if proposal.epoch > EpochNumber::genesis() + 1
+        // once the DRB arrives.  Same epoch guard as `maybe_propose`:
+        // transitions in epoch >= 2 (`> genesis`) carry `next_drb_result`
+        // (the successor epoch's DRB lives in this leaf, so the successor
+        // epoch's catchup path unwraps `leaf.next_drb_result`).
+        if proposal.epoch > EpochNumber::genesis()
             && is_epoch_transition(block_number, *self.epoch_height)
         {
             if let Some(drb) = self.drb_results.get(&(epoch + 1)) {
@@ -824,13 +836,23 @@ impl<T: NodeType> Consensus<T> {
         }
 
         // TODO: Handle epoch change state cert
-        // The first two epochs have no prior DRB computation so we skip the
-        // requirement — matching the same guard in handle_proposal.
-        let next_drb_result = if proposal.epoch > EpochNumber::genesis() + 1
+        //
+        // Epoch 1 is the genesis epoch and has no successor that needs a
+        // DRB from a transition leaf — `set_first_epoch` pre-loads DRBs for
+        // `first_epoch` and `first_epoch + 1`.  Every epoch beyond that
+        // communicates its successor's DRB via `next_drb_result` on each
+        // leaf in its transition zone; the successor epoch's catchup
+        // unwraps that field, so leaving it `None` here would panic
+        // peers that fetch this leaf.
+        let next_drb_result = if proposal.epoch > EpochNumber::genesis()
             && is_epoch_transition(header.block_number(), *self.epoch_height)
         {
             let Some(drb) = self.drb_results.get(&EpochNumber::new(*proposal.epoch + 1)) else {
                 debug!(%proposal.epoch, "no DRB result for epoch");
+                // Keep retrying — the epoch manager dedups pending requests,
+                // but if an earlier catchup failed (e.g. Leaf2Fetcher
+                // timeout under CPU load) nothing else kicks the request.
+                outbox.push_back(ConsensusOutput::RequestDrbResult(proposal.epoch + 1));
                 return;
             };
             Some(*drb)
@@ -991,9 +1013,10 @@ impl<T: NodeType> Consensus<T> {
         };
 
         // Don't vote for epoch-transition proposals until we can verify
-        // the attached DRB result.
+        // the attached DRB result.  Same guard as `maybe_propose`:
+        // transitions in epoch >= 2 must carry `next_drb_result`.
         let block_number = proposal.block_header.block_number();
-        if proposal.epoch > EpochNumber::genesis() + 1
+        if proposal.epoch > EpochNumber::genesis()
             && is_epoch_transition(block_number, *self.epoch_height)
         {
             let Some(drb) = self.drb_results.get(&(proposal.epoch + 1)) else {
@@ -1331,7 +1354,9 @@ impl<T: NodeType> ConsensusInput<T> {
             },
             ConsensusInput::VidDisperseCreated(view, _) => *view,
             ConsensusInput::ViewSyncCertificate(cert) => cert.view_number(),
-            // TODO: where else can this cause problems?
+            // DRB results arrive asynchronously and don't belong to any
+            // particular view; `apply` handles routing by using
+            // `current_view` for this variant.
             ConsensusInput::DrbResult(..) => ViewNumber::genesis(),
             ConsensusInput::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
         }
