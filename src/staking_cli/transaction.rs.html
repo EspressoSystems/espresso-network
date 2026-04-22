@@ -364,7 +364,7 @@
 <a href=#364 id=364 data-nosnippet>364</a>            <span class="kw">use </span>hotshot_contract_adapter::sol_types::StakeTableV2;
 <a href=#365 id=365 data-nosnippet>365</a>            <span class="kw">let </span>st = StakeTableV2::new(<span class="kw-2">*</span>stake_table, provider);
 <a href=#366 id=366 data-nosnippet>366</a>            <span class="kw">let </span>version: StakeTableContractVersion = st.getVersion().call().<span class="kw">await</span><span class="question-mark">?</span>.try_into()<span class="question-mark">?</span>;
-<a href=#367 id=367 data-nosnippet>367</a>            <span class="kw">if let </span>StakeTableContractVersion::V2 = version {
+<a href=#367 id=367 data-nosnippet>367</a>            <span class="kw">if </span><span class="macro">matches!</span>(version, StakeTableContractVersion::V2) {
 <a href=#368 id=368 data-nosnippet>368</a>                <span class="kw">let </span>min_amount = st.minDelegateAmount().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#369 id=369 data-nosnippet>369</a>                <span class="kw">if </span>amount &lt; <span class="kw-2">&amp;</span>min_amount {
 <a href=#370 id=370 data-nosnippet>370</a>                    <span class="macro">bail!</span>(
