@@ -12,6 +12,7 @@ members = [
     "contracts/rust/safe-tx-builder",
     "crates/builder",
     "crates/cliquenet",
+    "crates/espresso/api",
     "crates/espresso/dev-node",
     "crates/espresso/node",
     "crates/espresso/node-sqlite",
@@ -34,7 +35,6 @@ members = [
     "crates/hotshot/types",
     "crates/hotshot/utils",
     "crates/serialization/api",
-    "crates/espresso/api",
     "crates/versions",
     "hotshot-events-service",
     "hotshot-query-service",
@@ -111,6 +111,7 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2024"
 
 [workspace.dependencies]
+aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
 alloy = { version = "1.0", features = [
     "eips",
     "provider-ws",
@@ -140,7 +141,6 @@ async-trait = "0.1"
 atomic = "0.6"
 atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5" }
 automod = "1.0.14"
-aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
 axum = "0.8.8"
 backoff = "0.4"
 base64 = "0.22"
