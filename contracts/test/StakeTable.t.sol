@@ -245,6 +245,29 @@ contract StakeTable_register_Test is LightClientCommonTest {
         vm.expectRevert(S.InvalidSchnorrVK.selector);
         stakeTable.registerValidator(blsVK, zeroSchnorrVK, sig, COMMISSION);
 
+        // revert when the schnorrVK is the Edwards identity point
+        EdOnBN254.EdOnBN254Point memory identitySchnorrVK = EdOnBN254.EdOnBN254Point(0, 1);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.registerValidator(blsVK, identitySchnorrVK, sig, COMMISSION);
+
+        // revert when the schnorrVK is the x=0 order-2 point (0, -1) on EdOnBN254
+        EdOnBN254.EdOnBN254Point memory order2SchnorrVK =
+            EdOnBN254.EdOnBN254Point(0, EdOnBN254.P_MOD - 1);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.registerValidator(blsVK, order2SchnorrVK, sig, COMMISSION);
+
+        // unreduced coordinates: x ≡ 0 (mod p) with canonical y=1 is the identity encoding
+        EdOnBN254.EdOnBN254Point memory unreducedIdentityXSchnorrVK =
+            EdOnBN254.EdOnBN254Point(EdOnBN254.P_MOD, 1);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.registerValidator(blsVK, unreducedIdentityXSchnorrVK, sig, COMMISSION);
+
+        // unreduced y (y == P_MOD is not a valid field limb; would not be caught by `x == 0` alone)
+        EdOnBN254.EdOnBN254Point memory unreducedYSchnorrVK =
+            EdOnBN254.EdOnBN254Point(1, EdOnBN254.P_MOD);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.registerValidator(blsVK, unreducedYSchnorrVK, sig, COMMISSION);
+
         vm.stopPrank();
     }
 
@@ -429,6 +452,45 @@ contract StakeTable_register_Test is LightClientCommonTest {
         // Step 4: update the consensus keys with the new bls keys but empty schnorrVK
         vm.expectRevert(S.InvalidSchnorrVK.selector);
         stakeTable.updateConsensusKeys(newBlsVK, emptySchnorrVK, newSig);
+
+        // Step 5: reject Edwards identity schnorrVK as well
+        EdOnBN254.EdOnBN254Point memory identitySchnorrVK = EdOnBN254.EdOnBN254Point(0, 1);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.updateConsensusKeys(newBlsVK, identitySchnorrVK, newSig);
+
+        // Step 6: reject x=0 order-2 point (0, -1)
+        EdOnBN254.EdOnBN254Point memory order2SchnorrVK =
+            EdOnBN254.EdOnBN254Point(0, EdOnBN254.P_MOD - 1);
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.updateConsensusKeys(newBlsVK, order2SchnorrVK, newSig);
+
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_UnreducedSchnorrVK_on_UpdateConsensusKeys() public {
+        uint64 depositAmount = 10 ether;
+        (
+            BN254.G2Point memory blsVK,
+            EdOnBN254.EdOnBN254Point memory schnorrVK,
+            BN254.G1Point memory sig
+        ) = genClientWallet(validator, seed1);
+
+        vm.startPrank(validator);
+        token.approve(address(stakeTable), depositAmount);
+        stakeTable.registerValidator(blsVK, schnorrVK, sig, COMMISSION);
+
+        (BN254.G2Point memory newBlsVK,, BN254.G1Point memory newSig) =
+            genClientWallet(validator, seed2);
+
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.updateConsensusKeys(
+            newBlsVK, EdOnBN254.EdOnBN254Point(EdOnBN254.P_MOD, 1), newSig
+        );
+
+        vm.expectRevert(S.InvalidSchnorrVK.selector);
+        stakeTable.updateConsensusKeys(
+            newBlsVK, EdOnBN254.EdOnBN254Point(1, EdOnBN254.P_MOD), newSig
+        );
 
         vm.stopPrank();
     }
