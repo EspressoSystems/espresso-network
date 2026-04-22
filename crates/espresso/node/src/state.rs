@@ -459,6 +459,7 @@ where
         tracing::info!(
             node_id = instance.node_id,
             last_height,
+            height,
             current_height,
             "updating state storage"
         );
