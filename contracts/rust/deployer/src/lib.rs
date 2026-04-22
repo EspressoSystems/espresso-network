@@ -237,7 +237,7 @@ pub enum Contract {
     StakeTable,
     #[display("ESPRESSO_STAKE_TABLE_V2_ADDRESS")]
     StakeTableV2,
-    #[display("ESPRESSO_SEQUENCER_STAKE_TABLE_V3_ADDRESS")]
+    #[display("ESPRESSO_STAKE_TABLE_V3_ADDRESS")]
     StakeTableV3,
     #[display("ESPRESSO_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
