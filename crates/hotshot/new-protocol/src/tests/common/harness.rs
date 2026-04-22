@@ -4,6 +4,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    storage_types::TestStorage,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
@@ -94,6 +95,10 @@ impl TestHarness {
             .epoch_manager(epoch_manager)
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
+            .storage(crate::storage::Storage::new(
+                TestStorage::default(),
+                private_key,
+            ))
             .membership_coordinator(membership)
             .outbox(Outbox::new())
             .timer(Timer::new(
