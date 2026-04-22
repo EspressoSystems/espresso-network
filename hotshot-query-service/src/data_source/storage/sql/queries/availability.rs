@@ -263,7 +263,7 @@ where
             format!(
                 "SELECT {BLOCK_COLUMNS}
                   FROM header AS h
-                  JOIN payload AS p ON h.height = p.height
+                  JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                   WHERE h.height > {ph}
                   ORDER BY h.height"
             )
@@ -271,7 +271,7 @@ where
             format!(
                 "SELECT {BLOCK_COLUMNS}
                   FROM header AS h
-                  JOIN payload AS p ON h.height = p.height
+                  JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                   {where_clause} AND h.height > {ph}
                   ORDER BY h.height"
             )
@@ -350,7 +350,7 @@ where
             format!(
                 "SELECT {PAYLOAD_COLUMNS}
                   FROM header AS h
-                  JOIN payload AS p ON h.height = p.height
+                  JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                   WHERE h.height > {ph}
                   ORDER BY h.height"
             )
@@ -358,7 +358,7 @@ where
             format!(
                 "SELECT {PAYLOAD_COLUMNS}
                   FROM header AS h
-                  JOIN payload AS p ON h.height = p.height
+                  JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                   {where_clause} AND h.height > {ph}
                   ORDER BY h.height"
             )
@@ -394,7 +394,7 @@ where
             format!(
                 "SELECT {PAYLOAD_METADATA_COLUMNS}
                   FROM header AS h
-                  JOIN payload AS p ON h.height = p.height
+                  JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                   WHERE h.height > {ph} AND p.num_transactions IS NOT NULL
                   ORDER BY h.height ASC"
             )
@@ -402,7 +402,7 @@ where
             format!(
                 "SELECT {PAYLOAD_METADATA_COLUMNS}
                   FROM header AS h
-                  JOIN payload AS p ON h.height = p.height
+                  JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                   {where_clause} AND h.height > {ph} AND p.num_transactions IS NOT NULL
                   ORDER BY h.height ASC"
             )
@@ -449,7 +449,7 @@ where
             format!(
                 "SELECT {VID_COMMON_COLUMNS}
                   FROM header AS h
-                  JOIN vid2 AS v ON h.height = v.height
+                  JOIN vid_common AS v ON h.payload_hash = v.hash
                   WHERE h.height > {ph}
                   ORDER BY h.height"
             )
@@ -457,7 +457,7 @@ where
             format!(
                 "SELECT {VID_COMMON_COLUMNS}
                   FROM header AS h
-                  JOIN vid2 AS v ON h.height = v.height
+                  JOIN vid_common AS v ON h.payload_hash = v.hash
                   {where_clause} AND h.height > {ph}
                   ORDER BY h.height"
             )
@@ -493,7 +493,7 @@ where
             format!(
                 "SELECT {VID_COMMON_METADATA_COLUMNS}
                   FROM header AS h
-                  JOIN vid2 AS v ON h.height = v.height
+                  JOIN vid_common AS v ON h.payload_hash = v.hash
                   WHERE h.height > {ph}
                   ORDER BY h.height ASC"
             )
@@ -501,7 +501,7 @@ where
             format!(
                 "SELECT {VID_COMMON_METADATA_COLUMNS}
                   FROM header AS h
-                  JOIN vid2 AS v ON h.height = v.height
+                  JOIN vid_common AS v ON h.payload_hash = v.hash
                   {where_clause} AND h.height > {ph}
                   ORDER BY h.height ASC"
             )

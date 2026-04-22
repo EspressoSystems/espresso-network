@@ -50,7 +50,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height > $2
                 ORDER BY h.height DESC
                 LIMIT $1"
@@ -62,7 +62,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height <= $1 AND h.height > $3
                 ORDER BY h.height DESC
                 LIMIT $2"
@@ -79,7 +79,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height <= (SELECT h1.height FROM header AS h1 WHERE h1.hash = $1 AND h1.height > $3)
                   AND h.height > $3
                 ORDER BY h.height DESC
@@ -92,7 +92,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height > $1
                 ORDER BY h.height DESC
                 LIMIT 1"
@@ -104,7 +104,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height = $1 AND h.height > $2
                 ORDER BY h.height DESC
                 LIMIT 1"
@@ -116,7 +116,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.hash = $1 AND h.height > $2
                 ORDER BY h.height DESC
                 LIMIT 1"
@@ -168,7 +168,7 @@ lazy_static::lazy_static! {
         format!(
             "SELECT {BLOCK_COLUMNS}
                 FROM header AS h
-                JOIN payload AS p ON h.height = p.height
+                JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                 WHERE h.height = $1 AND h.height > $2
                 ORDER BY h.height DESC"
         )
@@ -674,7 +674,7 @@ where
             let block_query = format!(
                 "SELECT {BLOCK_COLUMNS}
                     FROM header AS h
-                    JOIN payload AS p ON h.height = p.height
+                    JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
                     WHERE h.hash = $1 AND h.height > $2
                     ORDER BY h.height DESC
                     LIMIT 1"
