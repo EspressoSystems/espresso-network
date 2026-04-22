@@ -565,7 +565,7 @@ pub fn encode_stake_table_v3_timelock_proposal(
         U256::ZERO,
     )?
     .with_description(format!(
-        "Schedule StakeTable -> V3 upgrade via timelock {timelock_addr:#x} (proxy \
+        "Schedule StakeTable V2 -> V3 upgrade via timelock {timelock_addr:#x} (proxy \
          {proxy_addr:#x}, impl {v3_impl_addr:#x})"
     ));
 
@@ -582,8 +582,8 @@ pub fn encode_stake_table_v3_timelock_proposal(
         U256::ZERO,
     )?
     .with_description(format!(
-        "Execute StakeTable -> V3 upgrade via timelock {timelock_addr:#x} (proxy {proxy_addr:#x}, \
-         impl {v3_impl_addr:#x})"
+        "Execute StakeTable V2 -> V3 upgrade via timelock {timelock_addr:#x} (proxy \
+         {proxy_addr:#x}, impl {v3_impl_addr:#x})"
     ));
 
     Ok(StakeTableV3TimelockProposal {
