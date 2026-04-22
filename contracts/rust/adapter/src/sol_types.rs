@@ -182,17 +182,15 @@ impl From<LightClientV2Mock::votingStakeTableStateReturn> for StakeTableStateSol
     }
 }
 
-// G1PointSol comes from light_client::BN254::G1Point, which is a distinct type from
-// stake_table_v3::BN254::G1Point despite having the same layout.
 impl From<stake_table_v3::BN254::G1Point> for G1PointSol {
     fn from(v: stake_table_v3::BN254::G1Point) -> Self {
-        unsafe { std::mem::transmute(v) }
+        Self { x: v.x, y: v.y }
     }
 }
 
 impl From<G1PointSol> for stake_table_v3::BN254::G1Point {
     fn from(v: G1PointSol) -> Self {
-        unsafe { std::mem::transmute(v) }
+        Self { x: v.x, y: v.y }
     }
 }
 
