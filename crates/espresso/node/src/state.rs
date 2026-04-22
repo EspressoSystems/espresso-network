@@ -430,6 +430,31 @@ where
             None => last_height,
         };
 
+        // Check for environment variable override
+        let height =
+            if let Ok(env_height) = std::env::var("ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT") {
+                match env_height.parse::<usize>() {
+                    Ok(override_height) => {
+                        tracing::error!(
+                            node_id = instance.node_id,
+                            calculated_height = height,
+                            override_height,
+                            "overriding initial state storage height from environment variable"
+                        );
+                        override_height
+                    },
+                    Err(e) => {
+                        tracing::error!(
+                            "failed to parse ESPRESSO_NODE_STATE_STORAGE_INITIAL_HEIGHT: {e}, \
+                             using calculated height {height}"
+                        );
+                        height
+                    },
+                }
+            } else {
+                height
+            };
+
         let current_height = storage.block_height().await?;
         tracing::info!(
             node_id = instance.node_id,
