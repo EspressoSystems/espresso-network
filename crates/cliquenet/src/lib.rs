@@ -57,14 +57,6 @@ pub struct Config {
 
     #[builder(default = Duration::from_secs(30))]
     receive_timeout: Duration,
-
-    /// If true we wait a random number of milliseconds [0..1000] before connecting.
-    ///
-    /// If many nodes start all at once this can reduce the number of simultanous
-    /// connections, some of which need to be dropped to settle one 1 connection
-    /// between any two peers.
-    #[builder(default = true)]
-    random_initial_connect_delay: bool,
 }
 
 /// Network peer role.
