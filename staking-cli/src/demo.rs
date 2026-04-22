@@ -891,7 +891,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
         let st = StakeTableV2::new(stake_table, &token_holder_provider);
         let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
-        if matches!(version, StakeTableContractVersion::V2) {
+        if let StakeTableContractVersion::V2 = version {
             let min_delegate_amount = st.minDelegateAmount().call().await?;
             for delegator in &delegator_info {
                 if delegator.delegate_amount < min_delegate_amount {
