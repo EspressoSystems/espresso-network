@@ -626,6 +626,9 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = certificate.view_number() + 1;
+        if self.timeout_certs.contains_key(&view) {
+            return Protocol::Continue;
+        }
         let Some(epoch) = certificate.epoch() else {
             warn!(view = %certificate.view_number(), "timeout certificate has no epoch number");
             return Protocol::Abort;

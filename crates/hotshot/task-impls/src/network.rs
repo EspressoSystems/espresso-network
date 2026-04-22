@@ -230,7 +230,10 @@ impl<TYPES: NodeType> NetworkMessageTaskState<TYPES> {
                                 .upgrade_lock
                                 .epochs_enabled(view_sync_message.view_number())
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncPreCommitCertificate for view {} but epochs are enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncPreCommitCertificate for view {} but epochs are enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncPreCommitCertificateRecv(
@@ -244,7 +247,10 @@ impl<TYPES: NodeType> NetworkMessageTaskState<TYPES> {
                                 .upgrade_lock
                                 .epochs_enabled(view_sync_message.view_number())
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncPreCommitCertificate2 for view {} but epochs are not enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncPreCommitCertificate2 for view {} but epochs are not enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncPreCommitCertificateRecv(view_sync_message)
@@ -338,7 +344,10 @@ impl<TYPES: NodeType> NetworkMessageTaskState<TYPES> {
                                 .upgrade_lock
                                 .epochs_enabled(view_sync_message.view_number())
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncFinalizeCertificate for view {} but epochs are enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncFinalizeCertificate for view {} but epochs are enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncFinalizeCertificateRecv(
@@ -352,7 +361,10 @@ impl<TYPES: NodeType> NetworkMessageTaskState<TYPES> {
                                 .upgrade_lock
                                 .epochs_enabled(view_sync_message.view_number())
                             {
-                                tracing::warn!("received GeneralConsensusMessage::ViewSyncFinalizeCertificate2 for view {} but epochs are not enabled for that view", view_sync_message.view_number());
+                                tracing::warn!(
+                                    "received GeneralConsensusMessage::ViewSyncFinalizeCertificate2 for view {} but epochs are not enabled for that view",
+                                    view_sync_message.view_number()
+                                );
                                 return;
                             }
                             HotShotEvent::ViewSyncFinalizeCertificateRecv(view_sync_message)

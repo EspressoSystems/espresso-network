@@ -262,9 +262,9 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             .inner
             .master_map
             .subscribed_map
-            .entry(topic)
-            .or_default()
-            .clone();
+            .get(&topic)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default();
         // Spawn per-recipient sends so a slow/full recipient channel does
         // not backpressure the rest of the broadcast. When a node restarts
         // its new coordinator starts draining its input channel from
@@ -313,9 +313,9 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for MemoryNetwork<K> {
             .inner
             .master_map
             .subscribed_map
-            .entry(Topic::Da)
-            .or_default()
-            .clone();
+            .get(&Topic::Da)
+            .map(|entry| entry.value().clone())
+            .unwrap_or_default();
         // Spawn per-recipient sends so a slow/full recipient channel does
         // not backpressure the rest of the broadcast (see `broadcast_message`).
         for (key, node) in nodes {

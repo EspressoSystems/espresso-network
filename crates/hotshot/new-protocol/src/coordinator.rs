@@ -285,7 +285,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                         let m = validated.message.proposal.data.block_header.metadata().clone();
                         self.vid_reconstructor.handle_vid_share(s.clone(), m);
                         self.storage.append_vid(s);
-                        self.storage.append_proposal(validated.message.proposal.data.clone()).await;
+                        self.storage.append_proposal(validated.message.proposal.data.clone());
                         return Ok(ConsensusInput::Proposal(validated.sender, validated.message))
                     }
                     Err(e) => {
@@ -554,7 +554,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
             },
             ConsensusOutput::RequestProposal(..) => {}, // TODO
             ConsensusOutput::SendProposal(proposal, vid_disperse) => {
-                self.storage.append_proposal(proposal.data.clone()).await;
+                self.storage.append_proposal(proposal.data.clone());
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
                 for vid_share in vid_disperse.to_shares() {
