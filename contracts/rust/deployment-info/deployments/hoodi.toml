@@ -1,4 +1,4 @@
-# fetched at block 2608269 (2026-04-13T07:56:24Z)
+# fetched at block 2655684 (2026-04-20T12:25:48Z)
 network = "hoodi"
 
 [multisigs.espresso_labs]
@@ -17,10 +17,50 @@ status = "deployed"
 address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
 min_delay = "5m"
 
+[[ops_timelock.proposers]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[ops_timelock.executors]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[ops_timelock.cancellers]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[ops_timelock.default_admins]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[ops_timelock.default_admins]]
+address = "0xf04e9344f0f28aa5ef0f321a9cfc00680bc53118"
+name = "ops_timelock"
+
 [safe_exit_timelock]
 status = "deployed"
 address = "0xe34cdddf2271492809728c83eb347b36ba001438"
 min_delay = "10m"
+
+[[safe_exit_timelock.proposers]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[safe_exit_timelock.executors]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[safe_exit_timelock.cancellers]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[safe_exit_timelock.default_admins]]
+address = "0x26bf8656f1654a14570af587adc8cac68fda6fcf"
+name = "espresso_labs"
+
+[[safe_exit_timelock.default_admins]]
+address = "0xe34cdddf2271492809728c83eb347b36ba001438"
+name = "safe_exit_timelock"
 
 [esp_token]
 status = "deployed"

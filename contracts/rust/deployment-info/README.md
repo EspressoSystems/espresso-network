@@ -65,10 +65,10 @@ For timelocks:
 | espresso_labs | [`0x34F5af5158171Ffd2475d21dB5fc3B311F221982`](https://etherscan.io/address/0x34F5af5158171Ffd2475d21dB5fc3B311F221982) | 1.4.1 | 3 |
 | serviceco | [`0x5e37B8038615EF3D75cf28b5982C4CBF065401fB`](https://etherscan.io/address/0x5e37B8038615EF3D75cf28b5982C4CBF065401fB) | 1.4.1 | 3 |
 
-| Timelock | Address | Min Delay |
-|---------|---------|----------|
-| ops_timelock | [`0x67861f1eF4Db9BCADdD8c5E86dB92386Dd4EC700`](https://etherscan.io/address/0x67861f1eF4Db9BCADdD8c5E86dB92386Dd4EC700) | 2days |
-| safe_exit_timelock | [`0x6E7941fE8F9C751363b5c156419a0C8912dEA6b2`](https://etherscan.io/address/0x6E7941fE8F9C751363b5c156419a0C8912dEA6b2) | 14days |
+| Timelock | Address | Min Delay | Proposers | Executors | Cancellers | Default admins |
+|----------|---------|-----------|-----------|-----------|------------|------------------|
+| ops_timelock | [`0x67861f1eF4Db9BCADdD8c5E86dB92386Dd4EC700`](https://etherscan.io/address/0x67861f1eF4Db9BCADdD8c5E86dB92386Dd4EC700) | 2days | espresso_labs, serviceco | serviceco | espresso_labs, serviceco | serviceco, ops_timelock |
+| safe_exit_timelock | [`0x6E7941fE8F9C751363b5c156419a0C8912dEA6b2`](https://etherscan.io/address/0x6E7941fE8F9C751363b5c156419a0C8912dEA6b2) | 14days | espresso_labs, serviceco | serviceco | espresso_labs, serviceco | serviceco, safe_exit_timelock |
 
 ### decaf
 
@@ -84,10 +84,10 @@ For timelocks:
 |----------|---------|---------|----------|
 | espresso_labs | [`0xB76834E371B666feEe48e5d7d9A97CA08b5a0620`](https://sepolia.etherscan.io/address/0xB76834E371B666feEe48e5d7d9A97CA08b5a0620) | 1.4.1 | 2 |
 
-| Timelock | Address | Min Delay |
-|---------|---------|----------|
-| ops_timelock | [`0x8e3b6563D683b87964104A2c3A4bf542bb70767F`](https://sepolia.etherscan.io/address/0x8e3b6563D683b87964104A2c3A4bf542bb70767F) | 5m |
-| safe_exit_timelock | [`0x0eB0Ef3B5a46a444C38dA452055bddb273550d5c`](https://sepolia.etherscan.io/address/0x0eB0Ef3B5a46a444C38dA452055bddb273550d5c) | 10m |
+| Timelock | Address | Min Delay | Proposers | Executors | Cancellers | Default admins |
+|----------|---------|-----------|-----------|-----------|------------|------------------|
+| ops_timelock | [`0x8e3b6563D683b87964104A2c3A4bf542bb70767F`](https://sepolia.etherscan.io/address/0x8e3b6563D683b87964104A2c3A4bf542bb70767F) | 5m | espresso_labs | espresso_labs | espresso_labs | ops_timelock, espresso_labs |
+| safe_exit_timelock | [`0x0eB0Ef3B5a46a444C38dA452055bddb273550d5c`](https://sepolia.etherscan.io/address/0x0eB0Ef3B5a46a444C38dA452055bddb273550d5c) | 10m | espresso_labs | espresso_labs | espresso_labs | safe_exit_timelock, espresso_labs |
 
 ### hoodi
 
@@ -103,9 +103,9 @@ For timelocks:
 |----------|---------|---------|----------|
 | espresso_labs | [`0x26bF8656f1654A14570Af587aDc8cac68fDa6Fcf`](https://hoodi.etherscan.io/address/0x26bF8656f1654A14570Af587aDc8cac68fDa6Fcf) | 1.4.1 | 2 |
 
-| Timelock | Address | Min Delay |
-|---------|---------|----------|
-| ops_timelock | [`0xf04E9344F0F28AA5ef0f321a9Cfc00680BC53118`](https://hoodi.etherscan.io/address/0xf04E9344F0F28AA5ef0f321a9Cfc00680BC53118) | 5m |
-| safe_exit_timelock | [`0xE34cDDdF2271492809728C83eB347b36Ba001438`](https://hoodi.etherscan.io/address/0xE34cDDdF2271492809728C83eB347b36Ba001438) | 10m |
+| Timelock | Address | Min Delay | Proposers | Executors | Cancellers | Default admins |
+|----------|---------|-----------|-----------|-----------|------------|------------------|
+| ops_timelock | [`0xf04E9344F0F28AA5ef0f321a9Cfc00680BC53118`](https://hoodi.etherscan.io/address/0xf04E9344F0F28AA5ef0f321a9Cfc00680BC53118) | 5m | espresso_labs | espresso_labs | espresso_labs | espresso_labs, ops_timelock |
+| safe_exit_timelock | [`0xE34cDDdF2271492809728C83eB347b36Ba001438`](https://hoodi.etherscan.io/address/0xE34cDDdF2271492809728C83eB347b36Ba001438) | 10m | espresso_labs | espresso_labs | espresso_labs | espresso_labs, safe_exit_timelock |
 <!-- prettier-ignore-end -->
 <!-- DEPLOYMENT_TABLE_END -->
