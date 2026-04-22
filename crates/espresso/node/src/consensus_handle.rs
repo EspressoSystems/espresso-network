@@ -352,8 +352,15 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         Ok(async move { future.await.map_err(|e| anyhow::anyhow!("{e}")) }.boxed())
     }
 
-    // TODO: implement for new protocol
     pub async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
+        let view = self.current_view().await;
+        if self.new_protocol_at(view).await {
+            return self
+                .client_api
+                .submit_transaction(tx)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"));
+        }
         self.legacy_handle
             .read()
             .await

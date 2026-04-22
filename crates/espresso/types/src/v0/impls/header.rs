@@ -668,28 +668,30 @@ impl Header {
                 .context(format!("missing fee account {}", fee_info.account()))?;
         }
 
-        // Validate and charge the builder fee.
-        for BuilderFee {
-            fee_account,
-            fee_signature,
-            fee_amount,
-        } in &builder_fee
-        {
-            ensure!(
-                fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table)
-                    || fee_account.validate_fee_signature_with_vid_commitment(
-                        fee_signature,
-                        *fee_amount,
-                        &ns_table,
-                        &payload_commitment
-                    ),
-                "invalid builder signature"
-            );
+        // TODO(abdul): builder is unfunded error
+        if version < versions::CLIQUENET_VERSION {
+            for BuilderFee {
+                fee_account,
+                fee_signature,
+                fee_amount,
+            } in &builder_fee
+            {
+                ensure!(
+                    fee_account.validate_fee_signature(fee_signature, *fee_amount, &ns_table)
+                        || fee_account.validate_fee_signature_with_vid_commitment(
+                            fee_signature,
+                            *fee_amount,
+                            &ns_table,
+                            &payload_commitment
+                        ),
+                    "invalid builder signature"
+                );
 
-            let fee_info = FeeInfo::new(*fee_account, *fee_amount);
-            state
-                .charge_fee(fee_info, chain_config.fee_recipient)
-                .context(format!("invalid builder fee {fee_info:?}"))?;
+                let fee_info = FeeInfo::new(*fee_account, *fee_amount);
+                state
+                    .charge_fee(fee_info, chain_config.fee_recipient)
+                    .context(format!("invalid builder fee {fee_info:?}"))?;
+            }
         }
 
         let fee_info = FeeInfo::from_builder_fees(builder_fee.clone());
@@ -1399,7 +1401,7 @@ impl BlockHeader<SeqTypes> for Header {
         version: Version,
         view_number: u64,
     ) -> Result<Self, Self::Error> {
-        tracing::info!("preparing to propose legacy header");
+        tracing::info!("preparing to propose header");
 
         let height = parent_leaf.height();
         let view = parent_leaf.view_number();

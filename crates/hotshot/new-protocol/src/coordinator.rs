@@ -98,7 +98,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             initializer.epoch_height,
         );
 
-        // TODO: 
+        // TODO:
         let genesis_cert1 = initializer.high_qc.clone();
         let genesis_proposal = message::Proposal {
             block_header: initializer.anchor_leaf.block_header().clone(),
@@ -244,6 +244,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);
+                let _ = respond.send(());
+            },
+            ClientRequest::SubmitTransaction { tx, respond } => {
+                self.block_builder.on_submit_transaction(tx);
                 let _ = respond.send(());
             },
         }

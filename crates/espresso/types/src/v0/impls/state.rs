@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
+use versions::{
+    CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION,
+};
 
 use super::{
     BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, L1Client, fee_info::FeeError,
@@ -1038,11 +1040,14 @@ impl ValidatedState {
         let mut delta = Delta::default();
         validated_state.apply_proposal(&mut delta, parent_leaf, l1_deposits);
 
-        validated_state.charge_fees(
-            &mut delta,
-            proposed_header.fee_info(),
-            chain_config.fee_recipient,
-        )?;
+        // TODO(abdul): builder is unfunded error
+        if version < CLIQUENET_VERSION {
+            validated_state.charge_fees(
+                &mut delta,
+                proposed_header.fee_info(),
+                chain_config.fee_recipient,
+            )?;
+        }
 
         // total_rewards_distributed is only present in >= V4
         let total_rewards_distributed = if version < EPOCH_VERSION {

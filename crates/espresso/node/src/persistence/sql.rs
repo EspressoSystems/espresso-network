@@ -15,8 +15,8 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use either::Either;
 use espresso_types::{
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, CoordinatorEvent, FeeMerkleTree, Leaf,
-    Leaf2, NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, CoordinatorEvent, FeeMerkleTree,
+    Leaf, Leaf2, NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
     parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},

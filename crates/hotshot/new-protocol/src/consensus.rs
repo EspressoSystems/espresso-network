@@ -168,6 +168,8 @@ pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, Proposal<T>>,
     signed_proposals: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
     proposed_views: BTreeSet<ViewNumber>,
+    // TODO(abdul): not the leader for the view error
+    skipped_views: BTreeSet<ViewNumber>,
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
@@ -226,6 +228,7 @@ impl<T: NodeType> Consensus<T> {
             proposals: BTreeMap::new(),
             signed_proposals: BTreeMap::new(),
             proposed_views: BTreeSet::new(),
+            skipped_views: BTreeSet::new(),
             vid_disperses: BTreeMap::new(),
             blocks: BTreeMap::new(),
             states_verified: BTreeMap::new(),
@@ -429,7 +432,19 @@ impl<T: NodeType> Consensus<T> {
     }
 
     pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
+        // Advance `last_decided_leaf` before pruning `leaves`, so it stays
+        // consistent with `last_decided_view`. Callers of `DecidedState` look
+        // up state by `last_decided_leaf().view_number()`; if we only bumped
+        // the view without advancing the leaf, that view would be pruned from
+        // the state manager and lookups would return None.
+        if let Some(leaf) = self.leaves.get(&view) {
+            self.last_decided_leaf =
+                std::cmp::max_by_key(self.last_decided_leaf.clone(), leaf.clone(), |l| {
+                    l.view_number()
+                });
+        }
         self.proposed_views = self.proposed_views.split_off(&view);
+        self.skipped_views = self.skipped_views.split_off(&view);
         self.states_verified = self.states_verified.split_off(&view);
         self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
         self.blocks = self.blocks.split_off(&view);
@@ -633,6 +648,9 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = certificate.view_number() + 1;
+        if self.timeout_certs.contains_key(&view) {
+            return Protocol::Continue;
+        }
         let Some(epoch) = certificate.epoch() else {
             warn!(view = %certificate.view_number(), "timeout certificate has no epoch number");
             return Protocol::Abort;
@@ -788,7 +806,7 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        if self.proposed_views.contains(&view) {
+        if self.proposed_views.contains(&view) || self.skipped_views.contains(&view) {
             return;
         }
 
@@ -839,6 +857,7 @@ impl<T: NodeType> Consensus<T> {
         };
         if !self.is_leader(view, proposal_epoch).await {
             warn!(epoch = %proposal_epoch, "not the leader for this view, we should not have a header");
+            self.skipped_views.insert(view);
             return;
         }
 

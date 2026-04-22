@@ -67,6 +67,12 @@ impl<T: NodeType> ClientApi<T> {
         .await
     }
 
+    pub async fn submit_transaction(&self, tx: T::Transaction) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::SubmitTransaction { tx, respond }, rx)
+            .await
+    }
+
     async fn call<A>(
         &self,
         request: ClientRequest<T>,
@@ -130,6 +136,10 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     UpdateLeaf {
         update: UpdateLeaf<T>,
+        respond: oneshot::Sender<()>,
+    },
+    SubmitTransaction {
+        tx: T::Transaction,
         respond: oneshot::Sender<()>,
     },
 }

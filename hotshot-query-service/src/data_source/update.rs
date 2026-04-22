@@ -123,7 +123,7 @@ where
                         .block_payload()
                         .map(|payload| BlockQueryData::new(leaf2.block_header().clone(), payload));
                     if block_data.is_none() {
-                        tracing::info!(height, "block not available at decide");
+                        tracing::warn!(height, "block payload missing at decide");
                     }
 
                     let (vid_common, vid_share) = match vid_share {
@@ -216,7 +216,7 @@ where
                         .block_payload()
                         .map(|payload| BlockQueryData::new(leaf.block_header().clone(), payload));
                     if block_data.is_none() {
-                        tracing::info!(height, "block not available at decide");
+                        tracing::warn!(height, "block payload missing at decide");
                     }
 
                     // Extract VID common data from the new protocol's VidDisperseShare2.
