@@ -17,8 +17,6 @@ use tokio::{
 };
 use tracing::{debug, instrument, warn};
 
-use crate::helpers::upgrade_lock;
-
 pub struct VoteCollector<T: NodeType, V, C> {
     accumulators: BTreeMap<ViewNumber, (mpsc::Sender<V>, AbortHandle)>,
     completed_certificates: BTreeSet<ViewNumber>,
@@ -81,9 +79,12 @@ where
         let (tx, _abort_handle) = self.accumulators.entry(view).or_insert_with(|| {
             let (tx, rx) = mpsc::channel(100);
             let accumulator = VoteAccumulator::new(self.upgrade_lock.clone());
-            let abort_handle =
-                self.tasks
-                    .spawn(Self::run_per_view(view, rx, accumulator, membership));
+            let abort_handle = self.tasks.spawn(Self::run_per_view(
+                rx,
+                accumulator,
+                membership,
+                self.upgrade_lock.clone(),
+            ));
             (tx, abort_handle)
         });
         let _ = tx.send(vote).await;
@@ -105,10 +106,10 @@ where
 
     #[instrument(level = "debug", skip_all)]
     async fn run_per_view(
-        _view: ViewNumber,
         mut rx: mpsc::Receiver<V>,
         mut accumulator: VoteAccumulator<T, V, C>,
         membership: EpochMembership<T>,
+        upgrade_lock: UpgradeLock<T>,
     ) -> C {
         let mut votes = Vec::new();
 
@@ -119,7 +120,7 @@ where
                 match cert.is_valid_cert(
                     &StakeTableEntries::<T>::from(stake_table).0,
                     threshold,
-                    &upgrade_lock(),
+                    &upgrade_lock,
                 ) {
                     Ok(()) => {
                         return cert;
@@ -130,14 +131,14 @@ where
                         // Recover the good votes, this takes a long time
                         // TODO make this more efficient by parallelizing the validation
                         votes.retain(|v: &V| {
-                            let vote_commitment = generate_vote_commitment(v, &upgrade_lock());
+                            let vote_commitment = generate_vote_commitment(v, &upgrade_lock);
 
                             vote_commitment.is_some_and(|commitment| {
                                 v.signing_key()
                                     .validate(&v.signature(), commitment.as_ref())
                             })
                         });
-                        accumulator = VoteAccumulator::new(upgrade_lock());
+                        accumulator = VoteAccumulator::new(upgrade_lock.clone());
                         for vote in &votes {
                             // after recovering the good votes, try to accumulate them again, but this time
                             // we know the cert if good if we can form it
@@ -200,9 +201,8 @@ mod tests {
 
     use super::VoteCollector;
     use crate::{
-        helpers::upgrade_lock,
         message::{Certificate1, Certificate2, Vote2},
-        tests::common::utils::mock_membership,
+        tests::common::utils::{mock_membership, upgrade_lock},
     };
 
     /// Number of test validators.

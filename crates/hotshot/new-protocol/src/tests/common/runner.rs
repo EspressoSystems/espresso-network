@@ -8,9 +8,8 @@ use committable::Committable;
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::{block_types::TestTransaction, node_types::TestTypes};
 use hotshot_types::{
-    data::ViewNumber,
-    traits::{network::ConnectedNetwork, signature_key::SignatureKey},
-    vote::HasViewNumber,
+    PeerConnectInfo, addr::NetAddr, data::ViewNumber, traits::signature_key::SignatureKey,
+    vote::HasViewNumber, x25519::Keypair,
 };
 use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::{
@@ -20,14 +19,12 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
+    client::ClientApi,
     consensus::ConsensusOutput,
     coordinator::{Coordinator, error::Severity},
-    helpers::upgrade_lock,
-    message::{BlockMessage, Message, MessageType, TransactionMessage, Validated},
-    network::Network,
+    network::cliquenet::Cliquenet,
     tests::common::{
-        coordinator_builder::build_test_coordinator, network::TestNetwork,
-        utils::mock_membership_with_num_nodes,
+        coordinator_builder::build_test_coordinator, utils::mock_membership_with_num_nodes,
     },
 };
 
@@ -159,21 +156,19 @@ impl TestRunner {
         result
     }
 
-    /// Run the integration test using the given network backend.
+    /// Run the integration test over cliquenet.
     ///
-    /// Spins up `self.num_nodes` coordinators connected via `N`.  Each
-    /// coordinator self-starts via the genesis bootstrap (no side-channel
-    /// injection needed).  Transactions are broadcast over the network using
-    /// a dedicated client network instance.
-    pub async fn run<N: TestNetwork>(&self) -> Result<(), TestError> {
+    /// Spins up `self.num_nodes` coordinators. Each coordinator self-starts
+    /// via the genesis bootstrap. Transactions are submitted via the client
+    /// API of the first live node.
+    pub async fn run(&self) -> Result<(), TestError> {
         let membership = mock_membership_with_num_nodes(self.num_nodes).await;
-        let (network_state, networks) = N::create(self.num_nodes, &self.down_nodes).await;
+        let networks = create_networks(self.num_nodes, &self.down_nodes).await;
 
         let mut output_channels: Vec<Option<UnboundedReceiver<NodeEvent>>> =
             Vec::with_capacity(self.num_nodes);
+        let mut tx_client: Option<ClientApi<TestTypes>> = None;
 
-        // Spawn one coordinator task per node.  Down nodes are not
-        // subscribed to any topic, so their slot is `None`.
         for (i, network) in networks.into_iter().enumerate() {
             let Some(network) = network else {
                 output_channels.push(None);
@@ -183,7 +178,7 @@ impl TestRunner {
             let (output_tx, output_rx) = mpsc::unbounded_channel();
             output_channels.push(Some(output_rx));
 
-            let coord = build_test_coordinator::<N::Impl>(
+            let coord = build_test_coordinator(
                 i as u64,
                 network,
                 membership.clone(),
@@ -192,17 +187,16 @@ impl TestRunner {
             )
             .await;
 
+            if tx_client.is_none() {
+                tx_client = Some(coord.client_api().clone());
+            }
+
             tokio::spawn(run_node(coord, output_tx));
         }
 
-        // Create a client network for broadcasting transactions.
-        let client_net = network_state.create_client().await;
-        let mut client_network =
-            Network::<TestTypes, _>::new(client_net, membership.clone(), upgrade_lock());
-
+        let tx_client = tx_client.expect("at least one node must be live");
         let all_expected_failures = self.failed_views_from_down_nodes();
 
-        // Collect decided leaf commits from each node until all live nodes reach the target.
         let mut node_commits: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
             vec![BTreeMap::new(); self.num_nodes];
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
@@ -218,11 +212,10 @@ impl TestRunner {
                 .checked_duration_since(tokio::time::Instant::now())
                 .ok_or(TestError::Timeout)?;
 
-            // Broadcast a transaction over the network.
             tx_nonce = tx_nonce.wrapping_add(1);
-            broadcast_transaction(&mut client_network, tx_nonce, self.transaction_size).await;
+            let tx = random_transaction(tx_nonce, self.transaction_size);
+            let _ = tx_client.submit_transaction(tx).await;
 
-            // Collect events from each live node.
             for (idx, rx_opt) in output_channels.iter_mut().enumerate() {
                 let Some(rx) = rx_opt else { continue };
                 if node_commits[idx].len() >= self.target_decisions {
@@ -252,10 +245,6 @@ impl TestRunner {
         )
     }
 
-    /// Verify that the collected per-node commits and timeouts are consistent:
-    ///  - Views expected to fail were not decided by any node, and a quorum timed out.
-    ///  - All other views were decided by a quorum, and all nodes that decided
-    ///    agree on the same leaf commitment.
     fn verify_correctness(
         node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
         node_timeouts: &[BTreeSet<ViewNumber>],
@@ -324,10 +313,65 @@ impl TestRunner {
     }
 }
 
-/// Event loop for a single node.  Processes coordinator inputs, collects
-/// decided leaf commits, and forwards them to the test runner.
-async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
-    mut coord: Coordinator<TestTypes, N>,
+/// Create `num_nodes` interconnected cliquenet instances.
+async fn create_networks(
+    num_nodes: usize,
+    skip_nodes: &BTreeSet<usize>,
+) -> Vec<Option<Cliquenet<TestTypes>>> {
+    use crate::tests::common::utils::upgrade_lock;
+
+    let parties: Vec<(Keypair, BLSPubKey, NetAddr)> = (0..num_nodes)
+        .map(|i| {
+            let (_, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64);
+            let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
+            let port =
+                test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+            (
+                keypair,
+                BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64).0,
+                addr,
+            )
+        })
+        .collect();
+
+    let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
+        .iter()
+        .map(|(kp, pk, addr)| {
+            (
+                *pk,
+                PeerConnectInfo {
+                    x25519_key: kp.public_key(),
+                    p2p_addr: addr.clone(),
+                },
+            )
+        })
+        .collect();
+
+    let mut networks = Vec::with_capacity(num_nodes);
+    for (i, (keypair, pk, addr)) in parties.iter().enumerate() {
+        if skip_nodes.contains(&i) {
+            networks.push(None);
+            continue;
+        }
+        let net = Cliquenet::create(
+            "test",
+            *pk,
+            keypair.clone(),
+            addr.clone(),
+            peer_infos.clone(),
+            upgrade_lock(),
+        )
+        .await
+        .expect("cliquenet creation should succeed");
+        networks.push(Some(net));
+    }
+
+    networks
+}
+
+async fn run_node(
+    mut coord: Coordinator<TestTypes, Cliquenet<TestTypes>>,
     output_tx: UnboundedSender<NodeEvent>,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
@@ -380,25 +424,6 @@ async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
             }
         }
     }
-}
-
-/// Broadcast a random transaction over the network.
-async fn broadcast_transaction<N: ConnectedNetwork<BLSPubKey>>(
-    client: &mut Network<TestTypes, N>,
-    nonce: u64,
-    size: usize,
-) {
-    let tx = random_transaction(nonce, size);
-    let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9999);
-    let msg: Message<TestTypes, Validated> = Message {
-        sender: pk,
-        message_type: MessageType::Block(BlockMessage::Transactions(TransactionMessage {
-            view: ViewNumber::genesis(),
-            transactions: vec![tx],
-        })),
-    };
-    // Best-effort: ignore send errors (network may not be fully ready yet).
-    let _ = client.broadcast(msg).await;
 }
 
 fn random_transaction(nonce: u64, size: usize) -> TestTransaction {

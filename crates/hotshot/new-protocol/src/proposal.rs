@@ -8,7 +8,7 @@ use hotshot_types::{
         vid_disperse::vid_total_weight,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
-    message::Proposal as SignedProposal,
+    message::{Proposal as SignedProposal, UpgradeLock},
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
@@ -18,10 +18,7 @@ use hotshot_utils::anytrace;
 use tokio::task::JoinSet;
 use tracing::error;
 
-use crate::{
-    helpers::upgrade_lock,
-    message::{Proposal, ProposalMessage, Unchecked, Validated},
-};
+use crate::message::{Proposal, ProposalMessage, Unchecked, Validated};
 
 type Result<T> = std::result::Result<T, ValidationError>;
 
@@ -42,14 +39,16 @@ pub struct ProposalValidator<T: NodeType> {
 
 struct Validator<T: NodeType> {
     membership_coordinator: EpochMembershipCoordinator<T>,
+    upgrade_lock: UpgradeLock<T>,
 }
 
 impl<T: NodeType> ProposalValidator<T> {
-    pub fn new(c: EpochMembershipCoordinator<T>) -> Self {
+    pub fn new(c: EpochMembershipCoordinator<T>, l: UpgradeLock<T>) -> Self {
         Self {
             tasks: JoinSet::new(),
             validator: Arc::new(Validator {
                 membership_coordinator: c,
+                upgrade_lock: l,
             }),
         }
     }
@@ -138,7 +137,7 @@ impl<T: NodeType> Validator<T> {
         let threshold = membership.success_threshold().await;
         match proposal
             .justify_qc
-            .is_valid_cert(&entries, threshold, &upgrade_lock::<T>())
+            .is_valid_cert(&entries, threshold, &self.upgrade_lock)
         {
             Ok(()) => Ok(()),
             Err(e) => Err(ValidationError::InvalidJustifyQc(e)),

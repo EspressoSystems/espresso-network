@@ -19,7 +19,7 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::coordinator::Coordinator;
+use hotshot_new_protocol::{coordinator::Coordinator, network::Network};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -91,10 +91,14 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     validator_config: ValidatorConfig<SeqTypes>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P> {
+impl<N, P> SequencerContext<N, P>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+{
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init<CN: ConnectedNetwork<PubKey>>(
+    pub async fn init<T: Network<SeqTypes> + Send + 'static>(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -104,7 +108,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
-        coordinator_network: CN,
+        coordinator_network: T,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
@@ -141,13 +145,19 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = initializer.epoch_height;
 
-        let coordinator = Coordinator::<SeqTypes, CN>::maker()
+        let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer)
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .timeout_duration(Duration::from_secs(10))
+            .upgrade_lock({
+                // TODO: The Coordinator and HotShot each create their own UpgradeLock
+                // from the same inputs. They need to share a single lock so that upgrade
+                // certificate updates are visible to both.
+                UpgradeLock::from_certificate(upgrade, &initializer.decided_upgrade_certificate)
+            })
             .make();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(

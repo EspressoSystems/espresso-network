@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use committable::Committable;
-use hotshot::{traits::NodeImplementation, types::BLSPubKey};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -18,12 +18,12 @@ use crate::{
     consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    helpers::upgrade_lock,
     message::{Certificate1, Proposal},
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
     state::StateManager,
+    tests::common::utils::upgrade_lock,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -34,23 +34,24 @@ use crate::{
 /// certificate and proposal so that the view-1 leader can propose without any
 /// external injection.  The initial `ViewChanged` and (for the leader)
 /// `RequestBlockAndHeader` outputs are already queued in the outbox.
-pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
+pub async fn build_test_coordinator<N: Network<TestTypes>>(
     node_index: u64,
-    network: I::Network,
+    network: N,
     membership: EpochMembershipCoordinator<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> Coordinator<TestTypes, I::Network> {
+) -> Coordinator<TestTypes, N> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
+    let upgrade_lock = upgrade_lock();
 
-    let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+    let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
@@ -62,6 +63,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         private_key.clone(),
         genesis_leaf.clone(),
         epoch_height,
+        upgrade_lock.clone(),
     );
 
     let vid_disperser = VidDisperser::new(membership.clone());
@@ -71,9 +73,10 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         instance.clone(),
         membership.clone(),
         BlockBuilderConfig::default(),
+        upgrade_lock.clone(),
     );
 
-    let mut state_manager = StateManager::new(instance.clone());
+    let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
     state_manager.seed_state(
         ViewNumber::genesis(),
         Arc::new(genesis_state),
@@ -85,9 +88,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-    let proposal_validator = ProposalValidator::new(membership.clone());
-
-    let network = Network::new(network, membership.clone(), upgrade_lock());
+    let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)

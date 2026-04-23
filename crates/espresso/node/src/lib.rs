@@ -37,13 +37,14 @@ pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, GossipConfig, KeyPair,
-        Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
+        CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
+        MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
         derive_libp2p_multiaddr, derive_libp2p_peer_id,
     },
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
+use hotshot_new_protocol::network::cliquenet::Cliquenet;
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -51,6 +52,7 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
+    message::UpgradeLock,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -737,12 +739,16 @@ where
             .into_iter()
             .filter_map(|cfg| Some((cfg.stake_table_entry.stake_key, cfg.connect_info?)));
 
-        Cliquenet::<PubKey>::create(
-            "sequencer",
+        // TODO: This creates a separate UpgradeLock from the one HotShot will
+        // use. They should share a single lock so upgrade certificate updates
+        // are visible to both.
+        Cliquenet::create(
+            "sequencer", // TODO: Make name configurable per environment
             pub_key,
             network_params.x25519_secret_key.into(),
             network_params.cliquenet_bind_addr.clone(),
             peers,
+            UpgradeLock::new(version_upgrade),
         )
         .await?
     };
@@ -784,6 +790,7 @@ pub mod testing {
     use std::{
         cmp::max,
         collections::{BTreeMap, HashMap},
+        net::Ipv4Addr,
         time::Duration,
     };
 
@@ -838,6 +845,7 @@ pub mod testing {
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
+        message::UpgradeLock,
         signature_key::BLSKeyPair,
         traits::{
             EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
@@ -1483,16 +1491,25 @@ pub mod testing {
                 "starting node",
             );
 
-            // The coordinator needs its own separate MemoryNetwork so it doesn't
-            // steal messages from HotShot's network. We use a separate MasterMap
-            // to avoid overwriting HotShot's entry in the shared master map.
-            let coordinator_master_map = Arc::new(MasterMap::new());
-            let coordinator_network = MemoryNetwork::new(
-                &my_peer_config.stake_table_entry.stake_key,
-                &coordinator_master_map,
-                &topics,
-                None,
-            );
+            let coordinator_network = {
+                let keypair = x25519::Keypair::derive_from::<PubKey>(&self.priv_keys[i])
+                    .expect("keypair derivation should succeed");
+                let port = test_utils::reserve_tcp_port()
+                    .expect("OS should have ephemeral ports available");
+                let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
+                let lock = UpgradeLock::<SeqTypes>::new(upgrade);
+                Cliquenet::create(
+                    "test-coordinator",
+                    my_peer_config.stake_table_entry.stake_key,
+                    keypair,
+                    addr,
+                    vec![],
+                    lock,
+                )
+                .await
+                .expect("cliquenet creation should succeed")
+            };
+
             SequencerContext::init(
                 NetworkConfig {
                     config,

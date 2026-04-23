@@ -7,11 +7,12 @@ use crate::{
     consensus::ConsensusInput,
     message::{Certificate1, EpochChangeMessage, Proposal},
     tests::common::assertions::{
-        any, count_matching, has_epoch_change, is_block_built, is_block_reconstructed, is_cert1,
-        is_cert2, is_drb_result, is_header_created, is_leaf_decided, is_proposal,
-        is_request_block_and_header, is_request_vid_disperse, is_send_cert1, is_send_timeout_vote,
-        is_state_validated, is_timeout, is_timeout_cert, is_timeout_one_honest, is_vid_disperse,
-        is_view_changed, is_vote1, is_vote2, node_index_for_key,
+        any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
+        is_drb_result, is_header_created, is_leaf_decided, is_proposal,
+        is_request_block_and_header, is_request_vid_disperse, is_send_cert1, is_send_epoch_change,
+        is_send_timeout_vote, is_state_validated, is_timeout, is_timeout_cert,
+        is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1, is_vote2,
+        node_index_for_key,
     },
 };
 
@@ -38,14 +39,12 @@ async fn send_proposal_and_vote1s(
     }
 
     harness
-        .process_until(
-            |inputs| {
-                any(inputs, is_cert1)
-                    && any(inputs, is_block_reconstructed)
-                    && any(inputs, is_state_validated)
-            },
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_cert1)
+                && any(inputs, is_block_reconstructed)
+                && any(inputs, is_state_validated)
+        })
         .await;
     assert!(
         any(harness.outputs(), is_view_changed),
@@ -60,10 +59,10 @@ async fn send_vote2s(harness: &mut TestHarness, test_data: &TestData, view_idx: 
         harness.message(test_view.vote2_input(i)).await;
     }
     harness
-        .process_until(
-            |inputs| any(inputs, is_cert2),
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_cert2)
+        })
         .await;
 }
 
@@ -81,10 +80,10 @@ async fn send_timeout_votes(
             .await;
     }
     harness
-        .process_until(
-            |inputs| any(inputs, is_timeout_cert),
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_timeout_cert)
+        })
         .await;
     harness
         .apply_and_process(ConsensusInput::TimeoutCertificate(
@@ -112,10 +111,10 @@ async fn test_sequential_vote1() {
         .await;
 
     harness
-        .process_until(
-            |inputs| count_matching(inputs, is_state_validated) >= 2 || any(inputs, is_timeout),
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            count_matching(inputs, is_state_validated) >= 2
+        })
         .await;
 
     assert_eq!(
@@ -146,13 +145,10 @@ async fn test_cert1_formed_and_vote2_sent() {
     );
 }
 
-/// Full decide path: CPU tasks form Certificate1, Certificate2, and
-/// reconstruct blocks from VID shares, leading to a leaf decision.
-/// Block reconstruction is exercised because consensus requires
-/// BlockReconstructed (produced by the CPU VidShareTask) before it
-/// can proceed to the decide step.
+/// Full decide path: Certificate1, Certificate2, and block reconstruction
+/// from VID shares lead to a leaf decision.
 #[tokio::test]
-async fn test_full_decide_via_cpu_tasks() {
+async fn test_full_decide() {
     let test_data = TestData::new(3).await;
     let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -185,14 +181,11 @@ async fn test_full_decide_via_cpu_tasks() {
     );
 }
 
-/// Leader sends a proposal after CPU tasks form Certificate1.
-/// The proposal requires VID disperse, which is computed by the CPU
-/// VidDisperseTask (the mock coordinator forwards RequestVidDisperse
-/// to the CPU task when cpu_tx is set). SendProposal in the output
-/// proves the full leader path: cert1 formation → block/header request
-/// → VID disperse via CPU → proposal sent.
+/// Leader sends a proposal after Certificate1 is formed.
+/// SendProposal in the output proves the full leader path:
+/// cert1 formation → block/header request → VID disperse → proposal sent.
 #[tokio::test]
-async fn test_leader_proposal_via_cpu_tasks() {
+async fn test_leader_proposal() {
     let test_data = TestData::new(4).await;
     let leader_for_view_2 = test_data.views[1].leader_public_key;
     let leader_index = node_index_for_key(&leader_for_view_2);
@@ -215,17 +208,15 @@ async fn test_leader_proposal_via_cpu_tasks() {
     }
 
     harness
-        .process_until(
-            |inputs| {
-                any(inputs, is_cert1)
-                    && any(inputs, is_block_reconstructed)
-                    && any(inputs, is_state_validated)
-                    && any(inputs, is_block_built)
-                    && any(inputs, is_header_created)
-                    && any(inputs, is_vid_disperse)
-            },
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_cert1)
+                && any(inputs, is_block_reconstructed)
+                && any(inputs, is_state_validated)
+                && any(inputs, is_block_built)
+                && any(inputs, is_header_created)
+                && any(inputs, is_vid_disperse)
+        })
         .await;
 
     // SendProposal proves the CPU VidDisperseTask computed the VID
@@ -236,10 +227,10 @@ async fn test_leader_proposal_via_cpu_tasks() {
     );
 }
 
-/// Multi-view chain: CPU tasks form certificates for each view, leading to
+/// Multi-view chain: certificates are formed for each view, leading to
 /// multiple decisions.
 #[tokio::test]
-async fn test_multi_view_decide_via_cpu_tasks() {
+async fn test_multi_view_decide() {
     let test_data = TestData::new(5).await;
     let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
@@ -272,15 +263,11 @@ async fn test_timeout_votes_form_tc() {
     );
 }
 
-/// Full leader path after timeout via CPU tasks: establish lock → timer
-/// fires for view 2 (Timeout) → timeout votes form TC → leader proposes
-/// for view 3 before the view 3 timer fires.
-///
-/// The 100ms timer is short enough to actually fire during the test,
-/// proving the timeout mechanism does not interfere with the leader's
-/// proposal path.
+/// Full leader path after timeout: establish lock → timer fires for
+/// view 2 (Timeout) → timeout votes form TC → leader proposes for
+/// view 3 before the view 3 timer fires.
 #[tokio::test]
-async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
+async fn test_leader_proposes_after_timeout() {
     let test_data = TestData::new(5).await;
     // Timeout cert for view 2 advances to view 3; we need to be leader of view 3
     let leader_for_view_3 = test_data.views[2].leader_public_key;
@@ -296,10 +283,7 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
 
     // Wait for the timeout to fire (non-timeout events are processed inline).
     harness
-        .process_until(
-            |inputs| any(inputs, is_timeout),
-            |inputs| !any(inputs, is_timeout),
-        )
+        .process_until(|inputs| any(inputs, is_timeout))
         .await;
 
     // Send timeout votes for view 2 → CPU timeout collector forms TC
@@ -311,14 +295,12 @@ async fn test_leader_proposes_after_timeout_via_cpu_tasks() {
     send_timeout_votes(&mut harness, &test_data, 1, lock).await;
 
     harness
-        .process_until(
-            |inputs| {
-                any(inputs, is_vid_disperse)
-                    && any(inputs, is_block_built)
-                    && any(inputs, is_header_created)
-            },
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_vid_disperse)
+                && any(inputs, is_block_built)
+                && any(inputs, is_header_created)
+        })
         .await;
 
     assert!(
@@ -379,7 +361,7 @@ async fn test_epoch_boundary_emits_epoch_change() {
     run_views_integration(&mut harness, &test_data, &node_key, 0..10).await;
 
     assert!(
-        has_epoch_change(harness.outputs()),
+        any(harness.outputs(), is_send_epoch_change),
         "SendEpochChange should be emitted when the epoch boundary block is decided"
     );
 }
@@ -487,10 +469,10 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
 
     // Wait for the DRB result from the EpochManager to arrive.
     harness
-        .process_until(
-            |inputs| any(inputs, is_drb_result),
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_drb_result)
+        })
         .await;
 
     // ---- Epoch 1 → 2 boundary ----
@@ -528,10 +510,10 @@ async fn test_node_votes_with_computed_drb_in_epoch3() {
 
     // Wait for the DRB result from the EpochManager.
     harness
-        .process_until(
-            |inputs| any(inputs, is_drb_result),
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_drb_result)
+        })
         .await;
 
     // ---- Epoch 1 → 2 boundary ----
@@ -582,10 +564,10 @@ async fn test_f_plus_1_timeout_votes_trigger_timeout_one_honest() {
     }
 
     harness
-        .process_until(
-            |inputs| any(inputs, is_timeout_one_honest),
-            |inputs| any(inputs, is_timeout),
-        )
+        .process_until(|inputs| {
+            assert!(!any(inputs, is_timeout));
+            any(inputs, is_timeout_one_honest)
+        })
         .await;
 
     assert!(

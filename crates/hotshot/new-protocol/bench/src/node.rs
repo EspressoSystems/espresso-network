@@ -1,10 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{
-    traits::{BlockPayload, implementations::Cliquenet},
-    types::BLSPubKey,
-};
+use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -15,8 +12,7 @@ use hotshot_new_protocol::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    helpers::upgrade_lock,
-    network::Network,
+    network::cliquenet::Cliquenet,
     outbox::Outbox,
     proposal::ProposalValidator,
     state::StateManager,
@@ -28,14 +24,16 @@ use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    traits::signature_key::SignatureKey,
+    message::UpgradeLock,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
+use versions::VID2_UPGRADE_VERSION;
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<BLSPubKey>>;
+type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -55,7 +53,7 @@ async fn create_network(
     public_key: &BLSPubKey,
     private_key: &<BLSPubKey as SignatureKey>::PrivateKey,
     cfg: &NodeConfig,
-) -> Result<Cliquenet<BLSPubKey>> {
+) -> Result<Cliquenet<TestTypes>> {
     let keypair = Keypair::derive_from::<BLSPubKey>(private_key)?;
     let bind_addr: NetAddr = cfg
         .bind_addr
@@ -82,9 +80,16 @@ async fn create_network(
         ));
     }
 
-    let net = Cliquenet::create("bench", *public_key, keypair, bind_addr, parties)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to create cliquenet: {e}"))?;
+    let net = Cliquenet::create(
+        "bench",
+        *public_key,
+        keypair,
+        bind_addr,
+        parties,
+        upgrade_lock(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("failed to create cliquenet: {e}"))?;
 
     Ok(net)
 }
@@ -93,7 +98,7 @@ async fn build_coordinator(
     public_key: BLSPubKey,
     private_key: <BLSPubKey as SignatureKey>::PrivateKey,
     membership: EpochMembershipCoordinator<TestTypes>,
-    network: Cliquenet<BLSPubKey>,
+    network: Cliquenet<TestTypes>,
     cfg: &NodeConfig,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
@@ -109,6 +114,7 @@ async fn build_coordinator(
         private_key,
         genesis_leaf.clone(),
         epoch_height,
+        upgrade_lock(),
     );
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
@@ -123,9 +129,14 @@ async fn build_coordinator(
     let vid_reconstructor = VidReconstructor::new();
 
     let block_config = BlockBuilderConfig::default();
-    let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
+    let block_builder = BlockBuilder::new(
+        instance.clone(),
+        membership.clone(),
+        block_config,
+        upgrade_lock(),
+    );
 
-    let mut state_manager = StateManager::new(instance.clone());
+    let mut state_manager = StateManager::new(instance.clone(), upgrade_lock());
     state_manager.seed_state(
         ViewNumber::genesis(),
         Arc::new(genesis_state),
@@ -138,9 +149,7 @@ async fn build_coordinator(
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-    let proposal_validator = ProposalValidator::new(membership.clone());
-
-    let net = Network::new(network, membership.clone(), upgrade_lock());
+    let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock());
 
     let timer = Timer::new(
         cfg.timeout_duration(),
@@ -150,7 +159,7 @@ async fn build_coordinator(
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
-        .network(net)
+        .network(network)
         .state_manager(state_manager)
         .vote1_collector(vote1_collector)
         .vote2_collector(vote2_collector)
@@ -339,4 +348,8 @@ fn build_genesis_proposal(
         next_drb_result: None,
         state_cert: None,
     }
+}
+
+pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
+    UpgradeLock::new(VID2_UPGRADE_VERSION.into())
 }
