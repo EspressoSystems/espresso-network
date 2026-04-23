@@ -51,6 +51,11 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
 
@@ -113,6 +118,11 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          comment_on_pr: false
+
       - uses: actions/checkout@v4
       - uses: rui314/setup-mold@v1
 
