@@ -50,7 +50,7 @@ use super::{
 };
 use crate::{
     SeqTypes,
-    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
+    api::RewardMerkleTreeDataSource,
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{ChainConfigPersistence, sql::Options},
     state::compute_state_update,
@@ -195,6 +195,38 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             .await?
             .context(format!(
                 "No reward merkle tree for height {} in storage",
+                height
+            ))?;
+
+            row.try_get::<Vec<u8>, _>("balances")
+                .context("Missing field balances from row; this should never happen")
+        }
+    }
+
+    fn load_latest_tree(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction for load_latest_tree")?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT balances
+                FROM reward_merkle_tree_v2_data
+                WHERE height <= $1
+                ORDER BY height DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(height as i64)
+            .fetch_optional(tx.as_mut())
+            .await?
+            .context(format!(
+                "No reward merkle tree at or below height {} in storage",
                 height
             ))?;
 
@@ -815,6 +847,13 @@ impl RewardMerkleTreeDataSource for DataSource {
         async move { self.as_ref().load_tree(height).await }
     }
 
+    fn load_latest_tree(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.as_ref().load_latest_tree(height).await }
+    }
+
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move { self.as_ref().garbage_collect(height).await }
     }
@@ -1172,53 +1211,6 @@ async fn load_reward_merkle_tree_v2(
     Ok((snapshot, leaf.leaf().clone()))
 }
 
-/// Returns the RewardMerkleTreeV2 for height <= requested height
-///
-/// After V5 the tree is only written at epoch boundaries, so `reward_merkle_tree_v2_data`
-/// has no row for most heights. Within an epoch the tree doesn't change, so the previous
-/// boundary's tree matches the current block's reward root but only if we're actually in
-/// the same epoch. The caller is responsible for checking the returned tree's commitment
-/// against the header at `height`.
-/// if they differ we loaded a tree from an older epoch.
-async fn load_latest_reward_merkle_tree_v2(
-    db: &SqlStorage,
-    height: u64,
-) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
-    let mut tx = db
-        .read()
-        .await
-        .with_context(|| "failed to open read transaction")?;
-
-    let row = sqlx::query(
-        r#"
-        SELECT balances
-        FROM reward_merkle_tree_v2_data
-        WHERE height <= $1
-        ORDER BY height DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(height as i64)
-    .fetch_optional(tx.as_mut())
-    .await?
-    .context(format!(
-        "No reward merkle tree at or below height {height} in storage"
-    ))?;
-
-    let balances: Vec<u8> = row
-        .try_get("balances")
-        .context("Missing balances column; this should never happen")?;
-
-    let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&balances)
-        .context("Failed to deserialize RewardMerkleTreeV2 from storage")?;
-
-    let tree = PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances)
-        .await
-        .context("Failed to reconstruct reward merkle tree from storage")?;
-
-    Ok(tree)
-}
-
 async fn load_accounts<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
@@ -1401,7 +1393,8 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
             // we ended up with a tree from an older epoch.
             // But this should never happen as we don't garbage collect the latest tree
             if version >= EPOCH_REWARD_VERSION && !is_last_block(from_height, epoch_height) {
-                let tree = load_latest_reward_merkle_tree_v2(db, from_height)
+                let tree = db
+                    .load_latest_reward_merkle_tree_v2(from_height)
                     .await
                     .context("RewardMerkleTreeV2 not available at or below origin")?;
                 state.reward_merkle_tree_v2 = tree.tree;
