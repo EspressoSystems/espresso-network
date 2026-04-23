@@ -32,6 +32,22 @@ pub trait ApiSerializations {
     /// Reward merkle tree snapshot data type
     type RewardMerkleTreeData;
 
+    // Data API types
+
+    /// Namespace proof type (transactions + proof)
+    type NamespaceProof;
+
+    /// Incorrect encoding proof type
+    type IncorrectEncodingProof;
+
+    // Consensus API types
+
+    /// State certificate type
+    type StateCertificate;
+
+    /// Stake table type
+    type StakeTable;
+
     // Deserialize proto/string types → internal types
 
     /// Deserialize an address string from a proto request into the implementation's Address type
@@ -71,4 +87,30 @@ pub trait ApiSerializations {
         &self,
         value: &Self::RewardMerkleTreeData,
     ) -> anyhow::Result<RewardMerkleTreeV2Data>;
+
+    // Data API serialization methods
+
+    /// Serialize implementation's NamespaceProof to proto NamespaceProofResponse
+    fn serialize_namespace_proof(
+        &self,
+        value: &Self::NamespaceProof,
+    ) -> anyhow::Result<NamespaceProofResponse>;
+
+    /// Serialize implementation's IncorrectEncodingProof to proto IncorrectEncodingProofResponse
+    fn serialize_incorrect_encoding_proof(
+        &self,
+        value: &Self::IncorrectEncodingProof,
+    ) -> anyhow::Result<IncorrectEncodingProofResponse>;
+
+    // Consensus API serialization methods
+
+    /// Serialize implementation's StateCertificate to proto StateCertificateResponse
+    fn serialize_state_certificate(
+        &self,
+        value: &Self::StateCertificate,
+    ) -> anyhow::Result<StateCertificateResponse>;
+
+    /// Serialize implementation's StakeTable to proto StakeTableResponse
+    fn serialize_stake_table(&self, value: &Self::StakeTable)
+    -> anyhow::Result<StakeTableResponse>;
 }

@@ -61,6 +61,43 @@ pub mod v1 {
     /// Path: GET /v1/reward-state-v2/reward-merkle-tree-v2/{height}
     pub const REWARD_MERKLE_TREE_V2_ROUTE: &str =
         "/v1/reward-state-v2/reward-merkle-tree-v2/{height}";
+
+    //=========================================================================
+    // Availability API Routes
+    //=========================================================================
+
+    /// Get namespace proof by block height
+    /// Path: GET /v1/availability/namespace/{namespace}/block/{height}
+    pub const NAMESPACE_PROOF_BY_HEIGHT_ROUTE: &str =
+        "/v1/availability/namespace/{namespace}/block/{height}";
+
+    /// Get namespace proof by block hash
+    /// Path: GET /v1/availability/namespace/{namespace}/block/hash/{hash}
+    pub const NAMESPACE_PROOF_BY_HASH_ROUTE: &str =
+        "/v1/availability/namespace/{namespace}/block/hash/{hash}";
+
+    /// Get namespace proof by payload hash
+    /// Path: GET /v1/availability/namespace/{namespace}/block/payload-hash/{payload_hash}
+    pub const NAMESPACE_PROOF_BY_PAYLOAD_HASH_ROUTE: &str =
+        "/v1/availability/namespace/{namespace}/block/payload-hash/{payload_hash}";
+
+    /// Get namespace proofs for a range of blocks
+    /// Path: GET /v1/availability/namespace/{namespace}/blocks/{from}/{until}
+    pub const NAMESPACE_PROOF_RANGE_ROUTE: &str =
+        "/v1/availability/namespace/{namespace}/blocks/{from}/{until}";
+
+    /// Generate proof of incorrect encoding
+    /// Path: GET /v1/availability/incorrect-encoding/{namespace}/block/{block_number}
+    pub const INCORRECT_ENCODING_PROOF_ROUTE: &str =
+        "/v1/availability/incorrect-encoding/{namespace}/block/{block_number}";
+
+    /// Get light client state certificate (V1)
+    /// Path: GET /v1/availability/state-cert/{epoch}
+    pub const STATE_CERT_V1_ROUTE: &str = "/v1/availability/state-cert/{epoch}";
+
+    /// Get light client state certificate (V2)
+    /// Path: GET /v1/availability/state-cert-v2/{epoch}
+    pub const STATE_CERT_V2_ROUTE: &str = "/v1/availability/state-cert-v2/{epoch}";
 }
 
 //=============================================================================
@@ -130,4 +167,48 @@ pub mod v2 {
 
     /// Redoc documentation UI endpoint
     pub const REDOC_ROUTE: &str = "/v2/redoc";
+
+    //=========================================================================
+    // Data API Routes
+    //=========================================================================
+
+    /// Get namespace proof(s) for a namespace
+    ///
+    /// HTTP: GET /v2/data/finalized/namespace-proof/{namespace_id}?block={height}
+    ///       or GET /v2/data/finalized/namespace-proof/{namespace_id}?from={start}&to={end}
+    /// gRPC: /espresso.api.v2.DataService/GetNamespaceProof (single)
+    ///       /espresso.api.v2.DataService/GetNamespaceProofRange (range)
+    pub const NAMESPACE_PROOF_ROUTE: Route = Route {
+        http: "/v2/data/finalized/namespace-proof/{namespace_id}",
+        grpc: "/espresso.api.v2.DataService/GetNamespaceProof",
+    };
+
+    /// Get incorrect encoding proof
+    ///
+    /// HTTP: GET /v2/data/finalized/incorrect-encoding-proof/{namespace_id}?block={block_height}
+    /// gRPC: /espresso.api.v2.DataService/GetIncorrectEncodingProof
+    pub const INCORRECT_ENCODING_PROOF_ROUTE: Route = Route {
+        http: "/v2/data/finalized/incorrect-encoding-proof/{namespace_id}",
+        grpc: "/espresso.api.v2.DataService/GetIncorrectEncodingProof",
+    };
+
+    //=========================================================================
+    // Consensus API Routes
+    //=========================================================================
+
+    /// Get state certificate for an epoch
+    ///
+    /// HTTP: GET /v2/consensus/state-certificate/{epoch}
+    pub const STATE_CERTIFICATE_ROUTE: Route = Route {
+        http: "/v2/consensus/state-certificate/{epoch}",
+        grpc: "/espresso.api.v2.ConsensusService/GetStateCertificate",
+    };
+
+    /// Get stake table for an epoch
+    ///
+    /// HTTP: GET /v2/consensus/stake-table/{epoch}
+    pub const STAKE_TABLE_ROUTE: Route = Route {
+        http: "/v2/consensus/stake-table/{epoch}",
+        grpc: "/espresso.api.v2.ConsensusService/GetStakeTable",
+    };
 }

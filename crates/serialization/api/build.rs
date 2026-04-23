@@ -52,10 +52,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
         )
         .out_dir(&out_dir)
-        .compile_protos(&["v2/common.proto", "v2/rewards.proto"], &[proto_root])?;
+        .compile_protos(
+            &[
+                "v2/common.proto",
+                "v2/rewards.proto",
+                "v2/data.proto",
+                "v2/consensus.proto",
+            ],
+            &[proto_root],
+        )?;
 
     println!("cargo:rerun-if-changed=proto/v2/common.proto");
     println!("cargo:rerun-if-changed=proto/v2/rewards.proto");
+    println!("cargo:rerun-if-changed=proto/v2/data.proto");
+    println!("cargo:rerun-if-changed=proto/v2/consensus.proto");
 
     Ok(())
 }

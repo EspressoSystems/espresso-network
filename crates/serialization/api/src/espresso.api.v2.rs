@@ -235,3 +235,98 @@ pub struct GetRewardMerkleTreeRequest {
     #[schemars(example = "1000000")]
     pub height: u64,
 }
+/// Request to get namespace proof for a single block
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetNamespaceProofRequest {
+    /// Namespace ID
+    #[prost(uint32, tag = "1")]
+    pub namespace_id: u32,
+    /// Block height
+    #[prost(uint64, tag = "2")]
+    pub block_height: u64,
+}
+/// Request to get namespace proofs for a range of blocks
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetNamespaceProofRangeRequest {
+    /// Namespace ID
+    #[prost(uint32, tag = "1")]
+    pub namespace_id: u32,
+    /// Starting block height (inclusive)
+    #[prost(uint64, tag = "2")]
+    pub from: u64,
+    /// Ending block height (exclusive)
+    #[prost(uint64, tag = "3")]
+    pub until: u64,
+}
+/// Namespace proof response containing transactions and proof
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NamespaceProofResponse {
+    /// Serialized transactions for this namespace
+    #[prost(bytes = "vec", tag = "1")]
+    pub transactions: ::prost::alloc::vec::Vec<u8>,
+    /// Serialized namespace proof (VID proof)
+    #[prost(bytes = "vec", tag = "2")]
+    pub proof: ::prost::alloc::vec::Vec<u8>,
+}
+/// Response for range queries - array of namespace proofs
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamespaceProofRangeResponse {
+    /// Proofs for each block in the range
+    #[prost(message, repeated, tag = "1")]
+    pub proofs: ::prost::alloc::vec::Vec<NamespaceProofResponse>,
+}
+/// Request to get incorrect encoding proof
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetIncorrectEncodingProofRequest {
+    /// Namespace ID
+    #[prost(uint32, tag = "1")]
+    pub namespace_id: u32,
+    /// Block height
+    #[prost(uint64, tag = "2")]
+    pub block_height: u64,
+}
+/// Incorrect encoding proof response
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct IncorrectEncodingProofResponse {
+    /// Serialized incorrect encoding proof
+    #[prost(bytes = "vec", tag = "1")]
+    pub proof: ::prost::alloc::vec::Vec<u8>,
+}
+/// Request to get state certificate for an epoch
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetStateCertificateRequest {
+    /// Epoch number
+    #[prost(uint64, tag = "1")]
+    pub epoch: u64,
+}
+/// State certificate response
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StateCertificateResponse {
+    /// Serialized light client state update certificate
+    #[prost(bytes = "vec", tag = "1")]
+    pub certificate: ::prost::alloc::vec::Vec<u8>,
+}
+/// Request to get stake table for an epoch
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetStakeTableRequest {
+    /// Epoch number
+    #[prost(uint64, tag = "1")]
+    pub epoch: u64,
+}
+/// Stake table response
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StakeTableResponse {
+    /// Serialized stake table data
+    #[prost(bytes = "vec", tag = "1")]
+    pub stake_table: ::prost::alloc::vec::Vec<u8>,
+}

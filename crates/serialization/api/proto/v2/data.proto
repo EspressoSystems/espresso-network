@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+//=============================================================================
+// Namespace Proof Queries
+//=============================================================================
+
+// Request to get namespace proof for a single block
+message GetNamespaceProofRequest {
+  // Namespace ID
+  uint32 namespace_id = 1;
+
+  // Block height
+  uint64 block_height = 2;
+}
+
+// Request to get namespace proofs for a range of blocks
+message GetNamespaceProofRangeRequest {
+  // Namespace ID
+  uint32 namespace_id = 1;
+
+  // Starting block height (inclusive)
+  uint64 from = 2;
+
+  // Ending block height (exclusive)
+  uint64 until = 3;
+}
+
+// Namespace proof response containing transactions and proof
+message NamespaceProofResponse {
+  // Serialized transactions for this namespace
+  bytes transactions = 1;
+
+  // Serialized namespace proof (VID proof)
+  bytes proof = 2;
+}
+
+// Response for range queries - array of namespace proofs
+message NamespaceProofRangeResponse {
+  // Proofs for each block in the range
+  repeated NamespaceProofResponse proofs = 1;
+}
+
+//=============================================================================
+// Incorrect Encoding Proof
+//=============================================================================
+
+// Request to get incorrect encoding proof
+message GetIncorrectEncodingProofRequest {
+  // Namespace ID
+  uint32 namespace_id = 1;
+
+  // Block height
+  uint64 block_height = 2;
+}
+
+// Incorrect encoding proof response
+message IncorrectEncodingProofResponse {
+  // Serialized incorrect encoding proof
+  bytes proof = 1;
+}
+
+//=============================================================================
+// gRPC Service Definition
+//=============================================================================
+
+// gRPC service for data availability queries
+service DataService {
+  // Get namespace proof for a single block
+  rpc GetNamespaceProof(GetNamespaceProofRequest) returns (NamespaceProofResponse);
+
+  // Get namespace proofs for a range of blocks
+  rpc GetNamespaceProofRange(GetNamespaceProofRangeRequest) returns (NamespaceProofRangeResponse);
+
+  // Get incorrect encoding proof for a block
+  rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (IncorrectEncodingProofResponse);
+}

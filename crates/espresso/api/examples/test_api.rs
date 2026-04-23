@@ -120,6 +120,66 @@ impl v1::RewardApi for TestApi {
     }
 }
 
+// Implement v1::AvailabilityApi with test data
+#[async_trait]
+impl v1::AvailabilityApi for TestApi {
+    type NamespaceProofQueryData = (Vec<u8>, Option<Vec<u8>>); // (transactions, proof)
+    type IncorrectEncodingProof = Vec<u8>;
+    type StateCertQueryDataV1 = Vec<u8>;
+    type StateCertQueryDataV2 = Vec<u8>;
+
+    async fn get_namespace_proof(
+        &self,
+        block_id: v1::availability::BlockId,
+        namespace: u32,
+    ) -> Result<Option<Self::NamespaceProofQueryData>> {
+        tracing::info!(
+            "v1: get_namespace_proof(block_id={:?}, namespace={})",
+            block_id,
+            namespace
+        );
+        Ok(Some((vec![0xaa, 0xbb, 0xcc], Some(vec![0x11, 0x22, 0x33]))))
+    }
+
+    async fn get_namespace_proof_range(
+        &self,
+        from: u64,
+        until: u64,
+        namespace: u32,
+    ) -> Result<Vec<Self::NamespaceProofQueryData>> {
+        tracing::info!(
+            "v1: get_namespace_proof_range(from={}, until={}, namespace={})",
+            from,
+            until,
+            namespace
+        );
+        Ok(vec![(vec![0xaa, 0xbb], Some(vec![0x11, 0x22]))])
+    }
+
+    async fn get_incorrect_encoding_proof(
+        &self,
+        block_id: v1::availability::BlockId,
+        namespace: u32,
+    ) -> Result<Self::IncorrectEncodingProof> {
+        tracing::info!(
+            "v1: get_incorrect_encoding_proof(block_id={:?}, namespace={})",
+            block_id,
+            namespace
+        );
+        Ok(vec![0xde, 0xad, 0xbe, 0xef])
+    }
+
+    async fn get_state_cert(&self, epoch: u64) -> Result<Self::StateCertQueryDataV1> {
+        tracing::info!("v1: get_state_cert(epoch={})", epoch);
+        Ok(vec![0x01, 0x02, 0x03])
+    }
+
+    async fn get_state_cert_v2(&self, epoch: u64) -> Result<Self::StateCertQueryDataV2> {
+        tracing::info!("v1: get_state_cert_v2(epoch={})", epoch);
+        Ok(vec![0x04, 0x05, 0x06])
+    }
+}
+
 // Implement v2::RewardApi (simplified API - latest-only for claim/balance/proof)
 #[async_trait]
 impl v2::RewardApi for TestApi {
@@ -158,6 +218,68 @@ impl v2::RewardApi for TestApi {
     }
 }
 
+// Implement v2::DataApi with test data
+#[async_trait]
+impl v2::DataApi for TestApi {
+    async fn get_namespace_proof(
+        &self,
+        namespace_id: u32,
+        block_height: u64,
+    ) -> Result<Self::NamespaceProof> {
+        tracing::info!(
+            "v2: get_namespace_proof(namespace_id={}, block_height={})",
+            namespace_id,
+            block_height
+        );
+        Ok((vec![0xaa, 0xbb, 0xcc], vec![0x11, 0x22, 0x33]))
+    }
+
+    async fn get_namespace_proof_range(
+        &self,
+        namespace_id: u32,
+        from: u64,
+        until: u64,
+    ) -> Result<Vec<Self::NamespaceProof>> {
+        tracing::info!(
+            "v2: get_namespace_proof_range(namespace_id={}, from={}, until={})",
+            namespace_id,
+            from,
+            until
+        );
+        Ok(vec![
+            (vec![0xaa, 0xbb], vec![0x11, 0x22]),
+            (vec![0xcc, 0xdd], vec![0x33, 0x44]),
+        ])
+    }
+
+    async fn get_incorrect_encoding_proof(
+        &self,
+        namespace_id: u32,
+        block_height: u64,
+    ) -> Result<Self::IncorrectEncodingProof> {
+        tracing::info!(
+            "v2: get_incorrect_encoding_proof(namespace_id={}, block_height={})",
+            namespace_id,
+            block_height
+        );
+        Ok(vec![0xde, 0xad, 0xbe, 0xef])
+    }
+}
+
+// Implement v2::ConsensusApi with test data
+#[async_trait]
+impl v2::ConsensusApi for TestApi {
+    async fn get_state_certificate(&self, epoch: u64) -> Result<Self::StateCertificate> {
+        tracing::info!("v2: get_state_certificate(epoch={})", epoch);
+        Ok(vec![0x01, 0x02, 0x03, 0x04])
+    }
+
+    async fn get_stake_table(&self, epoch: u64) -> Result<Self::StakeTable> {
+        tracing::info!("v2: get_stake_table(epoch={})", epoch);
+        Ok(vec![0x05, 0x06, 0x07, 0x08])
+    }
+}
+
 // Implement ApiSerializations for v2 proto type conversions
 impl ApiSerializations for TestApi {
     type Address = String;
@@ -166,6 +288,14 @@ impl ApiSerializations for TestApi {
     type RewardAccountQueryData = (u128, Vec<u8>);
     type RewardBalances = (Vec<(u128, u128)>, u64);
     type RewardMerkleTreeData = Vec<u8>;
+
+    // Data API types
+    type NamespaceProof = (Vec<u8>, Vec<u8>); // (transactions, proof)
+    type IncorrectEncodingProof = Vec<u8>;
+
+    // Consensus API types
+    type StateCertificate = Vec<u8>;
+    type StakeTable = Vec<u8>;
 
     fn deserialize_address(&self, s: &str) -> Result<Self::Address> {
         // Simple validation: must start with 0x and be hex
@@ -250,6 +380,48 @@ impl ApiSerializations for TestApi {
     ) -> Result<serialization_api::v2::RewardMerkleTreeV2Data> {
         Ok(serialization_api::v2::RewardMerkleTreeV2Data {
             data: value.clone(),
+        })
+    }
+
+    // Data API serialization methods
+
+    fn serialize_namespace_proof(
+        &self,
+        value: &Self::NamespaceProof,
+    ) -> Result<serialization_api::v2::NamespaceProofResponse> {
+        let (transactions, proof) = value;
+        Ok(serialization_api::v2::NamespaceProofResponse {
+            transactions: transactions.clone(),
+            proof: proof.clone(),
+        })
+    }
+
+    fn serialize_incorrect_encoding_proof(
+        &self,
+        value: &Self::IncorrectEncodingProof,
+    ) -> Result<serialization_api::v2::IncorrectEncodingProofResponse> {
+        Ok(serialization_api::v2::IncorrectEncodingProofResponse {
+            proof: value.clone(),
+        })
+    }
+
+    // Consensus API serialization methods
+
+    fn serialize_state_certificate(
+        &self,
+        value: &Self::StateCertificate,
+    ) -> Result<serialization_api::v2::StateCertificateResponse> {
+        Ok(serialization_api::v2::StateCertificateResponse {
+            certificate: value.clone(),
+        })
+    }
+
+    fn serialize_stake_table(
+        &self,
+        value: &Self::StakeTable,
+    ) -> Result<serialization_api::v2::StakeTableResponse> {
+        Ok(serialization_api::v2::StakeTableResponse {
+            stake_table: value.clone(),
         })
     }
 }

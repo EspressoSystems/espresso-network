@@ -6,6 +6,7 @@
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use espresso_types::{
+    NsProof,
     v0::sparse_mt::KeccakNode,
     v0_3::RewardAmount as InternalRewardAmount,
     v0_4::{
@@ -16,6 +17,7 @@ use espresso_types::{
     v0_6::RewardClaimError,
 };
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
+use hotshot_query_service::availability::AvailabilityDataSource;
 use jf_merkle_tree_compat::prelude::{
     MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
 };
@@ -27,7 +29,10 @@ use serialization_api::v2::{
 };
 use tagged_base64::TaggedBase64;
 
-use super::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData};
+use super::{
+    RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
+    data_source::{StateCertDataSource, StateCertFetchingDataSource, StakeTableDataSource},
+};
 
 /// Node API state implementation
 ///
@@ -149,7 +154,8 @@ impl<D> NodeApiStateImpl<D> {
 
 impl<D> serialization_api::ApiSerializations for NodeApiStateImpl<D>
 where
-    D: RewardMerkleTreeDataSource,
+    D: std::ops::Deref + Send + Sync + 'static,
+    D::Target: RewardMerkleTreeDataSource + Send + Sync,
 {
     // Request types
     type Address = alloy::primitives::Address;
@@ -160,6 +166,14 @@ where
     type RewardAccountQueryData = InternalRewardAccountQueryData;
     type RewardBalances = (Vec<(RewardAccountV2, InternalRewardAmount)>, u64); // (amounts, total)
     type RewardMerkleTreeData = InternalRewardTreeData;
+
+    // Data API types
+    type NamespaceProof = espresso_types::NamespaceProofQueryData;
+    type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
+
+    // Consensus API types
+    type StateCertificate = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
+    type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
 
     // Deserialize proto/string types → internal types
     fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address> {
@@ -238,6 +252,62 @@ where
             .map_err(|e| anyhow::anyhow!("failed to serialize RewardMerkleTreeV2Data: {}", e))?;
         Ok(RewardMerkleTreeV2Data { data: bytes })
     }
+
+    // Data API serialization methods
+
+    fn serialize_namespace_proof(
+        &self,
+        value: &Self::NamespaceProof,
+    ) -> anyhow::Result<serialization_api::v2::NamespaceProofResponse> {
+        // Serialize transactions and proof to bytes
+        let transactions_bytes = bincode::serialize(&value.transactions)
+            .map_err(|e| anyhow::anyhow!("failed to serialize transactions: {}", e))?;
+        let proof_bytes = bincode::serialize(&value.proof)
+            .map_err(|e| anyhow::anyhow!("failed to serialize proof: {}", e))?;
+
+        Ok(serialization_api::v2::NamespaceProofResponse {
+            transactions: transactions_bytes,
+            proof: proof_bytes,
+        })
+    }
+
+    fn serialize_incorrect_encoding_proof(
+        &self,
+        value: &Self::IncorrectEncodingProof,
+    ) -> anyhow::Result<serialization_api::v2::IncorrectEncodingProofResponse> {
+        let proof_bytes = bincode::serialize(value)
+            .map_err(|e| anyhow::anyhow!("failed to serialize incorrect encoding proof: {}", e))?;
+
+        Ok(serialization_api::v2::IncorrectEncodingProofResponse {
+            proof: proof_bytes,
+        })
+    }
+
+    // Consensus API serialization methods
+
+    fn serialize_state_certificate(
+        &self,
+        value: &Self::StateCertificate,
+    ) -> anyhow::Result<serialization_api::v2::StateCertificateResponse> {
+        let cert_bytes = bincode::serialize(&value.0)
+            .map_err(|e| anyhow::anyhow!("failed to serialize state certificate: {}", e))?;
+
+        Ok(serialization_api::v2::StateCertificateResponse {
+            certificate: cert_bytes,
+        })
+    }
+
+    fn serialize_stake_table(
+        &self,
+        value: &Self::StakeTable,
+    ) -> anyhow::Result<serialization_api::v2::StakeTableResponse> {
+        let stake_table_bytes = bincode::serialize(value)
+            .map_err(|e| anyhow::anyhow!("failed to serialize stake table: {}", e))?;
+
+        Ok(serialization_api::v2::StakeTableResponse {
+            stake_table: stake_table_bytes,
+        })
+    }
 }
 
 // ============================================================================
@@ -247,7 +317,8 @@ where
 #[async_trait]
 impl<D> espresso_api::v2::RewardApi for NodeApiStateImpl<D>
 where
-    D: RewardMerkleTreeDataSource,
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: RewardMerkleTreeDataSource + Send + Sync,
 {
     async fn get_reward_claim_input(
         &self,
@@ -610,5 +681,546 @@ where
             })?;
 
         Ok(tree_data)
+    }
+}
+
+// ============================================================================
+// v2::DataApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v2::DataApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: RewardMerkleTreeDataSource
+        + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
+        + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
+        + Sync + Send,
+{
+    async fn get_namespace_proof(
+        &self,
+        namespace_id: u32,
+        block_height: u64,
+    ) -> anyhow::Result<Self::NamespaceProof> {
+        use futures::join;
+        use espresso_types::NamespaceId;
+        use hotshot_query_service::availability::BlockId;
+
+        let ns_id = NamespaceId::from(namespace_id);
+        let block_id = BlockId::Number(block_height as usize);
+
+        // Fetch block and VID common data concurrently
+        let ds = &*self.data_source;
+        let timeout = std::time::Duration::from_millis(500);
+        let (block_fetch, vid_fetch) = join!(
+            ds.get_block(block_id),
+            ds.get_vid_common(block_id)
+        );
+        let (block_opt, vid_opt) = join!(
+            block_fetch.with_timeout(timeout),
+            vid_fetch.with_timeout(timeout)
+        );
+
+        let block = block_opt
+            .ok_or_else(|| anyhow::anyhow!("block {} not found", block_height))?;
+        let vid_common = vid_opt
+            .ok_or_else(|| anyhow::anyhow!("VID common data for block {} not found", block_height))?;
+
+        // Generate namespace proof
+        let ns_table = block.payload().ns_table();
+        let ns_index = ns_table.find_ns_id(&ns_id)
+            .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block {}", namespace_id, block_height))?;
+
+        let proof = NsProof::new(block.payload(), &ns_index, vid_common.common())
+            .ok_or_else(|| anyhow::anyhow!("failed to generate namespace proof for block {}", block_height))?;
+
+        let transactions = proof.export_all_txs(&ns_id);
+
+        Ok(espresso_types::NamespaceProofQueryData {
+            transactions,
+            proof: Some(proof),
+        })
+    }
+
+    async fn get_namespace_proof_range(
+        &self,
+        namespace_id: u32,
+        from: u64,
+        until: u64,
+    ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
+        use espresso_types::NamespaceId;
+
+        let ns_id = NamespaceId::from(namespace_id);
+
+        // Validate range
+        if until <= from {
+            return Err(anyhow::anyhow!("invalid range: until ({}) must be greater than from ({})", until, from));
+        }
+
+        let range_size = until - from;
+        const MAX_RANGE: u64 = 100; // Match limit from availability.toml
+        if range_size > MAX_RANGE {
+            return Err(anyhow::anyhow!("range too large: {} blocks (max {})", range_size, MAX_RANGE));
+        }
+
+        // Fetch blocks and VID common data for the range
+        use futures::join;
+        use futures::stream::StreamExt;
+
+        let (blocks_stream, vids_stream) = join!(
+            self.data_source.get_block_range(from as usize..until as usize),
+            self.data_source.get_vid_common_range(from as usize..until as usize)
+        );
+
+        let blocks: Vec<_> = blocks_stream
+            .then(|block| async move { block.resolve().await })
+            .collect()
+            .await;
+        let vids: Vec<_> = vids_stream
+            .then(|vid| async move { vid.resolve().await })
+            .collect()
+            .await;
+
+        if blocks.len() != vids.len() {
+            return Err(anyhow::anyhow!("mismatch between blocks and VID common data"));
+        }
+
+        // Generate proofs for each block
+        use espresso_types::NsProof;
+        let mut proofs = Vec::new();
+
+        for (block, vid) in blocks.into_iter().zip(vids.into_iter()) {
+            let ns_table = block.payload().ns_table();
+
+            // Check if namespace exists in this block
+            if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
+                if let Some(proof) = NsProof::new(block.payload(), &ns_index, vid.common()) {
+                    let transactions = proof.export_all_txs(&ns_id);
+                    proofs.push(espresso_types::NamespaceProofQueryData {
+                        transactions,
+                        proof: Some(proof),
+                    });
+                } else {
+                    // Failed to generate proof - return empty result for this block
+                    proofs.push(espresso_types::NamespaceProofQueryData {
+                        transactions: vec![],
+                        proof: None,
+                    });
+                }
+            } else {
+                // Namespace not present in this block
+                proofs.push(espresso_types::NamespaceProofQueryData {
+                    transactions: vec![],
+                    proof: None,
+                });
+            }
+        }
+
+        Ok(proofs)
+    }
+
+    async fn get_incorrect_encoding_proof(
+        &self,
+        namespace_id: u32,
+        block_height: u64,
+    ) -> anyhow::Result<Self::IncorrectEncodingProof> {
+        use espresso_types::{NamespaceId, NsProof};
+        use hotshot_query_service::availability::BlockId;
+        use futures::join;
+
+        let ns_id = NamespaceId::from(namespace_id);
+        let block_id = BlockId::Number(block_height as usize);
+
+        // Fetch block and VID common data
+        let ds = &*self.data_source;
+        let timeout = std::time::Duration::from_millis(500);
+        let (block_fetch, vid_fetch) = join!(
+            ds.get_block(block_id),
+            ds.get_vid_common(block_id)
+        );
+        let (block, vid_common) = join!(
+            block_fetch.with_timeout(timeout),
+            vid_fetch.with_timeout(timeout)
+        );
+
+        let block = block
+            .ok_or_else(|| anyhow::anyhow!("block {} not found", block_height))?;
+        let vid_common = vid_common
+            .ok_or_else(|| anyhow::anyhow!("VID common data for block {} not found", block_height))?;
+
+        // For incorrect encoding proof, we need special handling
+        // Note: Full incorrect encoding proof support with VID share fetching
+        // would require more complex implementation. For now, we return an error
+        // if the basic proof generation fails.
+
+        let ns_table = block.payload().ns_table();
+        let ns_index = ns_table.find_ns_id(&ns_id)
+            .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block {}", namespace_id, block_height))?;
+
+        // Try to generate a normal proof first
+        if let Some(_proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) {
+            return Err(anyhow::anyhow!("block {} was correctly encoded", block_height));
+        }
+
+        // If normal proof generation failed, it indicates incorrect encoding
+        // but we can't generate the full incorrect encoding proof without VID share fetching
+        Err(anyhow::anyhow!(
+            "Incorrect encoding detected for namespace {} in block {}, but full proof generation requires VID share fetching",
+            namespace_id,
+            block_height
+        ))
+    }
+}
+
+// ============================================================================
+// v2::ConsensusApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v2::ConsensusApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: RewardMerkleTreeDataSource
+        + super::data_source::StateCertDataSource
+        + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
+        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+        + Send + Sync,
+{
+    async fn get_state_certificate(&self, epoch: u64) -> anyhow::Result<Self::StateCertificate> {
+        use std::time::Duration;
+
+        let ds = &*self.data_source;
+
+        // Try to get from local storage first
+        let state_cert = ds
+            .get_state_cert_by_epoch(epoch)
+            .await?;
+
+        let cert = match state_cert {
+            Some(cert) => cert,
+            None => {
+                // Not found locally, try to fetch from peers
+                const TIMEOUT: Duration = Duration::from_secs(40);
+                let cert = ds
+                    .request_state_cert(epoch, TIMEOUT)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e))?;
+
+                // Store the fetched certificate
+                ds
+                    .insert_state_cert(epoch, cert.clone())
+                    .await?;
+
+                cert
+            }
+        };
+
+        Ok(espresso_types::StateCertQueryDataV2(cert))
+    }
+
+    async fn get_stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
+        use hotshot_types::data::EpochNumber;
+
+        let ds = &*self.data_source;
+        ds.get_stake_table(Some(EpochNumber::new(epoch)))
+            .await
+    }
+}
+
+// ============================================================================
+// v1::AvailabilityApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v1::AvailabilityApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: RewardMerkleTreeDataSource
+        + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
+        + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
+        + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
+        + super::data_source::StateCertDataSource
+        + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
+        + Send + Sync,
+{
+    type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
+    type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
+    type StateCertQueryDataV1 = espresso_types::StateCertQueryDataV1<espresso_types::SeqTypes>;
+    type StateCertQueryDataV2 = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
+
+    async fn get_namespace_proof(
+        &self,
+        block_id: espresso_api::v1::availability::BlockId,
+        namespace: u32,
+    ) -> anyhow::Result<Option<Self::NamespaceProofQueryData>> {
+        use espresso_types::NamespaceId;
+        use hotshot_query_service::availability::BlockId as HsBlockId;
+        use futures::join;
+
+        let ns_id = NamespaceId::from(namespace);
+
+        // Convert v1 BlockId to hotshot BlockId
+        let hs_block_id = match block_id {
+            espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
+            espresso_api::v1::availability::BlockId::Hash(h) => {
+                let hash = h.parse()
+                    .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
+                HsBlockId::Hash(hash)
+            },
+            espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+                let payload_hash = h.parse()
+                    .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
+                HsBlockId::PayloadHash(payload_hash)
+            },
+        };
+
+        // Fetch block and VID common data
+        let ds = &*self.data_source;
+        let timeout = std::time::Duration::from_millis(500);
+        let (block_fetch, vid_fetch) = join!(
+            ds.get_block(hs_block_id),
+            ds.get_vid_common(hs_block_id)
+        );
+        let (block, vid_common) = join!(
+            block_fetch.with_timeout(timeout),
+            vid_fetch.with_timeout(timeout)
+        );
+
+        let Some(block) = block else {
+            return Ok(None);
+        };
+        let Some(vid_common) = vid_common else {
+            return Ok(None);
+        };
+
+        // Check if namespace is present
+        use espresso_types::NsProof;
+        let ns_table = block.payload().ns_table();
+        let Some(ns_index) = ns_table.find_ns_id(&ns_id) else {
+            return Ok(None);
+        };
+
+        // Generate namespace proof
+        let Some(proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) else {
+            // Failed to generate proof - namespace exists but proof generation failed
+            return Ok(Some(espresso_types::NamespaceProofQueryData {
+                transactions: vec![],
+                proof: None,
+            }));
+        };
+
+        let transactions = proof.export_all_txs(&ns_id);
+
+        Ok(Some(espresso_types::NamespaceProofQueryData {
+            transactions,
+            proof: Some(proof),
+        }))
+    }
+
+    async fn get_namespace_proof_range(
+        &self,
+        from: u64,
+        until: u64,
+        namespace: u32,
+    ) -> anyhow::Result<Vec<Self::NamespaceProofQueryData>> {
+        use espresso_types::NamespaceId;
+
+        let ns_id = NamespaceId::from(namespace);
+
+        // Validate range
+        if until <= from {
+            return Err(anyhow::anyhow!("invalid range: until ({}) must be greater than from ({})", until, from));
+        }
+
+        let range_size = until - from;
+        const MAX_RANGE: u64 = 100;
+        if range_size > MAX_RANGE {
+            return Err(anyhow::anyhow!("range too large: {} blocks (max {})", range_size, MAX_RANGE));
+        }
+
+        // Fetch blocks and VID common data for the range
+        use futures::join;
+        use futures::stream::StreamExt;
+
+        let (blocks_stream, vids_stream) = join!(
+            self.data_source.get_block_range(from as usize..until as usize),
+            self.data_source.get_vid_common_range(from as usize..until as usize)
+        );
+
+        let blocks: Vec<_> = blocks_stream
+            .then(|block| async move { block.resolve().await })
+            .collect()
+            .await;
+        let vids: Vec<_> = vids_stream
+            .then(|vid| async move { vid.resolve().await })
+            .collect()
+            .await;
+
+        if blocks.len() != vids.len() {
+            return Err(anyhow::anyhow!("mismatch between blocks and VID common data"));
+        }
+
+        // Generate proofs for each block
+        use espresso_types::NsProof;
+        let mut proofs = Vec::new();
+
+        for (block, vid) in blocks.into_iter().zip(vids.into_iter()) {
+            let ns_table = block.payload().ns_table();
+
+            // Check if namespace exists in this block
+            if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
+                if let Some(proof) = NsProof::new(block.payload(), &ns_index, vid.common()) {
+                    let transactions = proof.export_all_txs(&ns_id);
+                    proofs.push(espresso_types::NamespaceProofQueryData {
+                        transactions,
+                        proof: Some(proof),
+                    });
+                } else {
+                    // Failed to generate proof - return empty result for this block
+                    proofs.push(espresso_types::NamespaceProofQueryData {
+                        transactions: vec![],
+                        proof: None,
+                    });
+                }
+            } else {
+                // Namespace not present in this block
+                proofs.push(espresso_types::NamespaceProofQueryData {
+                    transactions: vec![],
+                    proof: None,
+                });
+            }
+        }
+
+        Ok(proofs)
+    }
+
+    async fn get_incorrect_encoding_proof(
+        &self,
+        block_id: espresso_api::v1::availability::BlockId,
+        namespace: u32,
+    ) -> anyhow::Result<Self::IncorrectEncodingProof> {
+        use espresso_types::{NamespaceId, NsProof};
+        use hotshot_query_service::availability::BlockId as HsBlockId;
+        use futures::join;
+
+        let ns_id = NamespaceId::from(namespace);
+
+        // Convert v1 BlockId to hotshot BlockId
+        let hs_block_id = match block_id {
+            espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
+            espresso_api::v1::availability::BlockId::Hash(h) => {
+                let hash = h.parse()
+                    .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
+                HsBlockId::Hash(hash)
+            },
+            espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+                let payload_hash = h.parse()
+                    .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
+                HsBlockId::PayloadHash(payload_hash)
+            },
+        };
+
+        // Fetch block and VID common data
+        let ds = &*self.data_source;
+        let timeout = std::time::Duration::from_millis(500);
+        let (block_fetch, vid_fetch) = join!(
+            ds.get_block(hs_block_id),
+            ds.get_vid_common(hs_block_id)
+        );
+        let (block, vid_common) = join!(
+            block_fetch.with_timeout(timeout),
+            vid_fetch.with_timeout(timeout)
+        );
+
+        let block = block
+            .ok_or_else(|| anyhow::anyhow!("block not found"))?;
+        let vid_common = vid_common
+            .ok_or_else(|| anyhow::anyhow!("VID common data not found"))?;
+
+        // For incorrect encoding proof, we need special handling
+        // Note: Full incorrect encoding proof support with VID share fetching
+        // would require more complex implementation. For now, we return an error
+        // if the basic proof generation fails.
+
+        let ns_table = block.payload().ns_table();
+        let ns_index = ns_table.find_ns_id(&ns_id)
+            .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block", namespace))?;
+
+        // Try to generate a normal proof first
+        if let Some(_proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) {
+            return Err(anyhow::anyhow!("block was correctly encoded"));
+        }
+
+        // If normal proof generation failed, it indicates incorrect encoding
+        // but we can't generate the full incorrect encoding proof without VID share fetching
+        Err(anyhow::anyhow!(
+            "Incorrect encoding detected for namespace {} but full proof generation requires VID share fetching",
+            namespace
+        ))
+    }
+
+    async fn get_state_cert(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV1> {
+        use std::time::Duration;
+
+        // Try to get from local storage first
+        let state_cert = self
+            .data_source
+            .get_state_cert_by_epoch(epoch)
+            .await?;
+
+        let cert = match state_cert {
+            Some(cert) => cert,
+            None => {
+                // Not found locally, try to fetch from peers
+                const TIMEOUT: Duration = Duration::from_secs(40);
+                let cert = self
+                    .data_source
+                    .request_state_cert(epoch, TIMEOUT)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e))?;
+
+                // Store the fetched certificate
+                self.data_source
+                    .insert_state_cert(epoch, cert.clone())
+                    .await?;
+
+                cert
+            }
+        };
+
+        Ok(espresso_types::StateCertQueryDataV1::from(espresso_types::StateCertQueryDataV2(cert)))
+    }
+
+    async fn get_state_cert_v2(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV2> {
+        use std::time::Duration;
+
+        // Try to get from local storage first
+        let state_cert = self
+            .data_source
+            .get_state_cert_by_epoch(epoch)
+            .await?;
+
+        let cert = match state_cert {
+            Some(cert) => cert,
+            None => {
+                // Not found locally, try to fetch from peers
+                const TIMEOUT: Duration = Duration::from_secs(40);
+                let cert = self
+                    .data_source
+                    .request_state_cert(epoch, TIMEOUT)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e))?;
+
+                // Store the fetched certificate
+                self.data_source
+                    .insert_state_cert(epoch, cert.clone())
+                    .await?;
+
+                cert
+            }
+        };
+
+        Ok(espresso_types::StateCertQueryDataV2(cert))
     }
 }

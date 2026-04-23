@@ -21,8 +21,10 @@ use axum::{
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
+    GetIncorrectEncodingProofRequest, GetNamespaceProofRangeRequest, GetNamespaceProofRequest,
     GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
-    GetRewardClaimInputRequest, GetRewardMerkleTreeRequest,
+    GetRewardClaimInputRequest, GetRewardMerkleTreeRequest, GetStakeTableRequest,
+    GetStateCertificateRequest,
 };
 
 use crate::{error::ApiError, handlers, v1, v2};
@@ -88,10 +90,124 @@ async fn redirect_to_docs() -> axum::response::Redirect {
     axum::response::Redirect::permanent("/v2")
 }
 
+struct SendQuery<T>(T);
+
+impl<T, S> axum::extract::FromRequestParts<S> for SendQuery<T>
+where
+    T: serde::de::DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = axum::extract::rejection::QueryRejection;
+
+    fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            axum::extract::Query::<T>::from_request_parts(parts, state)
+                .await
+                .map(|axum::extract::Query(inner)| SendQuery(inner))
+        }
+    }
+}
+
+impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
+    fn operation_input(
+        ctx: &mut aide::generate::GenContext,
+        operation: &mut aide::openapi::Operation,
+    ) {
+        let schema = ctx.schema.subschema_for::<T>();
+        let params = aide::operation::parameters_from_schema(
+            ctx,
+            schema,
+            aide::operation::ParamLocation::Query,
+        );
+        aide::operation::add_parameters(ctx, operation, params);
+    }
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct NamespaceProofQuery {
+    #[serde(default)]
+    block: Option<u64>,
+    #[serde(default)]
+    from: Option<u64>,
+    #[serde(default)]
+    to: Option<u64>,
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct NamespaceIdPath {
+    namespace_id: u32,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+enum NamespaceProofResponseUnion {
+    Single(serialization_api::v2::NamespaceProofResponse),
+    Range(serialization_api::v2::NamespaceProofRangeResponse),
+}
+
+async fn get_namespace_proof<S: v2::DataApi>(
+    State(state): State<S>,
+    Path(path): Path<NamespaceIdPath>,
+    SendQuery(query): SendQuery<NamespaceProofQuery>,
+) -> Result<Json<NamespaceProofResponseUnion>, ApiError> {
+    match (query.block, query.from, query.to) {
+        (Some(block), None, None) => {
+            let request = GetNamespaceProofRequest {
+                namespace_id: path.namespace_id,
+                block_height: block,
+            };
+            let response = handlers::get_namespace_proof(&state, request).await?;
+            Ok(Json(NamespaceProofResponseUnion::Single(response)))
+        },
+        (None, Some(from), Some(to)) => {
+            let request = GetNamespaceProofRangeRequest {
+                namespace_id: path.namespace_id,
+                from,
+                until: to,
+            };
+            let response = handlers::get_namespace_proof_range(&state, request).await?;
+            Ok(Json(NamespaceProofResponseUnion::Range(response)))
+        },
+        _ => Err(ApiError::BadRequest(anyhow::anyhow!(
+            "Must specify either 'block' or both 'from' and 'to' query parameters"
+        ))),
+    }
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct IncorrectEncodingProofQuery {
+    block: u64,
+}
+
+async fn get_incorrect_encoding_proof<S: v2::DataApi>(
+    State(state): State<S>,
+    Path(path): Path<NamespaceIdPath>,
+    SendQuery(query): SendQuery<IncorrectEncodingProofQuery>,
+) -> Result<Json<serialization_api::v2::IncorrectEncodingProofResponse>, ApiError> {
+    let request = GetIncorrectEncodingProofRequest {
+        namespace_id: path.namespace_id,
+        block_height: query.block,
+    };
+    handlers::get_incorrect_encoding_proof(&state, request)
+        .await
+        .map(Json)
+}
+
 /// Create a combined router serving both v1 and v2 APIs
 pub fn create_combined_router<S>(state: S) -> Router
 where
-    S: v1::RewardApi + v2::RewardApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi
+        + v1::AvailabilityApi
+        + v2::RewardApi
+        + v2::DataApi
+        + v2::ConsensusApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state).layer(middleware::from_fn(rewrite_root_to_v2));
@@ -102,7 +218,7 @@ where
 /// Create v1 router without OpenAPI documentation (internal types)
 pub fn create_router_v1<S>(state: S) -> Router
 where
-    S: v1::RewardApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi + v1::AvailabilityApi + Clone + Send + Sync + 'static,
 {
     // Create handler closures that capture the generic state type
     let get_reward_claim_input =
@@ -165,6 +281,74 @@ where
             .map_err(ApiError::Internal)
     };
 
+    // Availability API handlers
+    let get_namespace_proof_by_height =
+        |State(state): State<S>, Path((namespace, height)): Path<(u32, u64)>| async move {
+            state
+                .get_namespace_proof(v1::availability::BlockId::Height(height), namespace)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_namespace_proof_by_hash =
+        |State(state): State<S>, Path((namespace, hash)): Path<(u32, String)>| async move {
+            state
+                .get_namespace_proof(v1::availability::BlockId::Hash(hash), namespace)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_namespace_proof_by_payload_hash =
+        |State(state): State<S>, Path((namespace, payload_hash)): Path<(u32, String)>| async move {
+            state
+                .get_namespace_proof(
+                    v1::availability::BlockId::PayloadHash(payload_hash),
+                    namespace,
+                )
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_namespace_proof_range =
+        |State(state): State<S>, Path((namespace, from, until)): Path<(u32, u64, u64)>| async move {
+            state
+                .get_namespace_proof_range(from, until, namespace)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_incorrect_encoding_proof =
+        |State(state): State<S>, Path((namespace, block_number)): Path<(u32, u64)>| async move {
+            state
+                .get_incorrect_encoding_proof(
+                    v1::availability::BlockId::Height(block_number),
+                    namespace,
+                )
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_state_cert_v1 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_state_cert(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let get_state_cert_v2 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_state_cert_v2(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
         .route(
@@ -189,13 +373,36 @@ where
             routes::v1::REWARD_MERKLE_TREE_V2_ROUTE,
             get(get_reward_merkle_tree_v2),
         )
+        // Availability API routes
+        .route(
+            routes::v1::NAMESPACE_PROOF_BY_HEIGHT_ROUTE,
+            get(get_namespace_proof_by_height),
+        )
+        .route(
+            routes::v1::NAMESPACE_PROOF_BY_HASH_ROUTE,
+            get(get_namespace_proof_by_hash),
+        )
+        .route(
+            routes::v1::NAMESPACE_PROOF_BY_PAYLOAD_HASH_ROUTE,
+            get(get_namespace_proof_by_payload_hash),
+        )
+        .route(
+            routes::v1::NAMESPACE_PROOF_RANGE_ROUTE,
+            get(get_namespace_proof_range),
+        )
+        .route(
+            routes::v1::INCORRECT_ENCODING_PROOF_ROUTE,
+            get(get_incorrect_encoding_proof),
+        )
+        .route(routes::v1::STATE_CERT_V1_ROUTE, get(get_state_cert_v1))
+        .route(routes::v1::STATE_CERT_V2_ROUTE, get(get_state_cert_v2))
         .with_state(state)
 }
 
 /// Create v2 router with OpenAPI documentation (proto types)
 pub fn create_router_v2<S>(state: S) -> Router
 where
-    S: v2::RewardApi + Clone + Send + Sync + 'static,
+    S: v2::RewardApi + v2::DataApi + v2::ConsensusApi + Clone + Send + Sync + 'static,
 {
     let mut api = OpenApi {
         info: Info {
@@ -244,6 +451,17 @@ where
                 .map(Json)
         };
 
+    let get_state_certificate =
+        |State(state): State<S>, Path(request): Path<GetStateCertificateRequest>| async move {
+            handlers::get_state_certificate(&state, request)
+                .await
+                .map(Json)
+        };
+
+    let get_stake_table = |State(state): State<S>, Path(request): Path<GetStakeTableRequest>| async move {
+        handlers::get_stake_table(&state, request).await.map(Json)
+    };
+
     let router = ApiRouter::new()
         .api_route(
             routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
@@ -290,6 +508,46 @@ where
                      merkle tree data",
                 )
                 .tag("Rewards")
+            }),
+        )
+        .api_route(
+            routes::v2::NAMESPACE_PROOF_ROUTE.http,
+            get_with(get_namespace_proof::<S>, |op| {
+                op.description(
+                    "Get namespace proof(s) for the specified namespace. Use '?block={height}' \
+                     for a single block, or '?from={start}&to={end}' for a range. Returns \
+                     transactions for the namespace along with cryptographic proof(s) of \
+                     completeness.",
+                )
+                .tag("Data")
+            }),
+        )
+        .api_route(
+            routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.http,
+            get_with(get_incorrect_encoding_proof::<S>, |op| {
+                op.description(
+                    "Generate a fraud proof showing incorrect namespace encoding for a specific \
+                     block. Query param 'block' specifies the block height. Used to challenge \
+                     invalid block proposals.",
+                )
+                .tag("Data")
+            }),
+        )
+        .api_route(
+            routes::v2::STATE_CERTIFICATE_ROUTE.http,
+            get_with(get_state_certificate, |op| {
+                op.description(
+                    "Get light client state update certificate for an epoch. Used to update L1 \
+                     contracts with new stake table information.",
+                )
+                .tag("Consensus")
+            }),
+        )
+        .api_route(
+            routes::v2::STAKE_TABLE_ROUTE.http,
+            get_with(get_stake_table, |op| {
+                op.description("Get stake table for an epoch.")
+                    .tag("Consensus")
             }),
         )
         .finish_api(&mut api);

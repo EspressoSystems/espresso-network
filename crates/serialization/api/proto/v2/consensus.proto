@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+//=============================================================================
+// State Certificate Queries
+//=============================================================================
+
+// Request to get state certificate for an epoch
+message GetStateCertificateRequest {
+  // Epoch number
+  uint64 epoch = 1;
+}
+
+// State certificate response
+message StateCertificateResponse {
+  // Serialized light client state update certificate
+  bytes certificate = 1;
+}
+
+//=============================================================================
+// Stake Table Queries
+//=============================================================================
+
+// Request to get stake table for an epoch
+message GetStakeTableRequest {
+  // Epoch number
+  uint64 epoch = 1;
+}
+
+// Stake table response
+message StakeTableResponse {
+  // Serialized stake table data
+  bytes stake_table = 1;
+}
+
+//=============================================================================
+// gRPC Service Definition
+//=============================================================================
+
+// gRPC service for consensus state queries
+service ConsensusService {
+  // Get state certificate for an epoch
+  rpc GetStateCertificate(GetStateCertificateRequest) returns (StateCertificateResponse);
+
+  // Get stake table for an epoch
+  rpc GetStakeTable(GetStakeTableRequest) returns (StakeTableResponse);
+}

@@ -50,7 +50,7 @@ use super::data_source::{
 };
 use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence, api::RewardMerkleTreeDataSource};
 
-mod availability;
+pub(crate) mod availability;
 pub(super) use availability::*;
 
 pub(super) fn fee<State, Ver>(

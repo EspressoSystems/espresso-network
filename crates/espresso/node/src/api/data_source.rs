@@ -377,6 +377,167 @@ pub(crate) trait DatabaseMetadataSource {
     fn get_table_sizes(&self) -> impl Send + Future<Output = anyhow::Result<Vec<TableSize>>>;
 }
 
+// ============================================================================
+// Arc delegation implementations
+// ============================================================================
+// These implementations allow Arc<T> to implement the data source traits
+// when T implements them, which is necessary for NodeApiStateImpl to work
+// with Arc-wrapped data sources.
+
+use std::sync::Arc;
+
+#[async_trait]
+impl<D> StateCertDataSource for Arc<D>
+where
+    D: StateCertDataSource + Sync + Send,
+{
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        (*self).get_state_cert_by_epoch(epoch).await
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        (*self).insert_state_cert(epoch, cert).await
+    }
+}
+
+impl<Types, D> RequestResponseDataSource<Types> for Arc<D>
+where
+    Types: NodeType,
+    D: RequestResponseDataSource<Types> + Send + Sync,
+{
+    fn request_vid_shares(
+        &self,
+        block_number: u64,
+        vid_common_data: VidCommonQueryData<Types>,
+        duration: Duration,
+    ) -> impl Future<Output = BoxFuture<'static, anyhow::Result<Vec<VidShare>>>> + Send {
+        let this = self.clone();
+        async move { (*this).request_vid_shares(block_number, vid_common_data, duration).await }
+    }
+}
+
+#[async_trait]
+impl<Types, D> StateCertFetchingDataSource<Types> for Arc<D>
+where
+    Types: NodeType,
+    D: StateCertFetchingDataSource<Types> + Sync + Send,
+{
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError> {
+        (*self).request_state_cert(epoch, timeout).await
+    }
+}
+
+#[async_trait]
+impl<T, D> StakeTableDataSource<T> for Arc<D>
+where
+    T: NodeType,
+    D: StakeTableDataSource<T> + Sync + Send,
+{
+    fn get_stake_table(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>> {
+        let this = self.clone();
+        async move { (*this).get_stake_table(epoch).await }
+    }
+
+    fn get_stake_table_current(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<StakeTableWithEpochNumber<T>>> {
+        let this = self.clone();
+        async move { (*this).get_stake_table_current().await }
+    }
+
+    fn get_da_stake_table(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>> {
+        let this = self.clone();
+        async move { (*this).get_da_stake_table(epoch).await }
+    }
+
+    fn get_da_stake_table_current(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<StakeTableWithEpochNumber<T>>> {
+        let this = self.clone();
+        async move { (*this).get_da_stake_table_current().await }
+    }
+
+    fn get_validators(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>>> {
+        let this = self.clone();
+        async move { (*this).get_validators(epoch).await }
+    }
+
+    fn get_block_reward(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<RewardAmount>>> {
+        let this = self.clone();
+        async move { (*this).get_block_reward(epoch).await }
+    }
+
+    fn current_proposal_participation(
+        &self,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+        let this = self.clone();
+        async move { (*this).current_proposal_participation().await }
+    }
+
+    fn proposal_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+        let this = self.clone();
+        async move { (*this).proposal_participation(epoch).await }
+    }
+
+    fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+        let this = self.clone();
+        async move { (*this).current_vote_participation().await }
+    }
+
+    fn vote_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+        let this = self.clone();
+        async move { (*this).vote_participation(epoch).await }
+    }
+
+    fn get_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<RegisteredValidator<PubKey>>>> {
+        let this = self.clone();
+        async move { (*this).get_all_validators(epoch, offset, limit).await }
+    }
+
+    fn stake_table_events(
+        &self,
+        from_l1_block: u64,
+        to_l1_block: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<StakeTableEvent>>> {
+        let this = self.clone();
+        async move { (*this).stake_table_events(from_l1_block, to_l1_block).await }
+    }
+}
+
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
     use super::{super::Options, *};
