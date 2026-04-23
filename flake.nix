@@ -140,9 +140,10 @@
             rustfmt = {
               enable = true;
               description = "Run rustfmt on changed files";
-              entry = "rustfmt";
+              entry = "just fmt";
               types_or = [ "rust" ];
               pass_filenames = true;
+              excludes = [ "^contracts/rust/adapter/src/bindings/" ];
             };
             cargo-sort = {
               enable = true;

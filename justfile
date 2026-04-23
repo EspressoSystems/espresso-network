@@ -57,8 +57,15 @@ demo *args:
 demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
-fmt:
-    cargo fmt --all
+# cargo fmt misses files whose `mod` declarations are produced by macro expansion
+fmt *files:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{files}}" ]; then
+        git ls-files '*.rs' | grep -v '^contracts/rust/adapter/src/bindings/' | xargs -P "$(nproc)" -n 50 rustfmt
+    else
+        rustfmt {{files}}
+    fi
 
 fix *args:
     just clippy --fix {{args}}
