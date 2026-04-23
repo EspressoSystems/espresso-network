@@ -73,6 +73,7 @@
         dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
+          pup = prev.callPackage ./nix/pup { };
         })
 
         (final: prev: {
@@ -232,6 +233,7 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             entr
+            pup
             process-compose
             lazydocker # a docker compose TUI
             # `postgresql` defaults to an older version (15), so we select the latest version (16)
