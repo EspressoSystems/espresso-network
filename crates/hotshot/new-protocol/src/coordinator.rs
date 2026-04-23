@@ -544,7 +544,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
-            ConsensusOutput::LeafDecided { leaves, .. } => {
+            ConsensusOutput::LeafDecided { leaves, cert2, .. } => {
+                if let Some(cert2) = cert2 {
+                    self.storage.append_cert2(cert2.view_number, cert2.clone());
+                }
                 for leaf in leaves {
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }

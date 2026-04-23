@@ -14,8 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, CoordinatorEvent, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
-    RegisteredValidatorMap, SeqTypes, StakeTableHash,
+    AuthenticatedValidatorMap, CoordinatorEvent, Leaf, Leaf2, NetworkConfig, NewDecideEvent,
+    Payload, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -43,10 +43,12 @@ use hotshot_types::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
         node_implementation::NodeType,
+        storage::Cert2,
     },
     vote::HasViewNumber,
 };
 use itertools::Itertools;
+use versions::NEW_PROTOCOL_VERSION;
 
 use super::RegisteredValidatorNoX25519;
 use crate::{
@@ -277,6 +279,24 @@ impl Inner {
         self.path.join("state_cert")
     }
 
+    fn decided_cert2_dir_path(&self) -> PathBuf {
+        self.path.join("decided_cert2")
+    }
+
+    fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Cert2<SeqTypes>>> {
+        let file_path = self
+            .decided_cert2_dir_path()
+            .join(view.u64().to_string())
+            .with_extension("txt");
+        if !file_path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&file_path).context("read cert2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize cert2")?,
+        ))
+    }
+
     fn update_migration(&mut self) -> anyhow::Result<()> {
         let path = self.migration();
         let bytes = bincode::serialize(&self.migrated)?;
@@ -443,10 +463,11 @@ impl Inner {
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
             // Include the VID share if available.
-            let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
-            if vid_share.is_none() {
+            let vid_proposal = self.load_vid_share(v)?;
+            if vid_proposal.is_none() {
                 tracing::debug!(?v, "VID share not available at decide");
             }
+            let vid_share = vid_proposal.as_ref().map(|p| p.data.clone());
 
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
@@ -472,7 +493,7 @@ impl Inner {
                 delta: Default::default(),
             };
 
-            leaves.insert(v, (info, cert));
+            leaves.insert(v, (info, cert, vid_proposal));
         }
 
         // The invariant is that the oldest existing leaf in the `anchor_leaf` table -- if there is
@@ -488,31 +509,43 @@ impl Inner {
 
         let mut intervals = vec![];
         let mut current_interval = None;
-        for (view, (leaf, cert)) in leaves {
+        for (view, (leaf, cert, vid_proposal)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            {
-                // Insert the deciding QC at the appropriate position, with the last decide event in the
-                // chain.
-                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
-                    (deciding_qc.view_number() == cert.view_number() + 1)
-                        .then_some(deciding_qc.clone())
-                } else {
-                    None
-                };
+            // emit event based on protocol version
+            let event = if leaf.leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
+                let cert2 = self.load_cert2(view)?;
+                let vid_v2 = vid_proposal.and_then(|p| match p.data {
+                    VidDisperseShare::V2(v2) => Some(Proposal {
+                        data: v2,
+                        signature: p.signature,
+                        _pd: std::marker::PhantomData,
+                    }),
+                    _ => None,
+                });
+                CoordinatorEvent::NewDecide(NewDecideEvent {
+                    cert1: cert.qc().clone(),
+                    cert2,
+                    leaves: vec![leaf.leaf],
+                    vid_shares: vec![vid_v2],
+                })
+            } else {
+                let deciding_qc = deciding_qc
+                    .as_ref()
+                    .filter(|qc| qc.view_number() == cert.view_number() + 1)
+                    .cloned();
+                CoordinatorEvent::LegacyEvent(Event {
+                    view_number: view,
+                    event: EventType::Decide {
+                        committing_qc: Arc::new(cert),
+                        deciding_qc,
+                        leaf_chain: Arc::new(vec![leaf]),
+                        block_size: None,
+                    },
+                })
+            };
+            consumer.handle_event(&event).await?;
 
-                consumer
-                    .handle_event(&CoordinatorEvent::LegacyEvent(Event {
-                        view_number: view,
-                        event: EventType::Decide {
-                            committing_qc: Arc::new(cert),
-                            deciding_qc,
-                            leaf_chain: Arc::new(vec![leaf]),
-                            block_size: None,
-                        },
-                    }))
-                    .await?;
-            }
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
                     // If we have a chain of consecutive leaves, extend the current interval of
@@ -974,6 +1007,35 @@ impl SequencerPersistence for Persistence {
                 Ok(())
             },
         )
+    }
+
+    async fn append_cert2(&self, view: ViewNumber, cert2: Cert2<SeqTypes>) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let dir_path = inner.decided_cert2_dir_path();
+        fs::create_dir_all(dir_path.clone()).context("failed to create decided_cert2 dir")?;
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("txt");
+        inner.replace(
+            &file_path,
+            |_| Ok(true),
+            |mut file| {
+                let bytes = bincode::serialize(&cert2).context("serialize cert2")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Cert2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.decided_cert2_dir_path();
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("txt");
+        if !file_path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&file_path).context("read cert2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize cert2")?,
+        ))
     }
     async fn load_quorum_proposals(
         &self,

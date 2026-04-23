@@ -90,7 +90,6 @@ pub enum ConsensusOutput<T: NodeType> {
         /// Each older leaf's cert1 is available as the next leaf's `justify_qc`.
         cert1: Certificate1<T>,
         cert2: Option<Certificate2<T>>,
-        // TODO(new-protocol): remove this field once the coordinator has storage
         vid_shares: Vec<Option<SignedProposal<T, VidDisperseShare2<T>>>>,
     },
     LockUpdated(Certificate2<T>),
@@ -110,7 +109,6 @@ pub struct NewDecideEvent<T: NodeType> {
     /// Each older leaf's cert1 is the next leaf's `justify_qc`.
     pub cert1: Certificate1<T>,
     pub cert2: Option<Certificate2<T>>,
-    // TODO(new-protocol): remove this field once the coordinator has storage
     pub vid_shares: Vec<Option<SignedProposal<T, VidDisperseShare2<T>>>>,
 }
 
@@ -285,7 +283,6 @@ impl<T: NodeType> Consensus<T> {
         self.certs.get(&view)
     }
 
-    // TODO(new-protocol): remove this field once the coordinator has storage
     fn signed_vid_share(
         &self,
         view: ViewNumber,
@@ -432,17 +429,6 @@ impl<T: NodeType> Consensus<T> {
     }
 
     pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
-        // Advance `last_decided_leaf` before pruning `leaves`, so it stays
-        // consistent with `last_decided_view`. Callers of `DecidedState` look
-        // up state by `last_decided_leaf().view_number()`; if we only bumped
-        // the view without advancing the leaf, that view would be pruned from
-        // the state manager and lookups would return None.
-        if let Some(leaf) = self.leaves.get(&view) {
-            self.last_decided_leaf =
-                std::cmp::max_by_key(self.last_decided_leaf.clone(), leaf.clone(), |l| {
-                    l.view_number()
-                });
-        }
         self.proposed_views = self.proposed_views.split_off(&view);
         self.skipped_views = self.skipped_views.split_off(&view);
         self.states_verified = self.states_verified.split_off(&view);
@@ -459,7 +445,7 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
-        self.last_decided_view = self.last_decided_view.max(view);
+        //self.last_decided_view = self.last_decided_view.max(view);
     }
 
     #[instrument(level = "debug", skip_all)]
