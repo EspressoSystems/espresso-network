@@ -10,8 +10,10 @@ pub mod x25519;
 
 use std::{fmt, num::NonZeroUsize, sync::Arc, time::Duration};
 
-pub use addr::NetAddr;
 use bon::Builder;
+
+pub use addr::NetAddr;
+pub use error::NetworkError;
 pub use msg::Slot;
 pub use net::{
     Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,

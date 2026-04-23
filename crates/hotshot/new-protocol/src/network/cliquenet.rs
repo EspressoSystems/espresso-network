@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use cliquenet::{NetAddr, Role, Slot, x25519::PublicKey};
-use hotshot::traits::NetworkError;
+use cliquenet::{NetAddr, NetworkError as CliquenetError, Role, Slot, x25519::PublicKey};
 use hotshot_types::{
     PeerConnectInfo,
     data::ViewNumber,
@@ -13,7 +12,7 @@ use tracing::{error, info};
 
 use crate::{
     message::{Message, Unchecked, Validated},
-    network::{Network, PeerManagement, PeerRole},
+    network::{Network, NetworkError, PeerRole},
 };
 
 pub struct Cliquenet<T: NodeType> {
@@ -53,7 +52,7 @@ impl<T: NodeType> Cliquenet<T> {
 
         let net = cliquenet::Network::create(cfg)
             .await
-            .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
+            .map_err(to_network_error)?;
 
         info!(peers = %parties.len(), "cliquenet created");
 
@@ -72,6 +71,8 @@ impl<T: NodeType> Cliquenet<T> {
 }
 
 impl<T: NodeType> Network<T> for Cliquenet<T> {
+    type PeerData = (PublicKey, NetAddr);
+
     fn unicast(
         &mut self,
         v: ViewNumber,
@@ -89,7 +90,7 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         let bytes = self.serialize(m)?;
         self.inner
             .unicast(Slot::new(*v), target, bytes)
-            .map_err(|e| NetworkError::MessageSendError(format!("unicast failed: {e}")))?;
+            .map_err(to_network_error)?;
         Ok(())
     }
 
@@ -112,7 +113,7 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         }
         self.inner
             .multicast(Slot::new(*v), targets, bytes)
-            .map_err(|e| NetworkError::MessageSendError(format!("multicast failed: {e}")))?;
+            .map_err(to_network_error)?;
         Ok(())
     }
 
@@ -120,33 +121,28 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         let bytes = self.serialize(m)?;
         self.inner
             .broadcast(Slot::new(*v), bytes)
-            .map_err(|e| NetworkError::MessageSendError(format!("broadcast failed: {e}")))?;
+            .map_err(to_network_error)?;
         Ok(())
     }
 
     async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
-        let (_src, bytes) = self.inner.receive().await.ok_or_else(|| {
-            NetworkError::MessageReceiveError("cliquenet receive channel closed".to_string())
-        })?;
+        let (_src, bytes) = self
+            .inner
+            .receive()
+            .await
+            .ok_or_else(|| NetworkError::Critical("cliquenet has shutdown".into()))?;
         let m = self.deserialize(&bytes)?;
         Ok(m)
     }
 
     fn gc(&mut self, v: ViewNumber) -> Result<(), NetworkError> {
-        self.inner
-            .gc(Slot::new(*v))
-            .map_err(|e| NetworkError::ConfigError(format!("gc failed: {e}")))?;
-        Ok(())
+        self.inner.gc(Slot::new(*v)).map_err(to_network_error)
     }
-}
-
-impl<T: NodeType> PeerManagement<T> for Cliquenet<T> {
-    type Data = (PublicKey, NetAddr);
 
     fn add_peers(
         &mut self,
         r: PeerRole,
-        ps: Vec<(T::SignatureKey, Self::Data)>,
+        ps: Vec<(T::SignatureKey, Self::PeerData)>,
     ) -> Result<(), NetworkError> {
         let mut targets = Vec::new();
         for (k, (x, a)) in ps {
@@ -155,7 +151,7 @@ impl<T: NodeType> PeerManagement<T> for Cliquenet<T> {
         }
         self.inner
             .add_peers(map_peer_role(r), targets)
-            .map_err(|e| NetworkError::ConfigError(format!("add_peers failed: {e}")))?;
+            .map_err(to_network_error)?;
         Ok(())
     }
 
@@ -166,9 +162,7 @@ impl<T: NodeType> PeerManagement<T> for Cliquenet<T> {
                 targets.push(x)
             }
         }
-        self.inner
-            .remove_peers(targets)
-            .map_err(|e| NetworkError::ConfigError(format!("remove_peers failed: {e}")))?;
+        self.inner.remove_peers(targets).map_err(to_network_error)?;
         Ok(())
     }
 
@@ -181,7 +175,7 @@ impl<T: NodeType> PeerManagement<T> for Cliquenet<T> {
         }
         self.inner
             .assign_peers(map_peer_role(r), targets)
-            .map_err(|e| NetworkError::ConfigError(format!("assign_peers failed: {e}")))?;
+            .map_err(to_network_error)?;
         Ok(())
     }
 }
@@ -190,7 +184,7 @@ impl<T: NodeType> Cliquenet<T> {
     fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>, NetworkError> {
         self.upgrade_lock
             .serialize(m)
-            .map_err(|e| NetworkError::FailedToSerialize(e.to_string()))
+            .map_err(|e| NetworkError::Io(format!("serialization error: {e}").into()))
     }
 
     fn deserialize(&self, bytes: &[u8]) -> Result<Message<T, Unchecked>, NetworkError> {
@@ -200,12 +194,14 @@ impl<T: NodeType> Cliquenet<T> {
         {
             Ok((m, v)) => {
                 if v == EXTERNAL_MESSAGE_VERSION && !m.is_external() {
-                    let e = "received a non-external message with version 0.0".to_string();
-                    return Err(NetworkError::FailedToDeserialize(e));
+                    let e = "received a non-external message with version 0.0";
+                    return Err(NetworkError::Io(e.into()));
                 }
                 Ok(m)
             },
-            Err(err) => Err(NetworkError::FailedToDeserialize(err.to_string())),
+            Err(e) => Err(NetworkError::Io(
+                format!("deserialization error: {e}").into(),
+            )),
         }
     }
 }
@@ -214,5 +210,14 @@ fn map_peer_role(r: PeerRole) -> Role {
     match r {
         PeerRole::Active => Role::Active,
         PeerRole::Passive => Role::Passive,
+    }
+}
+
+fn to_network_error(e: CliquenetError) -> NetworkError {
+    match e {
+        e @ CliquenetError::Bind(..) => NetworkError::Critical(e.into()),
+        e @ CliquenetError::ChannelClosed => NetworkError::Critical(e.into()),
+        e @ CliquenetError::BudgetClosed => NetworkError::Critical(e.into()),
+        e => NetworkError::Io(e.into()),
     }
 }

@@ -1497,7 +1497,7 @@ pub mod testing {
                 let port = test_utils::reserve_tcp_port()
                     .expect("OS should have ephemeral ports available");
                 let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
-                let lock = UpgradeLock::<SeqTypes>::new(upgrade.into());
+                let lock = UpgradeLock::<SeqTypes>::new(upgrade);
                 Cliquenet::create(
                     "test-coordinator",
                     my_peer_config.stake_table_entry.stake_key,

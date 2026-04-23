@@ -1,46 +1,37 @@
 pub mod cliquenet;
 
-use hotshot::traits::NetworkError;
 use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
 
 use crate::message::{Message, Unchecked, Validated};
 
+type Result<T> = std::result::Result<T, NetworkError>;
+
 pub trait Network<T: NodeType> {
+    type PeerData;
+
+    fn broadcast(&mut self, v: ViewNumber, m: &Message<T, Validated>) -> Result<()>;
+
     fn unicast(
         &mut self,
         v: ViewNumber,
         to: &T::SignatureKey,
         m: &Message<T, Validated>,
-    ) -> Result<(), NetworkError>;
+    ) -> Result<()>;
 
     fn multicast(
         &mut self,
         v: ViewNumber,
         to: Vec<&T::SignatureKey>,
         m: &Message<T, Validated>,
-    ) -> Result<(), NetworkError>;
+    ) -> Result<()>;
 
-    fn broadcast(&mut self, v: ViewNumber, m: &Message<T, Validated>) -> Result<(), NetworkError>;
+    fn receive(&mut self) -> impl Future<Output = Result<Message<T, Unchecked>>> + Send;
 
-    fn receive(
-        &mut self,
-    ) -> impl Future<Output = Result<Message<T, Unchecked>, NetworkError>> + Send;
+    fn gc(&mut self, v: ViewNumber) -> Result<()>;
 
-    fn gc(&mut self, v: ViewNumber) -> Result<(), NetworkError>;
-}
-
-pub trait PeerManagement<T: NodeType> {
-    type Data;
-
-    fn add_peers(
-        &mut self,
-        r: PeerRole,
-        ps: Vec<(T::SignatureKey, Self::Data)>,
-    ) -> Result<(), NetworkError>;
-
-    fn remove_peers(&mut self, ps: Vec<&T::SignatureKey>) -> Result<(), NetworkError>;
-
-    fn assign_role(&mut self, r: PeerRole, ps: Vec<&T::SignatureKey>) -> Result<(), NetworkError>;
+    fn add_peers(&mut self, r: PeerRole, ps: Vec<(T::SignatureKey, Self::PeerData)>) -> Result<()>;
+    fn remove_peers(&mut self, ps: Vec<&T::SignatureKey>) -> Result<()>;
+    fn assign_role(&mut self, r: PeerRole, ps: Vec<&T::SignatureKey>) -> Result<()>;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -49,24 +40,17 @@ pub enum PeerRole {
     Passive,
 }
 
-pub fn is_critical(e: &NetworkError) -> bool {
-    match e {
-        NetworkError::ChannelReceiveError(_)
-        | NetworkError::ChannelSendError(_)
-        | NetworkError::ConfigError(_)
-        | NetworkError::ListenError(_)
-        | NetworkError::ShutDown
-        | NetworkError::Unimplemented => true,
+#[derive(Debug, thiserror::Error)]
+pub enum NetworkError {
+    #[error("{0}")]
+    Io(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-        NetworkError::FailedToDeserialize(_)
-        | NetworkError::FailedToSerialize(_)
-        | NetworkError::LookupError(_)
-        | NetworkError::MessageReceiveError(_)
-        | NetworkError::MessageSendError(_)
-        | NetworkError::NoPeersYet
-        | NetworkError::RequestCancelled
-        | NetworkError::Timeout(_) => false,
+    #[error("{0}")]
+    Critical(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
 
-        NetworkError::Multiple(es) => es.iter().any(is_critical),
+impl NetworkError {
+    pub fn is_critical(&self) -> bool {
+        matches!(self, Self::Critical(_))
     }
 }

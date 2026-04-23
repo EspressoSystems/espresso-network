@@ -304,6 +304,10 @@ impl<T: NodeType, N: Network<T>> Coordinator<T, N> {
         self.consensus.apply(input, &mut self.outbox).await;
     }
 
+    pub fn node_id(&self) -> &KeyPrefix {
+        &self.node_id
+    }
+
     pub fn outbox(&self) -> &Outbox<ConsensusOutput<T>> {
         &self.outbox
     }
@@ -656,9 +660,5 @@ impl<T: NodeType, N: Network<T>> Coordinator<T, N> {
         self.timeout_one_honest_collector.gc(view, epoch);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
-    }
-
-    pub fn node_id(&self) -> &KeyPrefix {
-        &self.node_id
     }
 }
