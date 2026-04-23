@@ -137,12 +137,13 @@
               types_or = [ "plantuml" ];
               pass_filenames = false;
             };
-            cargo-fmt = {
+            rustfmt = {
               enable = true;
-              description = "Enforce rustfmt";
-              entry = "just fmt";
-              types_or = [ "rust" "toml" ];
-              pass_filenames = false;
+              description = "Run rustfmt on changed files";
+              # cargo-fmt is slower, does not format all files, and doesn't allow passing file arguments
+              entry = "rustfmt";
+              types_or = [ "rust" ];
+              pass_filenames = true;
             };
             cargo-sort = {
               enable = true;

@@ -1,9 +1,15 @@
+use std::{
+    num::NonZeroUsize,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use alloy::{
     network::Ethereum,
     primitives::{B256, U256},
     providers::{
-        fillers::{FillProvider, JoinFill, RecommendedFillers},
         Identity, Provider, RootProvider,
+        fillers::{FillProvider, JoinFill, RecommendedFillers},
     },
     transports::http::{Client, Http},
 };
@@ -15,11 +21,6 @@ use hotshot_types::traits::metrics::{Counter, Gauge, Metrics, NoMetrics};
 use lru::LruCache;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use std::{
-    num::NonZeroUsize,
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use tokio::{
     sync::{Mutex, Notify},
     task::JoinHandle,
@@ -86,11 +87,7 @@ pub struct L1ClientOptions {
     pub l1_polling_interval: Duration,
 
     /// Maximum number of L1 blocks to keep in cache at once.
-    #[clap(
-        long,
-        env = "ESPRESSO_L1_BLOCKS_CACHE_SIZE",
-        default_value = "100"
-    )]
+    #[clap(long, env = "ESPRESSO_L1_BLOCKS_CACHE_SIZE", default_value = "100")]
     pub l1_blocks_cache_size: NonZeroUsize,
 
     /// Number of L1 events to buffer before discarding.

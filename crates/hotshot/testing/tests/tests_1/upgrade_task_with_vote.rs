@@ -29,9 +29,9 @@ use hotshot_testing::{
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
-    data::{null_block, EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber, null_block},
     simple_vote::UpgradeProposalData,
-    traits::{election::Membership},
+    traits::election::Membership,
     vote::HasViewNumber,
 };
 use versions::version;
@@ -44,8 +44,7 @@ const TIMEOUT: Duration = Duration::from_millis(65);
 async fn test_upgrade_task_with_vote() {
     use hotshot_testing::helpers::build_system_handle;
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let old_version = version(0, 1);
     let new_version = version(0, 2);
@@ -168,8 +167,7 @@ async fn test_upgrade_task_with_vote() {
         ),
     ];
 
-    let vote_state =
-        QuorumVoteTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
+    let vote_state = QuorumVoteTaskState::<TestTypes, MemoryImpl>::create_from(&handle).await;
     let mut vote_script = TaskScript {
         timeout: TIMEOUT,
         state: vote_state,

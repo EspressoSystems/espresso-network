@@ -21,7 +21,7 @@ use hotshot_testing::block_builder::{
 use hotshot_types::{
     data::vid_commitment,
     network::RandomBuilderConfig,
-    traits::{node_implementation::NodeType, signature_key::SignatureKey, BlockPayload},
+    traits::{BlockPayload, node_implementation::NodeType, signature_key::SignatureKey},
 };
 use test_utils::reserve_tcp_port;
 use tide_disco::Url;

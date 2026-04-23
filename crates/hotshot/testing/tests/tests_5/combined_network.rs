@@ -50,7 +50,6 @@ async fn test_combined_network() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_cdn_crash() {
-
     let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
@@ -95,7 +94,6 @@ async fn test_combined_network_cdn_crash() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_reup() {
-
     let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
@@ -145,7 +143,6 @@ async fn test_combined_network_reup() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn test_combined_network_half_dc() {
-
     let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
@@ -218,7 +215,6 @@ fn generate_random_node_changes(
 #[instrument]
 #[ignore]
 async fn test_stress_combined_network_fuzzy() {
-
     let mut metadata: TestDescription<TestTypes, CombinedImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,
