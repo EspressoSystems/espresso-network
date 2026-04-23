@@ -24,8 +24,8 @@ pub struct Cliquenet<T: NodeType> {
 
 impl<T: NodeType> Cliquenet<T> {
     pub async fn create<A, P>(
-        name: &'static str,
-        singing_key: T::SignatureKey,
+        name: &str,
+        signing_key: T::SignatureKey,
         keypair: Keypair,
         addr: A,
         parties: P,
@@ -62,7 +62,7 @@ impl<T: NodeType> Cliquenet<T> {
             .collect();
 
         Ok(Self {
-            my_keys: (singing_key, public_key.into()),
+            my_keys: (signing_key, public_key.into()),
             inner: net,
             peers,
             upgrade_lock,
