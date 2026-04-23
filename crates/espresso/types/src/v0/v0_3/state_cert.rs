@@ -2,8 +2,7 @@
 
 use derive_more::From;
 use hotshot_types::{
-    simple_certificate::LightClientStateUpdateCertificateV1,
-    traits::node_implementation::NodeType,
+    simple_certificate::LightClientStateUpdateCertificateV1, traits::node_implementation::NodeType,
 };
 use serde::{Deserialize, Serialize};
 

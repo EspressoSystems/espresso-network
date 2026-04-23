@@ -21,13 +21,9 @@ use hotshot_testing::{
     serial,
 };
 use hotshot_types::{
-    data::{null_block, DaProposal, PackedBundle, VidDisperse, ViewNumber},
+    data::{DaProposal, PackedBundle, VidDisperse, ViewNumber, null_block},
     message::UpgradeLock,
-    traits::{
-        consensus_api::ConsensusApi,
-        node_implementation::NodeType,
-        BlockPayload,
-    },
+    traits::{BlockPayload, consensus_api::ConsensusApi, node_implementation::NodeType},
 };
 use vec1::vec1;
 
@@ -36,9 +32,7 @@ async fn test_vid_task() {
     use hotshot_types::message::Proposal;
 
     // Build the API for node 2.
-    let handle = build_system_handle::<TestTypes, MemoryImpl>(2)
-        .await
-        .0;
+    let handle = build_system_handle::<TestTypes, MemoryImpl>(2).await.0;
     let pub_key = handle.public_key();
 
     let membership = handle.hotshot.membership_coordinator.clone();
@@ -111,12 +105,13 @@ async fn test_vid_task() {
                 },
                 ViewNumber::new(2),
                 None,
-                vec1::vec1![null_block::builder_fee::<TestTypes>(
-                    num_storage_nodes,
-                    TEST_VERSIONS.test.base
-                )
-                .unwrap()],
-
+                vec1::vec1![
+                    null_block::builder_fee::<TestTypes>(
+                        num_storage_nodes,
+                        TEST_VERSIONS.test.base
+                    )
+                    .unwrap()
+                ],
             )),
         ],
     ];
@@ -131,12 +126,13 @@ async fn test_vid_task() {
                     num_transactions: transactions.len() as u64,
                 },
                 ViewNumber::new(2),
-                vec1![null_block::builder_fee::<TestTypes>(
-                    num_storage_nodes,
-                    TEST_VERSIONS.test.base
-                )
-                .unwrap()],
-
+                vec1![
+                    null_block::builder_fee::<TestTypes>(
+                        num_storage_nodes,
+                        TEST_VERSIONS.test.base
+                    )
+                    .unwrap()
+                ],
             )),
             exact(VidDisperseSend(vid_proposal.clone(), pub_key)),
         ]),

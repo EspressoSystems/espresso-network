@@ -20,7 +20,6 @@ use tracing::instrument;
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn push_cdn_network() {
-
     let mut metadata: TestDescription<TestTypes, PushCdnImpl> = TestDescription {
         timing_data: TimingData {
             next_view_timeout: 10_000,

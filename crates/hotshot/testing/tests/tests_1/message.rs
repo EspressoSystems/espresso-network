@@ -10,11 +10,16 @@ use std::marker::PhantomData;
 use committable::Committable;
 use hotshot_example_types::node_types::{TEST_VERSIONS, TestTypes};
 use hotshot_types::{
-    data::ViewNumber, message::{GeneralConsensusMessage, Message, MessageKind, SequencingMessage}, signature_key::BLSPubKey, simple_certificate::{SimpleCertificate, ViewSyncCommitCertificate2}, simple_vote::ViewSyncCommitData2, traits::signature_key::SignatureKey
+    data::ViewNumber,
+    message::{GeneralConsensusMessage, Message, MessageKind, SequencingMessage},
+    signature_key::BLSPubKey,
+    simple_certificate::{SimpleCertificate, ViewSyncCommitCertificate2},
+    simple_vote::ViewSyncCommitData2,
+    traits::signature_key::SignatureKey,
 };
 use vbs::{
-    version::{StaticVersion, Version},
     BinarySerializer, Serializer,
+    version::{StaticVersion, Version},
 };
 
 #[test]
@@ -70,8 +75,7 @@ async fn test_certificate2_validity() {
 
     let node_id = 1;
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let membership = handle.hotshot.membership_coordinator.clone();
 
     let mut generator =
@@ -102,21 +106,23 @@ async fn test_certificate2_validity() {
     let membership_stake_table = StakeTableEntries::from(epoch_mem.stake_table().await).0;
     let membership_success_threshold = epoch_mem.success_threshold().await;
 
-    assert!(qc
-        .is_valid_cert(
+    assert!(
+        qc.is_valid_cert(
             &membership_stake_table,
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
-        .is_ok());
+        .is_ok()
+    );
 
-    assert!(qc2
-        .is_valid_cert(
+    assert!(
+        qc2.is_valid_cert(
             &membership_stake_table,
             membership_success_threshold,
             &handle.hotshot.upgrade_lock
         )
-        .is_ok());
+        .is_ok()
+    );
 
     // ensure that we don't break the leaf commitment chain
     let leaf2 = Leaf2::from_quorum_proposal(&proposal.data);
