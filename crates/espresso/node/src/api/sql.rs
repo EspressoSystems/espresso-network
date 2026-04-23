@@ -1394,11 +1394,12 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
                 .epoch_height
                 .context("epoch_height not set but parent has V2 reward tree")?;
 
-            // Under V5+ the reward tree is only persisted at epoch boundaries, so an exact
-            // load at `from_height` will fail off-boundary. Walk back to the most recent
-            // persisted tree <= from_height instead; the commitment check below still
-            // guarantees we got the right tree (V5+ doesn't mutate the tree between
-            // boundaries, so any heights in the same epoch share the same root).
+            // V5+ only stores the reward merkle tree at epoch's last block, so if we're
+            // reconstructing at a non boundary height there is no row at from_height.
+            // Load the latest tree instead
+            // the commitment check below will catch it if
+            // we ended up with a tree from an older epoch.
+            // But this should never happen as we don't garbage collect the latest tree
             if version >= EPOCH_REWARD_VERSION && !is_last_block(from_height, epoch_height) {
                 let tree = load_latest_reward_merkle_tree_v2(db, from_height)
                     .await
