@@ -13,6 +13,10 @@ Datadog state:
 pup auth login --scopes metrics_read,logs_read_data,monitors_read,dashboards_read
 ```
 
+- Access tokens last 1 hour; pup auto-refreshes them.
+- Refresh tokens have a short lifetime set by Datadog; re-run `pup auth login` when it expires.
+- `pup auth refresh` forces a refresh on demand.
+
 ## Examples
 
 ### Logs
