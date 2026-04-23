@@ -7,7 +7,11 @@ use hotshot_types::{
         VidDisperseShare2, ViewNumber,
     },
     message::Proposal as SignedProposal,
-    traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
+    traits::{
+        EncodeBytes,
+        node_implementation::NodeType,
+        storage::{Cert2, Storage as StorageTrait},
+    },
     utils::EpochTransitionIndicator,
 };
 use tokio::{
@@ -98,6 +102,22 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
             }
         });
         self.handles.entry(view_number).or_default().push(handle);
+    }
+
+    pub fn append_cert2(&mut self, view: ViewNumber, cert2: Cert2<T>) {
+        let storage = self.storage.clone();
+        let handle = spawn(async move {
+            loop {
+                match storage.append_cert2(view, cert2.clone()).await {
+                    Ok(()) => return,
+                    Err(err) => {
+                        warn!(%err, %view, "failed to append cert2, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
     }
 
     pub fn append_proposal(&mut self, proposal: Proposal<T>) {

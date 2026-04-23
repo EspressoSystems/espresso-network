@@ -23,8 +23,10 @@ use hotshot_types::{
     },
     stake_table::HSStakeTable,
     traits::{
-        ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
-        storage::Storage,
+        ValidatedState as HotShotState,
+        metrics::Metrics,
+        node_implementation::NodeType,
+        storage::{Cert2, Storage},
     },
     utils::genesis_epoch_from_version,
     vote::HasViewNumber,
@@ -937,6 +939,16 @@ pub trait SequencerPersistence:
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()>;
 
+    /// Persist cert2 for the given view.
+    async fn append_cert2(&self, _view: ViewNumber, _cert2: Cert2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load a persisted cert2 by view, if any.
+    async fn load_cert2(&self, _view: ViewNumber) -> anyhow::Result<Option<Cert2<SeqTypes>>> {
+        Ok(None)
+    }
+
     /// Update the current eQC in storage.
     async fn store_eqc(
         &self,
@@ -1176,6 +1188,10 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).add_state_cert(state_cert).await
+    }
+
+    async fn append_cert2(&self, view: ViewNumber, cert2: Cert2<SeqTypes>) -> anyhow::Result<()> {
+        (**self).append_cert2(view, cert2).await
     }
 }
 
