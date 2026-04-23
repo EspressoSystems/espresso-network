@@ -44,7 +44,7 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: git ls-files '*.rs' | grep -v '^contracts/rust/adapter/src/bindings/' | xargs rustfmt +nightly --check
+        run: git ls-files '*.rs' | grep -vE '^contracts/rust/adapter/src/bindings/|\.api\.v[0-9]+\.rs$' | xargs rustfmt +nightly --check
 
   clippy-postgres:
     name: clippy (postgres)

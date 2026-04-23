@@ -63,7 +63,7 @@ fmt *files:
     set -euo pipefail
     files="{{files}}"
     if [ -z "$files" ]; then
-        files=$(git ls-files '*.rs' | grep -v '^contracts/rust/adapter/src/bindings/')
+        files=$(git ls-files '*.rs' | grep -vE '^contracts/rust/adapter/src/bindings/|\.api\.v[0-9]+\.rs$')
     fi
     echo "$files" | xargs -P $(nproc) -n 10 rustfmt
 
