@@ -468,7 +468,7 @@ impl Peer {
                                     if *off < buf.len() {
                                         continue
                                     }
-                                    let hdr = Header::unvalidated(*buf);
+                                    let hdr = Header::unvalidated(u32::from_be_bytes(*buf));
                                     fbuf.resize(hdr.len().into(), 0);
                                     rstate = ReadState::Frame { hdr, off: 0, buf: &mut fbuf }
                                 }
