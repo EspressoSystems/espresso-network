@@ -26,7 +26,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::Version;
 use versions::{
-    CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION,
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
 };
 
 use super::{
@@ -1041,7 +1041,7 @@ impl ValidatedState {
         validated_state.apply_proposal(&mut delta, parent_leaf, l1_deposits);
 
         // TODO(abdul): builder is unfunded error
-        if version < CLIQUENET_VERSION {
+        if version < NEW_PROTOCOL_VERSION {
             validated_state.charge_fees(
                 &mut delta,
                 proposed_header.fee_info(),

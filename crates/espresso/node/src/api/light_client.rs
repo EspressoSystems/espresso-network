@@ -23,7 +23,7 @@ use light_client::consensus::{
 };
 use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
-use versions::CLIQUENET_VERSION;
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 
@@ -338,7 +338,7 @@ where
                 .await
                 .ok_or_else(|| not_found(format!("unknown header {requested}")))?;
 
-            if header.version() >= CLIQUENET_VERSION {
+            if header.version() >= NEW_PROTOCOL_VERSION {
                 get_leaf_proof_new_protocol(state, requested, fetch_timeout).await
             } else {
                 get_leaf_proof(state, requested, finalized, fetch_timeout).await
