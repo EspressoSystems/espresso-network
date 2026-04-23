@@ -253,8 +253,11 @@ contract StakeTableV2PropTestBase is FunctionCallTracking {
         });
 
         schnorrVK = EdOnBN254.EdOnBN254Point({
-            x: uint256(keccak256(abi.encode(_validator, "schnorr_x"))),
-            y: uint256(keccak256(abi.encode(_validator, "schnorr_y")))
+            // Keep Schnorr coordinates canonical for StakeTable validation:
+            // x in [1, P_MOD-1], y in [0, P_MOD-1].
+            x: (uint256(keccak256(abi.encode(_validator, "schnorr_x"))) % (EdOnBN254.P_MOD - 1))
+                + 1,
+            y: uint256(keccak256(abi.encode(_validator, "schnorr_y"))) % EdOnBN254.P_MOD
         });
 
         blsSig = BN254.G1Point({
