@@ -50,7 +50,7 @@ use super::{
 };
 use crate::{
     SeqTypes,
-    api::RewardMerkleTreeDataSource,
+    api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
     catchup::{CatchupStorage, NullStateCatchup},
     persistence::{ChainConfigPersistence, sql::Options},
     state::compute_state_update,
@@ -1172,6 +1172,53 @@ async fn load_reward_merkle_tree_v2(
     Ok((snapshot, leaf.leaf().clone()))
 }
 
+/// Returns the RewardMerkleTreeV2 for height <= requested height
+///
+/// After V5 the tree is only written at epoch boundaries, so `reward_merkle_tree_v2_data`
+/// has no row for most heights. Within an epoch the tree doesn't change, so the previous
+/// boundary's tree matches the current block's reward root but only if we're actually in
+/// the same epoch. The caller is responsible for checking the returned tree's commitment
+/// against the header at `height`.
+/// if they differ we loaded a tree from an older epoch.
+async fn load_latest_reward_merkle_tree_v2(
+    db: &SqlStorage,
+    height: u64,
+) -> anyhow::Result<PermittedRewardMerkleTreeV2> {
+    let mut tx = db
+        .read()
+        .await
+        .with_context(|| "failed to open read transaction")?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT balances
+        FROM reward_merkle_tree_v2_data
+        WHERE height <= $1
+        ORDER BY height DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(height as i64)
+    .fetch_optional(tx.as_mut())
+    .await?
+    .context(format!(
+        "No reward merkle tree at or below height {height} in storage"
+    ))?;
+
+    let balances: Vec<u8> = row
+        .try_get("balances")
+        .context("Missing balances column; this should never happen")?;
+
+    let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&balances)
+        .context("Failed to deserialize RewardMerkleTreeV2 from storage")?;
+
+    let tree = PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances)
+        .await
+        .context("Failed to reconstruct reward merkle tree from storage")?;
+
+    Ok(tree)
+}
+
 async fn load_accounts<Mode: TransactionMode>(
     tx: &mut Transaction<Mode>,
     height: u64,
@@ -1342,14 +1389,28 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
             );
         },
         either::Either::Right(expected_root) => {
-            state.reward_merkle_tree_v2 = load_reward_merkle_tree_v2(db, from_height)
-                .await
-                .context(
-                    "unable to reconstruct state because RewardMerkleTreeV2 not available at \
-                     origin",
-                )?
-                .0
-                .tree;
+            let version = parent.block_header().version();
+            let epoch_height = instance
+                .epoch_height
+                .context("epoch_height not set but parent has V2 reward tree")?;
+
+            // Under V5+ the reward tree is only persisted at epoch boundaries, so an exact
+            // load at `from_height` will fail off-boundary. Walk back to the most recent
+            // persisted tree <= from_height instead; the commitment check below still
+            // guarantees we got the right tree (V5+ doesn't mutate the tree between
+            // boundaries, so any heights in the same epoch share the same root).
+            if version >= EPOCH_REWARD_VERSION && !is_last_block(from_height, epoch_height) {
+                let tree = load_latest_reward_merkle_tree_v2(db, from_height)
+                    .await
+                    .context("RewardMerkleTreeV2 not available at or below origin")?;
+                state.reward_merkle_tree_v2 = tree.tree;
+            } else {
+                state.reward_merkle_tree_v2 = load_reward_merkle_tree_v2(db, from_height)
+                    .await
+                    .context("RewardMerkleTreeV2 not available at origin")?
+                    .0
+                    .tree;
+            }
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == expected_root,
                 "loaded reward state does not match parent header"
