@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+r"""Nextest CI helper: render PR summaries and maintain main-branch history.
+
+Requires the `gh` CLI on PATH for stats-fetch (GH_TOKEN or `gh auth login`).
+
+Examples:
+    # Render step summary to stdout from a directory of per-shard JUnit XMLs.
+    scripts/nextest-ci report target/nextest
+
+    # Append summary to $GITHUB_STEP_SUMMARY and emit a failure-only PR comment;
+    # annotate the failure/flaky tables with main-branch history.
+    scripts/nextest-ci report junit-artifacts \
+        --title "Nextest (postgres + sqlite)" \
+        --pr-comment-out junit-artifacts/pr-comment.md \
+        --main-stats main-test-stats.json \
+        >> "$GITHUB_STEP_SUMMARY"
+
+    # On main: export current run's failed/flaky lists as a single-run artifact.
+    scripts/nextest-ci stats-write \
+        --junit-dir junit-artifacts \
+        --sha "$GITHUB_SHA" \
+        --run-id "$GITHUB_RUN_ID" \
+        --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+        --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --out test-stats.json
+
+    # On a PR: aggregate the last 20 main-branch stats artifacts.
+    scripts/nextest-ci stats-fetch \
+        --workflow test.yml \
+        --artifact-name test-stats-test \
+        --out main-test-stats.json
+"""
+
+import argparse
+import json
+import logging
+import os
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger("nextest-ci")
+
+
+# JUnit parsing (shared by report and stats-write)
+
+
+@dataclass
+class TestCase:
+    test_id: str
+    status: str
+    attempts: int
+    time: float
+
+
+def derive_status(case: ET.Element) -> str:
+    if case.find("failure") is not None or case.find("error") is not None:
+        return "failed"
+    if case.find("flakyFailure") is not None:
+        return "flaky"
+    if case.find("skipped") is not None:
+        return "skipped"
+    return "passed"
+
+
+def count_attempts(case: ET.Element) -> int:
+    prior = sum(1 for child in case if child.tag in ("rerunFailure", "flakyFailure"))
+    return prior + 1
+
+
+def parse_time(raw: str | None) -> float:
+    return float(raw) if raw else 0.0
+
+
+def parse_file(path: Path) -> list[TestCase]:
+    try:
+        tree = ET.parse(path)
+    except ET.ParseError as e:
+        log.warning("failed to parse %s: %s", path, e)
+        return []
+    cases: list[TestCase] = []
+    for case in tree.iter("testcase"):
+        classname = case.attrib.get("classname") or ""
+        name = case.attrib.get("name") or ""
+        cases.append(
+            TestCase(
+                test_id=f"{classname}::{name}",
+                status=derive_status(case),
+                attempts=count_attempts(case),
+                time=parse_time(case.attrib.get("time")),
+            )
+        )
+    return cases
+
+
+def parse_junit_dir_sets(junit_dir: Path) -> tuple[list[str], list[str], int]:
+    # nextest's partitioning guarantees each test id appears once across all
+    # shards, so set-keyed dedup is correct.
+    failed: set[str] = set()
+    flaky: set[str] = set()
+    total = 0
+    xml_files = sorted(junit_dir.rglob("*.xml")) if junit_dir.exists() else []
+    for path in xml_files:
+        for c in parse_file(path):
+            total += 1
+            if c.status == "failed":
+                failed.add(c.test_id)
+            elif c.status == "flaky":
+                flaky.add(c.test_id)
+    return sorted(failed), sorted(flaky), total
+
+
+# Markdown rendering (report subcommand)
+
+
+def format_id(test_id: str) -> str:
+    return f"`{test_id.replace('`', '')}`"
+
+
+def load_main_stats(path: Path | None) -> list[dict] | None:
+    if path is None:
+        return None
+    if not path.exists():
+        log.warning("main stats file %s not found; skipping history column", path)
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        log.warning(
+            "failed to parse main stats %s: %s; skipping history column", path, e
+        )
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("runs"), list):
+        log.warning("main stats %s has unexpected shape; skipping history column", path)
+        return None
+    return data["runs"]
+
+
+def history_cell(test_id: str, runs: list[dict]) -> str:
+    total = len(runs)
+    if total == 0:
+        return "unknown"
+    failed_count = sum(1 for r in runs if test_id in r.get("failed", []))
+    flaky_count = sum(1 for r in runs if test_id in r.get("flaky", []))
+    if failed_count > 0:
+        return f"failed {failed_count}/{total}"
+    if flaky_count > 0:
+        return f"flaky {flaky_count}/{total}"
+    return "passing"
+
+
+def render_failure_table(cases: list[TestCase], runs: list[dict] | None) -> list[str]:
+    if runs is not None:
+        lines = [
+            "| Test | Attempts | Time (s) | Main history |",
+            "|------|----------|----------|--------------|",
+        ]
+        for c in cases:
+            lines.append(
+                f"| {format_id(c.test_id)} | {c.attempts} | {c.time:.2f} | {history_cell(c.test_id, runs)} |"
+            )
+        return lines
+    lines = ["| Test | Attempts | Time (s) |", "|------|----------|----------|"]
+    for c in cases:
+        lines.append(f"| {format_id(c.test_id)} | {c.attempts} | {c.time:.2f} |")
+    return lines
+
+
+def render_slowest_table(cases: list[TestCase]) -> list[str]:
+    lines = ["| Test | Time (s) | Status |", "|------|----------|--------|"]
+    for c in cases:
+        lines.append(f"| {format_id(c.test_id)} | {c.time:.2f} | {c.status} |")
+    return lines
+
+
+def build_summary(title: str, cases: list[TestCase], runs: list[dict] | None) -> str:
+    out: list[str] = [f"## {title} test results", ""]
+    if not cases:
+        out.append("_No JUnit XML files found._")
+        return "\n".join(out) + "\n"
+
+    failing = sorted(
+        (c for c in cases if c.status == "failed"), key=lambda c: c.test_id
+    )
+    flaky = sorted((c for c in cases if c.status == "flaky"), key=lambda c: c.test_id)
+    non_skipped = [c for c in cases if c.status != "skipped"]
+    slowest = sorted(non_skipped, key=lambda c: (-c.time, c.test_id))[:20]
+
+    if failing:
+        out.append(f"### Failing tests ({len(failing)})")
+        out.append("")
+        out.extend(render_failure_table(failing, runs))
+        out.append("")
+    if flaky:
+        out.append(f"### Flaky tests ({len(flaky)})")
+        out.append("")
+        out.extend(render_failure_table(flaky, runs))
+        out.append("")
+
+    out.append("### 20 slowest tests")
+    out.append("")
+    if slowest:
+        out.extend(render_slowest_table(slowest))
+    else:
+        out.append("_No test cases found._")
+    out.append("")
+    return "\n".join(out) + "\n"
+
+
+def build_pr_comment(failing: list[TestCase], runs: list[dict] | None) -> str:
+    if not failing:
+        return ""
+    lines = [f"### Nextest failures ({len(failing)})", ""]
+    lines.extend(render_failure_table(failing, runs))
+    lines.append("")
+    lines.append("See the job step summary for flaky tests and slowest tests.")
+    return "\n".join(lines) + "\n"
+
+
+# gh helpers (stats-fetch subcommand)
+
+
+def gh_json(args: list[str]) -> Any:
+    cmd = ["gh", *args]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` exited {e.returncode}: {(e.stderr or '').strip()}"
+        ) from e
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        stdout = result.stdout.strip() or "<empty>"
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` returned non-JSON output: {stdout[:200]} ({e})"
+        ) from e
+
+
+def resolve_repo() -> str:
+    env_repo = os.environ.get("GITHUB_REPOSITORY")
+    if env_repo:
+        return env_repo
+    cmd = ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` exited {e.returncode}: {(e.stderr or '').strip()}"
+        ) from e
+    repo = result.stdout.strip()
+    if not repo:
+        raise RuntimeError(f"`{' '.join(cmd)}` returned empty output")
+    return repo
+
+
+def download_artifact(repo: str, run_id: Any, artifact_name: str) -> dict | None:
+    with tempfile.TemporaryDirectory(
+        dir="./tmp" if Path("./tmp").exists() else None
+    ) as td:
+        subprocess.run(
+            [
+                "gh",
+                "run",
+                "download",
+                str(run_id),
+                "--repo",
+                repo,
+                "--name",
+                artifact_name,
+                "--dir",
+                td,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        json_files = sorted(Path(td).rglob("*.json"))
+        if not json_files:
+            log.warning(
+                "artifact %s from run %s had no JSON files", artifact_name, run_id
+            )
+            return None
+        return json.loads(json_files[0].read_text())
+
+
+def write_empty_runs(out: Path) -> None:
+    out.write_text(json.dumps({"runs": []}))
+
+
+# Subcommand implementations
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    xml_files = sorted(args.junit_dir.rglob("*.xml")) if args.junit_dir.exists() else []
+    log.info("parsing %d JUnit file(s) under %s", len(xml_files), args.junit_dir)
+
+    cases: list[TestCase] = []
+    for path in xml_files:
+        cases.extend(parse_file(path))
+
+    runs = load_main_stats(args.main_stats)
+
+    sys.stdout.write(build_summary(args.title, cases, runs))
+
+    failing = sorted(
+        (c for c in cases if c.status == "failed"), key=lambda c: c.test_id
+    )
+
+    # The workflow uses hashFiles() on this file to decide whether to delete the
+    # sticky PR comment. Skip writing it when there are no failures so the hash
+    # is empty and the comment is cleaned up automatically.
+    if args.pr_comment_out is not None and failing:
+        args.pr_comment_out.write_text(build_pr_comment(failing, runs))
+    return 0
+
+
+def cmd_stats_write(args: argparse.Namespace) -> int:
+    failed, flaky, total = parse_junit_dir_sets(args.junit_dir)
+    if total == 0:
+        log.error("no JUnit testcases parsed; refusing to write stats")
+        return 1
+    entry = {
+        "sha": args.sha,
+        "timestamp": args.timestamp,
+        "run_id": args.run_id,
+        "run_url": args.run_url,
+        "failed": failed,
+        "flaky": flaky,
+    }
+    args.out.write_text(json.dumps(entry, indent=2, sort_keys=False) + "\n")
+    log.info(
+        "wrote %s: %d failed, %d flaky in current run",
+        args.out,
+        len(failed),
+        len(flaky),
+    )
+    return 0
+
+
+def cmd_stats_fetch(args: argparse.Namespace) -> int:
+    try:
+        repo = resolve_repo()
+        log.info(
+            "fetching up to %d %s artifacts from main runs of %s in %s",
+            args.max_runs,
+            args.artifact_name,
+            args.workflow,
+            repo,
+        )
+        runs_data = gh_json(
+            [
+                "api",
+                "-X",
+                "GET",
+                f"repos/{repo}/actions/workflows/{args.workflow}/runs",
+                "-F",
+                "branch=main",
+                "-F",
+                "event=push",
+                "-F",
+                "status=success",
+                "-F",
+                f"per_page={args.max_runs}",
+            ]
+        )
+        if not isinstance(runs_data, dict):
+            raise RuntimeError(f"unexpected runs response: {runs_data!r}")
+        workflow_runs = runs_data.get("workflow_runs", [])
+        # Defend against GitHub not guaranteeing newest-first ordering.
+        workflow_runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        log.info("found %d successful main runs", len(workflow_runs))
+
+        aggregated: list[dict] = []
+        for run in workflow_runs:
+            run_id = run["id"]
+            try:
+                artifacts_data = gh_json(
+                    ["api", f"repos/{repo}/actions/runs/{run_id}/artifacts"]
+                )
+                artifacts = (
+                    artifacts_data.get("artifacts", [])
+                    if isinstance(artifacts_data, dict)
+                    else []
+                )
+                match = next(
+                    (
+                        a
+                        for a in artifacts
+                        if a.get("name") == args.artifact_name
+                        and not a.get("expired", False)
+                    ),
+                    None,
+                )
+                if match is None:
+                    log.debug("run %s has no matching artifact", run_id)
+                    continue
+                entry = download_artifact(repo, run_id, args.artifact_name)
+                if entry is None:
+                    continue
+                aggregated.append(entry)
+            except (
+                subprocess.CalledProcessError,
+                json.JSONDecodeError,
+                RuntimeError,
+                OSError,
+            ) as e:
+                log.warning("run %s: skipping (%s)", run_id, e)
+                continue
+
+        args.out.write_text(
+            json.dumps({"runs": aggregated}, indent=2, sort_keys=False) + "\n"
+        )
+        log.info("wrote %s with %d run(s)", args.out, len(aggregated))
+        return 0
+    except (
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+        RuntimeError,
+        OSError,
+    ) as e:
+        log.warning("fetch failed, continuing with empty history: %s", e, exc_info=True)
+        write_empty_runs(args.out)
+        return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("NEXTEST_CI_LOG", "INFO"),
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    report = sub.add_parser(
+        "report", help="render markdown summary + optional PR comment"
+    )
+    report.add_argument(
+        "junit_dir", type=Path, help="directory containing per-shard JUnit XMLs"
+    )
+    report.add_argument(
+        "--title", default="Nextest", help="heading prefix for the summary section"
+    )
+    report.add_argument(
+        "--pr-comment-out",
+        type=Path,
+        help="path for the failure-only sticky PR comment (omitted when no failures)",
+    )
+    report.add_argument(
+        "--main-stats",
+        type=Path,
+        help="main-branch stats JSON from stats-fetch; enables the history column",
+    )
+    report.set_defaults(func=cmd_report)
+
+    write = sub.add_parser(
+        "stats-write", help="export current run's failed/flaky lists"
+    )
+    write.add_argument(
+        "--junit-dir",
+        required=True,
+        type=Path,
+        help="directory containing per-shard JUnit XMLs",
+    )
+    write.add_argument("--sha", required=True, help="commit SHA of the current run")
+    write.add_argument("--run-id", required=True, help="GitHub Actions run id")
+    write.add_argument("--run-url", required=True, help="URL to this run in Actions UI")
+    write.add_argument(
+        "--timestamp", required=True, help="ISO 8601 UTC timestamp of the run"
+    )
+    write.add_argument(
+        "--out", required=True, type=Path, help="output path for the single-run JSON"
+    )
+    write.set_defaults(func=cmd_stats_write)
+
+    fetch = sub.add_parser(
+        "stats-fetch", help="aggregate recent main stats artifacts into a runs list"
+    )
+    fetch.add_argument(
+        "--workflow", required=True, help="workflow filename (e.g. test.yml)"
+    )
+    fetch.add_argument(
+        "--artifact-name",
+        required=True,
+        help="name of the per-run stats artifact to aggregate",
+    )
+    fetch.add_argument(
+        "--out", required=True, type=Path, help="output path for the aggregated JSON"
+    )
+    fetch.add_argument(
+        "--max-runs",
+        type=int,
+        default=20,
+        help="max recent main runs to scan for the artifact (default: 20, max: 100)",
+    )
+    fetch.set_defaults(func=cmd_stats_fetch)
+
+    args = parser.parse_args()
+    logging.basicConfig(
+        level=args.log_level,
+        format="%(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

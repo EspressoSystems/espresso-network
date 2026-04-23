@@ -479,7 +479,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/nextest-history fetch \
+          python3 scripts/nextest-ci stats-fetch \
             --workflow test.yml \
             --artifact-name test-stats-test \
             --out main-test-stats.json
@@ -490,7 +490,7 @@ jobs:
           if [ -s main-test-stats.json ]; then
             args+=(--main-stats main-test-stats.json)
           fi
-          python3 scripts/nextest-summary "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/nextest-ci report "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
@@ -522,7 +522,7 @@ jobs:
 
       - name: Export stats
         run: |
-          python3 scripts/nextest-history write \
+          python3 scripts/nextest-ci stats-write \
             --junit-dir junit-artifacts \
             --sha "${{ github.sha }}" \
             --run-id "${{ github.run_id }}" \
