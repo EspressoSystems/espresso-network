@@ -1340,6 +1340,30 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         }
     }
 
+    /// Returns the RewardMerkleTreeV2 for height <= requested height
+    ///
+    /// After V5 the tree is only written at epoch boundaries, so `reward_merkle_tree_v2_data`
+    /// has no row for most heights. Within an epoch the tree doesn't change, so the previous
+    /// boundary's tree matches the current block's reward root but only if we're actually in
+    /// the same epoch. The caller is responsible for checking the returned tree's commitment
+    /// against the header at `height`.
+    /// if they differ we loaded a tree from an older epoch.
+    fn load_latest_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<PermittedRewardMerkleTreeV2>> {
+        async move {
+            let tree_bytes = self.load_latest_tree(height).await?;
+
+            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes)
+                .context("Failed to deserialize RewardMerkleTreeV2 from storage")?;
+
+            PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances)
+                .await
+                .context("Failed to reconstruct reward merkle tree from storage")
+        }
+    }
+
     fn load_reward_account_proof_v2(
         &self,
         _height: u64,
@@ -1374,6 +1398,10 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 
     fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    /// Load the latest serialized reward merkle tree v2 at height `<= height`.
+    fn load_latest_tree(&self, height: u64)
+    -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
 
     fn persist_proofs(
         &self,
@@ -1432,6 +1460,15 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
     }
 
     fn load_tree(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load_latest_tree(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move {
             bail!("reward merklized state is not supported for this data source");
         }
@@ -1528,6 +1565,13 @@ where
         async move { self.inner().load_tree(height).await }
     }
 
+    fn load_latest_tree(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_latest_tree(height).await }
+    }
+
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move { self.inner().garbage_collect(height).await }
     }
@@ -1597,6 +1641,13 @@ where
 
     fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move { (**self).load_tree(height).await }
+    }
+
+    fn load_latest_tree(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_latest_tree(height).await }
     }
 
     fn load_reward_merkle_tree_v2(
