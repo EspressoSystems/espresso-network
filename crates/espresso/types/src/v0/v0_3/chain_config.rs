@@ -1,9 +1,10 @@
-use crate::{v0_1, BlockSize, ChainId, FeeAccount, FeeAmount};
 use alloy::primitives::{Address, U256};
 use alloy_compat::ethers_serde;
 use committable::{Commitment, Committable};
 use itertools::Either;
 use serde::{Deserialize, Serialize};
+
+use crate::{BlockSize, ChainId, FeeAccount, FeeAmount, v0_1};
 
 /// Global variables for an Espresso blockchain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -146,8 +147,6 @@ impl From<v0_1::ChainConfig> for ChainConfig {
     }
 }
 
-  
-
 impl From<ChainConfig> for v0_1::ChainConfig {
     fn from(chain_config: ChainConfig) -> v0_1::ChainConfig {
         let ChainConfig {
@@ -182,7 +181,6 @@ impl Default for ChainConfig {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -200,8 +198,6 @@ mod test {
         assert_eq!(expectation, v3_resolvable);
     }
 
-     
-
     #[test]
     fn test_upgrade_chain_config_v1_chain_config_from_v3() {
         let expectation = v0_1::ChainConfig::default();
@@ -209,6 +205,4 @@ mod test {
         let v1_chain_config = v0_1::ChainConfig::from(v3_chain_config);
         assert_eq!(expectation, v1_chain_config);
     }
-
-    
 }

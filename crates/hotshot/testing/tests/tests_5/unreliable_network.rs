@@ -21,7 +21,6 @@ use tracing::instrument;
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network_sync() {
-
     let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
@@ -86,7 +85,6 @@ async fn test_memory_network_sync() {
 #[ignore]
 #[instrument]
 async fn libp2p_network_async() {
-
     let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
@@ -99,8 +97,7 @@ async fn libp2p_network_async() {
         ),
         timing_data: TimingData {
             next_view_timeout: 25000,
-            ..TestDescription::<TestTypes, Libp2pImpl>::default_multiple_rounds()
-                .timing_data
+            ..TestDescription::<TestTypes, Libp2pImpl>::default_multiple_rounds().timing_data
         },
         unreliable_network: Some(Box::new(AsynchronousNetwork {
             keep_numerator: 9,
@@ -145,8 +142,7 @@ async fn test_memory_network_async() {
         ),
         timing_data: TimingData {
             next_view_timeout: 1000,
-            ..TestDescription::<TestTypes, MemoryImpl>::default_multiple_rounds()
-                .timing_data
+            ..TestDescription::<TestTypes, MemoryImpl>::default_multiple_rounds().timing_data
         },
         unreliable_network: Some(Box::new(AsynchronousNetwork {
             keep_numerator: 95,
@@ -220,7 +216,6 @@ async fn test_memory_network_partially_sync() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network_partially_sync() {
-
     let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             ..Default::default()
@@ -299,7 +294,6 @@ async fn test_memory_network_chaos() {
 #[ignore]
 #[instrument]
 async fn libp2p_network_chaos() {
-
     let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,

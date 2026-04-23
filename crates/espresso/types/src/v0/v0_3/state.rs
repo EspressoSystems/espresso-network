@@ -1,9 +1,9 @@
 use alloy::primitives::{Address, U256};
-use derive_more::{derive::AddAssign, Add, Display, From, Into, Mul, Sub};
+use derive_more::{Add, Display, From, Into, Mul, Sub, derive::AddAssign};
 use jf_merkle_tree_compat::{
+    MerkleTreeScheme, UniversalMerkleTreeScheme,
     prelude::{Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
-    MerkleTreeScheme, UniversalMerkleTreeScheme,
 };
 use serde::{Deserialize, Serialize};
 

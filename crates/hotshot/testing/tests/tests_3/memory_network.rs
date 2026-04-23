@@ -21,10 +21,11 @@ use hotshot_types::{
     signature_key::BLSPubKey,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
-        node_implementation::{NodeType},
-    }, vote::HasViewNumber,
+        node_implementation::NodeType,
+    },
+    vote::HasViewNumber,
 };
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::time::timeout;
 use tracing::{instrument, trace};
 
@@ -128,11 +129,12 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).unwrap();
-        assert!(timeout(Duration::from_secs(1), network2.recv_message())
-            .await
-            .is_err());
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).unwrap();
+        assert!(
+            timeout(Duration::from_secs(1), network2.recv_message())
+                .await
+                .is_err()
+        );
         fake_message_eq(sent_message, deserialized_message);
     }
 
@@ -151,11 +153,12 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).unwrap();
-        assert!(timeout(Duration::from_secs(1), network1.recv_message())
-            .await
-            .is_err());
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).unwrap();
+        assert!(
+            timeout(Duration::from_secs(1), network1.recv_message())
+                .await
+                .is_err()
+        );
         fake_message_eq(sent_message, deserialized_message);
     }
 }
@@ -182,18 +185,24 @@ async fn memory_network_broadcast_queue() {
         let view = sent_message.view_number();
         let serialized_message = upgrade_lock.serialize(&sent_message).unwrap();
         network1
-            .broadcast_message(view, serialized_message.clone(), Topic::Da, BroadcastDelay::None)
+            .broadcast_message(
+                view,
+                serialized_message.clone(),
+                Topic::Da,
+                BroadcastDelay::None,
+            )
             .await
             .expect("Failed to message node");
         let recv_message = network2
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).unwrap();
-        assert!(timeout(Duration::from_secs(1), network2.recv_message())
-            .await
-            .is_err());
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).unwrap();
+        assert!(
+            timeout(Duration::from_secs(1), network2.recv_message())
+                .await
+                .is_err()
+        );
         fake_message_eq(sent_message, deserialized_message);
     }
 
@@ -217,11 +226,12 @@ async fn memory_network_broadcast_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).unwrap();
-        assert!(timeout(Duration::from_secs(1), network1.recv_message())
-            .await
-            .is_err());
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).unwrap();
+        assert!(
+            timeout(Duration::from_secs(1), network1.recv_message())
+                .await
+                .is_err()
+        );
         fake_message_eq(sent_message, deserialized_message);
     }
 }

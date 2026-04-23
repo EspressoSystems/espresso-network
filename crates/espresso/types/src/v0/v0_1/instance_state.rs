@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+
+use serde::{Deserialize, Serialize};
 
 use crate::{v0::utils::Timestamp, v0_3::ChainConfig};
 

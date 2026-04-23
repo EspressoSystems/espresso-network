@@ -1,13 +1,9 @@
-use serde::{Deserialize, Serialize};
-use std::iter::Peekable;
+use std::{default::Default, iter::Peekable, ops::Range};
 
 use derive_more::Display;
-use std::ops::Range;
-use thiserror::Error;
-
 use hotshot_types::vid::advz::{LargeRangeProofType, SmallRangeProofType};
-
-use std::default::Default;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// Proof of correctness for namespace payload bytes in a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
