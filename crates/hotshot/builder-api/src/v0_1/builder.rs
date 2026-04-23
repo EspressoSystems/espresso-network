@@ -279,10 +279,7 @@ where
         })?
         .get("get_status", |req: RequestParams, state| {
             async move {
-                let tx = req
-                    .body_auto::<<Types as NodeType>::Transaction, Ver>(Ver::instance())
-                    .map_err(Error::TxnUnpack)?;
-                let hash = tx.commit();
+                let hash = try_extract_param(&req, "transaction_hash")?;
                 state.txn_status(hash).await.map_err(Error::TxnStat)
             }
             .boxed()
