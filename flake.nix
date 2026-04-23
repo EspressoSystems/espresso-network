@@ -140,7 +140,8 @@
             rustfmt = {
               enable = true;
               description = "Run rustfmt on changed files";
-              entry = "just fmt";
+              # cargo-fmt is slower, does not format all files, and doesn't allow passing file arguments
+              entry = "rustfmt";
               types_or = [ "rust" ];
               pass_filenames = true;
               excludes = [ "^contracts/rust/adapter/src/bindings/" ];

@@ -61,11 +61,11 @@ demo-native *args: (build "test")
 fmt *files:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "{{files}}" ]; then
-        git ls-files '*.rs' | grep -v '^contracts/rust/adapter/src/bindings/' | xargs -P "$(nproc)" -n 50 rustfmt
-    else
-        rustfmt {{files}}
+    files="{{files}}"
+    if [ -z "$files" ]; then
+        files=$(git ls-files '*.rs' | grep -v '^contracts/rust/adapter/src/bindings/')
     fi
+    echo "$files" | xargs -P $(nproc) -n 10 rustfmt
 
 fix *args:
     just clippy --fix {{args}}
