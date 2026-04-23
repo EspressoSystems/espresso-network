@@ -1435,6 +1435,30 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
         }
     }
 
+    /// Returns the RewardMerkleTreeV2 for height <= requested height
+    ///
+    /// After V5 the tree is only written at epoch boundaries, so `reward_merkle_tree_v2_data`
+    /// has no row for most heights. Within an epoch the tree doesn't change, so the previous
+    /// boundary's tree matches the current block's reward root but only if we're actually in
+    /// the same epoch. The caller is responsible for checking the returned tree's commitment
+    /// against the header at `height`.
+    /// if they differ we loaded a tree from an older epoch.
+    fn load_latest_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<PermittedRewardMerkleTreeV2>> {
+        async move {
+            let tree_bytes = self.load_latest_tree(height).await?;
+
+            let tree_data = bincode::deserialize::<RewardMerkleTreeV2Data>(&tree_bytes)
+                .context("Failed to deserialize RewardMerkleTreeV2 from storage")?;
+
+            PermittedRewardMerkleTreeV2::try_from_kv_set(tree_data.balances)
+                .await
+                .context("Failed to reconstruct reward merkle tree from storage")
+        }
+    }
+
     fn load_reward_account_proof_v2(
         &self,
         _height: u64,
@@ -1469,6 +1493,10 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
 
     fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
+
+    /// Load the latest serialized reward merkle tree v2 at height `<= height`.
+    fn load_latest_tree(&self, height: u64)
+    -> impl Send + Future<Output = anyhow::Result<Vec<u8>>>;
 
     fn persist_proofs(
         &self,
@@ -1527,6 +1555,15 @@ impl RewardMerkleTreeDataSource for hotshot_query_service::data_source::MetricsD
     }
 
     fn load_tree(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            bail!("reward merklized state is not supported for this data source");
+        }
+    }
+
+    fn load_latest_tree(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move {
             bail!("reward merklized state is not supported for this data source");
         }
@@ -1623,6 +1660,13 @@ where
         async move { self.inner().load_tree(height).await }
     }
 
+    fn load_latest_tree(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.inner().load_latest_tree(height).await }
+    }
+
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move { self.inner().garbage_collect(height).await }
     }
@@ -1666,6 +1710,99 @@ where
                 .persist_reward_proofs(node_state, height, version)
                 .await
         }
+    }
+}
+
+// Implement Reward MerkleTreeDataSource for Arc<D> to allow shared ownership
+impl<D> RewardMerkleTreeDataSource for Arc<D>
+where
+    D: RewardMerkleTreeDataSource,
+{
+    async fn load_v1_reward_account_proof(
+        &self,
+        height: u64,
+        account: RewardAccountV1,
+    ) -> anyhow::Result<RewardAccountQueryDataV1> {
+        (**self).load_v1_reward_account_proof(height, account).await
+    }
+
+    fn persist_tree(
+        &self,
+        height: u64,
+        merkle_tree: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).persist_tree(height, merkle_tree).await }
+    }
+
+    fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_tree(height).await }
+    }
+
+    fn load_latest_tree(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_latest_tree(height).await }
+    }
+
+    fn load_reward_merkle_tree_v2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<PermittedRewardMerkleTreeV2>> {
+        async move { (**self).load_reward_merkle_tree_v2(height).await }
+    }
+
+    fn load_reward_account_proof_v2(
+        &self,
+        height: u64,
+        account: RewardAccountV2,
+    ) -> impl Send + Future<Output = anyhow::Result<RewardAccountQueryDataV2>> {
+        async move { (**self).load_reward_account_proof_v2(height, account).await }
+    }
+
+    fn persist_proofs(
+        &self,
+        height: u64,
+        proofs: impl Iterator<Item = (Vec<u8>, Vec<u8>)> + Send,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).persist_proofs(height, proofs).await }
+    }
+
+    fn persist_reward_proofs(
+        &self,
+        node_state: &NodeState,
+        height: u64,
+        version: Version,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move {
+            (**self)
+                .persist_reward_proofs(node_state, height, version)
+                .await
+        }
+    }
+
+    fn load_proof(
+        &self,
+        height: u64,
+        account: Vec<u8>,
+        epoch_height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_proof(height, account, epoch_height).await }
+    }
+
+    fn proof_exists(&self, height: u64) -> impl Send + Future<Output = bool> {
+        async move { (**self).proof_exists(height).await }
+    }
+
+    fn load_latest_proof(
+        &self,
+        account: Vec<u8>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { (**self).load_latest_proof(account).await }
+    }
+
+    fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async move { (**self).garbage_collect(height).await }
     }
 }
 
