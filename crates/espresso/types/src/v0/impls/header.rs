@@ -669,7 +669,7 @@ impl Header {
         }
 
         // TODO(abdul): builder is unfunded error
-        if version < versions::CLIQUENET_VERSION {
+        if version < versions::NEW_PROTOCOL_VERSION {
             for BuilderFee {
                 fee_account,
                 fee_signature,
