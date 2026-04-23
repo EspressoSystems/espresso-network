@@ -20,7 +20,7 @@ use hotshot_types::{
     message::{DataMessage, Message, MessageKind, UpgradeLock},
     signature_key::BLSPubKey,
     traits::{
-        network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
+        network::{BroadcastDelay, ConnectedNetwork, Topic},
         node_implementation::NodeType,
     },
     vote::HasViewNumber,
@@ -235,4 +235,3 @@ async fn memory_network_broadcast_queue() {
         fake_message_eq(sent_message, deserialized_message);
     }
 }
-
