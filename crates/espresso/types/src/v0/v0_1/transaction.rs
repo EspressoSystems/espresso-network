@@ -1,6 +1,5 @@
-use derive_more::{Display, From, Into};
-
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use derive_more::{Display, From, Into};
 use serde::{Deserialize, Serialize};
 
 #[derive(

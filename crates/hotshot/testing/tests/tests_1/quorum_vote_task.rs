@@ -22,9 +22,7 @@ use hotshot_testing::{
     random,
     script::{Expectations, InputOrder, TaskScript},
 };
-use hotshot_types::{
-    data::{Leaf2, ViewNumber},
-};
+use hotshot_types::data::{Leaf2, ViewNumber};
 
 const TIMEOUT: Duration = Duration::from_millis(35);
 
@@ -38,8 +36,7 @@ async fn test_quorum_vote_task_success() {
         view_generator::TestViewGenerator,
     };
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
@@ -102,8 +99,7 @@ async fn test_quorum_vote_task_miss_dependency() {
         helpers::build_system_handle, predicates::event::exact, view_generator::TestViewGenerator,
     };
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
@@ -183,8 +179,7 @@ async fn test_quorum_vote_task_incorrect_dependency() {
         helpers::build_system_handle, predicates::event::exact, view_generator::TestViewGenerator,
     };
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
 
