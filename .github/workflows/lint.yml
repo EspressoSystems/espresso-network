@@ -21,6 +21,18 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  cargo-sort:
+    name: cargo sort
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-sort
+
+      - name: Check workspace Cargo.toml sort order
+        run: cargo sort --check --grouped --workspace
+
   cargo-fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
