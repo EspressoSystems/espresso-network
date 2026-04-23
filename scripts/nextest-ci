@@ -118,7 +118,7 @@ def parse_junit_dir_sets(junit_dir: Path) -> tuple[list[str], list[str], int]:
 
 
 def format_id(test_id: str) -> str:
-    return f"`{test_id.replace('`', '')}`"
+    return f"`{test_id.replace('`', '').replace('|', '\\|')}`"
 
 
 def load_main_stats(path: Path | None) -> list[dict] | None:
@@ -259,9 +259,7 @@ def resolve_repo() -> str:
 
 
 def download_artifact(repo: str, run_id: Any, artifact_name: str) -> dict | None:
-    with tempfile.TemporaryDirectory(
-        dir="./tmp" if Path("./tmp").exists() else None
-    ) as td:
+    with tempfile.TemporaryDirectory() as td:
         subprocess.run(
             [
                 "gh",
