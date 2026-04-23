@@ -144,7 +144,6 @@
               entry = "rustfmt";
               types_or = [ "rust" ];
               pass_filenames = true;
-              excludes = [ "^contracts/rust/adapter/src/bindings/" "\\.api\\.v[0-9]+\\.rs$" ];
             };
             cargo-sort = {
               enable = true;

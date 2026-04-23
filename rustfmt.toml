@@ -14,5 +14,5 @@ ignore = [
   # the contract bindings are generated files
   "contracts/rust/adapter/src/bindings",
   # tonic-prost generated protobuf stubs
-  "**/*.api.v*.rs",
+  "**/*.api.v[0-9]*.rs",
 ]
