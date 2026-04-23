@@ -13,8 +13,8 @@
 <a href=#13 id=13 data-nosnippet>13</a>    UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
 <a href=#14 id=14 data-nosnippet>14</a>};
 <a href=#15 id=15 data-nosnippet>15</a><span class="kw">use </span>hotshot_types::{
-<a href=#16 id=16 data-nosnippet>16</a>    PeerConfig, data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, x25519,
-<a href=#17 id=17 data-nosnippet>17</a>    addr::NetAddr
+<a href=#16 id=16 data-nosnippet>16</a>    PeerConfig, addr::NetAddr, data::EpochNumber, light_client::StateVerKey,
+<a href=#17 id=17 data-nosnippet>17</a>    network::PeerConfigKeys, x25519,
 <a href=#18 id=18 data-nosnippet>18</a>};
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>itertools::Itertools;
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>jf_utils::to_bytes;
@@ -24,10 +24,10 @@
 <a href=#24 id=24 data-nosnippet>24</a>
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span><span class="kw">super</span>::L1Client;
 <a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>crate::{
-<a href=#27 id=27 data-nosnippet>27</a>    traits::{MembershipPersistence, StateCatchup},
-<a href=#28 id=28 data-nosnippet>28</a>    v0::{impls::StakeTableHash, ChainConfig},
-<a href=#29 id=29 data-nosnippet>29</a>    v0_3::RewardAmount,
-<a href=#30 id=30 data-nosnippet>30</a>    AuthenticatedValidatorMap, SeqTypes,
+<a href=#27 id=27 data-nosnippet>27</a>    AuthenticatedValidatorMap, SeqTypes,
+<a href=#28 id=28 data-nosnippet>28</a>    traits::{MembershipPersistence, StateCatchup},
+<a href=#29 id=29 data-nosnippet>29</a>    v0::{ChainConfig, impls::StakeTableHash},
+<a href=#30 id=30 data-nosnippet>30</a>    v0_3::RewardAmount,
 <a href=#31 id=31 data-nosnippet>31</a>};
 <a href=#32 id=32 data-nosnippet>32</a><span class="doccomment">/// Stake table holding all staking information (DA and non-DA stakers)
 <a href=#33 id=33 data-nosnippet>33</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize, From)]
@@ -70,7 +70,7 @@
 <a href=#70 id=70 data-nosnippet>70</a>    <span class="doccomment">/// Public X25519 key for network communication.
 <a href=#71 id=71 data-nosnippet>71</a>    </span><span class="kw">pub </span>x25519_key: <span class="prelude-ty">Option</span>&lt;x25519::PublicKey&gt;,
 <a href=#72 id=72 data-nosnippet>72</a>    <span class="doccomment">/// Network address.
-<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">pub </span>p2p_addr: <span class="prelude-ty">Option</span>&lt;NetAddr&gt;
+<a href=#73 id=73 data-nosnippet>73</a>    </span><span class="kw">pub </span>p2p_addr: <span class="prelude-ty">Option</span>&lt;NetAddr&gt;,
 <a href=#74 id=74 data-nosnippet>74</a>}
 <a href=#75 id=75 data-nosnippet>75</a>
 <a href=#76 id=76 data-nosnippet>76</a><span class="doccomment">/// Validator eligible for consensus participation.
@@ -152,8 +152,8 @@
 <a href=#152 id=152 data-nosnippet>152</a>            .fixed_size_field(<span class="string">"stake"</span>, <span class="kw-2">&amp;</span>to_fixed_bytes(<span class="self">self</span>.stake))
 <a href=#153 id=153 data-nosnippet>153</a>            .constant_str(<span class="string">"commission"</span>)
 <a href=#154 id=154 data-nosnippet>154</a>            .u16(<span class="self">self</span>.commission);
-<a href=#155 id=155 data-nosnippet>155</a>            <span class="comment">//.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
-<a href=#156 id=156 data-nosnippet>156</a>            //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
+<a href=#155 id=155 data-nosnippet>155</a>        <span class="comment">//.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
+<a href=#156 id=156 data-nosnippet>156</a>        //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
 <a href=#157 id=157 data-nosnippet>157</a>
 <a href=#158 id=158 data-nosnippet>158</a>        </span>builder = builder.constant_str(<span class="string">"delegators"</span>);
 <a href=#159 id=159 data-nosnippet>159</a>        <span class="kw">for </span>(address, stake) <span class="kw">in </span><span class="self">self</span>.delegators.iter().sorted() {

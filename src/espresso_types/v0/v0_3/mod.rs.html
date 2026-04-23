@@ -2,40 +2,40 @@
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="comment">// Re-export types which haven't changed since the last minor version.
 <a href=#4 id=4 data-nosnippet>4</a></span><span class="kw">pub use </span><span class="kw">super</span>::v0_1::{
-<a href=#5 id=5 data-nosnippet>5</a>    ADVZNsProof, ADVZTxProof, AccountQueryData, BlockMerkleCommitment, BlockMerkleTree, BlockSize,
-<a href=#6 id=6 data-nosnippet>6</a>    BuilderSignature, ChainId, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo,
-<a href=#7 id=7 data-nosnippet>7</a>    FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, Index, Iter, L1BlockInfo, L1Client,
-<a href=#8 id=8 data-nosnippet>8</a>    L1ClientOptions, L1Snapshot, NamespaceId, NsIndex, NsIter, NsPayload, NsPayloadBuilder,
-<a href=#9 id=9 data-nosnippet>9</a>    NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, NsTable, NsTableBuilder,
-<a href=#10 id=10 data-nosnippet>10</a>    NsTableValidationError, NumNss, NumTxs, NumTxsRange, NumTxsUnchecked, Payload, PayloadByteLen,
-<a href=#11 id=11 data-nosnippet>11</a>    TimeBasedUpgrade, Transaction, TxIndex, TxIter, TxPayload, TxPayloadRange, TxTableEntries,
-<a href=#12 id=12 data-nosnippet>12</a>    TxTableEntriesRange, Upgrade, UpgradeMode, UpgradeType, ViewBasedUpgrade,
-<a href=#13 id=13 data-nosnippet>13</a>    BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
-<a href=#14 id=14 data-nosnippet>14</a>    NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, TX_OFFSET_BYTE_LEN,
-<a href=#15 id=15 data-nosnippet>15</a>};
-<a href=#16 id=16 data-nosnippet>16</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span><span class="kw">super</span>::v0_1::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
-<a href=#17 id=17 data-nosnippet>17</a>
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">pub const </span>VERSION: Version = Version { major: <span class="number">0</span>, minor: <span class="number">3 </span>};
-<a href=#19 id=19 data-nosnippet>19</a>
-<a href=#20 id=20 data-nosnippet>20</a><span class="doccomment">/// Maximum number of active validators in the stake table.
-<a href=#21 id=21 data-nosnippet>21</a>///
-<a href=#22 id=22 data-nosnippet>22</a>/// `select_active_validator_set()` picks the top `MAX_VALIDATORS` validators
-<a href=#23 id=23 data-nosnippet>23</a>/// by stake. Only these validators participate in consensus and can be elected
-<a href=#24 id=24 data-nosnippet>24</a>/// leader.
-<a href=#25 id=25 data-nosnippet>25</a></span><span class="kw">pub const </span>MAX_VALIDATORS: usize = <span class="number">100</span>;
-<a href=#26 id=26 data-nosnippet>26</a>
-<a href=#27 id=27 data-nosnippet>27</a><span class="kw">mod </span>chain_config;
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">mod </span>header;
-<a href=#29 id=29 data-nosnippet>29</a><span class="kw">mod </span>nsproof;
-<a href=#30 id=30 data-nosnippet>30</a><span class="kw">mod </span>stake_table;
-<a href=#31 id=31 data-nosnippet>31</a><span class="kw">mod </span>state;
-<a href=#32 id=32 data-nosnippet>32</a><span class="kw">mod </span>state_cert;
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">mod </span>txproof;
-<a href=#34 id=34 data-nosnippet>34</a>
-<a href=#35 id=35 data-nosnippet>35</a><span class="kw">pub use </span>chain_config::<span class="kw-2">*</span>;
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">pub use </span>header::<span class="kw-2">*</span>;
-<a href=#37 id=37 data-nosnippet>37</a><span class="kw">pub use </span>nsproof::<span class="kw-2">*</span>;
-<a href=#38 id=38 data-nosnippet>38</a><span class="kw">pub use </span>stake_table::<span class="kw-2">*</span>;
-<a href=#39 id=39 data-nosnippet>39</a><span class="kw">pub use </span>state::<span class="kw-2">*</span>;
-<a href=#40 id=40 data-nosnippet>40</a><span class="kw">pub use </span>state_cert::<span class="kw-2">*</span>;
-<a href=#41 id=41 data-nosnippet>41</a><span class="kw">pub use </span>txproof::<span class="kw-2">*</span>;</code></pre></div></section></main></body></html>
+<a href=#5 id=5 data-nosnippet>5</a>    ADVZNsProof, ADVZTxProof, AccountQueryData, BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleCommitment,
+<a href=#6 id=6 data-nosnippet>6</a>    BlockMerkleTree, BlockSize, BuilderSignature, ChainId, FEE_MERKLE_TREE_HEIGHT, FeeAccount,
+<a href=#7 id=7 data-nosnippet>7</a>    FeeAccountProof, FeeAmount, FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, Index,
+<a href=#8 id=8 data-nosnippet>8</a>    Iter, L1BlockInfo, L1Client, L1ClientOptions, L1Snapshot, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
+<a href=#9 id=9 data-nosnippet>9</a>    NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, NamespaceId, NsIndex, NsIter, NsPayload, NsPayloadBuilder,
+<a href=#10 id=10 data-nosnippet>10</a>    NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, NsTable, NsTableBuilder,
+<a href=#11 id=11 data-nosnippet>11</a>    NsTableValidationError, NumNss, NumTxs, NumTxsRange, NumTxsUnchecked, Payload, PayloadByteLen,
+<a href=#12 id=12 data-nosnippet>12</a>    TX_OFFSET_BYTE_LEN, TimeBasedUpgrade, Transaction, TxIndex, TxIter, TxPayload, TxPayloadRange,
+<a href=#13 id=13 data-nosnippet>13</a>    TxTableEntries, TxTableEntriesRange, Upgrade, UpgradeMode, UpgradeType, ViewBasedUpgrade,
+<a href=#14 id=14 data-nosnippet>14</a>};
+<a href=#15 id=15 data-nosnippet>15</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">use </span><span class="kw">super</span>::v0_1::{L1ClientMetrics, L1Event, L1State, L1UpdateTask};
+<a href=#16 id=16 data-nosnippet>16</a>
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">pub const </span>VERSION: Version = Version { major: <span class="number">0</span>, minor: <span class="number">3 </span>};
+<a href=#18 id=18 data-nosnippet>18</a>
+<a href=#19 id=19 data-nosnippet>19</a><span class="doccomment">/// Maximum number of active validators in the stake table.
+<a href=#20 id=20 data-nosnippet>20</a>///
+<a href=#21 id=21 data-nosnippet>21</a>/// `select_active_validator_set()` picks the top `MAX_VALIDATORS` validators
+<a href=#22 id=22 data-nosnippet>22</a>/// by stake. Only these validators participate in consensus and can be elected
+<a href=#23 id=23 data-nosnippet>23</a>/// leader.
+<a href=#24 id=24 data-nosnippet>24</a></span><span class="kw">pub const </span>MAX_VALIDATORS: usize = <span class="number">100</span>;
+<a href=#25 id=25 data-nosnippet>25</a>
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">mod </span>chain_config;
+<a href=#27 id=27 data-nosnippet>27</a><span class="kw">mod </span>header;
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">mod </span>nsproof;
+<a href=#29 id=29 data-nosnippet>29</a><span class="kw">mod </span>stake_table;
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">mod </span>state;
+<a href=#31 id=31 data-nosnippet>31</a><span class="kw">mod </span>state_cert;
+<a href=#32 id=32 data-nosnippet>32</a><span class="kw">mod </span>txproof;
+<a href=#33 id=33 data-nosnippet>33</a>
+<a href=#34 id=34 data-nosnippet>34</a><span class="kw">pub use </span>chain_config::<span class="kw-2">*</span>;
+<a href=#35 id=35 data-nosnippet>35</a><span class="kw">pub use </span>header::<span class="kw-2">*</span>;
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">pub use </span>nsproof::<span class="kw-2">*</span>;
+<a href=#37 id=37 data-nosnippet>37</a><span class="kw">pub use </span>stake_table::<span class="kw-2">*</span>;
+<a href=#38 id=38 data-nosnippet>38</a><span class="kw">pub use </span>state::<span class="kw-2">*</span>;
+<a href=#39 id=39 data-nosnippet>39</a><span class="kw">pub use </span>state_cert::<span class="kw-2">*</span>;
+<a href=#40 id=40 data-nosnippet>40</a><span class="kw">pub use </span>txproof::<span class="kw-2">*</span>;
+</code></pre></div></section></main></body></html>
