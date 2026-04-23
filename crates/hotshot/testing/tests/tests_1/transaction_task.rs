@@ -7,20 +7,16 @@ use hotshot_task_impls::{
     events::HotShotEvent, harness::run_harness, transactions::TransactionTaskState,
 };
 use hotshot_testing::helpers::build_system_handle;
-use hotshot_types::{
-    data::{null_block, EpochNumber, PackedBundle, ViewNumber},
-};
+use hotshot_types::data::{EpochNumber, PackedBundle, ViewNumber, null_block};
 
 #[cfg(test)]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_transaction_task_leader_two_views_in_a_row() {
-
     // Build the API for node 2.
     let node_id = 2;
-    let handle =
-        build_system_handle::<TestConsecutiveLeaderTypes, MemoryImpl>(node_id)
-            .await
-            .0;
+    let handle = build_system_handle::<TestConsecutiveLeaderTypes, MemoryImpl>(node_id)
+        .await
+        .0;
 
     let mut input = Vec::new();
     let mut output = Vec::new();
@@ -58,7 +54,6 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
             )
             .unwrap()
         ],
-
     );
     output.push(HotShotEvent::BlockRecv(exp_packed_bundle.clone()));
 
@@ -67,9 +62,6 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
     output.push(HotShotEvent::BlockRecv(exp_packed_bundle));
 
     let transaction_state =
-        TransactionTaskState::<TestConsecutiveLeaderTypes>::create_from(
-            &handle,
-        )
-        .await;
+        TransactionTaskState::<TestConsecutiveLeaderTypes>::create_from(&handle).await;
     run_harness(input, output, transaction_state, false).await;
 }

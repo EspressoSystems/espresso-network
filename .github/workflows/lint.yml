@@ -21,8 +21,20 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  cargo-fmt:
-    name: cargo fmt
+  cargo-sort:
+    name: cargo sort
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-sort
+
+      - name: Check workspace Cargo.toml sort order
+        run: cargo sort --check --grouped --workspace
+
+  rustfmt:
+    name: rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +44,7 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo +nightly fmt -- --check
+        run: git ls-files '*.rs' | xargs rustfmt +nightly --check
 
   clippy-postgres:
     name: clippy (postgres)
