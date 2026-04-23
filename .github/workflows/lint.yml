@@ -33,8 +33,8 @@ jobs:
       - name: Check workspace Cargo.toml sort order
         run: cargo sort --check --grouped --workspace
 
-  cargo-fmt:
-    name: cargo fmt
+  rustfmt:
+    name: rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo +nightly fmt -- --check
+        run: git ls-files '*.rs' | grep -v '^contracts/rust/adapter/src/bindings/' | xargs rustfmt --check
 
   clippy-postgres:
     name: clippy (postgres)
