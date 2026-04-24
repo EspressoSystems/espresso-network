@@ -12,7 +12,7 @@ use crate::{
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
-    msg::{MAX_PAYLOAD_SIZE, MsgId, Slot, Trailer, TrailerType},
+    msg::{MAX_PAYLOAD_SIZE, MsgId, Slot, Trailer, TrailerType, hello::Hello},
     net::{RetryPolicy, peer::Peer},
     queue::Queue,
 };
@@ -47,7 +47,11 @@ async fn connection_pair(
     let (cb, ca) = tokio::join!(
         async {
             let (stream, _) = listener.accept().await.unwrap();
-            Connection::accept(conf_b, stream).await.unwrap()
+            let mut conn = Connection::accept(conf_b, stream).await.unwrap();
+            let h = conn.recv_hello().await.unwrap();
+            assert!(h.is_ok());
+            conn.send_hello(Hello::ok()).await.unwrap();
+            conn
         },
         Connection::connect(conf_a, pkb, addr),
     );

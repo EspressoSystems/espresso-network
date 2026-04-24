@@ -1,6 +1,8 @@
 mod frame;
 mod trailer;
 
+pub mod hello;
+
 use std::fmt;
 
 pub use frame::{FrameType, Header, InvalidHeader};
