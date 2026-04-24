@@ -15,7 +15,7 @@ use axum::{
     extract::{Path, Request, State},
     http::{StatusCode, Uri},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::get,
 };
 use schemars::transform::Transform;
@@ -57,6 +57,11 @@ impl OperationOutput for ApiError {
 /// Serve the OpenAPI spec (extracted from Extension)
 async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi> {
     Json(api)
+}
+
+/// Serve custom Swagger UI with collapsed defaults
+async fn serve_swagger_ui() -> Html<&'static str> {
+    Html(include_str!("../templates/swagger.html"))
 }
 
 /// Middleware to rewrite root paths to /v2 paths
@@ -553,18 +558,8 @@ where
 
     router
         .route(routes::v2::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec))
-        .route(
-            routes::v2::SWAGGER_ROUTE,
-            get(Swagger::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
-        .route(
-            "/v2/",
-            get(Swagger::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
+        .route(routes::v2::SWAGGER_ROUTE, get(serve_swagger_ui))
+        .route("/v2/", get(serve_swagger_ui))
         .route(
             routes::v2::SCALAR_ROUTE,
             get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)
