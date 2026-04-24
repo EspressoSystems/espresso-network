@@ -334,7 +334,6 @@ impl<T: NodeType> Consensus<T> {
         if drb_epoch.is_some() {
             self.retry_pending_certs(outbox).await;
         }
-        }
     }
 
     pub fn last_decided_view(&self) -> ViewNumber {
