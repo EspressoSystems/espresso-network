@@ -2,6 +2,43 @@ syntax = "proto3";
 
 package espresso.api.v2;
 
+import "v2/common.proto";
+
+//=============================================================================
+// Light Client State Types
+//=============================================================================
+
+// Light client state
+message LightClientState {
+  uint64 view_number = 1;
+  uint64 block_height = 2;
+  bytes block_comm_root = 3;  // CircuitField serialized as bytes
+}
+
+// Stake table state commitments
+message StakeTableState {
+  bytes bls_key_comm = 1;      // CircuitField as bytes
+  bytes schnorr_key_comm = 2;  // CircuitField as bytes
+  bytes amount_comm = 3;       // CircuitField as bytes
+  bytes threshold = 4;         // CircuitField as bytes
+}
+
+// State signature tuple (key + two signatures)
+message StateSignatureTuple {
+  SchnorrPublicKey state_signature_key = 1;  // Schnorr public key
+  bytes lcv3_signature = 2;                   // LCV3 Schnorr signature
+  bytes lcv2_signature = 3;                   // LCV2 Schnorr signature
+}
+
+// Light client state update certificate V2
+message LightClientStateUpdateCertificateV2 {
+  uint64 epoch = 1;
+  LightClientState light_client_state = 2;
+  StakeTableState next_stake_table_state = 3;
+  repeated StateSignatureTuple signatures = 4;
+  bytes auth_root = 5;  // 32 bytes
+}
+
 //=============================================================================
 // State Certificate Queries
 //=============================================================================
@@ -14,8 +51,8 @@ message GetStateCertificateRequest {
 
 // State certificate response
 message StateCertificateResponse {
-  // Serialized light client state update certificate
-  bytes certificate = 1;
+  // Structured light client state update certificate
+  LightClientStateUpdateCertificateV2 certificate = 1;
 }
 
 //=============================================================================
@@ -30,8 +67,8 @@ message GetStakeTableRequest {
 
 // Stake table response
 message StakeTableResponse {
-  // Serialized stake table data
-  bytes stake_table = 1;
+  // List of peer configurations
+  repeated PeerConfig peers = 1;
 }
 
 //=============================================================================

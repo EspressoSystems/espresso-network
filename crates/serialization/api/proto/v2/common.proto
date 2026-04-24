@@ -4,3 +4,64 @@ package espresso.api.v2;
 
 // Common types for Espresso API v2
 // This file is intentionally minimal - domain-specific types live in their own proto files
+
+//=============================================================================
+// Cryptographic Key Types
+//=============================================================================
+
+// BLS public key (typically 48 bytes)
+message BLSPublicKey {
+  bytes key = 1;
+}
+
+// Schnorr public key (typically 32 bytes)
+message SchnorrPublicKey {
+  bytes key = 1;
+}
+
+//=============================================================================
+// Network Address Types
+//=============================================================================
+
+// Network address - either IP or domain name with port
+message NetAddr {
+  oneof addr_type {
+    InetAddr inet = 1;
+    NameAddr name = 2;
+  }
+}
+
+// IP address (v4 or v6) with port
+message InetAddr {
+  string ip = 1;    // IP address string (e.g., "127.0.0.1" or "::1")
+  uint32 port = 2;
+}
+
+// Domain name with port
+message NameAddr {
+  string name = 1;  // Domain name
+  uint32 port = 2;
+}
+
+//=============================================================================
+// Peer Configuration Types
+//=============================================================================
+
+// Stake table entry for a validator
+message StakeTableEntry {
+  BLSPublicKey stake_key = 1;  // BLS verification key
+  string stake_amount = 2;      // U256 as decimal string
+}
+
+// Peer connection information
+message PeerConnectInfo {
+  bytes x25519_key = 1;  // X25519 public key (32 bytes)
+  NetAddr p2p_addr = 2;  // P2P network address
+}
+
+// Complete peer configuration
+message PeerConfig {
+  StakeTableEntry stake_table_entry = 1;  // Stake information
+  SchnorrPublicKey state_ver_key = 2;     // State verification key
+  optional PeerConnectInfo connect_info = 3;  // Optional connection info
+}

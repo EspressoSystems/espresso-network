@@ -419,7 +419,11 @@ where
         duration: Duration,
     ) -> impl Future<Output = BoxFuture<'static, anyhow::Result<Vec<VidShare>>>> + Send {
         let this = self.clone();
-        async move { (*this).request_vid_shares(block_number, vid_common_data, duration).await }
+        async move {
+            (*this)
+                .request_vid_shares(block_number, vid_common_data, duration)
+                .await
+        }
     }
 }
 
@@ -477,7 +481,8 @@ where
     fn get_validators(
         &self,
         epoch: EpochNumber,
-    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>>> {
+    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>>>
+    {
         let this = self.clone();
         async move { (*this).get_validators(epoch).await }
     }

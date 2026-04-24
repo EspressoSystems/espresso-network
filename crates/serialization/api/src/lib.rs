@@ -113,4 +113,29 @@ pub trait ApiSerializations {
     /// Serialize implementation's StakeTable to proto StakeTableResponse
     fn serialize_stake_table(&self, value: &Self::StakeTable)
     -> anyhow::Result<StakeTableResponse>;
+
+    // Helper conversion methods (for building structured proto messages)
+
+    /// Convert a PeerConfig to proto PeerConfig
+    fn convert_peer_config(&self, peer: &Self::PeerConfig) -> anyhow::Result<PeerConfig>
+    where
+        Self::PeerConfig: Sized;
+
+    /// Convert a light client certificate to proto LightClientStateUpdateCertificateV2
+    fn convert_light_client_cert(
+        &self,
+        cert: &Self::LightClientCert,
+    ) -> anyhow::Result<LightClientStateUpdateCertificateV2>
+    where
+        Self::LightClientCert: Sized;
+
+    /// Convert a namespace proof to proto NsProof
+    fn convert_ns_proof(&self, proof: &Self::NsProof) -> anyhow::Result<NsProof>
+    where
+        Self::NsProof: Sized;
+
+    // Associated types for helper conversions
+    type PeerConfig;
+    type LightClientCert;
+    type NsProof;
 }

@@ -31,7 +31,7 @@ use tagged_base64::TaggedBase64;
 
 use super::{
     RewardMerkleTreeDataSource, RewardMerkleTreeV2Data as InternalRewardTreeData,
-    data_source::{StateCertDataSource, StateCertFetchingDataSource, StakeTableDataSource},
+    data_source::{StakeTableDataSource, StateCertDataSource, StateCertFetchingDataSource},
 };
 
 /// Node API state implementation
@@ -175,6 +175,13 @@ where
     type StateCertificate = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
     type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
 
+    // Helper conversion types
+    type PeerConfig = hotshot_types::PeerConfig<espresso_types::SeqTypes>;
+    type LightClientCert = hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<
+        espresso_types::SeqTypes,
+    >;
+    type NsProof = espresso_types::NsProof;
+
     // Deserialize proto/string types → internal types
     fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address> {
         s.parse()
@@ -259,15 +266,24 @@ where
         &self,
         value: &Self::NamespaceProof,
     ) -> anyhow::Result<serialization_api::v2::NamespaceProofResponse> {
-        // Serialize transactions and proof to bytes
-        let transactions_bytes = bincode::serialize(&value.transactions)
+        // Serialize each transaction individually
+        let transactions: Vec<Vec<u8>> = value
+            .transactions
+            .iter()
+            .map(|tx| bincode::serialize(tx))
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("failed to serialize transactions: {}", e))?;
-        let proof_bytes = bincode::serialize(&value.proof)
-            .map_err(|e| anyhow::anyhow!("failed to serialize proof: {}", e))?;
+
+        // Convert proof to proto structure
+        let proof = value
+            .proof
+            .as_ref()
+            .map(|p| self.convert_ns_proof(p))
+            .transpose()?;
 
         Ok(serialization_api::v2::NamespaceProofResponse {
-            transactions: transactions_bytes,
-            proof: proof_bytes,
+            transactions,
+            proof,
         })
     }
 
@@ -275,11 +291,11 @@ where
         &self,
         value: &Self::IncorrectEncodingProof,
     ) -> anyhow::Result<serialization_api::v2::IncorrectEncodingProofResponse> {
-        let proof_bytes = bincode::serialize(value)
+        let proof_data = bincode::serialize(value)
             .map_err(|e| anyhow::anyhow!("failed to serialize incorrect encoding proof: {}", e))?;
 
         Ok(serialization_api::v2::IncorrectEncodingProofResponse {
-            proof: proof_bytes,
+            proof: Some(v2::AvidMIncorrectEncodingNsProof { proof_data }),
         })
     }
 
@@ -289,11 +305,10 @@ where
         &self,
         value: &Self::StateCertificate,
     ) -> anyhow::Result<serialization_api::v2::StateCertificateResponse> {
-        let cert_bytes = bincode::serialize(&value.0)
-            .map_err(|e| anyhow::anyhow!("failed to serialize state certificate: {}", e))?;
+        let certificate = self.convert_light_client_cert(&value.0)?;
 
         Ok(serialization_api::v2::StateCertificateResponse {
-            certificate: cert_bytes,
+            certificate: Some(certificate),
         })
     }
 
@@ -301,11 +316,176 @@ where
         &self,
         value: &Self::StakeTable,
     ) -> anyhow::Result<serialization_api::v2::StakeTableResponse> {
-        let stake_table_bytes = bincode::serialize(value)
-            .map_err(|e| anyhow::anyhow!("failed to serialize stake table: {}", e))?;
+        let peers: Result<Vec<_>, _> = value
+            .iter()
+            .map(|peer| self.convert_peer_config(peer))
+            .collect();
 
-        Ok(serialization_api::v2::StakeTableResponse {
-            stake_table: stake_table_bytes,
+        Ok(serialization_api::v2::StakeTableResponse { peers: peers? })
+    }
+
+    // Helper conversion methods
+
+    fn convert_peer_config(
+        &self,
+        peer: &Self::PeerConfig,
+    ) -> anyhow::Result<serialization_api::v2::PeerConfig> {
+        use hotshot_types::traits::signature_key::SignatureKey;
+
+        let stake_table_entry = v2::StakeTableEntry {
+            stake_key: Some(v2::BlsPublicKey {
+                key: peer.stake_table_entry.stake_key.to_bytes().to_vec(),
+            }),
+            stake_amount: peer.stake_table_entry.stake_amount.to_string(),
+        };
+
+        let state_ver_key = v2::SchnorrPublicKey {
+            key: bincode::serialize(&peer.state_ver_key)
+                .map_err(|e| anyhow::anyhow!("failed to serialize state ver key: {}", e))?,
+        };
+
+        let connect_info = peer.connect_info.as_ref().map(|info| {
+            let p2p_addr = match &info.p2p_addr {
+                hotshot_types::addr::NetAddr::Inet(ip, port) => v2::NetAddr {
+                    addr_type: Some(v2::net_addr::AddrType::Inet(v2::InetAddr {
+                        ip: ip.to_string(),
+                        port: *port as u32,
+                    })),
+                },
+                hotshot_types::addr::NetAddr::Name(name, port) => v2::NetAddr {
+                    addr_type: Some(v2::net_addr::AddrType::Name(v2::NameAddr {
+                        name: name.to_string(),
+                        port: *port as u32,
+                    })),
+                },
+            };
+
+            v2::PeerConnectInfo {
+                x25519_key: info.x25519_key.as_bytes().to_vec(),
+                p2p_addr: Some(p2p_addr),
+            }
+        });
+
+        Ok(v2::PeerConfig {
+            stake_table_entry: Some(stake_table_entry),
+            state_ver_key: Some(state_ver_key),
+            connect_info,
+        })
+    }
+
+    fn convert_light_client_cert(
+        &self,
+        cert: &Self::LightClientCert,
+    ) -> anyhow::Result<serialization_api::v2::LightClientStateUpdateCertificateV2> {
+        use ark_serialize::CanonicalSerialize;
+
+        // Helper to serialize field elements using arkworks
+        let serialize_field =
+            |field: &hotshot_types::light_client::CircuitField| -> anyhow::Result<Vec<u8>> {
+                let mut bytes = Vec::new();
+                field
+                    .serialize_compressed(&mut bytes)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize field element: {}", e))?;
+                Ok(bytes)
+            };
+
+        let light_client_state = v2::LightClientState {
+            view_number: cert.light_client_state.view_number,
+            block_height: cert.light_client_state.block_height,
+            block_comm_root: serialize_field(&cert.light_client_state.block_comm_root)?,
+        };
+
+        let next_stake_table_state = v2::StakeTableState {
+            bls_key_comm: serialize_field(&cert.next_stake_table_state.bls_key_comm)?,
+            schnorr_key_comm: serialize_field(&cert.next_stake_table_state.schnorr_key_comm)?,
+            amount_comm: serialize_field(&cert.next_stake_table_state.amount_comm)?,
+            threshold: serialize_field(&cert.next_stake_table_state.threshold)?,
+        };
+
+        let signatures: Result<Vec<_>, anyhow::Error> = cert
+            .signatures
+            .iter()
+            .map(
+                |(key, lcv3_sig, lcv2_sig)| -> anyhow::Result<v2::StateSignatureTuple> {
+                    Ok(v2::StateSignatureTuple {
+                        state_signature_key: Some(v2::SchnorrPublicKey {
+                            key: bincode::serialize(key).map_err(|e| {
+                                anyhow::anyhow!("failed to serialize signature key: {}", e)
+                            })?,
+                        }),
+                        lcv3_signature: bincode::serialize(lcv3_sig).map_err(|e| {
+                            anyhow::anyhow!("failed to serialize lcv3 signature: {}", e)
+                        })?,
+                        lcv2_signature: bincode::serialize(lcv2_sig).map_err(|e| {
+                            anyhow::anyhow!("failed to serialize lcv2 signature: {}", e)
+                        })?,
+                    })
+                },
+            )
+            .collect();
+
+        // Extract epoch as u64 (EpochNumber is a newtype around u64)
+        let epoch_bytes = bincode::serialize(&cert.epoch)
+            .map_err(|e| anyhow::anyhow!("failed to serialize epoch: {}", e))?;
+        let epoch: u64 = bincode::deserialize(&epoch_bytes)
+            .map_err(|e| anyhow::anyhow!("failed to deserialize epoch: {}", e))?;
+
+        Ok(v2::LightClientStateUpdateCertificateV2 {
+            epoch,
+            light_client_state: Some(light_client_state),
+            next_stake_table_state: Some(next_stake_table_state),
+            signatures: signatures?,
+            auth_root: cert.auth_root.to_vec(),
+        })
+    }
+
+    fn convert_ns_proof(
+        &self,
+        proof: &Self::NsProof,
+    ) -> anyhow::Result<serialization_api::v2::NsProof> {
+        use espresso_types::NsProof as InternalNsProof;
+
+        // For now, serialize each proof variant to bincode since the inner fields are private
+        // The proto structure documents the proof types, but we use opaque bytes for crypto data
+        let proof_version = match proof {
+            InternalNsProof::V0(advz_proof) => {
+                let proof_bytes = bincode::serialize(advz_proof)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize V0 proof: {}", e))?;
+                v2::ns_proof::ProofVersion::V0(v2::AdvzNsProof {
+                    namespace_id: 0, // Field not accessible, serialized in ns_proof
+                    ns_payload: vec![],
+                    ns_proof: Some(proof_bytes),
+                })
+            },
+            InternalNsProof::V1(avidm_proof) => {
+                let proof_bytes = bincode::serialize(avidm_proof)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize V1 proof: {}", e))?;
+                v2::ns_proof::ProofVersion::V1(v2::AvidMNsProof {
+                    ns_index: 0, // Field not accessible, serialized in ns_proof
+                    ns_payload: vec![],
+                    ns_proof: proof_bytes,
+                })
+            },
+            InternalNsProof::V1IncorrectEncoding(incorrect_proof) => {
+                v2::ns_proof::ProofVersion::V1IncorrectEncoding(v2::AvidMIncorrectEncodingNsProof {
+                    proof_data: bincode::serialize(incorrect_proof).map_err(|e| {
+                        anyhow::anyhow!("failed to serialize incorrect encoding proof: {}", e)
+                    })?,
+                })
+            },
+            InternalNsProof::V2(gf2_proof) => {
+                let proof_bytes = bincode::serialize(gf2_proof)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize V2 proof: {}", e))?;
+                v2::ns_proof::ProofVersion::V2(v2::AvidmGf2NsProof {
+                    ns_index: 0, // Field not accessible, serialized in ns_proof
+                    ns_payload: vec![],
+                    ns_proof: proof_bytes,
+                })
+            },
+        };
+
+        Ok(v2::NsProof {
+            proof_version: Some(proof_version),
         })
     }
 }
@@ -696,15 +876,16 @@ where
         + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
         + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
         + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
-        + Sync + Send,
+        + Sync
+        + Send,
 {
     async fn get_namespace_proof(
         &self,
         namespace_id: u32,
         block_height: u64,
     ) -> anyhow::Result<Self::NamespaceProof> {
-        use futures::join;
         use espresso_types::NamespaceId;
+        use futures::join;
         use hotshot_query_service::availability::BlockId;
 
         let ns_id = NamespaceId::from(namespace_id);
@@ -713,27 +894,34 @@ where
         // Fetch block and VID common data concurrently
         let ds = &*self.data_source;
         let timeout = std::time::Duration::from_millis(500);
-        let (block_fetch, vid_fetch) = join!(
-            ds.get_block(block_id),
-            ds.get_vid_common(block_id)
-        );
+        let (block_fetch, vid_fetch) = join!(ds.get_block(block_id), ds.get_vid_common(block_id));
         let (block_opt, vid_opt) = join!(
             block_fetch.with_timeout(timeout),
             vid_fetch.with_timeout(timeout)
         );
 
-        let block = block_opt
-            .ok_or_else(|| anyhow::anyhow!("block {} not found", block_height))?;
-        let vid_common = vid_opt
-            .ok_or_else(|| anyhow::anyhow!("VID common data for block {} not found", block_height))?;
+        let block = block_opt.ok_or_else(|| anyhow::anyhow!("block {} not found", block_height))?;
+        let vid_common = vid_opt.ok_or_else(|| {
+            anyhow::anyhow!("VID common data for block {} not found", block_height)
+        })?;
 
         // Generate namespace proof
         let ns_table = block.payload().ns_table();
-        let ns_index = ns_table.find_ns_id(&ns_id)
-            .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block {}", namespace_id, block_height))?;
+        let ns_index = ns_table.find_ns_id(&ns_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "namespace {} not present in block {}",
+                namespace_id,
+                block_height
+            )
+        })?;
 
-        let proof = NsProof::new(block.payload(), &ns_index, vid_common.common())
-            .ok_or_else(|| anyhow::anyhow!("failed to generate namespace proof for block {}", block_height))?;
+        let proof =
+            NsProof::new(block.payload(), &ns_index, vid_common.common()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "failed to generate namespace proof for block {}",
+                    block_height
+                )
+            })?;
 
         let transactions = proof.export_all_txs(&ns_id);
 
@@ -755,22 +943,31 @@ where
 
         // Validate range
         if until <= from {
-            return Err(anyhow::anyhow!("invalid range: until ({}) must be greater than from ({})", until, from));
+            return Err(anyhow::anyhow!(
+                "invalid range: until ({}) must be greater than from ({})",
+                until,
+                from
+            ));
         }
 
         let range_size = until - from;
         const MAX_RANGE: u64 = 100; // Match limit from availability.toml
         if range_size > MAX_RANGE {
-            return Err(anyhow::anyhow!("range too large: {} blocks (max {})", range_size, MAX_RANGE));
+            return Err(anyhow::anyhow!(
+                "range too large: {} blocks (max {})",
+                range_size,
+                MAX_RANGE
+            ));
         }
 
         // Fetch blocks and VID common data for the range
-        use futures::join;
-        use futures::stream::StreamExt;
+        use futures::{join, stream::StreamExt};
 
         let (blocks_stream, vids_stream) = join!(
-            self.data_source.get_block_range(from as usize..until as usize),
-            self.data_source.get_vid_common_range(from as usize..until as usize)
+            self.data_source
+                .get_block_range(from as usize..until as usize),
+            self.data_source
+                .get_vid_common_range(from as usize..until as usize)
         );
 
         let blocks: Vec<_> = blocks_stream
@@ -783,7 +980,9 @@ where
             .await;
 
         if blocks.len() != vids.len() {
-            return Err(anyhow::anyhow!("mismatch between blocks and VID common data"));
+            return Err(anyhow::anyhow!(
+                "mismatch between blocks and VID common data"
+            ));
         }
 
         // Generate proofs for each block
@@ -826,8 +1025,8 @@ where
         block_height: u64,
     ) -> anyhow::Result<Self::IncorrectEncodingProof> {
         use espresso_types::{NamespaceId, NsProof};
-        use hotshot_query_service::availability::BlockId;
         use futures::join;
+        use hotshot_query_service::availability::BlockId;
 
         let ns_id = NamespaceId::from(namespace_id);
         let block_id = BlockId::Number(block_height as usize);
@@ -835,19 +1034,16 @@ where
         // Fetch block and VID common data
         let ds = &*self.data_source;
         let timeout = std::time::Duration::from_millis(500);
-        let (block_fetch, vid_fetch) = join!(
-            ds.get_block(block_id),
-            ds.get_vid_common(block_id)
-        );
+        let (block_fetch, vid_fetch) = join!(ds.get_block(block_id), ds.get_vid_common(block_id));
         let (block, vid_common) = join!(
             block_fetch.with_timeout(timeout),
             vid_fetch.with_timeout(timeout)
         );
 
-        let block = block
-            .ok_or_else(|| anyhow::anyhow!("block {} not found", block_height))?;
-        let vid_common = vid_common
-            .ok_or_else(|| anyhow::anyhow!("VID common data for block {} not found", block_height))?;
+        let block = block.ok_or_else(|| anyhow::anyhow!("block {} not found", block_height))?;
+        let vid_common = vid_common.ok_or_else(|| {
+            anyhow::anyhow!("VID common data for block {} not found", block_height)
+        })?;
 
         // For incorrect encoding proof, we need special handling
         // Note: Full incorrect encoding proof support with VID share fetching
@@ -855,18 +1051,27 @@ where
         // if the basic proof generation fails.
 
         let ns_table = block.payload().ns_table();
-        let ns_index = ns_table.find_ns_id(&ns_id)
-            .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block {}", namespace_id, block_height))?;
+        let ns_index = ns_table.find_ns_id(&ns_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "namespace {} not present in block {}",
+                namespace_id,
+                block_height
+            )
+        })?;
 
         // Try to generate a normal proof first
         if let Some(_proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) {
-            return Err(anyhow::anyhow!("block {} was correctly encoded", block_height));
+            return Err(anyhow::anyhow!(
+                "block {} was correctly encoded",
+                block_height
+            ));
         }
 
         // If normal proof generation failed, it indicates incorrect encoding
         // but we can't generate the full incorrect encoding proof without VID share fetching
         Err(anyhow::anyhow!(
-            "Incorrect encoding detected for namespace {} in block {}, but full proof generation requires VID share fetching",
+            "Incorrect encoding detected for namespace {} in block {}, but full proof generation \
+             requires VID share fetching",
             namespace_id,
             block_height
         ))
@@ -885,7 +1090,8 @@ where
         + super::data_source::StateCertDataSource
         + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
         + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
-        + Send + Sync,
+        + Send
+        + Sync,
 {
     async fn get_state_certificate(&self, epoch: u64) -> anyhow::Result<Self::StateCertificate> {
         use std::time::Duration;
@@ -893,27 +1099,22 @@ where
         let ds = &*self.data_source;
 
         // Try to get from local storage first
-        let state_cert = ds
-            .get_state_cert_by_epoch(epoch)
-            .await?;
+        let state_cert = ds.get_state_cert_by_epoch(epoch).await?;
 
         let cert = match state_cert {
             Some(cert) => cert,
             None => {
                 // Not found locally, try to fetch from peers
                 const TIMEOUT: Duration = Duration::from_secs(40);
-                let cert = ds
-                    .request_state_cert(epoch, TIMEOUT)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e))?;
+                let cert = ds.request_state_cert(epoch, TIMEOUT).await.map_err(|e| {
+                    anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
+                })?;
 
                 // Store the fetched certificate
-                ds
-                    .insert_state_cert(epoch, cert.clone())
-                    .await?;
+                ds.insert_state_cert(epoch, cert.clone()).await?;
 
                 cert
-            }
+            },
         };
 
         Ok(espresso_types::StateCertQueryDataV2(cert))
@@ -923,8 +1124,7 @@ where
         use hotshot_types::data::EpochNumber;
 
         let ds = &*self.data_source;
-        ds.get_stake_table(Some(EpochNumber::new(epoch)))
-            .await
+        ds.get_stake_table(Some(EpochNumber::new(epoch))).await
     }
 }
 
@@ -942,7 +1142,8 @@ where
         + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
         + super::data_source::StateCertDataSource
         + super::data_source::StateCertFetchingDataSource<espresso_types::SeqTypes>
-        + Send + Sync,
+        + Send
+        + Sync,
 {
     type NamespaceProofQueryData = espresso_types::NamespaceProofQueryData;
     type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
@@ -955,8 +1156,8 @@ where
         namespace: u32,
     ) -> anyhow::Result<Option<Self::NamespaceProofQueryData>> {
         use espresso_types::NamespaceId;
-        use hotshot_query_service::availability::BlockId as HsBlockId;
         use futures::join;
+        use hotshot_query_service::availability::BlockId as HsBlockId;
 
         let ns_id = NamespaceId::from(namespace);
 
@@ -964,12 +1165,14 @@ where
         let hs_block_id = match block_id {
             espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
             espresso_api::v1::availability::BlockId::Hash(h) => {
-                let hash = h.parse()
+                let hash = h
+                    .parse()
                     .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
                 HsBlockId::Hash(hash)
             },
             espresso_api::v1::availability::BlockId::PayloadHash(h) => {
-                let payload_hash = h.parse()
+                let payload_hash = h
+                    .parse()
                     .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
                 HsBlockId::PayloadHash(payload_hash)
             },
@@ -978,10 +1181,8 @@ where
         // Fetch block and VID common data
         let ds = &*self.data_source;
         let timeout = std::time::Duration::from_millis(500);
-        let (block_fetch, vid_fetch) = join!(
-            ds.get_block(hs_block_id),
-            ds.get_vid_common(hs_block_id)
-        );
+        let (block_fetch, vid_fetch) =
+            join!(ds.get_block(hs_block_id), ds.get_vid_common(hs_block_id));
         let (block, vid_common) = join!(
             block_fetch.with_timeout(timeout),
             vid_fetch.with_timeout(timeout)
@@ -1030,22 +1231,31 @@ where
 
         // Validate range
         if until <= from {
-            return Err(anyhow::anyhow!("invalid range: until ({}) must be greater than from ({})", until, from));
+            return Err(anyhow::anyhow!(
+                "invalid range: until ({}) must be greater than from ({})",
+                until,
+                from
+            ));
         }
 
         let range_size = until - from;
         const MAX_RANGE: u64 = 100;
         if range_size > MAX_RANGE {
-            return Err(anyhow::anyhow!("range too large: {} blocks (max {})", range_size, MAX_RANGE));
+            return Err(anyhow::anyhow!(
+                "range too large: {} blocks (max {})",
+                range_size,
+                MAX_RANGE
+            ));
         }
 
         // Fetch blocks and VID common data for the range
-        use futures::join;
-        use futures::stream::StreamExt;
+        use futures::{join, stream::StreamExt};
 
         let (blocks_stream, vids_stream) = join!(
-            self.data_source.get_block_range(from as usize..until as usize),
-            self.data_source.get_vid_common_range(from as usize..until as usize)
+            self.data_source
+                .get_block_range(from as usize..until as usize),
+            self.data_source
+                .get_vid_common_range(from as usize..until as usize)
         );
 
         let blocks: Vec<_> = blocks_stream
@@ -1058,7 +1268,9 @@ where
             .await;
 
         if blocks.len() != vids.len() {
-            return Err(anyhow::anyhow!("mismatch between blocks and VID common data"));
+            return Err(anyhow::anyhow!(
+                "mismatch between blocks and VID common data"
+            ));
         }
 
         // Generate proofs for each block
@@ -1101,8 +1313,8 @@ where
         namespace: u32,
     ) -> anyhow::Result<Self::IncorrectEncodingProof> {
         use espresso_types::{NamespaceId, NsProof};
-        use hotshot_query_service::availability::BlockId as HsBlockId;
         use futures::join;
+        use hotshot_query_service::availability::BlockId as HsBlockId;
 
         let ns_id = NamespaceId::from(namespace);
 
@@ -1110,12 +1322,14 @@ where
         let hs_block_id = match block_id {
             espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
             espresso_api::v1::availability::BlockId::Hash(h) => {
-                let hash = h.parse()
+                let hash = h
+                    .parse()
                     .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
                 HsBlockId::Hash(hash)
             },
             espresso_api::v1::availability::BlockId::PayloadHash(h) => {
-                let payload_hash = h.parse()
+                let payload_hash = h
+                    .parse()
                     .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
                 HsBlockId::PayloadHash(payload_hash)
             },
@@ -1124,19 +1338,15 @@ where
         // Fetch block and VID common data
         let ds = &*self.data_source;
         let timeout = std::time::Duration::from_millis(500);
-        let (block_fetch, vid_fetch) = join!(
-            ds.get_block(hs_block_id),
-            ds.get_vid_common(hs_block_id)
-        );
+        let (block_fetch, vid_fetch) =
+            join!(ds.get_block(hs_block_id), ds.get_vid_common(hs_block_id));
         let (block, vid_common) = join!(
             block_fetch.with_timeout(timeout),
             vid_fetch.with_timeout(timeout)
         );
 
-        let block = block
-            .ok_or_else(|| anyhow::anyhow!("block not found"))?;
-        let vid_common = vid_common
-            .ok_or_else(|| anyhow::anyhow!("VID common data not found"))?;
+        let block = block.ok_or_else(|| anyhow::anyhow!("block not found"))?;
+        let vid_common = vid_common.ok_or_else(|| anyhow::anyhow!("VID common data not found"))?;
 
         // For incorrect encoding proof, we need special handling
         // Note: Full incorrect encoding proof support with VID share fetching
@@ -1144,7 +1354,8 @@ where
         // if the basic proof generation fails.
 
         let ns_table = block.payload().ns_table();
-        let ns_index = ns_table.find_ns_id(&ns_id)
+        let ns_index = ns_table
+            .find_ns_id(&ns_id)
             .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block", namespace))?;
 
         // Try to generate a normal proof first
@@ -1155,7 +1366,8 @@ where
         // If normal proof generation failed, it indicates incorrect encoding
         // but we can't generate the full incorrect encoding proof without VID share fetching
         Err(anyhow::anyhow!(
-            "Incorrect encoding detected for namespace {} but full proof generation requires VID share fetching",
+            "Incorrect encoding detected for namespace {} but full proof generation requires VID \
+             share fetching",
             namespace
         ))
     }
@@ -1164,10 +1376,7 @@ where
         use std::time::Duration;
 
         // Try to get from local storage first
-        let state_cert = self
-            .data_source
-            .get_state_cert_by_epoch(epoch)
-            .await?;
+        let state_cert = self.data_source.get_state_cert_by_epoch(epoch).await?;
 
         let cert = match state_cert {
             Some(cert) => cert,
@@ -1178,7 +1387,9 @@ where
                     .data_source
                     .request_state_cert(epoch, TIMEOUT)
                     .await
-                    .map_err(|e| anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e))?;
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
+                    })?;
 
                 // Store the fetched certificate
                 self.data_source
@@ -1186,20 +1397,19 @@ where
                     .await?;
 
                 cert
-            }
+            },
         };
 
-        Ok(espresso_types::StateCertQueryDataV1::from(espresso_types::StateCertQueryDataV2(cert)))
+        Ok(espresso_types::StateCertQueryDataV1::from(
+            espresso_types::StateCertQueryDataV2(cert),
+        ))
     }
 
     async fn get_state_cert_v2(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV2> {
         use std::time::Duration;
 
         // Try to get from local storage first
-        let state_cert = self
-            .data_source
-            .get_state_cert_by_epoch(epoch)
-            .await?;
+        let state_cert = self.data_source.get_state_cert_by_epoch(epoch).await?;
 
         let cert = match state_cert {
             Some(cert) => cert,
@@ -1210,7 +1420,9 @@ where
                     .data_source
                     .request_state_cert(epoch, TIMEOUT)
                     .await
-                    .map_err(|e| anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e))?;
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to fetch state cert for epoch {}: {}", epoch, e)
+                    })?;
 
                 // Store the fetched certificate
                 self.data_source
@@ -1218,7 +1430,7 @@ where
                     .await?;
 
                 cert
-            }
+            },
         };
 
         Ok(espresso_types::StateCertQueryDataV2(cert))
