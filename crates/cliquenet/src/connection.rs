@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use minicbor::encode::write::Cursor;
 use rand::RngExt;
 use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
 use tokio::{
@@ -228,9 +229,14 @@ impl Connection {
 
     /// Send a `Hello` frame.
     pub async fn send_hello(&mut self, h: Hello) -> Result<()> {
-        let mut b = vec![0; 1024];
-        let v = minicbor::to_vec(h).map_err(io::Error::other)?;
-        let n = self.state.write_message(&v, &mut b[Header::SIZE..])?;
+        let mut buf = [0u8; 256];
+        let (a, b) = buf.split_at_mut(128);
+        let n = {
+            let mut c = Cursor::new(&mut *a);
+            minicbor::encode(h, &mut c).map_err(io::Error::other)?;
+            c.position()
+        };
+        let n = self.state.write_message(&a[..n], &mut b[Header::SIZE..])?;
         let h = Header::data(n as u16);
         send_frame(&mut self.stream, h, &mut b[..Header::SIZE + n]).await?;
         Ok(())
@@ -238,10 +244,10 @@ impl Connection {
 
     /// Read a `Hello` frame.
     pub async fn recv_hello(&mut self) -> Result<Hello> {
-        let mut v = Vec::new();
-        recv_frame(&mut self.stream, &mut v).await?;
-        let mut b = vec![0; v.len()];
-        let n = self.state.read_message(&v, &mut b)?;
+        let mut a = [0u8; 128];
+        let h = recv_frame(&mut self.stream, &mut a).await?;
+        let mut b = [0u8; 128];
+        let n = self.state.read_message(&a[..h.len().into()], &mut b)?;
         let h = minicbor::decode(&b[..n]).map_err(io::Error::other)?;
         Ok(h)
     }
@@ -254,28 +260,28 @@ fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
 
 /// Perform a noise handshake as initiator with the remote party.
 async fn handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<TransportState> {
-    let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
-    let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
+    let mut a = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
+    let n = hs.write_message(&[], &mut a[Header::SIZE..])?;
     let h = Header::data(n as u16);
-    send_frame(stream, h, &mut b[..Header::SIZE + n]).await?;
-    let mut m = Vec::new();
-    let h = recv_frame(stream, &mut m).await?;
+    send_frame(stream, h, &mut a[..Header::SIZE + n]).await?;
+    let mut b = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
+    let h = recv_frame(stream, &mut b).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    hs.read_message(&m, &mut b)?;
+    hs.read_message(&b[..h.len().into()], &mut a)?;
     Ok(hs.into_transport_mode()?)
 }
 
 /// Perform a noise handshake as responder with a remote party.
 async fn on_handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<TransportState> {
-    let mut m = Vec::new();
-    let h = recv_frame(stream, &mut m).await?;
+    let mut a = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
+    let h = recv_frame(stream, &mut a).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
-    hs.read_message(&m, &mut b)?;
+    let mut b = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
+    hs.read_message(&a[..h.len().into()], &mut b)?;
     let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
     let h = Header::data(n as u16);
     send_frame(stream, h, &mut b[..Header::SIZE + n]).await?;
@@ -283,7 +289,7 @@ async fn on_handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<
 }
 
 /// Read a single frame (header + payload) from the remote.
-pub async fn recv_frame<R>(stream: &mut R, buf: &mut Vec<u8>) -> io::Result<Header>
+pub async fn recv_frame<R, const N: usize>(stream: &mut R, buf: &mut [u8; N]) -> io::Result<Header>
 where
     R: AsyncReadExt + Unpin,
 {
@@ -291,8 +297,11 @@ where
         let n = stream.read_u32().await?;
         Header::unvalidated(n)
     };
-    buf.resize(h.len().into(), 0);
-    stream.read_exact(buf).await?;
+    let n = h.len().into();
+    if n > N {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    stream.read_exact(&mut buf[..n]).await?;
     Ok(h)
 }
 
