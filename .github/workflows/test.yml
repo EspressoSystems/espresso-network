@@ -486,7 +486,12 @@ jobs:
 
       - name: Render summary
         run: |
-          args=(junit-artifacts --title "Nextest (postgres + sqlite + integration)" --pr-comment-out junit-artifacts/pr-comment.md)
+          args=(
+            junit-artifacts
+            --title "Nextest (postgres + sqlite + integration)"
+            --pr-comment-out junit-artifacts/pr-comment.md
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          )
           if [ -s main-test-stats.json ]; then
             args+=(--main-stats main-test-stats.json)
           fi

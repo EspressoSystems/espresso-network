@@ -211,13 +211,19 @@ def build_summary(title: str, cases: list[TestCase], runs: list[dict] | None) ->
     return "\n".join(out) + "\n"
 
 
-def build_pr_comment(failing: list[TestCase], runs: list[dict] | None) -> str:
+def build_pr_comment(
+    failing: list[TestCase], runs: list[dict] | None, run_url: str | None
+) -> str:
     if not failing:
         return ""
-    lines = [f"### Nextest failures ({len(failing)})", ""]
+    heading = f"### Nextest failures ({len(failing)})"
+    if run_url:
+        heading = f"{heading} in [this run]({run_url})"
+    lines = [heading, ""]
     lines.extend(render_failure_table(failing, runs))
     lines.append("")
-    lines.append("See the job step summary for flaky tests and slowest tests.")
+    summary_target = f"[step summary]({run_url})" if run_url else "job step summary"
+    lines.append(f"See the {summary_target} for flaky tests and slowest tests.")
     return "\n".join(lines) + "\n"
 
 
@@ -313,7 +319,9 @@ def cmd_report(args: argparse.Namespace) -> int:
     # sticky PR comment. Skip writing it when there are no failures so the hash
     # is empty and the comment is cleaned up automatically.
     if args.pr_comment_out is not None and failing:
-        args.pr_comment_out.write_text(build_pr_comment(failing, runs))
+        args.pr_comment_out.write_text(
+            build_pr_comment(failing, runs, args.run_url)
+        )
     return 0
 
 
@@ -457,6 +465,10 @@ def main() -> int:
         "--main-stats",
         type=Path,
         help="main-branch stats JSON from stats-fetch; enables the history column",
+    )
+    report.add_argument(
+        "--run-url",
+        help="URL of the current workflow run; linked from the PR comment",
     )
     report.set_defaults(func=cmd_report)
 
