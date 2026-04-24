@@ -29,11 +29,8 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
-    simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
-    simple_vote::{
-        QuorumVote2, TimeoutData2, TimeoutVote2, ViewSyncFinalizeData2, ViewSyncFinalizeVote2,
-        Vote2Data,
-    },
+    simple_certificate::TimeoutCertificate2,
+    simple_vote::{QuorumVote2, TimeoutData2, TimeoutVote2, Vote2Data},
     traits::{
         EncodeBytes,
         block_contents::{BlockHeader, BuilderFee},
@@ -74,7 +71,6 @@ pub struct TestView {
     pub cert1: Certificate1<TestTypes>,
     pub cert2: Certificate2<TestTypes>,
     pub timeout_cert: TimeoutCertificate2<TestTypes>,
-    pub view_sync_cert: ViewSyncFinalizeCertificate2<TestTypes>,
 }
 
 impl TestView {
@@ -394,14 +390,6 @@ impl TestData {
                 leader_private_key,
             )
             .await;
-            let view_sync_cert = build_view_sync_cert(
-                view_number,
-                epoch,
-                &epoch_membership,
-                &leader_public_key,
-                leader_private_key,
-            )
-            .await;
 
             views.push(TestView {
                 view_number,
@@ -414,7 +402,6 @@ impl TestData {
                 cert1,
                 cert2,
                 timeout_cert,
-                view_sync_cert,
             });
         }
         Self { views }
@@ -840,34 +827,6 @@ async fn build_timeout_cert(
         epoch: Some(epoch),
     };
     build_cert::<TestTypes, TimeoutData2, TimeoutVote2<TestTypes>, TimeoutCertificate2<TestTypes>>(
-        data,
-        epoch_membership,
-        view_number,
-        public_key,
-        private_key,
-        &upgrade_lock::<TestTypes>(),
-    )
-    .await
-}
-
-async fn build_view_sync_cert(
-    view_number: ViewNumber,
-    epoch: EpochNumber,
-    epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
-    public_key: &BLSPubKey,
-    private_key: &BLSPrivKey,
-) -> ViewSyncFinalizeCertificate2<TestTypes> {
-    let data = ViewSyncFinalizeData2 {
-        relay: 0,
-        round: view_number,
-        epoch: Some(epoch),
-    };
-    build_cert::<
-        TestTypes,
-        ViewSyncFinalizeData2,
-        ViewSyncFinalizeVote2<TestTypes>,
-        ViewSyncFinalizeCertificate2<TestTypes>,
-    >(
         data,
         epoch_membership,
         view_number,

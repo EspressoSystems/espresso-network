@@ -481,7 +481,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                 }
                 None
             },
-            MessageType::ViewSync(_) => todo!(),
             MessageType::External(data) => {
                 // Forward to the membership's external channel so the
                 // `Leaf2Fetcher` inside `Membership::get_epoch_root` sees

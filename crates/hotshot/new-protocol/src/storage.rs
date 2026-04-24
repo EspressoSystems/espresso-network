@@ -4,7 +4,7 @@ use hotshot::{traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     data::{
         DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare, VidDisperseShare2, ViewNumber,
+        VidDisperseShare, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
     },
     message::Proposal as SignedProposal,
     traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
@@ -108,7 +108,9 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
                     justify_qc: proposal.justify_qc,
                     next_epoch_justify_qc: None,
                     upgrade_certificate: proposal.upgrade_certificate,
-                    view_change_evidence: proposal.view_change_evidence,
+                    view_change_evidence: proposal
+                        .view_change_evidence
+                        .map(ViewChangeEvidence2::Timeout),
                     next_drb_result: proposal.next_drb_result,
                     state_cert: proposal.state_cert,
                 },
