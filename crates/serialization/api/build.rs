@@ -5,6 +5,9 @@ const EXAMPLE_ETH_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
 const EXAMPLE_HEIGHT: u64 = 1000000;
 const EXAMPLE_OFFSET: u64 = 0;
 const EXAMPLE_LIMIT: u64 = 100;
+const EXAMPLE_NAMESPACE_ID: u32 = 10001;
+const EXAMPLE_EPOCH: u64 = 100;
+const EXAMPLE_BLOCK_RANGE_LAST: u64 = 1000100;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("proto");
@@ -47,6 +50,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .field_attribute(
             "GetRewardMerkleTreeRequest.height",
             format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
+        )
+        // Data API examples
+        .field_attribute(
+            "GetNamespaceProofRequest.namespace_id",
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_NAMESPACE_ID),
+        )
+        .field_attribute(
+            "GetNamespaceProofRequest.block",
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
+        )
+        .field_attribute(
+            "GetNamespaceProofRequest.first",
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
+        )
+        .field_attribute(
+            "GetNamespaceProofRequest.last",
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_BLOCK_RANGE_LAST),
+        )
+        .field_attribute(
+            "GetIncorrectEncodingProofRequest.namespace_id",
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_NAMESPACE_ID),
+        )
+        .field_attribute(
+            "GetIncorrectEncodingProofRequest.block_height",
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
+        )
+        // Consensus API examples
+        .field_attribute(
+            "GetStateCertificateRequest.epoch",
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_EPOCH),
+        )
+        .field_attribute(
+            "GetStakeTableRequest.epoch",
+            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_EPOCH),
         )
         .out_dir(&out_dir)
         .compile_protos(

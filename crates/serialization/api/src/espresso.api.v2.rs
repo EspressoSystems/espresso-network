@@ -394,15 +394,19 @@ pub mod ns_proof {
 pub struct GetNamespaceProofRequest {
     /// Namespace ID
     #[prost(uint32, tag = "1")]
+    #[schemars(example = "10001")]
     pub namespace_id: u32,
     /// Single block query
     #[prost(uint64, optional, tag = "2")]
+    #[schemars(example = "1000000")]
     pub block: ::core::option::Option<u64>,
     /// Range query - first block (inclusive)
     #[prost(uint64, optional, tag = "3")]
+    #[schemars(example = "1000000")]
     pub first: ::core::option::Option<u64>,
     /// Range query - last block (inclusive)
     #[prost(uint64, optional, tag = "4")]
+    #[schemars(example = "1000100")]
     pub last: ::core::option::Option<u64>,
 }
 /// Single block namespace proof response
@@ -450,9 +454,11 @@ pub mod get_namespace_proof_response {
 pub struct GetIncorrectEncodingProofRequest {
     /// Namespace ID
     #[prost(uint32, tag = "1")]
+    #[schemars(example = "10001")]
     pub namespace_id: u32,
     /// Block height
     #[prost(uint64, tag = "2")]
+    #[schemars(example = "1000000")]
     pub block_height: u64,
 }
 /// Incorrect encoding proof response
@@ -528,6 +534,7 @@ pub struct LightClientStateUpdateCertificateV2 {
 pub struct GetStateCertificateRequest {
     /// Epoch number
     #[prost(uint64, tag = "1")]
+    #[schemars(example = "100")]
     pub epoch: u64,
 }
 /// State certificate response
@@ -544,6 +551,7 @@ pub struct StateCertificateResponse {
 pub struct GetStakeTableRequest {
     /// Epoch number
     #[prost(uint64, tag = "1")]
+    #[schemars(example = "100")]
     pub epoch: u64,
 }
 /// Stake table response
