@@ -231,7 +231,8 @@ impl v2::DataApi for TestApi {
             namespace_id,
             block_height
         );
-        Ok((vec![0xaa, 0xbb, 0xcc], vec![0x11, 0x22, 0x33]))
+        // Return (transactions as Vec<Vec<u8>>, optional proof)
+        Ok((vec![vec![0xaa, 0xbb, 0xcc]], Some(vec![0x11, 0x22, 0x33])))
     }
 
     async fn get_namespace_proof_range(
@@ -247,8 +248,8 @@ impl v2::DataApi for TestApi {
             until
         );
         Ok(vec![
-            (vec![0xaa, 0xbb], vec![0x11, 0x22]),
-            (vec![0xcc, 0xdd], vec![0x33, 0x44]),
+            (vec![vec![0xaa, 0xbb]], Some(vec![0x11, 0x22])),
+            (vec![vec![0xcc, 0xdd]], Some(vec![0x33, 0x44])),
         ])
     }
 
@@ -276,7 +277,11 @@ impl v2::ConsensusApi for TestApi {
 
     async fn get_stake_table(&self, epoch: u64) -> Result<Self::StakeTable> {
         tracing::info!("v2: get_stake_table(epoch={})", epoch);
-        Ok(vec![0x05, 0x06, 0x07, 0x08])
+        // Return Vec<Vec<u8>> - each entry represents a peer
+        Ok(vec![
+            vec![0x05, 0x06, 0x07, 0x08],
+            vec![0x09, 0x0a, 0x0b, 0x0c],
+        ])
     }
 }
 
@@ -290,12 +295,17 @@ impl ApiSerializations for TestApi {
     type RewardMerkleTreeData = Vec<u8>;
 
     // Data API types
-    type NamespaceProof = (Vec<u8>, Vec<u8>); // (transactions, proof)
+    type NamespaceProof = (Vec<Vec<u8>>, Option<Vec<u8>>); // (transactions, proof)
     type IncorrectEncodingProof = Vec<u8>;
 
     // Consensus API types
     type StateCertificate = Vec<u8>;
-    type StakeTable = Vec<u8>;
+    type StakeTable = Vec<Vec<u8>>;
+
+    // Helper conversion types (dummy types for test)
+    type PeerConfig = Vec<u8>;
+    type LightClientCert = Vec<u8>;
+    type NsProof = Vec<u8>;
 
     fn deserialize_address(&self, s: &str) -> Result<Self::Address> {
         // Simple validation: must start with 0x and be hex
@@ -389,10 +399,25 @@ impl ApiSerializations for TestApi {
         &self,
         value: &Self::NamespaceProof,
     ) -> Result<serialization_api::v2::NamespaceProofResponse> {
-        let (transactions, proof) = value;
+        let (transactions, proof_bytes) = value;
+
+        // Convert proof bytes to NsProof if present
+        let proof = proof_bytes.as_ref().map(|bytes| {
+            // Create a dummy NsProof for testing
+            serialization_api::v2::NsProof {
+                proof_version: Some(serialization_api::v2::ns_proof::ProofVersion::V0(
+                    serialization_api::v2::AdvzNsProof {
+                        namespace_id: 0,
+                        ns_payload: vec![],
+                        ns_proof: Some(bytes.clone()),
+                    },
+                )),
+            }
+        });
+
         Ok(serialization_api::v2::NamespaceProofResponse {
             transactions: transactions.clone(),
-            proof: proof.clone(),
+            proof,
         })
     }
 
@@ -401,7 +426,9 @@ impl ApiSerializations for TestApi {
         value: &Self::IncorrectEncodingProof,
     ) -> Result<serialization_api::v2::IncorrectEncodingProofResponse> {
         Ok(serialization_api::v2::IncorrectEncodingProofResponse {
-            proof: value.clone(),
+            proof: Some(serialization_api::v2::AvidMIncorrectEncodingNsProof {
+                proof_data: value.clone(),
+            }),
         })
     }
 
@@ -412,7 +439,13 @@ impl ApiSerializations for TestApi {
         value: &Self::StateCertificate,
     ) -> Result<serialization_api::v2::StateCertificateResponse> {
         Ok(serialization_api::v2::StateCertificateResponse {
-            certificate: value.clone(),
+            certificate: Some(serialization_api::v2::LightClientStateUpdateCertificateV2 {
+                epoch: 0,
+                light_client_state: None,
+                next_stake_table_state: None,
+                signatures: vec![],
+                auth_root: value.clone(),
+            }),
         })
     }
 
@@ -420,8 +453,58 @@ impl ApiSerializations for TestApi {
         &self,
         value: &Self::StakeTable,
     ) -> Result<serialization_api::v2::StakeTableResponse> {
-        Ok(serialization_api::v2::StakeTableResponse {
-            stake_table: value.clone(),
+        // Convert each entry to a PeerConfig
+        let peers = value
+            .iter()
+            .map(|peer_bytes| serialization_api::v2::PeerConfig {
+                stake_table_entry: Some(serialization_api::v2::StakeTableEntry {
+                    stake_key: Some(serialization_api::v2::BlsPublicKey {
+                        key: peer_bytes.clone(),
+                    }),
+                    stake_amount: "1000000".to_string(),
+                }),
+                state_ver_key: Some(serialization_api::v2::SchnorrPublicKey {
+                    key: peer_bytes.clone(),
+                }),
+                connect_info: None,
+            })
+            .collect();
+
+        Ok(serialization_api::v2::StakeTableResponse { peers })
+    }
+
+    // Helper conversion methods (dummy implementations for test)
+
+    fn convert_peer_config(
+        &self,
+        _peer: &Self::PeerConfig,
+    ) -> Result<serialization_api::v2::PeerConfig> {
+        Ok(serialization_api::v2::PeerConfig {
+            stake_table_entry: None,
+            state_ver_key: None,
+            connect_info: None,
+        })
+    }
+
+    fn convert_light_client_cert(
+        &self,
+        _cert: &Self::LightClientCert,
+    ) -> Result<serialization_api::v2::LightClientStateUpdateCertificateV2> {
+        Ok(serialization_api::v2::LightClientStateUpdateCertificateV2 {
+            epoch: 0,
+            light_client_state: None,
+            next_stake_table_state: None,
+            signatures: vec![],
+            auth_root: vec![],
+        })
+    }
+
+    fn convert_ns_proof(
+        &self,
+        _proof: &Self::NsProof,
+    ) -> Result<serialization_api::v2::NsProof> {
+        Ok(serialization_api::v2::NsProof {
+            proof_version: None,
         })
     }
 }

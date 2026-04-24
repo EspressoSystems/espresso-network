@@ -46,22 +46,20 @@ message NsProof {
 // Namespace Proof Queries
 //=============================================================================
 
-// Block range for range queries (both ends inclusive)
-message BlockRange {
-  uint64 first = 1;  // First block (inclusive)
-  uint64 last = 2;   // Last block (inclusive)
-}
-
 // Request to get namespace proof(s)
+// Either specify 'block' for a single block, or 'first' and 'last' for a range
 message GetNamespaceProofRequest {
   // Namespace ID
   uint32 namespace_id = 1;
 
-  // Query type - either single block or range
-  oneof query {
-    uint64 block_height = 2;  // Single block query
-    BlockRange range = 3;      // Range query
-  }
+  // Single block query
+  optional uint64 block = 2;
+
+  // Range query - first block (inclusive)
+  optional uint64 first = 3;
+
+  // Range query - last block (inclusive)
+  optional uint64 last = 4;
 }
 
 // Single block namespace proof response

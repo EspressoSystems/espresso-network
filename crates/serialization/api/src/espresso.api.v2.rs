@@ -164,7 +164,6 @@ pub struct RewardAccountProofV2 {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RewardMerkleProofV2 {
     #[prost(oneof = "reward_merkle_proof_v2::ProofType", tags = "1, 2")]
-    #[serde(flatten)]
     pub proof_type: ::core::option::Option<reward_merkle_proof_v2::ProofType>,
 }
 /// Nested message and enum types in `RewardMerkleProofV2`.
@@ -194,7 +193,6 @@ pub struct MerkleProof {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MerkleNode {
     #[prost(oneof = "merkle_node::NodeType", tags = "1, 2, 3, 4")]
-    #[serde(flatten)]
     pub node_type: ::core::option::Option<merkle_node::NodeType>,
 }
 /// Nested message and enum types in `MerkleNode`.
@@ -389,41 +387,23 @@ pub mod ns_proof {
         V2(super::AvidmGf2NsProof),
     }
 }
-/// Block range for range queries (both ends inclusive)
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct BlockRange {
-    /// First block (inclusive)
-    #[prost(uint64, tag = "1")]
-    pub first: u64,
-    /// Last block (inclusive)
-    #[prost(uint64, tag = "2")]
-    pub last: u64,
-}
 /// Request to get namespace proof(s)
+/// Either specify 'block' for a single block, or 'first' and 'last' for a range
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetNamespaceProofRequest {
     /// Namespace ID
     #[prost(uint32, tag = "1")]
     pub namespace_id: u32,
-    /// Query type - either single block or range
-    #[prost(oneof = "get_namespace_proof_request::Query", tags = "2, 3")]
-    pub query: ::core::option::Option<get_namespace_proof_request::Query>,
-}
-/// Nested message and enum types in `GetNamespaceProofRequest`.
-pub mod get_namespace_proof_request {
-    /// Query type - either single block or range
-    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Query {
-        /// Single block query
-        #[prost(uint64, tag = "2")]
-        BlockHeight(u64),
-        /// Range query
-        #[prost(message, tag = "3")]
-        Range(super::BlockRange),
-    }
+    /// Single block query
+    #[prost(uint64, optional, tag = "2")]
+    pub block: ::core::option::Option<u64>,
+    /// Range query - first block (inclusive)
+    #[prost(uint64, optional, tag = "3")]
+    pub first: ::core::option::Option<u64>,
+    /// Range query - last block (inclusive)
+    #[prost(uint64, optional, tag = "4")]
+    pub last: ::core::option::Option<u64>,
 }
 /// Single block namespace proof response
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]

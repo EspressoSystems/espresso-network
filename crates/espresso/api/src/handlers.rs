@@ -116,17 +116,12 @@ pub async fn get_namespace_proof<S>(
 where
     S: DataApi,
 {
-    use get_namespace_proof_request::Query;
     use get_namespace_proof_response::Response;
 
-    let query = request
-        .query
-        .ok_or_else(|| ApiError::BadRequest(anyhow::anyhow!("query field is required")))?;
-
-    match query {
-        Query::BlockHeight(block_height) => {
+    match (request.block, request.first, request.last) {
+        (Some(block), None, None) => {
             let result = state
-                .get_namespace_proof(request.namespace_id, block_height)
+                .get_namespace_proof(request.namespace_id, block)
                 .await
                 .map_err(ApiError::Internal)?;
 
@@ -138,10 +133,11 @@ where
                 response: Some(Response::Single(serialized)),
             })
         }
-        Query::Range(range) => {
+        (None, Some(first), Some(last)) => {
             // Range is inclusive on both ends (first and last)
+            // Internal API expects exclusive end, so add 1
             let proofs = state
-                .get_namespace_proof_range(request.namespace_id, range.first, range.last + 1)
+                .get_namespace_proof_range(request.namespace_id, first, last + 1)
                 .await
                 .map_err(ApiError::Internal)?;
 
@@ -157,6 +153,9 @@ where
                 })),
             })
         }
+        _ => Err(ApiError::BadRequest(anyhow::anyhow!(
+            "Must specify either 'block' or both 'first' and 'last' query parameters"
+        ))),
     }
 }
 

@@ -17,9 +17,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ".",
             "#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]",
         )
-        // Flatten oneof fields to remove wrapper in JSON serialization
-        .field_attribute("RewardMerkleProofV2.proof_type", "#[serde(flatten)]")
-        .field_attribute("MerkleNode.node_type", "#[serde(flatten)]")
         // Skip Empty's dummy field so it serializes as {}
         .field_attribute("Empty.dummy", "#[serde(skip)]")
         // Add OpenAPI examples for path parameters

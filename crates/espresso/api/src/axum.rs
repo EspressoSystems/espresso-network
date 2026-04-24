@@ -21,10 +21,10 @@ use axum::{
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
-    get_namespace_proof_request, BlockRange, GetIncorrectEncodingProofRequest,
-    GetNamespaceProofRequest, GetNamespaceProofResponse, GetRewardAccountProofRequest,
-    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
-    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
+    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetNamespaceProofResponse,
+    GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
+    GetRewardClaimInputRequest, GetRewardMerkleTreeRequest, GetStakeTableRequest,
+    GetStateCertificateRequest,
 };
 
 use crate::{error::ApiError, handlers, v1, v2};
@@ -126,68 +126,20 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
     }
 }
 
-#[derive(serde::Deserialize, schemars::JsonSchema)]
-struct NamespaceProofQuery {
-    /// Single block query
-    #[serde(default)]
-    block: Option<u64>,
-    /// Range query - first block (inclusive)
-    #[serde(default)]
-    first: Option<u64>,
-    /// Range query - last block (inclusive)
-    #[serde(default)]
-    last: Option<u64>,
-}
-
-#[derive(serde::Deserialize, schemars::JsonSchema)]
-struct NamespaceIdPath {
-    namespace_id: u32,
-}
-
 async fn get_namespace_proof<S: v2::DataApi>(
     State(state): State<S>,
-    Path(path): Path<NamespaceIdPath>,
-    SendQuery(query): SendQuery<NamespaceProofQuery>,
+    SendQuery(query): SendQuery<GetNamespaceProofRequest>,
 ) -> Result<Json<GetNamespaceProofResponse>, ApiError> {
-    let proto_query = match (query.block, query.first, query.last) {
-        (Some(block), None, None) => {
-            Some(get_namespace_proof_request::Query::BlockHeight(block))
-        }
-        (None, Some(first), Some(last)) => Some(get_namespace_proof_request::Query::Range(
-            BlockRange { first, last },
-        )),
-        _ => {
-            return Err(ApiError::BadRequest(anyhow::anyhow!(
-                "Must specify either 'block' or both 'first' and 'last' query parameters"
-            )))
-        }
-    };
-
-    let request = GetNamespaceProofRequest {
-        namespace_id: path.namespace_id,
-        query: proto_query,
-    };
-
-    handlers::get_namespace_proof(&state, request)
+    handlers::get_namespace_proof(&state, query)
         .await
         .map(Json)
 }
 
-#[derive(serde::Deserialize, schemars::JsonSchema)]
-struct IncorrectEncodingProofQuery {
-    block: u64,
-}
-
 async fn get_incorrect_encoding_proof<S: v2::DataApi>(
     State(state): State<S>,
-    Path(path): Path<NamespaceIdPath>,
-    SendQuery(query): SendQuery<IncorrectEncodingProofQuery>,
+    SendQuery(query): SendQuery<GetIncorrectEncodingProofRequest>,
 ) -> Result<Json<serialization_api::v2::IncorrectEncodingProofResponse>, ApiError> {
-    let request = GetIncorrectEncodingProofRequest {
-        namespace_id: path.namespace_id,
-        block_height: query.block,
-    };
-    handlers::get_incorrect_encoding_proof(&state, request)
+    handlers::get_incorrect_encoding_proof(&state, query)
         .await
         .map(Json)
 }
