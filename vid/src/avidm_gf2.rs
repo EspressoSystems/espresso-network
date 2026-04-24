@@ -343,7 +343,7 @@ impl VidScheme for AvidmGf2Scheme {
             }
 
             let result = decoder.decode()?;
-			for (i, shard) in input_orig.iter().enumerate().take(original_count) {
+            for (i, shard) in input_orig.iter().enumerate().take(original_count) {
                 let shard: &[u8] = match shard {
                     Some(data) => data,
                     None => result.restored_original(i).ok_or_else(|| {
