@@ -331,9 +331,9 @@ impl<T: NodeType> Consensus<T> {
         // When new epoch data arrives (DRB result or epoch change), retry
         // any pending certificates that were deferred because their epoch
         // membership wasn't available yet.
-        if drb_epoch.is_some() || !self.pending_certs1.is_empty() || !self.pending_certs2.is_empty()
-        {
+        if drb_epoch.is_some() {
             self.retry_pending_certs(outbox).await;
+        }
         }
     }
 
