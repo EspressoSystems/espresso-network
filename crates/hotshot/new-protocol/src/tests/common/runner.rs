@@ -9,7 +9,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
 use tokio::{
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{self, UnboundedSender},
     task::JoinHandle,
     time::timeout,
 };
@@ -151,6 +151,17 @@ enum NodeEvent {
     TimedOut(ViewNumber),
 }
 
+/// Event with its originating node index and generation.
+///
+/// The generation is bumped each time a node is restarted so that events
+/// queued by the aborted task can be distinguished from events produced by
+/// the fresh task.
+struct TaggedEvent {
+    idx: usize,
+    generation: u64,
+    event: NodeEvent,
+}
+
 impl TestRunner {
     /// Compute the set of nodes that should be offline at test start.
     ///
@@ -211,8 +222,8 @@ impl TestRunner {
         let (network_state, networks) = N::create(self.num_nodes, &initially_down).await;
 
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
-        let mut output_channels: Vec<Option<UnboundedReceiver<NodeEvent>>> =
-            Vec::with_capacity(self.num_nodes);
+        let mut generations: Vec<u64> = vec![0; self.num_nodes];
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TaggedEvent>();
         let mut currently_down = initially_down;
 
         // Spawn one coordinator task per live node.  Each node gets its
@@ -220,12 +231,8 @@ impl TestRunner {
         for (i, network) in networks.into_iter().enumerate() {
             let Some(network) = network else {
                 node_handles.push(None);
-                output_channels.push(None);
                 continue;
             };
-
-            let (output_tx, output_rx) = mpsc::unbounded_channel();
-            output_channels.push(Some(output_rx));
 
             let (membership, storage) = network_state
                 .create_membership(i, self.num_nodes, self.epoch_height)
@@ -240,7 +247,9 @@ impl TestRunner {
             )
             .await;
 
-            node_handles.push(Some(tokio::spawn(run_node(coord, output_tx))));
+            let tx = event_tx.clone();
+            let generation = generations[i];
+            node_handles.push(Some(tokio::spawn(run_node(coord, tx, i, generation))));
         }
 
         // Build pending changes sorted by view.
@@ -296,7 +305,6 @@ impl TestRunner {
                                 network_state.shutdown_node(change.idx).await;
                                 // Create a fresh coordinator from genesis.
                                 let net = network_state.create_node(change.idx).await;
-                                let (tx, rx) = mpsc::unbounded_channel();
                                 let (membership, storage) = network_state
                                     .create_membership(
                                         change.idx,
@@ -313,8 +321,13 @@ impl TestRunner {
                                     self.view_timeout,
                                 )
                                 .await;
-                                node_handles[change.idx] = Some(tokio::spawn(run_node(coord, tx)));
-                                output_channels[change.idx] = Some(rx);
+                                // Bump the generation so stale events queued
+                                // by the aborted task are ignored.
+                                generations[change.idx] += 1;
+                                let tx = event_tx.clone();
+                                let generation = generations[change.idx];
+                                node_handles[change.idx] =
+                                    Some(tokio::spawn(run_node(coord, tx, change.idx, generation)));
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
                             },
@@ -323,7 +336,7 @@ impl TestRunner {
                             //         handle.abort();
                             //     }
                             //     network_state.shutdown_node(change.idx).await;
-                            //     output_channels[change.idx] = None;
+                            //     generations[change.idx] += 1;
                             //     currently_down.insert(change.idx);
                             // },
                         }
@@ -331,30 +344,31 @@ impl TestRunner {
                 }
             }
 
-            // Collect events from each live node.
-            for (idx, rx_opt) in output_channels.iter_mut().enumerate() {
-                let Some(rx) = rx_opt else { continue };
-                if node_commits[idx].len() >= self.target_decisions {
-                    continue;
-                }
-                if let Ok(Some(event)) = timeout(remaining, rx.recv()).await {
-                    match event {
-                        NodeEvent::Decided(commits) => {
-                            if let Some(&max_v) = commits.keys().last() {
-                                let v: u64 = *max_v;
-                                if v > max_decided_view {
-                                    max_decided_view = v;
-                                }
-                            }
-                            node_commits[idx] = commits;
-                        },
-                        NodeEvent::TimedOut(view) => {
-                            node_timeouts[idx].insert(view);
-                        },
+            // Get the next event from any node, rather than polling each
+            // node in sequence.  Stale events (from tasks aborted by a
+            // restart) are filtered out via the generation counter.
+            let Ok(Some(tagged)) = timeout(remaining, event_rx.recv()).await else {
+                return Err(TestError::Timeout);
+            };
+            if tagged.generation != generations[tagged.idx] {
+                continue;
+            }
+            if node_commits[tagged.idx].len() >= self.target_decisions {
+                continue;
+            }
+            match tagged.event {
+                NodeEvent::Decided(commits) => {
+                    if let Some(&max_v) = commits.keys().last() {
+                        let v: u64 = *max_v;
+                        if v > max_decided_view {
+                            max_decided_view = v;
+                        }
                     }
-                } else {
-                    return Err(TestError::Timeout);
-                }
+                    node_commits[tagged.idx] = commits;
+                },
+                NodeEvent::TimedOut(view) => {
+                    node_timeouts[tagged.idx].insert(view);
+                },
             }
         }
 
@@ -440,13 +454,25 @@ impl TestRunner {
 }
 
 /// Event loop for a single node.  Processes coordinator inputs, collects
-/// decided leaf commits, and forwards them to the test runner.
+/// decided leaf commits, and forwards them to the test runner.  All events
+/// are tagged with the node's index and generation so the runner can
+/// multiplex a single receive channel across every node and drop events
+/// from tasks that have been superseded by a restart.
 async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
     mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
-    output_tx: UnboundedSender<NodeEvent>,
+    output_tx: UnboundedSender<TaggedEvent>,
+    idx: usize,
+    generation: u64,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
+    let send = |event: NodeEvent| {
+        let _ = output_tx.send(TaggedEvent {
+            idx,
+            generation,
+            event,
+        });
+    };
 
     loop {
         match coord.next_consensus_input().await {
@@ -470,11 +496,11 @@ async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
                         );
                     }
                 }
-                let _ = output_tx.send(NodeEvent::Decided(commits.clone()));
+                send(NodeEvent::Decided(commits.clone()));
             } else if let ConsensusOutput::SendTimeoutVote(vote, _) = &output {
                 let view = vote.view_number();
                 debug!(node = %coord.node_id(), %view, "timeout vote");
-                let _ = output_tx.send(NodeEvent::TimedOut(view));
+                send(NodeEvent::TimedOut(view));
             } else if let ConsensusOutput::ViewChanged(view, epoch) = &output
                 && *view > last_view
             {
