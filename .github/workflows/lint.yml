@@ -37,7 +37,7 @@ jobs:
     name: rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
@@ -50,7 +50,7 @@ jobs:
     name: clippy (postgres)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -69,7 +69,7 @@ jobs:
       name: clippy (embedded-db)
       runs-on: ubuntu-latest
       steps:
-        - uses: actions/checkout@v4
+        - uses: actions/checkout@v6
 
         - name: Install protoc
           run: sudo apt-get update && sudo apt-get install -y protobuf-compiler

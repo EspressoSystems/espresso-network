@@ -4,6 +4,11 @@ slow-timeout = { period = "2m", terminate-after = 3 }
 default-filter = 'not (deps(hotshot-testing) | package(tests) | package(slow-tests) | package(espresso-dev-node))'
 retries = 2
 
+[profile.default.junit]
+path = "junit.xml"
+store-failure-output = true
+report-name = "nextest"
+
 [[profile.default.overrides]]
 # These tests are fast if they work (usually about 150ms) but sometimes they
 # hang, especially when running Concurrently with other tests. Kill after a
@@ -45,6 +50,11 @@ default-filter = 'deps(hotshot-testing)'
 final-status-level = "flaky"
 threads-required = "num-test-threads"
 
+[profile.hotshot.junit]
+path = "junit.xml"
+store-failure-output = true
+report-name = "nextest"
+
 # cross_tests! macro tests: use binary() not test(), because the macro names the
 # binary after the file but the test function is always the base test name.
 #
@@ -82,6 +92,11 @@ retries = 2
 slow-timeout = "2m"
 default-filter = 'package(tests)'
 retries = 2
+
+[profile.integration.junit]
+path = "junit.xml"
+store-failure-output = true
+report-name = "nextest"
 
 # Serial required
 # TRY 3 FAIL [   2.790s] hotshot-testing::tests_4 tests_4::test_marketplace::test_builders_down::testtypes_::memoryimpl_::test_builders_down
