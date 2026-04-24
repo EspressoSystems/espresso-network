@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use jf_merkle_tree::MerkleTreeScheme;
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::{AvidmGf2Commit, AvidmGf2Share};
@@ -169,12 +170,20 @@ impl NsAvidmGf2Scheme {
         {
             return Err(VidError::InvalidShare);
         }
-        for (commit, content) in common.ns_commits.iter().zip(share.0.iter()) {
-            if AvidmGf2Scheme::verify_share(&common.param, commit, content)?.is_err() {
-                return Ok(Err(()));
-            }
+        // Per-namespace verifications are independent. `find_any` short-
+        // circuits on the first failing namespace and avoids allocating an
+        // intermediate `Vec<VerificationResult>`.
+        match common
+            .ns_commits
+            .par_iter()
+            .zip(share.0.par_iter())
+            .map(|(commit, content)| AvidmGf2Scheme::verify_share(&common.param, commit, content))
+            .find_any(|r| !matches!(r, Ok(Ok(()))))
+        {
+            None => Ok(Ok(())),
+            Some(Ok(v)) => Ok(v),
+            Some(Err(e)) => Err(e),
         }
-        Ok(Ok(()))
     }
 
     /// Verify a namespaced share
@@ -194,11 +203,14 @@ impl NsAvidmGf2Scheme {
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
         }
-        let mut result = vec![];
-        for ns_index in 0..common.ns_lens.len() {
-            result.append(&mut Self::ns_recover(common, ns_index, shares)?)
-        }
-        Ok(result)
+        // Each `ns_recover` is independent: distinct decoder state, distinct
+        // output bytes. Run them on the rayon pool so multi-namespace blocks
+        // actually use more than one core.
+        let per_ns: Vec<Vec<u8>> = (0..common.ns_lens.len())
+            .into_par_iter()
+            .map(|ns_index| Self::ns_recover(common, ns_index, shares))
+            .collect::<VidResult<Vec<_>>>()?;
+        Ok(per_ns.concat())
     }
 
     /// Recover the payload for a given namespace.

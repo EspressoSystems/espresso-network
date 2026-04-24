@@ -20,6 +20,7 @@ ark-poly = { workspace = true }
 ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 base64-bytes = { workspace = true }
+blake3 = { workspace = true, features = ["traits-preview"] }
 displaydoc = { workspace = true }
 jf-crhf = { workspace = true }
 jf-merkle-tree = { workspace = true }
@@ -43,6 +44,14 @@ harness = false
 
 [[bench]]
 name = "avidm_gf2"
+harness = false
+
+[[bench]]
+name = "avidm_gf2_ns"
+harness = false
+
+[[bench]]
+name = "avidm_gf2_breakdown"
 harness = false
 
 [lints]

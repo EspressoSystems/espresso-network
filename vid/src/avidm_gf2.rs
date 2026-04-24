@@ -18,9 +18,10 @@ pub mod namespaced;
 /// Namespace proofs for AvidmGf2 scheme
 pub mod proofs;
 
+pub(crate) type Hasher = blake3::Hasher;
 /// Merkle tree scheme used in the VID
 pub(crate) type MerkleTree =
-    jf_merkle_tree::hasher::HasherMerkleTree<sha3::Keccak256, HasherNode<sha3::Keccak256>>;
+    jf_merkle_tree::hasher::GenericHasherMerkleTree<Hasher, HasherNode<Hasher>, u64, 4>;
 type MerkleProof = <MerkleTree as MerkleTreeScheme>::MembershipProof;
 type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 
@@ -152,7 +153,7 @@ impl AvidmGf2Scheme {
         let shares = [original, recovery].concat();
         let share_digests: Vec<_> = shares
             .par_iter()
-            .map(|share| HasherNode::from(sha3::Keccak256::digest(share)))
+            .map(|share| HasherNode::from(Hasher::digest(share)))
             .collect();
         let mt = MerkleTree::from_elems(None, &share_digests)?;
         Ok((mt, shares))
@@ -224,21 +225,29 @@ impl VidScheme for AvidmGf2Scheme {
         if !share.validate() || share.range.is_empty() || share.range.end > param.total_weights {
             return Err(VidError::InvalidShare);
         }
-        for (i, index) in share.range.clone().enumerate() {
-            let payload_digest = HasherNode::from(sha3::Keccak256::digest(&share.payload[i]));
-            // TODO(Chengyu): switch to batch verification
-            if MerkleTree::verify(
-                commit.commit,
-                index as u64,
-                payload_digest,
-                &share.mt_proofs[i],
-            )?
-            .is_err()
-            {
-                return Ok(Err(()));
-            }
+        // Each (i, leaf, proof) triple is independent. `find_any` short-
+        // circuits on the first failing position and avoids allocating any
+        // intermediate collection.
+        let start = share.range.start;
+        let len = share.range.end - start;
+        match (0..len)
+            .into_par_iter()
+            .map(|i| -> VidResult<crate::VerificationResult> {
+                let payload_digest = HasherNode::from(Hasher::digest(&share.payload[i]));
+                MerkleTree::verify(
+                    commit.commit,
+                    (start + i) as u64,
+                    payload_digest,
+                    &share.mt_proofs[i],
+                )
+                .map_err(VidError::from)
+            })
+            .find_any(|r| !matches!(r, Ok(Ok(()))))
+        {
+            None => Ok(Ok(())),
+            Some(Ok(v)) => Ok(v),
+            Some(Err(e)) => Err(e),
         }
-        Ok(Ok(()))
     }
 
     fn recover(
@@ -254,18 +263,30 @@ impl VidScheme for AvidmGf2Scheme {
         };
         let shard_bytes = first_share.payload[0].len();
 
-        let mut original_shares: Vec<Option<Vec<u8>>> = vec![None; original_count];
+        // Track references to input original shards; avoids the per-shard
+        // `.clone()` the previous version did to populate a
+        // `Vec<Option<Vec<u8>>>`. Reconstructed shards come from the decoder
+        // and are copied directly into the output buffer below.
+        let mut input_orig: Vec<Option<&[u8]>> = vec![None; original_count];
+
+        let mut recovered: Vec<u8> = Vec::with_capacity(original_count * shard_bytes);
         if recovery_count == 0 {
-            // Edge case where there are no recovery shares
+            // Edge case where there are no recovery shares: every original must
+            // be supplied as input.
             for share in shares {
                 if !share.validate() || share.payload.iter().any(|p| p.len() != shard_bytes) {
                     return Err(VidError::InvalidShare);
                 }
                 for (i, index) in share.range.clone().enumerate() {
                     if index < original_count {
-                        original_shares[index] = Some(share.payload[i].clone());
+                        input_orig[index] = Some(&share.payload[i]);
                     }
                 }
+            }
+            for slot in &input_orig {
+                let shard = slot
+                    .ok_or_else(|| VidError::Internal(anyhow!("Failed to recover the payload.")))?;
+                recovered.extend_from_slice(shard);
             }
         } else {
             let mut decoder = reed_solomon_simd::ReedSolomonDecoder::new(
@@ -278,34 +299,27 @@ impl VidScheme for AvidmGf2Scheme {
                     return Err(VidError::InvalidShare);
                 }
                 for (i, index) in share.range.clone().enumerate() {
+                    let shard = &share.payload[i];
                     if index < original_count {
-                        original_shares[index] = Some(share.payload[i].clone());
-                        decoder.add_original_shard(index, &share.payload[i])?;
+                        input_orig[index] = Some(shard);
+                        decoder.add_original_shard(index, shard)?;
                     } else {
-                        decoder.add_recovery_shard(index - original_count, &share.payload[i])?;
+                        decoder.add_recovery_shard(index - original_count, shard)?;
                     }
                 }
             }
 
             let result = decoder.decode()?;
-            original_shares
-                .iter_mut()
-                .enumerate()
-                .for_each(|(i, share)| {
-                    if share.is_none() {
-                        *share = result.restored_original(i).map(|s| s.to_vec());
-                    }
-                });
+            for i in 0..original_count {
+                let shard: &[u8] = match input_orig[i] {
+                    Some(data) => data,
+                    None => result.restored_original(i).ok_or_else(|| {
+                        VidError::Internal(anyhow!("Failed to recover the payload."))
+                    })?,
+                };
+                recovered.extend_from_slice(shard);
+            }
         }
-        if original_shares.iter().any(|share| share.is_none()) {
-            return Err(VidError::Internal(anyhow!(
-                "Failed to recover the payload."
-            )));
-        }
-        let mut recovered: Vec<_> = original_shares
-            .into_iter()
-            .flat_map(|share| share.unwrap())
-            .collect();
         match recovered.iter().rposition(|&b| b != 0) {
             Some(pad_index) if recovered[pad_index] == 1u8 => {
                 recovered.truncate(pad_index);
