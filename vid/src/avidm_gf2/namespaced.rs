@@ -124,16 +124,27 @@ impl NsAvidmGf2Scheme {
         ns_table: impl IntoIterator<Item = Range<usize>>,
     ) -> VidResult<(NsAvidmGf2Commit, NsAvidmGf2Common, Vec<NsAvidmGf2Share>)> {
         let num_storage_nodes = distribution.len();
-        let mut ns_commits = vec![];
-        let mut disperses = vec![];
-        let mut ns_lens = vec![];
-        for ns_range in ns_table {
-            ns_lens.push(ns_range.len());
-            let (commit, shares) =
-                AvidmGf2Scheme::disperse(param, distribution, &payload[ns_range])?;
-            ns_commits.push(commit);
-            disperses.push(shares);
+        let ns_ranges: Vec<Range<usize>> = ns_table.into_iter().collect();
+        let ns_lens: Vec<usize> = ns_ranges.iter().map(|r| r.len()).collect();
+
+        // Per-namespace dispersals are independent; run them on rayon.
+        // Inner `AvidmGf2Scheme::disperse` also uses `par_iter` internally for
+        // leaf hashing and share assembly — rayon's work-stealing pool
+        // coordinates the nested parallelism.
+        let per_ns: Vec<(AvidmGf2Commit, Vec<AvidmGf2Share>)> = ns_ranges
+            .par_iter()
+            .map(|ns_range| {
+                AvidmGf2Scheme::disperse(param, distribution, &payload[ns_range.clone()])
+            })
+            .collect::<VidResult<Vec<_>>>()?;
+
+        let mut ns_commits = Vec::with_capacity(per_ns.len());
+        let mut disperses = Vec::with_capacity(per_ns.len());
+        for (c, s) in per_ns {
+            ns_commits.push(c);
+            disperses.push(s);
         }
+
         let common = NsAvidmGf2Common {
             param: param.clone(),
             ns_commits,

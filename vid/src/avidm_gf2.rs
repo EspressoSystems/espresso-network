@@ -116,16 +116,43 @@ impl AvidmGf2Scheme {
         AvidmGf2Param::new(recovery_threshold, total_weights)
     }
 
-    fn bit_padding(payload: &[u8], payload_len: usize) -> VidResult<Vec<u8>> {
-        if payload_len < payload.len() + 1 {
+    /// Build the `original_count` original shards directly from `payload`,
+    /// applying the AvidM-GF2 bit padding (one `0x01` byte at
+    /// `payload.len()` followed by zeros to fill the final shard).
+    ///
+    /// Writing the chunks straight out avoids allocating an intermediate
+    /// `shard_bytes * original_count`-byte buffer just to re-chunk it.
+    fn chunk_and_pad(
+        payload: &[u8],
+        shard_bytes: usize,
+        original_count: usize,
+    ) -> VidResult<Vec<Vec<u8>>> {
+        let padded_len = shard_bytes * original_count;
+        if padded_len < payload.len() + 1 {
             return Err(VidError::Argument(
                 "Payload length is too large to fit in the given payload length".to_string(),
             ));
         }
-        let mut padded = vec![0u8; payload_len];
-        padded[..payload.len()].copy_from_slice(payload);
-        padded[payload.len()] = 1u8;
-        Ok(padded)
+        let mut original: Vec<Vec<u8>> = Vec::with_capacity(original_count);
+        for i in 0..original_count {
+            let start = i * shard_bytes;
+            let mut chunk = vec![0u8; shard_bytes];
+            if start < payload.len() {
+                let end = ((i + 1) * shard_bytes).min(payload.len());
+                let take = end - start;
+                chunk[..take].copy_from_slice(&payload[start..end]);
+                if take < shard_bytes {
+                    // Pad byte falls inside this chunk.
+                    chunk[take] = 1u8;
+                }
+            } else if start == payload.len() {
+                // Payload ended exactly on a chunk boundary — pad byte is the
+                // first byte of this all-zero chunk.
+                chunk[0] = 1u8;
+            }
+            original.push(chunk);
+        }
+        Ok(original)
     }
 
     fn raw_disperse(
@@ -134,16 +161,11 @@ impl AvidmGf2Scheme {
     ) -> VidResult<(MerkleTree, Vec<Vec<u8>>)> {
         let original_count = param.recovery_threshold;
         let recovery_count = param.total_weights - param.recovery_threshold;
-        // Bit padding, we append an 1u8 to the end of the payload.
         let mut shard_bytes = (payload.len() + 1).div_ceil(original_count);
         if shard_bytes % 2 == 1 {
             shard_bytes += 1;
         }
-        let payload = Self::bit_padding(payload, shard_bytes * original_count)?;
-        let original = payload
-            .chunks(shard_bytes)
-            .map(|chunk| chunk.to_owned())
-            .collect::<Vec<_>>();
+        let original = Self::chunk_and_pad(payload, shard_bytes, original_count)?;
         let recovery = if recovery_count == 0 {
             vec![]
         } else {
@@ -198,13 +220,22 @@ impl VidScheme for AvidmGf2Scheme {
                 Some(prefix_sum..*sum)
             })
             .collect();
+        // Ranges partition `shares` in order. Consume the owned shares via a
+        // single iterator instead of `shares[range].to_vec()`, which
+        // heap-clones every Vec<u8> payload and is a large memcpy bill at
+        // high num_ns × total_weights.
+        let mut shares_iter = shares.into_iter();
+        let payloads: Vec<Vec<Vec<u8>>> = ranges
+            .iter()
+            .map(|range| shares_iter.by_ref().take(range.len()).collect())
+            .collect();
         let shares: Vec<_> = ranges
             .into_par_iter()
-            .map(|range| AvidmGf2Share {
-                range: range.clone(),
-                payload: shares[range.clone()].to_vec(),
+            .zip(payloads.into_par_iter())
+            .map(|(range, payload)| AvidmGf2Share {
                 // TODO(Chengyu): switch to batch proof generation
                 mt_proofs: range
+                    .clone()
                     .map(|k| {
                         mt.lookup(k as u64)
                             .expect_ok()
@@ -212,6 +243,8 @@ impl VidScheme for AvidmGf2Scheme {
                             .1
                     })
                     .collect::<Vec<_>>(),
+                range,
+                payload,
             })
             .collect();
         Ok((commit, shares))
