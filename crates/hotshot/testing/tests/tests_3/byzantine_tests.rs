@@ -2,22 +2,23 @@ use std::{collections::HashSet, rc::Rc, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot_example_types::{
-    node_types::{CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS},
+    node_types::{
+        CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS,
+    },
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
     byzantine::byzantine_behaviour::{
-        BadProposalViewDos, DishonestDa, DishonestLeader, DishonestVoter, DishonestVoting,
-        DoubleProposeVote, DishonestViewSyncRelay,
+        BadProposalViewDos, DishonestDa, DishonestLeader, DishonestViewSyncRelay,
+        DishonestViewSyncWrongEpoch, DishonestVoter, DishonestVoting, DoubleProposeVote,
     },
     completion_task::{CompletionTaskDescription, TimeBasedCompletionTaskDescription},
     overall_safety_task::OverallSafetyPropertiesDescription,
     test_builder::{Behaviour, TestDescription},
+    view_sync_task::ViewSyncTaskDescription,
 };
-use hotshot_testing::byzantine::byzantine_behaviour::DishonestViewSyncWrongEpoch;
-use hotshot_testing::view_sync_task::ViewSyncTaskDescription;
 use hotshot_types::{
     message::{GeneralConsensusMessage, MessageKind, SequencingMessage},
     traits::{election::Membership, network::TransmitType, node_implementation::NodeType},

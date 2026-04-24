@@ -30,18 +30,15 @@ use hotshot_testing::{
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
-    data::{null_block, EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber, null_block},
     simple_vote::UpgradeProposalData,
-    traits::{
-        election::Membership,
-        ValidatedState,
-    },
+    traits::{ValidatedState, election::Membership},
     utils::BuilderCommitment,
     vote::HasViewNumber,
 };
 use sha2::Digest;
-use versions::version;
 use vec1::vec1;
+use versions::version;
 
 const TIMEOUT: Duration = Duration::from_millis(35);
 
@@ -52,13 +49,12 @@ async fn test_upgrade_task_with_proposal() {
 
     use hotshot_testing::helpers::build_system_handle;
 
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(3).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(3).await;
 
     let other_handles = futures::future::join_all((0..=9).map(build_system_handle)).await;
 
-    let old_version = version(0,1);
-    let new_version = version(0,2);
+    let old_version = version(0, 1);
+    let new_version = version(0, 2);
 
     let upgrade_data: UpgradeProposalData = UpgradeProposalData {
         old_version,
@@ -127,11 +123,8 @@ async fn test_upgrade_task_with_proposal() {
 
     let genesis_cert = proposals[0].data.justify_qc().clone();
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
-    let builder_fee = null_block::builder_fee::<TestTypes>(
-        num_storage_nodes,
-        TEST_VERSIONS.test.base
-    )
-    .unwrap();
+    let builder_fee =
+        null_block::builder_fee::<TestTypes>(num_storage_nodes, TEST_VERSIONS.test.base).unwrap();
 
     let mut upgrade_votes = Vec::new();
 
@@ -158,19 +151,14 @@ async fn test_upgrade_task_with_proposal() {
         random![
             Qc2Formed(either::Left(genesis_cert.clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes>(
-                    &epoch_1_mem,
-                    ViewNumber::new(1),
-                    version_1,
-                )
-                .await,
+                build_payload_commitment::<TestTypes>(&epoch_1_mem, ViewNumber::new(1), version_1,)
+                    .await,
                 builder_commitment.clone(),
                 TestMetadata {
                     num_transactions: 0
                 },
                 ViewNumber::new(1),
                 vec1![builder_fee.clone()],
-
             ),
             VidDisperseSend(vid_dispersals[0].clone(), handle.public_key()),
         ],
@@ -178,17 +166,12 @@ async fn test_upgrade_task_with_proposal() {
             QuorumProposalPreliminarilyValidated(proposals[0].clone()),
             Qc2Formed(either::Left(proposals[1].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes>(
-                    &epoch_1_mem,
-                    ViewNumber::new(2),
-                    version_2,
-                )
-                .await,
+                build_payload_commitment::<TestTypes>(&epoch_1_mem, ViewNumber::new(2), version_2,)
+                    .await,
                 builder_commitment.clone(),
                 proposals[0].data.block_header().metadata,
                 ViewNumber::new(2),
                 vec1![builder_fee.clone()],
-
             ),
             VidDisperseSend(vid_dispersals[1].clone(), handle.public_key()),
         ],
@@ -197,17 +180,12 @@ async fn test_upgrade_task_with_proposal() {
             QuorumProposalPreliminarilyValidated(proposals[1].clone()),
             Qc2Formed(either::Left(proposals[2].data.justify_qc().clone())),
             SendPayloadCommitmentAndMetadata(
-                build_payload_commitment::<TestTypes>(
-                    &epoch_1_mem,
-                    ViewNumber::new(3),
-                    version_3,
-                )
-                .await,
+                build_payload_commitment::<TestTypes>(&epoch_1_mem, ViewNumber::new(3), version_3,)
+                    .await,
                 builder_commitment.clone(),
                 proposals[1].data.block_header().metadata,
                 ViewNumber::new(3),
                 vec1![builder_fee.clone()],
-
             ),
             VidDisperseSend(vid_dispersals[2].clone(), handle.public_key()),
         ],

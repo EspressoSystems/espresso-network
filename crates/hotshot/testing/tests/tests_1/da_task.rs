@@ -4,7 +4,10 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{sync::{Arc, atomic::Ordering}, time::Duration};
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
 
 use futures::StreamExt;
 use hotshot::tasks::task_state::CreateTaskState;
@@ -22,16 +25,14 @@ use hotshot_testing::{
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
-    data::{null_block, PackedBundle, ViewNumber},
+    data::{PackedBundle, ViewNumber, null_block},
     simple_vote::DaData2,
 };
 use versions::VERSION_0_0;
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_da_task() {
-
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     let membership = handle.hotshot.membership_coordinator.clone();
     let default_version = VERSION_0_0;
@@ -111,12 +112,10 @@ async fn test_da_task() {
                 },
                 ViewNumber::new(2),
                 None,
-                vec1::vec1![null_block::builder_fee::<TestTypes>(
-                    num_storage_node,
-                    TEST_VERSIONS.test.base
-                )
-                .unwrap()],
-
+                vec1::vec1![
+                    null_block::builder_fee::<TestTypes>(num_storage_node, TEST_VERSIONS.test.base)
+                        .unwrap()
+                ],
             )),
         ],
         serial![DaProposalRecv(proposals[1].clone(), leaders[1])],
@@ -143,12 +142,13 @@ async fn test_da_task() {
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn test_da_task_storage_failure() {
-
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(2).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(2).await;
 
     // Set the error flag here for the system handle. This causes it to emit an error on append.
-    handle.storage().should_return_err.store( true, Ordering::Relaxed);
+    handle
+        .storage()
+        .should_return_err
+        .store(true, Ordering::Relaxed);
     let membership = handle.hotshot.membership_coordinator.clone();
     let default_version = VERSION_0_0;
 
@@ -227,12 +227,10 @@ async fn test_da_task_storage_failure() {
                 },
                 ViewNumber::new(2),
                 None,
-                vec1::vec1![null_block::builder_fee::<TestTypes>(
-                    num_storage_node,
-                    TEST_VERSIONS.test.base
-                )
-                .unwrap()],
-
+                vec1::vec1![
+                    null_block::builder_fee::<TestTypes>(num_storage_node, TEST_VERSIONS.test.base)
+                        .unwrap()
+                ],
             ),)
         ],
         serial![DaProposalRecv(proposals[1].clone(), leaders[1])],

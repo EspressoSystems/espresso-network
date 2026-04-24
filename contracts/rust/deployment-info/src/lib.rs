@@ -205,7 +205,7 @@ mod tests {
         addresses::{DeploymentAddresses, KnownAddresses},
         contracts::{
             AccessControlDeployment, CollectedDeployment, ContractType, DeploymentInfo,
-            DeploymentQuerier, OwnableDeployment, TimelockDeployment,
+            DeploymentQuerier, OwnableDeployment, RoleHolder, TimelockDeployment,
         },
     };
 
@@ -410,14 +410,40 @@ mod tests {
         );
 
         // Test timelocks
+        let deployer_holder = RoleHolder {
+            address: deployer_address,
+            name: "test_multisig".to_string(),
+        };
+        let mut ops_default_admins = vec![
+            RoleHolder {
+                address: ops_timelock_addr,
+                name: "ops_timelock".to_string(),
+            },
+            deployer_holder.clone(),
+        ];
+        ops_default_admins.sort_by_key(|h| h.address);
+
         let ops_tl = querier.query_timelock(ops_timelock_addr).await?;
         assert_eq!(
             ops_tl,
             TimelockDeployment::Deployed {
                 address: ops_timelock_addr,
                 min_delay: ops_delay,
+                proposers: vec![deployer_holder.clone()],
+                executors: vec![deployer_holder.clone()],
+                cancellers: vec![deployer_holder.clone()],
+                default_admins: ops_default_admins,
             }
         );
+
+        let mut safe_default_admins = vec![
+            RoleHolder {
+                address: safe_exit_timelock_addr,
+                name: "safe_exit_timelock".to_string(),
+            },
+            deployer_holder.clone(),
+        ];
+        safe_default_admins.sort_by_key(|h| h.address);
 
         let safe_tl = querier.query_timelock(safe_exit_timelock_addr).await?;
         assert_eq!(
@@ -425,6 +451,10 @@ mod tests {
             TimelockDeployment::Deployed {
                 address: safe_exit_timelock_addr,
                 min_delay: safe_exit_delay,
+                proposers: vec![deployer_holder.clone()],
+                executors: vec![deployer_holder.clone()],
+                cancellers: vec![deployer_holder.clone()],
+                default_admins: safe_default_admins,
             }
         );
 
@@ -461,8 +491,12 @@ mod tests {
         let info = DeploymentInfo::for_test();
         let table = info.to_markdown_table();
 
-        assert!(table.contains("| Timelock | Address | Min Delay |"));
+        assert!(table.contains(
+            "| Timelock | Address | Min Delay | Proposers | Executors | Cancellers | Default \
+             admins |",
+        ));
         assert!(table.contains("| ops_timelock |"));
+        assert!(table.contains("espresso_labs"));
         assert!(table.contains("| safe_exit_timelock | Not deployed |"));
     }
 

@@ -435,7 +435,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 }
                 None
             },
-            MessageType::ViewSync(_) => todo!(),
             MessageType::External(data) => {
                 self.coordinator_outbox
                     .push_back(CoordinatorOutput::ExternalMessageReceived {
