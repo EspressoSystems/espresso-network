@@ -473,9 +473,7 @@ impl ApiSerializations for TestApi {
         Ok(serialization_api::v2::StakeTableResponse { peers })
     }
 
-    // Helper conversion methods (dummy implementations for test)
-
-    fn convert_peer_config(
+    fn serialize_peer_config(
         &self,
         _peer: &Self::PeerConfig,
     ) -> Result<serialization_api::v2::PeerConfig> {
@@ -486,7 +484,7 @@ impl ApiSerializations for TestApi {
         })
     }
 
-    fn convert_light_client_cert(
+    fn serialize_light_client_cert(
         &self,
         _cert: &Self::LightClientCert,
     ) -> Result<serialization_api::v2::LightClientStateUpdateCertificateV2> {
@@ -499,7 +497,7 @@ impl ApiSerializations for TestApi {
         })
     }
 
-    fn convert_ns_proof(
+    fn serialize_ns_proof(
         &self,
         _proof: &Self::NsProof,
     ) -> Result<serialization_api::v2::NsProof> {

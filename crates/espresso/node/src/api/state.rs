@@ -274,11 +274,10 @@ where
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("failed to serialize transactions: {}", e))?;
 
-        // Convert proof to proto structure
         let proof = value
             .proof
             .as_ref()
-            .map(|p| self.convert_ns_proof(p))
+            .map(|p| self.serialize_ns_proof(p))
             .transpose()?;
 
         Ok(serialization_api::v2::NamespaceProofResponse {
@@ -305,7 +304,7 @@ where
         &self,
         value: &Self::StateCertificate,
     ) -> anyhow::Result<serialization_api::v2::StateCertificateResponse> {
-        let certificate = self.convert_light_client_cert(&value.0)?;
+        let certificate = self.serialize_light_client_cert(&value.0)?;
 
         Ok(serialization_api::v2::StateCertificateResponse {
             certificate: Some(certificate),
@@ -318,15 +317,13 @@ where
     ) -> anyhow::Result<serialization_api::v2::StakeTableResponse> {
         let peers: Result<Vec<_>, _> = value
             .iter()
-            .map(|peer| self.convert_peer_config(peer))
+            .map(|peer| self.serialize_peer_config(peer))
             .collect();
 
         Ok(serialization_api::v2::StakeTableResponse { peers: peers? })
     }
 
-    // Helper conversion methods
-
-    fn convert_peer_config(
+    fn serialize_peer_config(
         &self,
         peer: &Self::PeerConfig,
     ) -> anyhow::Result<serialization_api::v2::PeerConfig> {
@@ -373,7 +370,7 @@ where
         })
     }
 
-    fn convert_light_client_cert(
+    fn serialize_light_client_cert(
         &self,
         cert: &Self::LightClientCert,
     ) -> anyhow::Result<serialization_api::v2::LightClientStateUpdateCertificateV2> {
@@ -439,7 +436,7 @@ where
         })
     }
 
-    fn convert_ns_proof(
+    fn serialize_ns_proof(
         &self,
         proof: &Self::NsProof,
     ) -> anyhow::Result<serialization_api::v2::NsProof> {
