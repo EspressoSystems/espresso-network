@@ -181,6 +181,7 @@ where
         }
         self.accumulators = keep;
         self.membership_cache = self.membership_cache.split_off(&epoch);
+        self.pending_votes.retain(|v| v.view_number() >= view);
     }
 }
 
