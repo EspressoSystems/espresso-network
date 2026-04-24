@@ -21,10 +21,10 @@ use axum::{
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
-    GetIncorrectEncodingProofRequest, GetNamespaceProofRangeRequest, GetNamespaceProofRequest,
-    GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
-    GetRewardClaimInputRequest, GetRewardMerkleTreeRequest, GetStakeTableRequest,
-    GetStateCertificateRequest,
+    get_namespace_proof_request, BlockRange, GetIncorrectEncodingProofRequest,
+    GetNamespaceProofRequest, GetNamespaceProofResponse, GetRewardAccountProofRequest,
+    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
+    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 
 use crate::{error::ApiError, handlers, v1, v2};
@@ -128,12 +128,15 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct NamespaceProofQuery {
+    /// Single block query
     #[serde(default)]
     block: Option<u64>,
+    /// Range query - first block (inclusive)
     #[serde(default)]
-    from: Option<u64>,
+    first: Option<u64>,
+    /// Range query - last block (inclusive)
     #[serde(default)]
-    to: Option<u64>,
+    last: Option<u64>,
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
@@ -141,40 +144,33 @@ struct NamespaceIdPath {
     namespace_id: u32,
 }
 
-#[derive(serde::Serialize, schemars::JsonSchema)]
-#[serde(untagged)]
-enum NamespaceProofResponseUnion {
-    Single(serialization_api::v2::NamespaceProofResponse),
-    Range(serialization_api::v2::NamespaceProofRangeResponse),
-}
-
 async fn get_namespace_proof<S: v2::DataApi>(
     State(state): State<S>,
     Path(path): Path<NamespaceIdPath>,
     SendQuery(query): SendQuery<NamespaceProofQuery>,
-) -> Result<Json<NamespaceProofResponseUnion>, ApiError> {
-    match (query.block, query.from, query.to) {
+) -> Result<Json<GetNamespaceProofResponse>, ApiError> {
+    let proto_query = match (query.block, query.first, query.last) {
         (Some(block), None, None) => {
-            let request = GetNamespaceProofRequest {
-                namespace_id: path.namespace_id,
-                block_height: block,
-            };
-            let response = handlers::get_namespace_proof(&state, request).await?;
-            Ok(Json(NamespaceProofResponseUnion::Single(response)))
-        },
-        (None, Some(from), Some(to)) => {
-            let request = GetNamespaceProofRangeRequest {
-                namespace_id: path.namespace_id,
-                from,
-                until: to,
-            };
-            let response = handlers::get_namespace_proof_range(&state, request).await?;
-            Ok(Json(NamespaceProofResponseUnion::Range(response)))
-        },
-        _ => Err(ApiError::BadRequest(anyhow::anyhow!(
-            "Must specify either 'block' or both 'from' and 'to' query parameters"
-        ))),
-    }
+            Some(get_namespace_proof_request::Query::BlockHeight(block))
+        }
+        (None, Some(first), Some(last)) => Some(get_namespace_proof_request::Query::Range(
+            BlockRange { first, last },
+        )),
+        _ => {
+            return Err(ApiError::BadRequest(anyhow::anyhow!(
+                "Must specify either 'block' or both 'first' and 'last' query parameters"
+            )))
+        }
+    };
+
+    let request = GetNamespaceProofRequest {
+        namespace_id: path.namespace_id,
+        query: proto_query,
+    };
+
+    handlers::get_namespace_proof(&state, request)
+        .await
+        .map(Json)
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]

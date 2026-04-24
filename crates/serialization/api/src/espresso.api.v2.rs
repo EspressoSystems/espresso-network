@@ -389,32 +389,43 @@ pub mod ns_proof {
         V2(super::AvidmGf2NsProof),
     }
 }
-/// Request to get namespace proof for a single block
+/// Block range for range queries (both ends inclusive)
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BlockRange {
+    /// First block (inclusive)
+    #[prost(uint64, tag = "1")]
+    pub first: u64,
+    /// Last block (inclusive)
+    #[prost(uint64, tag = "2")]
+    pub last: u64,
+}
+/// Request to get namespace proof(s)
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetNamespaceProofRequest {
     /// Namespace ID
     #[prost(uint32, tag = "1")]
     pub namespace_id: u32,
-    /// Block height
-    #[prost(uint64, tag = "2")]
-    pub block_height: u64,
+    /// Query type - either single block or range
+    #[prost(oneof = "get_namespace_proof_request::Query", tags = "2, 3")]
+    pub query: ::core::option::Option<get_namespace_proof_request::Query>,
 }
-/// Request to get namespace proofs for a range of blocks
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetNamespaceProofRangeRequest {
-    /// Namespace ID
-    #[prost(uint32, tag = "1")]
-    pub namespace_id: u32,
-    /// Starting block height (inclusive)
-    #[prost(uint64, tag = "2")]
-    pub from: u64,
-    /// Ending block height (exclusive)
-    #[prost(uint64, tag = "3")]
-    pub until: u64,
+/// Nested message and enum types in `GetNamespaceProofRequest`.
+pub mod get_namespace_proof_request {
+    /// Query type - either single block or range
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Query {
+        /// Single block query
+        #[prost(uint64, tag = "2")]
+        BlockHeight(u64),
+        /// Range query
+        #[prost(message, tag = "3")]
+        Range(super::BlockRange),
+    }
 }
-/// Namespace proof response containing transactions and proof
+/// Single block namespace proof response
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NamespaceProofResponse {
@@ -432,6 +443,26 @@ pub struct NamespaceProofRangeResponse {
     /// Proofs for each block in the range
     #[prost(message, repeated, tag = "1")]
     pub proofs: ::prost::alloc::vec::Vec<NamespaceProofResponse>,
+}
+/// Unified response for namespace proof queries
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetNamespaceProofResponse {
+    #[prost(oneof = "get_namespace_proof_response::Response", tags = "1, 2")]
+    pub response: ::core::option::Option<get_namespace_proof_response::Response>,
+}
+/// Nested message and enum types in `GetNamespaceProofResponse`.
+pub mod get_namespace_proof_response {
+    #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Response {
+        /// Single block response
+        #[prost(message, tag = "1")]
+        Single(super::NamespaceProofResponse),
+        /// Range response
+        #[prost(message, tag = "2")]
+        Range(super::NamespaceProofRangeResponse),
+    }
 }
 /// Request to get incorrect encoding proof
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]

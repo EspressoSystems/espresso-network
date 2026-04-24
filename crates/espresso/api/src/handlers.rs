@@ -112,41 +112,52 @@ where
 pub async fn get_namespace_proof<S>(
     state: &S,
     request: GetNamespaceProofRequest,
-) -> Result<NamespaceProofResponse, ApiError>
+) -> Result<GetNamespaceProofResponse, ApiError>
 where
     S: DataApi,
 {
-    let result = state
-        .get_namespace_proof(request.namespace_id, request.block_height)
-        .await
-        .map_err(ApiError::Internal)?;
+    use get_namespace_proof_request::Query;
+    use get_namespace_proof_response::Response;
 
-    state
-        .serialize_namespace_proof(&result)
-        .map_err(ApiError::Internal)
-}
+    let query = request
+        .query
+        .ok_or_else(|| ApiError::BadRequest(anyhow::anyhow!("query field is required")))?;
 
-pub async fn get_namespace_proof_range<S>(
-    state: &S,
-    request: GetNamespaceProofRangeRequest,
-) -> Result<NamespaceProofRangeResponse, ApiError>
-where
-    S: DataApi,
-{
-    let proofs = state
-        .get_namespace_proof_range(request.namespace_id, request.from, request.until)
-        .await
-        .map_err(ApiError::Internal)?;
+    match query {
+        Query::BlockHeight(block_height) => {
+            let result = state
+                .get_namespace_proof(request.namespace_id, block_height)
+                .await
+                .map_err(ApiError::Internal)?;
 
-    let serialized_proofs = proofs
-        .iter()
-        .map(|proof| state.serialize_namespace_proof(proof))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(ApiError::Internal)?;
+            let serialized = state
+                .serialize_namespace_proof(&result)
+                .map_err(ApiError::Internal)?;
 
-    Ok(NamespaceProofRangeResponse {
-        proofs: serialized_proofs,
-    })
+            Ok(GetNamespaceProofResponse {
+                response: Some(Response::Single(serialized)),
+            })
+        }
+        Query::Range(range) => {
+            // Range is inclusive on both ends (first and last)
+            let proofs = state
+                .get_namespace_proof_range(request.namespace_id, range.first, range.last + 1)
+                .await
+                .map_err(ApiError::Internal)?;
+
+            let serialized_proofs = proofs
+                .iter()
+                .map(|proof| state.serialize_namespace_proof(proof))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(ApiError::Internal)?;
+
+            Ok(GetNamespaceProofResponse {
+                response: Some(Response::Range(NamespaceProofRangeResponse {
+                    proofs: serialized_proofs,
+                })),
+            })
+        }
+    }
 }
 
 pub async fn get_incorrect_encoding_proof<S>(
