@@ -289,7 +289,7 @@ async fn on_handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<
 }
 
 /// Read a single frame (header + payload) from the remote.
-pub async fn recv_frame<R, const N: usize>(stream: &mut R, buf: &mut [u8; N]) -> io::Result<Header>
+async fn recv_frame<R, const N: usize>(stream: &mut R, buf: &mut [u8; N]) -> io::Result<Header>
 where
     R: AsyncReadExt + Unpin,
 {
@@ -309,7 +309,7 @@ where
 ///
 /// The header is serialised into the first 4 bytes of `msg`. It is the
 /// caller's responsibility to ensure there is room at the beginning.
-pub async fn send_frame<W>(stream: &mut W, hdr: Header, msg: &mut [u8]) -> io::Result<()>
+async fn send_frame<W>(stream: &mut W, hdr: Header, msg: &mut [u8]) -> io::Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {
