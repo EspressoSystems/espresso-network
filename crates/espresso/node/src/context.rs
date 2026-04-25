@@ -147,6 +147,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             .initializer(&initializer)
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
+            .state_private_key(validator_config.state_private_key.clone())
+            .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .make();
 

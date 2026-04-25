@@ -1,8 +1,28 @@
 //! Helpers and test mocks for Light Client logic
 
-use alloy::primitives::U256;
+use std::collections::HashMap;
+
+use alloy::{
+    primitives::{FixedBytes, U256},
+    sol_types::SolValue,
+};
 use ark_ff::PrimeField;
-use hotshot_types::light_client::{GenericLightClientState, GenericStakeTableState};
+use hotshot_types::{
+    data::ViewNumber,
+    epoch_membership::EpochMembershipCoordinator,
+    light_client::{
+        CircuitField, GenericLightClientState, GenericStakeTableState, LightClientState,
+        StakeTableState,
+    },
+    message::UpgradeLock,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_vote::HasEpoch,
+    traits::{
+        node_implementation::NodeType,
+        signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, StakeTableEntryType},
+    },
+};
+use hotshot_utils::anytrace::*;
 use rand::Rng;
 
 use crate::{
@@ -115,4 +135,99 @@ impl<F: PrimeField> From<GenericStakeTableState<F>> for StakeTableStateSol {
             threshold: field_to_u256(v.threshold),
         }
     }
+}
+
+/// Derive the signed state digest used for LCV3 light-client signatures:
+/// `keccak256(abi.encodePacked(abi.encode(state) || abi.encode(stake) || abi.encode(auth_root)))`,
+/// converted to a `CircuitField`.
+pub fn derive_signed_state_digest(
+    lc_state: &LightClientState,
+    next_stake_state: &StakeTableState,
+    auth_root: &FixedBytes<32>,
+) -> CircuitField {
+    let lc_state_sol: LightClientStateSol = (*lc_state).into();
+    let stake_st_sol: StakeTableStateSol = (*next_stake_state).into();
+
+    let res = alloy::primitives::keccak256(
+        (
+            lc_state_sol.abi_encode(),
+            stake_st_sol.abi_encode(),
+            auth_root.abi_encode(),
+        )
+            .abi_encode_packed(),
+    );
+    CircuitField::from_be_bytes_mod_order(res.as_ref())
+}
+
+/// Validates a light client state update certificate:
+/// - every signer is in the voting stake table for the cert's epoch
+/// - each signature is valid (LCV2 always; LCV3 once post-DrbAndHeaderUpgrade)
+/// - the accumulated stake of signers meets the success threshold
+pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
+    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
+    membership_coordinator: &EpochMembershipCoordinator<TYPES>,
+    upgrade_lock: &UpgradeLock<TYPES>,
+) -> Result<()> {
+    tracing::debug!("Validating light client state update certificate");
+
+    let epoch_membership = membership_coordinator
+        .membership_for_epoch(state_cert.epoch())
+        .await?;
+
+    let membership_stake_table = epoch_membership.stake_table().await;
+    let membership_success_threshold = epoch_membership.success_threshold().await;
+
+    let mut state_key_map = HashMap::new();
+    membership_stake_table.into_iter().for_each(|config| {
+        state_key_map.insert(
+            config.state_ver_key.clone(),
+            config.stake_table_entry.stake(),
+        );
+    });
+
+    let mut accumulated_stake = U256::from(0);
+    let signed_state_digest = derive_signed_state_digest(
+        &state_cert.light_client_state,
+        &state_cert.next_stake_table_state,
+        &state_cert.auth_root,
+    );
+    for (key, sig, sig_v2) in state_cert.signatures.iter() {
+        if let Some(stake) = state_key_map.get(key) {
+            accumulated_stake += *stake;
+            #[allow(clippy::collapsible_else_if)]
+            // We only perform the second signature check prior to the DrbAndHeaderUpgrade
+            if !upgrade_lock
+                .proposal2_version(ViewNumber::new(state_cert.light_client_state.view_number))
+            {
+                if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig_v2,
+                    &state_cert.light_client_state,
+                    &state_cert.next_stake_table_state,
+                ) {
+                    bail!("Invalid light client state update certificate signature");
+                }
+            } else {
+                if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig,
+                    signed_state_digest,
+                ) || !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
+                    key,
+                    sig_v2,
+                    &state_cert.light_client_state,
+                    &state_cert.next_stake_table_state,
+                ) {
+                    bail!("Invalid light client state update certificate signature");
+                }
+            }
+        } else {
+            bail!("Invalid light client state update certificate signature");
+        }
+    }
+    if accumulated_stake < membership_success_threshold {
+        bail!("Light client state update certificate does not meet the success threshold");
+    }
+
+    Ok(())
 }

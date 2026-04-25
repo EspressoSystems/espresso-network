@@ -4,21 +4,11 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashSet, sync::Arc, time::Instant};
 
-use alloy::{
-    primitives::{FixedBytes, U256},
-    sol_types::SolValue,
-};
-use ark_ff::PrimeField;
 use async_broadcast::{Receiver, SendError, Sender};
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
-use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -29,12 +19,11 @@ use hotshot_types::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     event::{Event, EventType, LeafInfo},
-    light_client::{CircuitField, LightClientState, StakeTableState},
     message::{Proposal, UpgradeLock},
     request_response::ProposalRequestPayload,
     simple_certificate::{
-        CertificatePair, DaCertificate2, LightClientStateUpdateCertificateV2,
-        NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate,
+        CertificatePair, DaCertificate2, NextEpochQuorumCertificate2, QuorumCertificate2,
+        UpgradeCertificate,
     },
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
@@ -43,9 +32,7 @@ use hotshot_types::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::{NodeImplementation, NodeType},
-        signature_key::{
-            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StakeTableEntryType,
-        },
+        signature_key::SignatureKey,
         storage::Storage,
     },
     utils::{
@@ -1278,88 +1265,6 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType>(
     Ok(())
 }
 
-/// Validates the light client state update certificate
-pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
-    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
-    membership_coordinator: &EpochMembershipCoordinator<TYPES>,
-    upgrade_lock: &UpgradeLock<TYPES>,
-) -> Result<()> {
-    tracing::debug!("Validating light client state update certificate");
-
-    let epoch_membership = membership_coordinator
-        .membership_for_epoch(state_cert.epoch())
-        .await?;
-
-    let membership_stake_table = epoch_membership.stake_table().await;
-    let membership_success_threshold = epoch_membership.success_threshold().await;
-
-    let mut state_key_map = HashMap::new();
-    membership_stake_table.into_iter().for_each(|config| {
-        state_key_map.insert(
-            config.state_ver_key.clone(),
-            config.stake_table_entry.stake(),
-        );
-    });
-
-    let mut accumulated_stake = U256::from(0);
-    let signed_state_digest = derive_signed_state_digest(
-        &state_cert.light_client_state,
-        &state_cert.next_stake_table_state,
-        &state_cert.auth_root,
-    );
-    for (key, sig, sig_v2) in state_cert.signatures.iter() {
-        if let Some(stake) = state_key_map.get(key) {
-            accumulated_stake += *stake;
-            #[allow(clippy::collapsible_else_if)]
-            // We only perform the second signature check prior to the DrbAndHeaderUpgrade
-            if !upgrade_lock
-                .proposal2_version(ViewNumber::new(state_cert.light_client_state.view_number))
-            {
-                if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
-                    key,
-                    sig_v2,
-                    &state_cert.light_client_state,
-                    &state_cert.next_stake_table_state,
-                ) {
-                    bail!("Invalid light client state update certificate signature");
-                }
-            } else {
-                if !<TYPES::StateSignatureKey as LCV3StateSignatureKey>::verify_state_sig(
-                    key,
-                    sig,
-                    signed_state_digest,
-                ) || !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
-                    key,
-                    sig_v2,
-                    &state_cert.light_client_state,
-                    &state_cert.next_stake_table_state,
-                ) {
-                    bail!("Invalid light client state update certificate signature");
-                }
-            }
-        } else {
-            bail!("Invalid light client state update certificate signature");
-        }
-    }
-    if accumulated_stake < membership_success_threshold {
-        bail!("Light client state update certificate does not meet the success threshold");
-    }
-
-    Ok(())
-}
-
-pub(crate) fn check_qc_state_cert_correspondence<TYPES: NodeType>(
-    qc: &QuorumCertificate2<TYPES>,
-    state_cert: &LightClientStateUpdateCertificateV2<TYPES>,
-    epoch_height: u64,
-) -> bool {
-    qc.data
-        .block_number
-        .is_some_and(|bn| is_epoch_root(bn, epoch_height))
-        && Some(state_cert.epoch) == qc.data.epoch()
-        && qc.view_number().u64() == state_cert.light_client_state.view_number
-}
-
 /// Gets the second VID share, the current or the next epoch accordingly, from the shared consensus state;
 /// makes sure it corresponds to the given DA certificate;
 /// if it's not yet available, waits for it with the given timeout.
@@ -1450,23 +1355,4 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
         sender,
     )
     .await
-}
-
-pub fn derive_signed_state_digest(
-    lc_state: &LightClientState,
-    next_stake_state: &StakeTableState,
-    auth_root: &FixedBytes<32>,
-) -> CircuitField {
-    let lc_state_sol: LightClientStateSol = (*lc_state).into();
-    let stake_st_sol: StakeTableStateSol = (*next_stake_state).into();
-
-    let res = alloy::primitives::keccak256(
-        (
-            lc_state_sol.abi_encode(),
-            stake_st_sol.abi_encode(),
-            auth_root.abi_encode(),
-        )
-            .abi_encode_packed(),
-    );
-    CircuitField::from_be_bytes_mod_order(res.as_ref())
 }

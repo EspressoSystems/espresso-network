@@ -6,6 +6,7 @@ use std::{
 
 use committable::{Commitment, Committable};
 use hotshot::traits::BlockPayload;
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{
         BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
@@ -14,15 +15,23 @@ use hotshot_types::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal as SignedProposal,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::{
+        LightClientStateUpdateCertificateV2, TimeoutCertificate2,
+        check_qc_state_cert_correspondence,
+    },
     simple_vote::{
-        CheckpointData, HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
+        CheckpointData, HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote,
+        TimeoutData2, TimeoutVote2, Vote2Data,
     },
     stake_table::StakeTableEntries,
     traits::{
-        block_contents::BlockHeader, node_implementation::NodeType, signature_key::SignatureKey,
+        block_contents::BlockHeader,
+        node_implementation::NodeType,
+        signature_key::{
+            LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
+        },
     },
-    utils::{is_epoch_transition, is_last_block},
+    utils::{is_epoch_root, is_epoch_transition, is_last_block},
     vote::{self, Certificate, HasViewNumber},
 };
 use tracing::{debug, instrument, warn};
@@ -51,6 +60,13 @@ pub enum ConsensusInput<T: NodeType> {
     BlockReconstructed(ViewNumber, VidCommitment2),
     Certificate1(Certificate1<T>),
     Certificate2(Certificate2<T>),
+    /// Atomic pair emitted by the `EpochRootVoteCollector` for epoch-root views:
+    /// a `Certificate1` and its matching `LightClientStateUpdateCertificateV2`.
+    /// Consensus never sees an epoch-root Cert1 without the matching state_cert.
+    EpochRootCertificates {
+        cert1: Certificate1<T>,
+        state_cert: LightClientStateUpdateCertificateV2<T>,
+    },
     EpochChange(EpochChangeMessage<T>),
     HeaderCreated(ViewNumber, T::BlockHeader),
     Proposal(T::SignatureKey, ProposalMessage<T, Validated>),
@@ -126,6 +142,10 @@ pub struct Consensus<T: NodeType> {
 
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    state_private_key: <T::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+    stake_table_capacity: usize,
+    // TODO: persist state_certs
+    state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<T>>,
     node_id: KeyPrefix,
 
     garbage_collection_interval: BlockNumber,
@@ -141,10 +161,13 @@ enum Protocol {
 }
 
 impl<T: NodeType> Consensus<T> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new<B>(
         membership_coordinator: EpochMembershipCoordinator<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+        state_private_key: <T::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+        stake_table_capacity: usize,
         genesis_leaf: Leaf2<T>,
         epoch_height: B,
     ) -> Self
@@ -176,6 +199,9 @@ impl<T: NodeType> Consensus<T> {
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
             private_key,
+            state_private_key,
+            stake_table_capacity,
+            state_certs: BTreeMap::new(),
             vid_shares: BTreeMap::new(),
             // TODO: make this configurable or Constant
             garbage_collection_interval: 100.into(),
@@ -221,6 +247,13 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::Certificate2(certificate) => {
                 self.handle_certificate2(certificate).await
+            },
+            ConsensusInput::EpochRootCertificates { cert1, state_cert } => {
+                // Store state_cert first so the subsequent Cert1 handler / leader
+                // proposer has it on hand. Atomicity invariant: this pair always
+                // arrives together; Consensus never sees the Cert1 alone.
+                self.state_certs.insert(state_cert.epoch, state_cert);
+                self.handle_certificate1(cert1).await
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 self.handle_timeout_certificate(certificate, outbox).await
@@ -704,7 +737,6 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        // TODO: Handle epoch change state cert
         // The first two epochs have no prior DRB computation so we skip the
         // requirement — matching the same guard in handle_proposal.
         let next_drb_result = if proposal.epoch > EpochNumber::genesis() + 1
@@ -727,6 +759,33 @@ impl<T: NodeType> Consensus<T> {
         } else {
             None
         };
+
+        // If the parent QC is for an epoch-root block, attach the state_cert.
+        // By the atomicity invariant (enforced by `EpochRootVoteCollector`),
+        // if we hold the epoch-root Cert1 then `state_certs` also holds the
+        // matching cert.
+        let parent_block_number = parent_cert.data.block_number.unwrap_or(0);
+        let state_cert = if is_epoch_root(parent_block_number, *self.epoch_height) {
+            let Some(parent_epoch) = parent_cert.data.epoch() else {
+                warn!("epoch-root parent QC has no epoch; cannot propose");
+                return;
+            };
+            let Some(sc) = self.state_certs.get(&parent_epoch).cloned() else {
+                warn!(
+                    %view,
+                    "epoch-root parent QC without state_cert — atomicity invariant broken; skipping propose"
+                );
+                return;
+            };
+            if !check_qc_state_cert_correspondence(parent_cert, &sc, *self.epoch_height) {
+                warn!(%view, "state_cert does not correspond to parent QC; skipping propose");
+                return;
+            }
+            Some(sc)
+        } else {
+            None
+        };
+
         let proposal = Proposal::<T> {
             block_header: header.clone(),
             view_number: view,
@@ -736,7 +795,7 @@ impl<T: NodeType> Consensus<T> {
             upgrade_certificate: None,
             view_change_evidence,
             next_drb_result,
-            state_cert: None,
+            state_cert,
         };
 
         // Sign the proposal
@@ -845,6 +904,63 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Build a `LightClientStateUpdateVote2` for an epoch-root leaf.
+    ///
+    /// Computes the `LightClientState` from the header, fetches the next-epoch
+    /// stake-table commitment, and signs both the LCV2 (pre-upgrade, for
+    /// backward compatibility with existing relay infrastructure) and LCV3
+    /// (current) Schnorr signatures.
+    async fn build_state_vote(
+        &self,
+        proposal: &Proposal<T>,
+    ) -> anyhow::Result<LightClientStateUpdateVote2<T>> {
+        let view_number = proposal.view_number;
+        let light_client_state = proposal
+            .block_header
+            .get_light_client_state(view_number)
+            .map_err(|e| anyhow::anyhow!("failed to generate light client state: {e}"))?;
+        let auth_root = proposal
+            .block_header
+            .auth_root()
+            .map_err(|e| anyhow::anyhow!("failed to fetch auth root: {e}"))?;
+        let membership = self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(proposal.epoch))
+            .await
+            .map_err(|e| anyhow::anyhow!("membership lookup failed: {e}"))?;
+        let next_stake_table = membership
+            .next_epoch_stake_table()
+            .await
+            .map_err(|e| anyhow::anyhow!("next-epoch stake table lookup failed: {e}"))?
+            .stake_table()
+            .await;
+        let next_stake_table_state = next_stake_table
+            .commitment(self.stake_table_capacity)
+            .map_err(|e| anyhow::anyhow!("failed to compute stake table commitment: {e}"))?;
+        let v2_signature = <T::StateSignatureKey as LCV2StateSignatureKey>::sign_state(
+            &self.state_private_key,
+            &light_client_state,
+            &next_stake_table_state,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to sign LCV2 state: {e}"))?;
+        let signed_state_digest =
+            derive_signed_state_digest(&light_client_state, &next_stake_table_state, &auth_root);
+        let signature = <T::StateSignatureKey as LCV3StateSignatureKey>::sign_state(
+            &self.state_private_key,
+            signed_state_digest,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to sign LCV3 state: {e}"))?;
+        Ok(LightClientStateUpdateVote2 {
+            epoch: proposal.epoch,
+            light_client_state,
+            next_stake_table_state,
+            signature,
+            v2_signature,
+            auth_root,
+            signed_state_digest,
+        })
+    }
+
     #[instrument(level = "debug", skip_all)]
     async fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
         if view <= self.timeout_view {
@@ -937,9 +1053,24 @@ impl<T: NodeType> Consensus<T> {
                 return;
             },
         };
+
+        let state_vote = if is_epoch_root(proposal.block_header.block_number(), *self.epoch_height)
+        {
+            match self.build_state_vote(proposal).await {
+                Ok(sv) => Some(sv),
+                Err(err) => {
+                    warn!(%view, %err, "failed to build state vote for epoch-root leaf; skipping vote1");
+                    return;
+                },
+            }
+        } else {
+            None
+        };
+
         let vote = Vote1 {
             vote: inner_vote,
             vid_share: vid_share.clone(),
+            state_vote,
         };
         outbox.push_back(ConsensusOutput::SendVote1(vote));
         self.voted_1_views.insert(view);
@@ -1130,6 +1261,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::BlockReconstructed(view, _) => *view,
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
+            ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),
             ConsensusInput::HeaderCreated(view, _) => *view,
             ConsensusInput::Proposal(_, prop) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,

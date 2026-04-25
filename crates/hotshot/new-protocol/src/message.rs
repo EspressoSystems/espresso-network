@@ -13,8 +13,8 @@ use hotshot_types::{
         SimpleCertificate, SuccessThreshold, TimeoutCertificate2, UpgradeCertificate,
     },
     simple_vote::{
-        CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
-        Vote2Data,
+        CheckpointData, HasEpoch, LightClientStateUpdateVote2, QuorumData2, QuorumVote2,
+        SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
     },
     traits::node_implementation::NodeType,
     vote::HasViewNumber,
@@ -167,6 +167,8 @@ impl<T: NodeType, S> HasViewNumber for ProposalMessage<T, S> {
 pub struct Vote1<T: NodeType> {
     pub vote: QuorumVote2<T>,
     pub vid_share: VidDisperseShare2<T>,
+    /// Populated only when voting on an epoch-root leaf. Required there; absent otherwise.
+    pub state_vote: Option<LightClientStateUpdateVote2<T>>,
 }
 
 impl<T: NodeType> HasViewNumber for Vote1<T> {

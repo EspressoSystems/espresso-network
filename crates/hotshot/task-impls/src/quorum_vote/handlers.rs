@@ -10,6 +10,7 @@ use alloy::primitives::U256;
 use async_broadcast::{InactiveReceiver, Sender};
 use chrono::Utc;
 use committable::Committable;
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
@@ -44,7 +45,7 @@ use crate::{
     events::HotShotEvent,
     helpers::{
         LeafChainTraversalOutcome, broadcast_event, decide_from_proposal, decide_from_proposal_2,
-        derive_signed_state_digest, fetch_proposal, handle_drb_result,
+        fetch_proposal, handle_drb_result,
     },
 };
 
