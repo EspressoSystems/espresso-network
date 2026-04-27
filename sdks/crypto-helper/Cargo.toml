@@ -19,16 +19,16 @@ hotshot-types = { workspace = true }
 jf-crhf = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 jf-rescue = { workspace = true }
-primitive-types = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-sha2 = { workspace = true }
-tagged-base64 = { workspace = true }
 
 # https://tikv.github.io/doc/openssl/index.html
 # We need this for the target `aarch64-unknown-linux-gnu` in CI.
 # This can be removed if we figure out this build issue.
 openssl = { workspace = true }
+primitive-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tagged-base64 = { workspace = true }
 
 [lints]
 workspace = true

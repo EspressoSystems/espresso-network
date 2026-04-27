@@ -126,18 +126,18 @@ vergen-gitcl = { workspace = true }
 [dev-dependencies]
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
-hotshot-example-types = { workspace = true }
-hotshot-query-service = { workspace = true }
-hotshot-testing = { workspace = true }
-pretty_assertions = { workspace = true }
-rand = { workspace = true }
-reqwest = { workspace = true }
-test-log = { workspace = true }
 
 # Enable "testing" feature when running tests
 espresso-node = { path = ".", features = ["testing"] }
+hotshot-example-types = { workspace = true }
+hotshot-query-service = { workspace = true }
+hotshot-testing = { workspace = true }
 light-client = { workspace = true, features = ["testing"] }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
 tempfile = { workspace = true }
+test-log = { workspace = true }
 
 [lints]
 workspace = true
