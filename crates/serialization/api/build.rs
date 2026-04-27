@@ -1,91 +1,40 @@
-use std::path::PathBuf;
-
-// Example values for OpenAPI documentation
-const EXAMPLE_ETH_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
-const EXAMPLE_HEIGHT: u64 = 1000000;
-const EXAMPLE_OFFSET: u64 = 0;
-const EXAMPLE_LIMIT: u64 = 100;
-const EXAMPLE_NAMESPACE_ID: u32 = 10001;
-const EXAMPLE_EPOCH: u64 = 100;
-const EXAMPLE_BLOCK_RANGE_LAST: u64 = 1000100;
+use std::{collections::HashMap, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("proto");
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
 
-    // Generate message types with serde support for JSON serialization and OpenAPI schema
-    // Output directly to src/ so generated types are committed to git for visibility
-    prost_build::Config::new()
-        .type_attribute(
-            ".",
-            "#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]",
-        )
-        // Skip Empty's dummy field so it serializes as {}
-        .field_attribute("Empty.dummy", "#[serde(skip)]")
-        // Add OpenAPI examples for path parameters
-        .field_attribute(
-            "GetRewardClaimInputRequest.address",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
-        )
-        .field_attribute(
-            "GetRewardBalanceRequest.address",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
-        )
-        .field_attribute(
-            "GetRewardAccountProofRequest.address",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_ETH_ADDRESS),
-        )
-        .field_attribute(
-            "GetRewardBalancesRequest.height",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
-        )
-        .field_attribute(
-            "GetRewardBalancesRequest.offset",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_OFFSET),
-        )
-        .field_attribute(
-            "GetRewardBalancesRequest.limit",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_LIMIT),
-        )
-        .field_attribute(
-            "GetRewardMerkleTreeRequest.height",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
-        )
-        // Data API examples
-        .field_attribute(
-            "GetNamespaceProofRequest.namespace_id",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_NAMESPACE_ID),
-        )
-        .field_attribute(
-            "GetNamespaceProofRequest.block",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
-        )
-        .field_attribute(
-            "GetNamespaceProofRequest.first",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
-        )
-        .field_attribute(
-            "GetNamespaceProofRequest.last",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_BLOCK_RANGE_LAST),
-        )
-        .field_attribute(
-            "GetIncorrectEncodingProofRequest.namespace_id",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_NAMESPACE_ID),
-        )
-        .field_attribute(
-            "GetIncorrectEncodingProofRequest.block_height",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_HEIGHT),
-        )
-        // Consensus API examples
-        .field_attribute(
-            "GetStateCertificateRequest.epoch",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_EPOCH),
-        )
-        .field_attribute(
-            "GetStakeTableRequest.epoch",
-            format!(r#"#[schemars(example = "{}")]"#, EXAMPLE_EPOCH),
-        )
-        .out_dir(&out_dir)
+    let examples_path = proto_root.join("v2/examples.toml");
+    let examples_content = std::fs::read_to_string(&examples_path)?;
+    let examples: HashMap<String, HashMap<String, toml::Value>> =
+        toml::from_str(&examples_content)?;
+
+    let mut config = prost_build::Config::new();
+    config.type_attribute(
+        ".",
+        "#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]",
+    );
+
+    config.field_attribute("Empty.dummy", "#[serde(skip)]");
+
+    for (message_name, fields) in examples {
+        for (field_name, value) in fields {
+            let field_path = format!("{}.{}", message_name, field_name);
+            let example_value = match value {
+                toml::Value::String(s) => s,
+                toml::Value::Integer(i) => i.to_string(),
+                toml::Value::Float(f) => f.to_string(),
+                toml::Value::Boolean(b) => b.to_string(),
+                _ => continue,
+            };
+            config.field_attribute(
+                &field_path,
+                format!(r#"#[schemars(example = "{}")]"#, example_value),
+            );
+        }
+    }
+
+    config.out_dir(&out_dir)
         .compile_protos(
             &[
                 "v2/common.proto",
@@ -100,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/v2/rewards.proto");
     println!("cargo:rerun-if-changed=proto/v2/data.proto");
     println!("cargo:rerun-if-changed=proto/v2/consensus.proto");
+    println!("cargo:rerun-if-changed=proto/v2/examples.toml");
 
     Ok(())
 }
