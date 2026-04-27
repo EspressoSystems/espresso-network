@@ -834,7 +834,16 @@ pub trait SequencerPersistence:
                     return;
                 }
 
-                // TODO(new-protocol): remove this field once the coordinator has storage
+                if decide.vid_shares.len() != decide.leaves.len() {
+                    tracing::error!(
+                        leaves = decide.leaves.len(),
+                        vid_shares = decide.vid_shares.len(),
+                        "new protocol decide event has mismatched leaves and VID shares"
+                    );
+                    return;
+                }
+
+                // TODO(new-protocol)
                 for signed in decide.vid_shares.iter().flatten() {
                     let proposal = convert_proposal(signed.clone());
                     if let Err(err) = self.append_vid(&proposal).await {

@@ -246,7 +246,7 @@ pub struct BlockInfo<Types: NodeType> {
     pub vid_common: Option<VidCommonQueryData<Types>>,
     pub vid_share: Option<VidShare>,
     pub qc_chain: Option<[CertificatePair<Types>; 2]>,
-    /// New protocol finality proof: cert2 alone proves finality.
+    /// New protocol finality certificate, present at heights finalized by cert2.
     pub cert2: Option<Certificate2<Types>>,
 }
 

@@ -187,20 +187,35 @@ where
                 }
             },
             CoordinatorEvent::NewDecide(decide) => {
-                // cert1 certifies leaves[0] (newest); each leaf's justify_qc
-                // certifies the next older leaf.
-                let qcs = once(decide.cert1.clone())
-                    .chain(decide.leaves.iter().map(|leaf| leaf.justify_qc()))
-                    .rev()
-                    .skip(1);
+                let Some(newest_leaf) = decide.leaves.first() else {
+                    tracing::error!("new decide event contained no leaves");
+                    return Ok(());
+                };
 
-                for ((qc, leaf), vid_share) in qcs
-                    .zip(decide.leaves.iter().rev())
-                    .zip(decide.vid_shares.iter().rev())
+                if let Some(cert2) = &decide.cert2
+                    && cert2.data.leaf_commit != Committable::commit(newest_leaf)
                 {
-                    let height = leaf.block_header().block_number();
+                    tracing::error!(
+                        height = newest_leaf.block_header().block_number(),
+                        cert2_leaf = %cert2.data.leaf_commit,
+                        newest_leaf = %Committable::commit(newest_leaf),
+                        "new decide event cert2 does not certify the newest leaf"
+                    );
+                    return Err(newest_leaf.block_header().block_number());
+                }
 
-                    let leaf_data = match LeafQueryData::new(leaf.clone(), qc.clone()) {
+                for (index, leaf) in decide.leaves.iter().enumerate().rev() {
+                    let height = leaf.block_header().block_number();
+                    let qc = if index == 0 {
+                        // cert1 certifies the newest leaf.
+                        decide.cert1.clone()
+                    } else {
+                        // Each newer leaf's justify_qc certifies the next older leaf.
+                        decide.leaves[index - 1].justify_qc()
+                    };
+                    let vid_share = &decide.vid_shares[index];
+
+                    let leaf_data = match LeafQueryData::new(leaf.clone(), qc) {
                         Ok(leaf) => leaf,
                         Err(err) => {
                             tracing::error!(
@@ -237,9 +252,9 @@ where
 
                     let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
 
-                    // Attach cert2 to the leaf it certifies (the most recent decided leaf).
-                    if let Some(cert2) = &decide.cert2
-                        && cert2.data.leaf_commit == Committable::commit(leaf)
+                    // Attach cert2 to the newest leaf. The cert2 match was checked above.
+                    if index == 0
+                        && let Some(cert2) = &decide.cert2
                     {
                         info = info.with_cert2(cert2.clone());
                     }

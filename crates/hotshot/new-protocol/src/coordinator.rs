@@ -795,6 +795,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
         self.storage.gc(view);
+        self.pending_proposal_fetches.gc(view);
     }
 
     pub fn node_id(&self) -> &KeyPrefix {
@@ -825,6 +826,10 @@ impl<T: NodeType> PendingProposalFetches<T> {
             leaf_commitment,
             respond,
         });
+    }
+
+    fn gc(&mut self, view: ViewNumber) {
+        self.pending.retain(|pending| pending.view >= view);
     }
 
     fn resolve(&mut self, proposal: &SignedProposal<T, Proposal<T>>) {

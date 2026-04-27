@@ -6,10 +6,10 @@ use espresso_types::{Certificate2, Leaf2, SeqTypes};
 use hotshot_query_service_types::availability::LeafQueryData;
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembership, simple_vote::HasEpoch,
-    vote::HasViewNumber,
+    traits::block_contents::BlockHeader, vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
-use versions::EPOCH_VERSION;
+use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
 use super::quorum::{Certificate, Quorum};
 use crate::consensus::quorum::StakeTableQuorum;
@@ -39,10 +39,11 @@ pub enum FinalityProof {
 
     /// The finality follows from a Certificate2 in the new protocol.
     ///
-    /// In the new protocol, Certificate2 (from Vote2 threshold signatures) proves finality.
-    /// A validator only votes in round 2 after seeing Certificate1, so Certificate2 implicitly
-    /// proves that round 1 quorum was also achieved.
-    NewProtocol { cert2: Certificate2<SeqTypes> },
+    /// Certificate2 proves finality.
+    NewProtocol {
+        cert1: Arc<Certificate>,
+        cert2: Arc<Certificate2<SeqTypes>>,
+    },
 
     /// The finality follows from a 3-chain of QCs using the original HotStuff commit rule.
     ///
@@ -66,7 +67,7 @@ impl FinalityProof {
             Self::Assumption => None,
             Self::HotStuff2 { committing_qc, .. } => committing_qc.epoch(),
             Self::HotStuff { precommit_qc, .. } => precommit_qc.epoch(),
-            Self::NewProtocol { cert2 } => cert2.epoch(),
+            Self::NewProtocol { cert2, .. } => cert2.epoch(),
         }
     }
 }
@@ -195,23 +196,45 @@ impl LeafProof {
 
                 precommit_qc.qc().clone()
             },
-            (FinalityProof::NewProtocol { cert2 }, LeafProofHint::Quorum(quorum)) => {
-                // In the new protocol, Certificate2 alone proves finality.
-                // A quorum voted in round 2, which requires having seen Certificate1,
-                // so round 1 quorum is implicitly proven.
+            (FinalityProof::NewProtocol { cert1, cert2 }, LeafProofHint::Quorum(quorum)) => {
+                // Certificate2 proves finality. Certificate1 is still needed here because this
+                // method returns LeafQueryData, which includes the QC certifying `curr`.
+                let version = curr.block_header().version();
+                ensure!(
+                    version >= NEW_PROTOCOL_VERSION,
+                    "new protocol finality proof used for pre-new-protocol leaf"
+                );
                 ensure!(
                     cert2.data.leaf_commit == curr.commit(),
                     "cert2 leaf commitment does not match leaf"
                 );
+                ensure!(
+                    cert1.leaf_commit() == curr.commit(),
+                    "cert1 leaf commitment does not match leaf"
+                );
+                ensure!(
+                    cert1.view_number() == cert2.view_number(),
+                    "cert1 and cert2 certify different views"
+                );
+                ensure!(
+                    cert1.epoch() == cert2.epoch(),
+                    "cert1 and cert2 certify different epochs"
+                );
+                ensure!(
+                    cert2.data.block_number == curr.block_header().block_number(),
+                    "cert2 block number does not match leaf"
+                );
 
-                let version = curr.block_header().version();
                 quorum
                     .verify_cert2(cert2, version)
                     .await
                     .context("verifying cert2 signature")?;
+                quorum
+                    .verify(cert1, version)
+                    .await
+                    .context("verifying cert1 signature")?;
 
-                // Return the leaf's justify_qc as the signing QC for LeafQueryData.
-                curr.justify_qc()
+                cert1.qc().clone()
             },
             (proof, hint) => {
                 let required = match proof {
@@ -248,7 +271,10 @@ impl LeafProof {
 
         // Check if the new leaf plus the last saved leaf contain justifying QCs that form a
         // HotStuff2 QC chain for the leaf before.
-        if len >= 2 && self.leaves[len - 2].block_header().version() >= EPOCH_VERSION {
+        if len >= 2
+            && self.leaves[len - 2].block_header().version() >= EPOCH_VERSION
+            && self.leaves[len - 2].block_header().version() < NEW_PROTOCOL_VERSION
+        {
             let committing_qc = Certificate::for_parent(&self.leaves[len - 1]);
             let deciding_qc = Certificate::for_parent(new_leaf.leaf());
             if committing_qc.view_number() == self.leaves[len - 2].view_number()
@@ -326,14 +352,16 @@ impl LeafProof {
         };
     }
 
-    /// Complete a finality proof using a new protocol Certificate2.
-    ///
-    /// Certificate2 alone proves finality — round 2 voting requires having seen
-    /// Certificate1, so round 1 quorum is implicitly proven.
-    pub fn add_cert2(&mut self, cert2: Certificate2<SeqTypes>) {
+    /// Complete a finality proof using the new protocol certificates.
+    pub fn add_certificates(
+        &mut self,
+        cert1: Arc<Certificate>,
+        cert2: Arc<Certificate2<SeqTypes>>,
+    ) {
         debug_assert!(cert2.data.leaf_commit == self.leaves[self.leaves.len() - 1].commit());
+        debug_assert!(cert1.leaf_commit() == self.leaves[self.leaves.len() - 1].commit());
 
-        self.proof = FinalityProof::NewProtocol { cert2 };
+        self.proof = FinalityProof::NewProtocol { cert1, cert2 };
     }
 
     /// Inspect the raw finality proof within the larger proof.
