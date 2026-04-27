@@ -1751,32 +1751,29 @@ where
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
-    /// Get a cert2 from local storage, or kick off a background fetch and return `None`.
+    /// Get a cert2 from local storage
     async fn get_cert2(self: &Arc<Self>, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
-        // Try local storage first.
-        {
-            let mut tx = self.read().await.map_err(|err| QueryError::Error {
-                message: err.to_string(),
-            })?;
-            if let Ok(Some(cert2)) = tx.load_cert2(height).await {
-                return Ok(Some(cert2));
-            }
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+
+        if let Some(cert2) = tx.load_cert2(height).await? {
+            return Ok(Some(cert2));
         }
 
-        // todo:
-        let fetcher = Arc::clone(self);
-        spawn(async move {
-            let cert2 = fetcher
-                .provider
-                .fetch(request::Certificate2Request { height })
-                .await
-                .flatten();
-            if let Some(cert2) = cert2 {
-                fetcher.store(&(height, cert2)).await;
-            }
-        });
+        drop(tx);
 
-        Ok(None)
+        let Some(cert2) = self
+            .provider
+            .fetch(request::Certificate2Request { height })
+            .await
+            .flatten()
+        else {
+            return Ok(None);
+        };
+
+        self.store(&(height, cert2.clone())).await;
+        Ok(Some(cert2))
     }
 }
 
