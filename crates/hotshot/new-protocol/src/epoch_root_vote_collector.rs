@@ -84,14 +84,14 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
         }
     }
 
-    /// Accumulate a `Vote1` for an epoch-root view. Caller must have verified
-    /// `vote1.state_vote.is_some()` — this method panics otherwise, because the
-    /// atomicity invariant is broken if it isn't true.
+    /// Accumulate a `Vote1` for an epoch-root view. Caller should have verified
+    /// `vote1.state_vote.is_some()`.
     pub async fn accumulate(&mut self, vote1: Vote1<T>) {
         debug_assert!(
             vote1.state_vote.is_some(),
             "EpochRootVoteCollector::accumulate called with a Vote1 missing state_vote"
         );
+
         let view = vote1.vote.view_number();
         if self.completed.contains(&view) {
             return;
@@ -148,7 +148,13 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
         while let Some(vote1) = rx.recv().await {
             let state_vote = match vote1.state_vote.clone() {
                 Some(sv) => sv,
-                None => continue, // defensive; coordinator filters this out
+                None => {
+                    tracing::error!(
+                        "EpochRootVoteCollector::run_per_view called with a Vote1 missing \
+                         state_vote"
+                    );
+                    continue;
+                },
             };
             let bls_key = vote1.vote.signing_key();
 
@@ -201,6 +207,8 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
                 }
             }
 
+            // Unlike regular votes, we don't have to double check the certificate because votes are
+            // fully checked, including signature in the state_accumulator.
             if state_cert.is_none()
                 && let Some(cert) = state_accumulator
                     .accumulate(&bls_key, &state_vote, &membership)

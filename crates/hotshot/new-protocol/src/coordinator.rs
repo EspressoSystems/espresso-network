@@ -413,9 +413,8 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     if is_epoch_root(bn, epoch_height) {
-                        // Atomicity: an epoch-root Vote1 MUST carry a state_vote.
-                        // Reject otherwise — Byzantine half-votes would otherwise
-                        // fill the quorum accumulator but starve the state one.
+                        // An epoch-root Vote1 MUST carry a state_vote.
+                        // Reject otherwise.
                         vote1.state_vote.as_ref()?;
                         self.epoch_root_collector.accumulate(vote1.clone()).await;
                     } else {
