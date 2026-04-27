@@ -322,7 +322,7 @@ impl Genesis {
 
 #[cfg(test)]
 mod test {
-    use std::{fs, sync::Arc};
+    use std::{fs, path::Path, sync::Arc};
 
     use alloy::{
         node_bindings::Anvil,
@@ -416,6 +416,25 @@ mod test {
         .unwrap();
 
         assert!(Genesis::from_file(file.path()).is_ok());
+    }
+
+    #[test]
+    fn test_committed_genesis_files_validate() {
+        let genesis_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../data/genesis");
+        let mut checked = 0;
+
+        for entry in fs::read_dir(&genesis_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|ext| ext != "toml") {
+                continue;
+            }
+
+            Genesis::from_file(&path)
+                .unwrap_or_else(|err| panic!("{} failed validation: {err:#}", path.display()));
+            checked += 1;
+        }
+
+        assert!(checked > 0, "no genesis files found");
     }
 
     #[test]
