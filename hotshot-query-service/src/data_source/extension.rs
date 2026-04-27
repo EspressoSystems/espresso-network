@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use hotshot::types::Event;
 use hotshot_events_service::events_source::{EventFilterSet, EventsSource, StartupInfo};
+use hotshot_new_protocol::consensus::CoordinatorEvent;
 use hotshot_types::{data::VidShare, event::LegacyEvent, traits::node_implementation::NodeType};
 use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
@@ -600,7 +601,8 @@ mod impl_testable_data_source {
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
-            self.update(event).await.unwrap();
+            let event = CoordinatorEvent::LegacyEvent(event.clone());
+            self.update(&event).await.unwrap();
         }
     }
 }

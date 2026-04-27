@@ -812,7 +812,6 @@ mod tests {
                     .iter()
                     .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change((*qc).clone()))),
                 None,
-                None,
                 &consumer,
             )
             .await
@@ -877,7 +876,6 @@ mod tests {
                     &leaf_info(leaves[3].clone()),
                     CertificatePair::non_epoch_change(qcs[3].clone()),
                 )],
-                None,
                 None,
                 &consumer,
             )
@@ -1155,7 +1153,6 @@ mod tests {
                     .iter()
                     .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
                 None,
-                None,
                 &FailConsumer,
             )
             .await
@@ -1209,7 +1206,6 @@ mod tests {
                 leaf_chain
                     .iter()
                     .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
-                None,
                 None,
                 &consumer,
             )
@@ -2048,7 +2044,6 @@ mod tests {
                     CertificatePair::non_epoch_change(qc0),
                 )],
                 None,
-                None,
                 &FailConsumer,
             )
             .await
@@ -2068,7 +2063,6 @@ mod tests {
                 Some(Arc::new(CertificatePair::non_epoch_change(
                     deciding_qc.clone(),
                 ))),
-                None,
                 &consumer,
             )
             .await

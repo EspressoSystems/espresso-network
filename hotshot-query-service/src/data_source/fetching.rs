@@ -783,7 +783,7 @@ where
 
         // Save the new decided leaf.
         self.fetcher
-            .store(&(info.leaf.clone(), info.qc_chain))
+            .store(&(info.leaf.clone(), info.qc_chain, info.cert2.clone()))
             .await;
 
         // Trigger a fetch of the parent leaf, if we don't already have it.
