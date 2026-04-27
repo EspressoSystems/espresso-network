@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -23,10 +23,7 @@ use hotshot_types::{
     consensus::OuterConsensus,
     data::ViewNumber,
     message::UpgradeLock,
-    traits::{
-        election::Membership,
-        node_implementation::{NodeType},
-    },
+    traits::{election::Membership, node_implementation::NodeType},
 };
 use tokio::time::timeout;
 
@@ -45,8 +42,7 @@ async fn test_network_task() {
         TestDescription::default_multiple_rounds();
     let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
     let node_id = 1;
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let launcher = builder.gen_launcher();
 
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
@@ -224,8 +220,7 @@ async fn test_network_storage_fail() {
     let builder: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default_multiple_rounds();
     let node_id = 1;
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let launcher = builder.gen_launcher();
 
     let network = (launcher.resource_generators.channel_generator)(node_id).await;

@@ -51,7 +51,7 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -74,7 +74,7 @@ jobs:
           scripts/ci-build-binary ${{ matrix.binary }}
 
       - name: Upload cargo timings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-build-amd-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
@@ -94,7 +94,7 @@ jobs:
           done
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: amd-${{ matrix.binary }}
           path: |
@@ -113,7 +113,7 @@ jobs:
           - binary: espresso-dev-node
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
 
       - name: Install Protoc
@@ -136,7 +136,7 @@ jobs:
           scripts/ci-build-binary ${{ matrix.binary }}
 
       - name: Upload cargo timings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-build-arm-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
@@ -155,7 +155,7 @@ jobs:
           done
 
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: arm-${{ matrix.binary }}
           path: |
@@ -186,10 +186,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download executables AMD
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: amd-*
           path: target/amd64/release
@@ -230,7 +230,7 @@ jobs:
 
       - name: Upload docker image artifact (on PRs)
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.service }}-docker-image
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
@@ -261,7 +261,7 @@ jobs:
 
       - name: Upload digest
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "digests-${{ matrix.service }}-amd64"
           path: "${{ runner.temp }}/digests/*"
@@ -295,10 +295,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download executables ARM
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: arm-*
           path: target/arm64/release
@@ -343,7 +343,7 @@ jobs:
           ls -lah "${digest_dir}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "digests-${{ matrix.service }}-arm64"
           path: "${{ runner.temp }}/digests/*"
@@ -380,7 +380,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -393,7 +393,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN  }}
 
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "digests-${{ matrix.service }}-*"
           path: "${{ runner.temp }}/digests"
@@ -455,11 +455,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@just
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/docker-images
           pattern: "*-docker-image"
@@ -496,7 +496,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/install-action@just
 
       - name: Set docker image tag for compose

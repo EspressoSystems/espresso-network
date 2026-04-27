@@ -1447,7 +1447,10 @@ mod tests {
     // ensuring that persisted data matches the on-chain events and that event fetcher work correctly.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_stake_table_fetching_from_persistence<P: TestablePersistence>(
-        #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+        #[values(
+            StakeTableContractVersion::V1,
+            StakeTableContractVersion::V2,
+        )]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {
@@ -1517,11 +1520,9 @@ mod tests {
         // Load initial persisted events and validate they exist.
         let membership_coordinator = test_network
             .server
-            .consensus()
-            .read()
-            .await
-            .membership_coordinator
-            .clone();
+            .consensus_handle()
+            .membership_coordinator()
+            .await;
 
         let l1_client = L1Client::new(vec![l1_url]).unwrap();
         let node_state = test_network.server.node_state();
@@ -1579,7 +1580,10 @@ mod tests {
 
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_stake_table_background_fetching<P: TestablePersistence>(
-        #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+        #[values(
+            StakeTableContractVersion::V1,
+            StakeTableContractVersion::V2,
+        )]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
     ) -> anyhow::Result<()> {

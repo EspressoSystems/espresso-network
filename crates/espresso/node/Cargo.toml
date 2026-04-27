@@ -30,6 +30,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-ff = { workspace = true }
 ark-serialize = { workspace = true }
+async-broadcast = { workspace = true }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-once-cell = { workspace = true }
@@ -48,11 +49,10 @@ derivative = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
 either = { workspace = true }
-espresso-contract-deployer = { workspace = true }
 espresso-api = { path = "../api" }
+espresso-contract-deployer = { workspace = true }
 espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
-serialization-api = { path = "../../serialization/api" }
 futures = { workspace = true }
 generic-tests = { workspace = true }
 hotshot = { workspace = true }
@@ -60,6 +60,7 @@ hotshot-builder-refactored = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-libp2p-networking = { workspace = true }
+hotshot-new-protocol = { workspace = true }
 hotshot-orchestrator = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-state-prover = { workspace = true }
@@ -90,6 +91,7 @@ rstest_reuse = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serialization-api = { path = "../../serialization/api" }
 sha2 = { workspace = true }
 snafu = { workspace = true }
 sqlx = { workspace = true }

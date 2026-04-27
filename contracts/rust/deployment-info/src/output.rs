@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use crate::{
     contracts::{
         AccessControlDeployment, CollectedDeployment, DeploymentInfo, OwnableDeployment,
-        TimelockDeployment,
+        RoleHolder, TimelockDeployment,
     },
     get_crate_dir,
 };
@@ -125,27 +125,51 @@ impl DeploymentInfo {
 
         if has_timelocks {
             out.push('\n');
-            out.push_str("| Timelock | Address | Min Delay |\n");
-            out.push_str("|---------|---------|----------|\n");
+            out.push_str(
+                "| Timelock | Address | Min Delay | Proposers | Executors | Cancellers | Default \
+                 admins |\n",
+            );
+            out.push_str("|----------|---------|-----------|-----------|-----------|------------|------------------|\n");
             for (name, tl) in timelocks {
                 match tl {
                     TimelockDeployment::Deployed {
-                        address, min_delay, ..
+                        address,
+                        min_delay,
+                        proposers,
+                        executors,
+                        cancellers,
+                        default_admins,
                     } => {
                         out.push_str(&format!(
-                            "| {name} | {} | {} |\n",
+                            "| {name} | {} | {} | {} | {} | {} | {} |\n",
                             address_link(*address, etherscan),
                             humantime::format_duration(*min_delay),
+                            format_role_holder_names(proposers),
+                            format_role_holder_names(executors),
+                            format_role_holder_names(cancellers),
+                            format_role_holder_names(default_admins),
                         ));
                     },
                     TimelockDeployment::NotYetDeployed => {
-                        out.push_str(&format!("| {name} | Not deployed | |\n"));
+                        out.push_str(&format!("| {name} | Not deployed | | | | | |\n",));
                     },
                 }
             }
         }
 
         out
+    }
+}
+
+fn format_role_holder_names(holders: &[RoleHolder]) -> String {
+    if holders.is_empty() {
+        "-".to_string()
+    } else {
+        holders
+            .iter()
+            .map(|h| h.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 

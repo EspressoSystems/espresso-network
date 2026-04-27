@@ -1,4 +1,5 @@
 mod hotshot
+mod py "scripts/py.just"
 
 default:
     just --list
@@ -57,8 +58,17 @@ demo *args:
 demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
-fmt:
-    cargo fmt --all
+# cargo fmt misses files whose `mod` declarations are produced by macro expansion
+fmt *files:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files="{{files}}"
+    if [ -z "$files" ]; then
+        files=$(git ls-files '*.rs')
+    fi
+    if [ -n "$files" ]; then
+        echo "$files" | xargs -P $(getconf _NPROCESSORS_ONLN) -n 10 rustfmt
+    fi
 
 fix *args:
     just clippy --fix {{args}}
