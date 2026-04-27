@@ -182,13 +182,6 @@ where
     >;
     type NsProof = espresso_types::NsProof;
 
-    fn encode_base64(&self, bytes: &[u8]) -> String {
-        use base64::engine::general_purpose::STANDARD;
-        use base64::Engine;
-        STANDARD.encode(bytes)
-    }
-
-    // Deserialize proto/string types → internal types
     fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address> {
         s.parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", s))
@@ -272,16 +265,24 @@ where
         &self,
         value: &Self::NamespaceProof,
     ) -> anyhow::Result<serialization_api::v2::NamespaceProofResponse> {
-        // Serialize each transaction using serde JSON to preserve base64 encoding
+        // Serialize each transaction field explicitly using base64_bytes
         let transactions: Vec<v2::Transaction> = value
             .transactions
             .iter()
-            .map(|tx| {
-                let json = serde_json::to_value(tx)?;
-                serde_json::from_value(json)
-                    .map_err(|e| anyhow::anyhow!("failed to deserialize transaction: {}", e))
+            .map(|tx| -> anyhow::Result<v2::Transaction> {
+                let mut payload_bytes = Vec::new();
+                base64_bytes::serialize(&tx.payload, &mut serde_json::Serializer::new(&mut payload_bytes))
+                    .map_err(|e| anyhow::anyhow!("failed to serialize payload: {}", e))?;
+                // Convert to string and remove quotes added by JSON serializer
+                let payload_str = String::from_utf8(payload_bytes)?
+                    .trim_matches('"').to_string();
+
+                Ok(v2::Transaction {
+                    namespace: tx.namespace.0 as u32,
+                    payload: payload_str,
+                })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         let proof = value
             .proof
@@ -299,10 +300,8 @@ where
         &self,
         value: &Self::IncorrectEncodingProof,
     ) -> anyhow::Result<serialization_api::v2::IncorrectEncodingProofResponse> {
-        let proof_bytes = bincode::serialize(value)
-            .map_err(|e| anyhow::anyhow!("failed to serialize incorrect encoding proof: {}", e))?;
-        let proof_data = self.encode_base64(&proof_bytes);
-
+        // Serialize the VID proof to JSON string
+        let proof_data = serde_json::to_string(&value.0)?;
         Ok(serialization_api::v2::IncorrectEncodingProofResponse {
             proof: Some(v2::AvidMIncorrectEncodingNsProof { proof_data }),
         })
@@ -397,18 +396,12 @@ where
             )
             .collect();
 
-        // Extract epoch as u64 (EpochNumber is a newtype around u64)
-        let epoch_bytes = bincode::serialize(&cert.epoch)
-            .map_err(|e| anyhow::anyhow!("failed to serialize epoch: {}", e))?;
-        let epoch: u64 = bincode::deserialize(&epoch_bytes)
-            .map_err(|e| anyhow::anyhow!("failed to deserialize epoch: {}", e))?;
-
         Ok(v2::LightClientStateUpdateCertificateV2 {
-            epoch,
+            epoch: cert.epoch.u64(),
             light_client_state: cert.light_client_state.to_string(),
             next_stake_table_state: cert.next_stake_table_state.to_string(),
             signatures: signatures?,
-            auth_root: self.encode_base64(cert.auth_root.as_slice()),
+            auth_root: cert.auth_root.to_string(),
         })
     }
 
@@ -418,8 +411,6 @@ where
     ) -> anyhow::Result<serialization_api::v2::NsProof> {
         use espresso_types::NsProof as InternalNsProof;
 
-        // Access the inner VID proof types directly and serialize them to JSON
-        // This preserves the exact structure and TaggedBase64 encoding from v1
         let proof_version = match proof {
             InternalNsProof::V0(advz_proof) => {
                 // Serialize the inner fields directly
@@ -431,17 +422,40 @@ where
                 v2::ns_proof::ProofVersion::V0(serde_json::from_value(json)?)
             },
             InternalNsProof::V1(avidm_proof) => {
-                // The inner VID proof with proper serde annotations
-                let json = serde_json::to_value(&avidm_proof.0)?;
-                v2::ns_proof::ProofVersion::V1(serde_json::from_value(json)?)
+                // Serialize ns_payload using base64_bytes
+                let mut ns_payload_bytes = Vec::new();
+                base64_bytes::serialize(&avidm_proof.0.ns_payload, &mut serde_json::Serializer::new(&mut ns_payload_bytes))
+                    .map_err(|e| anyhow::anyhow!("failed to serialize ns_payload: {}", e))?;
+                let ns_payload_str = String::from_utf8(ns_payload_bytes)?
+                    .trim_matches('"').to_string();
+
+                v2::ns_proof::ProofVersion::V1(v2::AvidMNsProof {
+                    ns_index: avidm_proof.0.ns_index as u64,
+                    ns_payload: ns_payload_str,
+                    ns_proof: avidm_proof.0.ns_proof.to_string(),
+                })
             },
             InternalNsProof::V1IncorrectEncoding(incorrect_proof) => {
-                let json = serde_json::to_value(&incorrect_proof.0)?;
-                v2::ns_proof::ProofVersion::V1IncorrectEncoding(serde_json::from_value(json)?)
+                // Serialize the whole proof to JSON string
+                v2::ns_proof::ProofVersion::V1IncorrectEncoding(
+                    v2::AvidMIncorrectEncodingNsProof {
+                        proof_data: serde_json::to_string(&incorrect_proof.0)?,
+                    },
+                )
             },
             InternalNsProof::V2(gf2_proof) => {
-                let json = serde_json::to_value(&gf2_proof.0)?;
-                v2::ns_proof::ProofVersion::V2(serde_json::from_value(json)?)
+                // Serialize ns_payload using base64_bytes
+                let mut ns_payload_bytes = Vec::new();
+                base64_bytes::serialize(&gf2_proof.0.ns_payload, &mut serde_json::Serializer::new(&mut ns_payload_bytes))
+                    .map_err(|e| anyhow::anyhow!("failed to serialize ns_payload: {}", e))?;
+                let ns_payload_str = String::from_utf8(ns_payload_bytes)?
+                    .trim_matches('"').to_string();
+
+                v2::ns_proof::ProofVersion::V2(v2::AvidmGf2NsProof {
+                    ns_index: gf2_proof.0.ns_index as u64,
+                    ns_payload: ns_payload_str,
+                    ns_proof: gf2_proof.0.ns_proof.to_string(),
+                })
             },
         };
 

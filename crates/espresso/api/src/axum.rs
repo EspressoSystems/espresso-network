@@ -8,7 +8,6 @@ use aide::{
     operation::OperationOutput,
     redoc::Redoc,
     scalar::Scalar,
-    swagger::Swagger,
 };
 use axum::{
     Extension, Json, Router,
@@ -367,51 +366,49 @@ where
         ..Default::default()
     };
 
-    // Handler closures: use proto request types directly with Path<T>
-
     let get_reward_claim_input =
-        |State(state): State<S>, Path(request): Path<GetRewardClaimInputRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardClaimInputRequest>| async move {
             handlers::get_reward_claim_input(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_reward_balance =
-        |State(state): State<S>, Path(request): Path<GetRewardBalanceRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalanceRequest>| async move {
             handlers::get_reward_balance(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_reward_account_proof =
-        |State(state): State<S>, Path(request): Path<GetRewardAccountProofRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardAccountProofRequest>| async move {
             handlers::get_reward_account_proof(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_reward_balances =
-        |State(state): State<S>, Path(request): Path<GetRewardBalancesRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalancesRequest>| async move {
             handlers::get_reward_balances(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_reward_merkle_tree_v2 =
-        |State(state): State<S>, Path(request): Path<GetRewardMerkleTreeRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardMerkleTreeRequest>| async move {
             handlers::get_reward_merkle_tree_v2(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_state_certificate =
-        |State(state): State<S>, Path(request): Path<GetStateCertificateRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetStateCertificateRequest>| async move {
             handlers::get_state_certificate(&state, request)
                 .await
                 .map(Json)
         };
 
-    let get_stake_table = |State(state): State<S>, Path(request): Path<GetStakeTableRequest>| async move {
+    let get_stake_table = |State(state): State<S>, SendQuery(request): SendQuery<GetStakeTableRequest>| async move {
         handlers::get_stake_table(&state, request).await.map(Json)
     };
 

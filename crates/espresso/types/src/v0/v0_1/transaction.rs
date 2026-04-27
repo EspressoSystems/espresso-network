@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
     CanonicalDeserialize,
 )]
 pub struct Transaction {
-    pub(crate) namespace: NamespaceId,
+    pub namespace: NamespaceId,
     #[serde(with = "base64_bytes")]
-    pub(crate) payload: Vec<u8>,
+    pub payload: Vec<u8>,
 }
 
 #[derive(
@@ -37,4 +37,4 @@ pub struct Transaction {
     Ord,
 )]
 #[display("{_0}")]
-pub struct NamespaceId(pub(crate) u64);
+pub struct NamespaceId(pub u64);

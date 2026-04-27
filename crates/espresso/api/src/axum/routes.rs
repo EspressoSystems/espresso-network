@@ -107,108 +107,53 @@ pub mod v1 {
 pub mod v2 {
     use super::Route;
 
-    /// Get reward claim input for L1 contract submission
-    ///
-    /// HTTP: GET /v2/rewards/claim-input/{address}
-    /// gRPC: /espresso.api.v2.RewardService/GetRewardClaimInput
     pub const REWARD_CLAIM_INPUT_ROUTE: Route = Route {
-        http: "/v2/rewards/claim-input/{address}",
+        http: "/v2/rewards/claim-input",
         grpc: "/espresso.api.v2.RewardService/GetRewardClaimInput",
     };
 
-    /// Get reward balance at the latest finalized height
-    ///
-    /// HTTP: GET /v2/rewards/balance/{address}
-    /// gRPC: /espresso.api.v2.RewardService/GetRewardBalance
     pub const REWARD_BALANCE_ROUTE: Route = Route {
-        http: "/v2/rewards/balance/{address}",
+        http: "/v2/rewards/balance",
         grpc: "/espresso.api.v2.RewardService/GetRewardBalance",
     };
 
-    /// Get reward account Merkle proof at the latest finalized height
-    ///
-    /// HTTP: GET /v2/rewards/proof/{address}
-    /// gRPC: /espresso.api.v2.RewardService/GetRewardAccountProof
     pub const REWARD_ACCOUNT_PROOF_ROUTE: Route = Route {
-        http: "/v2/rewards/proof/{address}",
+        http: "/v2/rewards/proof",
         grpc: "/espresso.api.v2.RewardService/GetRewardAccountProof",
     };
 
-    /// Get paginated list of reward balances
-    ///
-    /// HTTP: GET /v2/rewards/balances/{height}/{offset}/{limit}
-    /// gRPC: /espresso.api.v2.RewardService/GetRewardBalances
     pub const REWARD_BALANCES_ROUTE: Route = Route {
-        http: "/v2/rewards/balances/{height}/{offset}/{limit}",
+        http: "/v2/rewards/balances",
         grpc: "/espresso.api.v2.RewardService/GetRewardBalances",
     };
 
-    /// Get raw RewardMerkleTreeV2 snapshot
-    ///
-    /// HTTP: GET /v2/rewards/tree/{height}
-    /// gRPC: /espresso.api.v2.RewardService/GetRewardMerkleTreeV2
     pub const REWARD_MERKLE_TREE_V2_ROUTE: Route = Route {
-        http: "/v2/rewards/tree/{height}",
+        http: "/v2/rewards/tree",
         grpc: "/espresso.api.v2.RewardService/GetRewardMerkleTreeV2",
     };
 
-    //=========================================================================
-    // Documentation Routes (V2 only)
-    //=========================================================================
-
-    /// OpenAPI specification endpoint
     pub const OPENAPI_SPEC_ROUTE: &str = "/v2/docs/openapi.json";
-
-    /// Swagger documentation UI endpoint
     pub const SWAGGER_ROUTE: &str = "/v2";
-
-    /// Scalar documentation UI endpoint
     pub const SCALAR_ROUTE: &str = "/v2/scalar";
-
-    /// Redoc documentation UI endpoint
     pub const REDOC_ROUTE: &str = "/v2/redoc";
 
-    //=========================================================================
-    // Data API Routes
-    //=========================================================================
-
-    /// Get namespace proof(s) for a namespace
-    ///
-    /// HTTP: GET /v2/data/finalized/namespace-proof/{namespace_id}?block={height}
-    ///       or GET /v2/data/finalized/namespace-proof/{namespace_id}?from={start}&to={end}
-    /// gRPC: /espresso.api.v2.DataService/GetNamespaceProof (single)
-    ///       /espresso.api.v2.DataService/GetNamespaceProofRange (range)
     pub const NAMESPACE_PROOF_ROUTE: Route = Route {
-        http: "/v2/data/finalized/namespace-proof/{namespace_id}",
+        http: "/v2/data/finalized/namespace-proof",
         grpc: "/espresso.api.v2.DataService/GetNamespaceProof",
     };
 
-    /// Get incorrect encoding proof
-    ///
-    /// HTTP: GET /v2/data/finalized/incorrect-encoding-proof/{namespace_id}?block={block_height}
-    /// gRPC: /espresso.api.v2.DataService/GetIncorrectEncodingProof
     pub const INCORRECT_ENCODING_PROOF_ROUTE: Route = Route {
-        http: "/v2/data/finalized/incorrect-encoding-proof/{namespace_id}",
+        http: "/v2/data/finalized/incorrect-encoding-proof",
         grpc: "/espresso.api.v2.DataService/GetIncorrectEncodingProof",
     };
 
-    //=========================================================================
-    // Consensus API Routes
-    //=========================================================================
-
-    /// Get state certificate for an epoch
-    ///
-    /// HTTP: GET /v2/consensus/state-certificate/{epoch}
     pub const STATE_CERTIFICATE_ROUTE: Route = Route {
-        http: "/v2/consensus/state-certificate/{epoch}",
+        http: "/v2/consensus/state-certificate",
         grpc: "/espresso.api.v2.ConsensusService/GetStateCertificate",
     };
 
-    /// Get stake table for an epoch
-    ///
-    /// HTTP: GET /v2/consensus/stake-table/{epoch}
     pub const STAKE_TABLE_ROUTE: Route = Route {
-        http: "/v2/consensus/stake-table/{epoch}",
+        http: "/v2/consensus/stake-table",
         grpc: "/espresso.api.v2.ConsensusService/GetStakeTable",
     };
 }

@@ -20,8 +20,6 @@ pub trait ApiSerializations {
     type LightClientCert;
     type NsProof;
 
-    fn encode_base64(&self, bytes: &[u8]) -> String;
-
     fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address>;
 
     fn serialize_reward_claim_input(

@@ -113,6 +113,7 @@ pub struct DataServiceImpl<S> {
 }
 
 impl<S> DataServiceImpl<S> {
+    #[allow(dead_code)]
     pub fn new(state: S) -> Self {
         Self { state }
     }
@@ -145,6 +146,7 @@ where
 }
 
 /// Create the data gRPC service
+#[allow(dead_code)]
 pub fn create_data_service<S>(state: S) -> DataServiceServer<DataServiceImpl<S>>
 where
     S: v2::DataApi + Send + Sync + Clone + 'static,
@@ -158,6 +160,7 @@ pub struct ConsensusServiceImpl<S> {
 }
 
 impl<S> ConsensusServiceImpl<S> {
+    #[allow(dead_code)]
     pub fn new(state: S) -> Self {
         Self { state }
     }
@@ -190,6 +193,7 @@ where
 }
 
 /// Create the consensus gRPC service
+#[allow(dead_code)]
 pub fn create_consensus_service<S>(state: S) -> ConsensusServiceServer<ConsensusServiceImpl<S>>
 where
     S: v2::ConsensusApi + Send + Sync + Clone + 'static,

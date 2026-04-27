@@ -8,6 +8,8 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use espresso_api::{v1, v2};
 use serde::Serialize;
 use serialization_api::ApiSerializations;
@@ -401,6 +403,15 @@ impl ApiSerializations for TestApi {
     ) -> Result<serialization_api::v2::NamespaceProofResponse> {
         let (transactions, proof_bytes) = value;
 
+        // Convert transactions to Transaction messages
+        let txs = transactions
+            .iter()
+            .map(|tx| serialization_api::v2::Transaction {
+                namespace: 0,
+                payload: STANDARD.encode(tx),
+            })
+            .collect();
+
         // Convert proof bytes to NsProof if present
         let proof = proof_bytes.as_ref().map(|bytes| {
             // Create a dummy NsProof for testing
@@ -408,15 +419,15 @@ impl ApiSerializations for TestApi {
                 proof_version: Some(serialization_api::v2::ns_proof::ProofVersion::V0(
                     serialization_api::v2::AdvzNsProof {
                         namespace_id: 0,
-                        ns_payload: vec![],
-                        ns_proof: Some(bytes.clone()),
+                        ns_payload: String::new(),
+                        ns_proof: Some(STANDARD.encode(bytes)),
                     },
                 )),
             }
         });
 
         Ok(serialization_api::v2::NamespaceProofResponse {
-            transactions: transactions.clone(),
+            transactions: txs,
             proof,
         })
     }
@@ -427,7 +438,7 @@ impl ApiSerializations for TestApi {
     ) -> Result<serialization_api::v2::IncorrectEncodingProofResponse> {
         Ok(serialization_api::v2::IncorrectEncodingProofResponse {
             proof: Some(serialization_api::v2::AvidMIncorrectEncodingNsProof {
-                proof_data: value.clone(),
+                proof_data: STANDARD.encode(value),
             }),
         })
     }
@@ -441,10 +452,10 @@ impl ApiSerializations for TestApi {
         Ok(serialization_api::v2::StateCertificateResponse {
             certificate: Some(serialization_api::v2::LightClientStateUpdateCertificateV2 {
                 epoch: 0,
-                light_client_state: None,
-                next_stake_table_state: None,
+                light_client_state: String::new(),
+                next_stake_table_state: String::new(),
                 signatures: vec![],
-                auth_root: value.clone(),
+                auth_root: STANDARD.encode(value),
             }),
         })
     }
@@ -459,12 +470,12 @@ impl ApiSerializations for TestApi {
             .map(|peer_bytes| serialization_api::v2::PeerConfig {
                 stake_table_entry: Some(serialization_api::v2::StakeTableEntry {
                     stake_key: Some(serialization_api::v2::BlsPublicKey {
-                        key: peer_bytes.clone(),
+                        key: STANDARD.encode(peer_bytes),
                     }),
                     stake_amount: "1000000".to_string(),
                 }),
                 state_ver_key: Some(serialization_api::v2::SchnorrPublicKey {
-                    key: peer_bytes.clone(),
+                    key: STANDARD.encode(peer_bytes),
                 }),
                 connect_info: None,
             })
@@ -490,10 +501,10 @@ impl ApiSerializations for TestApi {
     ) -> Result<serialization_api::v2::LightClientStateUpdateCertificateV2> {
         Ok(serialization_api::v2::LightClientStateUpdateCertificateV2 {
             epoch: 0,
-            light_client_state: None,
-            next_stake_table_state: None,
+            light_client_state: String::new(),
+            next_stake_table_state: String::new(),
             signatures: vec![],
-            auth_root: vec![],
+            auth_root: String::new(),
         })
     }
 
