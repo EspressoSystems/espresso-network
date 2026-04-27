@@ -34,16 +34,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    config.out_dir(&out_dir)
-        .compile_protos(
-            &[
-                "v2/common.proto",
-                "v2/rewards.proto",
-                "v2/data.proto",
-                "v2/consensus.proto",
-            ],
-            &[proto_root],
-        )?;
+    config.out_dir(&out_dir).compile_protos(
+        &[
+            "v2/common.proto",
+            "v2/rewards.proto",
+            "v2/data.proto",
+            "v2/consensus.proto",
+        ],
+        &[proto_root],
+    )?;
 
     println!("cargo:rerun-if-changed=proto/v2/common.proto");
     println!("cargo:rerun-if-changed=proto/v2/rewards.proto");

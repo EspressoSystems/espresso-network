@@ -102,15 +102,13 @@ where
 {
     type Rejection = axum::extract::rejection::QueryRejection;
 
-    fn from_request_parts(
+    async fn from_request_parts(
         parts: &mut axum::http::request::Parts,
         state: &S,
-    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
-        async move {
-            axum::extract::Query::<T>::from_request_parts(parts, state)
-                .await
-                .map(|axum::extract::Query(inner)| SendQuery(inner))
-        }
+    ) -> Result<Self, Self::Rejection> {
+        axum::extract::Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|axum::extract::Query(inner)| SendQuery(inner))
     }
 }
 

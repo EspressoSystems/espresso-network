@@ -271,11 +271,15 @@ where
             .iter()
             .map(|tx| -> anyhow::Result<v2::Transaction> {
                 let mut payload_bytes = Vec::new();
-                base64_bytes::serialize(&tx.payload, &mut serde_json::Serializer::new(&mut payload_bytes))
-                    .map_err(|e| anyhow::anyhow!("failed to serialize payload: {}", e))?;
+                base64_bytes::serialize(
+                    &tx.payload,
+                    &mut serde_json::Serializer::new(&mut payload_bytes),
+                )
+                .map_err(|e| anyhow::anyhow!("failed to serialize payload: {}", e))?;
                 // Convert to string and remove quotes added by JSON serializer
                 let payload_str = String::from_utf8(payload_bytes)?
-                    .trim_matches('"').to_string();
+                    .trim_matches('"')
+                    .to_string();
 
                 Ok(v2::Transaction {
                     namespace: tx.namespace.0 as u32,
@@ -424,10 +428,14 @@ where
             InternalNsProof::V1(avidm_proof) => {
                 // Serialize ns_payload using base64_bytes
                 let mut ns_payload_bytes = Vec::new();
-                base64_bytes::serialize(&avidm_proof.0.ns_payload, &mut serde_json::Serializer::new(&mut ns_payload_bytes))
-                    .map_err(|e| anyhow::anyhow!("failed to serialize ns_payload: {}", e))?;
+                base64_bytes::serialize(
+                    &avidm_proof.0.ns_payload,
+                    &mut serde_json::Serializer::new(&mut ns_payload_bytes),
+                )
+                .map_err(|e| anyhow::anyhow!("failed to serialize ns_payload: {}", e))?;
                 let ns_payload_str = String::from_utf8(ns_payload_bytes)?
-                    .trim_matches('"').to_string();
+                    .trim_matches('"')
+                    .to_string();
 
                 v2::ns_proof::ProofVersion::V1(v2::AvidMNsProof {
                     ns_index: avidm_proof.0.ns_index as u64,
@@ -437,19 +445,21 @@ where
             },
             InternalNsProof::V1IncorrectEncoding(incorrect_proof) => {
                 // Serialize the whole proof to JSON string
-                v2::ns_proof::ProofVersion::V1IncorrectEncoding(
-                    v2::AvidMIncorrectEncodingNsProof {
-                        proof_data: serde_json::to_string(&incorrect_proof.0)?,
-                    },
-                )
+                v2::ns_proof::ProofVersion::V1IncorrectEncoding(v2::AvidMIncorrectEncodingNsProof {
+                    proof_data: serde_json::to_string(&incorrect_proof.0)?,
+                })
             },
             InternalNsProof::V2(gf2_proof) => {
                 // Serialize ns_payload using base64_bytes
                 let mut ns_payload_bytes = Vec::new();
-                base64_bytes::serialize(&gf2_proof.0.ns_payload, &mut serde_json::Serializer::new(&mut ns_payload_bytes))
-                    .map_err(|e| anyhow::anyhow!("failed to serialize ns_payload: {}", e))?;
+                base64_bytes::serialize(
+                    &gf2_proof.0.ns_payload,
+                    &mut serde_json::Serializer::new(&mut ns_payload_bytes),
+                )
+                .map_err(|e| anyhow::anyhow!("failed to serialize ns_payload: {}", e))?;
                 let ns_payload_str = String::from_utf8(ns_payload_bytes)?
-                    .trim_matches('"').to_string();
+                    .trim_matches('"')
+                    .to_string();
 
                 v2::ns_proof::ProofVersion::V2(v2::AvidmGf2NsProof {
                     ns_index: gf2_proof.0.ns_index as u64,
@@ -964,7 +974,7 @@ where
         use espresso_types::NsProof;
         let mut proofs = Vec::new();
 
-        for (block, vid) in blocks.into_iter().zip(vids.into_iter()) {
+        for (block, vid) in blocks.into_iter().zip(vids) {
             let ns_table = block.payload().ns_table();
 
             // Check if namespace exists in this block
@@ -1252,7 +1262,7 @@ where
         use espresso_types::NsProof;
         let mut proofs = Vec::new();
 
-        for (block, vid) in blocks.into_iter().zip(vids.into_iter()) {
+        for (block, vid) in blocks.into_iter().zip(vids) {
             let ns_table = block.payload().ns_table();
 
             // Check if namespace exists in this block

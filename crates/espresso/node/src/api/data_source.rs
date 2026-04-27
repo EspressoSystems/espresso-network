@@ -412,18 +412,15 @@ where
     Types: NodeType,
     D: RequestResponseDataSource<Types> + Send + Sync,
 {
-    fn request_vid_shares(
+    async fn request_vid_shares(
         &self,
         block_number: u64,
         vid_common_data: VidCommonQueryData<Types>,
-        duration: Duration,
-    ) -> impl Future<Output = BoxFuture<'static, anyhow::Result<Vec<VidShare>>>> + Send {
-        let this = self.clone();
-        async move {
-            (*this)
-                .request_vid_shares(block_number, vid_common_data, duration)
-                .await
-        }
+        timeout_duration: Duration,
+    ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
+        self.as_ref()
+            .request_vid_shares(block_number, vid_common_data, timeout_duration)
+            .await
     }
 }
 
