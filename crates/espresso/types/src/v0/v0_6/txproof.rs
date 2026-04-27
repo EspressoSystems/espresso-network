@@ -1,5 +1,6 @@
-use super::{AvidmGf2NsProof, TxIndex};
 use serde::{Deserialize, Serialize};
+
+use super::{AvidmGf2NsProof, TxIndex};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AvidmGf2TxProof {

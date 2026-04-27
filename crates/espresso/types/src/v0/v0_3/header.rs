@@ -1,13 +1,13 @@
-use crate::{ v0_3::state::RewardMerkleCommitmentV1, NsTable};
+use ark_serialize::CanonicalSerialize;
+use committable::{Commitment, Committable, RawCommitmentBuilder};
+use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
+use serde::{Deserialize, Serialize};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
     ResolvableChainConfig,
 };
-use ark_serialize::CanonicalSerialize;
-use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
-use serde::{Deserialize, Serialize};
+use crate::{NsTable, v0_3::state::RewardMerkleCommitmentV1};
 
 /// A header is like a [`Block`] with the body replaced by a digest.
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
