@@ -120,7 +120,7 @@ demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 demo-native-ff *args: (build "test" "--no-default-features")
-    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-v8.toml scripts/demo-native -f process-compose.yaml {{args}}
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
 
 ff *args:
     mkdir -p logs
@@ -400,4 +400,3 @@ contracts-test-network *args='-vv':
         exit 1
     fi
     forge test --match-test test_Network_ --jobs 1 {{args}}
-
