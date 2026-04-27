@@ -34,9 +34,9 @@ jobs:
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - uses: taiki-e/install-action@cargo-hack
       - uses: taiki-e/install-action@just
