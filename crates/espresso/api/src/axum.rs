@@ -20,10 +20,9 @@ use axum::{
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
-    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetNamespaceProofResponse,
-    GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
-    GetRewardClaimInputRequest, GetRewardMerkleTreeRequest, GetStakeTableRequest,
-    GetStateCertificateRequest,
+    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetRewardAccountProofRequest,
+    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
+    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 
 use crate::{error::ApiError, handlers, v1, v2};
@@ -128,24 +127,6 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
         );
         aide::operation::add_parameters(ctx, operation, params);
     }
-}
-
-async fn get_namespace_proof<S: v2::DataApi>(
-    State(state): State<S>,
-    SendQuery(query): SendQuery<GetNamespaceProofRequest>,
-) -> Result<Json<GetNamespaceProofResponse>, ApiError> {
-    handlers::get_namespace_proof(&state, query)
-        .await
-        .map(Json)
-}
-
-async fn get_incorrect_encoding_proof<S: v2::DataApi>(
-    State(state): State<S>,
-    SendQuery(query): SendQuery<GetIncorrectEncodingProofRequest>,
-) -> Result<Json<serialization_api::v2::IncorrectEncodingProofResponse>, ApiError> {
-    handlers::get_incorrect_encoding_proof(&state, query)
-        .await
-        .map(Json)
 }
 
 /// Create a combined router serving both v1 and v2 APIs
@@ -408,8 +389,23 @@ where
                 .map(Json)
         };
 
-    let get_stake_table = |State(state): State<S>, SendQuery(request): SendQuery<GetStakeTableRequest>| async move {
-        handlers::get_stake_table(&state, request).await.map(Json)
+    let get_stake_table =
+        |State(state): State<S>, SendQuery(request): SendQuery<GetStakeTableRequest>| async move {
+            handlers::get_stake_table(&state, request).await.map(Json)
+        };
+
+    let get_namespace_proof =
+        |State(state): State<S>, SendQuery(query): SendQuery<GetNamespaceProofRequest>| async move {
+            handlers::get_namespace_proof(&state, query).await.map(Json)
+        };
+
+    let get_incorrect_encoding_proof = |State(state): State<S>,
+                                        SendQuery(query): SendQuery<
+        GetIncorrectEncodingProofRequest,
+    >| async move {
+        handlers::get_incorrect_encoding_proof(&state, query)
+            .await
+            .map(Json)
     };
 
     let router = ApiRouter::new()
@@ -462,7 +458,7 @@ where
         )
         .api_route(
             routes::v2::NAMESPACE_PROOF_ROUTE.http,
-            get_with(get_namespace_proof::<S>, |op| {
+            get_with(get_namespace_proof, |op| {
                 op.description(
                     "Get namespace proof(s) for the specified namespace. Use '?block={height}' \
                      for a single block, or '?from={start}&to={end}' for a range. Returns \
@@ -474,7 +470,7 @@ where
         )
         .api_route(
             routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.http,
-            get_with(get_incorrect_encoding_proof::<S>, |op| {
+            get_with(get_incorrect_encoding_proof, |op| {
                 op.description(
                     "Generate a fraud proof showing incorrect namespace encoding for a specific \
                      block. Query param 'block' specifies the block height. Used to challenge \

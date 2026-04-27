@@ -132,7 +132,7 @@ where
             Ok(GetNamespaceProofResponse {
                 response: Some(Response::Single(serialized)),
             })
-        }
+        },
         (None, Some(first), Some(last)) => {
             // Range is inclusive on both ends (first and last)
             // Internal API expects exclusive end, so add 1
@@ -152,7 +152,7 @@ where
                     proofs: serialized_proofs,
                 })),
             })
-        }
+        },
         _ => Err(ApiError::BadRequest(anyhow::anyhow!(
             "Must specify either 'block' or both 'first' and 'last' query parameters"
         ))),

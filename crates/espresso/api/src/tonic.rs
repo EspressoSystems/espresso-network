@@ -8,8 +8,8 @@ use serialization_api::v2::{
     GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
     GetRewardClaimInputRequest, GetRewardMerkleTreeRequest, GetStakeTableRequest,
     GetStateCertificateRequest, IncorrectEncodingProofResponse, RewardAccountQueryDataV2,
-    RewardBalance, RewardBalances, RewardClaimInput, RewardMerkleTreeV2Data,
-    StakeTableResponse, StateCertificateResponse,
+    RewardBalance, RewardBalances, RewardClaimInput, RewardMerkleTreeV2Data, StakeTableResponse,
+    StateCertificateResponse,
 };
 use tonic::{Request, Response, Status};
 

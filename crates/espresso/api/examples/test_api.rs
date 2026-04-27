@@ -8,8 +8,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use espresso_api::{v1, v2};
 use serde::Serialize;
 use serialization_api::ApiSerializations;
@@ -508,10 +507,7 @@ impl ApiSerializations for TestApi {
         })
     }
 
-    fn serialize_ns_proof(
-        &self,
-        _proof: &Self::NsProof,
-    ) -> Result<serialization_api::v2::NsProof> {
+    fn serialize_ns_proof(&self, _proof: &Self::NsProof) -> Result<serialization_api::v2::NsProof> {
         Ok(serialization_api::v2::NsProof {
             proof_version: None,
         })
