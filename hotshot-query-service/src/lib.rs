@@ -435,7 +435,7 @@ use derive_more::{Deref, From, Into};
 pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
-use hotshot_new_protocol::consensus::ConsensusEvent;
+use hotshot_new_protocol::consensus::CoordinatorEvent;
 pub use hotshot_query_service_types::{
     ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
     QueryResult, QuorumCertificate, SignatureKey, Transaction,
@@ -541,7 +541,7 @@ where
         // just returns the failed block height for use in garbage collection, but this simple
         // implementation isn't doing any kind of garbage collection.
         data_source
-            .update(&ConsensusEvent::LegacyEvent(event))
+            .update(&CoordinatorEvent::LegacyEvent(event))
             .await
             .ok();
     }

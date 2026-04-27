@@ -9,12 +9,12 @@ use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{
         BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
-        VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        VidDisperseShare2, ViewNumber,
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    message::Proposal as SignedProposal,
-    simple_certificate::{TimeoutCertificate2, ViewSyncFinalizeCertificate2},
+    message::{Proposal as SignedProposal, UpgradeLock},
+    simple_certificate::TimeoutCertificate2,
     simple_vote::{
         CheckpointData, HasEpoch, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2, Vote2Data,
     },
@@ -29,7 +29,7 @@ use tracing::{debug, instrument, warn};
 
 use crate::{
     block::BlockAndHeaderRequest,
-    helpers::{proposal_commitment, upgrade_lock},
+    helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
         Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal, ProposalMessage,
@@ -60,14 +60,12 @@ pub enum ConsensusInput<T: NodeType> {
     TimeoutCertificate(TimeoutCertificate2<T>),
     TimeoutOneHonest(ViewNumber, EpochNumber),
     VidDisperseCreated(ViewNumber, VidDisperse2<T>),
-    ViewSyncCertificate(ViewSyncFinalizeCertificate2<T>),
     DrbResult(EpochNumber, DrbResult),
 }
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
-    RequestProposal(ViewNumber, Commitment<Leaf2<T>>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
     SendProposal(SignedProposal<T, Proposal<T>>, VidDisperse2<T>),
@@ -176,7 +174,6 @@ pub struct Consensus<T: NodeType> {
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
-    view_sync_certs: BTreeMap<ViewNumber, ViewSyncFinalizeCertificate2<T>>,
     locked_cert: Option<Certificate1<T>>,
     headers: BTreeMap<ViewNumber, T::BlockHeader>,
     leaves: BTreeMap<ViewNumber, Leaf2<T>>,
@@ -198,6 +195,7 @@ pub struct Consensus<T: NodeType> {
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     node_id: KeyPrefix,
+    upgrade_lock: UpgradeLock<T>,
 
     garbage_collection_interval: BlockNumber,
     pub(crate) epoch_height: BlockNumber,
@@ -216,6 +214,7 @@ impl<T: NodeType> Consensus<T> {
         membership_coordinator: EpochMembershipCoordinator<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+        upgrade_lock: UpgradeLock<T>,
         genesis_leaf: Leaf2<T>,
         epoch_height: B,
     ) -> Self
@@ -234,7 +233,6 @@ impl<T: NodeType> Consensus<T> {
             certs: BTreeMap::new(),
             certs2: BTreeMap::new(),
             timeout_certs: BTreeMap::new(),
-            view_sync_certs: BTreeMap::new(),
             locked_cert: None,
             leaves: BTreeMap::new(),
             last_decided_view: ViewNumber::genesis(),
@@ -250,6 +248,7 @@ impl<T: NodeType> Consensus<T> {
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
             private_key,
+            upgrade_lock,
             vid_shares: BTreeMap::new(),
             // TODO: make this configurable or Constant
             garbage_collection_interval: 100.into(),
@@ -313,9 +312,6 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
                 self.handle_timeout_certificate(certificate, outbox).await
-            },
-            ConsensusInput::ViewSyncCertificate(certificate) => {
-                self.handle_view_sync_certificate(certificate, outbox).await
             },
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 self.blocks_reconstructed.insert(view, vid_commitment);
@@ -438,7 +434,6 @@ impl<T: NodeType> Consensus<T> {
         self.certs = self.certs.split_off(&view);
         self.certs2 = self.certs2.split_off(&view);
         self.timeout_certs = self.timeout_certs.split_off(&view);
-        self.view_sync_certs = self.view_sync_certs.split_off(&view);
         self.headers = self.headers.split_off(&view);
         self.leaves = self.leaves.split_off(&view);
         self.proposals = self.proposals.split_off(&view);
@@ -612,7 +607,7 @@ impl<T: NodeType> Consensus<T> {
             view,
             &self.public_key,
             &self.private_key,
-            &upgrade_lock::<T>(),
+            &self.upgrade_lock,
         ) {
             Ok(vote) => vote,
             Err(err) => {
@@ -666,42 +661,6 @@ impl<T: NodeType> Consensus<T> {
         };
         // Note: We don't handle epoch change on timeout certificate, because
         // we can't change epoch after a timeout
-        outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
-            BlockAndHeaderRequest {
-                view,
-                epoch,
-                parent_proposal: proposal.clone(),
-            },
-        ));
-        Protocol::Continue
-    }
-
-    #[instrument(level = "debug", skip_all)]
-    async fn handle_view_sync_certificate(
-        &mut self,
-        certificate: ViewSyncFinalizeCertificate2<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) -> Protocol {
-        let view = certificate.view_number();
-        let Some(epoch) = certificate.epoch() else {
-            warn!(%view, "view-sync certificate has no epoch number");
-            return Protocol::Abort;
-        };
-        self.view_sync_certs.insert(view, certificate.clone());
-        self.current_epoch = Some(epoch);
-        outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
-        if !self.is_leader(view, epoch).await {
-            debug!(%epoch, "not leader");
-            return Protocol::Abort;
-        }
-        let Some(locked_view) = self.locked_cert.as_ref().map(|cert| cert.view_number()) else {
-            debug!("locked qc not available");
-            return Protocol::Abort;
-        };
-        let Some(proposal) = self.proposals.get(&locked_view) else {
-            debug!(%locked_view, "proposal not available");
-            return Protocol::Abort;
-        };
         outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
             BlockAndHeaderRequest {
                 view,
@@ -796,12 +755,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        let mut view_change_evidence = None;
-        if let Some(view_sync_cert) = self.view_sync_certs.get(&view) {
-            view_change_evidence = Some(ViewChangeEvidence2::ViewSync(view_sync_cert.clone()));
-        } else if let Some(timeout_cert) = self.timeout_certs.get(&view) {
-            view_change_evidence = Some(ViewChangeEvidence2::Timeout(timeout_cert.clone()));
-        };
+        let view_change_evidence = self.timeout_certs.get(&view).cloned();
         let parent_cert = if view_change_evidence.is_some() {
             let Some(cert) = &self.locked_cert else {
                 debug!("no locked qc");
@@ -995,7 +949,7 @@ impl<T: NodeType> Consensus<T> {
                 view,
                 &self.public_key,
                 &self.private_key,
-                &upgrade_lock::<T>(),
+                &self.upgrade_lock,
             ) {
                 Ok(vote) => vote,
                 Err(err) => {
@@ -1091,7 +1045,7 @@ impl<T: NodeType> Consensus<T> {
             view,
             &self.public_key,
             &self.private_key,
-            &upgrade_lock::<T>(),
+            &self.upgrade_lock,
         ) {
             Ok(vote) => vote,
             Err(err) => {
@@ -1175,7 +1129,7 @@ impl<T: NodeType> Consensus<T> {
             view,
             &self.public_key,
             &self.private_key,
-            &upgrade_lock::<T>(),
+            &self.upgrade_lock,
         ) {
             Ok(vote) => vote,
             Err(err) => {
@@ -1201,14 +1155,14 @@ impl<T: NodeType> Consensus<T> {
         }
 
         let liveness_check = proposal.justify_qc.view_number() > locked_cert.view_number();
-        let parent_commit = match proposal.justify_qc.data_commitment(&upgrade_lock::<T>()) {
+        let parent_commit = match proposal.justify_qc.data_commitment(&self.upgrade_lock) {
             Ok(c) => c,
             Err(err) => {
                 warn!(%err, "failed to compute justify qc data commitment");
                 return false;
             },
         };
-        let locked_commit = match locked_cert.data_commitment(&upgrade_lock::<T>()) {
+        let locked_commit = match locked_cert.data_commitment(&self.upgrade_lock) {
             Ok(c) => c,
             Err(err) => {
                 warn!(%err, "failed to compute locked certificate data");
@@ -1234,7 +1188,7 @@ impl<T: NodeType> Consensus<T> {
             Ok(stake_table) => {
                 let entries = StakeTableEntries::<T>::from(stake_table.stake_table().await).0;
                 let threshold = stake_table.success_threshold().await;
-                match cert.is_valid_cert(&entries, threshold, &upgrade_lock::<T>()) {
+                match cert.is_valid_cert(&entries, threshold, &self.upgrade_lock) {
                     Ok(()) => true,
                     Err(err) => {
                         warn!(%epoch, %err, "invalid threshold signature");
@@ -1304,7 +1258,6 @@ impl<T: NodeType> ConsensusInput<T> {
                 cert.view_number() + 1
             },
             ConsensusInput::VidDisperseCreated(view, _) => *view,
-            ConsensusInput::ViewSyncCertificate(cert) => cert.view_number(),
             // TODO: where else can this cause problems?
             ConsensusInput::DrbResult(..) => ViewNumber::genesis(),
             ConsensusInput::EpochChange(epoch_change) => epoch_change.cert1.view_number(),

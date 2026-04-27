@@ -71,6 +71,7 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
+hotshot-new-protocol = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
 pretty_assertions = { workspace = true, optional = true }

@@ -54,7 +54,7 @@ use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
+use versions::EPOCH_VERSION;
 
 use crate::{
     api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
@@ -699,38 +699,6 @@ where
         stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-
-        // Load the leaf to check which protocol version it belongs to.
-        let leaf = self.db.get_leaf(height).await?;
-
-        if leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
-            // New protocol: cert2 alone proves finality.
-            let cert2 = self
-                .db
-                .get_cert2_at_or_above(height)
-                .await?
-                .context("no cert2 available for new-protocol leaf")?;
-
-            let cert2_height = cert2.data.block_number;
-            let mut leaves = vec![leaf];
-            for h in (height + 1)..=cert2_height {
-                leaves.push(self.db.get_leaf(h).await?);
-            }
-
-            verify_leaf_chain_with_cert2(
-                leaves,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-                cert2,
-            )
-            .await
-            .with_context(|| "failed to verify new-protocol leaf chain")?;
-            return Ok(leaf);
-        }
-
         // Get the leaf chain
         let leaf_chain = self
             .db
@@ -744,7 +712,7 @@ where
             &stake_table,
             success_threshold,
             height,
-            &upgrade_lock,
+            &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
         )
         .await
         .with_context(|| "failed to verify leaf chain")?;

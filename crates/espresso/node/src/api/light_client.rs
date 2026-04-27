@@ -23,7 +23,6 @@ use light_client::consensus::{
 };
 use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
-use versions::NEW_PROTOCOL_VERSION;
 
 use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 
@@ -287,20 +286,7 @@ where
             let finalized = req
                 .opt_integer_param("finalized")
                 .map_err(bad_param("finalized"))?;
-            // Check the version of the requested leaf to decide which finality proof
-            // to use.
-            let header = state
-                .get_header(requested)
-                .await
-                .with_timeout(fetch_timeout)
-                .await
-                .ok_or_else(|| not_found(format!("unknown header {requested}")))?;
-
-            if header.version() >= NEW_PROTOCOL_VERSION {
-                get_leaf_proof_new_protocol(state, requested, fetch_timeout).await
-            } else {
-                get_leaf_proof(state, requested, finalized, fetch_timeout).await
-            }
+            get_leaf_proof(state, requested, finalized, fetch_timeout).await
         }
         .boxed()
     })?
