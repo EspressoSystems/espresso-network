@@ -989,7 +989,7 @@ where
                 let NetAddr::Inet(ip, _) = p.addr else {
                     return true;
                 };
-                Some(ip) == s.peer_addr().ok().map(|a| a.ip())
+                ip.is_unspecified() || Some(ip) == s.peer_addr().ok().map(|a| a.ip())
             })
             .unwrap_or(false)
     }

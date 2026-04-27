@@ -29,8 +29,8 @@ use super::{
 use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{
-        BlockId, BlockQueryData, LeafId, LeafQueryData, NamespaceId, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
+        BlockId, BlockQueryData, Certificate2, LeafId, LeafQueryData, NamespaceId,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash, VidCommonQueryData,
     },
     data_source::{
         VersionedDataSource,
@@ -472,6 +472,15 @@ where
         self.inner.insert_qc_chain(height, qc_chain).await
     }
 
+    async fn insert_cert2(
+        &mut self,
+        height: u64,
+        cert2: Certificate2<Types>,
+    ) -> anyhow::Result<()> {
+        self.maybe_fail_write(FailableAction::Any).await?;
+        self.inner.insert_cert2(height, cert2).await
+    }
+
     async fn insert_leaf_range<'a>(
         &mut self,
         leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,
@@ -574,6 +583,19 @@ where
     async fn latest_qc_chain(&mut self) -> QueryResult<Option<[CertificatePair<Types>; 2]>> {
         self.maybe_fail_read(FailableAction::Any).await?;
         self.inner.latest_qc_chain().await
+    }
+
+    async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.maybe_fail_read(FailableAction::Any).await?;
+        self.inner.load_cert2(height).await
+    }
+
+    async fn load_cert2_at_or_above(
+        &mut self,
+        height: u64,
+    ) -> QueryResult<Option<Certificate2<Types>>> {
+        self.maybe_fail_read(FailableAction::Any).await?;
+        self.inner.load_cert2_at_or_above(height).await
     }
 }
 

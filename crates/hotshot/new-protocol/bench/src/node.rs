@@ -9,13 +9,13 @@ use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    storage_types::TestStorage,
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    helpers::upgrade_lock,
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
@@ -28,14 +28,16 @@ use hotshot_types::{
     addr::NetAddr,
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
+use versions::{CLIQUENET_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<BLSPubKey>>;
+type BenchCoordinator = Coordinator<TestTypes, Cliquenet<BLSPubKey>, TestStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -109,20 +111,22 @@ async fn build_coordinator(
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+    let upgrade_lock = bench_upgrade_lock();
 
     let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
-        private_key,
+        private_key.clone(),
+        upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
     );
 
-    let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+    let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -130,9 +134,14 @@ async fn build_coordinator(
     let vid_reconstructor = VidReconstructor::new();
 
     let block_config = BlockBuilderConfig::default();
-    let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
+    let block_builder = BlockBuilder::new(
+        instance.clone(),
+        membership.clone(),
+        block_config,
+        upgrade_lock.clone(),
+    );
 
-    let mut state_manager = StateManager::new(instance.clone());
+    let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
     state_manager.seed_state(
         ViewNumber::genesis(),
         Arc::new(genesis_state),
@@ -145,9 +154,9 @@ async fn build_coordinator(
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-    let proposal_validator = ProposalValidator::new(membership.clone());
+    let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
 
-    let net = Network::new(network, membership.clone(), upgrade_lock());
+    let net = Network::new(network, membership.clone(), upgrade_lock);
 
     let timer = Timer::new(
         cfg.timeout_duration(),
@@ -169,6 +178,10 @@ async fn build_coordinator(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .storage(hotshot_new_protocol::storage::Storage::new(
+            TestStorage::default(),
+            private_key,
+        ))
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(timer)
@@ -227,7 +240,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
             {
                 let block = build_test_block(cfg.block_size, cfg.total_nodes);
                 let parent_leaf = req.parent_proposal.clone().into();
-                let version = upgrade_lock::<TestTypes>().version_infallible(req.view);
+                let version = bench_upgrade_lock().version_infallible(req.view);
                 let header = TestBlockHeader::new::<TestTypes>(
                     &parent_leaf,
                     block.payload_commitment,
@@ -307,6 +320,10 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
         payload_commitment,
         builder_commitment,
     }
+}
+
+fn bench_upgrade_lock() -> UpgradeLock<TestTypes> {
+    UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.

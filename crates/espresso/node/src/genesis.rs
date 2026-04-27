@@ -12,6 +12,7 @@ use espresso_types::{
 use hotshot_types::{VersionedDaCommittee, version_ser};
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -91,6 +92,35 @@ impl Genesis {
 }
 
 impl Genesis {
+    /// Validate that required fields are present for the version.
+    ///
+    /// Fields like `epoch_height` and the DRB difficulties are only meaningful once the
+    /// corresponding protocol version is active. If a genesis runs at or will upgrade to a
+    /// version that uses them, they must be set
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let version = std::cmp::max(self.base_version, self.upgrade_version);
+
+        if version >= EPOCH_VERSION {
+            self.epoch_height
+                .context("epoch_height missing from genesis (required at version >= 0.3)")?;
+            self.epoch_start_block
+                .context("epoch_start_block missing from genesis (required at version >= 0.3)")?;
+            self.stake_table_capacity.context(
+                "stake_table_capacity missing from genesis (required at version >= 0.3)",
+            )?;
+        }
+
+        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
+            self.drb_difficulty
+                .context("drb_difficulty missing from genesis (required at version >= 0.4)")?;
+            self.drb_upgrade_difficulty.context(
+                "drb_upgrade_difficulty missing from genesis (required at version >= 0.4)",
+            )?;
+        }
+
+        Ok(())
+    }
+
     pub async fn validate_fee_contract(&self, l1: &L1Client) -> anyhow::Result<()> {
         if let Some(fee_contract_address) = self.chain_config.fee_contract {
             tracing::info!("validating fee contract at {fee_contract_address:x}");
@@ -286,7 +316,9 @@ impl Genesis {
         let bytes = std::fs::read(path).context(format!("genesis file {}", path.display()))?;
         let text = std::str::from_utf8(&bytes).context("genesis file must be UTF-8")?;
 
-        toml::from_str(text).context("malformed genesis file")
+        let genesis: Self = toml::from_str(text).context("malformed genesis file")?;
+        genesis.validate().context("validating genesis")?;
+        Ok(genesis)
     }
 }
 

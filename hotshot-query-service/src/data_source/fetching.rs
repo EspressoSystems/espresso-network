@@ -98,9 +98,9 @@ use super::{
 use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{
-        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
-        FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
-        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
+        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+        Certificate2, Fetch, FetchStream, HeaderQueryData, LeafId, LeafQueryData, NamespaceId,
+        PayloadMetadata, PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
         UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::fetching::{leaf::RangeRequest, vid::VidCommonRangeFetcher},
@@ -762,6 +762,10 @@ where
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.fetcher.clone().get(TransactionRequest::from(h)).await
     }
+
+    async fn get_cert2(&self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.fetcher.get_cert2(height).await
+    }
 }
 
 impl<Types, S, P> UpdateAvailabilityData<Types> for FetchingDataSource<Types, S, P>
@@ -779,7 +783,7 @@ where
 
         // Save the new decided leaf.
         self.fetcher
-            .store(&(info.leaf.clone(), info.qc_chain))
+            .store(&(info.leaf.clone(), info.qc_chain, info.cert2))
             .await;
 
         // Trigger a fetch of the parent leaf, if we don't already have it.
@@ -1740,6 +1744,43 @@ where
 impl<Types, S, P> Fetcher<Types, S, P>
 where
     Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
+    for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
+    P: AvailabilityProvider<Types>,
+{
+    /// Get a cert2 from local storage
+    async fn get_cert2(self: &Arc<Self>, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        let mut tx = self.read().await.map_err(|err| QueryError::Error {
+            message: err.to_string(),
+        })?;
+
+        if let Some(cert2) = tx.load_cert2(height).await? {
+            return Ok(Some(cert2));
+        }
+
+        drop(tx);
+
+        let Some(cert2) = self
+            .provider
+            .fetch(request::Certificate2Request { height })
+            .await
+            .flatten()
+        else {
+            return Ok(None);
+        };
+
+        // TODO: verify cert2 before accepting and storing it.
+        self.store(&(height, cert2.clone())).await;
+        Ok(Some(cert2))
+    }
+}
+
+impl<Types, S, P> Fetcher<Types, S, P>
+where
+    Types: NodeType,
     S: VersionedDataSource,
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
 {
@@ -2069,6 +2110,7 @@ pub trait AvailabilityProvider<Types: NodeType>:
     + Provider<Types, request::BlockRangeRequest>
     + Provider<Types, request::VidCommonRequest>
     + Provider<Types, request::VidCommonRangeRequest>
+    + Provider<Types, request::Certificate2Request>
     + Sync
     + 'static
 {
@@ -2080,6 +2122,7 @@ impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
         + Provider<Types, request::BlockRangeRequest>
         + Provider<Types, request::VidCommonRequest>
         + Provider<Types, request::VidCommonRangeRequest>
+        + Provider<Types, request::Certificate2Request>
         + Sync
         + 'static
 {
@@ -2196,7 +2239,11 @@ trait Storable<Types: NodeType>: Clone {
 }
 
 impl<Types: NodeType> Storable<Types>
-    for (LeafQueryData<Types>, Option<[CertificatePair<Types>; 2]>)
+    for (
+        LeafQueryData<Types>,
+        Option<[CertificatePair<Types>; 2]>,
+        Option<Certificate2<Types>>,
+    )
 {
     fn debug_name(&self) -> String {
         format!("leaf {} with QC chain", self.0.height())
@@ -2213,7 +2260,29 @@ impl<Types: NodeType> Storable<Types>
     ) -> anyhow::Result<()> {
         storage
             .insert_leaf_with_qc_chain(&self.0, self.1.clone())
-            .await
+            .await?;
+        if let Some(cert2) = &self.2 {
+            storage.insert_cert2(self.0.height(), cert2.clone()).await?;
+        }
+        Ok(())
+    }
+}
+
+impl<Types: NodeType> Storable<Types> for (u64, Certificate2<Types>) {
+    fn debug_name(&self) -> String {
+        format!("cert2 at height {}", self.0)
+    }
+
+    async fn notify(&self, _notifiers: &Notifiers<Types>) {
+        // No passive listeners for cert2.
+    }
+
+    async fn store(
+        &self,
+        storage: &mut impl UpdateAvailabilityStorage<Types>,
+        _leaf_only: bool,
+    ) -> anyhow::Result<()> {
+        storage.insert_cert2(self.0, self.1.clone()).await
     }
 }
 

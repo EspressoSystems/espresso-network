@@ -5,6 +5,7 @@ use hotshot::{traits::NodeImplementation, types::BLSPubKey};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
+    storage_types::TestStorage,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
@@ -18,7 +19,7 @@ use crate::{
     consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    helpers::upgrade_lock,
+    helpers::test_upgrade_lock,
     message::{Certificate1, Proposal},
     network::Network,
     outbox::Outbox,
@@ -40,17 +41,18 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     membership: EpochMembershipCoordinator<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> Coordinator<TestTypes, I::Network> {
+) -> Coordinator<TestTypes, I::Network, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
+    let upgrade_lock = test_upgrade_lock();
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+    let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
@@ -60,6 +62,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         membership.clone(),
         public_key,
         private_key.clone(),
+        upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
     );
@@ -71,9 +74,10 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         instance.clone(),
         membership.clone(),
         BlockBuilderConfig::default(),
+        upgrade_lock.clone(),
     );
 
-    let mut state_manager = StateManager::new(instance.clone());
+    let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
     state_manager.seed_state(
         ViewNumber::genesis(),
         Arc::new(genesis_state),
@@ -85,9 +89,9 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-    let proposal_validator = ProposalValidator::new(membership.clone());
+    let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
 
-    let network = Network::new(network, membership.clone(), upgrade_lock());
+    let network = Network::new(network, membership.clone(), upgrade_lock);
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
@@ -103,6 +107,10 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .storage(crate::storage::Storage::new(
+            TestStorage::default(),
+            private_key,
+        ))
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(Timer::new(

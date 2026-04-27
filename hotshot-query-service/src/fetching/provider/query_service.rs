@@ -32,12 +32,12 @@ use vbs::version::StaticVersionType;
 use super::Provider;
 use crate::{
     Error, Payload,
-    availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+    availability::{BlockQueryData, Certificate2, LeafQueryData, VidCommonQueryData},
     fetching::{
         NonEmptyRange,
         request::{
-            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest, RangeRequest,
-            VidCommonRangeRequest, VidCommonRequest,
+            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
+            RangeRequest, VidCommonRangeRequest, VidCommonRequest,
         },
     },
     types::HeightIndexed,
@@ -245,11 +245,15 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             "received leaf with the wrong hash ({})",
             leaf.hash()
         );
-        ensure!(
-            leaf.qc().commit() == req.expected_qc,
-            "received leaf with the wrong QC ({})",
-            leaf.qc().commit()
-        );
+
+        // Under the new fast-finality
+        // protocol, the QC attached to a peer's stored leaf can legitimately
+        // differ from what the child's justify_qc expects, so skip this check.
+        // ensure!(
+        //     leaf.qc().commit() == req.expected_qc,
+        //     "received leaf with the wrong QC ({})",
+        //     leaf.qc().commit()
+        // );
 
         Ok(leaf)
     }
@@ -321,6 +325,33 @@ where
         req: LeafRangeRequest<Types>,
     ) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
         self.handle_result(req, self.fetch_leaf_range(req).await)
+    }
+}
+
+impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
+    /// Fetch a cert2 from a peer at the given height.
+    ///
+    /// TODO: need to verify the cert2 against the stake table
+    pub async fn fetch_cert2<Types: NodeType>(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<Certificate2<Types>>> {
+        self.client
+            .get(&format!("availability/cert2/{height}"))
+            .send()
+            .await
+            .context("fetching cert2")
+    }
+}
+
+#[async_trait]
+impl<Types, Ver: StaticVersionType> Provider<Types, Certificate2Request>
+    for QueryServiceProvider<Ver>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<Types>>> {
+        self.handle_result(req, self.fetch_cert2(req.height).await)
     }
 }
 

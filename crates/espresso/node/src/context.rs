@@ -141,13 +141,18 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = initializer.epoch_height;
 
-        let coordinator = Coordinator::<SeqTypes, CN>::maker()
+        let coordinator = Coordinator::<SeqTypes, CN, Arc<P>>::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer)
+            .upgrade_lock(UpgradeLock::from_certificate(
+                upgrade,
+                &initializer.decided_upgrade_certificate,
+            ))
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .timeout_duration(Duration::from_secs(10))
+            .storage(Arc::clone(&persistence))
             .make();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
@@ -480,6 +485,57 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
     }
 }
 
+fn log_decide_event(event: &CoordinatorEvent<SeqTypes>, node_id: u64) {
+    match event {
+        CoordinatorEvent::LegacyEvent(hotshot_event) => {
+            let hotshot_types::event::EventType::Decide {
+                leaf_chain,
+                deciding_qc,
+                ..
+            } = &hotshot_event.event
+            else {
+                return;
+            };
+
+            let newest = leaf_chain.first().map(|info| &info.leaf);
+            let oldest = leaf_chain.last().map(|info| &info.leaf);
+            tracing::info!(
+                node_id,
+                event_view = ?hotshot_event.view_number,
+                leaf_count = leaf_chain.len(),
+                newest_height = newest.map(Leaf2::height),
+                newest_view = ?newest.map(Leaf2::view_number),
+                newest_version = ?newest.map(|leaf| leaf.block_header().version()),
+                oldest_height = oldest.map(Leaf2::height),
+                oldest_view = ?oldest.map(Leaf2::view_number),
+                has_deciding_qc = deciding_qc.is_some(),
+                "processing legacy decide event"
+            );
+        },
+        CoordinatorEvent::NewDecide(decide) => {
+            let newest = decide.leaves.first();
+            let oldest = decide.leaves.last();
+            let below_new_protocol = newest
+                .map(|leaf| leaf.block_header().version() < versions::NEW_PROTOCOL_VERSION)
+                .unwrap_or(false);
+            tracing::info!(
+                node_id,
+                leaf_count = decide.leaves.len(),
+                newest_height = newest.map(Leaf2::height),
+                newest_view = ?newest.map(Leaf2::view_number),
+                newest_version = ?newest.map(|leaf| leaf.block_header().version()),
+                oldest_height = oldest.map(Leaf2::height),
+                oldest_view = ?oldest.map(Leaf2::view_number),
+                has_cert2 = decide.cert2.is_some(),
+                cert2_height = decide.cert2.as_ref().map(|cert2| cert2.data.block_number),
+                below_new_protocol,
+                "processing new-protocol decide event"
+            );
+        },
+        _ => {},
+    }
+}
+
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_events<N, P>(
@@ -511,53 +567,49 @@ async fn handle_events<N, P>(
 
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
+        log_decide_event(&event, node_id);
 
-        match event {
-            CoordinatorEvent::LegacyEvent(ref hotshot_event) => {
-                // Handle external messages from the legacy protocol.
+        // Handle external messages from either protocol.
+        match &event {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
                     hotshot_event.event
                     && let Err(err) = external_event_handler.handle_event(data).await
                 {
                     tracing::warn!("Failed to handle legacy external message: {:?}", err);
                 }
-
-                // Persistence and state signer consume the original HotShot event.
-                persistence
-                    .handle_event(hotshot_event, &event_consumer)
-                    .await;
-                state_signer
-                    .write()
-                    .await
-                    .handle_event(hotshot_event, &consensus_handle)
-                    .await;
-
-                // Forward to the event streaming service.
-                if let Some(events_streamer) = events_streamer.as_ref() {
-                    events_streamer
-                        .write()
-                        .await
-                        .handle_event(hotshot_event.clone())
-                        .await;
-                }
             },
-            CoordinatorEvent::NewDecide(_new_decide) => {
-                // TODO: Handle new protocol decide events.
-                // This will need to translate NewDecideEvent into the format
-                // expected by persistence, state signer, and events streamer.
-            },
-            CoordinatorEvent::ExternalMessageReceived { ref data, .. } => {
+            CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
-            CoordinatorEvent::QuorumProposal { .. } => {
-                // Handled by the proposal fetcher via its own event stream.
-            },
-            CoordinatorEvent::ViewChanged { .. } => {
-                // View changes are tracked internally by the adapter.
-            },
+            _ => {},
         }
+
+        let persistence_fut = persistence.handle_event(&event, &event_consumer);
+
+        let state_signer_fut = async {
+            state_signer
+                .write()
+                .await
+                .handle_event(&event, consensus_handle.as_ref())
+                .await;
+        };
+
+        let events_streamer_fut = async {
+            if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event
+                && let Some(events_streamer) = events_streamer.as_ref()
+            {
+                events_streamer
+                    .write()
+                    .await
+                    .handle_event(hotshot_event.clone())
+                    .await;
+            }
+        };
+
+        tokio::join!(persistence_fut, state_signer_fut, events_streamer_fut);
     }
 }
 

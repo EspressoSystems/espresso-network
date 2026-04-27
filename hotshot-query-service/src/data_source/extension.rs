@@ -27,10 +27,10 @@ use super::VersionedDataSource;
 use crate::{
     Header, Payload, QueryResult, Transaction,
     availability::{
-        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
-        FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, UpdateAvailabilityData,
-        VidCommonMetadata, VidCommonQueryData,
+        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+        Certificate2, Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
+        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -310,6 +310,10 @@ where
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.data_source.get_block_containing_transaction(h).await
     }
+
+    async fn get_cert2(&self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.data_source.get_cert2(height).await
+    }
 }
 
 impl<D, U, Types> UpdateAvailabilityData<Types> for ExtensibleDataSource<D, U>
@@ -557,6 +561,7 @@ where
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
     use hotshot::types::Event;
+    use hotshot_new_protocol::consensus::CoordinatorEvent;
 
     use super::*;
     use crate::{
@@ -596,7 +601,9 @@ mod impl_testable_data_source {
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
-            self.update(event).await.unwrap();
+            self.update(&CoordinatorEvent::LegacyEvent(event.clone()))
+                .await
+                .unwrap();
         }
     }
 }

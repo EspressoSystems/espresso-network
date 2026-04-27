@@ -119,6 +119,13 @@ demo-native-epoch-reward *args: (build "test" "--no-default-features")
 demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-ff *args: (build "test" "--no-default-features")
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
+
+ff *args:
+    mkdir -p logs
+    just demo-native-ff --tui=false {{args}} 2>&1 | tee logs/demo-native-ff.log
+
 demo-native-benchmark:
     cargo build --release --features benchmarking
     scripts/demo-native
@@ -393,4 +400,3 @@ contracts-test-network *args='-vv':
         exit 1
     fi
     forge test --match-test test_Network_ --jobs 1 {{args}}
-

@@ -9,6 +9,7 @@ use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
+use hotshot_new_protocol::{message::Certificate2, storage::NewProtocolStorage};
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
@@ -31,7 +32,7 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use serde::{Serialize, de::DeserializeOwned};
-use versions::Upgrade;
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use super::{
     impls::NodeState,
@@ -39,7 +40,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    AuthenticatedValidatorMap, BlockMerkleTree, CoordinatorEvent, FeeAccount, FeeAccountProof,
     FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
@@ -787,37 +788,139 @@ pub trait SequencerPersistence:
     }
 
     /// Update storage based on an event from consensus.
-    async fn handle_event(&self, event: &Event, consumer: &(impl EventConsumer + 'static)) {
-        if let EventType::Decide {
-            leaf_chain,
-            committing_qc,
-            deciding_qc,
-            ..
-        } = &event.event
-        {
-            let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-                // No new leaves.
-                return;
-            };
+    async fn handle_event(
+        &self,
+        event: &CoordinatorEvent<SeqTypes>,
+        consumer: &(impl EventConsumer + 'static),
+    ) {
+        match event {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
+                if let EventType::Decide {
+                    leaf_chain,
+                    committing_qc,
+                    deciding_qc,
+                    ..
+                } = &hotshot_event.event
+                {
+                    let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
+                        return;
+                    };
 
-            // Associate each decided leaf with a QC.
-            let chain = leaf_chain.iter().zip(
-                // The first (most recent) leaf corresponds to the QC triggering the decide event.
-                std::iter::once((**committing_qc).clone())
-                    // Moving backwards in the chain, each leaf corresponds with the subsequent
-                    // leaf's justify QC.
-                    .chain(leaf_chain.iter().map(|leaf| CertificatePair::for_parent(&leaf.leaf))),
-            );
+                    tracing::info!(
+                        leaf_count = leaf_chain.len(),
+                        newest_height = leaf.height(),
+                        newest_view = ?leaf.view_number(),
+                        newest_version = ?leaf.block_header().version(),
+                        has_deciding_qc = deciding_qc.is_some(),
+                        "persistence handling legacy decide event"
+                    );
 
-            if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, deciding_qc.clone(), consumer)
-                .await
-            {
-                tracing::error!(
-                    "failed to save decided leaves, chain may not be up to date: {err:#}"
-                );
-                return;
-            }
+                    let chain = leaf_chain.iter().zip(
+                        std::iter::once((**committing_qc).clone()).chain(
+                            leaf_chain
+                                .iter()
+                                .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
+                        ),
+                    );
+
+                    if let Err(err) = self
+                        .append_decided_leaves(
+                            leaf.view_number(),
+                            chain,
+                            deciding_qc.clone(),
+                            consumer,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "failed to save decided leaves, chain may not be up to date: {err:#}"
+                        );
+                    }
+                }
+            },
+            CoordinatorEvent::NewDecide(decide) => {
+                if decide.leaves.is_empty() {
+                    return;
+                }
+
+                if decide.vid_shares.len() != decide.leaves.len() {
+                    tracing::error!(
+                        leaves = decide.leaves.len(),
+                        vid_shares = decide.vid_shares.len(),
+                        "new protocol decide event has mismatched leaves and VID shares"
+                    );
+                    return;
+                }
+
+                let newest = &decide.leaves[0];
+                let newest_version = newest.block_header().version();
+                let cert2_height = decide.cert2.as_ref().map(|cert2| cert2.data.block_number);
+                if newest_version < NEW_PROTOCOL_VERSION {
+                    tracing::warn!(
+                        leaf_count = decide.leaves.len(),
+                        newest_height = newest.height(),
+                        newest_view = ?newest.view_number(),
+                        ?newest_version,
+                        has_cert2 = decide.cert2.is_some(),
+                        cert2_height,
+                        "persistence handling new-protocol decide before NEW_PROTOCOL_VERSION"
+                    );
+                } else {
+                    tracing::info!(
+                        leaf_count = decide.leaves.len(),
+                        newest_height = newest.height(),
+                        newest_view = ?newest.view_number(),
+                        ?newest_version,
+                        has_cert2 = decide.cert2.is_some(),
+                        cert2_height,
+                        "persistence handling new-protocol decide event"
+                    );
+                }
+
+                // TODO(new-protocol)
+                for signed in decide.vid_shares.iter().flatten() {
+                    let proposal = convert_proposal(signed.clone());
+                    if let Err(err) = self.append_vid(&proposal).await {
+                        tracing::error!("failed to append VID share from new protocol: {err:#}");
+                    }
+                }
+
+                // Store leaves in persistence. Zip with VID shares from the
+                // new protocol decide event.
+                let leaf_infos: Vec<_> = decide
+                    .leaves
+                    .iter()
+                    .zip(decide.vid_shares.iter())
+                    .map(|(leaf, vid_share)| {
+                        let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
+                        let vid = vid_share
+                            .as_ref()
+                            .map(|s| VidDisperseShare::V2(s.data.clone()));
+                        LeafInfo::new(leaf.clone(), state, None, vid, None)
+                    })
+                    .collect();
+
+                // cert1 certifies leaves[0] (newest); each leaf's justify_qc
+                // certifies the next older leaf.
+                let view_number = decide.leaves[0].view_number();
+                let qcs = std::iter::once(decide.cert1.clone())
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()));
+
+                if let Err(err) = self
+                    .append_decided_leaves(
+                        view_number,
+                        leaf_infos
+                            .iter()
+                            .zip(qcs.map(CertificatePair::non_epoch_change)),
+                        None,
+                        consumer,
+                    )
+                    .await
+                {
+                    tracing::error!("failed to save decided leaves from new protocol: {err:#}");
+                }
+            },
+            _ => {},
         }
     }
 
@@ -877,6 +980,23 @@ pub trait SequencerPersistence:
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()>;
+
+    /// Persist cert2 for the given view.
+    async fn append_cert2(
+        &self,
+        _view: ViewNumber,
+        _cert2: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load a persisted cert2 by view, if any.
+    async fn load_cert2(
+        &self,
+        _view: ViewNumber,
+    ) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        Ok(None)
+    }
 
     /// Update the current eQC in storage.
     async fn store_eqc(
@@ -974,7 +1094,7 @@ pub trait SequencerPersistence:
 
 #[async_trait]
 pub trait EventConsumer: Debug + Send + Sync {
-    async fn handle_event(&self, event: &Event) -> anyhow::Result<()>;
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -982,7 +1102,7 @@ impl<T> EventConsumer for Box<T>
 where
     T: EventConsumer + ?Sized,
 {
-    async fn handle_event(&self, event: &Event) -> anyhow::Result<()> {
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         (**self).handle_event(event).await
     }
 }
@@ -992,7 +1112,7 @@ pub struct NullEventConsumer;
 
 #[async_trait]
 impl EventConsumer for NullEventConsumer {
-    async fn handle_event(&self, _event: &Event) -> anyhow::Result<()> {
+    async fn handle_event(&self, _event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -1117,6 +1237,17 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).add_state_cert(state_cert).await
+    }
+}
+
+#[async_trait]
+impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
+    async fn append_cert2(
+        &self,
+        view: ViewNumber,
+        cert: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        (**self).append_cert2(view, cert).await
     }
 }
 
