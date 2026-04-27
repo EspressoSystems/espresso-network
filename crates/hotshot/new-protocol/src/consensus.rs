@@ -66,7 +66,6 @@ pub enum ConsensusInput<T: NodeType> {
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
-    RequestProposal(ViewNumber, Commitment<Leaf2<T>>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
     SendProposal(SignedProposal<T, Proposal<T>>, VidDisperse2<T>),
@@ -97,6 +96,7 @@ pub enum ConsensusOutput<T: NodeType> {
 
 pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, Proposal<T>>,
+    signed_proposals: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
     proposed_views: BTreeSet<ViewNumber>,
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
@@ -155,6 +155,7 @@ impl<T: NodeType> Consensus<T> {
     {
         Self {
             proposals: BTreeMap::new(),
+            signed_proposals: BTreeMap::new(),
             proposed_views: BTreeSet::new(),
             vid_disperses: BTreeMap::new(),
             blocks: BTreeMap::new(),
@@ -205,6 +206,10 @@ impl<T: NodeType> Consensus<T> {
     /// Return the proposal stored at the given view, if any.
     pub fn proposal_at(&self, view: ViewNumber) -> Option<&Proposal<T>> {
         self.proposals.get(&view)
+    }
+
+    pub fn signed_proposal(&self, view: &ViewNumber) -> Option<&SignedProposal<T, Proposal<T>>> {
+        self.signed_proposals.get(view)
     }
 
     /// Apply consensus to the given input and collect protocol outputs.
@@ -346,6 +351,7 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs = self.timeout_certs.split_off(&view);
         self.headers = self.headers.split_off(&view);
         self.leaves = self.leaves.split_off(&view);
+        self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
         self.last_decided_view = self.last_decided_view.max(view);
@@ -420,6 +426,7 @@ impl<T: NodeType> Consensus<T> {
         let payload_size = vid_share.payload_byte_len();
 
         self.proposals.insert(view, proposal.clone());
+        self.signed_proposals.insert(view, signed_proposal.clone());
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
 
