@@ -412,88 +412,64 @@ where
         .api_route(
             routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
             get_with(get_reward_claim_input, |op| {
-                op.description(
-                    "Get reward claim input for L1 contract submission. Returns lifetime rewards \
-                     and Merkle proof needed to call claimRewards() on the L1 contract.",
-                )
-                .tag("Rewards")
+                op.description(routes::v2::REWARD_CLAIM_INPUT_ROUTE.description)
+                    .tag(routes::v2::REWARD_CLAIM_INPUT_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::REWARD_BALANCE_ROUTE.http,
             get_with(get_reward_balance, |op| {
-                op.description("Get reward balance for an address at the latest finalized height")
-                    .tag("Rewards")
+                op.description(routes::v2::REWARD_BALANCE_ROUTE.description)
+                    .tag(routes::v2::REWARD_BALANCE_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.http,
             get_with(get_reward_account_proof, |op| {
-                op.description(
-                    "Get Merkle proof for a reward account at the latest finalized height. \
-                     Returns V2 proof with Keccak256 hashing",
-                )
-                .tag("Rewards")
+                op.description(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.description)
+                    .tag(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::REWARD_BALANCES_ROUTE.http,
             get_with(get_reward_balances, |op| {
-                op.description(
-                    "Get paginated list of all reward balances at a specific height. Limit must \
-                     be ≤ 10000",
-                )
-                .tag("Rewards")
+                op.description(routes::v2::REWARD_BALANCES_ROUTE.description)
+                    .tag(routes::v2::REWARD_BALANCES_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.http,
             get_with(get_reward_merkle_tree_v2, |op| {
-                op.description(
-                    "Get raw RewardMerkleTreeV2 snapshot at a given height. Returns serialized \
-                     merkle tree data",
-                )
-                .tag("Rewards")
+                op.description(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.description)
+                    .tag(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::NAMESPACE_PROOF_ROUTE.http,
             get_with(get_namespace_proof, |op| {
-                op.description(
-                    "Get namespace proof(s) for the specified namespace. Use '?block={height}' \
-                     for a single block, or '?from={start}&to={end}' for a range. Returns \
-                     transactions for the namespace along with cryptographic proof(s) of \
-                     completeness.",
-                )
-                .tag("Data")
+                op.description(routes::v2::NAMESPACE_PROOF_ROUTE.description)
+                    .tag(routes::v2::NAMESPACE_PROOF_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.http,
             get_with(get_incorrect_encoding_proof, |op| {
-                op.description(
-                    "Generate a fraud proof showing incorrect namespace encoding for a specific \
-                     block. Query param 'block' specifies the block height. Used to challenge \
-                     invalid block proposals.",
-                )
-                .tag("Data")
+                op.description(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.description)
+                    .tag(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::STATE_CERTIFICATE_ROUTE.http,
             get_with(get_state_certificate, |op| {
-                op.description(
-                    "Get light client state update certificate for an epoch. Used to update L1 \
-                     contracts with new stake table information.",
-                )
-                .tag("Consensus")
+                op.description(routes::v2::STATE_CERTIFICATE_ROUTE.description)
+                    .tag(routes::v2::STATE_CERTIFICATE_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::STAKE_TABLE_ROUTE.http,
             get_with(get_stake_table, |op| {
-                op.description("Get stake table for an epoch.")
-                    .tag("Consensus")
+                op.description(routes::v2::STAKE_TABLE_ROUTE.description)
+                    .tag(routes::v2::STAKE_TABLE_ROUTE.tag)
             }),
         )
         .finish_api(&mut api);

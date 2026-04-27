@@ -22,6 +22,10 @@ pub struct Route {
     pub http: &'static str,
     /// gRPC path for Tonic service (e.g., "/espresso.api.v2.RewardService/GetRewardBalance")
     pub grpc: &'static str,
+    /// OpenAPI description for the endpoint
+    pub description: &'static str,
+    /// OpenAPI tag grouping for the endpoint
+    pub tag: &'static str,
 }
 
 //=============================================================================
@@ -110,26 +114,40 @@ pub mod v2 {
     pub const REWARD_CLAIM_INPUT_ROUTE: Route = Route {
         http: "/v2/rewards/claim-input",
         grpc: "/espresso.api.v2.RewardService/GetRewardClaimInput",
+        description: "Get reward claim input for L1 contract submission. Returns lifetime rewards \
+                      and Merkle proof needed to call claimRewards() on the L1 contract.",
+        tag: "Rewards",
     };
 
     pub const REWARD_BALANCE_ROUTE: Route = Route {
         http: "/v2/rewards/balance",
         grpc: "/espresso.api.v2.RewardService/GetRewardBalance",
+        description: "Get reward balance for an address at the latest finalized height",
+        tag: "Rewards",
     };
 
     pub const REWARD_ACCOUNT_PROOF_ROUTE: Route = Route {
         http: "/v2/rewards/proof",
         grpc: "/espresso.api.v2.RewardService/GetRewardAccountProof",
+        description: "Get Merkle proof for a reward account at the latest finalized height. \
+                      Returns V2 proof with Keccak256 hashing",
+        tag: "Rewards",
     };
 
     pub const REWARD_BALANCES_ROUTE: Route = Route {
         http: "/v2/rewards/balances",
         grpc: "/espresso.api.v2.RewardService/GetRewardBalances",
+        description: "Get paginated list of all reward balances at a specific height. Limit must \
+                      be ≤ 10000",
+        tag: "Rewards",
     };
 
     pub const REWARD_MERKLE_TREE_V2_ROUTE: Route = Route {
         http: "/v2/rewards/tree",
         grpc: "/espresso.api.v2.RewardService/GetRewardMerkleTreeV2",
+        description: "Get raw RewardMerkleTreeV2 snapshot at a given height. Returns serialized \
+                      merkle tree data",
+        tag: "Rewards",
     };
 
     pub const OPENAPI_SPEC_ROUTE: &str = "/v2/docs/openapi.json";
@@ -140,20 +158,34 @@ pub mod v2 {
     pub const NAMESPACE_PROOF_ROUTE: Route = Route {
         http: "/v2/data/finalized/namespace-proof",
         grpc: "/espresso.api.v2.DataService/GetNamespaceProof",
+        description: "Get namespace proof(s) for the specified namespace. Use '?block={height}' \
+                      for a single block, or '?from={start}&to={end}' for a range. Returns \
+                      transactions for the namespace along with cryptographic proof(s) of \
+                      completeness.",
+        tag: "Data",
     };
 
     pub const INCORRECT_ENCODING_PROOF_ROUTE: Route = Route {
         http: "/v2/data/finalized/incorrect-encoding-proof",
         grpc: "/espresso.api.v2.DataService/GetIncorrectEncodingProof",
+        description: "Generate a fraud proof showing incorrect namespace encoding for a specific \
+                      block. Query param 'block' specifies the block height. Used to challenge \
+                      invalid block proposals.",
+        tag: "Data",
     };
 
     pub const STATE_CERTIFICATE_ROUTE: Route = Route {
         http: "/v2/consensus/state-certificate",
         grpc: "/espresso.api.v2.ConsensusService/GetStateCertificate",
+        description: "Get light client state update certificate for an epoch. Used to update L1 \
+                      contracts with new stake table information.",
+        tag: "Consensus",
     };
 
     pub const STAKE_TABLE_ROUTE: Route = Route {
         http: "/v2/consensus/stake-table",
         grpc: "/espresso.api.v2.ConsensusService/GetStakeTable",
+        description: "Get stake table for an epoch.",
+        tag: "Consensus",
     };
 }
