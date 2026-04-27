@@ -27,17 +27,9 @@ use crate::{
     message::{Proposal, convert_proposal},
     simple_certificate::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
-        QuorumCertificate2, SimpleCertificate, SuccessThreshold, UpgradeCertificate,
+        QuorumCertificate2, UpgradeCertificate,
     },
-    simple_vote::Vote2Data,
 };
-
-/// Cert2 is the finality certificate from the new protocol.
-///
-/// Defined here (rather than in the new-protocol crate) so the `Storage`
-/// trait can expose a persistence hook for it without introducing a
-/// reverse dependency.
-pub type Cert2<TYPES> = SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>;
 
 /// Abstraction for storing a variety of consensus payload datum.
 #[async_trait]
@@ -110,15 +102,6 @@ pub trait Storage<TYPES: NodeType>: Send + Sync + Clone + 'static {
         &self,
         _next_epoch_high_qc: NextEpochQuorumCertificate2<TYPES>,
     ) -> Result<()>;
-
-    /// Persist a new-protocol finality certificate (cert2) for the given view.
-    ///
-    /// Default implementation is a no-op so existing backends remain
-    /// unaffected; backends that surface decide events to downstream
-    /// consumers (query service) should override this.
-    async fn append_cert2(&self, _view: ViewNumber, _cert2: Cert2<TYPES>) -> Result<()> {
-        Ok(())
-    }
 
     /// Update the current eQC in storage.
     async fn update_eqc(

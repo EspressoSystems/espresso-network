@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, marker::PhantomData, time::Duration};
 
-use hotshot::{traits::BlockPayload, types::SignatureKey};
+use async_trait::async_trait;
+use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
         DaProposal2, EpochNumber, QuorumProposal2, VidCommitment, VidDisperseShare,
@@ -8,35 +9,51 @@ use hotshot_types::{
     },
     message::Proposal as SignedProposal,
     traits::{
-        EncodeBytes,
-        node_implementation::NodeType,
-        storage::{Cert2, Storage as StorageTrait},
+        EncodeBytes, block_contents::BlockPayload, node_implementation::NodeType,
+        signature_key::SignatureKey,
     },
     utils::EpochTransitionIndicator,
 };
-use tokio::{
-    task::{AbortHandle, JoinSet},
-    time::sleep,
-};
+use tokio::{spawn, task::JoinHandle, time::sleep};
 use tracing::{error, warn};
 
-use crate::message::Proposal;
+use crate::message::{Certificate2, Proposal};
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
 
-pub struct Storage<T: NodeType, S: StorageTrait<T>> {
-    storage: S,
-    private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
-    tasks: JoinSet<()>,
-    handles: BTreeMap<ViewNumber, Vec<AbortHandle>>,
+/// new protocol storage
+#[async_trait]
+pub trait NewProtocolStorage<T: NodeType>: Send + Sync + Clone + 'static {
+    async fn append_vid2(
+        &self,
+        proposal: &SignedProposal<T, VidDisperseShare2<T>>,
+    ) -> anyhow::Result<()>;
+
+    async fn append_da2(
+        &self,
+        proposal: &SignedProposal<T, DaProposal2<T>>,
+        vid_commit: VidCommitment,
+    ) -> anyhow::Result<()>;
+
+    async fn append_quorum_proposal2(
+        &self,
+        proposal: &SignedProposal<T, QuorumProposal2<T>>,
+    ) -> anyhow::Result<()>;
+
+    async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()>;
 }
 
-impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
+pub struct Storage<T: NodeType, S: NewProtocolStorage<T>> {
+    storage: S,
+    private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    handles: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
+}
+
+impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     pub fn new(storage: S, private_key: <T::SignatureKey as SignatureKey>::PrivateKey) -> Self {
         Self {
             storage,
             private_key,
-            tasks: JoinSet::new(),
             handles: BTreeMap::new(),
         }
     }
@@ -45,14 +62,13 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
         let view = vid_share.view_number;
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
-        let handle = self.tasks.spawn(async move {
-            let share: VidDisperseShare<T> = VidDisperseShare::V2(vid_share);
-            let Some(proposal) = share.to_proposal(&private_key) else {
+        let handle = spawn(async move {
+            let Some(proposal) = vid_share.to_proposal(&private_key) else {
                 error!("failed to sign VID share for storage");
                 return;
             };
             loop {
-                match storage.append_vid(&proposal).await {
+                match storage.append_vid2(&proposal).await {
                     Ok(()) => return,
                     Err(err) => {
                         warn!(%err, "failed to append VID share, retrying");
@@ -74,7 +90,7 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
     ) {
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
-        let handle = self.tasks.spawn(async move {
+        let handle = spawn(async move {
             let data = DaProposal2 {
                 encoded_transactions: block_payload.encode(),
                 metadata,
@@ -104,7 +120,7 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
         self.handles.entry(view_number).or_default().push(handle);
     }
 
-    pub fn append_cert2(&mut self, view: ViewNumber, cert2: Cert2<T>) {
+    pub fn append_cert2(&mut self, view: ViewNumber, cert2: Certificate2<T>) {
         let storage = self.storage.clone();
         let handle = spawn(async move {
             loop {
@@ -124,7 +140,7 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
         let view = proposal.view_number;
         let storage = self.storage.clone();
         let private_key = self.private_key.clone();
-        let handle = self.tasks.spawn(async move {
+        let handle = spawn(async move {
             let data = QuorumProposal2 {
                 block_header: proposal.block_header,
                 view_number: proposal.view_number,
@@ -146,7 +162,7 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
                 _pd: PhantomData,
             };
             loop {
-                match storage.append_proposal2(&signed).await {
+                match storage.append_quorum_proposal2(&signed).await {
                     Ok(()) => return,
                     Err(err) => {
                         warn!(%err, "failed to append proposal, retrying");
@@ -166,5 +182,39 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
             }
         }
         self.handles = keep;
+    }
+}
+
+#[async_trait]
+impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
+    async fn append_vid2(
+        &self,
+        proposal: &SignedProposal<T, VidDisperseShare2<T>>,
+    ) -> anyhow::Result<()> {
+        let wrapped = SignedProposal {
+            data: VidDisperseShare::V2(proposal.data.clone()),
+            signature: proposal.signature.clone(),
+            _pd: PhantomData,
+        };
+        hotshot_types::traits::storage::Storage::append_vid(self, &wrapped).await
+    }
+
+    async fn append_da2(
+        &self,
+        proposal: &SignedProposal<T, DaProposal2<T>>,
+        vid_commit: VidCommitment,
+    ) -> anyhow::Result<()> {
+        hotshot_types::traits::storage::Storage::append_da2(self, proposal, vid_commit).await
+    }
+
+    async fn append_quorum_proposal2(
+        &self,
+        proposal: &SignedProposal<T, QuorumProposal2<T>>,
+    ) -> anyhow::Result<()> {
+        hotshot_types::traits::storage::Storage::append_proposal2(self, proposal).await
+    }
+
+    async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
+        Ok(())
     }
 }

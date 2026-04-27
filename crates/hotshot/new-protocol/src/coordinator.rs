@@ -12,7 +12,7 @@ use hotshot_types::{
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
         block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
-        signature_key::SignatureKey, storage::Storage as StorageTrait,
+        signature_key::SignatureKey,
     },
     vote::HasViewNumber,
 };
@@ -39,7 +39,7 @@ use crate::{
     outbox::Outbox,
     proposal::ProposalValidator,
     state::{HeaderRequest, StateManager, StateManagerOutput},
-    storage::Storage,
+    storage::{NewProtocolStorage, Storage},
     vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -53,7 +53,7 @@ pub enum CoordinatorOutput<T: NodeType> {
 }
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
+pub struct Coordinator<T: NodeType, N, S: NewProtocolStorage<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Network<T, N>,
@@ -82,7 +82,9 @@ pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
 }
 
 #[bon]
-impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coordinator<T, N, S> {
+impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>>
+    Coordinator<T, N, S>
+{
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     pub fn maker(
         membership_coordinator: EpochMembershipCoordinator<T>,
@@ -234,7 +236,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                 let _ = tx.send(self.consensus.last_decided_leaf().clone());
             },
             ClientRequest::DecidedState(tx) => {
-                let view = self.consensus.last_decided_leaf().view_number();
+                let view = self.consensus.last_decided_view();
                 let _ = tx.send(self.state_manager.get_state(&view));
             },
             ClientRequest::UndecidedLeaves(tx) => {

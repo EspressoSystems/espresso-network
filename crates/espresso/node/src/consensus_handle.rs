@@ -17,6 +17,7 @@ use hotshot_new_protocol::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     state::UpdateLeaf,
+    storage::NewProtocolStorage,
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
@@ -101,7 +102,10 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
         epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
-    ) -> Self {
+    ) -> Self
+    where
+        I::Storage: NewProtocolStorage<T>,
+    {
         let client_api = coordinator.client_api().clone();
 
         let (mut event_tx, mut event_rx) =
@@ -422,7 +426,7 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
 async fn run_coordinator<
     T: NodeType,
     CN: ConnectedNetwork<T::SignatureKey>,
-    S: hotshot_types::traits::storage::Storage<T>,
+    S: NewProtocolStorage<T>,
 >(
     mut coordinator: Coordinator<T, CN, S>,
     event_sender: async_broadcast::Sender<CoordinatorEvent<T>>,
