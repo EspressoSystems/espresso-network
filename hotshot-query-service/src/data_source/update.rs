@@ -15,7 +15,6 @@ use std::iter::once;
 
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
-use committable::Committable;
 use futures::future::Future;
 use hotshot::types::EventType;
 use hotshot_new_protocol::consensus::CoordinatorEvent;
@@ -235,14 +234,7 @@ where
                         tracing::info!(height, "VID not available at decide");
                     }
 
-                    let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
-
-                    // Attach cert2 to the leaf it certifies (the most recent decided leaf).
-                    if let Some(cert2) = &decide.cert2
-                        && cert2.data.leaf_commit == Committable::commit(leaf)
-                    {
-                        info = info.with_cert2(cert2.clone());
-                    }
+                    let info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
 
                     if let Err(err) = self.append(info).await {
                         tracing::error!(height, "failed to append leaf information: {err:#}");
