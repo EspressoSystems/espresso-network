@@ -9,27 +9,27 @@ package espresso.api.v2;
 // ADVZ (VID V0) namespace proof
 message ADVZNsProof {
   uint32 namespace_id = 1;
-  bytes ns_payload = 2;
-  optional bytes ns_proof = 3;  // VID proof (serialized)
+  string ns_payload = 2;
+  optional string ns_proof = 3;  // VID proof (serialized)
 }
 
 // AvidM (VID V1) namespace proof
 message AvidMNsProof {
   uint64 ns_index = 1;
-  bytes ns_payload = 2;
-  bytes ns_proof = 3;  // Merkle proof (serialized)
+  string ns_payload = 2;
+  string ns_proof = 3;  // Merkle proof (serialized)
 }
 
 // AvidM incorrect encoding proof
 message AvidMIncorrectEncodingNsProof {
-  bytes proof_data = 1;  // Serialized incorrect encoding proof
+  string proof_data = 1;  // Serialized incorrect encoding proof
 }
 
 // AvidmGf2 (VID V2) namespace proof
 message AvidmGf2NsProof {
   uint64 ns_index = 1;
-  bytes ns_payload = 2;
-  bytes ns_proof = 3;  // Merkle proof (serialized)
+  string ns_payload = 2;
+  string ns_proof = 3;  // Merkle proof (serialized)
 }
 
 // Namespace proof - supports multiple VID versions
@@ -62,10 +62,16 @@ message GetNamespaceProofRequest {
   optional uint64 last = 4;
 }
 
+// Transaction
+message Transaction {
+  uint32 namespace = 1;
+  string payload = 2;  // base64 encoded
+}
+
 // Single block namespace proof response
 message NamespaceProofResponse {
-  // Transactions for this namespace (each transaction is serialized bytes)
-  repeated bytes transactions = 1;
+  // Transactions for this namespace
+  repeated Transaction transactions = 1;
 
   // Namespace proof (optional - may be None if namespace not present)
   optional NsProof proof = 2;

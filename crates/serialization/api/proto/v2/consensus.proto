@@ -12,31 +12,31 @@ import "v2/common.proto";
 message LightClientState {
   uint64 view_number = 1;
   uint64 block_height = 2;
-  bytes block_comm_root = 3;  // CircuitField serialized as bytes
+  string block_comm_root = 3;  // CircuitField serialized as bytes
 }
 
 // Stake table state commitments
 message StakeTableState {
-  bytes bls_key_comm = 1;      // CircuitField as bytes
-  bytes schnorr_key_comm = 2;  // CircuitField as bytes
-  bytes amount_comm = 3;       // CircuitField as bytes
-  bytes threshold = 4;         // CircuitField as bytes
+  string bls_key_comm = 1;      // CircuitField as bytes
+  string schnorr_key_comm = 2;  // CircuitField as bytes
+  string amount_comm = 3;       // CircuitField as bytes
+  string threshold = 4;         // CircuitField as bytes
 }
 
 // State signature tuple (key + two signatures)
 message StateSignatureTuple {
   SchnorrPublicKey state_signature_key = 1;  // Schnorr public key
-  bytes lcv3_signature = 2;                   // LCV3 Schnorr signature
-  bytes lcv2_signature = 3;                   // LCV2 Schnorr signature
+  string lcv3_signature = 2;                   // LCV3 Schnorr signature
+  string lcv2_signature = 3;                   // LCV2 Schnorr signature
 }
 
 // Light client state update certificate V2
 message LightClientStateUpdateCertificateV2 {
   uint64 epoch = 1;
-  LightClientState light_client_state = 2;
-  StakeTableState next_stake_table_state = 3;
+  string light_client_state = 2;  // TaggedBase64 "LIGHT_CLIENT_STATE~..."
+  string next_stake_table_state = 3;  // TaggedBase64 "STAKE_TABLE_STATE~..."
   repeated StateSignatureTuple signatures = 4;
-  bytes auth_root = 5;  // 32 bytes
+  string auth_root = 5;  // TaggedBase64 or plain base64
 }
 
 //=============================================================================

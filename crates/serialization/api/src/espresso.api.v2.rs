@@ -3,15 +3,15 @@
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BlsPublicKey {
-    #[prost(bytes = "vec", tag = "1")]
-    pub key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
 }
 /// Schnorr public key (typically 32 bytes)
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SchnorrPublicKey {
-    #[prost(bytes = "vec", tag = "1")]
-    pub key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
 }
 /// Network address - either IP or domain name with port
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -67,8 +67,8 @@ pub struct StakeTableEntry {
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PeerConnectInfo {
     /// X25519 public key (32 bytes)
-    #[prost(bytes = "vec", tag = "1")]
-    pub x25519_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "1")]
+    pub x25519_key: ::prost::alloc::string::String,
     /// P2P network address
     #[prost(message, optional, tag = "2")]
     pub p2p_addr: ::core::option::Option<NetAddr>,
@@ -327,11 +327,11 @@ pub struct GetRewardMerkleTreeRequest {
 pub struct AdvzNsProof {
     #[prost(uint32, tag = "1")]
     pub namespace_id: u32,
-    #[prost(bytes = "vec", tag = "2")]
-    pub ns_payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "2")]
+    pub ns_payload: ::prost::alloc::string::String,
     /// VID proof (serialized)
-    #[prost(bytes = "vec", optional, tag = "3")]
-    pub ns_proof: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(string, optional, tag = "3")]
+    pub ns_proof: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// AvidM (VID V1) namespace proof
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -339,19 +339,19 @@ pub struct AdvzNsProof {
 pub struct AvidMNsProof {
     #[prost(uint64, tag = "1")]
     pub ns_index: u64,
-    #[prost(bytes = "vec", tag = "2")]
-    pub ns_payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "2")]
+    pub ns_payload: ::prost::alloc::string::String,
     /// Merkle proof (serialized)
-    #[prost(bytes = "vec", tag = "3")]
-    pub ns_proof: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub ns_proof: ::prost::alloc::string::String,
 }
 /// AvidM incorrect encoding proof
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AvidMIncorrectEncodingNsProof {
     /// Serialized incorrect encoding proof
-    #[prost(bytes = "vec", tag = "1")]
-    pub proof_data: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "1")]
+    pub proof_data: ::prost::alloc::string::String,
 }
 /// AvidmGf2 (VID V2) namespace proof
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -359,11 +359,11 @@ pub struct AvidMIncorrectEncodingNsProof {
 pub struct AvidmGf2NsProof {
     #[prost(uint64, tag = "1")]
     pub ns_index: u64,
-    #[prost(bytes = "vec", tag = "2")]
-    pub ns_payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "2")]
+    pub ns_payload: ::prost::alloc::string::String,
     /// Merkle proof (serialized)
-    #[prost(bytes = "vec", tag = "3")]
-    pub ns_proof: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub ns_proof: ::prost::alloc::string::String,
 }
 /// Namespace proof - supports multiple VID versions
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -409,13 +409,23 @@ pub struct GetNamespaceProofRequest {
     #[schemars(example = "1000100")]
     pub last: ::core::option::Option<u64>,
 }
-/// Single block namespace proof response
+/// Transaction
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Transaction {
+    #[prost(uint32, tag = "1")]
+    pub namespace: u32,
+    /// base64 encoded
+    #[prost(string, tag = "2")]
+    pub payload: ::prost::alloc::string::String,
+}
+/// Single block namespace proof response
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NamespaceProofResponse {
-    /// Transactions for this namespace (each transaction is serialized bytes)
-    #[prost(bytes = "vec", repeated, tag = "1")]
-    pub transactions: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    /// Transactions for this namespace
+    #[prost(message, repeated, tag = "1")]
+    pub transactions: ::prost::alloc::vec::Vec<Transaction>,
     /// Namespace proof (optional - may be None if namespace not present)
     #[prost(message, optional, tag = "2")]
     pub proof: ::core::option::Option<NsProof>,
@@ -478,25 +488,25 @@ pub struct LightClientState {
     #[prost(uint64, tag = "2")]
     pub block_height: u64,
     /// CircuitField serialized as bytes
-    #[prost(bytes = "vec", tag = "3")]
-    pub block_comm_root: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub block_comm_root: ::prost::alloc::string::String,
 }
 /// Stake table state commitments
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StakeTableState {
     /// CircuitField as bytes
-    #[prost(bytes = "vec", tag = "1")]
-    pub bls_key_comm: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "1")]
+    pub bls_key_comm: ::prost::alloc::string::String,
     /// CircuitField as bytes
-    #[prost(bytes = "vec", tag = "2")]
-    pub schnorr_key_comm: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "2")]
+    pub schnorr_key_comm: ::prost::alloc::string::String,
     /// CircuitField as bytes
-    #[prost(bytes = "vec", tag = "3")]
-    pub amount_comm: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub amount_comm: ::prost::alloc::string::String,
     /// CircuitField as bytes
-    #[prost(bytes = "vec", tag = "4")]
-    pub threshold: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "4")]
+    pub threshold: ::prost::alloc::string::String,
 }
 /// State signature tuple (key + two signatures)
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -506,11 +516,11 @@ pub struct StateSignatureTuple {
     #[prost(message, optional, tag = "1")]
     pub state_signature_key: ::core::option::Option<SchnorrPublicKey>,
     /// LCV3 Schnorr signature
-    #[prost(bytes = "vec", tag = "2")]
-    pub lcv3_signature: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "2")]
+    pub lcv3_signature: ::prost::alloc::string::String,
     /// LCV2 Schnorr signature
-    #[prost(bytes = "vec", tag = "3")]
-    pub lcv2_signature: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub lcv2_signature: ::prost::alloc::string::String,
 }
 /// Light client state update certificate V2
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -518,15 +528,17 @@ pub struct StateSignatureTuple {
 pub struct LightClientStateUpdateCertificateV2 {
     #[prost(uint64, tag = "1")]
     pub epoch: u64,
-    #[prost(message, optional, tag = "2")]
-    pub light_client_state: ::core::option::Option<LightClientState>,
-    #[prost(message, optional, tag = "3")]
-    pub next_stake_table_state: ::core::option::Option<StakeTableState>,
+    /// TaggedBase64 "LIGHT_CLIENT_STATE~..."
+    #[prost(string, tag = "2")]
+    pub light_client_state: ::prost::alloc::string::String,
+    /// TaggedBase64 "STAKE_TABLE_STATE~..."
+    #[prost(string, tag = "3")]
+    pub next_stake_table_state: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "4")]
     pub signatures: ::prost::alloc::vec::Vec<StateSignatureTuple>,
-    /// 32 bytes
-    #[prost(bytes = "vec", tag = "5")]
-    pub auth_root: ::prost::alloc::vec::Vec<u8>,
+    /// TaggedBase64 or plain base64
+    #[prost(string, tag = "5")]
+    pub auth_root: ::prost::alloc::string::String,
 }
 /// Request to get state certificate for an epoch
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]

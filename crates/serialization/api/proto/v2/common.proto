@@ -11,12 +11,12 @@ package espresso.api.v2;
 
 // BLS public key (typically 48 bytes)
 message BLSPublicKey {
-  bytes key = 1;
+  string key = 1;
 }
 
 // Schnorr public key (typically 32 bytes)
 message SchnorrPublicKey {
-  bytes key = 1;
+  string key = 1;
 }
 
 //=============================================================================
@@ -55,7 +55,7 @@ message StakeTableEntry {
 
 // Peer connection information
 message PeerConnectInfo {
-  bytes x25519_key = 1;  // X25519 public key (32 bytes)
+  string x25519_key = 1;  // X25519 public key (32 bytes)
   NetAddr p2p_addr = 2;  // P2P network address
 }
 

@@ -8,9 +8,9 @@ use thiserror::Error;
 /// Proof of correctness for namespace payload bytes in a block.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ADVZNsProof {
-    pub(crate) ns_index: NsIndex,
-    pub(crate) ns_payload: NsPayloadOwned,
-    pub(crate) ns_proof: Option<LargeRangeProofType>, // `None` if ns_payload is empty
+    pub ns_index: NsIndex,
+    pub ns_payload: NsPayloadOwned,
+    pub ns_proof: Option<LargeRangeProofType>, // `None` if ns_payload is empty
 }
 
 /// Byte lengths for the different items that could appear in a namespace table.

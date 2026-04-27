@@ -182,6 +182,12 @@ where
     >;
     type NsProof = espresso_types::NsProof;
 
+    fn encode_base64(&self, bytes: &[u8]) -> String {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        STANDARD.encode(bytes)
+    }
+
     // Deserialize proto/string types → internal types
     fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address> {
         s.parse()
@@ -266,13 +272,16 @@ where
         &self,
         value: &Self::NamespaceProof,
     ) -> anyhow::Result<serialization_api::v2::NamespaceProofResponse> {
-        // Serialize each transaction individually
-        let transactions: Vec<Vec<u8>> = value
+        // Serialize each transaction using serde JSON to preserve base64 encoding
+        let transactions: Vec<v2::Transaction> = value
             .transactions
             .iter()
-            .map(|tx| bincode::serialize(tx))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| anyhow::anyhow!("failed to serialize transactions: {}", e))?;
+            .map(|tx| {
+                let json = serde_json::to_value(tx)?;
+                serde_json::from_value(json)
+                    .map_err(|e| anyhow::anyhow!("failed to deserialize transaction: {}", e))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let proof = value
             .proof
@@ -290,8 +299,9 @@ where
         &self,
         value: &Self::IncorrectEncodingProof,
     ) -> anyhow::Result<serialization_api::v2::IncorrectEncodingProofResponse> {
-        let proof_data = bincode::serialize(value)
+        let proof_bytes = bincode::serialize(value)
             .map_err(|e| anyhow::anyhow!("failed to serialize incorrect encoding proof: {}", e))?;
+        let proof_data = self.encode_base64(&proof_bytes);
 
         Ok(serialization_api::v2::IncorrectEncodingProofResponse {
             proof: Some(v2::AvidMIncorrectEncodingNsProof { proof_data }),
@@ -327,18 +337,15 @@ where
         &self,
         peer: &Self::PeerConfig,
     ) -> anyhow::Result<serialization_api::v2::PeerConfig> {
-        use hotshot_types::traits::signature_key::SignatureKey;
-
         let stake_table_entry = v2::StakeTableEntry {
             stake_key: Some(v2::BlsPublicKey {
-                key: peer.stake_table_entry.stake_key.to_bytes().to_vec(),
+                key: peer.stake_table_entry.stake_key.to_string(),
             }),
             stake_amount: peer.stake_table_entry.stake_amount.to_string(),
         };
 
         let state_ver_key = v2::SchnorrPublicKey {
-            key: bincode::serialize(&peer.state_ver_key)
-                .map_err(|e| anyhow::anyhow!("failed to serialize state ver key: {}", e))?,
+            key: peer.state_ver_key.to_string(),
         };
 
         let connect_info = peer.connect_info.as_ref().map(|info| {
@@ -358,7 +365,7 @@ where
             };
 
             v2::PeerConnectInfo {
-                x25519_key: info.x25519_key.as_bytes().to_vec(),
+                x25519_key: info.x25519_key.to_string(),
                 p2p_addr: Some(p2p_addr),
             }
         });
@@ -374,31 +381,6 @@ where
         &self,
         cert: &Self::LightClientCert,
     ) -> anyhow::Result<serialization_api::v2::LightClientStateUpdateCertificateV2> {
-        use ark_serialize::CanonicalSerialize;
-
-        // Helper to serialize field elements using arkworks
-        let serialize_field =
-            |field: &hotshot_types::light_client::CircuitField| -> anyhow::Result<Vec<u8>> {
-                let mut bytes = Vec::new();
-                field
-                    .serialize_compressed(&mut bytes)
-                    .map_err(|e| anyhow::anyhow!("failed to serialize field element: {}", e))?;
-                Ok(bytes)
-            };
-
-        let light_client_state = v2::LightClientState {
-            view_number: cert.light_client_state.view_number,
-            block_height: cert.light_client_state.block_height,
-            block_comm_root: serialize_field(&cert.light_client_state.block_comm_root)?,
-        };
-
-        let next_stake_table_state = v2::StakeTableState {
-            bls_key_comm: serialize_field(&cert.next_stake_table_state.bls_key_comm)?,
-            schnorr_key_comm: serialize_field(&cert.next_stake_table_state.schnorr_key_comm)?,
-            amount_comm: serialize_field(&cert.next_stake_table_state.amount_comm)?,
-            threshold: serialize_field(&cert.next_stake_table_state.threshold)?,
-        };
-
         let signatures: Result<Vec<_>, anyhow::Error> = cert
             .signatures
             .iter()
@@ -406,16 +388,10 @@ where
                 |(key, lcv3_sig, lcv2_sig)| -> anyhow::Result<v2::StateSignatureTuple> {
                     Ok(v2::StateSignatureTuple {
                         state_signature_key: Some(v2::SchnorrPublicKey {
-                            key: bincode::serialize(key).map_err(|e| {
-                                anyhow::anyhow!("failed to serialize signature key: {}", e)
-                            })?,
+                            key: key.to_string(),
                         }),
-                        lcv3_signature: bincode::serialize(lcv3_sig).map_err(|e| {
-                            anyhow::anyhow!("failed to serialize lcv3 signature: {}", e)
-                        })?,
-                        lcv2_signature: bincode::serialize(lcv2_sig).map_err(|e| {
-                            anyhow::anyhow!("failed to serialize lcv2 signature: {}", e)
-                        })?,
+                        lcv3_signature: lcv3_sig.to_string(),
+                        lcv2_signature: lcv2_sig.to_string(),
                     })
                 },
             )
@@ -429,10 +405,10 @@ where
 
         Ok(v2::LightClientStateUpdateCertificateV2 {
             epoch,
-            light_client_state: Some(light_client_state),
-            next_stake_table_state: Some(next_stake_table_state),
+            light_client_state: cert.light_client_state.to_string(),
+            next_stake_table_state: cert.next_stake_table_state.to_string(),
             signatures: signatures?,
-            auth_root: cert.auth_root.to_vec(),
+            auth_root: self.encode_base64(cert.auth_root.as_slice()),
         })
     }
 
@@ -442,42 +418,30 @@ where
     ) -> anyhow::Result<serialization_api::v2::NsProof> {
         use espresso_types::NsProof as InternalNsProof;
 
-        // For now, serialize each proof variant to bincode since the inner fields are private
-        // The proto structure documents the proof types, but we use opaque bytes for crypto data
+        // Access the inner VID proof types directly and serialize them to JSON
+        // This preserves the exact structure and TaggedBase64 encoding from v1
         let proof_version = match proof {
             InternalNsProof::V0(advz_proof) => {
-                let proof_bytes = bincode::serialize(advz_proof)
-                    .map_err(|e| anyhow::anyhow!("failed to serialize V0 proof: {}", e))?;
-                v2::ns_proof::ProofVersion::V0(v2::AdvzNsProof {
-                    namespace_id: 0, // Field not accessible, serialized in ns_proof
-                    ns_payload: vec![],
-                    ns_proof: Some(proof_bytes),
-                })
+                // Serialize the inner fields directly
+                let json = serde_json::json!({
+                    "ns_index": advz_proof.ns_index,
+                    "ns_payload": advz_proof.ns_payload,
+                    "ns_proof": advz_proof.ns_proof,
+                });
+                v2::ns_proof::ProofVersion::V0(serde_json::from_value(json)?)
             },
             InternalNsProof::V1(avidm_proof) => {
-                let proof_bytes = bincode::serialize(avidm_proof)
-                    .map_err(|e| anyhow::anyhow!("failed to serialize V1 proof: {}", e))?;
-                v2::ns_proof::ProofVersion::V1(v2::AvidMNsProof {
-                    ns_index: 0, // Field not accessible, serialized in ns_proof
-                    ns_payload: vec![],
-                    ns_proof: proof_bytes,
-                })
+                // The inner VID proof with proper serde annotations
+                let json = serde_json::to_value(&avidm_proof.0)?;
+                v2::ns_proof::ProofVersion::V1(serde_json::from_value(json)?)
             },
             InternalNsProof::V1IncorrectEncoding(incorrect_proof) => {
-                v2::ns_proof::ProofVersion::V1IncorrectEncoding(v2::AvidMIncorrectEncodingNsProof {
-                    proof_data: bincode::serialize(incorrect_proof).map_err(|e| {
-                        anyhow::anyhow!("failed to serialize incorrect encoding proof: {}", e)
-                    })?,
-                })
+                let json = serde_json::to_value(&incorrect_proof.0)?;
+                v2::ns_proof::ProofVersion::V1IncorrectEncoding(serde_json::from_value(json)?)
             },
             InternalNsProof::V2(gf2_proof) => {
-                let proof_bytes = bincode::serialize(gf2_proof)
-                    .map_err(|e| anyhow::anyhow!("failed to serialize V2 proof: {}", e))?;
-                v2::ns_proof::ProofVersion::V2(v2::AvidmGf2NsProof {
-                    ns_index: 0, // Field not accessible, serialized in ns_proof
-                    ns_payload: vec![],
-                    ns_proof: proof_bytes,
-                })
+                let json = serde_json::to_value(&gf2_proof.0)?;
+                v2::ns_proof::ProofVersion::V2(serde_json::from_value(json)?)
             },
         };
 

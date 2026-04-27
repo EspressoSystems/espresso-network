@@ -4787,6 +4787,7 @@ dependencies = [
  "async-lock 3.4.2",
  "async-once-cell",
  "async-trait",
+ "base64 0.22.1",
  "bincode",
  "blake3",
  "byteorder",
