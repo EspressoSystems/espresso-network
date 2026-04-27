@@ -54,7 +54,7 @@ use tokio::time::timeout;
 use tokio_util::task::AbortOnDropHandle;
 use url::Url;
 use vbs::version::StaticVersionType;
-use versions::{CLIQUENET_VERSION, EPOCH_VERSION};
+use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
 use crate::{
     api::{BlocksFrontier, RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
@@ -730,7 +730,7 @@ where
         // Load the leaf to check which protocol version it belongs to.
         let leaf = self.db.get_leaf(height).await?;
 
-        if leaf.block_header().version() >= CLIQUENET_VERSION {
+        if leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
             // New protocol: cert2 alone proves finality.
             let cert2 = self
                 .db
