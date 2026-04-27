@@ -252,10 +252,14 @@
             dregs-unwrapped
             nodePackages.prettier
             solhint
-            (python3.withPackages (ps: with ps; [ black ]))
             libusb1
             mdbook
+
+            # scripts
             bc
+            python3
+            ruff
+            ty
 
             go
             golangci-lint
