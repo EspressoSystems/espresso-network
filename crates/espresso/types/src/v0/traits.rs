@@ -13,7 +13,7 @@ use hotshot_new_protocol::{message::Certificate2, storage::NewProtocolStorage};
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
-        QuorumProposalWrapper, VidCommitment, VidDisperseShare, VidDisperseShare2, ViewNumber,
+        QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
@@ -1199,33 +1199,6 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
 
 #[async_trait]
 impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
-    async fn append_vid2(
-        &self,
-        proposal: &Proposal<SeqTypes, VidDisperseShare2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        let wrapped = Proposal {
-            data: VidDisperseShare::V2(proposal.data.clone()),
-            signature: proposal.signature.clone(),
-            _pd: std::marker::PhantomData,
-        };
-        Storage::<SeqTypes>::append_vid(self, &wrapped).await
-    }
-
-    async fn append_da2(
-        &self,
-        proposal: &Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        Storage::<SeqTypes>::append_da2(self, proposal, vid_commit).await
-    }
-
-    async fn append_quorum_proposal2(
-        &self,
-        proposal: &Proposal<SeqTypes, QuorumProposal2<SeqTypes>>,
-    ) -> anyhow::Result<()> {
-        Storage::<SeqTypes>::append_proposal2(self, proposal).await
-    }
-
     async fn append_cert2(
         &self,
         view: ViewNumber,

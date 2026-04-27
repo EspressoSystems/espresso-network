@@ -23,22 +23,18 @@ const RETRY_DELAY: Duration = Duration::from_millis(300);
 
 /// new protocol storage
 #[async_trait]
-pub trait NewProtocolStorage<T: NodeType>: Send + Sync + Clone + 'static {
+pub trait NewProtocolStorage<T: NodeType>: hotshot_types::traits::storage::Storage<T> {
     async fn append_vid2(
         &self,
         proposal: &SignedProposal<T, VidDisperseShare2<T>>,
-    ) -> anyhow::Result<()>;
-
-    async fn append_da2(
-        &self,
-        proposal: &SignedProposal<T, DaProposal2<T>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()>;
-
-    async fn append_quorum_proposal2(
-        &self,
-        proposal: &SignedProposal<T, QuorumProposal2<T>>,
-    ) -> anyhow::Result<()>;
+    ) -> anyhow::Result<()> {
+        let wrapped = SignedProposal {
+            data: VidDisperseShare::V2(proposal.data.clone()),
+            signature: proposal.signature.clone(),
+            _pd: PhantomData,
+        };
+        self.append_vid(&wrapped).await
+    }
 
     async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()>;
 }
@@ -162,7 +158,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 _pd: PhantomData,
             };
             loop {
-                match storage.append_quorum_proposal2(&signed).await {
+                match storage.append_proposal2(&signed).await {
                     Ok(()) => return,
                     Err(err) => {
                         warn!(%err, "failed to append proposal, retrying");
@@ -187,33 +183,6 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
 #[async_trait]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
-    async fn append_vid2(
-        &self,
-        proposal: &SignedProposal<T, VidDisperseShare2<T>>,
-    ) -> anyhow::Result<()> {
-        let wrapped = SignedProposal {
-            data: VidDisperseShare::V2(proposal.data.clone()),
-            signature: proposal.signature.clone(),
-            _pd: PhantomData,
-        };
-        hotshot_types::traits::storage::Storage::append_vid(self, &wrapped).await
-    }
-
-    async fn append_da2(
-        &self,
-        proposal: &SignedProposal<T, DaProposal2<T>>,
-        vid_commit: VidCommitment,
-    ) -> anyhow::Result<()> {
-        hotshot_types::traits::storage::Storage::append_da2(self, proposal, vid_commit).await
-    }
-
-    async fn append_quorum_proposal2(
-        &self,
-        proposal: &SignedProposal<T, QuorumProposal2<T>>,
-    ) -> anyhow::Result<()> {
-        hotshot_types::traits::storage::Storage::append_proposal2(self, proposal).await
-    }
-
     async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
         Ok(())
     }
