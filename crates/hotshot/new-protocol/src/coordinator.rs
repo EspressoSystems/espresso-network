@@ -730,6 +730,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         self.timeout_one_honest_collector.gc(view, epoch);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
+        self.pending_proposal_fetches.gc(view);
     }
 
     pub fn node_id(&self) -> &KeyPrefix {
@@ -760,6 +761,10 @@ impl<T: NodeType> PendingProposalFetches<T> {
             leaf_commitment,
             respond,
         });
+    }
+
+    fn gc(&mut self, view: ViewNumber) {
+        self.pending.retain(|pending| pending.view >= view);
     }
 
     fn resolve(&mut self, proposal: &SignedProposal<T, Proposal<T>>) {
