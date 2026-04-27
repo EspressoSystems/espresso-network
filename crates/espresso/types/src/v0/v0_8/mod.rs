@@ -3,19 +3,19 @@ use vbs::version::Version;
 // Re-export types which haven't changed since the last minor version.
 pub use super::v0_7::{
     ADVZNsProof, ADVZTxProof, AccountQueryData, AvidMIncorrectEncodingNsProof, AvidMNsProof,
-    AvidMTxProof, AvidmGf2NsProof, AvidmGf2TxProof, BlockMerkleCommitment, BlockMerkleTree,
-    BlockSize, BuilderSignature, ChainConfig, ChainId, Delta, FeeAccount, FeeAccountProof,
-    FeeAmount, FeeInfo, FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, Header, Index, Iter,
-    L1BlockInfo, L1Client, L1ClientOptions, L1Snapshot, LeaderCounts, NamespaceId, NsIndex, NsIter,
-    NsPayload, NsPayloadBuilder, NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, NsTable,
-    NsTableBuilder, NsTableValidationError, NumNss, NumTxs, NumTxsRange, NumTxsUnchecked, Payload,
-    PayloadByteLen, ResolvableChainConfig, RewardAccountProofV2, RewardAccountQueryDataV2,
-    RewardAccountV2, RewardClaimError, RewardMerkleCommitmentV2, RewardMerkleProofV2,
-    RewardMerkleTreeV2, TimeBasedUpgrade, Transaction, TxIndex, TxIter, TxPayload, TxPayloadRange,
-    TxTableEntries, TxTableEntriesRange, Upgrade, UpgradeMode, UpgradeType, ViewBasedUpgrade,
-    BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, MAX_VALIDATORS, NS_ID_BYTE_LEN,
-    NS_OFFSET_BYTE_LEN, NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, REWARD_MERKLE_TREE_V2_ARITY,
-    REWARD_MERKLE_TREE_V2_HEIGHT, TX_OFFSET_BYTE_LEN,
+    AvidMTxProof, AvidmGf2NsProof, AvidmGf2TxProof, BLOCK_MERKLE_TREE_HEIGHT,
+    BlockMerkleCommitment, BlockMerkleTree, BlockSize, BuilderSignature, ChainConfig, ChainId,
+    Delta, FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAccountProof, FeeAmount, FeeInfo,
+    FeeMerkleCommitment, FeeMerkleProof, FeeMerkleTree, Header, Index, Iter, L1BlockInfo, L1Client,
+    L1ClientOptions, L1Snapshot, LeaderCounts, MAX_VALIDATORS, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,
+    NUM_NSS_BYTE_LEN, NUM_TXS_BYTE_LEN, NamespaceId, NsIndex, NsIter, NsPayload, NsPayloadBuilder,
+    NsPayloadByteLen, NsPayloadOwned, NsPayloadRange, NsTable, NsTableBuilder,
+    NsTableValidationError, NumNss, NumTxs, NumTxsRange, NumTxsUnchecked, Payload, PayloadByteLen,
+    REWARD_MERKLE_TREE_V2_ARITY, REWARD_MERKLE_TREE_V2_HEIGHT, ResolvableChainConfig,
+    RewardAccountProofV2, RewardAccountQueryDataV2, RewardAccountV2, RewardClaimError,
+    RewardMerkleCommitmentV2, RewardMerkleProofV2, RewardMerkleTreeV2, TX_OFFSET_BYTE_LEN,
+    TimeBasedUpgrade, Transaction, TxIndex, TxIter, TxPayload, TxPayloadRange, TxTableEntries,
+    TxTableEntriesRange, Upgrade, UpgradeMode, UpgradeType, ViewBasedUpgrade,
 };
 
 pub const VERSION: Version = Version { major: 0, minor: 8 };

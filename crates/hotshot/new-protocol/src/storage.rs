@@ -148,7 +148,8 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 justify_qc: proposal.justify_qc,
                 next_epoch_justify_qc: None,
                 upgrade_certificate: proposal.upgrade_certificate,
-                view_change_evidence: proposal.view_change_evidence,
+                // TODO:
+                view_change_evidence: None,
                 next_drb_result: proposal.next_drb_result,
                 state_cert: proposal.state_cert,
             };

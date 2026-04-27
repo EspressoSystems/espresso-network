@@ -66,7 +66,6 @@ pub enum ConsensusInput<T: NodeType> {
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
-    RequestProposal(ViewNumber, Commitment<Leaf2<T>>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
     SendProposal(SignedProposal<T, Proposal<T>>, VidDisperse2<T>),

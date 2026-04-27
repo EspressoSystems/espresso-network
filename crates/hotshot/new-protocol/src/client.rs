@@ -1,13 +1,15 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
+use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
+    message::Proposal as SignedProposal,
     traits::node_implementation::NodeType,
     utils::StateAndDelta,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::state::UpdateLeaf;
+use crate::{message::Proposal, state::UpdateLeaf};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -71,6 +73,23 @@ impl<T: NodeType> ClientApi<T> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::SubmitTransaction { tx, respond }, rx)
             .await
+    }
+
+    pub async fn request_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> Result<SignedProposal<T, Proposal<T>>, QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(
+            ClientRequest::RequestProposal {
+                view,
+                leaf_commitment,
+                respond,
+            },
+            rx,
+        )
+        .await?
     }
 
     async fn call<A>(
@@ -141,6 +160,11 @@ pub(crate) enum ClientRequest<T: NodeType> {
     SubmitTransaction {
         tx: T::Transaction,
         respond: oneshot::Sender<()>,
+    },
+    RequestProposal {
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+        respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
     },
 }
 

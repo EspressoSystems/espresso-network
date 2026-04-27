@@ -4,10 +4,12 @@ pub mod timer;
 use std::{sync::Arc, time::Duration};
 
 use bon::{Builder, bon};
+use committable::Commitment;
 use hotshot::HotShotInitializer;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    message::Proposal as SignedProposal,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
@@ -16,24 +18,24 @@ use hotshot_types::{
     },
     vote::HasViewNumber,
 };
-use tokio::select;
+use tokio::{select, sync::oneshot};
 use tracing::warn;
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
-    client::{ClientApi, ClientRequest, CoordinatorClient},
+    client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{
         error::{CoordinatorError, ErrorSource, Severity},
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    helpers::upgrade_lock,
+    helpers::{proposal_commitment, upgrade_lock},
     logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
-        Message, MessageType, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
-        Vote2,
+        Message, MessageType, Proposal, ProposalFetchMessage, ProposalFetchRequest,
+        ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked, Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -79,6 +81,8 @@ pub struct Coordinator<T: NodeType, N, S: NewProtocolStorage<T>> {
     #[builder(default = KeyPrefix::from(&public_key))]
     node_id: KeyPrefix,
     timer: Timer,
+    #[builder(default)]
+    pending_proposal_fetches: PendingProposalFetches<T>,
 }
 
 #[bon]
@@ -224,7 +228,32 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         }
     }
 
-    fn handle_request(&mut self, request: ClientRequest<T>) {
+    fn get_matching_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> Option<SignedProposal<T, Proposal<T>>> {
+        let proposal = self.consensus.signed_proposal(&view)?;
+        (proposal_commitment(&proposal.data) == leaf_commitment).then(|| proposal.clone())
+    }
+
+    async fn broadcast_proposal_request(
+        &mut self,
+        view: ViewNumber,
+    ) -> Result<(), CoordinatorError> {
+        let message = Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(
+                ProposalFetchRequest::new(view),
+            )),
+        };
+        self.network
+            .broadcast(message)
+            .await
+            .map_err(|err| CoordinatorError::from(err).context("broadcast proposal request"))
+    }
+
+    async fn handle_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
         match request {
             ClientRequest::CurrentView(tx) => {
                 let _ = tx.send(self.consensus.current_view());
@@ -256,7 +285,26 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                 self.block_builder.on_submit_transaction(tx);
                 let _ = respond.send(());
             },
+            ClientRequest::RequestProposal {
+                view,
+                leaf_commitment,
+                respond,
+            } => {
+                // serve immediately if this node still
+                // has the requested proposal in consensus memory.
+                if let Some(proposal) = self.get_matching_proposal(view, leaf_commitment) {
+                    let _ = respond.send(Ok(proposal));
+                    return Ok(());
+                }
+
+                // Otherwise broadcast a request and keep the caller's sender
+                // until a matching proposal response arrives.
+                self.broadcast_proposal_request(view).await?;
+                self.pending_proposal_fetches
+                    .push(view, leaf_commitment, respond);
+            },
         }
+        Ok(())
     }
 
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
@@ -287,7 +335,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     }
                 }
                 Some(request) = self.client.next_request() => {
-                    self.handle_request(request);
+                    self.handle_request(request).await?;
                 }
                 Some(tcert) = self.timeout_collector.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
@@ -485,6 +533,34 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     None
                 },
             },
+            MessageType::ProposalFetch(ProposalFetchMessage::Request(request)) => {
+                if let Some(proposal) = self
+                    .consensus
+                    .signed_proposal(&request.view_number)
+                    .cloned()
+                {
+                    let response = Message {
+                        sender: self.public_key.clone(),
+                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(
+                            Box::new(proposal),
+                        )),
+                    };
+
+                    if let Err(err) = self.network.unicast(message.sender, response).await {
+                        let err = CoordinatorError::from(err).context("proposal response");
+                        if err.severity == Severity::Critical {
+                            tracing::error!(%err, "critical network error while sending proposal response");
+                        } else {
+                            warn!(%err, "network error while sending proposal response");
+                        }
+                    }
+                }
+                None
+            },
+            MessageType::ProposalFetch(ProposalFetchMessage::Response(proposal)) => {
+                self.pending_proposal_fetches.resolve(&proposal);
+                None
+            },
             MessageType::Block(msg) => {
                 match msg {
                     BlockMessage::Transactions(msg) => self.block_builder.on_transactions(msg),
@@ -557,7 +633,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
             ConsensusOutput::RequestBlockAndHeader(request) => {
                 self.block_builder.request_block(request);
             },
-            ConsensusOutput::RequestProposal(..) => {}, // TODO
             ConsensusOutput::SendProposal(proposal, vid_disperse) => {
                 self.storage.append_proposal(proposal.data.clone());
                 // TODO: This may be done async in network so we do not spend
@@ -724,5 +799,44 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
 
     pub fn node_id(&self) -> &KeyPrefix {
         &self.node_id
+    }
+}
+
+struct PendingProposalFetch<T: NodeType> {
+    view: ViewNumber,
+    leaf_commitment: Commitment<Leaf2<T>>,
+    respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
+}
+
+#[derive(Default)]
+pub struct PendingProposalFetches<T: NodeType> {
+    pending: Vec<PendingProposalFetch<T>>,
+}
+
+impl<T: NodeType> PendingProposalFetches<T> {
+    fn push(
+        &mut self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+        respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
+    ) {
+        self.pending.push(PendingProposalFetch {
+            view,
+            leaf_commitment,
+            respond,
+        });
+    }
+
+    fn resolve(&mut self, proposal: &SignedProposal<T, Proposal<T>>) {
+        let view = proposal.data.view_number;
+        let leaf_commitment = proposal_commitment(&proposal.data);
+
+        // Multiple callers can wait on the same proposal. Resolve all matches
+        // and remove them
+        for pending in self.pending.extract_if(.., |pending| {
+            pending.view == view && pending.leaf_commitment == leaf_commitment
+        }) {
+            let _ = pending.respond.send(Ok(proposal.clone()));
+        }
     }
 }
