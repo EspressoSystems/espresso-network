@@ -6,7 +6,9 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{CliquenetImpl, CompatNetImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestTypes};
+use hotshot_example_types::node_types::{
+    CliquenetImpl, CompatNetImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestTypes,
+};
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,

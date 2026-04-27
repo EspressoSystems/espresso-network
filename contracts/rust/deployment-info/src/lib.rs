@@ -66,7 +66,7 @@ impl fmt::Display for Network {
 struct Args {
     #[clap(
         long,
-        env = "ESPRESSO_SEQUENCER_L1_PROVIDER",
+        env = "ESPRESSO_L1_PROVIDER",
         help = "RPC URL for L1 provider. Defaults to publicnode when --network is specified."
     )]
     rpc_url: Option<Url>,
@@ -98,13 +98,14 @@ pub(crate) fn get_crate_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
+    espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let args = Args::parse();
     let crate_dir = get_crate_dir();
@@ -204,7 +205,7 @@ mod tests {
         addresses::{DeploymentAddresses, KnownAddresses},
         contracts::{
             AccessControlDeployment, CollectedDeployment, ContractType, DeploymentInfo,
-            DeploymentQuerier, OwnableDeployment, TimelockDeployment,
+            DeploymentQuerier, OwnableDeployment, RoleHolder, TimelockDeployment,
         },
     };
 
@@ -409,14 +410,40 @@ mod tests {
         );
 
         // Test timelocks
+        let deployer_holder = RoleHolder {
+            address: deployer_address,
+            name: "test_multisig".to_string(),
+        };
+        let mut ops_default_admins = vec![
+            RoleHolder {
+                address: ops_timelock_addr,
+                name: "ops_timelock".to_string(),
+            },
+            deployer_holder.clone(),
+        ];
+        ops_default_admins.sort_by_key(|h| h.address);
+
         let ops_tl = querier.query_timelock(ops_timelock_addr).await?;
         assert_eq!(
             ops_tl,
             TimelockDeployment::Deployed {
                 address: ops_timelock_addr,
                 min_delay: ops_delay,
+                proposers: vec![deployer_holder.clone()],
+                executors: vec![deployer_holder.clone()],
+                cancellers: vec![deployer_holder.clone()],
+                default_admins: ops_default_admins,
             }
         );
+
+        let mut safe_default_admins = vec![
+            RoleHolder {
+                address: safe_exit_timelock_addr,
+                name: "safe_exit_timelock".to_string(),
+            },
+            deployer_holder.clone(),
+        ];
+        safe_default_admins.sort_by_key(|h| h.address);
 
         let safe_tl = querier.query_timelock(safe_exit_timelock_addr).await?;
         assert_eq!(
@@ -424,6 +451,10 @@ mod tests {
             TimelockDeployment::Deployed {
                 address: safe_exit_timelock_addr,
                 min_delay: safe_exit_delay,
+                proposers: vec![deployer_holder.clone()],
+                executors: vec![deployer_holder.clone()],
+                cancellers: vec![deployer_holder.clone()],
+                default_admins: safe_default_admins,
             }
         );
 
@@ -460,8 +491,12 @@ mod tests {
         let info = DeploymentInfo::for_test();
         let table = info.to_markdown_table();
 
-        assert!(table.contains("| Timelock | Address | Min Delay |"));
+        assert!(table.contains(
+            "| Timelock | Address | Min Delay | Proposers | Executors | Cancellers | Default \
+             admins |",
+        ));
         assert!(table.contains("| ops_timelock |"));
+        assert!(table.contains("espresso_labs"));
         assert!(table.contains("| safe_exit_timelock | Not deployed |"));
     }
 
@@ -560,7 +595,7 @@ mod tests {
     fn test_load_addresses_empty_value_errors() {
         let dir = tempfile::tempdir().unwrap();
         let env_path = dir.path().join("test.env");
-        std::fs::write(&env_path, "ESPRESSO_SEQUENCER_STAKE_TABLE_PROXY_ADDRESS=\n").unwrap();
+        std::fs::write(&env_path, "ESPRESSO_STAKE_TABLE_PROXY_ADDRESS=\n").unwrap();
         let result = DeploymentAddresses::from_env_file(&env_path);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));

@@ -13,8 +13,8 @@ use hotshot_contract_adapter::sol_types::StakeTableV2::{
     UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
 };
 use hotshot_types::{
-    PeerConfig, data::EpochNumber, light_client::StateVerKey, network::PeerConfigKeys, x25519,
-    addr::NetAddr
+    PeerConfig, addr::NetAddr, data::EpochNumber, light_client::StateVerKey,
+    network::PeerConfigKeys, x25519,
 };
 use itertools::Itertools;
 use jf_utils::to_bytes;
@@ -24,10 +24,10 @@ use tokio::task::JoinHandle;
 
 use super::L1Client;
 use crate::{
-    traits::{MembershipPersistence, StateCatchup},
-    v0::{impls::StakeTableHash, ChainConfig},
-    v0_3::RewardAmount,
     AuthenticatedValidatorMap, SeqTypes,
+    traits::{MembershipPersistence, StateCatchup},
+    v0::{ChainConfig, impls::StakeTableHash},
+    v0_3::RewardAmount,
 };
 /// Stake table holding all staking information (DA and non-DA stakers)
 #[derive(Debug, Clone, Serialize, Deserialize, From)]
@@ -70,7 +70,7 @@ pub struct RegisteredValidator<KEY: SignatureKey> {
     /// Public X25519 key for network communication.
     pub x25519_key: Option<x25519::PublicKey>,
     /// Network address.
-    pub p2p_addr: Option<NetAddr>
+    pub p2p_addr: Option<NetAddr>,
 }
 
 /// Validator eligible for consensus participation.
@@ -152,8 +152,8 @@ impl<KEY: SignatureKey> Committable for RegisteredValidator<KEY> {
             .fixed_size_field("stake", &to_fixed_bytes(self.stake))
             .constant_str("commission")
             .u16(self.commission);
-            //.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
-            //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
+        //.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
+        //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
 
         builder = builder.constant_str("delegators");
         for (address, stake) in self.delegators.iter().sorted() {

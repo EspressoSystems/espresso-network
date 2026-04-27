@@ -1,13 +1,16 @@
-use crate::{v0::impls::StakeTableHash, v0_3::RewardAmount, v0_4::RewardMerkleCommitmentV2, NsTable, TimestampMillis};
+use ark_serialize::CanonicalSerialize;
+use committable::{Commitment, Committable, RawCommitmentBuilder};
+use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
+use serde::{Deserialize, Serialize};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
     ResolvableChainConfig,
 };
-use ark_serialize::CanonicalSerialize;
-use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
-use serde::{Deserialize, Serialize};
+use crate::{
+    NsTable, TimestampMillis, v0::impls::StakeTableHash, v0_3::RewardAmount,
+    v0_4::RewardMerkleCommitmentV2,
+};
 
 /// A header is like a [`Block`] with the body replaced by a digest.
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
@@ -63,7 +66,10 @@ impl Committable for Header {
             .var_size_field("fee_merkle_tree_root", &fmt_bytes)
             .field("fee_info", self.fee_info.commit())
             .var_size_field("reward_merkle_tree_root", &rwd_bytes)
-            .var_size_field("total_reward_distributed", &self.total_reward_distributed.to_fixed_bytes());
+            .var_size_field(
+                "total_reward_distributed",
+                &self.total_reward_distributed.to_fixed_bytes(),
+            );
 
         if let Some(next_stake_table_hash) = self.next_stake_table_hash {
             cb = cb.field("next_stake_table_hash", next_stake_table_hash);

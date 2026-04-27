@@ -32,6 +32,7 @@ use espresso_node::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
         test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
     },
+    consensus_handle::CoordinatorEvent,
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
@@ -403,9 +404,9 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         .boxed()
     }
 
-    async fn event_stream(&self) -> Option<BoxStream<'_, Event<SeqTypes>>> {
+    async fn event_stream(&self) -> Option<BoxStream<'_, CoordinatorEvent<SeqTypes>>> {
         if let Some(ctx) = &self.context {
-            Some(ctx.event_stream().await.boxed())
+            Some(ctx.event_stream().boxed())
         } else {
             None
         }
@@ -427,7 +428,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             let node_id = context.node_id();
             let next_view_timeout = {
                 context
-                    .consensus()
+                    .consensus_handle()
+                    .legacy_consensus()
                     .read()
                     .await
                     .hotshot
@@ -455,7 +457,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         let num_nodes = {
             context
-                .consensus()
+                .consensus_handle()
+                .legacy_consensus()
                 .read()
                 .await
                 .hotshot
@@ -467,9 +470,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         // Wait for a block proposed by this node. This proves that the node is tracking consensus
         // (getting Decide events) and participating (able to propose).
-        let mut events = context.event_stream().await;
+        let mut events = context.event_stream();
         while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
 
@@ -505,12 +512,16 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let node_id = context.node_id();
         tracing::info!(node_id, "verifying state of node");
 
-        let mut events = context.event_stream().await;
+        let mut events = context.event_stream();
         let mut collected_leaves = 0;
         let mut state_write = self.reference_state.write().await;
 
         while let Some(event) = events.next().await {
-            let EventType::Decide { leaf_chain, .. } = event.event else {
+            let CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) = event
+            else {
                 continue;
             };
 
@@ -538,7 +549,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         // Configure the builder to shut down in 50 views, so we don't leak resources or ports.
         let ctx = self.context.as_ref().unwrap();
-        let down_view = ctx.consensus().read().await.cur_view().await + 50;
+        let down_view = ctx.consensus_handle().current_view().await + 50;
 
         // Start a builder.
         let url: Url = format!("http://localhost:{port}").parse().unwrap();
@@ -551,7 +562,12 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                 .collect(),
         )
         .await;
-        task.start(Box::new(ctx.event_stream().await));
+        task.start(Box::new(ctx.event_stream().filter_map(|event| {
+            futures::future::ready(match event {
+                CoordinatorEvent::LegacyEvent(e) => Some(e),
+                _ => None,
+            })
+        })));
 
         // Wait for the API to start serving.
         let client = surf_disco::Client::<ClientError, SequencerApiVersion>::new(url);
@@ -561,7 +577,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         );
 
         // Submit a transaction and wait for it to be sequenced.
-        let mut events = ctx.event_stream().await;
+        let mut events = ctx.event_stream();
         let tx = Transaction::random(&mut rand::thread_rng());
         ctx.submit_transaction(tx.clone()).await.unwrap();
         let (block, _) = timeout(
@@ -573,7 +589,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(block, "transaction sequenced");
 
         // Wait until the builder is cleaned up.
-        while ctx.consensus().read().await.cur_view().await <= down_view {
+        while ctx.consensus_handle().current_view().await <= down_view {
             sleep(Duration::from_secs(1)).await;
         }
     }
@@ -588,14 +604,18 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
 
         let node_id = context.node_id();
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
-        let mut events = context.event_stream().await;
+        let mut events = context.event_stream();
 
         let timeout_duration = Duration::from_secs(60);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
-                let EventType::Decide {
-                    committing_qc: qc, ..
-                } = event.event
+                let CoordinatorEvent::LegacyEvent(Event {
+                    event:
+                        EventType::Decide {
+                            committing_qc: qc, ..
+                        },
+                    ..
+                }) = event
                 else {
                     continue;
                 };
@@ -1012,7 +1032,11 @@ impl TestNetwork {
                     .next()
                     .await
                     .expect("event stream terminated unexpectedly");
-                let EventType::Decide { leaf_chain, .. } = event.event else {
+                let CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) = event
+                else {
                     continue;
                 };
                 tracing::info!(?leaf_chain, "got decide, chain is progressing");
@@ -1083,7 +1107,11 @@ impl TestNetwork {
                             .next()
                             .await
                             .expect("event stream terminated unexpectedly");
-                        let EventType::Decide { leaf_chain, .. } = event.event else {
+                        let CoordinatorEvent::LegacyEvent(Event {
+                            event: EventType::Decide { leaf_chain, .. },
+                            ..
+                        }) = event
+                        else {
                             continue;
                         };
                         tracing::info!(?leaf_chain, "got decide, chain is progressing");

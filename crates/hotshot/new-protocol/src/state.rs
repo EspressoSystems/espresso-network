@@ -22,6 +22,13 @@ use crate::{
     message::Proposal,
 };
 
+pub struct UpdateLeaf<T: NodeType> {
+    pub view: ViewNumber,
+    pub leaf: Leaf2<T>,
+    pub state: Arc<T::ValidatedState>,
+    pub delta: Option<Delta<T>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StateRequest<T: NodeType> {
     pub view: ViewNumber,
@@ -281,9 +288,15 @@ impl<T: NodeType> StateManager<T> {
     }
 
     /// Provide an externally-obtained validated state.
-    pub fn update_state(&mut self, state: T::ValidatedState, view: ViewNumber, leaf: Leaf2<T>) {
+    pub fn update_state(&mut self, update: UpdateLeaf<T>) {
+        let UpdateLeaf {
+            view,
+            leaf,
+            state,
+            delta,
+        } = update;
         let commitment = leaf.commit();
-        self.insert_state(view, Arc::new(state), None, leaf);
+        self.insert_state(view, state, delta, leaf);
         if let Some((task, _)) = self.state_requests.remove(&commitment) {
             task.abort();
         }

@@ -10,7 +10,8 @@ use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
-        CliquenetImpl, CombinedImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes
+        CliquenetImpl, CombinedImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl,
+        TEST_VERSIONS, TestConsecutiveLeaderTypes, TestTwoStakeTablesTypes,
     },
     state_types::TestTypes,
 };
@@ -24,11 +25,7 @@ use hotshot_testing::{
 use hotshot_types::{
     data::ViewNumber,
     message::{GeneralConsensusMessage, MessageKind, SequencingMessage},
-    traits::{
-        election::Membership,
-        network::TransmitType,
-        node_implementation::{NodeType},
-    },
+    traits::{election::Membership, network::TransmitType, node_implementation::NodeType},
     vote::HasViewNumber,
 };
 

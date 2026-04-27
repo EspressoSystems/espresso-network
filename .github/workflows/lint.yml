@@ -21,24 +21,42 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
-  cargo-fmt:
-    name: cargo fmt
+  cargo-sort:
+    name: cargo sort
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-sort
+
+      - name: Check workspace Cargo.toml sort order
+        run: cargo sort --check --grouped --workspace
+
+  rustfmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           components: rustfmt
 
       - name: Check formatting
-        run: cargo +nightly fmt -- --check
+        run: git ls-files '*.rs' | xargs rustfmt +nightly --check
 
   clippy-postgres:
     name: clippy (postgres)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
@@ -51,7 +69,11 @@ jobs:
       name: clippy (embedded-db)
       runs-on: ubuntu-latest
       steps:
-        - uses: actions/checkout@v4
+        - uses: actions/checkout@v6
+
+        - name: Install protoc
+          run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
         - uses: Swatinem/rust-cache@v2
           with:
             save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}

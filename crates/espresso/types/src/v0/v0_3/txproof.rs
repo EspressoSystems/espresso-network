@@ -1,5 +1,6 @@
-use super::{AvidMNsProof, TxIndex};
 use serde::{Deserialize, Serialize};
+
+use super::{AvidMNsProof, TxIndex};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AvidMTxProof {

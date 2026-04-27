@@ -364,7 +364,7 @@ impl Transaction {
             use hotshot_contract_adapter::sol_types::StakeTableV2;
             let st = StakeTableV2::new(*stake_table, provider);
             let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
-            if let StakeTableContractVersion::V2 = version {
+            if matches!(version, StakeTableContractVersion::V2) {
                 let min_amount = st.minDelegateAmount().call().await?;
                 if amount < &min_amount {
                     bail!(
