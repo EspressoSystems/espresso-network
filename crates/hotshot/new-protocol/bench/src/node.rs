@@ -122,7 +122,7 @@ async fn build_coordinator(
         public_key,
         private_key,
         state_private_key,
-        cfg.total_nodes as usize,
+        cfg.total_nodes,
         genesis_leaf.clone(),
         epoch_height,
     );

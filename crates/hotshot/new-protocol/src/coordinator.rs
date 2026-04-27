@@ -416,9 +416,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                         // Atomicity: an epoch-root Vote1 MUST carry a state_vote.
                         // Reject otherwise — Byzantine half-votes would otherwise
                         // fill the quorum accumulator but starve the state one.
-                        if vote1.state_vote.is_none() {
-                            return None;
-                        }
+                        vote1.state_vote.as_ref()?;
                         self.epoch_root_collector.accumulate(vote1.clone()).await;
                     } else {
                         self.vote1_collector
