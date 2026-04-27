@@ -79,7 +79,7 @@ pub struct Coordinator<T: NodeType, N> {
     #[builder(default = KeyPrefix::from(&public_key))]
     node_id: KeyPrefix,
     timer: Timer,
-    #[builder(default)]
+    #[builder(skip)]
     pending_proposal_fetches: PendingProposalFetches<T>,
 }
 
@@ -745,7 +745,7 @@ struct PendingProposalFetch<T: NodeType> {
 }
 
 #[derive(Default)]
-pub struct PendingProposalFetches<T: NodeType> {
+struct PendingProposalFetches<T: NodeType> {
     pending: Vec<PendingProposalFetch<T>>,
 }
 
