@@ -31,6 +31,7 @@ use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
+use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
     availability::{BlockId, LeafQueryData},
     data_source::{
@@ -65,7 +66,6 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
-        storage::Cert2,
     },
     vote::HasViewNumber,
 };
@@ -716,6 +716,7 @@ pub struct Persistence {
 /// Transactions that fail with this code are safe to retry from scratch.
 const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
 
+#[derive(Debug)]
 struct DecidedLeaf {
     info: LeafInfo<SeqTypes>,
     cert: CertificatePair<SeqTypes>,
@@ -731,7 +732,7 @@ struct DecidedLeaf {
 /// `deciding_qc` is only forwarded on the legacy event
 fn build_decide_events(
     mut chain: Vec<DecidedLeaf>,
-    newest_cert2: Option<Cert2<SeqTypes>>,
+    newest_cert2: Option<Certificate2<SeqTypes>>,
     deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
 ) -> Vec<CoordinatorEvent<SeqTypes>> {
     let split_idx = chain
@@ -1014,7 +1015,7 @@ impl Persistence {
                 .await?
                 .map(|row| {
                     let bytes: Vec<u8> = row.get("data");
-                    bincode::deserialize::<Cert2<SeqTypes>>(&bytes)
+                    bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
                         .context("deserializing decided cert2")
                 })
                 .transpose()?;
@@ -1070,7 +1071,7 @@ impl Persistence {
                 ?from_view,
                 ?to_view,
                 ?final_qc,
-                ?leaf_chain,
+                ?chain,
                 "generating decide events"
             );
 
@@ -1906,7 +1907,11 @@ impl SequencerPersistence for Persistence {
         res
     }
 
-    async fn append_cert2(&self, view: ViewNumber, cert2: Cert2<SeqTypes>) -> anyhow::Result<()> {
+    async fn append_cert2(
+        &self,
+        view: ViewNumber,
+        cert2: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
         let data = bincode::serialize(&cert2).context("serializing cert2")?;
         let view_i64 = view.u64() as i64;
         WRITE_BACKOFF
@@ -1924,7 +1929,7 @@ impl SequencerPersistence for Persistence {
             .await
     }
 
-    async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Cert2<SeqTypes>>> {
+    async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         let row = self
             .db
             .read()
@@ -1935,7 +1940,7 @@ impl SequencerPersistence for Persistence {
             .await?;
         row.map(|row| {
             let bytes: Vec<u8> = row.get("data");
-            bincode::deserialize::<Cert2<SeqTypes>>(&bytes).context("deserializing cert2")
+            bincode::deserialize::<Certificate2<SeqTypes>>(&bytes).context("deserializing cert2")
         })
         .transpose()
     }

@@ -27,6 +27,7 @@ use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
+use hotshot_new_protocol::message::Certificate2;
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
@@ -43,7 +44,6 @@ use hotshot_types::{
         block_contents::{BlockHeader, BlockPayload},
         metrics::Metrics,
         node_implementation::NodeType,
-        storage::Cert2,
     },
     vote::HasViewNumber,
 };
@@ -283,7 +283,7 @@ impl Inner {
         self.path.join("decided_cert2")
     }
 
-    fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Cert2<SeqTypes>>> {
+    fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         let file_path = self
             .decided_cert2_dir_path()
             .join(view.u64().to_string())
@@ -1009,7 +1009,11 @@ impl SequencerPersistence for Persistence {
         )
     }
 
-    async fn append_cert2(&self, view: ViewNumber, cert2: Cert2<SeqTypes>) -> anyhow::Result<()> {
+    async fn append_cert2(
+        &self,
+        view: ViewNumber,
+        cert2: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let dir_path = inner.decided_cert2_dir_path();
         fs::create_dir_all(dir_path.clone()).context("failed to create decided_cert2 dir")?;
@@ -1025,7 +1029,7 @@ impl SequencerPersistence for Persistence {
         )
     }
 
-    async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Cert2<SeqTypes>>> {
+    async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         let inner = self.inner.read().await;
         let dir_path = inner.decided_cert2_dir_path();
         let file_path = dir_path.join(view.u64().to_string()).with_extension("txt");
