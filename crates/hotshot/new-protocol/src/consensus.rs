@@ -164,8 +164,6 @@ pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, Proposal<T>>,
     signed_proposals: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
     proposed_views: BTreeSet<ViewNumber>,
-    // TODO(abdul): not the leader for the view error
-    skipped_views: BTreeSet<ViewNumber>,
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
@@ -225,7 +223,6 @@ impl<T: NodeType> Consensus<T> {
             proposals: BTreeMap::new(),
             signed_proposals: BTreeMap::new(),
             proposed_views: BTreeSet::new(),
-            skipped_views: BTreeSet::new(),
             vid_disperses: BTreeMap::new(),
             blocks: BTreeMap::new(),
             states_verified: BTreeMap::new(),
@@ -749,7 +746,7 @@ impl<T: NodeType> Consensus<T> {
 
     #[instrument(level = "debug", skip_all)]
     async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
-        if self.proposed_views.contains(&view) || self.skipped_views.contains(&view) {
+        if self.proposed_views.contains(&view) {
             return;
         }
 
@@ -795,7 +792,6 @@ impl<T: NodeType> Consensus<T> {
         };
         if !self.is_leader(view, proposal_epoch).await {
             warn!(epoch = %proposal_epoch, "not the leader for this view, we should not have a header");
-            self.skipped_views.insert(view);
             return;
         }
 
