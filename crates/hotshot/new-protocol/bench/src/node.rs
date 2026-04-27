@@ -116,8 +116,8 @@ async fn build_coordinator(
     let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
-        upgrade_lock.clone(),
         private_key.clone(),
+        upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
     );
