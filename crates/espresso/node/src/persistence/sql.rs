@@ -1554,6 +1554,10 @@ impl SequencerPersistence for Persistence {
             .into_iter()
             .map(|(info, cert)| {
                 let mut leaf = info.leaf.clone();
+                // The leaf may come with a large payload attached. We don't care about this payload
+                // because we already store it separately, as part of the DA proposal. Storing it
+                // here contributes to load on the DB for no reason, so we remove it before
+                // serializing the leaf.
                 leaf.unfill_block_payload();
 
                 let view = cert.view_number().u64() as i64;
