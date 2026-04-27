@@ -540,10 +540,8 @@ where
         // Update the query data based on this event. It is safe to ignore errors here; the error
         // just returns the failed block height for use in garbage collection, but this simple
         // implementation isn't doing any kind of garbage collection.
-        data_source
-            .update(&CoordinatorEvent::LegacyEvent(event))
-            .await
-            .ok();
+        let event = CoordinatorEvent::LegacyEvent(event);
+        data_source.update(&event).await.ok();
     }
 
     Ok(())

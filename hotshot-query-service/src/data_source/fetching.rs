@@ -783,7 +783,7 @@ where
 
         // Save the new decided leaf.
         self.fetcher
-            .store(&(info.leaf.clone(), info.qc_chain, info.cert2))
+            .store(&(info.leaf.clone(), info.qc_chain, info.cert2.clone()))
             .await;
 
         // Trigger a fetch of the parent leaf, if we don't already have it.
@@ -2260,7 +2260,8 @@ impl<Types: NodeType> Storable<Types>
     ) -> anyhow::Result<()> {
         storage
             .insert_leaf_with_qc_chain(&self.0, self.1.clone())
-            .await?;
+            .await
+            .context("inserting leaf with QC chain")?;
         if let Some(cert2) = &self.2 {
             storage.insert_cert2(self.0.height(), cert2.clone()).await?;
         }

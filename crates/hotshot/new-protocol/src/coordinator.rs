@@ -81,7 +81,7 @@ pub struct Coordinator<T: NodeType, N, S: NewProtocolStorage<T>> {
     #[builder(default = KeyPrefix::from(&public_key))]
     node_id: KeyPrefix,
     timer: Timer,
-    #[builder(default)]
+    #[builder(skip)]
     pending_proposal_fetches: PendingProposalFetches<T>,
 }
 
@@ -100,7 +100,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         timeout_duration: Duration,
         storage: S,
     ) -> Self {
-        let mut consensus = Consensus::new(
+        let consensus = Consensus::new(
             membership_coordinator.clone(),
             public_key.clone(),
             private_key.clone(),
@@ -109,30 +109,9 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
             initializer.epoch_height,
         );
 
-        // TODO:
-        let genesis_cert1 = initializer.high_qc.clone();
-        let genesis_proposal = message::Proposal {
-            block_header: initializer.anchor_leaf.block_header().clone(),
-            view_number: ViewNumber::genesis(),
-            epoch: EpochNumber::genesis(),
-            justify_qc: genesis_cert1.clone(),
-            next_epoch_justify_qc: None,
-            upgrade_certificate: None,
-            view_change_evidence: None,
-            next_drb_result: None,
-            state_cert: None,
-        };
-        consensus.seed_genesis(genesis_cert1, genesis_proposal);
-
-        // TODO:
-        let mut state_manager = StateManager::new(
+        let state_manager = StateManager::new(
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
-        );
-        state_manager.seed_state(
-            ViewNumber::genesis(),
-            initializer.anchor_state.clone(),
-            initializer.anchor_leaf.clone(),
         );
 
         let lock = upgrade_lock.clone();
@@ -819,7 +798,7 @@ struct PendingProposalFetch<T: NodeType> {
 }
 
 #[derive(Default)]
-pub struct PendingProposalFetches<T: NodeType> {
+struct PendingProposalFetches<T: NodeType> {
     pending: Vec<PendingProposalFetch<T>>,
 }
 

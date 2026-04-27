@@ -83,7 +83,7 @@ where
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
     latest_qc_chain: Option<[CertificatePair<Types>; 2]>,
-    cert2s: std::collections::BTreeMap<u64, Certificate2<Types>>,
+    cert2s: BTreeMap<u64, Certificate2<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -205,7 +205,7 @@ where
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
                 latest_qc_chain: None,
-                cert2s: std::collections::BTreeMap::new(),
+                cert2s: BTreeMap::new(),
             }),
             metrics: Default::default(),
         })
@@ -278,7 +278,7 @@ where
                 vid_storage,
                 top_storage: None,
                 latest_qc_chain: None,
-                cert2s: std::collections::BTreeMap::new(),
+                cert2s: BTreeMap::new(),
             }),
             metrics: Default::default(),
         })

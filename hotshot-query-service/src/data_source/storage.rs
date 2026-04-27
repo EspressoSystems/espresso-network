@@ -243,11 +243,13 @@ where
         height: u64,
         qc_chain: Option<[CertificatePair<Types>; 2]>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
     fn insert_cert2(
         &mut self,
         height: u64,
         cert2: Certificate2<Types>,
     ) -> impl Send + Future<Output = anyhow::Result<()>>;
+
     fn insert_leaf_range<'a>(
         &mut self,
         leaves: impl Send + IntoIterator<IntoIter: Send, Item = &'a LeafQueryData<Types>>,

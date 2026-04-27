@@ -363,9 +363,8 @@ pub mod testing {
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
-            self.update(&CoordinatorEvent::LegacyEvent(event.clone()))
-                .await
-                .unwrap();
+            let event = CoordinatorEvent::LegacyEvent(event.clone());
+            self.update(&event).await.unwrap();
         }
     }
 }
