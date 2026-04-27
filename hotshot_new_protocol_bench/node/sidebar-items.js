@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["build_coordinator","build_genesis_cert1","build_genesis_proposal","build_test_block","create_network","run","run_instrumented"],"struct":["TestBlock"],"type":["BenchCoordinator"]};
+window.SIDEBAR_ITEMS = {"fn":["bench_upgrade_lock","build_coordinator","build_genesis_cert1","build_genesis_proposal","build_test_block","create_network","run","run_instrumented"],"struct":["TestBlock"],"type":["BenchCoordinator"]};

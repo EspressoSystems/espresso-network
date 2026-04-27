@@ -7,120 +7,120 @@
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>hotshot::traits::{BlockPayload, ValidatedState};
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>hotshot_types::{
 <a href=#9 id=9 data-nosnippet>9</a>    data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, ViewNumber},
-<a href=#10 id=10 data-nosnippet>10</a>    traits::{
-<a href=#11 id=11 data-nosnippet>11</a>        block_contents::{BlockHeader, BuilderFee},
-<a href=#12 id=12 data-nosnippet>12</a>        node_implementation::NodeType,
-<a href=#13 id=13 data-nosnippet>13</a>    },
-<a href=#14 id=14 data-nosnippet>14</a>    utils::BuilderCommitment,
-<a href=#15 id=15 data-nosnippet>15</a>    vote::HasViewNumber,
-<a href=#16 id=16 data-nosnippet>16</a>};
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>tokio::task::{AbortHandle, JoinSet};
-<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>tracing::{error, warn};
-<a href=#19 id=19 data-nosnippet>19</a>
-<a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>crate::{
-<a href=#21 id=21 data-nosnippet>21</a>    helpers::{proposal_commitment, upgrade_lock},
-<a href=#22 id=22 data-nosnippet>22</a>    message::Proposal,
-<a href=#23 id=23 data-nosnippet>23</a>};
-<a href=#24 id=24 data-nosnippet>24</a>
-<a href=#25 id=25 data-nosnippet>25</a><span class="kw">pub struct </span>UpdateLeaf&lt;T: NodeType&gt; {
-<a href=#26 id=26 data-nosnippet>26</a>    <span class="kw">pub </span>view: ViewNumber,
-<a href=#27 id=27 data-nosnippet>27</a>    <span class="kw">pub </span>leaf: Leaf2&lt;T&gt;,
-<a href=#28 id=28 data-nosnippet>28</a>    <span class="kw">pub </span>state: Arc&lt;T::ValidatedState&gt;,
-<a href=#29 id=29 data-nosnippet>29</a>    <span class="kw">pub </span>delta: <span class="prelude-ty">Option</span>&lt;Delta&lt;T&gt;&gt;,
-<a href=#30 id=30 data-nosnippet>30</a>}
-<a href=#31 id=31 data-nosnippet>31</a>
-<a href=#32 id=32 data-nosnippet>32</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
-<a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub struct </span>StateRequest&lt;T: NodeType&gt; {
-<a href=#34 id=34 data-nosnippet>34</a>    <span class="kw">pub </span>view: ViewNumber,
-<a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">pub </span>parent_view: ViewNumber,
-<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub </span>epoch: EpochNumber,
-<a href=#37 id=37 data-nosnippet>37</a>    <span class="kw">pub </span>block: BlockNumber,
-<a href=#38 id=38 data-nosnippet>38</a>    <span class="kw">pub </span>proposal: Proposal&lt;T&gt;,
-<a href=#39 id=39 data-nosnippet>39</a>    <span class="kw">pub </span>parent_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
-<a href=#40 id=40 data-nosnippet>40</a>    <span class="kw">pub </span>payload_size: u32,
-<a href=#41 id=41 data-nosnippet>41</a>}
-<a href=#42 id=42 data-nosnippet>42</a>
-<a href=#43 id=43 data-nosnippet>43</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
-<a href=#44 id=44 data-nosnippet>44</a></span><span class="kw">pub struct </span>HeaderRequest&lt;T: NodeType&gt; {
-<a href=#45 id=45 data-nosnippet>45</a>    <span class="kw">pub </span>view: ViewNumber,
-<a href=#46 id=46 data-nosnippet>46</a>    <span class="kw">pub </span>epoch: EpochNumber,
-<a href=#47 id=47 data-nosnippet>47</a>    <span class="kw">pub </span>parent_proposal: Proposal&lt;T&gt;,
-<a href=#48 id=48 data-nosnippet>48</a>    <span class="kw">pub </span>payload_commitment: VidCommitment,
-<a href=#49 id=49 data-nosnippet>49</a>    <span class="kw">pub </span>builder_commitment: BuilderCommitment,
-<a href=#50 id=50 data-nosnippet>50</a>    <span class="kw">pub </span>metadata: &lt;T::BlockPayload <span class="kw">as </span>BlockPayload&lt;T&gt;&gt;::Metadata,
-<a href=#51 id=51 data-nosnippet>51</a>    <span class="kw">pub </span>builder_fee: BuilderFee&lt;T&gt;,
-<a href=#52 id=52 data-nosnippet>52</a>}
-<a href=#53 id=53 data-nosnippet>53</a>
-<a href=#54 id=54 data-nosnippet>54</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
-<a href=#55 id=55 data-nosnippet>55</a></span><span class="kw">pub struct </span>StateResponse&lt;T: NodeType&gt; {
-<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">pub </span>view: ViewNumber,
-<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">pub </span>commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
-<a href=#58 id=58 data-nosnippet>58</a>    <span class="kw">pub </span>state: Arc&lt;T::ValidatedState&gt;,
-<a href=#59 id=59 data-nosnippet>59</a>    <span class="kw">pub </span>delta: <span class="prelude-ty">Option</span>&lt;Delta&lt;T&gt;&gt;,
-<a href=#60 id=60 data-nosnippet>60</a>}
-<a href=#61 id=61 data-nosnippet>61</a>
-<a href=#62 id=62 data-nosnippet>62</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
-<a href=#63 id=63 data-nosnippet>63</a></span><span class="kw">pub struct </span>HeaderResponse&lt;T: NodeType&gt; {
-<a href=#64 id=64 data-nosnippet>64</a>    <span class="kw">pub </span>view: ViewNumber,
-<a href=#65 id=65 data-nosnippet>65</a>    <span class="kw">pub </span>epoch: EpochNumber,
-<a href=#66 id=66 data-nosnippet>66</a>    <span class="kw">pub </span>parent_proposal: Proposal&lt;T&gt;,
-<a href=#67 id=67 data-nosnippet>67</a>}
-<a href=#68 id=68 data-nosnippet>68</a>
-<a href=#69 id=69 data-nosnippet>69</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
-<a href=#70 id=70 data-nosnippet>70</a>#[allow(clippy::large_enum_variant)]
-<a href=#71 id=71 data-nosnippet>71</a></span><span class="kw">pub enum </span>StateManagerOutput&lt;T: NodeType&gt; {
-<a href=#72 id=72 data-nosnippet>72</a>    State {
-<a href=#73 id=73 data-nosnippet>73</a>        response: StateResponse&lt;T&gt;,
-<a href=#74 id=74 data-nosnippet>74</a>        validated: bool,
-<a href=#75 id=75 data-nosnippet>75</a>    },
-<a href=#76 id=76 data-nosnippet>76</a>    Header {
-<a href=#77 id=77 data-nosnippet>77</a>        response: HeaderResponse&lt;T&gt;,
-<a href=#78 id=78 data-nosnippet>78</a>        header: <span class="prelude-ty">Option</span>&lt;T::BlockHeader&gt;,
-<a href=#79 id=79 data-nosnippet>79</a>    },
-<a href=#80 id=80 data-nosnippet>80</a>}
+<a href=#10 id=10 data-nosnippet>10</a>    message::UpgradeLock,
+<a href=#11 id=11 data-nosnippet>11</a>    traits::{
+<a href=#12 id=12 data-nosnippet>12</a>        block_contents::{BlockHeader, BuilderFee},
+<a href=#13 id=13 data-nosnippet>13</a>        node_implementation::NodeType,
+<a href=#14 id=14 data-nosnippet>14</a>    },
+<a href=#15 id=15 data-nosnippet>15</a>    utils::BuilderCommitment,
+<a href=#16 id=16 data-nosnippet>16</a>    vote::HasViewNumber,
+<a href=#17 id=17 data-nosnippet>17</a>};
+<a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>tokio::task::{AbortHandle, JoinSet};
+<a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>tracing::{error, warn};
+<a href=#20 id=20 data-nosnippet>20</a>
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>crate::{helpers::proposal_commitment, message::Proposal};
+<a href=#22 id=22 data-nosnippet>22</a>
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">pub struct </span>UpdateLeaf&lt;T: NodeType&gt; {
+<a href=#24 id=24 data-nosnippet>24</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="kw">pub </span>leaf: Leaf2&lt;T&gt;,
+<a href=#26 id=26 data-nosnippet>26</a>    <span class="kw">pub </span>state: Arc&lt;T::ValidatedState&gt;,
+<a href=#27 id=27 data-nosnippet>27</a>    <span class="kw">pub </span>delta: <span class="prelude-ty">Option</span>&lt;Delta&lt;T&gt;&gt;,
+<a href=#28 id=28 data-nosnippet>28</a>}
+<a href=#29 id=29 data-nosnippet>29</a>
+<a href=#30 id=30 data-nosnippet>30</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
+<a href=#31 id=31 data-nosnippet>31</a></span><span class="kw">pub struct </span>StateRequest&lt;T: NodeType&gt; {
+<a href=#32 id=32 data-nosnippet>32</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">pub </span>parent_view: ViewNumber,
+<a href=#34 id=34 data-nosnippet>34</a>    <span class="kw">pub </span>epoch: EpochNumber,
+<a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">pub </span>block: BlockNumber,
+<a href=#36 id=36 data-nosnippet>36</a>    <span class="kw">pub </span>proposal: Proposal&lt;T&gt;,
+<a href=#37 id=37 data-nosnippet>37</a>    <span class="kw">pub </span>parent_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
+<a href=#38 id=38 data-nosnippet>38</a>    <span class="kw">pub </span>payload_size: u32,
+<a href=#39 id=39 data-nosnippet>39</a>}
+<a href=#40 id=40 data-nosnippet>40</a>
+<a href=#41 id=41 data-nosnippet>41</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
+<a href=#42 id=42 data-nosnippet>42</a></span><span class="kw">pub struct </span>HeaderRequest&lt;T: NodeType&gt; {
+<a href=#43 id=43 data-nosnippet>43</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#44 id=44 data-nosnippet>44</a>    <span class="kw">pub </span>epoch: EpochNumber,
+<a href=#45 id=45 data-nosnippet>45</a>    <span class="kw">pub </span>parent_proposal: Proposal&lt;T&gt;,
+<a href=#46 id=46 data-nosnippet>46</a>    <span class="kw">pub </span>payload_commitment: VidCommitment,
+<a href=#47 id=47 data-nosnippet>47</a>    <span class="kw">pub </span>builder_commitment: BuilderCommitment,
+<a href=#48 id=48 data-nosnippet>48</a>    <span class="kw">pub </span>metadata: &lt;T::BlockPayload <span class="kw">as </span>BlockPayload&lt;T&gt;&gt;::Metadata,
+<a href=#49 id=49 data-nosnippet>49</a>    <span class="kw">pub </span>builder_fee: BuilderFee&lt;T&gt;,
+<a href=#50 id=50 data-nosnippet>50</a>}
+<a href=#51 id=51 data-nosnippet>51</a>
+<a href=#52 id=52 data-nosnippet>52</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
+<a href=#53 id=53 data-nosnippet>53</a></span><span class="kw">pub struct </span>StateResponse&lt;T: NodeType&gt; {
+<a href=#54 id=54 data-nosnippet>54</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#55 id=55 data-nosnippet>55</a>    <span class="kw">pub </span>commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
+<a href=#56 id=56 data-nosnippet>56</a>    <span class="kw">pub </span>state: Arc&lt;T::ValidatedState&gt;,
+<a href=#57 id=57 data-nosnippet>57</a>    <span class="kw">pub </span>delta: <span class="prelude-ty">Option</span>&lt;Delta&lt;T&gt;&gt;,
+<a href=#58 id=58 data-nosnippet>58</a>}
+<a href=#59 id=59 data-nosnippet>59</a>
+<a href=#60 id=60 data-nosnippet>60</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
+<a href=#61 id=61 data-nosnippet>61</a></span><span class="kw">pub struct </span>HeaderResponse&lt;T: NodeType&gt; {
+<a href=#62 id=62 data-nosnippet>62</a>    <span class="kw">pub </span>view: ViewNumber,
+<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub </span>epoch: EpochNumber,
+<a href=#64 id=64 data-nosnippet>64</a>    <span class="kw">pub </span>parent_proposal: Proposal&lt;T&gt;,
+<a href=#65 id=65 data-nosnippet>65</a>}
+<a href=#66 id=66 data-nosnippet>66</a>
+<a href=#67 id=67 data-nosnippet>67</a><span class="attr">#[derive(Clone, Debug, Eq, PartialEq)]
+<a href=#68 id=68 data-nosnippet>68</a>#[allow(clippy::large_enum_variant)]
+<a href=#69 id=69 data-nosnippet>69</a></span><span class="kw">pub enum </span>StateManagerOutput&lt;T: NodeType&gt; {
+<a href=#70 id=70 data-nosnippet>70</a>    State {
+<a href=#71 id=71 data-nosnippet>71</a>        response: StateResponse&lt;T&gt;,
+<a href=#72 id=72 data-nosnippet>72</a>        validated: bool,
+<a href=#73 id=73 data-nosnippet>73</a>    },
+<a href=#74 id=74 data-nosnippet>74</a>    Header {
+<a href=#75 id=75 data-nosnippet>75</a>        response: HeaderResponse&lt;T&gt;,
+<a href=#76 id=76 data-nosnippet>76</a>        header: <span class="prelude-ty">Option</span>&lt;T::BlockHeader&gt;,
+<a href=#77 id=77 data-nosnippet>77</a>    },
+<a href=#78 id=78 data-nosnippet>78</a>}
+<a href=#79 id=79 data-nosnippet>79</a>
+<a href=#80 id=80 data-nosnippet>80</a><span class="kw">type </span>Delta&lt;T&gt; = Arc&lt;&lt;&lt;T <span class="kw">as </span>NodeType&gt;::ValidatedState <span class="kw">as </span>ValidatedState&lt;T&gt;&gt;::Delta&gt;;
 <a href=#81 id=81 data-nosnippet>81</a>
-<a href=#82 id=82 data-nosnippet>82</a><span class="kw">type </span>Delta&lt;T&gt; = Arc&lt;&lt;&lt;T <span class="kw">as </span>NodeType&gt;::ValidatedState <span class="kw">as </span>ValidatedState&lt;T&gt;&gt;::Delta&gt;;
-<a href=#83 id=83 data-nosnippet>83</a>
-<a href=#84 id=84 data-nosnippet>84</a><span class="attr">#[derive(Clone)]
-<a href=#85 id=85 data-nosnippet>85</a></span><span class="kw">pub struct </span>StateEntry&lt;T: NodeType&gt; {
-<a href=#86 id=86 data-nosnippet>86</a>    <span class="kw">pub </span>state: Arc&lt;T::ValidatedState&gt;,
-<a href=#87 id=87 data-nosnippet>87</a>    <span class="kw">pub </span>delta: <span class="prelude-ty">Option</span>&lt;Delta&lt;T&gt;&gt;,
-<a href=#88 id=88 data-nosnippet>88</a>    <span class="kw">pub </span>leaf: Leaf2&lt;T&gt;,
-<a href=#89 id=89 data-nosnippet>89</a>}
-<a href=#90 id=90 data-nosnippet>90</a>
-<a href=#91 id=91 data-nosnippet>91</a><span class="kw">pub struct </span>StateManager&lt;T: NodeType&gt; {
-<a href=#92 id=92 data-nosnippet>92</a>    instance: Arc&lt;T::InstanceState&gt;,
-<a href=#93 id=93 data-nosnippet>93</a>    validated_states: BTreeMap&lt;ViewNumber, StateEntry&lt;T&gt;&gt;,
-<a href=#94 id=94 data-nosnippet>94</a>    state_requests: HashMap&lt;Commitment&lt;Leaf2&lt;T&gt;&gt;, (AbortHandle, ViewNumber)&gt;,
-<a href=#95 id=95 data-nosnippet>95</a>    header_requests: HashMap&lt;ViewNumber, AbortHandle&gt;,
-<a href=#96 id=96 data-nosnippet>96</a>    pending_requests: HashMap&lt;Commitment&lt;Leaf2&lt;T&gt;&gt;, Vec&lt;Pending&lt;T&gt;&gt;&gt;,
-<a href=#97 id=97 data-nosnippet>97</a>    tasks: JoinSet&lt;Completed&lt;T&gt;&gt;,
-<a href=#98 id=98 data-nosnippet>98</a>}
-<a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a><span class="kw">enum </span>Pending&lt;T: NodeType&gt; {
-<a href=#101 id=101 data-nosnippet>101</a>    State(StateRequest&lt;T&gt;),
-<a href=#102 id=102 data-nosnippet>102</a>    Header(HeaderRequest&lt;T&gt;),
-<a href=#103 id=103 data-nosnippet>103</a>}
-<a href=#104 id=104 data-nosnippet>104</a>
-<a href=#105 id=105 data-nosnippet>105</a><span class="kw">enum </span>Completed&lt;T: NodeType&gt; {
-<a href=#106 id=106 data-nosnippet>106</a>    State {
-<a href=#107 id=107 data-nosnippet>107</a>        response: StateResponse&lt;T&gt;,
-<a href=#108 id=108 data-nosnippet>108</a>        leaf: <span class="prelude-ty">Option</span>&lt;Leaf2&lt;T&gt;&gt;,
-<a href=#109 id=109 data-nosnippet>109</a>    },
-<a href=#110 id=110 data-nosnippet>110</a>    Header {
-<a href=#111 id=111 data-nosnippet>111</a>        response: HeaderResponse&lt;T&gt;,
-<a href=#112 id=112 data-nosnippet>112</a>        header: <span class="prelude-ty">Option</span>&lt;T::BlockHeader&gt;,
-<a href=#113 id=113 data-nosnippet>113</a>    },
-<a href=#114 id=114 data-nosnippet>114</a>}
-<a href=#115 id=115 data-nosnippet>115</a>
-<a href=#116 id=116 data-nosnippet>116</a><span class="kw">impl</span>&lt;T: NodeType&gt; StateManager&lt;T&gt; {
-<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">pub fn </span>new(instance: Arc&lt;T::InstanceState&gt;) -&gt; <span class="self">Self </span>{
-<a href=#118 id=118 data-nosnippet>118</a>        <span class="self">Self </span>{
-<a href=#119 id=119 data-nosnippet>119</a>            instance,
-<a href=#120 id=120 data-nosnippet>120</a>            validated_states: BTreeMap::new(),
-<a href=#121 id=121 data-nosnippet>121</a>            state_requests: HashMap::new(),
-<a href=#122 id=122 data-nosnippet>122</a>            header_requests: HashMap::new(),
-<a href=#123 id=123 data-nosnippet>123</a>            pending_requests: HashMap::new(),
+<a href=#82 id=82 data-nosnippet>82</a><span class="attr">#[derive(Clone)]
+<a href=#83 id=83 data-nosnippet>83</a></span><span class="kw">pub struct </span>StateEntry&lt;T: NodeType&gt; {
+<a href=#84 id=84 data-nosnippet>84</a>    <span class="kw">pub </span>state: Arc&lt;T::ValidatedState&gt;,
+<a href=#85 id=85 data-nosnippet>85</a>    <span class="kw">pub </span>delta: <span class="prelude-ty">Option</span>&lt;Delta&lt;T&gt;&gt;,
+<a href=#86 id=86 data-nosnippet>86</a>    <span class="kw">pub </span>leaf: Leaf2&lt;T&gt;,
+<a href=#87 id=87 data-nosnippet>87</a>}
+<a href=#88 id=88 data-nosnippet>88</a>
+<a href=#89 id=89 data-nosnippet>89</a><span class="kw">pub struct </span>StateManager&lt;T: NodeType&gt; {
+<a href=#90 id=90 data-nosnippet>90</a>    instance: Arc&lt;T::InstanceState&gt;,
+<a href=#91 id=91 data-nosnippet>91</a>    validated_states: BTreeMap&lt;ViewNumber, StateEntry&lt;T&gt;&gt;,
+<a href=#92 id=92 data-nosnippet>92</a>    state_requests: HashMap&lt;Commitment&lt;Leaf2&lt;T&gt;&gt;, (AbortHandle, ViewNumber)&gt;,
+<a href=#93 id=93 data-nosnippet>93</a>    header_requests: HashMap&lt;ViewNumber, AbortHandle&gt;,
+<a href=#94 id=94 data-nosnippet>94</a>    pending_requests: HashMap&lt;Commitment&lt;Leaf2&lt;T&gt;&gt;, Vec&lt;Pending&lt;T&gt;&gt;&gt;,
+<a href=#95 id=95 data-nosnippet>95</a>    upgrade_lock: UpgradeLock&lt;T&gt;,
+<a href=#96 id=96 data-nosnippet>96</a>    tasks: JoinSet&lt;Completed&lt;T&gt;&gt;,
+<a href=#97 id=97 data-nosnippet>97</a>}
+<a href=#98 id=98 data-nosnippet>98</a>
+<a href=#99 id=99 data-nosnippet>99</a><span class="kw">enum </span>Pending&lt;T: NodeType&gt; {
+<a href=#100 id=100 data-nosnippet>100</a>    State(StateRequest&lt;T&gt;),
+<a href=#101 id=101 data-nosnippet>101</a>    Header(HeaderRequest&lt;T&gt;),
+<a href=#102 id=102 data-nosnippet>102</a>}
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a><span class="kw">enum </span>Completed&lt;T: NodeType&gt; {
+<a href=#105 id=105 data-nosnippet>105</a>    State {
+<a href=#106 id=106 data-nosnippet>106</a>        response: StateResponse&lt;T&gt;,
+<a href=#107 id=107 data-nosnippet>107</a>        leaf: <span class="prelude-ty">Option</span>&lt;Leaf2&lt;T&gt;&gt;,
+<a href=#108 id=108 data-nosnippet>108</a>    },
+<a href=#109 id=109 data-nosnippet>109</a>    Header {
+<a href=#110 id=110 data-nosnippet>110</a>        response: HeaderResponse&lt;T&gt;,
+<a href=#111 id=111 data-nosnippet>111</a>        header: <span class="prelude-ty">Option</span>&lt;T::BlockHeader&gt;,
+<a href=#112 id=112 data-nosnippet>112</a>    },
+<a href=#113 id=113 data-nosnippet>113</a>}
+<a href=#114 id=114 data-nosnippet>114</a>
+<a href=#115 id=115 data-nosnippet>115</a><span class="kw">impl</span>&lt;T: NodeType&gt; StateManager&lt;T&gt; {
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">pub fn </span>new(instance: Arc&lt;T::InstanceState&gt;, upgrade_lock: UpgradeLock&lt;T&gt;) -&gt; <span class="self">Self </span>{
+<a href=#117 id=117 data-nosnippet>117</a>        <span class="self">Self </span>{
+<a href=#118 id=118 data-nosnippet>118</a>            instance,
+<a href=#119 id=119 data-nosnippet>119</a>            validated_states: BTreeMap::new(),
+<a href=#120 id=120 data-nosnippet>120</a>            state_requests: HashMap::new(),
+<a href=#121 id=121 data-nosnippet>121</a>            header_requests: HashMap::new(),
+<a href=#122 id=122 data-nosnippet>122</a>            pending_requests: HashMap::new(),
+<a href=#123 id=123 data-nosnippet>123</a>            upgrade_lock,
 <a href=#124 id=124 data-nosnippet>124</a>            tasks: JoinSet::new(),
 <a href=#125 id=125 data-nosnippet>125</a>        }
 <a href=#126 id=126 data-nosnippet>126</a>    }
@@ -171,7 +171,7 @@
 <a href=#171 id=171 data-nosnippet>171</a>        <span class="kw">let </span>view = request.view;
 <a href=#172 id=172 data-nosnippet>172</a>        <span class="kw">let </span>payload_size = request.payload_size;
 <a href=#173 id=173 data-nosnippet>173</a>
-<a href=#174 id=174 data-nosnippet>174</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(upgrade_lock) = upgrade_lock::&lt;T&gt;().version(view) <span class="kw">else </span>{
+<a href=#174 id=174 data-nosnippet>174</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(upgrade_lock) = <span class="self">self</span>.upgrade_lock.version(view) <span class="kw">else </span>{
 <a href=#175 id=175 data-nosnippet>175</a>            <span class="macro">error!</span>(%view, <span class="string">"unsupported version"</span>);
 <a href=#176 id=176 data-nosnippet>176</a>            <span class="kw">return</span>;
 <a href=#177 id=177 data-nosnippet>177</a>        };
@@ -243,7 +243,7 @@
 <a href=#243 id=243 data-nosnippet>243</a>        <span class="kw">let </span>epoch = request.epoch;
 <a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">let </span>parent_proposal = request.parent_proposal;
 <a href=#245 id=245 data-nosnippet>245</a>
-<a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(version) = upgrade_lock::&lt;T&gt;().version(view) <span class="kw">else </span>{
+<a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(version) = <span class="self">self</span>.upgrade_lock.version(view) <span class="kw">else </span>{
 <a href=#247 id=247 data-nosnippet>247</a>            <span class="macro">error!</span>(%view, <span class="string">"unsupported version"</span>);
 <a href=#248 id=248 data-nosnippet>248</a>            <span class="kw">return</span>;
 <a href=#249 id=249 data-nosnippet>249</a>        };
