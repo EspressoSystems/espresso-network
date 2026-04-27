@@ -9,7 +9,7 @@ use hotshot::HotShotInitializer;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    message::Proposal as SignedProposal,
+    message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
@@ -30,7 +30,7 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    helpers::{proposal_commitment, upgrade_lock},
+    helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
@@ -94,6 +94,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         membership_coordinator: EpochMembershipCoordinator<T>,
         network: N,
         initializer: &HotShotInitializer<T>,
+        upgrade_lock: UpgradeLock<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         timeout_duration: Duration,
@@ -103,6 +104,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
             membership_coordinator.clone(),
             public_key.clone(),
             private_key.clone(),
+            upgrade_lock.clone(),
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
         );
@@ -123,14 +125,17 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
         // TODO:
-        let mut state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
+        let mut state_manager = StateManager::new(
+            Arc::new(initializer.instance_state.clone()),
+            upgrade_lock.clone(),
+        );
         state_manager.seed_state(
             ViewNumber::genesis(),
             initializer.anchor_state.clone(),
             initializer.anchor_leaf.clone(),
         );
 
-        let lock = upgrade_lock();
+        let lock = upgrade_lock.clone();
         Self::builder()
             .consensus(consensus)
             .network(Network::new(
@@ -166,8 +171,12 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                 Arc::new(initializer.instance_state.clone()),
                 membership_coordinator.clone(),
                 BlockBuilderConfig::default(),
+                upgrade_lock.clone(),
             ))
-            .proposal_validator(ProposalValidator::new(membership_coordinator.clone()))
+            .proposal_validator(ProposalValidator::new(
+                membership_coordinator.clone(),
+                upgrade_lock,
+            ))
             .storage(Storage::new(storage, private_key))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(

@@ -145,6 +145,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer)
+            .upgrade_lock(UpgradeLock::from_certificate(
+                upgrade,
+                &initializer.decided_upgrade_certificate,
+            ))
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .timeout_duration(Duration::from_secs(10))
@@ -481,6 +485,57 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
     }
 }
 
+fn log_decide_event(event: &CoordinatorEvent<SeqTypes>, node_id: u64) {
+    match event {
+        CoordinatorEvent::LegacyEvent(hotshot_event) => {
+            let hotshot_types::event::EventType::Decide {
+                leaf_chain,
+                deciding_qc,
+                ..
+            } = &hotshot_event.event
+            else {
+                return;
+            };
+
+            let newest = leaf_chain.first().map(|info| &info.leaf);
+            let oldest = leaf_chain.last().map(|info| &info.leaf);
+            tracing::info!(
+                node_id,
+                event_view = ?hotshot_event.view_number,
+                leaf_count = leaf_chain.len(),
+                newest_height = newest.map(Leaf2::height),
+                newest_view = ?newest.map(Leaf2::view_number),
+                newest_version = ?newest.map(|leaf| leaf.block_header().version()),
+                oldest_height = oldest.map(Leaf2::height),
+                oldest_view = ?oldest.map(Leaf2::view_number),
+                has_deciding_qc = deciding_qc.is_some(),
+                "processing legacy decide event"
+            );
+        },
+        CoordinatorEvent::NewDecide(decide) => {
+            let newest = decide.leaves.first();
+            let oldest = decide.leaves.last();
+            let below_new_protocol = newest
+                .map(|leaf| leaf.block_header().version() < versions::NEW_PROTOCOL_VERSION)
+                .unwrap_or(false);
+            tracing::info!(
+                node_id,
+                leaf_count = decide.leaves.len(),
+                newest_height = newest.map(Leaf2::height),
+                newest_view = ?newest.map(Leaf2::view_number),
+                newest_version = ?newest.map(|leaf| leaf.block_header().version()),
+                oldest_height = oldest.map(Leaf2::height),
+                oldest_view = ?oldest.map(Leaf2::view_number),
+                has_cert2 = decide.cert2.is_some(),
+                cert2_height = decide.cert2.as_ref().map(|cert2| cert2.data.block_number),
+                below_new_protocol,
+                "processing new-protocol decide event"
+            );
+        },
+        _ => {},
+    }
+}
+
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
 async fn handle_events<N, P>(
@@ -512,6 +567,7 @@ async fn handle_events<N, P>(
 
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
+        log_decide_event(&event, node_id);
 
         // Handle external messages from either protocol.
         match &event {

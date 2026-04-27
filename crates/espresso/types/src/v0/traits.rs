@@ -32,7 +32,7 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use serde::{Serialize, de::DeserializeOwned};
-use versions::Upgrade;
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use super::{
     impls::NodeState,
@@ -806,6 +806,15 @@ pub trait SequencerPersistence:
                         return;
                     };
 
+                    tracing::info!(
+                        leaf_count = leaf_chain.len(),
+                        newest_height = leaf.height(),
+                        newest_view = ?leaf.view_number(),
+                        newest_version = ?leaf.block_header().version(),
+                        has_deciding_qc = deciding_qc.is_some(),
+                        "persistence handling legacy decide event"
+                    );
+
                     let chain = leaf_chain.iter().zip(
                         std::iter::once((**committing_qc).clone()).chain(
                             leaf_chain
@@ -841,6 +850,31 @@ pub trait SequencerPersistence:
                         "new protocol decide event has mismatched leaves and VID shares"
                     );
                     return;
+                }
+
+                let newest = &decide.leaves[0];
+                let newest_version = newest.block_header().version();
+                let cert2_height = decide.cert2.as_ref().map(|cert2| cert2.data.block_number);
+                if newest_version < NEW_PROTOCOL_VERSION {
+                    tracing::warn!(
+                        leaf_count = decide.leaves.len(),
+                        newest_height = newest.height(),
+                        newest_view = ?newest.view_number(),
+                        ?newest_version,
+                        has_cert2 = decide.cert2.is_some(),
+                        cert2_height,
+                        "persistence handling new-protocol decide before NEW_PROTOCOL_VERSION"
+                    );
+                } else {
+                    tracing::info!(
+                        leaf_count = decide.leaves.len(),
+                        newest_height = newest.height(),
+                        newest_view = ?newest.view_number(),
+                        ?newest_version,
+                        has_cert2 = decide.cert2.is_some(),
+                        cert2_height,
+                        "persistence handling new-protocol decide event"
+                    );
                 }
 
                 // TODO(new-protocol)
