@@ -426,7 +426,6 @@ impl<T: NodeType> Consensus<T> {
 
     pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
         self.proposed_views = self.proposed_views.split_off(&view);
-        self.skipped_views = self.skipped_views.split_off(&view);
         self.states_verified = self.states_verified.split_off(&view);
         self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
         self.blocks = self.blocks.split_off(&view);
@@ -440,7 +439,6 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
-        //self.last_decided_view = self.last_decided_view.max(view);
     }
 
     #[instrument(level = "debug", skip_all)]

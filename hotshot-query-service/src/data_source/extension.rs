@@ -557,7 +557,6 @@ where
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
     use hotshot::types::Event;
-    use hotshot_new_protocol::consensus::CoordinatorEvent;
 
     use super::*;
     use crate::{
@@ -597,9 +596,7 @@ mod impl_testable_data_source {
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
-            self.update(&CoordinatorEvent::LegacyEvent(event.clone()))
-                .await
-                .unwrap();
+            self.update(event).await.unwrap();
         }
     }
 }

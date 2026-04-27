@@ -16,8 +16,8 @@ use derive_more::derive::{From, Into};
 use either::Either;
 use espresso_types::{
     AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, CoordinatorEvent, FeeMerkleTree,
-    Leaf, Leaf2, NetworkConfig, NewDecideEvent, Payload, PubKey, Ratio, RegisteredValidatorMap,
-    StakeTableHash, parse_duration, parse_size,
+    Leaf, Leaf2, NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
+    parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{
@@ -73,7 +73,6 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use sqlx::{Executor, QueryBuilder, Row, query};
-use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
@@ -716,84 +715,6 @@ pub struct Persistence {
 /// Transactions that fail with this code are safe to retry from scratch.
 const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
 
-#[derive(Debug)]
-struct DecidedLeaf {
-    info: LeafInfo<SeqTypes>,
-    cert: CertificatePair<SeqTypes>,
-    vid_proposal: Option<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>,
-}
-
-/// Turns a decided leaf chain into the coordinator events
-///
-/// The chain is split at the protocol version: leaves with header
-/// version `>= NEW_PROTOCOL_VERSION` become a `NewDecide` event and older leaves
-/// become a legacy `Decide`
-///
-/// `deciding_qc` is only forwarded on the legacy event
-fn build_decide_events(
-    mut chain: Vec<DecidedLeaf>,
-    newest_cert2: Option<Certificate2<SeqTypes>>,
-    deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-) -> Vec<CoordinatorEvent<SeqTypes>> {
-    let split_idx = chain
-        .iter()
-        .position(|d| d.info.leaf.block_header().version() < NEW_PROTOCOL_VERSION)
-        .unwrap_or(chain.len());
-    let legacy_leaves = chain.split_off(split_idx);
-    let new_leaves = chain;
-
-    let mut events = Vec::with_capacity(2);
-    if !legacy_leaves.is_empty() {
-        // `legacy_leaves[0]` is the newest legacy leaf; its QC is the one
-        // committing the leaf chain emitted on this Decide.
-        let committing_qc = legacy_leaves[0].cert.clone();
-        let to_view = legacy_leaves[0].info.leaf.view_number();
-        // Only forward `deciding_qc` when the whole chain is legacy
-        let deciding_qc = new_leaves
-            .is_empty()
-            .then_some(deciding_qc)
-            .flatten()
-            .filter(|qc| qc.view_number() == committing_qc.view_number() + 1);
-        let leaf_chain: Vec<LeafInfo<SeqTypes>> =
-            legacy_leaves.into_iter().map(|d| d.info).collect();
-        events.push(CoordinatorEvent::LegacyEvent(Event {
-            view_number: to_view,
-            event: EventType::Decide {
-                leaf_chain: Arc::new(leaf_chain),
-                committing_qc: Arc::new(committing_qc),
-                deciding_qc,
-                block_size: None,
-            },
-        }));
-    }
-
-    if !new_leaves.is_empty() {
-        let cert1 = new_leaves[0].cert.qc().clone();
-        let mut leaves = Vec::with_capacity(new_leaves.len());
-        let mut vid_shares = Vec::with_capacity(new_leaves.len());
-        for d in new_leaves {
-            leaves.push(d.info.leaf);
-            let vid_v2 = d.vid_proposal.and_then(|p| match p.data {
-                VidDisperseShare::V2(v2) => Some(Proposal {
-                    data: v2,
-                    signature: p.signature,
-                    _pd: std::marker::PhantomData,
-                }),
-                _ => None,
-            });
-            vid_shares.push(vid_v2);
-        }
-        events.push(CoordinatorEvent::NewDecide(NewDecideEvent {
-            leaves,
-            cert1,
-            cert2: newest_cert2,
-            vid_shares,
-        }));
-    }
-
-    events
-}
-
 impl Persistence {
     /// Ensure the `leaf_hash` column is populated for all existing quorum proposals.
     ///
@@ -902,7 +823,7 @@ impl Persistence {
             )
             .bind(from_view)
             .fetch(tx.as_mut());
-            let mut leaves: Vec<(Leaf2, CertificatePair<SeqTypes>)> = vec![];
+            let mut leaves = vec![];
             let mut final_qc = None;
             while let Some(row) = rows.next().await {
                 let row = match row {
@@ -941,9 +862,8 @@ impl Persistence {
                     break;
                 }
                 parent = Some(height);
-                let cert = CertificatePair::new(qc, next_epoch_qc);
-                final_qc = Some(cert.clone());
-                leaves.push((leaf, cert));
+                leaves.push(leaf);
+                final_qc = Some(CertificatePair::new(qc, next_epoch_qc));
             }
             drop(rows);
 
@@ -955,10 +875,10 @@ impl Persistence {
 
             // Find the range of views encompassed by this leaf chain. All data in this range can be
             // processed by the consumer and then deleted.
-            let from_view = leaves[0].0.view_number();
-            let to_view = leaves[leaves.len() - 1].0.view_number();
+            let from_view = leaves[0].view_number();
+            let to_view = leaves[leaves.len() - 1].view_number();
 
-            // Collect VID shares for the decide event
+            // Collect VID shares for the decide event.
             let mut vid_shares = tx
                 .fetch_all(
                     query("SELECT view, data FROM vid_share2 where view >= $1 AND view <= $2")
@@ -973,7 +893,7 @@ impl Persistence {
                     let vid_proposal = bincode::deserialize::<
                         Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
                     >(&data)?;
-                    Ok((view as u64, vid_proposal))
+                    Ok((view as u64, vid_proposal.data))
                 })
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
@@ -1006,34 +926,21 @@ impl Persistence {
                     );
                 })?;
 
-            // Load the cert2 for the newest decided view, if the new protocol has persisted one.
-            let newest_cert2 = tx
-                .fetch_optional(
-                    query("SELECT data FROM decided_cert2 WHERE view = $1")
-                        .bind(to_view.u64() as i64),
-                )
-                .await?
-                .map(|row| {
-                    let bytes: Vec<u8> = row.get("data");
-                    bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
-                        .context("deserializing decided cert2")
-                })
-                .transpose()?;
             drop(tx);
 
             // Collate all the information by view number and construct a chain of leaves.
-            let chain: Vec<DecidedLeaf> = leaves
+            let leaf_chain = leaves
                 .into_iter()
+                // Go in reverse chronological order, as expected by Decide events.
                 .rev()
-                .map(|(mut leaf, cert)| {
+                .map(|mut leaf| {
                     let view = leaf.view_number();
 
                     // Include the VID share if available.
-                    let vid_proposal = vid_shares.remove(&view);
-                    if vid_proposal.is_none() {
+                    let vid_share = vid_shares.remove(&view);
+                    if vid_share.is_none() {
                         tracing::debug!(?view, "VID share not available at decide");
                     }
-                    let vid_share = vid_proposal.as_ref().map(|p| p.data.clone());
 
                     // Fill in the full block payload using the DA proposals we had persisted.
                     if let Some(proposal) = da_proposals.remove(&view) {
@@ -1050,7 +957,7 @@ impl Persistence {
 
                     let state_cert = state_certs.get(&view).cloned();
 
-                    let info = LeafInfo {
+                    LeafInfo {
                         leaf,
                         vid_share,
                         state_cert,
@@ -1058,11 +965,6 @@ impl Persistence {
                         // and should be removed. For now, we just default them.
                         state: Default::default(),
                         delta: Default::default(),
-                    };
-                    DecidedLeaf {
-                        info,
-                        cert,
-                        vid_proposal,
                     }
                 })
                 .collect();
@@ -1071,13 +973,29 @@ impl Persistence {
                 ?from_view,
                 ?to_view,
                 ?final_qc,
-                ?chain,
-                "generating decide events"
+                ?leaf_chain,
+                "generating decide event"
             );
 
-            for event in build_decide_events(chain, newest_cert2, deciding_qc.clone()) {
-                consumer.handle_event(&event).await?;
-            }
+            // Insert the deciding QC at the appropriate position, with the last decide event in
+            // the chain.
+            let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                (deciding_qc.view_number() == final_qc.view_number() + 1)
+                    .then_some(deciding_qc.clone())
+            } else {
+                None
+            };
+            consumer
+                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
+                    view_number: to_view,
+                    event: EventType::Decide {
+                        leaf_chain: Arc::new(leaf_chain),
+                        committing_qc: Arc::new(final_qc),
+                        deciding_qc,
+                        block_size: None,
+                    },
+                }))
+                .await?;
 
             let from_view_i64 = from_view.u64() as i64;
             let to_view_i64 = to_view.u64() as i64;

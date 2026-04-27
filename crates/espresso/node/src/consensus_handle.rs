@@ -23,7 +23,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
-    message::{Proposal as SignedProposal, UpgradeLock},
+    message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     traits::{
         ValidatedState, network::ConnectedNetwork, node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -346,7 +346,18 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     ) -> anyhow::Result<
         BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
-        // TODO: route through client_api once new protocol supports RequestProposal.
+        if self.new_protocol_at(view).await {
+            let client_api = self.client_api.clone();
+            return Ok(async move {
+                client_api
+                    .request_proposal(view, leaf_commitment)
+                    .await
+                    .map(convert_proposal)
+                    .map_err(|err| anyhow::anyhow!("{err}"))
+            }
+            .boxed());
+        }
+
         let future = self
             .legacy_handle
             .read()
