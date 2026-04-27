@@ -829,54 +829,6 @@ pub trait SequencerPersistence:
                     }
                 }
             },
-            CoordinatorEvent::NewDecide(decide) => {
-                if decide.leaves.is_empty() {
-                    return;
-                }
-
-                // TODO(new-protocol): remove this field once the coordinator has storage
-                for signed in decide.vid_shares.iter().flatten() {
-                    let proposal = convert_proposal(signed.clone());
-                    if let Err(err) = self.append_vid(&proposal).await {
-                        tracing::error!("failed to append VID share from new protocol: {err:#}");
-                    }
-                }
-
-                // Store leaves in persistence. Zip with VID shares from the
-                // new protocol decide event.
-                let leaf_infos: Vec<_> = decide
-                    .leaves
-                    .iter()
-                    .zip(decide.vid_shares.iter())
-                    .map(|(leaf, vid_share)| {
-                        let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
-                        let vid = vid_share
-                            .as_ref()
-                            .map(|s| VidDisperseShare::V2(s.data.clone()));
-                        LeafInfo::new(leaf.clone(), state, None, vid, None)
-                    })
-                    .collect();
-
-                // cert1 certifies leaves[0] (newest); each leaf's justify_qc
-                // certifies the next older leaf.
-                let view_number = decide.leaves[0].view_number();
-                let qcs = std::iter::once(decide.cert1.clone())
-                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()));
-
-                if let Err(err) = self
-                    .append_decided_leaves(
-                        view_number,
-                        leaf_infos
-                            .iter()
-                            .zip(qcs.map(CertificatePair::non_epoch_change)),
-                        None,
-                        consumer,
-                    )
-                    .await
-                {
-                    tracing::error!("failed to save decided leaves from new protocol: {err:#}");
-                }
-            },
             _ => {},
         }
     }
