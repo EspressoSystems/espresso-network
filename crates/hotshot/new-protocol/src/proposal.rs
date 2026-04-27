@@ -9,7 +9,7 @@ use hotshot_types::{
         vid_disperse::vid_total_weight,
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
-    message::Proposal as SignedProposal,
+    message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::check_qc_state_cert_correspondence,
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
@@ -21,10 +21,7 @@ use hotshot_utils::anytrace;
 use tokio::task::JoinSet;
 use tracing::error;
 
-use crate::{
-    helpers::upgrade_lock,
-    message::{Proposal, ProposalMessage, Unchecked, Validated},
-};
+use crate::message::{Proposal, ProposalMessage, Unchecked, Validated};
 
 type Result<T> = std::result::Result<T, ValidationError>;
 
@@ -46,15 +43,21 @@ pub struct ProposalValidator<T: NodeType> {
 struct Validator<T: NodeType> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     epoch_height: u64,
+    upgrade_lock: UpgradeLock<T>,
 }
 
 impl<T: NodeType> ProposalValidator<T> {
-    pub fn new(c: EpochMembershipCoordinator<T>, epoch_height: u64) -> Self {
+    pub fn new(
+        c: EpochMembershipCoordinator<T>,
+        epoch_height: u64,
+        upgrade_lock: UpgradeLock<T>,
+    ) -> Self {
         Self {
             tasks: JoinSet::new(),
             validator: Arc::new(Validator {
                 membership_coordinator: c,
                 epoch_height,
+                upgrade_lock,
             }),
         }
     }
@@ -144,7 +147,7 @@ impl<T: NodeType> Validator<T> {
         let threshold = membership.success_threshold().await;
         match proposal
             .justify_qc
-            .is_valid_cert(&entries, threshold, &upgrade_lock::<T>())
+            .is_valid_cert(&entries, threshold, &self.upgrade_lock)
         {
             Ok(()) => Ok(()),
             Err(e) => Err(ValidationError::InvalidJustifyQc(e)),
@@ -173,7 +176,7 @@ impl<T: NodeType> Validator<T> {
         validate_light_client_state_update_certificate(
             state_cert,
             &self.membership_coordinator,
-            &upgrade_lock::<T>(),
+            &self.upgrade_lock,
         )
         .await
         .map_err(ValidationError::InvalidStateCert)

@@ -17,7 +17,7 @@ use crate::{
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
-    helpers::upgrade_lock,
+    helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
     network::Network,
@@ -52,15 +52,18 @@ impl TestHarness {
         let state_private_key = state_key_pair.sign_key_ref().clone();
         let instance = Arc::new(TestInstanceState::default());
         let membership = mock_membership().await;
+        let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
 
-        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let epoch_root_collector = EpochRootVoteCollector::new(membership.clone(), upgrade_lock());
+        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_one_honest_collector =
+            VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let epoch_root_collector =
+            EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
         let genesis_leaf =
@@ -72,6 +75,7 @@ impl TestHarness {
             private_key.clone(),
             state_private_key,
             10,
+            upgrade_lock.clone(),
             genesis_leaf.clone(),
             epoch_height,
         );
@@ -80,14 +84,20 @@ impl TestHarness {
         let vid_reconstruction_task = VidReconstructor::new();
 
         let block_config = BlockBuilderConfig::default();
-        let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
+        let block_builder = BlockBuilder::new(
+            instance.clone(),
+            membership.clone(),
+            block_config,
+            upgrade_lock.clone(),
+        );
 
-        let mut state_manager = StateManager::new(instance.clone());
+        let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let proposal_validator = ProposalValidator::new(membership.clone(), epoch_height);
+        let proposal_validator =
+            ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
-        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
+        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock);
 
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)

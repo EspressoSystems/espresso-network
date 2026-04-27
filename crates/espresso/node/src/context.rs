@@ -145,6 +145,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer)
+            .upgrade_lock(UpgradeLock::from_certificate(
+                upgrade,
+                &initializer.decided_upgrade_certificate,
+            ))
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .state_private_key(validator_config.state_private_key.clone())
