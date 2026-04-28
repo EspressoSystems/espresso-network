@@ -38,7 +38,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-b1a6ec98.js";
+            window.path_to_searchindex_js = "../../searchindex-78103e10.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-7b70ea14.js"></script>
@@ -181,7 +181,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="rewardclaim"><a class="header" href="#rewardclaim">RewardClaim</a></h1>
-<p><a href="https://github.com/EspressoSystems/espresso-network/blob/e2e795168f1d1c84ba18cebcf7af3eca0cbb9239/contracts/src/RewardClaim.sol">Git Source</a></p>
+<p><a href="https://github.com/EspressoSystems/espresso-network/blob/99b718fb5390dfa889b38b4fb76bcb73ae908f10/contracts/src/RewardClaim.sol">Git Source</a></p>
 <p><strong>Inherits:</strong>
 <a href="/contracts/src/interfaces/IRewardClaim.sol/interface.IRewardClaim.html">IRewardClaim</a>, Initializable, UUPSUpgradeable, PausableUpgradeable, AccessControlUpgradeable, ReentrancyGuardUpgradeable</p>
 <p><strong>Title:</strong>
@@ -206,6 +206,21 @@ Governance: This contract enforces a single-admin model. <code>currentAdmin</cod
 <code>grantRole(DEFAULT_ADMIN_ROLE, ...)</code>. Any attempt to revoke or renounce the default admin role
 reverts so that there is always a single admin.</li>
 </ul>
+<h2 id="constants"><a class="header" href="#constants">Constants</a></h2>
+<h3 id="max_daily_limit_basis_points"><a class="header" href="#max_daily_limit_basis_points">MAX_DAILY_LIMIT_BASIS_POINTS</a></h3>
+<p>Maximum daily limit as percentage of total supply in basis points (500 = 5%)</p>
+<p>Hardcoded to prevent setting dangerously high limits without a contract upgrade.
+Increasing this value further would require upgrading the contract, which is
+intentional to ensure careful consideration and governance of security parameters.</p>
+<pre><code class="language-solidity">uint256 public constant MAX_DAILY_LIMIT_BASIS_POINTS = 500
+</code></pre>
+<h3 id="bps_denominator"><a class="header" href="#bps_denominator">BPS_DENOMINATOR</a></h3>
+<p>Basis points denominator (100% = 10000 bps)</p>
+<pre><code class="language-solidity">uint256 public constant BPS_DENOMINATOR = 10000
+</code></pre>
+<h3 id="pauser_role"><a class="header" href="#pauser_role">PAUSER_ROLE</a></h3>
+<pre><code class="language-solidity">bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE")
+</code></pre>
 <h2 id="state-variables"><a class="header" href="#state-variables">State Variables</a></h2>
 <h3 id="esptoken"><a class="header" href="#esptoken">espToken</a></h3>
 <p>The ESP token contract</p>
@@ -236,17 +251,6 @@ As total supply changes, this value becomes outdated and no longer represents th
 percentage that dailyLimitWei represents relative to current supply.</p>
 <pre><code class="language-solidity">uint256 public lastSetDailyLimitBasisPoints
 </code></pre>
-<h3 id="max_daily_limit_basis_points"><a class="header" href="#max_daily_limit_basis_points">MAX_DAILY_LIMIT_BASIS_POINTS</a></h3>
-<p>Maximum daily limit as percentage of total supply in basis points (500 = 5%)</p>
-<p>Hardcoded to prevent setting dangerously high limits without a contract upgrade.
-Increasing this value further would require upgrading the contract, which is
-intentional to ensure careful consideration and governance of security parameters.</p>
-<pre><code class="language-solidity">uint256 public constant MAX_DAILY_LIMIT_BASIS_POINTS = 500
-</code></pre>
-<h3 id="bps_denominator"><a class="header" href="#bps_denominator">BPS_DENOMINATOR</a></h3>
-<p>Basis points denominator (100% = 10000 bps)</p>
-<pre><code class="language-solidity">uint256 public constant BPS_DENOMINATOR = 10000
-</code></pre>
 <h3 id="_currentday"><a class="header" href="#_currentday">_currentDay</a></h3>
 <p>Current day number (days since epoch)</p>
 <pre><code class="language-solidity">uint256 private _currentDay
@@ -261,9 +265,6 @@ operation.</p>
 reset. We don’t expect to hit the daily limits, therefore implementation in the
 contract and in clients is not part of the initial release.</p>
 <pre><code class="language-solidity">uint256 private _claimedToday
-</code></pre>
-<h3 id="pauser_role"><a class="header" href="#pauser_role">PAUSER_ROLE</a></h3>
-<pre><code class="language-solidity">bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE")
 </code></pre>
 <h3 id="currentadmin"><a class="header" href="#currentadmin">currentAdmin</a></h3>
 <p>Current admin address with DEFAULT_ADMIN_ROLE</p>

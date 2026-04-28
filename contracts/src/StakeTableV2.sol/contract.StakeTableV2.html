@@ -38,7 +38,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-b1a6ec98.js";
+            window.path_to_searchindex_js = "../../searchindex-78103e10.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-7b70ea14.js"></script>
@@ -181,7 +181,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="staketablev2"><a class="header" href="#staketablev2">StakeTableV2</a></h1>
-<p><a href="https://github.com/EspressoSystems/espresso-network/blob/e2e795168f1d1c84ba18cebcf7af3eca0cbb9239/contracts/src/StakeTableV2.sol">Git Source</a></p>
+<p><a href="https://github.com/EspressoSystems/espresso-network/blob/99b718fb5390dfa889b38b4fb76bcb73ae908f10/contracts/src/StakeTableV2.sol">Git Source</a></p>
 <p><strong>Inherits:</strong>
 <a href="/contracts/src/StakeTable.sol/contract.StakeTable.html">StakeTable</a>, PausableUpgradeable, AccessControlUpgradeable</p>
 <p><strong>Title:</strong>
@@ -252,7 +252,7 @@ changed via <code>transferOwnership()</code> (directly or through
 attempt to revoke or renounce the default admin role, or to renounce
 ownership, reverts. This removes governance drift.</p>
 <p>All functions are marked as virtual so that future upgrades can override them.</p>
-<h2 id="state-variables"><a class="header" href="#state-variables">State Variables</a></h2>
+<h2 id="constants"><a class="header" href="#constants">Constants</a></h2>
 <h3 id="pauser_role"><a class="header" href="#pauser_role">PAUSER_ROLE</a></h3>
 <pre><code class="language-solidity">bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE")
 </code></pre>
@@ -280,6 +280,7 @@ parameters (e.g., blocksPerEpoch, blockTime, and epoch duration) to ensure secur
 <p>Reasonable upper bound to prevent excessive lockup periods</p>
 <pre><code class="language-solidity">uint64 public constant MAX_EXIT_ESCROW_PERIOD = 14 days
 </code></pre>
+<h2 id="state-variables"><a class="header" href="#state-variables">State Variables</a></h2>
 <h3 id="mincommissionincreaseinterval"><a class="header" href="#mincommissionincreaseinterval">minCommissionIncreaseInterval</a></h3>
 <p>Minimum time interval between commission increases (in seconds)</p>
 <pre><code class="language-solidity">uint256 public minCommissionIncreaseInterval
