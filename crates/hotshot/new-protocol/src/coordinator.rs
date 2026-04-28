@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bon::{Builder, bon};
 use committable::Commitment;
-use hotshot::HotShotInitializer;
+use hotshot::{HotShotInitializer, types::SignatureKey};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -14,7 +14,6 @@ use hotshot_types::{
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
         block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
-        signature_key::SignatureKey,
     },
     vote::HasViewNumber,
 };
@@ -414,11 +413,21 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                 },
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
+                        // New epoch data available — retry votes that were
+                        // buffered because their membership wasn't ready.
+                        self.vote1_collector.retry_pending_votes().await;
+                        self.vote2_collector.retry_pending_votes().await;
+                        self.timeout_collector.retry_pending_votes().await;
+                        self.timeout_one_honest_collector.retry_pending_votes().await;
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
-                    Ok(EpochRootResult::RootAdded(_epoch)) => {}
-                    Err(err) => {
-                        return Err(CoordinatorError::regular(err))
+                    Err(failure) => {
+                        // Catchup/compute failed. The epoch manager clears
+                        // the pending guard; consensus's `maybe_propose`
+                        // will re-request the DRB when it next tries to
+                        // build a transition proposal and finds it missing.
+                        warn!(%failure.error, epoch = %failure.epoch, "DRB request failed");
+                        continue;
                     }
                 },
                 else => {
@@ -446,6 +455,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
 
     pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<CoordinatorOutput<T>> {
         &mut self.coordinator_outbox
+    }
+
+    pub fn current_view(&self) -> ViewNumber {
+        self.consensus.current_view()
     }
 
     pub async fn on_state_manager_output(
@@ -741,6 +754,16 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     .await
                     .map_err(|e| e.context("unicast transactions"))?;
                 }
+
+                // Proactively fetch DRBs for the next epoch so
+                // late-starting nodes have them before they need to
+                // propose or verify certs in a new epoch. The dedup
+                // in request_drb_result makes repeated calls free.
+                let next_epoch = epoch + 1;
+                if next_epoch > EpochNumber::genesis() + 1 {
+                    self.epoch_manager.request_drb_result(next_epoch);
+                    self.epoch_manager.request_drb_result(next_epoch + 1);
+                }
             },
         }
         Ok(())
@@ -790,6 +813,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         self.block_builder.gc(view);
         self.storage.gc(view);
         self.pending_proposal_fetches.gc(view);
+        self.storage.gc(view);
     }
 
     pub fn node_id(&self) -> &KeyPrefix {
