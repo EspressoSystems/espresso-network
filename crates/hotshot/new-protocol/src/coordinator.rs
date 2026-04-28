@@ -1,7 +1,7 @@
 pub mod error;
 pub mod timer;
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bon::{Builder, bon};
 use committable::Commitment;
@@ -762,20 +762,35 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
     }
 }
 
-struct PendingProposalFetch<T: NodeType> {
+type ProposalFetchResponseSender<T> =
+    oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ProposalFetchKey<T: NodeType> {
     view: ViewNumber,
     leaf_commitment: Commitment<Leaf2<T>>,
-    respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
+}
+
+impl<T: NodeType> ProposalFetchKey<T> {
+    fn new(view: ViewNumber, leaf_commitment: Commitment<Leaf2<T>>) -> Self {
+        Self {
+            view,
+            leaf_commitment,
+        }
+    }
 }
 
 #[derive(Default)]
 struct PendingProposalFetches<T: NodeType> {
-    pending: Vec<PendingProposalFetch<T>>,
+    pending: HashMap<ProposalFetchKey<T>, Vec<ProposalFetchResponseSender<T>>>,
 }
 
 impl<T: NodeType> PendingProposalFetches<T> {
     fn prune_closed(&mut self) {
-        self.pending.retain(|pending| !pending.respond.is_closed());
+        self.pending.retain(|_, responders| {
+            responders.retain(|respond| !respond.is_closed());
+            !responders.is_empty()
+        });
     }
 
     fn contains_request(
@@ -785,37 +800,38 @@ impl<T: NodeType> PendingProposalFetches<T> {
     ) -> bool {
         self.prune_closed();
         self.pending
-            .iter()
-            .any(|pending| pending.view == view && pending.leaf_commitment == leaf_commitment)
+            .contains_key(&ProposalFetchKey::new(view, leaf_commitment))
     }
 
     fn push(
         &mut self,
         view: ViewNumber,
         leaf_commitment: Commitment<Leaf2<T>>,
-        respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
+        respond: ProposalFetchResponseSender<T>,
     ) {
-        self.pending.push(PendingProposalFetch {
-            view,
-            leaf_commitment,
-            respond,
-        });
+        self.pending
+            .entry(ProposalFetchKey::new(view, leaf_commitment))
+            .or_default()
+            .push(respond);
     }
 
     fn gc(&mut self, view: ViewNumber) {
-        self.pending
-            .retain(|pending| pending.view >= view && !pending.respond.is_closed());
+        self.pending.retain(|key, responders| {
+            responders.retain(|respond| !respond.is_closed());
+            key.view >= view && !responders.is_empty()
+        });
     }
 
     fn resolve(&mut self, proposal: &SignedProposal<T, Proposal<T>>) {
         self.prune_closed();
         let view = proposal.data.view_number;
         let leaf_commitment = proposal_commitment(&proposal.data);
+        let key = ProposalFetchKey::new(view, leaf_commitment);
 
-        for pending in self.pending.extract_if(.., |pending| {
-            pending.view == view && pending.leaf_commitment == leaf_commitment
-        }) {
-            let _ = pending.respond.send(Ok(proposal.clone()));
+        if let Some(responders) = self.pending.remove(&key) {
+            for respond in responders {
+                let _ = respond.send(Ok(proposal.clone()));
+            }
         }
     }
 }
