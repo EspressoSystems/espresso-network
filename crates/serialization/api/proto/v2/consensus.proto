@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+import "v2/common.proto";
+
+//=============================================================================
+// Light Client State Types
+//=============================================================================
+
+// Light client state
+message LightClientState {
+  uint64 view_number = 1;
+  uint64 block_height = 2;
+  string block_comm_root = 3;  // CircuitField serialized as bytes
+}
+
+// Stake table state commitments
+message StakeTableState {
+  string bls_key_comm = 1;      // CircuitField as bytes
+  string schnorr_key_comm = 2;  // CircuitField as bytes
+  string amount_comm = 3;       // CircuitField as bytes
+  string threshold = 4;         // CircuitField as bytes
+}
+
+// State signature tuple (key + two signatures)
+message StateSignatureTuple {
+  SchnorrPublicKey state_signature_key = 1;  // Schnorr public key
+  string lcv3_signature = 2;                   // LCV3 Schnorr signature
+  string lcv2_signature = 3;                   // LCV2 Schnorr signature
+}
+
+// Light client state update certificate V2
+message LightClientStateUpdateCertificateV2 {
+  uint64 epoch = 1;
+  string light_client_state = 2;  // TaggedBase64 "LIGHT_CLIENT_STATE~..."
+  string next_stake_table_state = 3;  // TaggedBase64 "STAKE_TABLE_STATE~..."
+  repeated StateSignatureTuple signatures = 4;
+  string auth_root = 5;  // TaggedBase64 or plain base64
+}
+
+//=============================================================================
+// State Certificate Queries
+//=============================================================================
+
+// Request to get state certificate for an epoch
+message GetStateCertificateRequest {
+  // Epoch number
+  uint64 epoch = 1;
+}
+
+// State certificate response
+message StateCertificateResponse {
+  // Structured light client state update certificate
+  LightClientStateUpdateCertificateV2 certificate = 1;
+}
+
+//=============================================================================
+// Stake Table Queries
+//=============================================================================
+
+// Request to get stake table for an epoch
+message GetStakeTableRequest {
+  // Epoch number
+  uint64 epoch = 1;
+}
+
+// Stake table response
+message StakeTableResponse {
+  // List of peer configurations
+  repeated PeerConfig peers = 1;
+}
+
+//=============================================================================
+// gRPC Service Definition
+//=============================================================================
+
+// gRPC service for consensus state queries
+service ConsensusService {
+  // Get state certificate for an epoch
+  rpc GetStateCertificate(GetStateCertificateRequest) returns (StateCertificateResponse);
+
+  // Get stake table for an epoch
+  rpc GetStakeTable(GetStakeTableRequest) returns (StakeTableResponse);
+}

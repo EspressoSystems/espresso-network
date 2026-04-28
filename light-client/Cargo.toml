@@ -13,16 +13,21 @@ testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
+
+# Testing dependencies
+bitvec = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 committable = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
 espresso-types = { workspace = true }
 futures = { workspace = true }
+hotshot-contract-adapter = { workspace = true, optional = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
+rand = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -32,11 +37,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
-
-# Testing dependencies
-bitvec = { workspace = true, optional = true }
-hotshot-contract-adapter = { workspace = true, optional = true }
-rand = { workspace = true, optional = true }
 
 [dev-dependencies]
 espresso-node = { workspace = true, default-features = false, features = [

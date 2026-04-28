@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+package espresso.api.v2;
+
+//=============================================================================
+// Namespace Proof Types
+//=============================================================================
+
+// ADVZ (VID V0) namespace proof
+message ADVZNsProof {
+  uint32 namespace_id = 1;
+  string ns_payload = 2;
+  optional string ns_proof = 3;  // VID proof (serialized)
+}
+
+// AvidM (VID V1) namespace proof
+message AvidMNsProof {
+  uint64 ns_index = 1;
+  string ns_payload = 2;
+  string ns_proof = 3;  // Merkle proof (serialized)
+}
+
+// AvidM incorrect encoding proof
+message AvidMIncorrectEncodingNsProof {
+  string proof_data = 1;  // Serialized incorrect encoding proof
+}
+
+// AvidmGf2 (VID V2) namespace proof
+message AvidmGf2NsProof {
+  uint64 ns_index = 1;
+  string ns_payload = 2;
+  string ns_proof = 3;  // Merkle proof (serialized)
+}
+
+// Namespace proof - supports multiple VID versions
+message NsProof {
+  oneof proof_version {
+    ADVZNsProof v0 = 1;
+    AvidMNsProof v1 = 2;
+    AvidMIncorrectEncodingNsProof v1_incorrect_encoding = 3;
+    AvidmGf2NsProof v2 = 4;
+  }
+}
+
+//=============================================================================
+// Namespace Proof Queries
+//=============================================================================
+
+// Request to get namespace proof(s)
+// Either specify 'block' for a single block, or 'first' and 'last' for a range
+message GetNamespaceProofRequest {
+  // Namespace ID
+  uint32 namespace_id = 1;
+
+  // Single block query
+  optional uint64 block = 2;
+
+  // Range query - first block (inclusive)
+  optional uint64 first = 3;
+
+  // Range query - last block (inclusive)
+  optional uint64 last = 4;
+}
+
+// Transaction
+message Transaction {
+  uint32 namespace = 1;
+  string payload = 2;  // base64 encoded
+}
+
+// Single block namespace proof response
+message NamespaceProofResponse {
+  // Transactions for this namespace
+  repeated Transaction transactions = 1;
+
+  // Namespace proof (optional - may be None if namespace not present)
+  optional NsProof proof = 2;
+}
+
+// Response for range queries - array of namespace proofs
+message NamespaceProofRangeResponse {
+  // Proofs for each block in the range
+  repeated NamespaceProofResponse proofs = 1;
+}
+
+// Unified response for namespace proof queries
+message GetNamespaceProofResponse {
+  oneof response {
+    NamespaceProofResponse single = 1;  // Single block response
+    NamespaceProofRangeResponse range = 2;  // Range response
+  }
+}
+
+//=============================================================================
+// Incorrect Encoding Proof
+//=============================================================================
+
+// Request to get incorrect encoding proof
+message GetIncorrectEncodingProofRequest {
+  // Namespace ID
+  uint32 namespace_id = 1;
+
+  // Block height
+  uint64 block_height = 2;
+}
+
+// Incorrect encoding proof response
+message IncorrectEncodingProofResponse {
+  // Incorrect encoding proof (AvidM V1.1 proof)
+  AvidMIncorrectEncodingNsProof proof = 1;
+}
+
+//=============================================================================
+// gRPC Service Definition
+//=============================================================================
+
+// gRPC service for data availability queries
+service DataService {
+  // Get namespace proof(s) - handles both single block and range queries
+  rpc GetNamespaceProof(GetNamespaceProofRequest) returns (GetNamespaceProofResponse);
+
+  // Get incorrect encoding proof for a block
+  rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (IncorrectEncodingProofResponse);
+}

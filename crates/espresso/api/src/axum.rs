@@ -8,21 +8,21 @@ use aide::{
     operation::OperationOutput,
     redoc::Redoc,
     scalar::Scalar,
-    swagger::Swagger,
 };
 use axum::{
     Extension, Json, Router,
     extract::{Path, Request, State},
     http::{StatusCode, Uri},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::get,
 };
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
-    GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
-    GetRewardClaimInputRequest, GetRewardMerkleTreeRequest,
+    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetRewardAccountProofRequest,
+    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
+    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 
 use crate::{error::ApiError, handlers, v1, v2};
@@ -57,6 +57,11 @@ async fn serve_openapi_spec(Extension(api): Extension<OpenApi>) -> Json<OpenApi>
     Json(api)
 }
 
+/// Serve custom Swagger UI with collapsed defaults
+async fn serve_swagger_ui() -> Html<&'static str> {
+    Html(include_str!("../templates/swagger.html"))
+}
+
 /// Middleware to rewrite root paths to /v2 paths
 ///
 /// Requests to `/rewards/...` get rewritten to `/v2/rewards/...`
@@ -88,10 +93,52 @@ async fn redirect_to_docs() -> axum::response::Redirect {
     axum::response::Redirect::permanent("/v2")
 }
 
+struct SendQuery<T>(T);
+
+impl<T, S> axum::extract::FromRequestParts<S> for SendQuery<T>
+where
+    T: serde::de::DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = axum::extract::rejection::QueryRejection;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        axum::extract::Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|axum::extract::Query(inner)| SendQuery(inner))
+    }
+}
+
+impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
+    fn operation_input(
+        ctx: &mut aide::generate::GenContext,
+        operation: &mut aide::openapi::Operation,
+    ) {
+        let schema = ctx.schema.subschema_for::<T>();
+        let params = aide::operation::parameters_from_schema(
+            ctx,
+            schema,
+            aide::operation::ParamLocation::Query,
+        );
+        aide::operation::add_parameters(ctx, operation, params);
+    }
+}
+
 /// Create a combined router serving both v1 and v2 APIs
 pub fn create_combined_router<S>(state: S) -> Router
 where
-    S: v1::RewardApi + v2::RewardApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi
+        + v1::AvailabilityApi
+        + v2::RewardApi
+        + v2::DataApi
+        + v2::ConsensusApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state).layer(middleware::from_fn(rewrite_root_to_v2));
@@ -102,7 +149,7 @@ where
 /// Create v1 router without OpenAPI documentation (internal types)
 pub fn create_router_v1<S>(state: S) -> Router
 where
-    S: v1::RewardApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi + v1::AvailabilityApi + Clone + Send + Sync + 'static,
 {
     // Create handler closures that capture the generic state type
     let get_reward_claim_input =
@@ -165,6 +212,74 @@ where
             .map_err(ApiError::Internal)
     };
 
+    // Availability API handlers
+    let get_namespace_proof_by_height =
+        |State(state): State<S>, Path((namespace, height)): Path<(u32, u64)>| async move {
+            state
+                .get_namespace_proof(v1::availability::BlockId::Height(height), namespace)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_namespace_proof_by_hash =
+        |State(state): State<S>, Path((namespace, hash)): Path<(u32, String)>| async move {
+            state
+                .get_namespace_proof(v1::availability::BlockId::Hash(hash), namespace)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_namespace_proof_by_payload_hash =
+        |State(state): State<S>, Path((namespace, payload_hash)): Path<(u32, String)>| async move {
+            state
+                .get_namespace_proof(
+                    v1::availability::BlockId::PayloadHash(payload_hash),
+                    namespace,
+                )
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_namespace_proof_range =
+        |State(state): State<S>, Path((namespace, from, until)): Path<(u32, u64, u64)>| async move {
+            state
+                .get_namespace_proof_range(from, until, namespace)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_incorrect_encoding_proof =
+        |State(state): State<S>, Path((namespace, block_number)): Path<(u32, u64)>| async move {
+            state
+                .get_incorrect_encoding_proof(
+                    v1::availability::BlockId::Height(block_number),
+                    namespace,
+                )
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_state_cert_v1 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_state_cert(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let get_state_cert_v2 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_state_cert_v2(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
         .route(
@@ -189,13 +304,36 @@ where
             routes::v1::REWARD_MERKLE_TREE_V2_ROUTE,
             get(get_reward_merkle_tree_v2),
         )
+        // Availability API routes
+        .route(
+            routes::v1::NAMESPACE_PROOF_BY_HEIGHT_ROUTE,
+            get(get_namespace_proof_by_height),
+        )
+        .route(
+            routes::v1::NAMESPACE_PROOF_BY_HASH_ROUTE,
+            get(get_namespace_proof_by_hash),
+        )
+        .route(
+            routes::v1::NAMESPACE_PROOF_BY_PAYLOAD_HASH_ROUTE,
+            get(get_namespace_proof_by_payload_hash),
+        )
+        .route(
+            routes::v1::NAMESPACE_PROOF_RANGE_ROUTE,
+            get(get_namespace_proof_range),
+        )
+        .route(
+            routes::v1::INCORRECT_ENCODING_PROOF_ROUTE,
+            get(get_incorrect_encoding_proof),
+        )
+        .route(routes::v1::STATE_CERT_V1_ROUTE, get(get_state_cert_v1))
+        .route(routes::v1::STATE_CERT_V2_ROUTE, get(get_state_cert_v2))
         .with_state(state)
 }
 
 /// Create v2 router with OpenAPI documentation (proto types)
 pub fn create_router_v2<S>(state: S) -> Router
 where
-    S: v2::RewardApi + Clone + Send + Sync + 'static,
+    S: v2::RewardApi + v2::DataApi + v2::ConsensusApi + Clone + Send + Sync + 'static,
 {
     let mut api = OpenApi {
         info: Info {
@@ -207,89 +345,129 @@ where
         ..Default::default()
     };
 
-    // Handler closures: use proto request types directly with Path<T>
-
     let get_reward_claim_input =
-        |State(state): State<S>, Path(request): Path<GetRewardClaimInputRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardClaimInputRequest>| async move {
             handlers::get_reward_claim_input(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_reward_balance =
-        |State(state): State<S>, Path(request): Path<GetRewardBalanceRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalanceRequest>| async move {
             handlers::get_reward_balance(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_reward_account_proof =
-        |State(state): State<S>, Path(request): Path<GetRewardAccountProofRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardAccountProofRequest>| async move {
             handlers::get_reward_account_proof(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_reward_balances =
-        |State(state): State<S>, Path(request): Path<GetRewardBalancesRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardBalancesRequest>| async move {
             handlers::get_reward_balances(&state, request)
                 .await
                 .map(Json)
         };
 
     let get_reward_merkle_tree_v2 =
-        |State(state): State<S>, Path(request): Path<GetRewardMerkleTreeRequest>| async move {
+        |State(state): State<S>, SendQuery(request): SendQuery<GetRewardMerkleTreeRequest>| async move {
             handlers::get_reward_merkle_tree_v2(&state, request)
                 .await
                 .map(Json)
         };
 
+    let get_state_certificate =
+        |State(state): State<S>, SendQuery(request): SendQuery<GetStateCertificateRequest>| async move {
+            handlers::get_state_certificate(&state, request)
+                .await
+                .map(Json)
+        };
+
+    let get_stake_table =
+        |State(state): State<S>, SendQuery(request): SendQuery<GetStakeTableRequest>| async move {
+            handlers::get_stake_table(&state, request).await.map(Json)
+        };
+
+    let get_namespace_proof =
+        |State(state): State<S>, SendQuery(query): SendQuery<GetNamespaceProofRequest>| async move {
+            handlers::get_namespace_proof(&state, query).await.map(Json)
+        };
+
+    let get_incorrect_encoding_proof = |State(state): State<S>,
+                                        SendQuery(query): SendQuery<
+        GetIncorrectEncodingProofRequest,
+    >| async move {
+        handlers::get_incorrect_encoding_proof(&state, query)
+            .await
+            .map(Json)
+    };
+
     let router = ApiRouter::new()
         .api_route(
             routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
             get_with(get_reward_claim_input, |op| {
-                op.description(
-                    "Get reward claim input for L1 contract submission. Returns lifetime rewards \
-                     and Merkle proof needed to call claimRewards() on the L1 contract.",
-                )
-                .tag("Rewards")
+                op.description(routes::v2::REWARD_CLAIM_INPUT_ROUTE.description)
+                    .tag(routes::v2::REWARD_CLAIM_INPUT_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::REWARD_BALANCE_ROUTE.http,
             get_with(get_reward_balance, |op| {
-                op.description("Get reward balance for an address at the latest finalized height")
-                    .tag("Rewards")
+                op.description(routes::v2::REWARD_BALANCE_ROUTE.description)
+                    .tag(routes::v2::REWARD_BALANCE_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.http,
             get_with(get_reward_account_proof, |op| {
-                op.description(
-                    "Get Merkle proof for a reward account at the latest finalized height. \
-                     Returns V2 proof with Keccak256 hashing",
-                )
-                .tag("Rewards")
+                op.description(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.description)
+                    .tag(routes::v2::REWARD_ACCOUNT_PROOF_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::REWARD_BALANCES_ROUTE.http,
             get_with(get_reward_balances, |op| {
-                op.description(
-                    "Get paginated list of all reward balances at a specific height. Limit must \
-                     be ≤ 10000",
-                )
-                .tag("Rewards")
+                op.description(routes::v2::REWARD_BALANCES_ROUTE.description)
+                    .tag(routes::v2::REWARD_BALANCES_ROUTE.tag)
             }),
         )
         .api_route(
             routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.http,
             get_with(get_reward_merkle_tree_v2, |op| {
-                op.description(
-                    "Get raw RewardMerkleTreeV2 snapshot at a given height. Returns serialized \
-                     merkle tree data",
-                )
-                .tag("Rewards")
+                op.description(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.description)
+                    .tag(routes::v2::REWARD_MERKLE_TREE_V2_ROUTE.tag)
+            }),
+        )
+        .api_route(
+            routes::v2::NAMESPACE_PROOF_ROUTE.http,
+            get_with(get_namespace_proof, |op| {
+                op.description(routes::v2::NAMESPACE_PROOF_ROUTE.description)
+                    .tag(routes::v2::NAMESPACE_PROOF_ROUTE.tag)
+            }),
+        )
+        .api_route(
+            routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.http,
+            get_with(get_incorrect_encoding_proof, |op| {
+                op.description(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.description)
+                    .tag(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.tag)
+            }),
+        )
+        .api_route(
+            routes::v2::STATE_CERTIFICATE_ROUTE.http,
+            get_with(get_state_certificate, |op| {
+                op.description(routes::v2::STATE_CERTIFICATE_ROUTE.description)
+                    .tag(routes::v2::STATE_CERTIFICATE_ROUTE.tag)
+            }),
+        )
+        .api_route(
+            routes::v2::STAKE_TABLE_ROUTE.http,
+            get_with(get_stake_table, |op| {
+                op.description(routes::v2::STAKE_TABLE_ROUTE.description)
+                    .tag(routes::v2::STAKE_TABLE_ROUTE.tag)
             }),
         )
         .finish_api(&mut api);
@@ -347,18 +525,8 @@ where
 
     router
         .route(routes::v2::OPENAPI_SPEC_ROUTE, get(serve_openapi_spec))
-        .route(
-            routes::v2::SWAGGER_ROUTE,
-            get(Swagger::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
-        .route(
-            "/v2/",
-            get(Swagger::new(routes::v2::OPENAPI_SPEC_ROUTE)
-                .with_title("Espresso Node API v2")
-                .axum_handler()),
-        )
+        .route(routes::v2::SWAGGER_ROUTE, get(serve_swagger_ui))
+        .route("/v2/", get(serve_swagger_ui))
         .route(
             routes::v2::SCALAR_ROUTE,
             get(Scalar::new(routes::v2::OPENAPI_SPEC_ROUTE)

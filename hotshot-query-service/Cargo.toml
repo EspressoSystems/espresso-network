@@ -51,8 +51,6 @@ anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
-hotshot-query-service-types = { workspace = true }
-light-client = { workspace = true }
 
 # Dependencies enabled by feature "file-system-data-source".
 atomic_store = { workspace = true, optional = true }
@@ -71,9 +69,9 @@ futures = { workspace = true }
 hotshot = { workspace = true }
 hotshot-events-service = { workspace = true }
 hotshot-example-types = { workspace = true }
+hotshot-query-service-types = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }
-pretty_assertions = { workspace = true, optional = true }
 
 # Dependencies enabled by feature "sql-data-source".
 include_dir = { workspace = true, optional = true }
@@ -81,7 +79,9 @@ itertools = { workspace = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
 lazy_static = { workspace = true }
+light-client = { workspace = true }
 log = { workspace = true, optional = true }
+pretty_assertions = { workspace = true, optional = true }
 prometheus = { workspace = true }
 rand = { workspace = true, optional = true }
 refinery = { workspace = true, optional = true }
