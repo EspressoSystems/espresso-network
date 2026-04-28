@@ -73,6 +73,7 @@
         dregs.overlays.default
         (final: prev: {
           solhint = prev.callPackage ./nix/solhint { };
+          pup = prev.callPackage ./nix/pup { };
         })
 
         (final: prev: {
@@ -136,12 +137,13 @@
               types_or = [ "plantuml" ];
               pass_filenames = false;
             };
-            cargo-fmt = {
+            rustfmt = {
               enable = true;
-              description = "Enforce rustfmt";
-              entry = "just fmt";
-              types_or = [ "rust" "toml" ];
-              pass_filenames = false;
+              description = "Run rustfmt on changed files";
+              # cargo-fmt is slower, does not format all files, and doesn't allow passing file arguments
+              entry = "rustfmt";
+              types_or = [ "rust" ];
+              pass_filenames = true;
             };
             cargo-sort = {
               enable = true;
@@ -232,6 +234,7 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             entr
+            pup
             process-compose
             lazydocker # a docker compose TUI
             # `postgresql` defaults to an older version (15), so we select the latest version (16)
@@ -249,10 +252,14 @@
             dregs-unwrapped
             nodePackages.prettier
             solhint
-            (python3.withPackages (ps: with ps; [ black ]))
             libusb1
             mdbook
+
+            # scripts
             bc
+            python3
+            ruff
+            ty
 
             go
             golangci-lint

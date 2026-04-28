@@ -24,7 +24,7 @@ use tracing::{debug, info};
 use crate::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, error::Severity},
-    helpers::upgrade_lock,
+    helpers::test_upgrade_lock,
     message::{BlockMessage, Message, MessageType, TransactionMessage, Validated},
     network::Network,
     tests::common::{
@@ -200,7 +200,7 @@ impl TestRunner {
         // Create a client network for broadcasting transactions.
         let client_net = network_state.create_client().await;
         let mut client_network =
-            Network::<TestTypes, _>::new(client_net, membership.clone(), upgrade_lock());
+            Network::<TestTypes, _>::new(client_net, membership.clone(), test_upgrade_lock());
 
         let all_expected_failures = self.failed_views_from_down_nodes();
 

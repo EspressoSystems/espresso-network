@@ -10,13 +10,13 @@ use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_task_impls::{events::HotShotEvent::*, quorum_vote::VoteDependencyHandle};
 use hotshot_testing::{
     helpers::build_system_handle,
-    predicates::{event::*, Predicate, PredicateResult},
+    predicates::{Predicate, PredicateResult, event::*},
     view_generator::TestViewGenerator,
 };
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, ViewNumber},
-    traits::{consensus_api::ConsensusApi},
+    traits::consensus_api::ConsensusApi,
 };
 use itertools::Itertools;
 use tokio::time::timeout;
@@ -31,8 +31,7 @@ async fn test_vote_dependency_handle() {
     // We use a node ID of 2 here arbitrarily. We just need it to build the system handle.
     let node_id = 2;
     // Construct the system handle for the node ID to build all of the state objects.
-    let (handle, _, _, node_key_map) =
-        build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
+    let (handle, _, _, node_key_map) = build_system_handle::<TestTypes, MemoryImpl>(node_id).await;
     let membership = handle.hotshot.membership_coordinator.clone();
     let mut generator = TestViewGenerator::generate(membership, node_key_map, TEST_VERSIONS.test);
 
@@ -80,27 +79,26 @@ async fn test_vote_dependency_handle() {
         let (_sender, cancel_receiver) = broadcast(1);
         let view_number = ViewNumber::new(node_id);
 
-        let vote_dependency_handle_state =
-            VoteDependencyHandle::<TestTypes, MemoryImpl> {
-                public_key: handle.public_key(),
-                private_key: handle.private_key().clone(),
-                consensus: OuterConsensus::new(consensus.clone()),
-                consensus_metrics: Arc::clone(&consensus.read().await.metrics),
-                instance_state: handle.hotshot.instance_state(),
-                membership_coordinator: handle.hotshot.membership_coordinator.clone(),
-                storage: handle.storage(),
-                storage_metrics: handle.storage_metrics(),
-                view_number,
-                sender: event_sender.clone(),
-                receiver: event_receiver.clone().deactivate(),
-                upgrade_lock: handle.hotshot.upgrade_lock.clone(),
-                id: handle.hotshot.id,
-                epoch_height: handle.hotshot.config.epoch_height,
-                state_private_key: handle.state_private_key().clone(),
-                first_epoch: None,
-                stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
-                cancel_receiver,
-            };
+        let vote_dependency_handle_state = VoteDependencyHandle::<TestTypes, MemoryImpl> {
+            public_key: handle.public_key(),
+            private_key: handle.private_key().clone(),
+            consensus: OuterConsensus::new(consensus.clone()),
+            consensus_metrics: Arc::clone(&consensus.read().await.metrics),
+            instance_state: handle.hotshot.instance_state(),
+            membership_coordinator: handle.hotshot.membership_coordinator.clone(),
+            storage: handle.storage(),
+            storage_metrics: handle.storage_metrics(),
+            view_number,
+            sender: event_sender.clone(),
+            receiver: event_receiver.clone().deactivate(),
+            upgrade_lock: handle.hotshot.upgrade_lock.clone(),
+            id: handle.hotshot.id,
+            epoch_height: handle.hotshot.config.epoch_height,
+            state_private_key: handle.state_private_key().clone(),
+            first_epoch: None,
+            stake_table_capacity: hotshot_types::light_client::DEFAULT_STAKE_TABLE_CAPACITY,
+            cancel_receiver,
+        };
 
         vote_dependency_handle_state
             .handle_dep_result(inputs.clone().into_iter().map(|i| i.into()).collect())

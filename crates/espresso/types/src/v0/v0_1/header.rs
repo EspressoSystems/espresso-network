@@ -1,17 +1,17 @@
-use crate::NsTable;
-
-use super::{
-    BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
-    ResolvableChainConfig,
-};
 use alloy_compat::ethers_serde;
 use ark_serialize::CanonicalSerialize;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
 use serde::{
-    de::{self, SeqAccess},
     Deserialize, Serialize,
+    de::{self, SeqAccess},
 };
+
+use super::{
+    BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
+    ResolvableChainConfig,
+};
+use crate::NsTable;
 
 /// A header is like a [`Block`] with the body replaced by a digest.
 #[derive(Clone, Debug, Deserialize, Serialize, Hash, PartialEq, Eq)]
