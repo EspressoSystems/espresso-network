@@ -15,12 +15,68 @@ use std::{
 
 use jf_merkle_tree::{
     MerkleTreeScheme,
-    hasher::{GenericHasherMerkleTree, HasherDigest, HasherNode},
+    append_only::MerkleTree as JfMerkleTree,
+    hasher::{GenericHasherMerkleTree, HasherNode},
 };
 use p3_maybe_rayon::prelude::*;
 use rand::{RngCore, SeedableRng, rngs::SmallRng};
+use sha2::Digest as _;
+use vid::utils::blake3::{Blake3DigestAlgorithm, Blake3Node};
 
-type Mt<H> = GenericHasherMerkleTree<H, HasherNode<H>, u64, 4>;
+/// Abstract Merkle backend so we can compare two `DigestAlgorithm` paths
+/// (HasherDigest+Keccak vs native-blake3) without duplicating the bench.
+trait MerkleBackend: 'static {
+    type Mt: Send + Sync;
+    type Node: Copy + Send + Sync + 'static;
+    type Proof: Send + 'static;
+
+    fn hash_leaf(data: &[u8]) -> Self::Node;
+    fn from_leaves(leaves: &[Self::Node]) -> Self::Mt;
+    fn lookup(mt: &Self::Mt, k: u64) -> Self::Proof;
+    fn commitment(mt: &Self::Mt) -> Self::Node;
+}
+
+struct KeccakBackend;
+
+impl MerkleBackend for KeccakBackend {
+    type Mt = GenericHasherMerkleTree<sha3::Keccak256, HasherNode<sha3::Keccak256>, u64, 4>;
+    type Node = HasherNode<sha3::Keccak256>;
+    type Proof = <Self::Mt as MerkleTreeScheme>::MembershipProof;
+
+    fn hash_leaf(data: &[u8]) -> Self::Node {
+        HasherNode::from(sha3::Keccak256::digest(data))
+    }
+    fn from_leaves(leaves: &[Self::Node]) -> Self::Mt {
+        Self::Mt::from_elems(None, leaves).unwrap()
+    }
+    fn lookup(mt: &Self::Mt, k: u64) -> Self::Proof {
+        mt.lookup(k).expect_ok().unwrap().1
+    }
+    fn commitment(mt: &Self::Mt) -> Self::Node {
+        mt.commitment()
+    }
+}
+
+struct Blake3Backend;
+
+impl MerkleBackend for Blake3Backend {
+    type Mt = JfMerkleTree<Blake3Node, Blake3DigestAlgorithm, u64, 4, Blake3Node>;
+    type Node = Blake3Node;
+    type Proof = <Self::Mt as MerkleTreeScheme>::MembershipProof;
+
+    fn hash_leaf(data: &[u8]) -> Self::Node {
+        Blake3Node::from(blake3::hash(data))
+    }
+    fn from_leaves(leaves: &[Self::Node]) -> Self::Mt {
+        Self::Mt::from_elems(None, leaves).unwrap()
+    }
+    fn lookup(mt: &Self::Mt, k: u64) -> Self::Proof {
+        mt.lookup(k).expect_ok().unwrap().1
+    }
+    fn commitment(mt: &Self::Mt) -> Self::Node {
+        mt.commitment()
+    }
+}
 
 // ------------------------------- disperse ----------------------------------
 
@@ -66,13 +122,13 @@ struct RawShare {
     payload: Vec<Vec<u8>>,
 }
 
-fn raw_disperse<H: HasherDigest>(
+fn raw_disperse<B: MerkleBackend>(
     recovery_threshold: usize,
     total_weights: usize,
     distribution: &[u32],
     payload: &[u8],
     t: &mut DispT,
-) -> (Mt<H>, Vec<RawShare>) {
+) -> (B::Mt, Vec<RawShare>) {
     let orig = recovery_threshold;
     let rec = total_weights - recovery_threshold;
 
@@ -110,14 +166,11 @@ fn raw_disperse<H: HasherDigest>(
     let shares: Vec<Vec<u8>> = [original, recovery].concat();
 
     let t2 = Instant::now();
-    let digests: Vec<HasherNode<H>> = shares
-        .par_iter()
-        .map(|s| HasherNode::from(H::digest(s)))
-        .collect();
+    let digests: Vec<B::Node> = shares.par_iter().map(|s| B::hash_leaf(s)).collect();
     t.leaf_hash += t2.elapsed();
 
     let t3 = Instant::now();
-    let mt = Mt::<H>::from_elems(None, &digests).unwrap();
+    let mt = B::from_leaves(&digests);
     t.mt_build += t3.elapsed();
 
     let ranges: Vec<Range<usize>> = distribution
@@ -141,10 +194,7 @@ fn raw_disperse<H: HasherDigest>(
         .into_par_iter()
         .zip(payloads.into_par_iter())
         .map(|(range, payload)| {
-            let _proofs: Vec<_> = range
-                .clone()
-                .map(|k| mt.lookup(k as u64).expect_ok().unwrap().1)
-                .collect();
+            let _proofs: Vec<B::Proof> = range.clone().map(|k| B::lookup(&mt, k as u64)).collect();
             RawShare { range, payload }
         })
         .collect();
@@ -154,7 +204,7 @@ fn raw_disperse<H: HasherDigest>(
     (mt, out)
 }
 
-fn ns_disperse<H: HasherDigest>(
+fn ns_disperse<B: MerkleBackend>(
     recovery_threshold: usize,
     total_weights: usize,
     distribution: &[u32],
@@ -163,7 +213,7 @@ fn ns_disperse<H: HasherDigest>(
 ) -> (DispT, Vec<Vec<RawShare>>) {
     let mut t = DispT::default();
     let ns_size = payload.len() / num_ns;
-    let mut commits = Vec::with_capacity(num_ns);
+    let mut commits: Vec<B::Node> = Vec::with_capacity(num_ns);
     let mut all = Vec::with_capacity(num_ns);
     for i in 0..num_ns {
         let end = if i + 1 == num_ns {
@@ -171,18 +221,18 @@ fn ns_disperse<H: HasherDigest>(
         } else {
             (i + 1) * ns_size
         };
-        let (mt, shares) = raw_disperse::<H>(
+        let (mt, shares) = raw_disperse::<B>(
             recovery_threshold,
             total_weights,
             distribution,
             &payload[i * ns_size..end],
             &mut t,
         );
-        commits.push(mt.commitment());
+        commits.push(B::commitment(&mt));
         all.push(shares);
     }
     let t_outer = Instant::now();
-    let outer = Mt::<H>::from_elems(None, &commits).unwrap();
+    let outer = B::from_leaves(&commits);
     t.outer_mt = t_outer.elapsed();
     std::hint::black_box(outer);
     (t, all)
@@ -385,7 +435,7 @@ fn print_rec(label: &str, t: &RecT) {
     );
 }
 
-fn run<H: HasherDigest>(
+fn run<B: MerkleBackend>(
     label: &str,
     recovery_threshold: usize,
     total_weights: usize,
@@ -395,7 +445,7 @@ fn run<H: HasherDigest>(
     trials: u32,
 ) -> (DispT, RecT) {
     // one warm-up
-    let (_, shares) = ns_disperse::<H>(
+    let (_, shares) = ns_disperse::<B>(
         recovery_threshold,
         total_weights,
         distribution,
@@ -408,7 +458,7 @@ fn run<H: HasherDigest>(
     let mut rec = RecT::default();
     let mut last_shares = None;
     for _ in 0..trials {
-        let (t, shares) = ns_disperse::<H>(
+        let (t, shares) = ns_disperse::<B>(
             recovery_threshold,
             total_weights,
             distribution,
@@ -452,7 +502,7 @@ fn main() {
 
     for &num_ns in &ns_counts {
         println!("\n========================= num_ns = {num_ns} =========================");
-        run::<blake3::Hasher>(
+        run::<Blake3Backend>(
             "BLAKE3",
             RECOVERY_THRESHOLD,
             TOTAL_WEIGHTS,
@@ -461,7 +511,7 @@ fn main() {
             num_ns,
             trials,
         );
-        run::<sha3::Keccak256>(
+        run::<KeccakBackend>(
             "Keccak",
             RECOVERY_THRESHOLD,
             TOTAL_WEIGHTS,

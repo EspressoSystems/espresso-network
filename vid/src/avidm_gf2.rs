@@ -4,24 +4,27 @@ use std::{ops::Range, vec};
 
 use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use jf_merkle_tree::{MerkleTreeScheme, hasher::HasherNode};
+use jf_merkle_tree::{MerkleTreeScheme, append_only::MerkleTree as JfMerkleTree};
 use jf_utils::canonical;
 use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
 use tagged_base64::tagged;
 
-use crate::{VidError, VidResult, VidScheme};
+use crate::{
+    VidError, VidResult, VidScheme,
+    utils::blake3::{Blake3DigestAlgorithm, Blake3Node},
+};
 
 /// Namespaced AvidmGf2 scheme
 pub mod namespaced;
 /// Namespace proofs for AvidmGf2 scheme
 pub mod proofs;
 
-pub(crate) type Hasher = blake3::Hasher;
-/// Merkle tree scheme used in the VID
-pub(crate) type MerkleTree =
-    jf_merkle_tree::hasher::GenericHasherMerkleTree<Hasher, HasherNode<Hasher>, u64, 4>;
+/// Merkle tree scheme used in the VID. Uses BLAKE3 directly via
+/// [`Blake3DigestAlgorithm`] rather than going through the
+/// `jf_merkle_tree::hasher::HasherDigest` blanket impl, which would pin
+/// `blake3` to a `digest 0.10`-compatible release line.
+pub(crate) type MerkleTree = JfMerkleTree<Blake3Node, Blake3DigestAlgorithm, u64, 4, Blake3Node>;
 type MerkleProof = <MerkleTree as MerkleTreeScheme>::MembershipProof;
 type MerkleCommit = <MerkleTree as MerkleTreeScheme>::Commitment;
 
@@ -173,9 +176,9 @@ impl AvidmGf2Scheme {
         };
 
         let shares = [original, recovery].concat();
-        let share_digests: Vec<_> = shares
+        let share_digests: Vec<Blake3Node> = shares
             .par_iter()
-            .map(|share| HasherNode::from(Hasher::digest(share)))
+            .map(|share| Blake3Node::from(blake3::hash(share)))
             .collect();
         let mt = MerkleTree::from_elems(None, &share_digests)?;
         Ok((mt, shares))
@@ -266,7 +269,7 @@ impl VidScheme for AvidmGf2Scheme {
         match (0..len)
             .into_par_iter()
             .map(|i| -> VidResult<crate::VerificationResult> {
-                let payload_digest = HasherNode::from(Hasher::digest(&share.payload[i]));
+                let payload_digest = Blake3Node::from(blake3::hash(&share.payload[i]));
                 MerkleTree::verify(
                     commit.commit,
                     (start + i) as u64,
