@@ -1,7 +1,11 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
+use async_broadcast::Sender;
 use committable::Committable;
-use hotshot::{traits::NodeImplementation, types::BLSPubKey};
+use hotshot::{
+    traits::NodeImplementation,
+    types::{BLSPubKey, Event},
+};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -43,7 +47,10 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     storage: TestStorage<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> Coordinator<TestTypes, I::Network, TestStorage<TestTypes>> {
+) -> (
+    Coordinator<TestTypes, I::Network, TestStorage<TestTypes>>,
+    Sender<Event<TestTypes>>,
+) {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let instance = Arc::new(TestInstanceState::default());
 
@@ -143,7 +150,6 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
         .storage(crate::storage::Storage::new(storage, private_key))
-        .external_events(external_events_tx)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(Timer::new(
@@ -163,7 +169,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         let _ = coordinator.process_consensus_output(output).await;
     }
 
-    coordinator
+    (coordinator, external_events_tx)
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.

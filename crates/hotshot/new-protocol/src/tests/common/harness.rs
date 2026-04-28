@@ -102,10 +102,6 @@ impl TestHarness {
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
             .storage(crate::storage::Storage::new(storage, private_key))
-            .external_events({
-                let (tx, _rx) = async_broadcast::broadcast(16);
-                tx
-            })
             .membership_coordinator(membership)
             .outbox(Outbox::new())
             .timer(Timer::new(

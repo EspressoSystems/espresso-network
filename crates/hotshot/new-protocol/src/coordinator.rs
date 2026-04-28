@@ -3,13 +3,11 @@ pub mod timer;
 
 use std::{sync::Arc, time::Duration};
 
-use async_broadcast::Sender as BroadcastSender;
 use bon::{Builder, bon};
 use hotshot::{HotShotInitializer, types::SignatureKey};
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::{Event, EventType},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
@@ -73,14 +71,7 @@ pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
     storage: Storage<T, S>,
-    /// Broadcast sink for external messages forwarded to the membership.
-    ///
-    /// Every incoming `MessageType::External(data)` is re-published as a
-    /// `hotshot_types::event::Event` with `ExternalMessageReceived` so the
-    /// membership's `Leaf2Fetcher` (fed via
-    /// `EpochMembershipCoordinator::set_external_channel`) can answer leaf
-    /// requests during catchup exactly as it does in the old protocol.
-    external_events: BroadcastSender<Event<T>>,
+
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     #[builder(default)]
@@ -113,11 +104,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
         let state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
 
         let lock = upgrade_lock();
-        // Production share the membership with old-protocol hotshot, which
-        // already owns the external channel.  Create a local sender here so
-        // `MessageType::External` handling has somewhere to publish; it has
-        // no receivers attached, which makes sends no-ops.
-        let (external_events, _rx) = async_broadcast::broadcast(16);
+
         Self::builder()
             .consensus(consensus)
             .network(Network::new(
@@ -156,7 +143,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
             ))
             .proposal_validator(ProposalValidator::new(membership_coordinator.clone()))
             .storage(Storage::new(storage, private_key))
-            .external_events(external_events)
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(
                 timeout_duration,
@@ -394,6 +380,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
         &mut self.coordinator_outbox
     }
 
+    pub fn current_view(&self) -> ViewNumber {
+        self.consensus.current_view()
+    }
+
     pub async fn on_state_manager_output(
         &mut self,
         output: StateManagerOutput<T>,
@@ -482,20 +472,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                 None
             },
             MessageType::External(data) => {
-                // Forward to the membership's external channel so the
-                // `Leaf2Fetcher` inside `Membership::get_epoch_root` sees
-                // catchup requests/responses.  `broadcast_direct` with no
-                // active receivers returns an error we ignore — in
-                // production the shared membership's external channel is
-                // owned by old-protocol hotshot.
-                let event = Event {
-                    view_number: self.consensus.current_view(),
-                    event: EventType::ExternalMessageReceived {
-                        sender: message.sender.clone(),
-                        data: data.clone(),
-                    },
-                };
-                let _ = self.external_events.broadcast_direct(event).await;
                 self.coordinator_outbox
                     .push_back(CoordinatorOutput::ExternalMessageReceived {
                         sender: message.sender,

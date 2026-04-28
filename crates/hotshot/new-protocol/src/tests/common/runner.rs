@@ -4,8 +4,9 @@ use std::{
     time::Duration,
 };
 
+use async_broadcast::Sender;
 use committable::Committable;
-use hotshot::types::BLSPubKey;
+use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
 use tokio::{
@@ -17,7 +18,7 @@ use tracing::{debug, info};
 
 use crate::{
     consensus::ConsensusOutput,
-    coordinator::{Coordinator, error::Severity},
+    coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     tests::common::{coordinator_builder::build_test_coordinator, network::TestNetwork},
 };
 
@@ -237,7 +238,7 @@ impl TestRunner {
             let (membership, storage) = network_state
                 .create_membership(i, self.num_nodes, self.epoch_height)
                 .await;
-            let coord = build_test_coordinator::<N::Impl>(
+            let (coord, external_events_tx) = build_test_coordinator::<N::Impl>(
                 i as u64,
                 network,
                 membership,
@@ -249,7 +250,13 @@ impl TestRunner {
 
             let tx = event_tx.clone();
             let generation = generations[i];
-            node_handles.push(Some(tokio::spawn(run_node(coord, tx, i, generation))));
+            node_handles.push(Some(tokio::spawn(run_node(
+                coord,
+                tx,
+                i,
+                generation,
+                external_events_tx,
+            ))));
         }
 
         // Build pending changes sorted by view.
@@ -312,22 +319,28 @@ impl TestRunner {
                                         self.epoch_height,
                                     )
                                     .await;
-                                let coord = build_test_coordinator::<N::Impl>(
-                                    change.idx as u64,
-                                    net,
-                                    membership,
-                                    storage,
-                                    self.epoch_height,
-                                    self.view_timeout,
-                                )
-                                .await;
+                                let (coord, external_events_tx) =
+                                    build_test_coordinator::<N::Impl>(
+                                        change.idx as u64,
+                                        net,
+                                        membership,
+                                        storage,
+                                        self.epoch_height,
+                                        self.view_timeout,
+                                    )
+                                    .await;
                                 // Bump the generation so stale events queued
                                 // by the aborted task are ignored.
                                 generations[change.idx] += 1;
                                 let tx = event_tx.clone();
                                 let generation = generations[change.idx];
-                                node_handles[change.idx] =
-                                    Some(tokio::spawn(run_node(coord, tx, change.idx, generation)));
+                                node_handles[change.idx] = Some(tokio::spawn(run_node(
+                                    coord,
+                                    tx,
+                                    change.idx,
+                                    generation,
+                                    external_events_tx,
+                                )));
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
                             },
@@ -463,6 +476,7 @@ async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,
     generation: u64,
+    external_events_tx: Sender<Event<TestTypes>>,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
@@ -518,6 +532,20 @@ async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
             {
                 tracing::error!(%err, node = %coord.node_id(), "critical error processing output");
                 return;
+            }
+
+            while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
+                if let CoordinatorOutput::ExternalMessageReceived { sender, data } = &output {
+                    let _ = external_events_tx
+                        .broadcast_direct(Event {
+                            view_number: coord.current_view(),
+                            event: EventType::ExternalMessageReceived {
+                                sender: *sender,
+                                data: data.clone(),
+                            },
+                        })
+                        .await;
+                }
             }
         }
     }
