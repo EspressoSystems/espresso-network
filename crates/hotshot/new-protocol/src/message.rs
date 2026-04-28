@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperseShare2,
@@ -8,6 +8,7 @@ use hotshot_types::{
     },
     drb::DrbResult,
     message::Proposal as SignedProposal,
+    request_response::ProposalRequestPayload,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, OneHonestThreshold, QuorumCertificate2,
         SimpleCertificate, SuccessThreshold, TimeoutCertificate2, UpgradeCertificate,
@@ -16,7 +17,7 @@ use hotshot_types::{
         CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
         Vote2Data,
     },
-    traits::node_implementation::NodeType,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
@@ -103,9 +104,9 @@ impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
     }
 }
 
-impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
+impl<T: NodeType> From<Proposal<T>> for QuorumProposalWrapper<T> {
     fn from(p: Proposal<T>) -> Self {
-        let qp = QuorumProposal2 {
+        QuorumProposalWrapper::from(QuorumProposal2 {
             block_header: p.block_header,
             view_number: p.view_number,
             epoch: Some(p.epoch),
@@ -115,8 +116,13 @@ impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
             view_change_evidence: p.view_change_evidence.map(ViewChangeEvidence2::Timeout),
             next_drb_result: p.next_drb_result,
             state_cert: p.state_cert,
-        };
-        Self::from_quorum_proposal(&QuorumProposalWrapper::from(qp))
+        })
+    }
+}
+
+impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
+    fn from(p: Proposal<T>) -> Self {
+        Self::from_quorum_proposal(&QuorumProposalWrapper::from(p))
     }
 }
 
@@ -207,6 +213,39 @@ pub struct EpochChangeMessage<T: NodeType> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct ProposalFetchRequest<T: NodeType> {
+    pub payload: ProposalRequestPayload<T>,
+    pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+}
+
+impl<T: NodeType> ProposalFetchRequest<T> {
+    pub fn new(
+        view_number: ViewNumber,
+        key: T::SignatureKey,
+        private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    ) -> Result<Self, <T::SignatureKey as SignatureKey>::SignError> {
+        let payload = ProposalRequestPayload { view_number, key };
+        let signature = T::SignatureKey::sign(private_key, payload.commit().as_ref())?;
+        Ok(Self { payload, signature })
+    }
+
+    pub fn validate_sender(&self, sender: &T::SignatureKey) -> bool {
+        &self.payload.key == sender
+            && self
+                .payload
+                .key
+                .validate(&self.signature, self.payload.commit().as_ref())
+    }
+}
+
+impl<T: NodeType> HasViewNumber for ProposalFetchRequest<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.payload.view_number
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
 #[allow(clippy::large_enum_variant)]
 pub enum ConsensusMessage<T: NodeType, S> {
@@ -256,6 +295,22 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
+pub enum ProposalFetchMessage<T: NodeType> {
+    Request(ProposalFetchRequest<T>),
+    Response(Box<SignedProposal<T, Proposal<T>>>),
+}
+
+impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::Request(request) => request.view_number(),
+            Self::Response(proposal) => proposal.data.view_number(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
 pub struct DedupManifest<T: NodeType> {
     pub(crate) view: ViewNumber,
     pub(crate) epoch: EpochNumber,
@@ -291,6 +346,7 @@ impl<T: NodeType> HasViewNumber for BlockMessage<T> {
 pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
     Block(BlockMessage<T>),
+    ProposalFetch(ProposalFetchMessage<T>),
     External(Vec<u8>),
 }
 
@@ -300,6 +356,7 @@ impl<T: NodeType, S> MessageType<T, S> {
         match self {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
             Self::Block(b) => MessageType::Block(b),
+            Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
             Self::External(v) => MessageType::External(v),
         }
     }
@@ -331,6 +388,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
         match &self.message_type {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
             MessageType::Block(block_message) => block_message.view_number(),
+            MessageType::ProposalFetch(message) => message.view_number(),
             MessageType::External(_) => ViewNumber::new(0), // TODO: This can become a problem
         }
     }

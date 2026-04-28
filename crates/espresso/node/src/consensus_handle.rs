@@ -10,7 +10,7 @@ use std::{
 use async_broadcast::InactiveReceiver;
 use async_lock::RwLock;
 use committable::Commitment;
-use futures::{StreamExt, stream::BoxStream};
+use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
     client::ClientApi,
@@ -23,7 +23,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
-    message::{Proposal as SignedProposal, UpgradeLock},
+    message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
     traits::{
         ValidatedState, network::ConnectedNetwork, node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -164,21 +164,13 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     }
 
     async fn new_protocol_at(&self, view: ViewNumber) -> bool {
-        if self.new_protocol_active.load(Ordering::Relaxed) {
-            return true;
-        }
-        let active = self
-            .legacy_handle
+        self.legacy_handle
             .read()
             .await
             .hotshot
             .upgrade_lock
             .version_infallible(view)
-            >= version(0, 8);
-        if active {
-            self.new_protocol_active.store(true, Ordering::Relaxed);
-        }
-        active
+            >= version(0, 8)
     }
 
     async fn new_protocol(&self) -> bool {
@@ -186,7 +178,11 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             return true;
         }
         let view = self.legacy_handle.read().await.cur_view().await;
-        self.new_protocol_at(view).await
+        let active = self.new_protocol_at(view).await;
+        if active {
+            self.new_protocol_active.store(true, Ordering::Relaxed);
+        }
+        active
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
@@ -367,21 +363,32 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             .vote_participation(epoch)
     }
 
-    // TODO: implement for new protocol
     pub async fn request_proposal(
         &self,
         view: ViewNumber,
         leaf_commitment: Commitment<Leaf2<T>>,
     ) -> anyhow::Result<
-        impl futures::Future<Output = anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
+        BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
+        if self.new_protocol_at(view).await {
+            let client_api = self.client_api.clone();
+            return Ok(async move {
+                client_api
+                    .request_proposal(view, leaf_commitment)
+                    .await
+                    .map(convert_proposal)
+                    .map_err(|err| anyhow::anyhow!("{err}"))
+            }
+            .boxed());
+        }
+
         let future = self
             .legacy_handle
             .read()
             .await
             .request_proposal(view, leaf_commitment)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(async move { future.await.map_err(|e| anyhow::anyhow!("{e}")) })
+        Ok(async move { future.await.map_err(|e| anyhow::anyhow!("{e}")) }.boxed())
     }
 
     // TODO: implement for new protocol
