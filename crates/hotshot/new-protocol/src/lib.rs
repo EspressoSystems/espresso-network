@@ -9,6 +9,7 @@ pub mod message;
 pub mod network;
 pub mod outbox;
 pub mod state;
+pub mod storage;
 pub mod vid;
 pub mod vote;
 

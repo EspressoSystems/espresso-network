@@ -12,6 +12,7 @@ path = "src/bin/node.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 clap = { workspace = true }
 cliquenet = { workspace = true }
