@@ -12,7 +12,6 @@ bon             = { workspace = true }
 bs58            = { workspace = true }
 bytes           = { workspace = true }
 ed25519-compact = { workspace = true }
-minicbor        = { workspace = true }
 parking_lot     = { workspace = true }
 rand            = "0.10.0"
 snow            = { workspace = true }

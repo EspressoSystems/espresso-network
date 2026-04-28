@@ -6,7 +6,7 @@ pub mod hello;
 use std::fmt;
 
 pub use frame::{FrameType, Header, InvalidHeader};
-pub use trailer::{Trailer, TrailerType};
+pub use trailer::Trailer;
 
 /// Max. message size using noise protocol.
 pub const MAX_NOISE_MESSAGE_SIZE: usize = 64 * 1024;

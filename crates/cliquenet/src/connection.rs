@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use minicbor::encode::write::Cursor;
 use rand::RngExt;
 use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
 use tokio::{
@@ -141,7 +140,7 @@ impl Connection {
                                         state,
                                     };
                                     match conn
-                                        .exchange_hello(conf.handshake_timeout, Hello::ok())
+                                        .exchange_hello(conf.handshake_timeout, Hello::Ok)
                                         .await
                                     {
                                         Ok(h) if h.is_ok() => break conn,
@@ -229,14 +228,10 @@ impl Connection {
 
     /// Send a `Hello` frame.
     pub async fn send_hello(&mut self, h: Hello) -> Result<()> {
-        let mut buf = [0u8; 256];
-        let (a, b) = buf.split_at_mut(128);
-        let n = {
-            let mut c = Cursor::new(&mut *a);
-            minicbor::encode(h, &mut c).map_err(io::Error::other)?;
-            c.position()
-        };
-        let n = self.state.write_message(&a[..n], &mut b[Header::SIZE..])?;
+        let mut b = [0u8; 64];
+        let n = self
+            .state
+            .write_message(h.to_bytes().as_ref(), &mut b[Header::SIZE..])?;
         let h = Header::data(n as u16);
         send_frame(&mut self.stream, h, &mut b[..Header::SIZE + n]).await?;
         Ok(())
@@ -244,11 +239,11 @@ impl Connection {
 
     /// Read a `Hello` frame.
     pub async fn recv_hello(&mut self) -> Result<Hello> {
-        let mut a = [0u8; 128];
+        let mut a = [0u8; 64];
         let h = recv_frame(&mut self.stream, &mut a).await?;
-        let mut b = [0u8; 128];
+        let mut b = [0u8; 64];
         let n = self.state.read_message(&a[..h.len().into()], &mut b)?;
-        let h = minicbor::decode(&b[..n]).map_err(io::Error::other)?;
+        let h = Hello::from_bytes(&b[..n]).ok_or_else(|| io::Error::other("invalid hello"))?;
         Ok(h)
     }
 }

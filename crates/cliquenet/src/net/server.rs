@@ -19,7 +19,7 @@ use crate::{
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
-    msg::{MsgId, Slot, Trailer, TrailerType, hello::Hello},
+    msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{Command, PeerCommand, PeerMessage, RetryPolicy, SendAction, peer::Peer},
     queue::Queue,
 };
@@ -163,7 +163,7 @@ impl Server {
                                 addr = %conn.addr,
                                 "unknown party"
                             );
-                            self.spawn_hello(conn, Hello::backoff(self.conf.backoff_duration));
+                            self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
                             continue
                         };
                         if party.ip_addr_mismatch(conn.addr.ip()) {
@@ -174,10 +174,10 @@ impl Server {
                                 addr = %conn.addr,
                                 "party has invalid ip addr"
                             );
-                            self.spawn_hello(conn, Hello::backoff(self.conf.backoff_duration));
+                            self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
                             continue
                         }
-                        self.spawn_hello(conn, Hello::ok());
+                        self.spawn_hello(conn, Hello::Ok);
                     }
                     Ok(Err(err)) => {
                         warn!(name = %self.conf.name, node = %self.key, %err, "handshake failed")
@@ -208,11 +208,11 @@ impl Server {
                         };
                         if !hello.is_ok() {
                             warn!(
-                                name   = %self.conf.name,
-                                node   = %self.key,
-                                peer   = %conn.key,
-                                addr   = %conn.addr,
-                                status = ?hello.status,
+                                name  = %self.conf.name,
+                                node  = %self.key,
+                                peer  = %conn.key,
+                                addr  = %conn.addr,
+                                hello = ?hello,
                                 "peer hello is not ok"
                             );
                             continue
@@ -483,7 +483,7 @@ impl Server {
                             }
 
                             let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
 
                             if let Some(party) = self.parties.get(&to) {
                                 party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes));
@@ -502,7 +502,7 @@ impl Server {
                             }
 
                             let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
 
                             if parties.contains(&self.key) {
                                 let bytes = remove_trailer(bytes.clone());
@@ -533,7 +533,7 @@ impl Server {
                             }
 
                             let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
 
                             if self.role.is_active() {
                                 let bytes = remove_trailer(bytes.clone());
@@ -673,10 +673,13 @@ impl PeerState {
     }
 }
 
-fn append_trailer(s: Slot, t: TrailerType, i: MsgId, bytes: Vec<u8>) -> Bytes {
-    let trailer = Trailer::new(t, s, i);
+fn append_trailer(pol: RetryPolicy, slot: Slot, id: MsgId, bytes: Vec<u8>) -> Bytes {
+    let t = match pol {
+        RetryPolicy::Default => Trailer::Std { slot, id },
+        RetryPolicy::NoRetry => Trailer::NoAck { slot },
+    };
     let mut msg = BytesMut::from(Bytes::from(bytes));
-    msg.extend_from_slice(&trailer.to_bytes());
+    msg.extend_from_slice(t.to_bytes().as_ref());
     msg.freeze()
 }
 
@@ -684,11 +687,4 @@ fn remove_trailer(mut bytes: Bytes) -> Bytes {
     let _t = Trailer::from_bytes(&mut bytes);
     debug_assert!(_t.is_some());
     bytes
-}
-
-fn trailer_type(p: &RetryPolicy) -> TrailerType {
-    match p {
-        RetryPolicy::Default => TrailerType::Std,
-        RetryPolicy::NoRetry => TrailerType::NoAck,
-    }
 }

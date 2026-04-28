@@ -304,7 +304,6 @@ log = { version = "0.4" }
 log-panics = { version = "2.0", features = ["with-backtrace"] }
 lru = "0.12"
 memoize = { version = "0.4", features = ["full"] }
-minicbor = { version = "2.2.1", features = ["full"] }
 mnemonic = "1"
 moka = { version = "0.12.12", features = ["future"] }
 multiaddr = { version = "0.18" }

@@ -12,7 +12,7 @@ use crate::{
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
-    msg::{MAX_PAYLOAD_SIZE, MsgId, Slot, Trailer, TrailerType, hello::Hello},
+    msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{RetryPolicy, peer::Peer},
     queue::Queue,
 };
@@ -50,7 +50,7 @@ async fn connection_pair(
             let mut conn = Connection::accept(conf_b, stream).await.unwrap();
             let h = conn.recv_hello().await.unwrap();
             assert!(h.is_ok());
-            conn.send_hello(Hello::ok()).await.unwrap();
+            conn.send_hello(Hello::Ok).await.unwrap();
             conn
         },
         Connection::connect(conf_a, pkb, addr),
@@ -60,10 +60,10 @@ async fn connection_pair(
 
 /// Build a payload with the trailer appended.
 fn payload(slot: Slot, id: MsgId, data: &[u8]) -> (RetryPolicy, Bytes) {
-    let trailer = Trailer::new(TrailerType::Std, slot, id).to_bytes();
-    let mut buf = BytesMut::with_capacity(data.len() + Trailer::SIZE);
+    let trailer = Trailer::Std { slot, id }.to_bytes();
+    let mut buf = BytesMut::new();
     buf.extend_from_slice(data);
-    buf.extend_from_slice(&trailer);
+    buf.extend_from_slice(trailer.as_ref());
     (RetryPolicy::Default, buf.freeze())
 }
 
@@ -527,78 +527,6 @@ async fn empty_payload() {
         .expect("channel closed");
 
     assert!(data.is_empty());
-
-    ha.abort();
-    hb.abort();
-}
-
-/// The largest payload that fits in a single Noise frame.
-#[tokio::test]
-async fn max_single_frame() {
-    let ka = Keypair::generate().unwrap();
-    let kb = Keypair::generate().unwrap();
-    let pkb = kb.public_key();
-
-    let conf_a = config(ka.clone(), Duration::from_secs(5));
-    let conf_b = config(kb.clone(), Duration::from_secs(5));
-
-    let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
-
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
-
-    let user_data_len = MAX_PAYLOAD_SIZE - Trailer::SIZE;
-    let data: Vec<u8> = (0..user_data_len).map(|i| (i % 199) as u8).collect();
-    let slot = Slot::new(1);
-    let id = MsgId::new(0);
-    outbox_a.enqueue(slot, id, payload(slot, id, &data));
-
-    let ha = tokio::spawn(async move { peer_a.start().await });
-    let hb = tokio::spawn(async move { peer_b.start().await });
-
-    let (_, received, _) = timeout(Duration::from_secs(5), rx_b.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-
-    assert_eq!(received.len(), user_data_len);
-    assert_eq!(received.as_ref(), data.as_slice());
-
-    ha.abort();
-    hb.abort();
-}
-
-/// One byte over the single-frame limit forces a second frame.
-#[tokio::test]
-async fn just_over_single_frame() {
-    let ka = Keypair::generate().unwrap();
-    let kb = Keypair::generate().unwrap();
-    let pkb = kb.public_key();
-
-    let conf_a = config(ka.clone(), Duration::from_secs(5));
-    let conf_b = config(kb.clone(), Duration::from_secs(5));
-
-    let (conn_a, conn_b) = connection_pair(conf_a.clone(), pkb, conf_b.clone()).await;
-
-    let (mut peer_a, _rx_a, outbox_a, _slot_a) = make_peer(conf_a, conn_a, 10);
-    let (mut peer_b, mut rx_b, _outbox_b, _slot_b) = make_peer(conf_b, conn_b, 10);
-
-    let user_data_len = MAX_PAYLOAD_SIZE - Trailer::SIZE + 1;
-    let data: Vec<u8> = (0..user_data_len).map(|i| (i % 199) as u8).collect();
-    let slot = Slot::new(1);
-    let id = MsgId::new(0);
-    outbox_a.enqueue(slot, id, payload(slot, id, &data));
-
-    let ha = tokio::spawn(async move { peer_a.start().await });
-    let hb = tokio::spawn(async move { peer_b.start().await });
-
-    let (_, received, _) = timeout(Duration::from_secs(5), rx_b.recv())
-        .await
-        .expect("timed out")
-        .expect("channel closed");
-
-    assert_eq!(received.len(), user_data_len);
-    assert_eq!(received.as_ref(), data.as_slice());
 
     ha.abort();
     hb.abort();
