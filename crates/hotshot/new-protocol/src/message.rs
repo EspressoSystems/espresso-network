@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use committable::Commitment;
+use committable::{Commitment, Committable};
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperseShare2,
@@ -8,6 +8,7 @@ use hotshot_types::{
     },
     drb::DrbResult,
     message::Proposal as SignedProposal,
+    request_response::ProposalRequestPayload,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, OneHonestThreshold, QuorumCertificate2,
         SimpleCertificate, SuccessThreshold, TimeoutCertificate2, UpgradeCertificate,
@@ -16,7 +17,7 @@ use hotshot_types::{
         CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
         Vote2Data,
     },
-    traits::node_implementation::NodeType,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
@@ -214,23 +215,33 @@ pub struct EpochChangeMessage<T: NodeType> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct ProposalFetchRequest<T: NodeType> {
-    pub view_number: ViewNumber,
-    #[serde(skip)]
-    _marker: PhantomData<fn() -> T>,
+    pub payload: ProposalRequestPayload<T>,
+    pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
 }
 
 impl<T: NodeType> ProposalFetchRequest<T> {
-    pub fn new(view_number: ViewNumber) -> Self {
-        Self {
-            view_number,
-            _marker: PhantomData,
-        }
+    pub fn new(
+        view_number: ViewNumber,
+        key: T::SignatureKey,
+        private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    ) -> Result<Self, <T::SignatureKey as SignatureKey>::SignError> {
+        let payload = ProposalRequestPayload { view_number, key };
+        let signature = T::SignatureKey::sign(private_key, payload.commit().as_ref())?;
+        Ok(Self { payload, signature })
+    }
+
+    pub fn validate_sender(&self, sender: &T::SignatureKey) -> bool {
+        &self.payload.key == sender
+            && self
+                .payload
+                .key
+                .validate(&self.signature, self.payload.commit().as_ref())
     }
 }
 
 impl<T: NodeType> HasViewNumber for ProposalFetchRequest<T> {
     fn view_number(&self) -> ViewNumber {
-        self.view_number
+        self.payload.view_number
     }
 }
 

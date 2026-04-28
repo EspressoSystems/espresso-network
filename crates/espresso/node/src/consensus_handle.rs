@@ -34,10 +34,7 @@ use tokio::spawn;
 use tokio_util::task::AbortOnDropHandle;
 use versions::version;
 
-fn consensus_event<T: NodeType>(
-    output: &ConsensusOutput<T>,
-    cur_view: &mut ViewNumber,
-) -> Option<CoordinatorEvent<T>> {
+fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<CoordinatorEvent<T>> {
     match output {
         ConsensusOutput::LeafDecided {
             leaves,
@@ -56,8 +53,7 @@ fn consensus_event<T: NodeType>(
                 vid_shares: vid_shares.clone(),
             }))
         },
-        ConsensusOutput::ViewChanged(view, _epoch) if *view > *cur_view => {
-            *cur_view = *view;
+        ConsensusOutput::ViewChanged(view, _epoch) => {
             Some(CoordinatorEvent::ViewChanged { view_number: *view })
         },
         ConsensusOutput::ProposalValidated { proposal, sender } => {
@@ -70,12 +66,9 @@ fn consensus_event<T: NodeType>(
     }
 }
 
-fn coordinator_event<T: NodeType>(
-    output: &CoordinatorOutput<T>,
-    cur_view: &mut ViewNumber,
-) -> Option<CoordinatorEvent<T>> {
+fn coordinator_event<T: NodeType>(output: &CoordinatorOutput<T>) -> Option<CoordinatorEvent<T>> {
     match output {
-        CoordinatorOutput::Consensus(inner) => consensus_event(inner, cur_view),
+        CoordinatorOutput::Consensus(inner) => consensus_event(inner),
         CoordinatorOutput::ExternalMessageReceived { sender, data } => {
             Some(CoordinatorEvent::ExternalMessageReceived {
                 sender: sender.clone(),
@@ -136,21 +129,13 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     }
 
     async fn new_protocol_at(&self, view: ViewNumber) -> bool {
-        if self.new_protocol_active.load(Ordering::Relaxed) {
-            return true;
-        }
-        let active = self
-            .legacy_handle
+        self.legacy_handle
             .read()
             .await
             .hotshot
             .upgrade_lock
             .version_infallible(view)
-            >= version(0, 8);
-        if active {
-            self.new_protocol_active.store(true, Ordering::Relaxed);
-        }
-        active
+            >= version(0, 8)
     }
 
     async fn new_protocol(&self) -> bool {
@@ -158,7 +143,11 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             return true;
         }
         let view = self.legacy_handle.read().await.cur_view().await;
-        self.new_protocol_at(view).await
+        let active = self.new_protocol_at(view).await;
+        if active {
+            self.new_protocol_active.store(true, Ordering::Relaxed);
+        }
+        active
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
@@ -443,8 +432,6 @@ async fn run_coordinator<
     event_sender: async_broadcast::Sender<CoordinatorEvent<T>>,
 ) {
     coordinator.start().await;
-    //TODO:
-    let mut cur_view = ViewNumber::new(0);
     loop {
         match coordinator.next_consensus_input().await {
             Ok(input) => coordinator.apply_consensus(input).await,
@@ -457,7 +444,7 @@ async fn run_coordinator<
             },
         }
         while let Some(output) = coordinator.outbox_mut().pop_front() {
-            if let Some(event) = consensus_event(&output, &mut cur_view) {
+            if let Some(event) = consensus_event(&output) {
                 broadcast_event(&event_sender, event).await;
             }
             if let Err(err) = coordinator.process_consensus_output(output).await {
@@ -470,7 +457,7 @@ async fn run_coordinator<
             }
         }
         while let Some(output) = coordinator.coordinator_outbox_mut().pop_front() {
-            if let Some(event) = coordinator_event(&output, &mut cur_view) {
+            if let Some(event) = coordinator_event(&output) {
                 broadcast_event(&event_sender, event).await;
             }
         }
