@@ -27,8 +27,7 @@ use versions::CLIQUENET_VERSION;
 
 use super::L1Client;
 use crate::{
-    AuthenticatedValidatorMap, SeqTypes,
-    traits::{MembershipPersistence, StateCatchup},
+    AuthenticatedValidatorMap, SeqTypes, traits::{MembershipPersistence, StateCatchup},
     v0::{ChainConfig, impls::StakeTableHash},
     v0_3::RewardAmount,
 };

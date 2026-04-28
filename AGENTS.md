@@ -36,12 +36,11 @@ fast finality and cross-rollup composability. This repo contains:
 cargo fmt
 cargo check -p <package> --tests
 cargo clippy -p <package> --tests
-cargo test -p <package> -- <test_name>
+cargo nextest run -p <package> -- <test_name>
 
 # Full workspace (pre-commit only)
 just check                            # Check postgres + embedded-db variants
 just lint                             # Clippy with -D warnings
-just test                             # Run nextest (skips slow tests)
 
 # Solidity contracts
 forge fmt
@@ -84,9 +83,10 @@ The codebase separates **consensus** (HotShot) from **application logic** (Espre
 - **HotShot** (`crates/hotshot/`): Generic BFT consensus library. Defines traits like `NodeType`, handles view-based
   voting, leader election, certificates, and network communication. Application-agnostic.
 
-- **Espresso Network** (`crates/espresso/node/`, `crates/espresso/types/`): Espresso-specific application built on HotShot. Implements `NodeType` via
-  `SeqTypes` in `crates/espresso/types/src/v0/mod.rs`, defining concrete types for headers, payloads, transactions, and validated state.
-  Handles L1 integration, namespaces, fees, and rollup-specific logic.
+- **Espresso Network** (`crates/espresso/node/`, `crates/espresso/types/`): Espresso-specific application built on
+  HotShot. Implements `NodeType` via `SeqTypes` in `crates/espresso/types/src/v0/mod.rs`, defining concrete types for
+  headers, payloads, transactions, and validated state. Handles L1 integration, namespaces, fees, and rollup-specific
+  logic.
 
 ### Espresso Network Internal Architecture
 
@@ -137,8 +137,8 @@ components:
 
 The Espresso node uses **only finalized L1 blocks** to avoid reorg issues:
 
-- **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): Tracks L1 `head` and `finalized` block numbers. Uses `BlockId::finalized()`
-  for all reads.
+- **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): Tracks L1 `head` and `finalized` block numbers. Uses
+  `BlockId::finalized()` for all reads.
 - **Block headers**: Every Espresso header contains `l1_finalized` referencing the latest finalized L1 block. Proposal
   validation enforces this is non-decreasing.
 - **Data read from L1**: Fee deposits (FeeContract), stake table events (ValidatorRegistered, Delegated, etc.)
@@ -151,9 +151,9 @@ The StakeTable contract emits events that affect consensus membership:
 - `Delegated/Undelegated` - Stake delegation changes
 - `ConsensusKeysUpdated` - Key rotation
 
-The `Fetcher` (`crates/espresso/types/src/v0/impls/stake_table.rs`) polls finalized L1 blocks, fetches events, validates signatures.
-Events transform into a `ValidatorMap`, then `select_active_validator_set()` picks top 100 validators by stake. Changes
-affect consensus starting from the next epoch boundary.
+The `Fetcher` (`crates/espresso/types/src/v0/impls/stake_table.rs`) polls finalized L1 blocks, fetches events, validates
+signatures. Events transform into a `ValidatorMap`, then `select_active_validator_set()` picks top 100 validators by
+stake. Changes affect consensus starting from the next epoch boundary.
 
 ### Reward Claims
 
@@ -187,15 +187,15 @@ table sync.
 
 ### Key Crates
 
-| Crate                      | Purpose                                                    |
-| -------------------------- | ---------------------------------------------------------- |
-| `espresso-node`            | Main node binary, API, persistence                         |
-| `espresso-types` (crates/espresso/types/)  | Domain types: Header, Payload, Transaction, ValidatedState |
-| `hotshot`                  | BFT consensus implementation                               |
-| `hotshot-query-service`    | Query APIs for blocks and availability data                |
-| `hotshot-state-prover`     | ZK proof generation for light client updates               |
-| `hotshot-contract-adapter` | Rust-Solidity type bridge                                  |
-| `staking-cli`              | CLI for stake table contract interaction                   |
+| Crate                                     | Purpose                                                    |
+| ----------------------------------------- | ---------------------------------------------------------- |
+| `espresso-node`                           | Main node binary, API, persistence                         |
+| `espresso-types` (crates/espresso/types/) | Domain types: Header, Payload, Transaction, ValidatedState |
+| `hotshot`                                 | BFT consensus implementation                               |
+| `hotshot-query-service`                   | Query APIs for blocks and availability data                |
+| `hotshot-state-prover`                    | ZK proof generation for light client updates               |
+| `hotshot-contract-adapter`                | Rust-Solidity type bridge                                  |
+| `staking-cli`                             | CLI for stake table contract interaction                   |
 
 ### Key Contracts (`contracts/src/`)
 
@@ -209,7 +209,8 @@ table sync.
 
 ### Protocol Versions
 
-Versions in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` defines version pairs for network operation.
+Versions in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` defines version pairs for network
+operation.
 
 | Version | Alias                        | Key Changes                                                                |
 | ------- | ---------------------------- | -------------------------------------------------------------------------- |
@@ -237,9 +238,9 @@ HotShot supports protocol upgrades via an `UpgradeProposal` mechanism. See `doc/
 
 ## Feature Flags
 
-| Feature          | Default | Purpose                  |
-| ---------------- | ------- | ------------------------ |
-| `embedded-db`    | No      | SQLite backend           |
+| Feature       | Default | Purpose        |
+| ------------- | ------- | -------------- |
+| `embedded-db` | No      | SQLite backend |
 
 **IMPORTANT:** `embedded-db` requires sqlx with different features than PostgreSQL. Since Rust features are additive and
 global to compilation, use `espresso-node-sqlite` crate for SQLite builds.
@@ -259,19 +260,19 @@ Agents make writing tests fast. There is no excuse for untested code.
 
 ### Test Structure
 
-| Layer                   | Location                        | Purpose                                   | Command                                  |
-| ----------------------- | ------------------------------- | ----------------------------------------- | ---------------------------------------- |
-| Unit tests              | Within crate modules            | Test individual functions/modules         | `cargo test -p <crate>`                  |
-| Reference/Serialization | `crates/espresso/types/src/reference_tests.rs`  | Verify serialization compatibility        | `cargo test -p espresso-types reference` |
-| HotShot tests           | `crates/hotshot/testing/tests/` | Consensus task tests, network simulations | `just hotshot::test <test_name>`         |
-| Integration (E2E)       | `tests/`                        | Full system tests                         | `cargo nextest run -p tests`             |
-| Slow tests              | `slow-tests/`                   | Long-running tests                        | `just test-slow`                         |
-| Contract tests          | `contracts/test/`               | Solidity unit/fuzz/invariant tests        | `just sol-test`                          |
+| Layer                   | Location                                       | Purpose                                   | Command                                  |
+| ----------------------- | ---------------------------------------------- | ----------------------------------------- | ---------------------------------------- |
+| Unit tests              | Within crate modules                           | Test individual functions/modules         | `cargo test -p <crate>`                  |
+| Reference/Serialization | `crates/espresso/types/src/reference_tests.rs` | Verify serialization compatibility        | `cargo test -p espresso-types reference` |
+| HotShot tests           | `crates/hotshot/testing/tests/`                | Consensus task tests, network simulations | `just hotshot::test <test_name>`         |
+| Integration (E2E)       | `tests/`                                       | Full system tests                         | `cargo nextest run -p tests`             |
+| Slow tests              | `slow-tests/`                                  | Long-running tests                        | `just test-slow`                         |
+| Contract tests          | `contracts/test/`                              | Solidity unit/fuzz/invariant tests        | `just sol-test`                          |
 
 ### Serialization Compatibility Tests
 
-**IMPORTANT:** The `crates/espresso/types/src/reference_tests.rs` module ensures backward compatibility. If you change a serializable
-type:
+**IMPORTANT:** The `crates/espresso/types/src/reference_tests.rs` module ensures backward compatibility. If you change a
+serializable type:
 
 1. Run `cargo test -p espresso-types reference`
 2. If tests fail and change is intentional, update reference files in `/data/` and commitment constants
@@ -297,7 +298,8 @@ For node operator details, see https://docs.espressosys.com/network/guides/node-
 
 - Uses [Refinery](https://github.com/rust-db/refinery) migration framework
 - Naming: `V{version}__{description}.sql` (e.g., `V501__epoch_tables.sql`)
-- Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`, `hotshot-query-service/migrations/{postgres,sqlite}/`
+- Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`,
+  `hotshot-query-service/migrations/{postgres,sqlite}/`
 - Version numbering: hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications
 
 **Filesystem Migrations (`crates/espresso/node/src/persistence/fs.rs`):**
@@ -335,6 +337,8 @@ APIs use [tide-disco](https://github.com/EspressoSystems/tide-disco) with TOML s
 intentional.
 
 **Storage migration failures:** Verify all three backends updated. Check version numbers don't conflict.
+
+**Datadog logs/metrics/monitors:** Use `pup` (available in the dev shell) to query logs. See `nix/pup/README.md`
 
 ## Key Files
 

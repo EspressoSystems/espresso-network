@@ -6,7 +6,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use hotshot::{traits::TestableNodeImplementation, HotShotError};
+use hotshot::{HotShotError, traits::TestableNodeImplementation};
 use hotshot_types::traits::node_implementation::NodeType;
 
 /// context for a round

@@ -21,7 +21,6 @@ use tracing::instrument;
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network() {
-
     let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
@@ -52,7 +51,6 @@ async fn libp2p_network() {
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 #[instrument]
 async fn libp2p_network_failures_2() {
-
     let mut metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription {
         overall_safety_properties: OverallSafetyPropertiesDescription {
             check_leaf: true,
@@ -98,9 +96,7 @@ async fn libp2p_network_failures_2() {
 #[instrument]
 #[ignore]
 async fn test_stress_libp2p_network() {
-
-    let metadata: TestDescription<TestTypes, Libp2pImpl> =
-        TestDescription::default_stress();
+    let metadata: TestDescription<TestTypes, Libp2pImpl> = TestDescription::default_stress();
     metadata
         .gen_launcher()
         .launch()

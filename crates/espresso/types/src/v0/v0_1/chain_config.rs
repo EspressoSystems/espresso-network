@@ -3,7 +3,6 @@ use alloy_compat::ethers_serde;
 use committable::{Commitment, Committable};
 use derive_more::{Deref, Display, From, Into};
 use itertools::Either;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{FeeAccount, FeeAmount};
