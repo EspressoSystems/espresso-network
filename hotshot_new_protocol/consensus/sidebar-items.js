@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ConsensusInput","ConsensusOutput","Protocol"],"struct":["Consensus"]};
+window.SIDEBAR_ITEMS = {"enum":["CertVerification","ConsensusInput","ConsensusOutput","Protocol"],"struct":["Consensus"]};

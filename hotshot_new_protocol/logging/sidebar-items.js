@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["KEY_PREFIX_LEN"],"fn":["init_logging","use_color"],"static":["LOG_INIT"],"struct":["KeyPrefix"]};
+window.SIDEBAR_ITEMS = {"constant":["KEY_PREFIX_LEN"],"fn":["init_logging","init_test_logging","use_color"],"static":["LOG_INIT"],"struct":["KeyPrefix"]};
