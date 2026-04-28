@@ -983,7 +983,7 @@ impl SequencerPersistence for Persistence {
         let mut inner = self.inner.write().await;
         let dir_path = inner.decided_cert2_dir_path();
         fs::create_dir_all(dir_path.clone()).context("failed to create decided_cert2 dir")?;
-        let file_path = dir_path.join(view.u64().to_string()).with_extension("txt");
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
         inner.replace(
             &file_path,
             |_| Ok(true),
@@ -998,12 +998,12 @@ impl SequencerPersistence for Persistence {
     async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         let inner = self.inner.read().await;
         let dir_path = inner.decided_cert2_dir_path();
-        let file_path = dir_path.join(view.u64().to_string()).with_extension("txt");
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
         if !file_path.is_file() {
             return Ok(None);
         }
         let bytes = fs::read(&file_path).context("read cert2")?;
-        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
+        Ok(Some(
             bincode::deserialize(&bytes).context("deserialize cert2")?,
         ))
     }
@@ -2364,7 +2364,7 @@ mod test {
         data::QuorumProposal2,
         light_client::LightClientState,
         simple_certificate::QuorumCertificate,
-        simple_vote::QuorumData,
+        simple_vote::{QuorumData, Vote2Data},
         traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES},
         vid::advz::advz_scheme,
     };
@@ -2802,6 +2802,26 @@ mod test {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_persisted_as_bin() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let view = ViewNumber::new(7);
+        let leaf = Leaf2::genesis(&Default::default(), &NodeState::mock(), MOCK_UPGRADE.base).await;
+        let data = Vote2Data {
+            leaf_commit: leaf.commit(),
+            epoch: EpochNumber::new(1),
+            block_number: leaf.height(),
+        };
+        let cert2 = Certificate2::new(data.clone(), data.commit(), view, None, PhantomData);
+
+        storage.append_cert2(view, cert2.clone()).await.unwrap();
+
+        assert!(tmp.path().join("decided_cert2/7.bin").is_file());
+        assert!(!tmp.path().join("decided_cert2/7.txt").exists());
+        assert_eq!(storage.load_cert2(view).await.unwrap(), Some(cert2));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
