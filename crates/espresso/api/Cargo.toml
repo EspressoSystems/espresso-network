@@ -4,22 +4,22 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-serialization-api = { path = "../../serialization/api" }
+aide = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
 axum = { workspace = true }
-tokio = { workspace = true }
-tower = { workspace = true }
+hex = { workspace = true }
+prost = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serialization-api = { path = "../../serialization/api" }
+tokio = { workspace = true }
 tonic = { workspace = true }
-tonic-reflection = { workspace = true }
 tonic-prost = { workspace = true }
-prost = { workspace = true }
+tonic-reflection = { workspace = true }
+tower = { workspace = true }
 tracing = { workspace = true }
-aide = { workspace = true }
-schemars = { workspace = true }
-async-trait = { workspace = true }
-anyhow = { workspace = true }
-hex = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [build-dependencies]

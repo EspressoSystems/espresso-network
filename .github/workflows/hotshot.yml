@@ -23,12 +23,12 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - uses: taiki-e/install-action@just
       - id: set-matrix
@@ -41,21 +41,25 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: Checkout Repository
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
         with:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
-          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.test_suites == 'test-ci-rest' }}
-          prefix-key: v1-hotshot
+          # Save from a hotshot-testing cell so the cache contains its dep graph:
+          # every other matrix cell needs those deps. `test-ci-rest` excludes
+          # hotshot-testing, so its target/ is a poor match for the rest of the
+          # matrix.
+          save-if: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-')) && matrix.test_suites == 'test-ci tests_1' }}
+          prefix-key: v2-hotshot
 
       - uses: taiki-e/install-action@just
 
@@ -76,16 +80,31 @@ jobs:
         env:
           RUST_BACKTRACE: full
 
+      - name: Sanitize artifact name
+        if: always()
+        id: artifact-name
+        run: |
+          name="nextest-junit-hotshot-$(echo '${{ matrix.test_suites }}' | tr ' /' '--')"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.artifact-name.outputs.name }}
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+
   test-new-protocol:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: Checkout Repository
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
@@ -93,7 +112,7 @@ jobs:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-          prefix-key: v1-hotshot
+          prefix-key: v2-hotshot
 
       - uses: taiki-e/install-action@nextest
 
@@ -109,18 +128,26 @@ jobs:
         env:
           RUST_BACKTRACE: full
 
+      - name: Upload nextest JUnit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-junit-hotshot-new-protocol
+          if-no-files-found: ignore
+          path: target/nextest/*/junit.xml
+
   test-examples:
     strategy:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: Checkout Repository
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - uses: Swatinem/rust-cache@v2
         name: Enable Rust Caching
@@ -128,7 +155,7 @@ jobs:
           shared-key: "hotshot-tests"
           cache-on-failure: "true"
           save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
-          prefix-key: v1-hotshot
+          prefix-key: v2-hotshot
 
       - uses: taiki-e/install-action@just
 
@@ -136,6 +163,94 @@ jobs:
         run: |
           just hotshot::example all-push-cdn -- --config_file ./crates/hotshot/orchestrator/run-config.toml
         timeout-minutes: 20
+
+  nextest-report:
+    needs: [test, test-new-protocol]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() }}
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download JUnit artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: nextest-junit-*
+          path: junit-artifacts
+
+      - name: Fetch main test stats
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/nextest-ci stats-fetch \
+            --workflow hotshot.yml \
+            --artifact-name test-stats-hotshot \
+            --out main-test-stats.json
+
+      - name: Render summary
+        run: |
+          args=(
+            junit-artifacts
+            --title "Nextest (hotshot)"
+            --pr-comment-out junit-artifacts/pr-comment.md
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          )
+          if [ -s main-test-stats.json ]; then
+            args+=(--main-stats main-test-stats.json)
+          fi
+          python3 scripts/nextest-ci report "${args[@]}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post/update PR comment
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: nextest-hotshot
+          path: junit-artifacts/pr-comment.md
+          delete: ${{ hashFiles('junit-artifacts/pr-comment.md') == '' }}
+
+  publish-test-stats:
+    needs: [test, test-new-protocol]
+    # always() so a single flaky shard on main does not freeze the history artifact.
+    if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    # Reporter only: failures here must not fail the workflow.
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download JUnit artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: nextest-junit-*
+          path: junit-artifacts
+
+      - name: Export stats
+        run: |
+          python3 scripts/nextest-ci stats-write \
+            --junit-dir junit-artifacts \
+            --sha "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --out test-stats.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-stats-hotshot
+          path: test-stats.json
+          if-no-files-found: error
+          retention-days: 90
 
   # This job enables having a single required status check in github for all hotshot tests.
   aggregate-hotshot-tests:
