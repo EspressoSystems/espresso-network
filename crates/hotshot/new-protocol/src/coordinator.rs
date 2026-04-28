@@ -1,7 +1,7 @@
 pub mod error;
 pub mod timer;
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bon::{Builder, bon};
 use committable::Commitment;
@@ -34,8 +34,8 @@ use crate::{
     logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
-        Message, MessageType, Proposal, ProposalFetchMessage, ProposalFetchRequest,
-        ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked, Vote2,
+        Message, MessageType, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest,
+        TransactionMessage, Unchecked, Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -211,16 +211,28 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         (proposal_commitment(&proposal.data) == leaf_commitment).then(|| proposal.clone())
     }
 
+    fn proposal_request_message(
+        &self,
+        view: ViewNumber,
+    ) -> Result<Message<T, message::Validated>, CoordinatorError> {
+        let request = self
+            .consensus
+            .signed_proposal_fetch_request(view)
+            .map_err(|err| {
+                CoordinatorError::regular(format!("failed to sign proposal request: {err}"))
+                    .context("sign proposal request")
+            })?;
+
+        Ok(Message {
+            sender: self.public_key.clone(),
+            message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),
+        })
+    }
+
     async fn broadcast_proposal_request(
         &mut self,
-        view: ViewNumber,
+        message: Message<T, message::Validated>,
     ) -> Result<(), CoordinatorError> {
-        let message = Message {
-            sender: self.public_key.clone(),
-            message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(
-                ProposalFetchRequest::new(view),
-            )),
-        };
         self.network
             .broadcast(message)
             .await
@@ -269,7 +281,13 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     return Ok(());
                 }
 
-                self.broadcast_proposal_request(view).await?;
+                let already_pending = self
+                    .pending_proposal_fetches
+                    .contains_request(view, leaf_commitment);
+                if !already_pending {
+                    let message = self.proposal_request_message(view)?;
+                    self.broadcast_proposal_request(message).await?;
+                }
                 self.pending_proposal_fetches
                     .push(view, leaf_commitment, respond);
             },
@@ -305,7 +323,9 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     }
                 }
                 Some(request) = self.client.next_request() => {
-                    self.handle_request(request).await?;
+                    if let Err(err) = self.handle_request(request).await {
+                        tracing::error!(%err, "error while handling client request");
+                    }
                 }
                 Some(tcert) = self.timeout_collector.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
@@ -517,9 +537,17 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                 None
             },
             MessageType::ProposalFetch(ProposalFetchMessage::Request(request)) => {
+                if !request.validate_sender(&message.sender) {
+                    warn!(
+                        sender = %message.sender,
+                        view = %request.view_number(),
+                        "ignoring invalid proposal fetch request signature"
+                    );
+                    return None;
+                }
                 if let Some(proposal) = self
                     .consensus
-                    .signed_proposal(&request.view_number)
+                    .signed_proposal(&request.view_number())
                     .cloned()
                 {
                     let response = Message {
@@ -531,11 +559,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
 
                     if let Err(err) = self.network.unicast(message.sender, response).await {
                         let err = CoordinatorError::from(err).context("proposal response");
-                        if err.severity == Severity::Critical {
-                            tracing::error!(%err, "critical network error while sending proposal response");
-                        } else {
-                            warn!(%err, "network error while sending proposal response");
-                        }
+                        warn!(%err, "network error while sending proposal response");
                     }
                 }
                 None
@@ -773,43 +797,76 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
     }
 }
 
-struct PendingProposalFetch<T: NodeType> {
+type ProposalFetchResponseSender<T> =
+    oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ProposalFetchKey<T: NodeType> {
     view: ViewNumber,
     leaf_commitment: Commitment<Leaf2<T>>,
-    respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
+}
+
+impl<T: NodeType> ProposalFetchKey<T> {
+    fn new(view: ViewNumber, leaf_commitment: Commitment<Leaf2<T>>) -> Self {
+        Self {
+            view,
+            leaf_commitment,
+        }
+    }
 }
 
 #[derive(Default)]
 struct PendingProposalFetches<T: NodeType> {
-    pending: Vec<PendingProposalFetch<T>>,
+    pending: HashMap<ProposalFetchKey<T>, Vec<ProposalFetchResponseSender<T>>>,
 }
 
 impl<T: NodeType> PendingProposalFetches<T> {
+    fn prune_closed(&mut self) {
+        self.pending.retain(|_, responders| {
+            responders.retain(|respond| !respond.is_closed());
+            !responders.is_empty()
+        });
+    }
+
+    fn contains_request(
+        &mut self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> bool {
+        self.prune_closed();
+        self.pending
+            .contains_key(&ProposalFetchKey::new(view, leaf_commitment))
+    }
+
     fn push(
         &mut self,
         view: ViewNumber,
         leaf_commitment: Commitment<Leaf2<T>>,
-        respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
+        respond: ProposalFetchResponseSender<T>,
     ) {
-        self.pending.push(PendingProposalFetch {
-            view,
-            leaf_commitment,
-            respond,
-        });
+        self.pending
+            .entry(ProposalFetchKey::new(view, leaf_commitment))
+            .or_default()
+            .push(respond);
     }
 
     fn gc(&mut self, view: ViewNumber) {
-        self.pending.retain(|pending| pending.view >= view);
+        self.pending.retain(|key, responders| {
+            responders.retain(|respond| !respond.is_closed());
+            key.view >= view && !responders.is_empty()
+        });
     }
 
     fn resolve(&mut self, proposal: &SignedProposal<T, Proposal<T>>) {
+        self.prune_closed();
         let view = proposal.data.view_number;
         let leaf_commitment = proposal_commitment(&proposal.data);
+        let key = ProposalFetchKey::new(view, leaf_commitment);
 
-        for pending in self.pending.extract_if(.., |pending| {
-            pending.view == view && pending.leaf_commitment == leaf_commitment
-        }) {
-            let _ = pending.respond.send(Ok(proposal.clone()));
+        if let Some(responders) = self.pending.remove(&key) {
+            for respond in responders {
+                let _ = respond.send(Ok(proposal.clone()));
+            }
         }
     }
 }
