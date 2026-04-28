@@ -1003,7 +1003,7 @@ impl SequencerPersistence for Persistence {
             return Ok(None);
         }
         let bytes = fs::read(&file_path).context("read cert2")?;
-        Ok(Some(
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
             bincode::deserialize(&bytes).context("deserialize cert2")?,
         ))
     }
