@@ -16,7 +16,7 @@ use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
-    helpers::upgrade_lock,
+    helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
     network::Network,
@@ -46,14 +46,16 @@ impl TestHarness {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let instance = Arc::new(TestInstanceState::default());
         let membership = mock_membership().await;
+        let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
 
-        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_one_honest_collector =
+            VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
         let genesis_leaf =
@@ -63,6 +65,7 @@ impl TestHarness {
             membership.clone(),
             public_key,
             private_key.clone(),
+            upgrade_lock.clone(),
             genesis_leaf.clone(),
             10,
         );
@@ -71,14 +74,19 @@ impl TestHarness {
         let vid_reconstruction_task = VidReconstructor::new();
 
         let block_config = BlockBuilderConfig::default();
-        let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
+        let block_builder = BlockBuilder::new(
+            instance.clone(),
+            membership.clone(),
+            block_config,
+            upgrade_lock.clone(),
+        );
 
-        let mut state_manager = StateManager::new(instance.clone());
+        let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let proposal_validator = ProposalValidator::new(membership.clone());
+        let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
 
-        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
+        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock);
 
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)

@@ -8,6 +8,7 @@ use hotshot::HotShotInitializer;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    message::UpgradeLock,
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
@@ -28,7 +29,6 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
-    helpers::upgrade_lock,
     logging::KeyPrefix,
     message::{
         self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
@@ -86,6 +86,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
         membership_coordinator: EpochMembershipCoordinator<T>,
         network: N,
         initializer: &HotShotInitializer<T>,
+        upgrade_lock: UpgradeLock<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         timeout_duration: Duration,
@@ -94,12 +95,17 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
             membership_coordinator.clone(),
             public_key.clone(),
             private_key,
+            upgrade_lock.clone(),
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
         );
-        let state_manager = StateManager::new(Arc::new(initializer.instance_state.clone()));
 
-        let lock = upgrade_lock();
+        let state_manager = StateManager::new(
+            Arc::new(initializer.instance_state.clone()),
+            upgrade_lock.clone(),
+        );
+
+        let lock = upgrade_lock.clone();
         Self::builder()
             .consensus(consensus)
             .network(Network::new(
@@ -135,8 +141,12 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                 Arc::new(initializer.instance_state.clone()),
                 membership_coordinator.clone(),
                 BlockBuilderConfig::default(),
+                upgrade_lock.clone(),
             ))
-            .proposal_validator(ProposalValidator::new(membership_coordinator.clone()))
+            .proposal_validator(ProposalValidator::new(
+                membership_coordinator.clone(),
+                upgrade_lock,
+            ))
             .membership_coordinator(membership_coordinator)
             .timer(Timer::new(
                 timeout_duration,
