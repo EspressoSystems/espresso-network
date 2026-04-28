@@ -226,7 +226,6 @@ async fn test_pruning() {
                 }]),
                 committing_qc: Arc::new(CertificatePair::non_epoch_change(mock_qc.clone())),
                 deciding_qc: None,
-                cert2: None,
                 block_size: None,
             },
         })
