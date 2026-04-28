@@ -1,10 +1,11 @@
 use std::{
+    cmp::max,
     collections::{BTreeMap, HashMap},
     path::Path,
 };
 
 use alloy::primitives::Address;
-use anyhow::{Context, Ok};
+use anyhow::{Context, Ok, ensure};
 use espresso_types::{
     FeeAccount, FeeAmount, GenesisHeader, L1BlockInfo, L1Client, SeqTypes, Timestamp, Upgrade,
     v0_3::ChainConfig,
@@ -12,6 +13,7 @@ use espresso_types::{
 use hotshot_types::{VersionedDaCommittee, version_ser};
 use serde::{Deserialize, Serialize};
 use vbs::version::Version;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -91,6 +93,32 @@ impl Genesis {
 }
 
 impl Genesis {
+    /// Validate that required fields are present for the configured protocol versions.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        ensure!(
+            self.genesis_version <= self.base_version,
+            "genesis_version cannot be greater than base_version"
+        );
+
+        let version = max(self.base_version, self.upgrade_version);
+
+        if version >= EPOCH_VERSION {
+            self.epoch_height
+                .context("epoch_height missing from genesis")?;
+            self.epoch_start_block
+                .context("epoch_start_block missing from genesis")?;
+        }
+
+        if version >= DRB_AND_HEADER_UPGRADE_VERSION {
+            self.drb_difficulty
+                .context("drb_difficulty missing from genesis")?;
+            self.drb_upgrade_difficulty
+                .context("drb_upgrade_difficulty missing from genesis")?;
+        }
+
+        Ok(())
+    }
+
     pub async fn validate_fee_contract(&self, l1: &L1Client) -> anyhow::Result<()> {
         if let Some(fee_contract_address) = self.chain_config.fee_contract {
             tracing::info!("validating fee contract at {fee_contract_address:x}");
@@ -286,13 +314,15 @@ impl Genesis {
         let bytes = std::fs::read(path).context(format!("genesis file {}", path.display()))?;
         let text = std::str::from_utf8(&bytes).context("genesis file must be UTF-8")?;
 
-        toml::from_str(text).context("malformed genesis file")
+        let genesis: Self = toml::from_str(text).context("malformed genesis file")?;
+        genesis.validate().context("validating genesis")?;
+        Ok(genesis)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{fs, path::Path, sync::Arc};
 
     use alloy::{
         node_bindings::Anvil,
@@ -304,9 +334,108 @@ mod test {
         L1BlockInfo, TimeBasedUpgrade, Timestamp, UpgradeMode, UpgradeType, ViewBasedUpgrade,
     };
     use espresso_utils::ser::FromStringOrInteger;
+    use tempfile::NamedTempFile;
     use toml::toml;
 
     use super::*;
+
+    fn minimal_genesis_toml(version: &str, root_fields: &str) -> String {
+        format!(
+            r#"
+            base_version = "{version}"
+            upgrade_version = "{version}"
+            genesis_version = "{version}"
+            {root_fields}
+
+            [stake_table]
+            capacity = 10
+
+            [chain_config]
+            chain_id = 12345
+            max_block_size = 30000
+            base_fee = 1
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+
+            [header]
+            timestamp = 123456
+
+            [header.chain_config]
+            chain_id = 35353
+            max_block_size = 30720
+            base_fee = 0
+            fee_recipient = "0x0000000000000000000000000000000000000000"
+
+            [l1_finalized]
+            number = 0
+            "#
+        )
+    }
+
+    #[test]
+    fn test_genesis_validation_allows_pre_epoch_without_epoch_fields() {
+        let genesis: Genesis = toml::from_str(&minimal_genesis_toml("0.2", "")).unwrap();
+        genesis.validate().unwrap();
+    }
+
+    #[test]
+    fn test_genesis_validation_requires_epoch_fields() {
+        let genesis: Genesis = toml::from_str(&minimal_genesis_toml("0.3", "")).unwrap();
+        assert!(genesis.validate().is_err());
+    }
+
+    #[test]
+    fn test_genesis_validation_requires_drb_fields() {
+        let genesis: Genesis = toml::from_str(&minimal_genesis_toml(
+            "0.4",
+            r#"
+                epoch_height = 20
+                epoch_start_block = 1
+                stake_table_capacity = 200
+                "#,
+        ))
+        .unwrap();
+        assert!(genesis.validate().is_err());
+    }
+
+    #[test]
+    fn test_genesis_from_file_accepts_complete_v04_genesis() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(
+            file.path(),
+            minimal_genesis_toml(
+                "0.4",
+                r#"
+                epoch_height = 20
+                epoch_start_block = 1
+                stake_table_capacity = 200
+                drb_difficulty = 10
+                drb_upgrade_difficulty = 20
+                "#,
+            ),
+        )
+        .unwrap();
+
+        assert!(Genesis::from_file(file.path()).is_ok());
+    }
+
+    #[test]
+    fn test_committed_genesis_files_validate() {
+        let genesis_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../data/genesis");
+        let mut checked = 0;
+
+        for entry in fs::read_dir(&genesis_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|ext| ext != "toml") {
+                continue;
+            }
+
+            Genesis::from_file(&path)
+                .unwrap_or_else(|err| panic!("{} failed validation: {err:#}", path.display()));
+            checked += 1;
+        }
+
+        assert!(checked > 0, "no genesis files found");
+    }
 
     #[test]
     fn test_genesis_from_toml_with_optional_fields() {
