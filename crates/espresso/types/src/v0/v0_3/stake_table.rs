@@ -27,7 +27,8 @@ use versions::CLIQUENET_VERSION;
 
 use super::L1Client;
 use crate::{
-    AuthenticatedValidatorMap, SeqTypes, traits::{MembershipPersistence, StateCatchup},
+    AuthenticatedValidatorMap, SeqTypes,
+    traits::{MembershipPersistence, StateCatchup},
     v0::{ChainConfig, impls::StakeTableHash},
     v0_3::RewardAmount,
 };
@@ -380,8 +381,7 @@ mod tests {
         let commit_base = base.commit();
 
         let mut with_x25519 = base.clone();
-        with_x25519.x25519_key =
-            Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
+        with_x25519.x25519_key = Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
         let commit_x25519 = with_x25519.commit();
 
         let mut with_p2p = base.clone();
