@@ -164,21 +164,13 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     }
 
     async fn new_protocol_at(&self, view: ViewNumber) -> bool {
-        if self.new_protocol_active.load(Ordering::Relaxed) {
-            return true;
-        }
-        let active = self
-            .legacy_handle
+        self.legacy_handle
             .read()
             .await
             .hotshot
             .upgrade_lock
             .version_infallible(view)
-            >= version(0, 8);
-        if active {
-            self.new_protocol_active.store(true, Ordering::Relaxed);
-        }
-        active
+            >= version(0, 8)
     }
 
     async fn new_protocol(&self) -> bool {
@@ -186,7 +178,11 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
             return true;
         }
         let view = self.legacy_handle.read().await.cur_view().await;
-        self.new_protocol_at(view).await
+        let active = self.new_protocol_at(view).await;
+        if active {
+            self.new_protocol_active.store(true, Ordering::Relaxed);
+        }
+        active
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {

@@ -32,8 +32,8 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal, ProposalMessage,
-        Validated, Vote1, Vote2,
+        Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal,
+        ProposalFetchRequest, ProposalMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -210,6 +210,13 @@ impl<T: NodeType> Consensus<T> {
 
     pub fn signed_proposal(&self, view: &ViewNumber) -> Option<&SignedProposal<T, Proposal<T>>> {
         self.signed_proposals.get(view)
+    }
+
+    pub fn signed_proposal_fetch_request(
+        &self,
+        view: ViewNumber,
+    ) -> Result<ProposalFetchRequest<T>, <T::SignatureKey as SignatureKey>::SignError> {
+        ProposalFetchRequest::new(view, self.public_key.clone(), &self.private_key)
     }
 
     /// Apply consensus to the given input and collect protocol outputs.
