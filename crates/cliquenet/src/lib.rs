@@ -59,6 +59,9 @@ pub struct Config {
 
     #[builder(default = Duration::from_secs(30))]
     receive_timeout: Duration,
+
+    #[builder(default = Duration::from_secs(30))]
+    backoff_duration: Duration,
 }
 
 /// Network peer role.

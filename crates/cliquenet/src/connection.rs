@@ -19,7 +19,7 @@ use crate::{
     Config,
     addr::NetAddr,
     error::NetworkError,
-    msg::{Header, MAX_NOISE_MESSAGE_SIZE},
+    msg::{Header, MAX_NOISE_MESSAGE_SIZE, hello::Hello},
     x25519::PublicKey,
 };
 
@@ -106,8 +106,14 @@ impl Connection {
         let addr = addr.to_string();
         let node = conf.keypair.public_key();
 
-        let (key, addr, stream, state) = loop {
-            sleep(delays.next().expect("delays iterator is infinite")).await;
+        let mut backoff = None;
+
+        loop {
+            if let Some(d) = backoff.take() {
+                sleep(d).await;
+            } else {
+                sleep(delays.next().expect("delays iterator is infinite")).await;
+            }
             debug!(name = %conf.name, %node, %peer, %addr, "connecting");
             match timeout(conf.connect_timeout, TcpStream::connect(&addr)).await {
                 Ok(Ok(mut stream)) => {
@@ -126,7 +132,44 @@ impl Connection {
                         Ok(Ok(state)) => {
                             debug!(name = %conf.name, %node, %peer, %addr, "connected");
                             match remote_static_key(&state) {
-                                Some(key) if key == peer => break (key, addr, stream, state),
+                                Some(key) if key == peer => {
+                                    let mut conn = Self {
+                                        key,
+                                        addr,
+                                        stream,
+                                        state,
+                                    };
+                                    match conn
+                                        .exchange_hello(conf.handshake_timeout, Hello::Ok)
+                                        .await
+                                    {
+                                        Ok(h) if h.is_ok() => break conn,
+                                        Ok(h) => {
+                                            warn!(
+                                                name = %conf.name,
+                                                %node,
+                                                %peer,
+                                                remote = %key,
+                                                %addr,
+                                                "hello response was not ok"
+                                            );
+                                            backoff = h.backoff_duration();
+                                            continue;
+                                        },
+                                        Err(err) => {
+                                            warn!(
+                                                name = %conf.name,
+                                                %node,
+                                                %peer,
+                                                remote = %key,
+                                                %addr,
+                                                %err,
+                                                "failed to exchange hello"
+                                            );
+                                            continue;
+                                        },
+                                    }
+                                },
                                 Some(key) => {
                                     warn!(
                                         name = %conf.name,
@@ -169,14 +212,39 @@ impl Connection {
                     warn!(name = %conf.name, %node, %peer, %addr, "connect timeout");
                 },
             }
-        };
-
-        Self {
-            key,
-            addr,
-            stream,
-            state,
         }
+    }
+
+    async fn exchange_hello(&mut self, d: Duration, h: Hello) -> Result<Hello> {
+        let future = async {
+            self.send_hello(h).await?;
+            self.recv_hello().await
+        };
+        match timeout(d, future).await {
+            Ok(re) => re,
+            Err(_) => Err(NetworkError::Timeout),
+        }
+    }
+
+    /// Send a `Hello` frame.
+    pub async fn send_hello(&mut self, h: Hello) -> Result<()> {
+        let mut b = [0u8; 64];
+        let n = self
+            .state
+            .write_message(h.to_bytes().as_ref(), &mut b[Header::SIZE..])?;
+        let h = Header::data(n as u16);
+        send_frame(&mut self.stream, h, &mut b[..Header::SIZE + n]).await?;
+        Ok(())
+    }
+
+    /// Read a `Hello` frame.
+    pub async fn recv_hello(&mut self) -> Result<Hello> {
+        let mut a = [0u8; 64];
+        let h = recv_frame(&mut self.stream, &mut a).await?;
+        let mut b = [0u8; 64];
+        let n = self.state.read_message(&a[..h.len().into()], &mut b)?;
+        let h = Hello::from_bytes(&b[..n]).ok_or_else(|| io::Error::other("invalid hello"))?;
+        Ok(h)
     }
 }
 
@@ -187,28 +255,28 @@ fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
 
 /// Perform a noise handshake as initiator with the remote party.
 async fn handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<TransportState> {
-    let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
-    let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
+    let mut a = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
+    let n = hs.write_message(&[], &mut a[Header::SIZE..])?;
     let h = Header::data(n as u16);
-    send_frame(stream, h, &mut b[..Header::SIZE + n]).await?;
-    let mut m = Vec::new();
-    let h = recv_frame(stream, &mut m).await?;
+    send_frame(stream, h, &mut a[..Header::SIZE + n]).await?;
+    let mut b = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
+    let h = recv_frame(stream, &mut b).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    hs.read_message(&m, &mut b)?;
+    hs.read_message(&b[..h.len().into()], &mut a)?;
     Ok(hs.into_transport_mode()?)
 }
 
 /// Perform a noise handshake as responder with a remote party.
 async fn on_handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<TransportState> {
-    let mut m = Vec::new();
-    let h = recv_frame(stream, &mut m).await?;
+    let mut a = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
+    let h = recv_frame(stream, &mut a).await?;
     if !h.is_data() || h.is_partial() {
         return Err(NetworkError::InvalidHandshakeMessage);
     }
-    let mut b = vec![0; MAX_NOISE_HANDSHAKE_SIZE];
-    hs.read_message(&m, &mut b)?;
+    let mut b = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
+    hs.read_message(&a[..h.len().into()], &mut b)?;
     let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
     let h = Header::data(n as u16);
     send_frame(stream, h, &mut b[..Header::SIZE + n]).await?;
@@ -216,7 +284,7 @@ async fn on_handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<
 }
 
 /// Read a single frame (header + payload) from the remote.
-pub async fn recv_frame<R>(stream: &mut R, buf: &mut Vec<u8>) -> io::Result<Header>
+async fn recv_frame<R, const N: usize>(stream: &mut R, buf: &mut [u8; N]) -> io::Result<Header>
 where
     R: AsyncReadExt + Unpin,
 {
@@ -224,8 +292,11 @@ where
         let n = stream.read_u32().await?;
         Header::unvalidated(n)
     };
-    buf.resize(h.len().into(), 0);
-    stream.read_exact(buf).await?;
+    let n = h.len().into();
+    if n > N {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    stream.read_exact(&mut buf[..n]).await?;
     Ok(h)
 }
 
@@ -233,7 +304,7 @@ where
 ///
 /// The header is serialised into the first 4 bytes of `msg`. It is the
 /// caller's responsibility to ensure there is room at the beginning.
-pub async fn send_frame<W>(stream: &mut W, hdr: Header, msg: &mut [u8]) -> io::Result<()>
+async fn send_frame<W>(stream: &mut W, hdr: Header, msg: &mut [u8]) -> io::Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {

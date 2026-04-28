@@ -9,6 +9,7 @@ use tokio::{
         watch,
     },
     task::{JoinHandle, JoinSet},
+    time::timeout,
 };
 use tokio_util::{sync::CancellationToken, task::JoinMap};
 use tracing::{debug, error, info, trace, warn};
@@ -18,7 +19,7 @@ use crate::{
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
-    msg::{MsgId, Slot, Trailer, TrailerType},
+    msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{Command, PeerCommand, PeerMessage, RetryPolicy, SendAction, peer::Peer},
     queue::Queue,
 };
@@ -34,6 +35,7 @@ pub struct Server {
     obound: UnboundedReceiver<Command>,
     next_slot: watch::Receiver<Slot>,
     accept_tasks: JoinSet<Result<Connection, NetworkError>>,
+    hello_tasks: JoinMap<PublicKey, Result<(Connection, Hello), NetworkError>>,
     connect_tasks: JoinMap<PublicKey, Connection>,
     peer_tasks: JoinMap<PublicKey, Peer>,
 }
@@ -107,6 +109,7 @@ impl Server {
             parties,
             accept_tasks: JoinSet::new(),
             connect_tasks: JoinMap::new(),
+            hello_tasks: JoinMap::new(),
             peer_tasks: JoinMap::new(),
             msgid: MsgId::new(0),
             next_slot: sx,
@@ -160,6 +163,7 @@ impl Server {
                                 addr = %conn.addr,
                                 "unknown party"
                             );
+                            self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
                             continue
                         };
                         if party.ip_addr_mismatch(conn.addr.ip()) {
@@ -169,6 +173,47 @@ impl Server {
                                 peer = %conn.key,
                                 addr = %conn.addr,
                                 "party has invalid ip addr"
+                            );
+                            self.spawn_hello(conn, Hello::BackOff(self.conf.backoff_duration));
+                            continue
+                        }
+                        self.spawn_hello(conn, Hello::Ok);
+                    }
+                    Ok(Err(err)) => {
+                        warn!(name = %self.conf.name, node = %self.key, %err, "handshake failed")
+                    }
+                    Err(err) => {
+                        if !err.is_cancelled() {
+                            error!(
+                                name = %self.conf.name,
+                                node = %self.key,
+                                %err,
+                                "handshake task panic"
+                            )
+                        }
+                    }
+                },
+
+                Some(r) = self.hello_tasks.join_next() => match r {
+                    (_, Ok(Ok((conn, hello)))) => {
+                        let Some(party) = self.parties.get_mut(&conn.key) else {
+                            info!(
+                                name = %self.conf.name,
+                                node = %self.key,
+                                peer = %conn.key,
+                                addr = %conn.addr,
+                                "unknown party"
+                            );
+                            continue
+                        };
+                        if !hello.is_ok() {
+                            warn!(
+                                name  = %self.conf.name,
+                                node  = %self.key,
+                                peer  = %conn.key,
+                                addr  = %conn.addr,
+                                hello = ?hello,
+                                "peer hello is not ok"
                             );
                             continue
                         }
@@ -214,16 +259,22 @@ impl Server {
                             }
                         }
                     }
-                    Ok(Err(err)) => {
-                        warn!(name = %self.conf.name, node = %self.key, %err, "handshake failed")
+                    (key, Ok(Err(err))) => {
+                        warn!(
+                            name = %self.conf.name,
+                            node = %self.key,
+                            peer = %key,
+                            %err, "hello failed"
+                        )
                     }
-                    Err(err) => {
+                    (key, Err(err)) => {
                         if !err.is_cancelled() {
                             error!(
                                 name = %self.conf.name,
                                 node = %self.key,
+                                peer = %key,
                                 %err,
-                                "handshake task panic"
+                                "hello task panic"
                             )
                         }
                     }
@@ -432,7 +483,7 @@ impl Server {
                             }
 
                             let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
 
                             if let Some(party) = self.parties.get(&to) {
                                 party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes));
@@ -451,7 +502,7 @@ impl Server {
                             }
 
                             let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
 
                             if parties.contains(&self.key) {
                                 let bytes = remove_trailer(bytes.clone());
@@ -482,7 +533,7 @@ impl Server {
                             }
 
                             let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.slot, trailer_type(&cmd.retry), msgid, m);
+                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
 
                             if self.role.is_active() {
                                 let bytes = remove_trailer(bytes.clone());
@@ -538,6 +589,31 @@ impl Server {
         debug!(name = %self.conf.name, node = %self.key, "spawning handshake task");
         let conn = Connection::accept(self.conf.clone(), stream);
         self.accept_tasks.spawn(conn);
+    }
+
+    fn spawn_hello(&mut self, mut conn: Connection, ours: Hello) {
+        debug!(
+            name = %self.conf.name,
+            node = %self.key,
+            peer = %conn.key,
+            addr = %conn.addr,
+            "spawning hello task"
+        );
+
+        let duration = self.conf.handshake_timeout;
+
+        self.hello_tasks.abort(&conn.key);
+        self.hello_tasks.spawn(conn.key, async move {
+            let future = async {
+                let theirs = conn.recv_hello().await?;
+                conn.send_hello(ours).await?;
+                Ok((conn, theirs))
+            };
+            match timeout(duration, future).await {
+                Ok(re) => re,
+                Err(_) => Err(NetworkError::Timeout),
+            }
+        })
     }
 
     fn spawn_peer(&mut self, key: PublicKey, mut peer: Peer) {
@@ -597,10 +673,13 @@ impl PeerState {
     }
 }
 
-fn append_trailer(s: Slot, t: TrailerType, i: MsgId, bytes: Vec<u8>) -> Bytes {
-    let trailer = Trailer::new(t, s, i);
+fn append_trailer(pol: RetryPolicy, slot: Slot, id: MsgId, bytes: Vec<u8>) -> Bytes {
+    let t = match pol {
+        RetryPolicy::Default => Trailer::Std { slot, id },
+        RetryPolicy::NoRetry => Trailer::NoAck { slot },
+    };
     let mut msg = BytesMut::from(Bytes::from(bytes));
-    msg.extend_from_slice(&trailer.to_bytes());
+    msg.extend_from_slice(t.to_bytes().as_ref());
     msg.freeze()
 }
 
@@ -608,11 +687,4 @@ fn remove_trailer(mut bytes: Bytes) -> Bytes {
     let _t = Trailer::from_bytes(&mut bytes);
     debug_assert!(_t.is_some());
     bytes
-}
-
-fn trailer_type(p: &RetryPolicy) -> TrailerType {
-    match p {
-        RetryPolicy::Default => TrailerType::Std,
-        RetryPolicy::NoRetry => TrailerType::NoAck,
-    }
 }

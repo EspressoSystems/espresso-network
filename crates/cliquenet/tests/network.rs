@@ -561,6 +561,69 @@ async fn reconnect_after_restart() {
     assert_eq!(data, Bytes::from("queued"));
 }
 
+/// When a noise-capable peer completes the handshake but its public key is
+/// unknown to the server, the server replies with `Hello::backoff` telling
+/// the peer to wait before reconnecting. The peer honours this by sleeping
+/// the requested duration inside `Connection::connect` instead of retrying
+/// on the normal (short) schedule.
+///
+/// We configure A with a 60 s backoff and C with a 1 s retry delay. After
+/// the first handshake, C sleeps 60 s. Since A never adds C, C has no peer
+/// and cannot deliver the queued message within the 5 s window.
+#[tokio::test]
+async fn unknown_peer_backs_off() {
+    let a = Node::new(reserve_port());
+    let c = Node::new(reserve_port());
+
+    // A does not know C. Unknown peers are told to back off for 60 s.
+    let mut net_a = Network::create(
+        Config::builder()
+            .name("test")
+            .keypair(a.keypair.clone())
+            .bind(a.addr().into())
+            .parties([(a.key, a.addr().into())])
+            .receive_timeout(Duration::from_secs(5))
+            .retry_delays(vec![1])
+            .max_retry_delay(Duration::from_secs(1))
+            .backoff_duration(Duration::from_secs(60))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    // C knows A and connects. Without the backoff, C's 1 s retry would
+    // cause it to reconnect immediately after each rejection. With the
+    // backoff, C sleeps 60 s after the first hello exchange.
+    let mut net_c = Network::create(
+        Config::builder()
+            .name("test")
+            .keypair(c.keypair.clone())
+            .bind(c.addr().into())
+            .parties([(a.key, a.addr().into()), (c.key, c.addr().into())])
+            .receive_timeout(Duration::from_secs(5))
+            .retry_delays(vec![1])
+            .max_retry_delay(Duration::from_secs(1))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    // C connects to A (~0–1 s), handshake succeeds, A replies with
+    // backoff(60 s). C's connect loop sleeps instead of retrying.
+    sleep(SETTLE).await;
+
+    // C queues a message for A but has no peer (connect is sleeping the
+    // backoff), so the message cannot be delivered.
+    net_c.unicast(Slot::MIN, a.key, b"hello".to_vec()).unwrap();
+
+    assert!(
+        timeout(Duration::from_secs(5), net_a.receive())
+            .await
+            .is_err(),
+        "message arrived despite backoff — peer should not have reconnected yet"
+    );
+}
+
 /// Updating a party's address via `add_peers` reconnects to the new address
 /// and preserves the peer's retry state (messages queued before the update
 /// are still delivered after reconnecting).
