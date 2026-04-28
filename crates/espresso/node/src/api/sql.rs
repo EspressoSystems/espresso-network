@@ -491,7 +491,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
     ///
     /// For V5+ (epoch rewards), the reward tree is only stored at epoch boundaries.
     /// We resolve to the nearest epoch boundary to load the tree, verify it's V5+
-    /// (for V4→V5 upgrades), and store the generated proofs at `finalized_hotshot_height`.
+    /// (for V4→V5 upgrades), and store the generated proofs at the same boundary height.
     /// For V4 (per-block rewards), the tree exists at every block height.
     fn persist_reward_proofs(
         &self,
@@ -528,13 +528,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 }
             };
 
-            if self.proof_exists(finalized_hotshot_height).await {
-                return Ok(());
-            }
-
             // Resolve which height to load the reward tree from.
             // V4: tree exists at every height. V5+: only at epoch boundaries.
             let mut tree_height = finalized_hotshot_height;
+            let mut proof_height = finalized_hotshot_height;
             if version >= EPOCH_REWARD_VERSION {
                 let epoch_height = node_state
                     .epoch_height
@@ -558,6 +555,11 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                         return Ok(());
                     }
                 }
+                proof_height = tree_height;
+            }
+
+            if self.proof_exists(proof_height).await {
+                return Ok(());
             }
 
             let permitted_tree = match self.load_reward_merkle_tree_v2(tree_height).await {
@@ -586,11 +588,8 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     ))
                 });
 
-            if let Err(err) = self.persist_proofs(finalized_hotshot_height, iter).await {
-                tracing::warn!(
-                    finalized_hotshot_height,
-                    "failed to persist proofs: {err:#}"
-                );
+            if let Err(err) = self.persist_proofs(proof_height, iter).await {
+                tracing::warn!(proof_height, "failed to persist proofs: {err:#}");
             }
 
             Ok(())
