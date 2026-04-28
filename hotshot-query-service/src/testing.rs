@@ -14,6 +14,8 @@
 use std::time::Duration;
 
 pub mod consensus;
+#[cfg(feature = "sql-data-source")]
+pub mod migration;
 pub mod mocks;
 
 pub async fn sleep(dur: Duration) {
