@@ -827,6 +827,35 @@ pub mod data_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Get block merkle path proof
+        pub async fn get_block_merkle_path(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                ::serialization_api::v2::GetBlockMerklePathRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<::serialization_api::v2::BlockMerklePathResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/espresso.api.v2.DataService/GetBlockMerklePath",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("espresso.api.v2.DataService", "GetBlockMerklePath"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -858,6 +887,14 @@ pub mod data_service_server {
             >,
         ) -> std::result::Result<
             tonic::Response<::serialization_api::v2::IncorrectEncodingProofResponse>,
+            tonic::Status,
+        >;
+        /// Get block merkle path proof
+        async fn get_block_merkle_path(
+            &self,
+            request: tonic::Request<::serialization_api::v2::GetBlockMerklePathRequest>,
+        ) -> std::result::Result<
+            tonic::Response<::serialization_api::v2::BlockMerklePathResponse>,
             tonic::Status,
         >;
     }
@@ -1024,6 +1061,55 @@ pub mod data_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetIncorrectEncodingProofSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/espresso.api.v2.DataService/GetBlockMerklePath" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBlockMerklePathSvc<T: DataService>(pub Arc<T>);
+                    impl<
+                        T: DataService,
+                    > tonic::server::UnaryService<
+                        ::serialization_api::v2::GetBlockMerklePathRequest,
+                    > for GetBlockMerklePathSvc<T> {
+                        type Response = ::serialization_api::v2::BlockMerklePathResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                ::serialization_api::v2::GetBlockMerklePathRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DataService>::get_block_merkle_path(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBlockMerklePathSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -102,6 +102,22 @@ pub mod v1 {
     /// Get light client state certificate (V2)
     /// Path: GET /v1/availability/state-cert-v2/{epoch}
     pub const STATE_CERT_V2_ROUTE: &str = "/v1/availability/state-cert-v2/{epoch}";
+
+    //=========================================================================
+    // Block-State API Routes
+    //=========================================================================
+
+    /// Get block merkle path proof by snapshot height
+    /// Path: GET /v1/block-state/{height}/{key}
+    pub const BLOCK_MERKLE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/block-state/{height}/{key}";
+
+    /// Get block merkle path proof by snapshot commitment
+    /// Path: GET /v1/block-state/commit/{commit}/{key}
+    pub const BLOCK_MERKLE_PATH_BY_COMMIT_ROUTE: &str = "/v1/block-state/commit/{commit}/{key}";
+
+    /// Get latest block height for which merklized state is available
+    /// Path: GET /v1/block-state/block-height
+    pub const BLOCK_MERKLE_HEIGHT_ROUTE: &str = "/v1/block-state/block-height";
 }
 
 //=============================================================================
@@ -187,5 +203,23 @@ pub mod v2 {
         grpc: "/espresso.api.v2.ConsensusService/GetStakeTable",
         description: "Get stake table for an epoch.",
         tag: "Consensus",
+    };
+
+    pub const BLOCK_MERKLE_PATH_ROUTE: Route = Route {
+        http: "/v2/data/finalized/block-proof",
+        grpc: "/espresso.api.v2.DataService/GetBlockMerklePath",
+        description: "Get merkle proof for a block commitment. Supply either `snapshot_height` \
+                      or `snapshot_commit` to identify the tree snapshot, plus `block_height` \
+                      (block index being proven). Returns a JSON-serialized MerkleProof.",
+        tag: "Data",
+    };
+
+    pub const BLOCK_MERKLE_HEIGHT_ROUTE: Route = Route {
+        http: "/v2/diagnostics/state-storage-loop/block-height",
+        grpc: "/espresso.api.v2.DataService/GetBlockMerkleHeight",
+        description: "Latest block height processed by the state storage loop. Updated once per \
+                      finalized leaf after the block merkle tree nodes are committed to storage. \
+                      Lags behind chain tip since state storage runs asynchronously.",
+        tag: "Diagnostics",
     };
 }

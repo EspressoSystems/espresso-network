@@ -111,6 +111,35 @@ message IncorrectEncodingProofResponse {
 }
 
 //=============================================================================
+// Block Merkle State
+//=============================================================================
+
+// Request to get a block merkle path proof
+// Either specify 'snapshot_height' or 'snapshot_commit' to identify the tree snapshot
+message GetBlockMerklePathRequest {
+  // Block height being proven (index into the merkle tree)
+  uint64 block_height = 1;
+
+  // Snapshot by block height
+  optional uint64 snapshot_height = 2;
+
+  // Snapshot by commitment (TaggedBase64 encoded)
+  optional string snapshot_commit = 3;
+}
+
+// Block merkle path response
+message BlockMerklePathResponse {
+  // JSON-serialized MerkleProof<Commitment<Header>, u64, Sha3Node, 3>
+  string proof = 1;
+}
+
+// Block merkle height response
+message BlockMerkleHeightResponse {
+  // Latest block height for which merklized state is available
+  uint64 height = 1;
+}
+
+//=============================================================================
 // gRPC Service Definition
 //=============================================================================
 
@@ -121,4 +150,7 @@ service DataService {
 
   // Get incorrect encoding proof for a block
   rpc GetIncorrectEncodingProof(GetIncorrectEncodingProofRequest) returns (IncorrectEncodingProofResponse);
+
+  // Get block merkle path proof
+  rpc GetBlockMerklePath(GetBlockMerklePathRequest) returns (BlockMerklePathResponse);
 }
