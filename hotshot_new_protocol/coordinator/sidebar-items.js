@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["CoordinatorOutput"],"mod":["coordinator_builder","coordinator_maker","error","timer"],"struct":["Coordinator","CoordinatorBuilder","CoordinatorMaker"]};
+window.SIDEBAR_ITEMS = {"enum":["CoordinatorOutput"],"mod":["coordinator_builder","coordinator_maker","error","timer"],"struct":["Coordinator","CoordinatorBuilder","CoordinatorMaker","PendingProposalFetches","ProposalFetchKey"],"type":["ProposalFetchResponseSender"]};
