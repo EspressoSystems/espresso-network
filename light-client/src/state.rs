@@ -9,6 +9,7 @@ use espresso_types::{
     DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState,
     Transaction, select_active_validator_set,
 };
+use futures::future::try_join;
 use hotshot_query_service_types::{
     HeightIndexed,
     availability::{BlockQueryData, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData},
@@ -387,6 +388,22 @@ where
         Ok(self.fetch_block_and_vid_common_for_header(header).await?.0)
     }
 
+    /// Fetch and verify the VID common data for the requested block.
+    pub async fn fetch_vid_common(
+        &self,
+        id: BlockId<SeqTypes>,
+    ) -> Result<VidCommonQueryData<SeqTypes>> {
+        Ok(self.fetch_block_and_vid_common(id).await?.1)
+    }
+
+    /// Fetch and verify the VID common data for the requested header.
+    pub async fn fetch_vid_common_for_header(
+        &self,
+        header: Header,
+    ) -> Result<VidCommonQueryData<SeqTypes>> {
+        Ok(self.fetch_block_and_vid_common_for_header(header).await?.1)
+    }
+
     /// Fetch and verify the requested payload and the associated VID common data.
     pub async fn fetch_block_and_vid_common(
         &self,
@@ -407,6 +424,60 @@ where
             BlockQueryData::new(header.clone(), payload),
             VidCommonQueryData::new(header, vid_common),
         ))
+    }
+
+    /// Fetch and verify the blocks in the height range `[start, end)`.
+    pub async fn fetch_blocks_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<BlockQueryData<SeqTypes>>> {
+        let res = self
+            .fetch_blocks_and_vid_common_in_range(start, end)
+            .await?;
+        Ok(res.into_iter().map(|(block, _)| block).collect())
+    }
+
+    /// Fetch and verify the VID common data for blocks in the height range `[start, end)`.
+    pub async fn fetch_vid_common_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<VidCommonQueryData<SeqTypes>>> {
+        let res = self
+            .fetch_blocks_and_vid_common_in_range(start, end)
+            .await?;
+        Ok(res.into_iter().map(|(_, vid)| vid).collect())
+    }
+
+    /// Fetch and verify the blocks and VID common data in the height range `[start, end)`.
+    pub async fn fetch_blocks_and_vid_common_in_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<(BlockQueryData<SeqTypes>, VidCommonQueryData<SeqTypes>)>> {
+        let (headers, proofs) = try_join(
+            self.fetch_headers_in_range(start, end),
+            self.server
+                .payload_proofs_in_range(start as u64, end as u64),
+        )
+        .await?;
+        ensure!(
+            headers.len() == proofs.len(),
+            "server returned wrong number of payload proofs for range {start}..{end} ({})",
+            proofs.len(),
+        );
+        headers
+            .into_iter()
+            .zip(proofs)
+            .map(|(header, proof)| {
+                let (payload, vid_common) = proof.verify_with_vid_common(&header)?;
+                Ok((
+                    BlockQueryData::new(header.clone(), payload),
+                    VidCommonQueryData::new(header, vid_common),
+                ))
+            })
+            .collect()
     }
 
     /// Fetch and verify the transactions in the given namespace of the requested block.
@@ -700,6 +771,7 @@ fn header_matches_id(header: &Header, id: BlockId<SeqTypes>) -> bool {
 mod test {
     use espresso_types::NsIndex;
     use hotshot_query_service_types::availability::TransactionIndex;
+    use itertools::izip;
     use pretty_assertions::assert_eq;
     use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
@@ -1153,6 +1225,7 @@ mod test {
             client.genesis().await,
         );
 
+        let mut hashes = vec![];
         for i in 1..10 {
             let payload = client.payload(i).await;
             let res = lc.fetch_payload(BlockId::Number(i)).await.unwrap();
@@ -1160,6 +1233,19 @@ mod test {
             assert_eq!(res.height(), i as u64);
             assert_eq!(res.block_hash(), client.leaf(i).await.block_hash());
             assert_eq!(res.hash(), client.leaf(i).await.payload_hash());
+            hashes.push(res.hash());
+        }
+
+        // Test ranged fetching.
+        let blocks = lc.fetch_blocks_in_range(1, 10).await.unwrap();
+        let vid = lc.fetch_vid_common_in_range(1, 10).await.unwrap();
+        assert_eq!(blocks.len(), 9);
+        assert_eq!(vid.len(), 9);
+        for (i, (hash, block, vid)) in izip!(hashes, blocks, vid).enumerate() {
+            assert_eq!(block.height() as usize, i + 1);
+            assert_eq!(vid.height() as usize, i + 1);
+            assert_eq!(block.payload_hash(), hash);
+            assert_eq!(vid.payload_hash(), hash);
         }
     }
 

@@ -448,12 +448,6 @@ where
         self.maybe_fail_read(FailableAction::GetTransaction).await?;
         self.inner.get_block_with_transaction(hash).await
     }
-
-    async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
-        self.maybe_fail_read(FailableAction::FirstAvailableLeaf)
-            .await?;
-        self.inner.first_available_leaf(from).await
-    }
 }
 
 impl<Types, T> UpdateAvailabilityStorage<Types> for Transaction<T>

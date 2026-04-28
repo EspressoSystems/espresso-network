@@ -372,17 +372,6 @@ where
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
         Ok(BlockQueryData::from_row(&row)?)
     }
-
-    async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
-        let row = query(&format!(
-            "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE height >= $1 ORDER BY height ASC LIMIT 1"
-        ))
-        .bind(from as i64)
-        .fetch_one(self.as_mut())
-        .await?;
-        let leaf = LeafQueryData::from_row(&row)?;
-        Ok(leaf)
-    }
 }
 
 impl<Mode> Transaction<Mode>

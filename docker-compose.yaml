@@ -408,7 +408,7 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_1_API_PORT:$ESPRESSO_NODE_1_API_PORT"
-    command: espresso-node -- storage-sql -- http -- query -- explorer
+    command: espresso-node -- storage-sql -- http -- config -- query -- explorer
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
@@ -470,7 +470,7 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_2_API_PORT:$ESPRESSO_NODE_2_API_PORT"
-    command: espresso-node -- http
+    command: espresso-node -- http -- config
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
@@ -524,7 +524,7 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_3_API_PORT:$ESPRESSO_NODE_3_API_PORT"
-    command: espresso-node -- http -- query -- storage-fs
+    command: espresso-node -- http -- config -- query -- storage-fs
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
@@ -578,9 +578,10 @@ services:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
       - "$ESPRESSO_NODE_4_API_PORT:$ESPRESSO_NODE_4_API_PORT"
-    command: espresso-node -- http -- query -- storage-fs
+    command: espresso-node -- http -- config -- query -- storage-fs
     environment:
       - ESPRESSO_NODE_EMBEDDED_DB=true
+      - LIGHT_CLIENT_DB_PATH=/store/lc
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
