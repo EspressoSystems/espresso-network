@@ -811,7 +811,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         self.timeout_one_honest_collector.gc(view, epoch);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
-        self.storage.gc(view);
         self.pending_proposal_fetches.gc(view);
         self.storage.gc(view);
     }

@@ -495,6 +495,7 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
+        self.last_decided_view = self.last_decided_view.max(view);
     }
 
     #[instrument(level = "debug", skip_all)]
