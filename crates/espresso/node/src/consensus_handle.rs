@@ -129,7 +129,7 @@ pub struct ConsensusHandle<T: NodeType, I: hotshot::traits::NodeImplementation<T
 impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, I> {
     pub fn new<CN: ConnectedNetwork<T::SignatureKey>>(
         legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-        coordinator: Coordinator<T, CN>,
+        coordinator: Coordinator<T, CN, I::Storage>,
         epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
@@ -447,8 +447,12 @@ impl<T: NodeType, I: hotshot::traits::NodeImplementation<T>> ConsensusHandle<T, 
     }
 }
 
-async fn run_coordinator<T: NodeType, CN: ConnectedNetwork<T::SignatureKey>>(
-    mut coordinator: Coordinator<T, CN>,
+async fn run_coordinator<
+    T: NodeType,
+    CN: ConnectedNetwork<T::SignatureKey>,
+    S: hotshot_types::traits::storage::Storage<T>,
+>(
+    mut coordinator: Coordinator<T, CN, S>,
     event_sender: async_broadcast::Sender<CoordinatorEvent<T>>,
 ) {
     loop {
