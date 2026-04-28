@@ -235,21 +235,19 @@ impl VidScheme for AvidmGf2Scheme {
         let shares: Vec<_> = ranges
             .into_par_iter()
             .zip(payloads.into_par_iter())
-            .map(|(range, payload)| AvidmGf2Share {
+            .map(|(range, payload)| -> VidResult<AvidmGf2Share> {
                 // TODO(Chengyu): switch to batch proof generation
-                mt_proofs: range
+                let mt_proofs = range
                     .clone()
-                    .map(|k| {
-                        mt.lookup(k as u64)
-                            .expect_ok()
-                            .expect("MT lookup shouldn't fail")
-                            .1
-                    })
-                    .collect::<Vec<_>>(),
-                range,
-                payload,
+                    .map(|k| Ok(mt.lookup(k as u64).expect_ok()?.1))
+                    .collect::<VidResult<Vec<_>>>()?;
+                Ok(AvidmGf2Share {
+                    range,
+                    payload,
+                    mt_proofs,
+                })
             })
-            .collect();
+            .collect::<VidResult<Vec<_>>>()?;
         Ok((commit, shares))
     }
 

@@ -138,12 +138,7 @@ impl NsAvidmGf2Scheme {
             })
             .collect::<VidResult<Vec<_>>>()?;
 
-        let mut ns_commits = Vec::with_capacity(per_ns.len());
-        let mut disperses = Vec::with_capacity(per_ns.len());
-        for (c, s) in per_ns {
-            ns_commits.push(c);
-            disperses.push(s);
-        }
+        let (ns_commits, disperses): (Vec<_>, Vec<_>) = per_ns.into_iter().unzip();
 
         let common = NsAvidmGf2Common {
             param: param.clone(),

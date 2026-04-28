@@ -305,8 +305,8 @@ fn recover_one(
 
     let t4 = Instant::now();
     let mut recovered: Vec<u8> = Vec::with_capacity(orig * shard_bytes);
-    for i in 0..orig {
-        let shard: &[u8] = match input_orig[i] {
+    for (i, shard) in input_orig.iter().enumerate().take(orig) {
+        let shard: &[u8] = match shard {
             Some(data) => data,
             None => result.restored_original(i).unwrap(),
         };
