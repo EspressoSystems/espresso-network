@@ -313,7 +313,9 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
                     }
                 }
                 Some(request) = self.client.next_request() => {
-                    self.handle_request(request).await?;
+                    if let Err(err) = self.handle_request(request).await {
+                        tracing::error!(%err, "error while handling client request");
+                    }
                 }
                 Some(tcert) = self.timeout_collector.next() => {
                     return Ok(ConsensusInput::TimeoutCertificate(tcert))
@@ -530,11 +532,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>> Coordinator<T, N> {
 
                     if let Err(err) = self.network.unicast(message.sender, response).await {
                         let err = CoordinatorError::from(err).context("proposal response");
-                        if err.severity == Severity::Critical {
-                            tracing::error!(%err, "critical network error while sending proposal response");
-                        } else {
-                            warn!(%err, "network error while sending proposal response");
-                        }
+                        warn!(%err, "network error while sending proposal response");
                     }
                 }
                 None
