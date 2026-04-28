@@ -215,6 +215,7 @@ impl VidScheme for AvidmGf2Scheme {
         let commit = AvidmGf2Commit {
             commit: mt.commitment(),
         };
+
         let ranges: Vec<_> = distribution
             .iter()
             .scan(0usize, |sum, w| {
@@ -223,31 +224,40 @@ impl VidScheme for AvidmGf2Scheme {
                 Some(prefix_sum..*sum)
             })
             .collect();
-        // Ranges partition `shares` in order. Consume the owned shares via a
-        // single iterator instead of `shares[range].to_vec()`, which
-        // heap-clones every Vec<u8> payload and is a large memcpy bill at
-        // high num_ns × total_weights.
+        // Ranges partition `shares` and `proofs` in order. Consume both via
+        // owning iterators instead of `shares[range].to_vec()` /
+        // `proofs[range].to_vec()`, which would heap-clone every Vec<u8>
+        // payload and every per-leaf proof at high num_ns × total_weights.
+        //
+        // `mt.collect_leaves_with_proof()` returns leaves in ascending
+        // position order (DFS over children 0..ARITY), so we can drain the
+        // iterator directly without an indexed placeholder Vec.
         let mut shares_iter = shares.into_iter();
         let payloads: Vec<Vec<Vec<u8>>> = ranges
             .iter()
             .map(|range| shares_iter.by_ref().take(range.len()).collect())
             .collect();
+        let mut proofs_iter = mt
+            .collect_leaves_with_proof()
+            .into_iter()
+            .map(|(_, _, proof)| proof);
+        let proof_groups: Vec<Vec<MerkleProof>> = ranges
+            .iter()
+            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
+            .collect();
+        // The map body is just a struct construction over already-prepared
+        // owned components — sub-µs per item, smaller than rayon's
+        // per-item scheduling overhead. Stay sequential.
         let shares: Vec<_> = ranges
-            .into_par_iter()
-            .zip(payloads.into_par_iter())
-            .map(|(range, payload)| -> VidResult<AvidmGf2Share> {
-                // TODO(Chengyu): switch to batch proof generation
-                let mt_proofs = range
-                    .clone()
-                    .map(|k| Ok(mt.lookup(k as u64).expect_ok()?.1))
-                    .collect::<VidResult<Vec<_>>>()?;
-                Ok(AvidmGf2Share {
-                    range,
-                    payload,
-                    mt_proofs,
-                })
+            .into_iter()
+            .zip(payloads)
+            .zip(proof_groups)
+            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
+                range,
+                payload,
+                mt_proofs,
             })
-            .collect::<VidResult<Vec<_>>>()?;
+            .collect();
         Ok((commit, shares))
     }
 

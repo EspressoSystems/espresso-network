@@ -2381,7 +2381,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -3286,7 +3286,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -4046,7 +4046,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -7519,8 +7519,8 @@ dependencies = [
 
 [[package]]
 name = "jf-merkle-tree"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.4.0#c6f3114507eb9fed48f7b2cbceab988d48764837"
+version = "0.4.2"
+source = "git+https://github.com/EspressoSystems/jellyfish?branch=cl%2Fmtiter#af8ae34908f261dece3c09d25ade3912e6c2d60f"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -7529,7 +7529,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
- "derivative",
+ "derive-where",
  "digest 0.10.7",
  "displaydoc",
  "hashbrown 0.14.5",
@@ -10201,7 +10201,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -12153,7 +12153,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.5.0",
+ "heck 0.4.1",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

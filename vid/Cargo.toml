@@ -54,5 +54,9 @@ harness = false
 name = "avidm_gf2_breakdown"
 harness = false
 
+[[bench]]
+name = "big_mt"
+harness = false
+
 [lints]
 workspace = true

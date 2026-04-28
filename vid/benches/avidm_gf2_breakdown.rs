@@ -17,6 +17,7 @@ use jf_merkle_tree::{
     MerkleTreeScheme,
     append_only::MerkleTree as JfMerkleTree,
     hasher::{GenericHasherMerkleTree, HasherNode},
+    prelude::MerkleTreeProof,
 };
 use p3_maybe_rayon::prelude::*;
 use rand::{RngCore, SeedableRng, rngs::SmallRng};
@@ -28,11 +29,14 @@ use vid::utils::blake3::{Blake3DigestAlgorithm, Blake3Node};
 trait MerkleBackend: 'static {
     type Mt: Send + Sync;
     type Node: Copy + Send + Sync + 'static;
-    type Proof: Send + 'static;
+    type Proof: Clone + Send + 'static;
 
     fn hash_leaf(data: &[u8]) -> Self::Node;
     fn from_leaves(leaves: &[Self::Node]) -> Self::Mt;
-    fn lookup(mt: &Self::Mt, k: u64) -> Self::Proof;
+    fn empty_proof() -> Self::Proof;
+    /// Collect every leaf's proof in one tree traversal, indexed by leaf
+    /// position. Mirrors the production path in `AvidmGf2Scheme::disperse`.
+    fn collect_proofs(mt: &Self::Mt, total_weights: usize) -> Vec<Self::Proof>;
     fn commitment(mt: &Self::Mt) -> Self::Node;
 }
 
@@ -49,8 +53,15 @@ impl MerkleBackend for KeccakBackend {
     fn from_leaves(leaves: &[Self::Node]) -> Self::Mt {
         Self::Mt::from_elems(None, leaves).unwrap()
     }
-    fn lookup(mt: &Self::Mt, k: u64) -> Self::Proof {
-        mt.lookup(k).expect_ok().unwrap().1
+    fn empty_proof() -> Self::Proof {
+        MerkleTreeProof(Vec::new())
+    }
+    fn collect_proofs(mt: &Self::Mt, total_weights: usize) -> Vec<Self::Proof> {
+        let mut proofs = vec![Self::empty_proof(); total_weights];
+        for (i, _, proof) in mt.collect_leaves_with_proof() {
+            proofs[*i as usize] = proof;
+        }
+        proofs
     }
     fn commitment(mt: &Self::Mt) -> Self::Node {
         mt.commitment()
@@ -70,8 +81,15 @@ impl MerkleBackend for Blake3Backend {
     fn from_leaves(leaves: &[Self::Node]) -> Self::Mt {
         Self::Mt::from_elems(None, leaves).unwrap()
     }
-    fn lookup(mt: &Self::Mt, k: u64) -> Self::Proof {
-        mt.lookup(k).expect_ok().unwrap().1
+    fn empty_proof() -> Self::Proof {
+        MerkleTreeProof(Vec::new())
+    }
+    fn collect_proofs(mt: &Self::Mt, total_weights: usize) -> Vec<Self::Proof> {
+        let mut proofs = vec![Self::empty_proof(); total_weights];
+        for (i, _, proof) in mt.collect_leaves_with_proof() {
+            proofs[*i as usize] = proof;
+        }
+        proofs
     }
     fn commitment(mt: &Self::Mt) -> Self::Node {
         mt.commitment()
@@ -183,20 +201,27 @@ fn raw_disperse<B: MerkleBackend>(
         .collect();
 
     // Lever D: consume owned shares via an iterator instead of cloning each
-    // per-recipient Vec<u8>. Ranges partition `shares` in order.
+    // per-recipient Vec<u8>. Ranges partition `shares` in order. Same drain
+    // pattern for proofs — `B::collect_proofs` walks the tree once instead
+    // of `range.len()` separate `mt.lookup(k)` calls per recipient.
     let t4 = Instant::now();
+    let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
+    let proofs = B::collect_proofs(&mt, total_weights);
     let mut shares_iter = shares.into_iter();
     let payloads: Vec<Vec<Vec<u8>>> = ranges
         .iter()
         .map(|range| shares_iter.by_ref().take(range.len()).collect())
         .collect();
+    let mut proofs_iter = proofs.into_iter();
+    let proof_groups: Vec<Vec<B::Proof>> = ranges
+        .iter()
+        .map(|range| proofs_iter.by_ref().take(range.len()).collect())
+        .collect();
     let out: Vec<RawShare> = ranges
-        .into_par_iter()
-        .zip(payloads.into_par_iter())
-        .map(|(range, payload)| {
-            let _proofs: Vec<B::Proof> = range.clone().map(|k| B::lookup(&mt, k as u64)).collect();
-            RawShare { range, payload }
-        })
+        .into_iter()
+        .zip(payloads)
+        .zip(proof_groups)
+        .map(|((range, payload), _mt_proofs)| RawShare { range, payload })
         .collect();
     t.share_assemble += t4.elapsed();
     std::hint::black_box(&out);
@@ -482,6 +507,16 @@ fn run<B: MerkleBackend>(
 }
 
 fn main() {
+    // `cargo nextest run --benches` (and `cargo test --benches`) invokes
+    // each bench binary with libtest-style flags for test discovery
+    // (`--list`, `--ignored`, etc.). This bench has no tests; respond
+    // cleanly so the outer test runner doesn't try to parse the bench
+    // output. `cargo bench` doesn't pass these flags, so the real bench
+    // runs as usual.
+    if std::env::args().any(|a| matches!(a.as_str(), "--list" | "--ignored" | "--exact")) {
+        return;
+    }
+
     const RECOVERY_THRESHOLD: usize = 340;
     const TOTAL_WEIGHTS: usize = 1000;
     const PAYLOAD_MB: usize = 10;
