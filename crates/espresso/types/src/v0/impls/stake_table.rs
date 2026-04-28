@@ -61,6 +61,7 @@ use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
+use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 #[cfg(any(test, feature = "testing"))]
@@ -789,8 +790,9 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 /// Filters out unauthenticated validator candidates, those without stake, and selects
 /// the top [`MAX_VALIDATORS`] staked validators.
 /// Returns a new AuthenticatedValidatorMap containing only the selected validators.
-pub fn select_active_validator_set(
+pub(crate) fn select_active_validator_set(
     candidates: &RegisteredValidatorMap,
+    protocol_version: Version,
 ) -> Result<AuthenticatedValidatorMap, StakeTableError> {
     let total_candidates = candidates.len();
 
@@ -809,6 +811,15 @@ pub fn select_active_validator_set(
                     }
                     if cv.stake.is_zero() {
                         tracing::info!("Validator {address:?} does not have any stake");
+                        return None;
+                    }
+                    if !cv.is_eligible(protocol_version) {
+                        tracing::debug!(
+                            ?address,
+                            has_x25519 = cv.x25519_key.is_some(),
+                            has_p2p = cv.p2p_addr.is_some(),
+                            "Validator not eligible at protocol version {protocol_version}"
+                        );
                         return None;
                     }
                     Some((*address, cv))
@@ -871,25 +882,62 @@ pub fn select_active_validator_set(
 
 #[derive(Clone, Debug)]
 pub struct ValidatorSet {
-    pub all_validators: RegisteredValidatorMap,
-    pub active_validators: AuthenticatedValidatorMap,
-    pub stake_table_hash: Option<StakeTableHash>,
+    pub(crate) all_validators: RegisteredValidatorMap,
+    pub(crate) active_validators: AuthenticatedValidatorMap,
+    pub(crate) stake_table_hash: Option<StakeTableHash>,
+    /// The protocol version at which `active_validators` was selected.
+    pub(crate) protocol_version: Version,
 }
 
-/// Extract the active validator set from the L1 stake table events.
-pub(crate) fn validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
-    events: I,
-) -> Result<ValidatorSet, StakeTableError> {
-    let (all_validators, stake_table_hash) = validators_from_l1_events(events)?;
-    let active_validators = select_active_validator_set(&all_validators)?;
+impl ValidatorSet {
+    /// Derive a validator set from a stake-table state at a given protocol version.
+    pub fn from_state(
+        state: &StakeTableState,
+        protocol_version: Version,
+    ) -> Result<Self, StakeTableError> {
+        let active_validators = select_active_validator_set(state.validators(), protocol_version)?;
+        Ok(Self {
+            all_validators: state.validators().clone(),
+            active_validators,
+            stake_table_hash: Some(state.commit()),
+            protocol_version,
+        })
+    }
 
-    let validator_set = ValidatorSet {
-        all_validators,
-        active_validators,
-        stake_table_hash: Some(stake_table_hash),
-    };
+    /// Derive a validator set directly from L1 events.
+    pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+        events: I,
+        protocol_version: Version,
+    ) -> Result<Self, StakeTableError> {
+        let (all_validators, stake_table_hash) = validators_from_l1_events(events)?;
+        let active_validators = select_active_validator_set(&all_validators, protocol_version)?;
+        Ok(Self {
+            all_validators,
+            active_validators,
+            stake_table_hash: Some(stake_table_hash),
+            protocol_version,
+        })
+    }
 
-    Ok(validator_set)
+    /// All registered validators known when this set was derived.
+    pub fn all_validators(&self) -> &RegisteredValidatorMap {
+        &self.all_validators
+    }
+
+    /// Validators selected to participate in consensus at `protocol_version`.
+    pub fn active_validators(&self) -> &AuthenticatedValidatorMap {
+        &self.active_validators
+    }
+
+    /// Commitment of the underlying stake-table state, if known.
+    pub fn stake_table_hash(&self) -> Option<StakeTableHash> {
+        self.stake_table_hash
+    }
+
+    /// Protocol version at which the active set was selected.
+    pub fn protocol_version(&self) -> Version {
+        self.protocol_version
+    }
 }
 
 impl std::fmt::Debug for StakeTableEvent {
@@ -1522,7 +1570,11 @@ impl Fetcher {
             },
         };
 
-        match validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
+        // Selection runs at the epoch root header's protocol version: that header's
+        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
+        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
+        // than each event's wall-clock version.
+        match ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), header.version()) {
             Ok(res) => Ok(res),
             Err(e) => {
                 bail!("failed to construct stake table {e:?}");
@@ -2984,6 +3036,7 @@ mod tests {
     use hotshot_types::signature_key::BLSKeyPair;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
+    use versions::{CLIQUENET_VERSION, DA_UPGRADE_VERSION, VID2_UPGRADE_VERSION};
 
     use super::*;
     use crate::{L1ClientOptions, v0::impls::testing::*};
@@ -3030,7 +3083,7 @@ mod tests {
         ]
         .to_vec();
 
-        let validators_set = validator_set_from_l1_events(events.iter().cloned())?;
+        let validators_set = ValidatorSet::from_l1_events(events.iter().cloned(), EPOCH_VERSION)?;
         let st = validators_set.active_validators;
         let st_val_1 = st.get(&val_1.account).unwrap();
         // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
@@ -3047,7 +3100,7 @@ mod tests {
 
         events.push(ValidatorExit::from(&val_1).into());
 
-        let validator_set = validator_set_from_l1_events(events.iter().cloned())?;
+        let validator_set = ValidatorSet::from_l1_events(events.iter().cloned(), EPOCH_VERSION)?;
         let st = validator_set.active_validators;
         // The first validator should have been removed
         assert_eq!(st.get(&val_1.account), None);
@@ -3062,7 +3115,7 @@ mod tests {
         events.push(ValidatorExit::from(&val_2).into());
 
         // This should fail because the validator has exited and no longer exists in the stake table.
-        assert!(validator_set_from_l1_events(events.iter().cloned()).is_err());
+        assert!(ValidatorSet::from_l1_events(events.iter().cloned(), EPOCH_VERSION).is_err());
 
         Ok(())
     }
@@ -3139,8 +3192,8 @@ mod tests {
 
         let minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
 
-        let selected_validators =
-            select_active_validator_set(&candidates).expect("Failed to select validators");
+        let selected_validators = select_active_validator_set(&candidates, EPOCH_VERSION)
+            .expect("Failed to select validators");
         assert!(
             selected_validators.len() <= MAX_VALIDATORS,
             "validators len is {}, expected at most {MAX_VALIDATORS}",
@@ -3189,14 +3242,20 @@ mod tests {
 
         // first ensure that wan build a valid stake table
         assert!(
-            validator_set_from_l1_events(vec![register.clone(), delegate.clone()].into_iter())
-                .is_ok()
+            ValidatorSet::from_l1_events(
+                vec![register.clone(), delegate.clone()].into_iter(),
+                EPOCH_VERSION,
+            )
+            .is_ok()
         );
 
         // add the invalid key update (re-using the same consensus keys)
         let key_update = ConsensusKeysUpdated::from(&val).into();
-        let err = validator_set_from_l1_events(vec![register, delegate, key_update].into_iter())
-            .unwrap_err();
+        let err = ValidatorSet::from_l1_events(
+            vec![register, delegate, key_update].into_iter(),
+            EPOCH_VERSION,
+        )
+        .unwrap_err();
 
         let bls: BLSPubKey = val.bls_vk.into();
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
@@ -3351,7 +3410,7 @@ mod tests {
         });
         state.apply_event(event).unwrap().unwrap();
 
-        let active = select_active_validator_set(state.validators());
+        let active = select_active_validator_set(state.validators(), EPOCH_VERSION);
         match active {
             Err(_) => {}, // No validators is valid - means the unauthenticated one was filtered
             Ok(map) => {
@@ -3842,7 +3901,7 @@ mod tests {
 
         // Reconstruct stake table from events
         let reconstructed_stake_table =
-            validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+            ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
                 .unwrap()
                 .active_validators;
 
@@ -4217,7 +4276,7 @@ mod tests {
             },
         }
 
-        let active = select_active_validator_set(state.validators());
+        let active = select_active_validator_set(state.validators(), EPOCH_VERSION);
         match active {
             Err(StakeTableError::NoValidValidators) => {},
             Err(e) => bail!("Unexpected error: {e}"),
@@ -4512,6 +4571,193 @@ mod tests {
             .insert(x25519::PublicKey::try_from([7u8; 32].as_slice()).unwrap());
 
         assert_ne!(state_without.commit(), state_with.commit());
+        Ok(())
+    }
+
+    // --- CLIQUENET_VERSION selection filter tests ---
+
+    /// Construct a `RegisteredValidator` with both x25519_key and p2p_addr populated.
+    fn complete_mock_validator() -> RegisteredValidator<BLSPubKey> {
+        let mut v = RegisteredValidator::<BLSPubKey>::mock();
+        v.x25519_key = Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
+        v.p2p_addr = Some("127.0.0.1:9000".parse().unwrap());
+        v
+    }
+
+    /// Pre-upgrade: validators with missing x25519/p2p fields must still be selected.
+    #[test]
+    fn test_select_pre_upgrade_includes_validators_missing_network_info() {
+        let mut map = RegisteredValidatorMap::new();
+
+        let incomplete = RegisteredValidator::<BLSPubKey>::mock();
+        assert!(incomplete.x25519_key.is_none());
+        assert!(incomplete.p2p_addr.is_none());
+        map.insert(incomplete.account, incomplete.clone());
+
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, EPOCH_VERSION).unwrap();
+        assert!(active.contains_key(&incomplete.account));
+        assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: validator missing x25519_key is filtered out.
+    #[test]
+    fn test_select_post_upgrade_excludes_missing_x25519() {
+        let mut map = RegisteredValidatorMap::new();
+
+        let mut missing_x25519 = complete_mock_validator();
+        missing_x25519.x25519_key = None;
+        map.insert(missing_x25519.account, missing_x25519.clone());
+
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        assert!(!active.contains_key(&missing_x25519.account));
+        assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: validator missing p2p_addr is filtered out.
+    #[test]
+    fn test_select_post_upgrade_excludes_missing_p2p() {
+        let mut map = RegisteredValidatorMap::new();
+
+        let mut missing_p2p = complete_mock_validator();
+        missing_p2p.p2p_addr = None;
+        map.insert(missing_p2p.account, missing_p2p.clone());
+
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        assert!(!active.contains_key(&missing_p2p.account));
+        assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: a single complete validator is kept.
+    #[test]
+    fn test_select_post_upgrade_keeps_complete() {
+        let mut map = RegisteredValidatorMap::new();
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: if all validators are incomplete, selection returns
+    /// `NoValidValidators`.
+    #[test]
+    fn test_select_post_upgrade_all_incomplete_fails() {
+        let mut map = RegisteredValidatorMap::new();
+        for _ in 0..5 {
+            let v = RegisteredValidator::<BLSPubKey>::mock();
+            map.insert(v.account, v);
+        }
+
+        let result = select_active_validator_set(&map, CLIQUENET_VERSION);
+        assert_matches!(result, Err(StakeTableError::NoValidValidators));
+    }
+
+    /// Post-upgrade: when more than MAX_VALIDATORS complete validators exist alongside
+    /// incomplete ones, only complete validators appear in the result and the count is
+    /// clamped to MAX_VALIDATORS.
+    #[test]
+    fn test_select_post_upgrade_top_n_only_complete() {
+        let mut map = RegisteredValidatorMap::new();
+        let mut complete_accounts = HashSet::new();
+        let mut incomplete_accounts = HashSet::new();
+
+        // Build MAX_VALIDATORS + 50 validators, alternating complete/incomplete. Give
+        // complete validators higher stake than incomplete ones so both the filter and
+        // the stake-based top-N truncation cleanly pick complete ones.
+        for i in 0..(MAX_VALIDATORS + 50) {
+            if i % 2 == 0 {
+                let mut v = complete_mock_validator();
+                v.stake = U256::from(1_000_000_000_u64 + i as u64);
+                complete_accounts.insert(v.account);
+                map.insert(v.account, v);
+            } else {
+                let mut v = RegisteredValidator::<BLSPubKey>::mock();
+                v.stake = U256::from(10_u64);
+                incomplete_accounts.insert(v.account);
+                map.insert(v.account, v);
+            }
+        }
+
+        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+
+        assert!(
+            active.len() <= MAX_VALIDATORS,
+            "active has {} validators, expected at most {}",
+            active.len(),
+            MAX_VALIDATORS
+        );
+        for addr in active.keys() {
+            assert!(
+                complete_accounts.contains(addr),
+                "incomplete validator {addr:?} ended up in active set"
+            );
+            assert!(!incomplete_accounts.contains(addr));
+        }
+    }
+
+    /// Verify the version boundary: the filter only kicks in at/after
+    /// `CLIQUENET_VERSION`. A validator missing the x25519 key must be retained at
+    /// every prior version and rejected at `CLIQUENET_VERSION`.
+    #[test]
+    fn test_select_version_boundary() {
+        let mut v = complete_mock_validator();
+        v.x25519_key = None;
+        let mut map = RegisteredValidatorMap::new();
+        map.insert(v.account, v.clone());
+
+        for protocol_version in [
+            EPOCH_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            DA_UPGRADE_VERSION,
+            VID2_UPGRADE_VERSION,
+        ] {
+            let active = select_active_validator_set(&map, protocol_version).unwrap();
+            assert!(
+                active.contains_key(&v.account),
+                "missing x25519 validator should be included at protocol version \
+                 {protocol_version}",
+            );
+        }
+
+        let result = select_active_validator_set(&map, CLIQUENET_VERSION);
+        assert_matches!(result, Err(StakeTableError::NoValidValidators));
+    }
+
+    /// Integration test: a RegisterV3 event with an unparsable p2p address results in
+    /// `p2p_addr: None`, which is accepted pre-upgrade and rejected post-upgrade.
+    #[test]
+    fn test_p2p_parse_fail_pre_upgrade_included_post_upgrade_excluded() -> anyhow::Result<()> {
+        let val = TestValidator::random().with_p2p_addr("host:notaport");
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+        // Delegate so the validator passes the stake/delegator checks.
+        state.apply_event(StakeTableEvent::Delegate(Delegated {
+            delegator: Address::random(),
+            validator: val.account,
+            amount: U256::from(100),
+        }))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert_eq!(registered.p2p_addr, None);
+
+        // Pre-upgrade: the validator is selected.
+        let pre = select_active_validator_set(state.validators(), EPOCH_VERSION).unwrap();
+        assert!(pre.contains_key(&val.account));
+
+        // Post-upgrade: the sole validator is filtered out, so selection fails.
+        let post = select_active_validator_set(state.validators(), CLIQUENET_VERSION);
+        assert_matches!(post, Err(StakeTableError::NoValidValidators));
+
         Ok(())
     }
 }

@@ -148,6 +148,23 @@ pub enum VersionError {
 
     #[error("bincode error: {0}")]
     Bincode(#[from] bincode::Error),
+
+    #[error("invalid version {0}, expected \"major.minor\"")]
+    Parse(String),
+}
+
+/// Parse a `Version` from its `"{major}.{minor}"` `Display` format.
+pub fn parse_version(s: &str) -> Result<Version, VersionError> {
+    let (major, minor) = s
+        .split_once('.')
+        .ok_or_else(|| VersionError::Parse(s.to_owned()))?;
+    let major = major
+        .parse()
+        .map_err(|_| VersionError::Parse(s.to_owned()))?;
+    let minor = minor
+        .parse()
+        .map_err(|_| VersionError::Parse(s.to_owned()))?;
+    Ok(Version { major, minor })
 }
 
 // `vbs::version::Version` derives serde's `Serialize` and `Deserialize` traits
@@ -191,19 +208,11 @@ impl<'de> Deserialize<'de> for Upgrade {
     where
         D: Deserializer<'de>,
     {
-        let parse = |s: &str| -> Result<Version, Box<dyn std::error::Error>> {
-            if let Some((major, minor)) = s.split_once('.') {
-                Ok(version(major.parse()?, minor.parse()?))
-            } else {
-                Err("invalid version format, expecting {major}.{minor}".into())
-            }
-        };
-
         if d.is_human_readable() {
             let us: UpgradeShadow<Cow<'de, str>> = UpgradeShadow::deserialize(d)?;
             Ok(Upgrade {
-                base: parse(&us.base).map_err(de::Error::custom)?,
-                target: parse(&us.target).map_err(de::Error::custom)?,
+                base: parse_version(&us.base).map_err(de::Error::custom)?,
+                target: parse_version(&us.target).map_err(de::Error::custom)?,
             })
         } else {
             let us: UpgradeShadow<Version> = UpgradeShadow::deserialize(d)?;
@@ -226,7 +235,10 @@ mod tests {
         version::{StaticVersion, StaticVersionType},
     };
 
-    use super::{decode, encode, version};
+    use super::{
+        CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, VersionError, decode,
+        encode, parse_version, version,
+    };
 
     /// Ensure our `encode`/`decode` matches `vbs`'s.
     fn check_encoding<T, V>(sample: &T)
@@ -285,5 +297,28 @@ mod tests {
         QuickCheck::new()
             .rng(Gen::new(4))
             .quickcheck(prop_identical_encoding as fn(_))
+    }
+
+    #[test]
+    fn parse_version_roundtrip() {
+        for v in [
+            EPOCH_VERSION,
+            CLIQUENET_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            version(0, 0),
+            version(u16::MAX, u16::MAX),
+        ] {
+            assert_eq!(parse_version(&v.to_string()).unwrap(), v);
+        }
+    }
+
+    #[test]
+    fn parse_version_errors() {
+        for s in ["", "1", "abc.1", "1.abc", "1.2.3", "."] {
+            match parse_version(s) {
+                Err(VersionError::Parse(got)) => assert_eq!(got, s),
+                other => panic!("expected Parse error for {s:?}, got {other:?}"),
+            }
+        }
     }
 }

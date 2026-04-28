@@ -22,6 +22,8 @@ use jf_utils::to_bytes;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinHandle;
+use vbs::version::Version;
+use versions::CLIQUENET_VERSION;
 
 use super::L1Client;
 use crate::{
@@ -98,6 +100,19 @@ impl<'de, KEY: SignatureKey> Deserialize<'de> for AuthenticatedValidator<KEY> {
 impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
     pub fn into_inner(self) -> RegisteredValidator<KEY> {
         self.0
+    }
+
+    /// Whether this validator can participate in consensus at `protocol_version`.
+    ///
+    /// Encodes only protocol-version-gated requirements; stake and delegation checks
+    /// live in `select_active_validator_set`.
+    pub fn is_eligible(&self, protocol_version: Version) -> bool {
+        if protocol_version >= CLIQUENET_VERSION
+            && (self.x25519_key.is_none() || self.p2p_addr.is_none())
+        {
+            return false;
+        }
+        true
     }
 }
 
