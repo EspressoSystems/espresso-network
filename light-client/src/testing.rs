@@ -799,6 +799,14 @@ impl Client for TestClient {
         Ok(PayloadProof::new(payload, vid_common))
     }
 
+    async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            proofs.push(self.payload_proof(i).await?);
+        }
+        Ok(proofs)
+    }
+
     async fn namespace_proof(
         &self,
         height: u64,

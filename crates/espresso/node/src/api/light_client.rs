@@ -4,7 +4,7 @@ use anyhow::Result;
 use espresso_types::{BlockMerkleTree, NsProof, SeqTypes};
 use futures::{
     TryStreamExt,
-    future::{FutureExt, try_join},
+    future::{FutureExt, join, try_join},
     stream::StreamExt,
 };
 use hotshot_query_service::{
@@ -400,6 +400,52 @@ where
                 payload.data().clone(),
                 vid_common.common().clone(),
             ))
+        }
+        .boxed()
+    })?
+    .get("payload_range", move |req, state| {
+        async move {
+            let start: usize = req.integer_param("start").map_err(bad_param("start"))?;
+            let end: usize = req.integer_param("end").map_err(bad_param("end"))?;
+            let fetch_payloads = async move {
+                state.get_payload_range(start..end).await.enumerate().then(
+                    move |(i, fetch)| async move {
+                        fetch
+                            .with_timeout(fetch_timeout)
+                            .await
+                            .ok_or_else(|| Error::Custom {
+                                message: format!("missing payload {}", start + i),
+                                status: StatusCode::NOT_FOUND,
+                            })
+                    },
+                )
+            };
+            let fetch_vid_commons = async move {
+                state
+                    .get_vid_common_range(start..end)
+                    .await
+                    .enumerate()
+                    .then(move |(i, fetch)| async move {
+                        fetch
+                            .with_timeout(fetch_timeout)
+                            .await
+                            .ok_or_else(|| Error::Custom {
+                                message: format!("missing VID common {}", start + i),
+                                status: StatusCode::NOT_FOUND,
+                            })
+                    })
+            };
+            let (payloads, vid_commons) = join(fetch_payloads, fetch_vid_commons).await;
+            payloads
+                .zip(vid_commons)
+                .map(|(payload, vid_common)| {
+                    Ok(PayloadProof::new(
+                        payload?.data().clone(),
+                        vid_common?.common().clone(),
+                    ))
+                })
+                .try_collect::<Vec<_>>()
+                .await
         }
         .boxed()
     })?

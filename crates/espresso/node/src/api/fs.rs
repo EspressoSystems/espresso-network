@@ -30,10 +30,11 @@ impl CatchupStorage for DataSource {}
 
 #[cfg(test)]
 mod impl_testable_data_source {
+    use light_client::state::LightClientOptions;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::api::{self, data_source::testing::TestableSequencerDataSource};
+    use crate::api::{self, data_source::testing::TestableSequencerDataSource, options::Query};
 
     #[async_trait]
     impl TestableSequencerDataSource for DataSource {
@@ -48,7 +49,17 @@ mod impl_testable_data_source {
         }
 
         fn options(storage: &Self::Storage, opt: api::Options) -> api::Options {
-            opt.query_fs(Default::default(), Options::new(storage.path().into()))
+            opt.query_fs(
+                Query {
+                    light_client: LightClientOptions {
+                        // Enable testnet features when running in tests.
+                        decaf: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Options::new(storage.path().into()),
+            )
         }
     }
 }
