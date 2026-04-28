@@ -4,12 +4,12 @@
 //! All business logic is in handlers, this just adapts to the tonic interface.
 
 use serialization_api::v2::{
-    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetNamespaceProofResponse,
-    GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
-    GetRewardClaimInputRequest, GetRewardMerkleTreeRequest, GetStakeTableRequest,
-    GetStateCertificateRequest, IncorrectEncodingProofResponse, RewardAccountQueryDataV2,
-    RewardBalance, RewardBalances, RewardClaimInput, RewardMerkleTreeV2Data, StakeTableResponse,
-    StateCertificateResponse,
+    BlockMerklePathResponse, GetBlockMerklePathRequest, GetIncorrectEncodingProofRequest,
+    GetNamespaceProofRequest, GetNamespaceProofResponse, GetRewardAccountProofRequest,
+    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
+    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
+    IncorrectEncodingProofResponse, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
+    RewardClaimInput, RewardMerkleTreeV2Data, StakeTableResponse, StateCertificateResponse,
 };
 use tonic::{Request, Response, Status};
 
@@ -123,6 +123,7 @@ impl<S> DataServiceImpl<S> {
 impl<S> DataService for DataServiceImpl<S>
 where
     S: v2::DataApi + Send + Sync + 'static,
+    <S as serialization_api::ApiSerializations>::BlockMerklePath: Sized + Send,
 {
     async fn get_namespace_proof(
         &self,
@@ -143,6 +144,16 @@ where
             .map(Response::new)
             .map_err(map_error)
     }
+
+    async fn get_block_merkle_path(
+        &self,
+        request: Request<GetBlockMerklePathRequest>,
+    ) -> Result<Response<BlockMerklePathResponse>, Status> {
+        handlers::get_block_merkle_path(&self.state, request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(map_error)
+    }
 }
 
 /// Create the data gRPC service
@@ -150,6 +161,7 @@ where
 pub fn create_data_service<S>(state: S) -> DataServiceServer<DataServiceImpl<S>>
 where
     S: v2::DataApi + Send + Sync + Clone + 'static,
+    <S as serialization_api::ApiSerializations>::BlockMerklePath: Sized + Send,
 {
     DataServiceServer::new(DataServiceImpl::new(state))
 }

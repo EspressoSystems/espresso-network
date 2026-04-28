@@ -479,6 +479,37 @@ pub struct IncorrectEncodingProofResponse {
     #[prost(message, optional, tag = "1")]
     pub proof: ::core::option::Option<AvidMIncorrectEncodingNsProof>,
 }
+/// Request to get a block merkle path proof
+/// Either specify 'snapshot_height' or 'snapshot_commit' to identify the tree snapshot
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBlockMerklePathRequest {
+    /// Block height being proven (index into the merkle tree)
+    #[prost(uint64, tag = "1")]
+    pub block_height: u64,
+    /// Snapshot by block height
+    #[prost(uint64, optional, tag = "2")]
+    pub snapshot_height: ::core::option::Option<u64>,
+    /// Snapshot by commitment (TaggedBase64 encoded)
+    #[prost(string, optional, tag = "3")]
+    pub snapshot_commit: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Block merkle path response
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BlockMerklePathResponse {
+    /// JSON-serialized MerkleProof\<Commitment<Header>, u64, Sha3Node, 3>
+    #[prost(string, tag = "1")]
+    pub proof: ::prost::alloc::string::String,
+}
+/// Block merkle height response
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BlockMerkleHeightResponse {
+    /// Latest block height for which merklized state is available
+    #[prost(uint64, tag = "1")]
+    pub height: u64,
+}
 /// Light client state
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

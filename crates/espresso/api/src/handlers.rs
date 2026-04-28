@@ -176,6 +176,42 @@ where
         .map_err(ApiError::Internal)
 }
 
+pub async fn get_block_merkle_path<S>(
+    state: &S,
+    request: GetBlockMerklePathRequest,
+) -> Result<BlockMerklePathResponse, ApiError>
+where
+    S: DataApi,
+    S::BlockMerklePath: Sized,
+{
+    if request.snapshot_height.is_none() && request.snapshot_commit.is_none() {
+        return Err(ApiError::BadRequest(anyhow::anyhow!(
+            "Must specify either `snapshot_height` or `snapshot_commit` query parameter"
+        )));
+    }
+
+    let result = state
+        .get_block_merkle_path(request)
+        .await
+        .map_err(ApiError::Internal)?;
+
+    state
+        .serialize_block_merkle_path(&result)
+        .map_err(ApiError::Internal)
+}
+
+pub async fn get_block_merkle_height<S>(state: &S) -> Result<BlockMerkleHeightResponse, ApiError>
+where
+    S: DataApi,
+{
+    let height = state
+        .get_block_merkle_height()
+        .await
+        .map_err(ApiError::Internal)?;
+
+    Ok(BlockMerkleHeightResponse { height })
+}
+
 // Consensus API handlers
 
 pub async fn get_state_certificate<S>(

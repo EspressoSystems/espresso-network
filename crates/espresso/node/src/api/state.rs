@@ -5,8 +5,9 @@
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
+use committable::Commitment;
 use espresso_types::{
-    NsProof,
+    BlockMerkleTree, Header, NsProof, SeqTypes,
     v0::sparse_mt::KeccakNode,
     v0_3::RewardAmount as InternalRewardAmount,
     v0_4::{
@@ -17,15 +18,21 @@ use espresso_types::{
     v0_6::RewardClaimError,
 };
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
-use hotshot_query_service::availability::AvailabilityDataSource;
-use jf_merkle_tree_compat::prelude::{
-    MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
+use hotshot_query_service::{
+    availability::AvailabilityDataSource,
+    merklized_state::{
+        MerklizedState, MerklizedStateDataSource, MerklizedStateHeightPersistence, Snapshot,
+    },
+};
+use jf_merkle_tree_compat::{
+    MerkleTreeScheme,
+    prelude::{MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof, Sha3Node},
 };
 use serde_json;
 use serialization_api::v2::{
-    self, RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances,
-    RewardClaimInput, RewardMerkleProofV2, RewardMerkleTreeV2Data, merkle_node,
-    reward_merkle_proof_v2::ProofType,
+    self, BlockMerklePathResponse, GetBlockMerklePathRequest,
+    RewardAccountProofV2, RewardAccountQueryDataV2, RewardBalance, RewardBalances, RewardClaimInput,
+    RewardMerkleProofV2, RewardMerkleTreeV2Data, merkle_node, reward_merkle_proof_v2::ProofType,
 };
 use tagged_base64::TaggedBase64;
 
@@ -170,6 +177,8 @@ where
     // Data API types
     type NamespaceProof = espresso_types::NamespaceProofQueryData;
     type IncorrectEncodingProof = espresso_types::v0_3::AvidMIncorrectEncodingNsProof;
+    type BlockMerklePath =
+        InternalMerkleProof<Commitment<Header>, u64, Sha3Node, { BlockMerkleTree::ARITY }>;
 
     // Consensus API types
     type StateCertificate = espresso_types::StateCertQueryDataV2<espresso_types::SeqTypes>;
@@ -472,6 +481,18 @@ where
         Ok(v2::NsProof {
             proof_version: Some(proof_version),
         })
+    }
+
+    fn serialize_block_merkle_path(
+        &self,
+        value: &Self::BlockMerklePath,
+    ) -> anyhow::Result<BlockMerklePathResponse>
+    where
+        Self::BlockMerklePath: Sized,
+    {
+        let proof = serde_json::to_string(value)
+            .map_err(|e| anyhow::anyhow!("failed to serialize block merkle path: {}", e))?;
+        Ok(BlockMerklePathResponse { proof })
     }
 }
 
@@ -861,6 +882,8 @@ where
         + hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
         + hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
         + super::data_source::RequestResponseDataSource<espresso_types::SeqTypes>
+        + MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + MerklizedStateHeightPersistence
         + Sync
         + Send,
 {
@@ -1060,6 +1083,46 @@ where
             namespace_id,
             block_height
         ))
+    }
+
+    async fn get_block_merkle_path(
+        &self,
+        request: GetBlockMerklePathRequest,
+    ) -> anyhow::Result<Self::BlockMerklePath>
+    where
+        Self::BlockMerklePath: Sized,
+    {
+        let snapshot = match (request.snapshot_height, request.snapshot_commit) {
+            (Some(height), _) => Snapshot::Index(height),
+            (None, Some(commit_str)) => {
+                let tb64: TaggedBase64 = commit_str
+                    .parse()
+                    .map_err(|e| anyhow::anyhow!("invalid TaggedBase64 snapshot_commit: {}", e))?;
+                let commit_val = <BlockMerkleTree as MerklizedState<
+                    SeqTypes,
+                    { BlockMerkleTree::ARITY },
+                >>::Commit::try_from(&tb64)
+                .map_err(|e| anyhow::anyhow!("failed to parse block merkle commit: {}", e))?;
+                Snapshot::Commit(commit_val)
+            },
+            (None, None) => {
+                return Err(anyhow::anyhow!(
+                    "Must specify either `snapshot_height` or `snapshot_commit`"
+                ));
+            },
+        };
+        (*self.data_source)
+            .get_path(snapshot, request.block_height)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_block_merkle_height(&self) -> anyhow::Result<u64> {
+        (*self.data_source)
+            .get_last_state_height()
+            .await
+            .map(|h| h as u64)
+            .map_err(|e| anyhow::anyhow!("{}", e))
     }
 }
 
@@ -1421,3 +1484,61 @@ where
         Ok(espresso_types::StateCertQueryDataV2(cert))
     }
 }
+
+// ============================================================================
+// v1::BlockStateApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v1::BlockStateApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: MerklizedStateDataSource<SeqTypes, BlockMerkleTree, { BlockMerkleTree::ARITY }>
+        + MerklizedStateHeightPersistence
+        + Send
+        + Sync,
+{
+    type BlockMerklePath =
+        InternalMerkleProof<Commitment<Header>, u64, Sha3Node, { BlockMerkleTree::ARITY }>;
+
+    async fn get_block_merkle_path(
+        &self,
+        height: u64,
+        key: u64,
+    ) -> anyhow::Result<Self::BlockMerklePath> {
+        let snapshot = Snapshot::Index(height);
+        (*self.data_source)
+            .get_path(snapshot, key)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_block_merkle_path_by_commit(
+        &self,
+        commit: String,
+        key: u64,
+    ) -> anyhow::Result<Self::BlockMerklePath> {
+        let tb64: TaggedBase64 = commit
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid TaggedBase64 commit: {}", e))?;
+        let commit_val =
+            <BlockMerkleTree as MerklizedState<SeqTypes, { BlockMerkleTree::ARITY }>>::Commit::try_from(&tb64)
+                .map_err(|e| anyhow::anyhow!("failed to parse block merkle commit: {}", e))?;
+        let snapshot = Snapshot::Commit(commit_val);
+        (*self.data_source)
+            .get_path(snapshot, key)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_block_merkle_height(&self) -> anyhow::Result<usize> {
+        (*self.data_source)
+            .get_last_state_height()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+}
+
+// ============================================================================
+// v2::DataApi block-state additions
+// ============================================================================

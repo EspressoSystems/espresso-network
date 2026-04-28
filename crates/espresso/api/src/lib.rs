@@ -26,6 +26,7 @@ pub async fn serve_axum<S>(port: u16, state: S) -> anyhow::Result<()>
 where
     S: v1::RewardApi
         + v1::AvailabilityApi
+        + v1::BlockStateApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi
@@ -33,6 +34,8 @@ where
         + Send
         + Sync
         + 'static,
+    <S as v1::BlockStateApi>::BlockMerklePath: Send,
+    <S as serialization_api::ApiSerializations>::BlockMerklePath: Sized + Send,
 {
     tracing::info!("Starting Axum server on port {} with v1 and v2 APIs", port);
 

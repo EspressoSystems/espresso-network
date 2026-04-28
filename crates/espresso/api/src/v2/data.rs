@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use serialization_api::ApiSerializations;
+use serialization_api::{v2::GetBlockMerklePathRequest, ApiSerializations};
 
 #[async_trait]
 pub trait DataApi: ApiSerializations {
@@ -21,4 +21,13 @@ pub trait DataApi: ApiSerializations {
         namespace_id: u32,
         block_height: u64,
     ) -> anyhow::Result<Self::IncorrectEncodingProof>;
+
+    async fn get_block_merkle_path(
+        &self,
+        request: GetBlockMerklePathRequest,
+    ) -> anyhow::Result<Self::BlockMerklePath>
+    where
+        Self::BlockMerklePath: Sized;
+
+    async fn get_block_merkle_height(&self) -> anyhow::Result<u64>;
 }

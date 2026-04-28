@@ -20,9 +20,10 @@ use axum::{
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
-    GetIncorrectEncodingProofRequest, GetNamespaceProofRequest, GetRewardAccountProofRequest,
-    GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
-    GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
+    GetBlockMerklePathRequest, GetIncorrectEncodingProofRequest, GetNamespaceProofRequest,
+    GetRewardAccountProofRequest, GetRewardBalanceRequest, GetRewardBalancesRequest,
+    GetRewardClaimInputRequest, GetRewardMerkleTreeRequest, GetStakeTableRequest,
+    GetStateCertificateRequest,
 };
 
 use crate::{error::ApiError, handlers, v1, v2};
@@ -132,6 +133,7 @@ pub fn create_combined_router<S>(state: S) -> Router
 where
     S: v1::RewardApi
         + v1::AvailabilityApi
+        + v1::BlockStateApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi
@@ -139,6 +141,8 @@ where
         + Send
         + Sync
         + 'static,
+    <S as v1::BlockStateApi>::BlockMerklePath: Send,
+    <S as serialization_api::ApiSerializations>::BlockMerklePath: Sized + Send,
 {
     let router_v1 = create_router_v1(state.clone());
     let router_v2 = create_router_v2(state).layer(middleware::from_fn(rewrite_root_to_v2));
@@ -149,7 +153,8 @@ where
 /// Create v1 router without OpenAPI documentation (internal types)
 pub fn create_router_v1<S>(state: S) -> Router
 where
-    S: v1::RewardApi + v1::AvailabilityApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi + v1::AvailabilityApi + v1::BlockStateApi + Clone + Send + Sync + 'static,
+    <S as v1::BlockStateApi>::BlockMerklePath: Send,
 {
     // Create handler closures that capture the generic state type
     let get_reward_claim_input =
@@ -280,6 +285,33 @@ where
             .map_err(ApiError::Internal)
     };
 
+    // Block-state API handlers
+    let get_block_merkle_path_by_height =
+        |State(state): State<S>, Path((height, key)): Path<(u64, u64)>| async move {
+            state
+                .get_block_merkle_path(height, key)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_block_merkle_path_by_commit =
+        |State(state): State<S>, Path((commit, key)): Path<(String, u64)>| async move {
+            state
+                .get_block_merkle_path_by_commit(commit, key)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_block_merkle_height = |State(state): State<S>| async move {
+        state
+            .get_block_merkle_height()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
         .route(
@@ -327,6 +359,19 @@ where
         )
         .route(routes::v1::STATE_CERT_V1_ROUTE, get(get_state_cert_v1))
         .route(routes::v1::STATE_CERT_V2_ROUTE, get(get_state_cert_v2))
+        // Block-state API routes
+        .route(
+            routes::v1::BLOCK_MERKLE_PATH_BY_HEIGHT_ROUTE,
+            get(get_block_merkle_path_by_height),
+        )
+        .route(
+            routes::v1::BLOCK_MERKLE_PATH_BY_COMMIT_ROUTE,
+            get(get_block_merkle_path_by_commit),
+        )
+        .route(
+            routes::v1::BLOCK_MERKLE_HEIGHT_ROUTE,
+            get(get_block_merkle_height),
+        )
         .with_state(state)
 }
 
@@ -334,6 +379,7 @@ where
 pub fn create_router_v2<S>(state: S) -> Router
 where
     S: v2::RewardApi + v2::DataApi + v2::ConsensusApi + Clone + Send + Sync + 'static,
+    <S as serialization_api::ApiSerializations>::BlockMerklePath: Sized + Send,
 {
     let mut api = OpenApi {
         info: Info {
@@ -406,6 +452,18 @@ where
             .map(Json)
     };
 
+    let get_block_merkle_path =
+        |State(state): State<S>,
+         SendQuery(request): SendQuery<GetBlockMerklePathRequest>| async move {
+            handlers::get_block_merkle_path(&state, request)
+                .await
+                .map(Json)
+        };
+
+    let get_block_merkle_height = |State(state): State<S>| async move {
+        handlers::get_block_merkle_height(&state).await.map(Json)
+    };
+
     let router = ApiRouter::new()
         .api_route(
             routes::v2::REWARD_CLAIM_INPUT_ROUTE.http,
@@ -454,6 +512,20 @@ where
             get_with(get_incorrect_encoding_proof, |op| {
                 op.description(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.description)
                     .tag(routes::v2::INCORRECT_ENCODING_PROOF_ROUTE.tag)
+            }),
+        )
+        .api_route(
+            routes::v2::BLOCK_MERKLE_PATH_ROUTE.http,
+            get_with(get_block_merkle_path, |op| {
+                op.description(routes::v2::BLOCK_MERKLE_PATH_ROUTE.description)
+                    .tag(routes::v2::BLOCK_MERKLE_PATH_ROUTE.tag)
+            }),
+        )
+        .api_route(
+            routes::v2::BLOCK_MERKLE_HEIGHT_ROUTE.http,
+            get_with(get_block_merkle_height, |op| {
+                op.description(routes::v2::BLOCK_MERKLE_HEIGHT_ROUTE.description)
+                    .tag(routes::v2::BLOCK_MERKLE_HEIGHT_ROUTE.tag)
             }),
         )
         .api_route(
