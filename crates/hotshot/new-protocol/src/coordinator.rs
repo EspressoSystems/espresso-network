@@ -14,7 +14,7 @@ use hotshot_types::{
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
         block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
-        signature_key::StateSignatureKey, storage::Storage as StorageTrait,
+        signature_key::StateSignatureKey,
     },
     utils::is_epoch_root,
     vote::HasViewNumber,
@@ -43,7 +43,7 @@ use crate::{
     outbox::Outbox,
     proposal::ProposalValidator,
     state::{HeaderRequest, StateManager, StateManagerOutput},
-    storage::Storage,
+    storage::{NewProtocolStorage, Storage},
     vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
@@ -57,7 +57,7 @@ pub enum CoordinatorOutput<T: NodeType> {
 }
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
+pub struct Coordinator<T: NodeType, N, S: NewProtocolStorage<T>> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
     network: Network<T, N>,
@@ -76,7 +76,6 @@ pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
     storage: Storage<T, S>,
-
     #[builder(default)]
     outbox: Outbox<ConsensusOutput<T>>,
     #[builder(default)]
@@ -90,7 +89,9 @@ pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
 }
 
 #[bon]
-impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coordinator<T, N, S> {
+impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>>
+    Coordinator<T, N, S>
+{
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     #[allow(clippy::too_many_arguments)]
     pub fn maker(
@@ -266,7 +267,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                 let _ = tx.send(self.consensus.last_decided_leaf().clone());
             },
             ClientRequest::DecidedState(tx) => {
-                let view = self.consensus.last_decided_leaf().view_number();
+                let view = self.consensus.last_decided_view();
                 let _ = tx.send(self.state_manager.get_state(&view));
             },
             ClientRequest::UndecidedLeaves(tx) => {
@@ -280,6 +281,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
             },
             ClientRequest::UpdateLeaf { update, respond } => {
                 self.state_manager.update_state(update);
+                let _ = respond.send(());
+            },
+            ClientRequest::SubmitTransaction { tx, respond } => {
+                self.block_builder.on_submit_transaction(tx);
                 let _ = respond.send(());
             },
             ClientRequest::RequestProposal {
@@ -494,10 +499,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                 header: Some(hdr),
             } => Some(ConsensusInput::HeaderCreated(response.view, hdr)),
             StateManagerOutput::Header {
-                response: _,
+                response,
                 header: None,
             } => {
-                todo!()
+                tracing::warn!(view = %response.view, "header creation failed");
+                None
             },
         }
     }
@@ -653,7 +659,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                     .await
                     .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
-            ConsensusOutput::LeafDecided { leaves, cert2: _ } => {
+            ConsensusOutput::LeafDecided { leaves, cert2, .. } => {
+                if let Some(cert2) = cert2 {
+                    self.storage.append_cert2(cert2.view_number, cert2.clone());
+                }
                 for leaf in leaves {
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }

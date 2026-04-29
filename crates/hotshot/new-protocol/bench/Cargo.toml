@@ -14,6 +14,7 @@ path = "src/bin/node.rs"
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
+async-trait = { workspace = true }
 clap = { workspace = true }
 cliquenet = { workspace = true }
 committable = { workspace = true }

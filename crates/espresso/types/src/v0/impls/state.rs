@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
+};
 
 use super::{
     BlockMerkleCommitment, BlockSize, FeeMerkleCommitment, L1Client, fee_info::FeeError,
@@ -1038,11 +1040,14 @@ impl ValidatedState {
         let mut delta = Delta::default();
         validated_state.apply_proposal(&mut delta, parent_leaf, l1_deposits);
 
-        validated_state.charge_fees(
-            &mut delta,
-            proposed_header.fee_info(),
-            chain_config.fee_recipient,
-        )?;
+        // TODO(abdul): builder is unfunded error
+        if version < NEW_PROTOCOL_VERSION {
+            validated_state.charge_fees(
+                &mut delta,
+                proposed_header.fee_info(),
+                chain_config.fee_recipient,
+            )?;
+        }
 
         // total_rewards_distributed is only present in >= V4
         let total_rewards_distributed = if version < EPOCH_VERSION {
@@ -1568,12 +1573,14 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
-                Header::V6(parent) => Header::V6(v0_6::Header {
-                    height: parent.height + 1,
-                    timestamp,
-                    timestamp_millis,
-                    ..parent.clone()
-                }),
+                Header::V6(parent) | Header::V7(parent) | Header::V8(parent) => {
+                    Header::V6(v0_6::Header {
+                        height: parent.height + 1,
+                        timestamp,
+                        timestamp_millis,
+                        ..parent.clone()
+                    })
+                },
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1610,11 +1617,13 @@ mod test {
                     builder_signature: Some(sig),
                     ..header.clone()
                 }),
-                Header::V6(header) => Header::V6(v0_6::Header {
-                    fee_info,
-                    builder_signature: Some(sig),
-                    ..header.clone()
-                }),
+                Header::V6(header) | Header::V7(header) | Header::V8(header) => {
+                    Header::V6(v0_6::Header {
+                        fee_info,
+                        builder_signature: Some(sig),
+                        ..header.clone()
+                    })
+                },
             }
         }
 
@@ -1655,11 +1664,13 @@ mod test {
                     builder_signature: Some(sig),
                     ..parent.clone()
                 }),
-                Header::V6(parent) => Header::V6(v0_6::Header {
-                    fee_info,
-                    builder_signature: Some(sig),
-                    ..parent.clone()
-                }),
+                Header::V6(parent) | Header::V7(parent) | Header::V8(parent) => {
+                    Header::V6(v0_6::Header {
+                        fee_info,
+                        builder_signature: Some(sig),
+                        ..parent.clone()
+                    })
+                },
             }
         }
     }
@@ -2245,11 +2256,13 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
-            Header::V6(header) => Header::V6(v0_6::Header {
-                builder_signature: Some(sig),
-                fee_info: FeeInfo::new(account, data),
-                ..header
-            }),
+            Header::V6(header) | Header::V7(header) | Header::V8(header) => {
+                Header::V6(v0_6::Header {
+                    builder_signature: Some(sig),
+                    fee_info: FeeInfo::new(account, data),
+                    ..header
+                })
+            },
         };
 
         validate_builder_fee(&header).unwrap();

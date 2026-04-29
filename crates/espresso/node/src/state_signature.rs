@@ -7,7 +7,7 @@ use async_lock::RwLock;
 use hotshot::types::{Event, EventType, SchnorrPubKey};
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
-    data::EpochNumber,
+    data::{EpochNumber, Leaf2},
     event::LeafInfo,
     light_client::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
@@ -28,7 +28,10 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::{SeqTypes, consensus_handle::ConsensusHandle};
+use crate::{
+    SeqTypes,
+    consensus_handle::{ConsensusHandle, CoordinatorEvent},
+};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;
@@ -92,16 +95,24 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 
     pub(super) async fn handle_event<I>(
         &mut self,
-        event: &Event<SeqTypes>,
+        event: &CoordinatorEvent<SeqTypes>,
         consensus_handle: &ConsensusHandle<SeqTypes, I>,
     ) where
         I: hotshot::traits::NodeImplementation<SeqTypes>,
     {
-        let EventType::Decide { leaf_chain, .. } = &event.event else {
-            return;
-        };
-        let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-            return;
+        let leaf: &Leaf2<SeqTypes> = match event {
+            CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) => match leaf_chain.first() {
+                Some(LeafInfo { leaf, .. }) => leaf,
+                None => return,
+            },
+            CoordinatorEvent::NewDecide(decide) => match decide.leaves.first() {
+                Some(leaf) => leaf,
+                None => return,
+            },
+            _ => return,
         };
         match leaf
             .block_header()

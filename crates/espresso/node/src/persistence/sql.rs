@@ -15,9 +15,9 @@ use derivative::Derivative;
 use derive_more::derive::{From, Into};
 use either::Either;
 use espresso_types::{
-    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
-    NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash, parse_duration,
-    parse_size,
+    AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, CoordinatorEvent, FeeMerkleTree,
+    Leaf, Leaf2, NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash,
+    parse_duration, parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
     v0_3::{
@@ -31,6 +31,7 @@ use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
+use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
     availability::{BlockId, LeafQueryData},
     data_source::{
@@ -924,6 +925,7 @@ impl Persistence {
                         "failed to load state certificates. error={err:#}"
                     );
                 })?;
+
             drop(tx);
 
             // Collate all the information by view number and construct a chain of leaves.
@@ -953,51 +955,47 @@ impl Persistence {
                         tracing::debug!(?view, "DA proposal not available at decide");
                     }
 
-                    let state_cert = state_certs
-                        .get(&view)
-                        .cloned();
+                    let state_cert = state_certs.get(&view).cloned();
 
                     LeafInfo {
                         leaf,
                         vid_share,
                         state_cert,
-                        // Note: the following fields are not used in Decide event processing, and
-                        // should be removed. For now, we just default them.
+                        // Note: the following fields are not used in Decide event processing,
+                        // and should be removed. For now, we just default them.
                         state: Default::default(),
                         delta: Default::default(),
                     }
                 })
                 .collect();
 
-            {
-                // Generate decide event for the consumer.
-                tracing::debug!(
-                    ?from_view,
-                    ?to_view,
-                    ?final_qc,
-                    ?leaf_chain,
-                    "generating decide event"
-                );
-                // Insert the deciding QC at the appropriate position, with the last decide event in
-                // the chain.
-                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
-                    (deciding_qc.view_number() == final_qc.view_number() + 1)
-                        .then_some(deciding_qc.clone())
-                } else {
-                    None
-                };
-                consumer
-                    .handle_event(&Event {
-                        view_number: to_view,
-                        event: EventType::Decide {
-                            leaf_chain: Arc::new(leaf_chain),
-                            committing_qc: Arc::new(final_qc),
-                            deciding_qc,
-                            block_size: None,
-                        },
-                    })
-                    .await?;
-            }
+            tracing::debug!(
+                ?from_view,
+                ?to_view,
+                ?final_qc,
+                ?leaf_chain,
+                "generating decide event"
+            );
+
+            // Insert the deciding QC at the appropriate position, with the last decide event in
+            // the chain.
+            let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
+                (deciding_qc.view_number() == final_qc.view_number() + 1)
+                    .then_some(deciding_qc.clone())
+            } else {
+                None
+            };
+            consumer
+                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
+                    view_number: to_view,
+                    event: EventType::Decide {
+                        leaf_chain: Arc::new(leaf_chain),
+                        committing_qc: Arc::new(final_qc),
+                        deciding_qc,
+                        block_size: None,
+                    },
+                }))
+                .await?;
 
             let from_view_i64 = from_view.u64() as i64;
             let to_view_i64 = to_view.u64() as i64;
@@ -1060,6 +1058,12 @@ impl Persistence {
                     .await?;
                     tx.execute(
                         query("DELETE FROM state_cert where view >= $1 AND view <= $2")
+                            .bind(from_view_i64)
+                            .bind(to_view_i64),
+                    )
+                    .await?;
+                    tx.execute(
+                        query("DELETE FROM decided_cert2 where view >= $1 AND view <= $2")
                             .bind(from_view_i64)
                             .bind(to_view_i64),
                     )
@@ -1823,6 +1827,44 @@ impl SequencerPersistence for Persistence {
             .internal_append_quorum2_duration
             .add_point(now.elapsed().as_secs_f64());
         res
+    }
+
+    async fn append_cert2(
+        &self,
+        view: ViewNumber,
+        cert2: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let data = bincode::serialize(&cert2).context("serializing cert2")?;
+        let view_i64 = view.u64() as i64;
+        WRITE_BACKOFF
+            .retry_if(WRITE_RETRY_MAX, is_serialization_error, || async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "decided_cert2",
+                    ["view", "data"],
+                    ["view"],
+                    [(view_i64, data.clone())],
+                )
+                .await?;
+                tx.commit().await
+            })
+            .await
+    }
+
+    async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        let row = self
+            .db
+            .read()
+            .await?
+            .fetch_optional(
+                query("SELECT data FROM decided_cert2 WHERE view = $1").bind(view.u64() as i64),
+            )
+            .await?;
+        row.map(|row| {
+            let bytes: Vec<u8> = row.get("data");
+            bincode::deserialize::<Certificate2<SeqTypes>>(&bytes).context("deserializing cert2")
+        })
+        .transpose()
     }
 
     async fn load_upgrade_certificate(
