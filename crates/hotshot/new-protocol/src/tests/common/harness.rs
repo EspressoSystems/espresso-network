@@ -10,13 +10,16 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
 };
 
-use super::utils::mock_membership;
+use super::utils::mock_membership_with_num_nodes;
+
+const HARNESS_NUM_NODES: usize = 10;
+const HARNESS_EPOCH_HEIGHT: u64 = 10;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
-    helpers::upgrade_lock,
+    helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
     network::Network,
@@ -38,22 +41,28 @@ pub(crate) struct TestHarness {
 impl TestHarness {
     pub async fn new(node_index: u64) -> Self {
         // Default timer must be long enough to not fire during tests even
-        // under heavy CPU load (e.g. full test suite running in parallel).
-        Self::new_with_timer(node_index, Duration::from_secs(2)).await
+        // under heavy CPU load (e.g. full test suite running in parallel)
+        // and through multi-epoch scenarios where catchup walks through
+        // several epoch roots.
+        Self::new_with_timer(node_index, Duration::from_secs(30)).await
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
+        crate::logging::init_test_logging();
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let instance = Arc::new(TestInstanceState::default());
-        let membership = mock_membership().await;
+        let (membership, storage) =
+            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT).await;
+        let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
 
-        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock());
-        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock());
+        let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let timeout_one_honest_collector =
+            VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
         let genesis_leaf =
@@ -63,6 +72,7 @@ impl TestHarness {
             membership.clone(),
             public_key,
             private_key.clone(),
+            upgrade_lock.clone(),
             genesis_leaf.clone(),
             10,
         );
@@ -71,14 +81,19 @@ impl TestHarness {
         let vid_reconstruction_task = VidReconstructor::new();
 
         let block_config = BlockBuilderConfig::default();
-        let block_builder = BlockBuilder::new(instance.clone(), membership.clone(), block_config);
+        let block_builder = BlockBuilder::new(
+            instance.clone(),
+            membership.clone(),
+            block_config,
+            upgrade_lock.clone(),
+        );
 
-        let mut state_manager = StateManager::new(instance.clone());
+        let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let proposal_validator = ProposalValidator::new(membership.clone());
+        let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
 
-        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock());
+        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock);
 
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
@@ -94,6 +109,7 @@ impl TestHarness {
             .epoch_manager(epoch_manager)
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
+            .storage(crate::storage::Storage::new(storage, private_key))
             .membership_coordinator(membership)
             .outbox(Outbox::new())
             .timer(Timer::new(

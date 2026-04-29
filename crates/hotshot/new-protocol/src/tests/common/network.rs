@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
 
 use hotshot::{
     traits::{
@@ -11,7 +14,11 @@ use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    traits::{network::Topic, signature_key::SignatureKey},
+    epoch_membership::EpochMembershipCoordinator,
+    traits::{
+        network::{ConnectedNetwork, Topic},
+        signature_key::SignatureKey,
+    },
     x25519::Keypair,
 };
 use serde::{Deserialize, Serialize};
@@ -42,11 +49,35 @@ pub trait TestNetwork {
     where
         Self: Sized;
 
-    /// Create a "client" network that can broadcast messages to the nodes
-    /// but does not participate in consensus.
-    fn create_client(
+    /// Create a network for a single node.  Used to bring a node online
+    /// mid-test (restart or late-start).
+    fn create_node(
         &self,
+        node_index: usize,
     ) -> impl std::future::Future<Output = <Self::Impl as NodeImplementation<TestTypes>>::Network>;
+
+    /// Shut down a previously created node's network so its internal
+    /// buffers don't block broadcasts.  Must be called before
+    /// [`create_node`](Self::create_node) when restarting a node.
+    fn shutdown_node(&self, node_index: usize) -> impl std::future::Future<Output = ()>;
+
+    /// Create an independent membership coordinator whose internal
+    /// fetcher is connected to this test network so epoch catchup can
+    /// reach peers.  The returned [`TestStorage`] is the storage the
+    /// membership's `Leaf2Fetcher` reads from; the caller is expected
+    /// to share it with the node's `Coordinator` so self-produced
+    /// proposals land in the same store.
+    fn create_membership(
+        &self,
+        node_index: usize,
+        num_nodes: usize,
+        epoch_height: u64,
+    ) -> impl std::future::Future<
+        Output = (
+            EpochMembershipCoordinator<TestTypes>,
+            TestStorage<TestTypes>,
+        ),
+    >;
 }
 
 // -- MemoryNetwork implementation -------------------------------------------
@@ -61,6 +92,9 @@ impl NodeImplementation<TestTypes> for MemoryNetworkImpl {
 
 pub struct MemoryTestNetwork {
     pub group: Arc<MasterMap<BLSPubKey>>,
+    /// Clones of created node networks, keyed by index.  Used to call
+    /// `shut_down` on old networks before replacing them during restarts.
+    node_networks: Mutex<BTreeMap<usize, MemoryNetwork<BLSPubKey>>>,
 }
 
 impl TestNetwork for MemoryTestNetwork {
@@ -71,6 +105,7 @@ impl TestNetwork for MemoryTestNetwork {
         skip_nodes: &BTreeSet<usize>,
     ) -> (Self, Vec<Option<MemoryNetwork<BLSPubKey>>>) {
         let group: Arc<MasterMap<BLSPubKey>> = MasterMap::new();
+        let mut stored = BTreeMap::new();
 
         let networks = (0..num_nodes)
             .map(|i| {
@@ -84,16 +119,65 @@ impl TestNetwork for MemoryTestNetwork {
                 if skip_nodes.contains(&i) {
                     None
                 } else {
+                    stored.insert(i, net.clone());
                     Some(net)
                 }
             })
             .collect();
-        (Self { group }, networks)
+        (
+            Self {
+                group,
+                node_networks: Mutex::new(stored),
+            },
+            networks,
+        )
     }
 
-    async fn create_client(&self) -> MemoryNetwork<BLSPubKey> {
-        let (pk, _) = BLSPubKey::generated_from_seed_indexed([1; 32], 9999);
-        MemoryNetwork::new(&pk, &self.group, &[], None)
+    async fn create_node(&self, node_index: usize) -> MemoryNetwork<BLSPubKey> {
+        let (pk, _) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index as u64);
+        let net = MemoryNetwork::new(&pk, &self.group, &[Topic::Global], None);
+        self.node_networks
+            .lock()
+            .unwrap()
+            .insert(node_index, net.clone());
+        net
+    }
+
+    async fn shutdown_node(&self, node_index: usize) {
+        let net = self.node_networks.lock().unwrap().remove(&node_index);
+        if let Some(net) = net {
+            net.shut_down().await;
+        }
+    }
+
+    async fn create_membership(
+        &self,
+        node_index: usize,
+        num_nodes: usize,
+        epoch_height: u64,
+    ) -> (
+        EpochMembershipCoordinator<TestTypes>,
+        TestStorage<TestTypes>,
+    ) {
+        let (pk, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
+        // Share the node's actual Coordinator network with the membership's
+        // Leaf2Fetcher.  Leaf2Fetcher only SENDS; only the Coordinator
+        // drains the receive channel.  MemoryNetwork is Clone (inner Arc
+        // state shared) so cloning hands out an alias.
+        let net = self
+            .node_networks
+            .lock()
+            .unwrap()
+            .get(&node_index)
+            .expect("node network must exist before create_membership")
+            .clone();
+        super::utils::mock_membership_with_network::<MemoryNetworkImpl>(
+            num_nodes,
+            epoch_height,
+            Arc::new(net),
+            pk,
+        )
+        .await
     }
 }
 
@@ -109,6 +193,9 @@ impl NodeImplementation<TestTypes> for CliquenetImpl {
 
 pub struct CliquenetTestNetwork {
     peer_infos: Vec<(BLSPubKey, PeerConnectInfo)>,
+    /// Live networks keyed by node index.  On restart we shut these down
+    /// (freeing the listener port) before rebinding to the same address.
+    node_networks: tokio::sync::Mutex<BTreeMap<usize, Cliquenet<BLSPubKey>>>,
 }
 
 impl TestNetwork for CliquenetTestNetwork {
@@ -148,6 +235,7 @@ impl TestNetwork for CliquenetTestNetwork {
         // Create each Cliquenet node (skip down nodes — sends to them
         // fail gracefully over TCP).
         let mut networks = Vec::with_capacity(num_nodes);
+        let mut stored = BTreeMap::new();
         for (i, (keypair, public_key, addr)) in parties.iter().enumerate() {
             if skip_nodes.contains(&i) {
                 networks.push(None);
@@ -162,26 +250,72 @@ impl TestNetwork for CliquenetTestNetwork {
             )
             .await
             .expect("cliquenet creation should succeed");
+            stored.insert(i, net.clone());
             networks.push(Some(net));
         }
 
-        (Self { peer_infos }, networks)
+        (
+            Self {
+                peer_infos,
+                node_networks: tokio::sync::Mutex::new(stored),
+            },
+            networks,
+        )
     }
 
-    async fn create_client(&self) -> Cliquenet<BLSPubKey> {
-        let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([1u8; 32], 9999);
+    async fn create_node(&self, node_index: usize) -> Cliquenet<BLSPubKey> {
+        let (public_key, private_key) =
+            BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
         let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
-        let port =
-            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
-        Cliquenet::create(
-            "test-client",
-            public_key,
-            keypair,
-            addr,
-            self.peer_infos.clone(),
+        // Reuse the node's original address so peers (whose parties list
+        // was fixed at startup) can still reach the restarted node.
+        let addr = self.peer_infos[node_index].1.p2p_addr.clone();
+        let net = Cliquenet::create("test", public_key, keypair, addr, self.peer_infos.clone())
+            .await
+            .expect("cliquenet node creation should succeed");
+        self.node_networks
+            .lock()
+            .await
+            .insert(node_index, net.clone());
+        net
+    }
+
+    async fn shutdown_node(&self, node_index: usize) {
+        let net = self.node_networks.lock().await.remove(&node_index);
+        if let Some(net) = net {
+            // Await shutdown so the TCP listener releases the port
+            // before `create_node` rebinds to the same address.
+            net.shut_down().await;
+        }
+    }
+
+    async fn create_membership(
+        &self,
+        node_index: usize,
+        num_nodes: usize,
+        epoch_height: u64,
+    ) -> (
+        EpochMembershipCoordinator<TestTypes>,
+        TestStorage<TestTypes>,
+    ) {
+        let (pk, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
+        // Share the node's actual Cliquenet with the membership's
+        // Leaf2Fetcher so catchup requests/responses travel over the
+        // real TCP transport.  Cliquenet is Clone (inner Arc) so this
+        // hands out an alias.
+        let net = self
+            .node_networks
+            .lock()
+            .await
+            .get(&node_index)
+            .expect("node network must exist before create_membership")
+            .clone();
+        super::utils::mock_membership_with_network::<CliquenetImpl>(
+            num_nodes,
+            epoch_height,
+            Arc::new(net),
+            pk,
         )
         .await
-        .expect("cliquenet client creation should succeed")
     }
 }

@@ -203,6 +203,38 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         }
     }
 
+    fn load_latest_tree(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move {
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction for load_latest_tree")?;
+
+            let row = sqlx::query(
+                r#"
+                SELECT balances
+                FROM reward_merkle_tree_v2_data
+                WHERE height <= $1
+                ORDER BY height DESC
+                LIMIT 1
+                "#,
+            )
+            .bind(height as i64)
+            .fetch_optional(tx.as_mut())
+            .await?
+            .context(format!(
+                "No reward merkle tree at or below height {} in storage",
+                height
+            ))?;
+
+            row.try_get::<Vec<u8>, _>("balances")
+                .context("Missing field balances from row; this should never happen")
+        }
+    }
+
     fn persist_proofs(
         &self,
         height: u64,
@@ -459,7 +491,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
     ///
     /// For V5+ (epoch rewards), the reward tree is only stored at epoch boundaries.
     /// We resolve to the nearest epoch boundary to load the tree, verify it's V5+
-    /// (for V4→V5 upgrades), and store the generated proofs at `finalized_hotshot_height`.
+    /// (for V4→V5 upgrades), and store the generated proofs at the same boundary height.
     /// For V4 (per-block rewards), the tree exists at every block height.
     fn persist_reward_proofs(
         &self,
@@ -496,13 +528,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 }
             };
 
-            if self.proof_exists(finalized_hotshot_height).await {
-                return Ok(());
-            }
-
             // Resolve which height to load the reward tree from.
             // V4: tree exists at every height. V5+: only at epoch boundaries.
             let mut tree_height = finalized_hotshot_height;
+            let mut proof_height = finalized_hotshot_height;
             if version >= EPOCH_REWARD_VERSION {
                 let epoch_height = node_state
                     .epoch_height
@@ -526,6 +555,11 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                         return Ok(());
                     }
                 }
+                proof_height = tree_height;
+            }
+
+            if self.proof_exists(proof_height).await {
+                return Ok(());
             }
 
             let permitted_tree = match self.load_reward_merkle_tree_v2(tree_height).await {
@@ -554,11 +588,8 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     ))
                 });
 
-            if let Err(err) = self.persist_proofs(finalized_hotshot_height, iter).await {
-                tracing::warn!(
-                    finalized_hotshot_height,
-                    "failed to persist proofs: {err:#}"
-                );
+            if let Err(err) = self.persist_proofs(proof_height, iter).await {
+                tracing::warn!(proof_height, "failed to persist proofs: {err:#}");
             }
 
             Ok(())
@@ -813,6 +844,13 @@ impl RewardMerkleTreeDataSource for DataSource {
 
     fn load_tree(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
         async move { self.as_ref().load_tree(height).await }
+    }
+
+    fn load_latest_tree(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<u8>>> {
+        async move { self.as_ref().load_latest_tree(height).await }
     }
 
     fn garbage_collect(&self, height: u64) -> impl Send + Future<Output = anyhow::Result<()>> {
@@ -1342,14 +1380,30 @@ pub(crate) async fn reconstruct_state<Mode: TransactionMode>(
             );
         },
         either::Either::Right(expected_root) => {
-            state.reward_merkle_tree_v2 = load_reward_merkle_tree_v2(db, from_height)
-                .await
-                .context(
-                    "unable to reconstruct state because RewardMerkleTreeV2 not available at \
-                     origin",
-                )?
-                .0
-                .tree;
+            let version = parent.block_header().version();
+            let epoch_height = instance
+                .epoch_height
+                .context("epoch_height not set but parent has V2 reward tree")?;
+
+            // V5+ only stores the reward merkle tree at epoch's last block, so if we're
+            // reconstructing at a non boundary height there is no row at from_height.
+            // Load the latest tree instead
+            // the commitment check below will catch it if
+            // we ended up with a tree from an older epoch.
+            // But this should never happen as we don't garbage collect the latest tree
+            if version >= EPOCH_REWARD_VERSION && !is_last_block(from_height, epoch_height) {
+                let tree = db
+                    .load_latest_reward_merkle_tree_v2(from_height)
+                    .await
+                    .context("RewardMerkleTreeV2 not available at or below origin")?;
+                state.reward_merkle_tree_v2 = tree.tree;
+            } else {
+                state.reward_merkle_tree_v2 = load_reward_merkle_tree_v2(db, from_height)
+                    .await
+                    .context("RewardMerkleTreeV2 not available at origin")?
+                    .0
+                    .tree;
+            }
             ensure!(
                 state.reward_merkle_tree_v2.commitment() == expected_root,
                 "loaded reward state does not match parent header"
