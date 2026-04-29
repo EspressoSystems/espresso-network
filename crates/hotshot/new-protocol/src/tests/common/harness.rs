@@ -10,7 +10,10 @@ use hotshot_types::{
     traits::signature_key::SignatureKey,
 };
 
-use super::utils::mock_membership;
+use super::utils::mock_membership_with_num_nodes;
+
+const HARNESS_NUM_NODES: usize = 10;
+const HARNESS_EPOCH_HEIGHT: u64 = 10;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
@@ -39,19 +42,23 @@ pub(crate) struct TestHarness {
 impl TestHarness {
     pub async fn new(node_index: u64) -> Self {
         // Default timer must be long enough to not fire during tests even
-        // under heavy CPU load (e.g. full test suite running in parallel).
-        Self::new_with_timer(node_index, Duration::from_secs(2)).await
+        // under heavy CPU load (e.g. full test suite running in parallel)
+        // and through multi-epoch scenarios where catchup walks through
+        // several epoch roots.
+        Self::new_with_timer(node_index, Duration::from_secs(30)).await
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
         let epoch_height = 10;
+        crate::logging::init_test_logging();
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
         let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
             [0u8; 32], node_index,
         );
         let state_private_key = state_key_pair.sign_key_ref().clone();
         let instance = Arc::new(TestInstanceState::default());
-        let membership = mock_membership().await;
+        let (membership, storage) =
+            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT).await;
         let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
@@ -114,6 +121,7 @@ impl TestHarness {
             .epoch_manager(epoch_manager)
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
+            .storage(crate::storage::Storage::new(storage, private_key))
             .membership_coordinator(membership)
             .outbox(Outbox::new())
             .timer(Timer::new(

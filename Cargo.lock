@@ -6390,6 +6390,7 @@ name = "hotshot-new-protocol-bench"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-broadcast",
  "async-lock 3.4.2",
  "clap 4.6.1",
  "cliquenet",

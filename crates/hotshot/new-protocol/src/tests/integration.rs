@@ -484,9 +484,9 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
     // Long timer: 27 views across 3 epochs takes more than the default 2s.
     let mut harness = TestHarness::new(8).await;
 
-    // ---- Epoch 1 (views 1-10) ----
+    // ---- Epoch 1 views 1-5 ----
     // Block 5 decision triggers epoch root → DRB for epoch 3 is computed.
-    run_views_integration(&mut harness, &test_data, &leader_key, 0..10).await;
+    run_views_integration(&mut harness, &test_data, &leader_key, 0..5).await;
 
     // Wait for the DRB result from the EpochManager to arrive.
     harness
@@ -495,6 +495,9 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
             |inputs| any(inputs, is_timeout),
         )
         .await;
+
+    // ---- Epoch 1 views 6-10 ----
+    run_views_integration(&mut harness, &test_data, &leader_key, 5..10).await;
 
     // ---- Epoch 1 → 2 boundary ----
     cross_epoch_boundary(&mut harness, &test_data, &leader_key, 9).await;
@@ -526,16 +529,20 @@ async fn test_node_votes_with_computed_drb_in_epoch3() {
     // Long timer: 27 views across 3 epochs takes more than the default 2s.
     let mut harness = TestHarness::new_with_timer(0, std::time::Duration::from_secs(30)).await;
 
-    // ---- Epoch 1 (views 1-10) ----
-    run_views_integration(&mut harness, &test_data, &node_key, 0..10).await;
+    // ---- Epoch 1 views 1-5 ----
+    // Block 5 decision triggers epoch root → DRB for epoch 3 is computed.
+    run_views_integration(&mut harness, &test_data, &node_key, 0..5).await;
 
-    // Wait for the DRB result from the EpochManager.
+    // Wait for the DRB result from the EpochManager to arrive.
     harness
         .process_until(
             |inputs| any(inputs, is_drb_result),
             |inputs| any(inputs, is_timeout),
         )
         .await;
+
+    // ---- Epoch 1 views 6-10 ----
+    run_views_integration(&mut harness, &test_data, &node_key, 5..10).await;
 
     // ---- Epoch 1 → 2 boundary ----
     cross_epoch_boundary(&mut harness, &test_data, &node_key, 9).await;
