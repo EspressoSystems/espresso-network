@@ -395,15 +395,23 @@ pub fn vid_commitment(
         .map(VidCommitment::V1)
         .unwrap()
     } else {
+        let start = std::time::Instant::now();
         let param = init_avidm_gf2_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
-        AvidmGf2Scheme::commit(
+        let result = AvidmGf2Scheme::commit(
             &param,
             encoded_transactions,
             ns_table::parse_ns_table(encoded_tx_len, metadata),
         )
         .map(|(comm, _)| VidCommitment::V2(comm))
-        .unwrap()
+        .unwrap();
+        tracing::error!(
+            "AvidmGf2Scheme::commit took {:?} (total_weight={}, payload_byte_len={})",
+            start.elapsed(),
+            total_weight,
+            encoded_tx_len
+        );
+        result
     }
 }
 

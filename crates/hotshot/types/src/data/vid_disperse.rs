@@ -748,6 +748,16 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         .context(|err| error!("Failed to calculate VID disperse. Error: {err}"))?;
         let ns_disperse_duration = now.elapsed();
 
+        // Debug logging
+        tracing::error!(
+            "AvidmGf2Scheme::ns_disperse took {:?} (total_weight={}, payload_byte_len={}) for \
+             view: {}",
+            ns_disperse_duration,
+            approximate_weights.total_weight,
+            num_txns,
+            view
+        );
+
         Ok((
             Self::from_membership(
                 view,
