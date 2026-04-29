@@ -4,8 +4,8 @@
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span>anyhow::bail;
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>async_trait::async_trait;
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>espresso_types::{
-<a href=#7 id=7 data-nosnippet>7</a>    AuthenticatedValidatorMap, Leaf2, NetworkConfig, PubKey, RegisteredValidatorMap,
-<a href=#8 id=8 data-nosnippet>8</a>    StakeTableHash,
+<a href=#7 id=7 data-nosnippet>7</a>    AuthenticatedValidatorMap, CoordinatorEvent, Leaf2, NetworkConfig, PubKey,
+<a href=#8 id=8 data-nosnippet>8</a>    RegisteredValidatorMap, StakeTableHash,
 <a href=#9 id=9 data-nosnippet>9</a>    traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
 <a href=#10 id=10 data-nosnippet>10</a>    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
 <a href=#11 id=11 data-nosnippet>11</a>    v0_3::{EventKey, IndexedStake, RegisteredValidator, RewardAmount, StakeTableEvent},
@@ -88,7 +88,7 @@
 <a href=#88 id=88 data-nosnippet>88</a>            </span>};
 <a href=#89 id=89 data-nosnippet>89</a>
 <a href=#90 id=90 data-nosnippet>90</a>            consumer
-<a href=#91 id=91 data-nosnippet>91</a>                .handle_event(<span class="kw-2">&amp;</span>Event {
+<a href=#91 id=91 data-nosnippet>91</a>                .handle_event(<span class="kw-2">&amp;</span>CoordinatorEvent::LegacyEvent(Event {
 <a href=#92 id=92 data-nosnippet>92</a>                    view_number,
 <a href=#93 id=93 data-nosnippet>93</a>                    event: EventType::Decide {
 <a href=#94 id=94 data-nosnippet>94</a>                        leaf_chain: Arc::new(<span class="macro">vec!</span>[leaf_info.clone()]),
@@ -96,7 +96,7 @@
 <a href=#96 id=96 data-nosnippet>96</a>                        deciding_qc,
 <a href=#97 id=97 data-nosnippet>97</a>                        block_size: <span class="prelude-val">None</span>,
 <a href=#98 id=98 data-nosnippet>98</a>                    },
-<a href=#99 id=99 data-nosnippet>99</a>                })
+<a href=#99 id=99 data-nosnippet>99</a>                }))
 <a href=#100 id=100 data-nosnippet>100</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#101 id=101 data-nosnippet>101</a>        }
 <a href=#102 id=102 data-nosnippet>102</a>        <span class="prelude-val">Ok</span>(())
