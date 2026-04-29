@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
 use hotshot::types::{Event, EventType, SchnorrPubKey};
-use hotshot_task_impls::helpers::derive_signed_state_digest;
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{EpochNumber, Leaf2},
     event::LeafInfo,
