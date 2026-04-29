@@ -15,6 +15,7 @@ use std::{
 
 use async_broadcast::{Receiver, Sender};
 use committable::{Commitment, Committable};
+use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
 use hotshot_task::dependency_task::HandleDepOutput;
 use hotshot_types::{
     consensus::{CommitmentAndMetadata, OuterConsensus},
@@ -25,7 +26,7 @@ use hotshot_types::{
     message::Proposal,
     simple_certificate::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
-        UpgradeCertificate,
+        UpgradeCertificate, check_qc_state_cert_correspondence,
     },
     traits::{
         BlockPayload,
@@ -46,10 +47,7 @@ use versions::EPOCH_VERSION;
 
 use crate::{
     events::HotShotEvent,
-    helpers::{
-        broadcast_event, check_qc_state_cert_correspondence, parent_leaf_and_state,
-        validate_light_client_state_update_certificate, validate_qc_and_next_epoch_qc,
-    },
+    helpers::{broadcast_event, parent_leaf_and_state, validate_qc_and_next_epoch_qc},
     quorum_proposal::{QuorumProposalTaskState, UpgradeLock},
 };
 

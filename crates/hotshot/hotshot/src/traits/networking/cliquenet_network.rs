@@ -2,11 +2,12 @@
 use std::time::Duration;
 use std::{
     collections::{HashMap, HashSet},
+    future::ready,
     sync::Arc,
 };
 
 use async_trait::async_trait;
-use cliquenet::{NetConf, NetworkDown, Retry, Role};
+use cliquenet::{self, Network, NetworkController, NetworkReceiver, Role, Slot};
 #[cfg(feature = "hotshot-testing")]
 use hotshot_types::traits::network::{
     AsyncGenerator, NetworkReliability, TestableNetworkingImplementation,
@@ -19,26 +20,29 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     stake_table::HSStakeTable,
     traits::{
-        metrics::Metrics,
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::NodeType,
         signature_key::{SignatureKey, StakeTableEntryType},
     },
-    x25519::Keypair,
+    x25519::{Keypair, PublicKey},
 };
-use tokio::sync::Mutex;
-use tracing::{error, info};
+use parking_lot::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
+use tracing::{error, info, warn};
 
 #[derive(Clone)]
 pub struct Cliquenet<K> {
-    net: Retry<K>,
-    inner: Arc<Mutex<Inner<K>>>,
+    my_keys: (K, PublicKey),
+    gc_window: ViewNumber,
+    sender: Arc<Mutex<Sender<K>>>,
+    receiver: Arc<AsyncMutex<NetworkReceiver>>,
+    epoch: Arc<AsyncMutex<EpochNumber>>,
 }
 
-#[derive(Clone)]
-struct Inner<K> {
-    epoch: EpochNumber,
+struct Sender<K> {
+    controller: NetworkController,
     peers: HashMap<K, PeerConnectInfo>,
+    last_gc: ViewNumber,
 }
 
 impl<K: SignatureKey + 'static> Cliquenet<K> {
@@ -48,45 +52,55 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         keypair: Keypair,
         addr: A,
         parties: P,
-        metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         A: Into<NetAddr>,
         P: IntoIterator<Item = (K, PeerConnectInfo)>,
     {
+        let this = (key, keypair.public_key());
         let parties: HashMap<K, PeerConnectInfo> = parties.into_iter().collect();
 
-        let cfg = NetConf::builder()
+        let cfg = cliquenet::Config::builder()
             .name(name)
-            .label(key)
-            .keypair(keypair)
+            .keypair(keypair.into())
             .bind(addr.into())
             .parties(
                 parties
-                    .iter()
-                    .map(|(k, info)| (k.clone(), info.x25519_key, info.p2p_addr.clone())),
+                    .values()
+                    .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
-            .metrics(metrics)
             .build();
 
-        let net = Retry::create(cfg)
+        let net = Network::create(cfg)
             .await
             .map_err(|e| NetworkError::ListenError(format!("cliquenet creation failed: {e}")))?;
 
         info!(peers = %parties.len(), "cliquenet created");
 
+        let (control, recv) = net.split_into();
+
         Ok(Self {
-            net,
-            inner: Arc::new(Mutex::new(Inner {
-                epoch: EpochNumber::genesis(),
+            my_keys: this,
+            sender: Arc::new(Mutex::new(Sender {
+                controller: control,
                 peers: parties,
+                last_gc: ViewNumber::genesis(),
             })),
+            receiver: Arc::new(AsyncMutex::new(recv)),
+            epoch: Arc::new(AsyncMutex::new(EpochNumber::genesis())),
+            gc_window: ViewNumber::new(100),
         })
     }
 
-    /// Get the current network peers.
-    pub fn peers(&self) -> Vec<K> {
-        self.net.parties(None)
+    /// How many views should potentially be resend to unresponsive peers?
+    ///
+    /// After that, messages from older views are discarded.
+    ///
+    /// NB: This is a workaround. The `ConnectedNetwork` trait should be
+    /// augmented to have a GC method that is invoked when it is safe to
+    /// discard old views.
+    pub fn set_gc_window(&mut self, v: ViewNumber) {
+        self.gc_window = v
     }
 
     /// Update peers on every epoch change.
@@ -108,10 +122,10 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
                 .collect()
         };
 
-        let mut inner = self.inner.lock().await;
+        let mut our_epoch = self.epoch.lock().await;
 
-        if epoch <= inner.epoch {
-            info!(%epoch, ours = %inner.epoch, "epoch already seen");
+        if epoch <= *our_epoch {
+            info!(%epoch, ours = %our_epoch, "epoch already seen");
             return;
         }
 
@@ -176,7 +190,7 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
 
         for k in &wanted {
             if let Some(Some(new_info)) = merged_infos.get(k) {
-                if Some(new_info) != inner.peers.get(k) {
+                if Some(new_info) != self.sender.lock().peers.get(k) {
                     info!(%epoch, peer = %k, "adding/updating network peer");
                     to_add.push((k.clone(), new_info.x25519_key, new_info.p2p_addr.clone()));
                 } else {
@@ -188,49 +202,72 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         }
 
         // Remove peers that have left both the current and previous epoch's stake tables.
-        for p in inner.peers.keys() {
-            if !(retained.contains(p) || wanted.contains(p)) {
-                info!(%epoch, peer = %p, "removing network peer");
-                to_del.push(p.clone());
+        for (k, p) in &self.sender.lock().peers {
+            if !(retained.contains(k) || wanted.contains(k)) {
+                info!(%epoch, peer = %k, "removing network peer");
+                to_del.push((k.clone(), p.x25519_key));
             }
         }
 
         // Perform the updates:
+        {
+            let peers = &mut self.sender.lock().peers;
+            for (k, _) in &to_del {
+                peers.remove(k);
+            }
 
-        for k in &to_del {
-            inner.peers.remove(k);
+            for (k, x, a) in to_add.iter().cloned() {
+                peers.insert(
+                    k,
+                    PeerConnectInfo {
+                        x25519_key: x,
+                        p2p_addr: a,
+                    },
+                );
+            }
         }
 
-        for (k, x, a) in to_add.iter().cloned() {
-            inner.peers.insert(
-                k,
-                PeerConnectInfo {
-                    x25519_key: x,
-                    p2p_addr: a,
-                },
-            );
+        {
+            let to_add = to_add.iter().map(|(_, k, a)| ((*k).into(), a.clone()));
+            let to_del = to_del.iter().map(|(_, k)| (*k).into());
+
+            let mut sender = self.sender.lock();
+
+            if let Err(err) = sender.controller.add_peers(Role::Active, to_add) {
+                error!(%epoch, %err, "network down; could not add peers to network");
+                return;
+            }
+
+            if let Err(err) = sender.controller.remove_peers(to_del) {
+                error!(%epoch, %err, "network down; could not remove peers from network");
+                return;
+            }
         }
 
-        if let Err(err) = self.net.add(Role::Active, to_add).await {
-            let _: NetworkDown = err;
-            error!(%epoch, "network down; could not add peers to network");
-            return;
+        info!(%epoch, peers = %self.sender.lock().peers.len());
+
+        *our_epoch = EpochNumber::from(*epoch);
+    }
+
+    /// Get the current network peers.
+    #[cfg(feature = "hotshot-testing")]
+    pub fn peers(&self) -> Vec<(PublicKey, Role)> {
+        self.sender
+            .lock()
+            .controller
+            .parties()
+            .map(|(k, r)| ((*k).into(), *r))
+            .collect()
+    }
+
+    #[cfg(feature = "hotshot-testing")]
+    pub fn reverse_lookup(&self, k: &PublicKey) -> Option<K> {
+        for (x, p) in &self.sender.lock().peers {
+            if p.x25519_key == *k {
+                return Some(x.clone());
+            }
         }
-
-        if let Err(err) = self.net.remove(to_del).await {
-            let _: NetworkDown = err;
-            error!(%epoch, "network down; could not remove peers from network");
-            return;
-        }
-
-        debug_assert_eq! {
-            HashSet::<K>::from_iter(self.net.parties(None)),
-            HashSet::<K>::from_iter(inner.peers.keys().cloned())
-        }
-
-        info!(%epoch, peers = %inner.peers.len());
-
-        inner.epoch = EpochNumber::from(*epoch);
+        None
     }
 }
 
@@ -243,10 +280,11 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         _: Topic,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        self.net.broadcast(*v, m).await.map_err(|e| {
-            NetworkError::MessageSendError(format!("cliquenet broadcast error: {e}"))
-        })?;
-        Ok(())
+        self.sender
+            .lock()
+            .controller
+            .broadcast(Slot::new(*v), m)
+            .map_err(|e| NetworkError::MessageSendError(format!("cliquenet broadcast error: {e}")))
     }
 
     async fn da_broadcast_message(
@@ -256,10 +294,23 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         recipients: Vec<K>,
         _: BroadcastDelay,
     ) -> Result<(), NetworkError> {
-        self.net.multicast(recipients, *v, m).await.map_err(|e| {
-            NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
-        })?;
-        Ok(())
+        let mut sender = self.sender.lock();
+        let mut targets = Vec::new();
+        for r in recipients {
+            if let Some(p) = sender.peers.get(&r) {
+                targets.push(p.x25519_key.into())
+            } else if r == self.my_keys.0 {
+                targets.push(self.my_keys.1.into())
+            } else {
+                warn!(node = %self.my_keys.1, recipient = %r, "unknown da broadcast target");
+            }
+        }
+        sender
+            .controller
+            .multicast(Slot::new(*v), targets, m)
+            .map_err(|e| {
+                NetworkError::MessageSendError(format!("cliquenet da_broadcast error: {e}"))
+            })
     }
 
     async fn direct_message(
@@ -268,18 +319,29 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         m: Vec<u8>,
         recipient: K,
     ) -> Result<(), NetworkError> {
-        self.net
-            .unicast(recipient, *v, m)
-            .await
-            .map_err(|e| NetworkError::MessageSendError(format!("cliquenet unicast error: {e}")))?;
-        Ok(())
+        let mut sender = self.sender.lock();
+        let target = if recipient == self.my_keys.0 {
+            self.my_keys.1
+        } else if let Some(k) = sender.peers.get(&recipient).map(|p| p.x25519_key) {
+            k
+        } else {
+            warn!(node = %self.my_keys.1, %recipient, "unknown direct message target");
+            return Ok(());
+        };
+        sender
+            .controller
+            .unicast(Slot::new(*v), target.into(), m)
+            .map_err(|e| NetworkError::MessageSendError(format!("cliquenet unicast error: {e}")))
     }
 
     async fn recv_message(&self) -> Result<Vec<u8>, NetworkError> {
-        let (_src, data) =
-            self.net.receive().await.map_err(|e| {
-                NetworkError::MessageSendError(format!("cliquenet receive error: {e}"))
-            })?;
+        let (_src, data) = self
+            .receiver
+            .lock()
+            .await
+            .receive()
+            .await
+            .ok_or(NetworkError::ShutDown)?;
         Ok(Vec::from(&data[..]))
     }
 
@@ -291,8 +353,13 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
     ) where
         U: NodeType<SignatureKey = K>,
     {
-        self.net.gc(*v);
-
+        {
+            let mut sender = self.sender.lock();
+            if v.saturating_sub(*sender.last_gc) >= *self.gc_window {
+                let _ = sender.controller.gc(Slot::new(*v));
+                sender.last_gc = v
+            }
+        }
         if let Some(e) = e {
             self.on_epoch_change(e, &m).await
         }
@@ -309,7 +376,12 @@ impl<K: SignatureKey + 'static> ConnectedNetwork<K> for Cliquenet<K> {
         'a: 'b,
         Self: 'b,
     {
-        boxed_sync(self.net.close())
+        let result = self.sender.lock().controller.shutdown();
+        if let Ok(future) = result {
+            boxed_sync(future)
+        } else {
+            boxed_sync(ready(()))
+        }
     }
 }
 
@@ -342,8 +414,6 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::Signature
         Box::pin(move |i| {
             let parties = parties.clone();
             let future = async move {
-                use hotshot_types::traits::metrics::NoMetrics;
-
                 let (s, k, a) = &parties[i as usize];
                 let it = parties.iter().map(|(s, k, a)| {
                     (
@@ -354,8 +424,7 @@ impl<T: NodeType> TestableNetworkingImplementation<T> for Cliquenet<T::Signature
                         },
                     )
                 });
-                let met = Box::new(NoMetrics);
-                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it, met)
+                let net = Cliquenet::create("test", k.clone(), s.clone(), a.clone(), it)
                     .await
                     .unwrap();
                 Arc::new(net)
@@ -378,7 +447,7 @@ fn gen_parties<K: SignatureKey>() -> impl Iterator<Item = (Keypair, K, NetAddr)>
     std::iter::repeat_with(move || {
         let secret = K::generated_from_seed_indexed([0u8; 32], i).1;
         let public = K::from_private(&secret);
-        let kpair = Keypair::derive_from::<K>(&secret);
+        let kpair = Keypair::derive_from::<K>(&secret).unwrap();
         let port =
             test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
         let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
@@ -391,7 +460,7 @@ fn gen_parties<K: SignatureKey>() -> impl Iterator<Item = (Keypair, K, NetAddr)>
 mod test {
     use std::str::FromStr;
 
-    use hotshot_types::{signature_key::BLSKeyPair, traits::metrics::NoMetrics, x25519};
+    use hotshot_types::{signature_key::BLSKeyPair, x25519};
     use rand::thread_rng;
     use test_utils::reserve_tcp_port;
 
@@ -406,7 +475,6 @@ mod test {
             x25519::Keypair::generate().unwrap(),
             NetAddr::from_str(&format!("0.0.0.0:{port}")).unwrap(),
             [],
-            Box::new(NoMetrics),
         )
         .await
         .unwrap();

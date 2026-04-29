@@ -169,7 +169,7 @@ clap-serde = "0.5.1"
 clap-serde-derive = "0.2.1"
 cld = "0.5"
 client = { path = "client" }
-cliquenet = { path = "crates/cliquenet", features = ["metrics"] }
+cliquenet = { path = "crates/cliquenet", features = ["serde"] }
 coarsetime = "0.1.34"
 committable = { git = "https://github.com/EspressoSystems/commit.git", features = [
     "ark-serialize",

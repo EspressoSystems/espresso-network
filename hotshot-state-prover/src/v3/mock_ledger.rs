@@ -10,8 +10,9 @@ use ark_std::{
     rand::{Rng, RngCore, rngs::StdRng},
 };
 use espresso_types::SeqTypes;
-use hotshot_contract_adapter::{field_to_u256, jellyfish::open_key};
-use hotshot_task_impls::helpers::derive_signed_state_digest;
+use hotshot_contract_adapter::{
+    field_to_u256, jellyfish::open_key, light_client::derive_signed_state_digest,
+};
 use hotshot_types::{
     PeerConfig,
     light_client::{GenericLightClientState, GenericStakeTableState, LightClientState},

@@ -25,6 +25,7 @@ ark-serialize = { workspace = true }
 ark-std = { workspace = true }
 derive_more = { workspace = true }
 hotshot-types = { workspace = true }
+hotshot-utils = { workspace = true }
 jf-pcs = { workspace = true }
 jf-plonk = { workspace = true }
 jf-plonk-compat = { workspace = true }
@@ -36,6 +37,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_arrays = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 bincode = { workspace = true }

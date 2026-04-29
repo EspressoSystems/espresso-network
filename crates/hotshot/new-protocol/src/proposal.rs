@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use committable::Committable;
 use hotshot::types::SignatureKey;
+use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
 use hotshot_types::{
     data::{
         EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber,
@@ -9,9 +10,11 @@ use hotshot_types::{
     },
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal as SignedProposal, UpgradeLock},
+    simple_certificate::check_qc_state_cert_correspondence,
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    utils::is_epoch_root,
     vote::{Certificate, HasViewNumber},
 };
 use hotshot_utils::anytrace;
@@ -39,15 +42,21 @@ pub struct ProposalValidator<T: NodeType> {
 
 struct Validator<T: NodeType> {
     membership_coordinator: EpochMembershipCoordinator<T>,
+    epoch_height: u64,
     upgrade_lock: UpgradeLock<T>,
 }
 
 impl<T: NodeType> ProposalValidator<T> {
-    pub fn new(c: EpochMembershipCoordinator<T>, upgrade_lock: UpgradeLock<T>) -> Self {
+    pub fn new(
+        c: EpochMembershipCoordinator<T>,
+        epoch_height: u64,
+        upgrade_lock: UpgradeLock<T>,
+    ) -> Self {
         Self {
             tasks: JoinSet::new(),
             validator: Arc::new(Validator {
                 membership_coordinator: c,
+                epoch_height,
                 upgrade_lock,
             }),
         }
@@ -60,6 +69,7 @@ impl<T: NodeType> ProposalValidator<T> {
             v.vid_share(&p.vid_share, p.proposal.data.epoch).await?;
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
+            v.state_cert(&p.proposal.data).await?;
             Ok(ValidatedProposal {
                 sender,
                 message: ProposalMessage::validated(p.proposal, p.vid_share),
@@ -144,6 +154,34 @@ impl<T: NodeType> Validator<T> {
         }
     }
 
+    /// Validate the state_cert on an epoch-root proposal.
+    ///
+    /// If the justify_qc points at an epoch-root block, the proposal MUST
+    /// carry a matching `LightClientStateUpdateCertificateV2`.
+    async fn state_cert(&self, proposal: &Proposal<T>) -> Result<()> {
+        let Some(qc_block_number) = proposal.justify_qc.data.block_number else {
+            return Ok(());
+        };
+        if !is_epoch_root(qc_block_number, self.epoch_height) {
+            // Non-epoch-root parent → no state_cert required.
+            return Ok(());
+        }
+        let Some(state_cert) = proposal.state_cert.as_ref() else {
+            return Err(ValidationError::MissingStateCert);
+        };
+        if !check_qc_state_cert_correspondence(&proposal.justify_qc, state_cert, self.epoch_height)
+        {
+            return Err(ValidationError::StateCertCorrespondence);
+        }
+        validate_light_client_state_update_certificate(
+            state_cert,
+            &self.membership_coordinator,
+            &self.upgrade_lock,
+        )
+        .await
+        .map_err(ValidationError::InvalidStateCert)
+    }
+
     async fn membership(&self, epoch: EpochNumber) -> Result<EpochMembership<T>> {
         match self
             .membership_coordinator
@@ -185,4 +223,13 @@ pub enum ValidationError {
 
     #[error("failed to get leader for view {0}, epoch {1}: {2}")]
     NoLeader(ViewNumber, EpochNumber, #[source] anytrace::Error),
+
+    #[error("proposal justify_qc is epoch-root but state_cert is missing")]
+    MissingStateCert,
+
+    #[error("state_cert does not correspond to justify_qc")]
+    StateCertCorrespondence,
+
+    #[error("state_cert signature validation failed: {0}")]
+    InvalidStateCert(#[source] anytrace::Error),
 }

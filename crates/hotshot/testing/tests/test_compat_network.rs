@@ -3,7 +3,10 @@ use std::{marker::PhantomData, net::Ipv4Addr, sync::Arc, time::Duration};
 use alloy::primitives::U256;
 use async_lock::RwLock;
 use committable::Committable;
-use hotshot::traits::implementations::{Cliquenet, CompatNetwork, MasterMap, MemoryNetwork};
+use hotshot::{
+    traits::implementations::{Cliquenet, CompatNetwork, MasterMap, MemoryNetwork},
+    types::SignatureKey,
+};
 use hotshot_example_types::{
     node_types::{MemoryImpl, TestTypes},
     storage_types::TestStorage,
@@ -19,7 +22,6 @@ use hotshot_types::{
     simple_vote::UpgradeProposalData,
     traits::{
         election::Membership,
-        metrics::NoMetrics,
         network::{ConnectedNetwork, Topic},
         node_implementation::NodeType,
     },
@@ -40,7 +42,7 @@ async fn cliquenet_epoch_change_adds_peers_from_stake_table() {
     cliq.update_view(ViewNumber::new(1), Some(EpochNumber::new(2)), coord)
         .await;
 
-    let peers = cliq.peers();
+    let peers = peers(&cliq);
     assert!(peers.contains(&v0.public_key), "v0 should be a peer");
     assert!(peers.contains(&v1.public_key), "v1 should be a peer");
     assert!(peers.contains(&v2.public_key), "v2 should be a peer");
@@ -60,7 +62,7 @@ async fn cliquenet_epoch_change_removes_stale_peers() {
     cliq.update_view(ViewNumber::new(1), Some(EpochNumber::new(2)), coord)
         .await;
 
-    let peers = cliq.peers();
+    let peers = peers(&cliq);
     assert!(peers.contains(&v0.public_key), "v0 should remain");
     assert!(peers.contains(&v1.public_key), "v1 should remain");
     assert!(!peers.contains(&v2.public_key), "v2 should be removed");
@@ -84,7 +86,7 @@ async fn cliquenet_epoch_change_skips_validator_without_addr() {
         .await;
 
     assert!(
-        !cliq.peers().contains(&v1_no_addr.public_key),
+        !peers(&cliq).contains(&v1_no_addr.public_key),
         "validator without connect info should not become a peer"
     );
 }
@@ -139,17 +141,17 @@ async fn cliquenet_epoch_change_retains_prev_epoch_validator_then_removes() {
 
     cliq.update_view(ViewNumber::new(1), Some(EpochNumber::new(2)), coord.clone())
         .await;
-    assert!(cliq.peers().contains(&v2.public_key));
+    assert!(peers(&cliq).contains(&v2.public_key));
 
     // v2 is absent from epoch 3 and 4, but was in epoch 2, so we still expect to find it in peers.
     cliq.update_view(ViewNumber::new(2), Some(EpochNumber::new(3)), coord.clone())
         .await;
-    assert!(cliq.peers().contains(&v2.public_key));
+    assert!(peers(&cliq).contains(&v2.public_key));
 
     // v2 is absent going forward, so it should be removed.
     cliq.update_view(ViewNumber::new(3), Some(EpochNumber::new(4)), coord)
         .await;
-    assert!(!cliq.peers().contains(&v2.public_key));
+    assert!(!peers(&cliq).contains(&v2.public_key));
 }
 
 #[test_log::test(tokio::test)]
@@ -222,7 +224,7 @@ async fn compat_network_update_view_updates_both_networks() {
 
     // Despite being in fallback mode, cliquenet's peer list was updated.
     assert!(
-        compat0.cliquenet().peers().contains(&v1.public_key),
+        peers(compat0.cliquenet()).contains(&v1.public_key),
         "cliquenet peers must be updated even while fallback is active"
     );
 }
@@ -324,7 +326,7 @@ fn make_validator(index: u64) -> ValidatorConfig<TestTypes> {
         U256::from(1),
         true,
     );
-    let k = x25519::Keypair::derive_from::<BLSPubKey>(&v.private_key);
+    let k = x25519::Keypair::derive_from::<BLSPubKey>(&v.private_key).unwrap();
     let p = test_utils::reserve_tcp_port().unwrap();
     v.x25519_keypair = Some(k);
     v.p2p_addr = Some(NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), p));
@@ -386,8 +388,14 @@ async fn make_cliquenet(
         owner.x25519_keypair.clone().unwrap(),
         owner.p2p_addr.clone().unwrap(),
         parties,
-        Box::new(NoMetrics),
     )
     .await
     .unwrap()
+}
+
+fn peers<K: SignatureKey + 'static>(c: &Cliquenet<K>) -> Vec<K> {
+    c.peers()
+        .into_iter()
+        .filter_map(|(k, _)| c.reverse_lookup(&k))
+        .collect()
 }
