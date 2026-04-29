@@ -17,15 +17,19 @@ use tokio::{
 };
 use tracing::{debug, instrument, warn};
 
-use crate::helpers::upgrade_lock;
-
 pub struct VoteCollector<T: NodeType, V, C> {
+    // NOTE: `tasks` is declared before `accumulators` so that on drop the
+    // JoinSet aborts running tasks before the channel senders in
+    // `accumulators` are closed.  This prevents `run_per_view` from
+    // observing a closed channel and hitting `unreachable!()`.
+    tasks: JoinSet<C>,
     accumulators: BTreeMap<ViewNumber, (mpsc::Sender<V>, AbortHandle)>,
     completed_certificates: BTreeSet<ViewNumber>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     membership_cache: BTreeMap<EpochNumber, EpochMembership<T>>,
     upgrade_lock: UpgradeLock<T>,
-    tasks: JoinSet<C>,
+    /// Votes received before their epoch membership was available.
+    pending_votes: Vec<V>,
 }
 
 impl<T, V, C> VoteCollector<T, V, C>
@@ -46,6 +50,7 @@ where
             membership_cache: BTreeMap::new(),
             upgrade_lock,
             tasks: JoinSet::new(),
+            pending_votes: Vec::new(),
         }
     }
 
@@ -76,17 +81,33 @@ where
             return;
         }
         let Some(membership) = self.resolve_membership(&vote).await else {
+            // Epoch membership not yet available — buffer for later retry.
+            self.pending_votes.push(vote);
             return;
         };
         let (tx, _abort_handle) = self.accumulators.entry(view).or_insert_with(|| {
             let (tx, rx) = mpsc::channel(100);
             let accumulator = VoteAccumulator::new(self.upgrade_lock.clone());
-            let abort_handle =
-                self.tasks
-                    .spawn(Self::run_per_view(view, rx, accumulator, membership));
+            let upgrade_lock = self.upgrade_lock.clone();
+            let abort_handle = self.tasks.spawn(Self::run_per_view(
+                view,
+                rx,
+                accumulator,
+                membership,
+                upgrade_lock,
+            ));
             (tx, abort_handle)
         });
         let _ = tx.send(vote).await;
+    }
+
+    /// Retry accumulation of votes that were buffered because their epoch
+    /// membership was not available.
+    pub async fn retry_pending_votes(&mut self) {
+        let pending = std::mem::take(&mut self.pending_votes);
+        for vote in pending {
+            self.accumulate_vote(vote).await;
+        }
     }
 
     async fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {
@@ -109,6 +130,7 @@ where
         mut rx: mpsc::Receiver<V>,
         mut accumulator: VoteAccumulator<T, V, C>,
         membership: EpochMembership<T>,
+        upgrade_lock: UpgradeLock<T>,
     ) -> C {
         let mut votes = Vec::new();
 
@@ -119,7 +141,7 @@ where
                 match cert.is_valid_cert(
                     &StakeTableEntries::<T>::from(stake_table).0,
                     threshold,
-                    &upgrade_lock(),
+                    &upgrade_lock,
                 ) {
                     Ok(()) => {
                         return cert;
@@ -130,14 +152,14 @@ where
                         // Recover the good votes, this takes a long time
                         // TODO make this more efficient by parallelizing the validation
                         votes.retain(|v: &V| {
-                            let vote_commitment = generate_vote_commitment(v, &upgrade_lock());
+                            let vote_commitment = generate_vote_commitment(v, &upgrade_lock);
 
                             vote_commitment.is_some_and(|commitment| {
                                 v.signing_key()
                                     .validate(&v.signature(), commitment.as_ref())
                             })
                         });
-                        accumulator = VoteAccumulator::new(upgrade_lock());
+                        accumulator = VoteAccumulator::new(upgrade_lock.clone());
                         for vote in &votes {
                             // after recovering the good votes, try to accumulate them again, but this time
                             // we know the cert if good if we can form it
@@ -163,6 +185,7 @@ where
         }
         self.accumulators = keep;
         self.membership_cache = self.membership_cache.split_off(&epoch);
+        self.pending_votes.retain(|v| v.view_number() >= view);
     }
 }
 
@@ -200,7 +223,7 @@ mod tests {
 
     use super::VoteCollector;
     use crate::{
-        helpers::upgrade_lock,
+        helpers::test_upgrade_lock,
         message::{Certificate1, Certificate2, Vote2},
         tests::common::utils::mock_membership,
     };
@@ -229,7 +252,7 @@ mod tests {
             epoch: Some(epoch),
             block_number: Some(1),
         };
-        SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, &upgrade_lock())
+        SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, &test_upgrade_lock())
             .expect("Failed to sign vote")
     }
 
@@ -247,7 +270,7 @@ mod tests {
     fn make_vote2(node_index: u64, view: ViewNumber) -> Vote2<TestTypes> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = vote_2_data();
-        SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, &upgrade_lock())
+        SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, &test_upgrade_lock())
             .expect("Failed to sign vote")
     }
 
@@ -257,9 +280,10 @@ mod tests {
         // Sign with a completely different key
         let (_, wrong_priv_key) = BLSPubKey::generated_from_seed_indexed([1u8; 32], node_index);
         let data = vote_2_data();
-        let commit = VersionedVoteData::<TestTypes, _>::new(data.clone(), view, &upgrade_lock())
-            .unwrap()
-            .commit();
+        let commit =
+            VersionedVoteData::<TestTypes, _>::new(data.clone(), view, &test_upgrade_lock())
+                .unwrap()
+                .commit();
         let bad_sig = BLSPubKey::sign(&wrong_priv_key, commit.as_ref()).unwrap();
         SimpleVote {
             signature: (pub_key, bad_sig),
@@ -287,7 +311,7 @@ mod tests {
         C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
     >() -> VoteCollector<TestTypes, V, C> {
         let membership = mock_membership().await;
-        VoteCollector::<TestTypes, V, C>::new(membership, upgrade_lock())
+        VoteCollector::<TestTypes, V, C>::new(membership, test_upgrade_lock())
     }
 
     /// Wait for exactly `expected` certificates, then abort the task.
@@ -343,7 +367,7 @@ mod tests {
         let stake_table = C::stake_table(membership).await;
         let stake_table_entries = StakeTableEntries::<TestTypes>::from(stake_table).0;
         let threshold = C::threshold(membership).await;
-        cert.is_valid_cert(&stake_table_entries, threshold, &upgrade_lock())
+        cert.is_valid_cert(&stake_table_entries, threshold, &test_upgrade_lock())
             .expect("Certificate signature validation failed");
     }
 
@@ -668,9 +692,14 @@ mod tests {
                 epoch: EpochNumber::genesis(),
                 block_number: 1,
             };
-            let vote =
-                SimpleVote::create_signed_vote(data, view, &pub_key, &priv_key, &upgrade_lock())
-                    .expect("Failed to sign vote");
+            let vote = SimpleVote::create_signed_vote(
+                data,
+                view,
+                &pub_key,
+                &priv_key,
+                &test_upgrade_lock(),
+            )
+            .expect("Failed to sign vote");
             task.accumulate_vote(vote).await;
         }
         assert_no_certs(&mut task).await;

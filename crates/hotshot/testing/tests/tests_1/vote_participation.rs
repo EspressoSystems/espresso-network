@@ -14,16 +14,16 @@ mod tests {
     use hotshot_example_types::node_types::TestTypes;
     use hotshot_testing::helpers::key_pair_for_id;
     use hotshot_types::{
+        PeerConfig,
         consensus::{Consensus, ConsensusMetricsValue},
         data::{EpochNumber, ViewNumber},
         simple_certificate::{QuorumCertificate2, SimpleCertificate, SuccessThreshold},
         simple_vote::QuorumData2,
-        stake_table::{supermajority_threshold, HSStakeTable},
+        stake_table::{HSStakeTable, supermajority_threshold},
         traits::{
             node_implementation::NodeType,
             signature_key::{SignatureKey, StateSignatureKey},
         },
-        PeerConfig,
     };
 
     /// Build an n-node stake table (each node has 1 unit of stake) plus the
@@ -34,8 +34,7 @@ mod tests {
                 let (_, pub_key) = key_pair_for_id::<TestTypes>(i as u64);
                 let (state_key, _) =
                     <TestTypes as NodeType>::StateSignatureKey::generated_from_seed_indexed(
-                        [0u8; 32],
-                        i as u64,
+                        [0u8; 32], i as u64,
                     );
                 PeerConfig::<TestTypes> {
                     stake_table_entry: pub_key.stake_table_entry(U256::from(1u64)),
@@ -111,9 +110,8 @@ mod tests {
         }
         // Get a valid BLS signature from the first signer (or signer 0 if none).
         // signers() only reads the bitvec; the aggregated sig is irrelevant.
-        let (priv_key, _) = key_pair_for_id::<TestTypes>(
-            signer_indices.first().copied().unwrap_or(0) as u64,
-        );
+        let (priv_key, _) =
+            key_pair_for_id::<TestTypes>(signer_indices.first().copied().unwrap_or(0) as u64);
         let dummy_sig = <TestTypes as NodeType>::SignatureKey::sign(&priv_key, &[0u8; 32])
             .expect("signing must succeed");
         let qc_type = (dummy_sig, bv);
@@ -156,15 +154,15 @@ mod tests {
         let mut consensus = make_test_consensus(stake_table.clone(), threshold, None);
 
         let qc = make_qc(&stake_table, 5, &[0, 1, 2], None);
-        consensus.update_vote_participation(qc).expect("update must succeed");
+        consensus
+            .update_vote_participation(qc)
+            .expect("update must succeed");
 
         let participation = consensus.current_vote_participation();
         assert_eq!(participation.len(), 5);
 
         // Nodes 0, 1, 2 signed in 1 of 1 views.
-        let node_keys: Vec<_> = (0..5)
-            .map(|i| key_pair_for_id::<TestTypes>(i).1)
-            .collect();
+        let node_keys: Vec<_> = (0..5).map(|i| key_pair_for_id::<TestTypes>(i).1).collect();
         for i in 0..3usize {
             let ratio = participation[&node_keys[i]];
             assert!(
@@ -298,7 +296,8 @@ mod tests {
     #[test]
     fn test_epoch_transition_preserves_history() {
         let (stake_table, threshold) = make_stake_table(5);
-        let mut consensus = make_test_consensus(stake_table.clone(), threshold, Some(EpochNumber::new(1)));
+        let mut consensus =
+            make_test_consensus(stake_table.clone(), threshold, Some(EpochNumber::new(1)));
 
         // Apply 3 QCs in epoch None; nodes [0,1,2] sign each.
         for view in 1u64..=3 {

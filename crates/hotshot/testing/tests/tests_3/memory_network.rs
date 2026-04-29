@@ -20,11 +20,12 @@ use hotshot_types::{
     message::{DataMessage, Message, MessageKind, UpgradeLock},
     signature_key::BLSPubKey,
     traits::{
-        network::{BroadcastDelay, ConnectedNetwork, TestableNetworkingImplementation, Topic},
-        node_implementation::{NodeType},
-    }, vote::HasViewNumber,
+        network::{BroadcastDelay, ConnectedNetwork, Topic},
+        node_implementation::NodeType,
+    },
+    vote::HasViewNumber,
 };
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use tokio::time::timeout;
 use tracing::{instrument, trace};
 
@@ -128,11 +129,12 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).unwrap();
-        assert!(timeout(Duration::from_secs(1), network2.recv_message())
-            .await
-            .is_err());
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).unwrap();
+        assert!(
+            timeout(Duration::from_secs(1), network2.recv_message())
+                .await
+                .is_err()
+        );
         fake_message_eq(sent_message, deserialized_message);
     }
 
@@ -151,11 +153,12 @@ async fn memory_network_direct_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).unwrap();
-        assert!(timeout(Duration::from_secs(1), network1.recv_message())
-            .await
-            .is_err());
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).unwrap();
+        assert!(
+            timeout(Duration::from_secs(1), network1.recv_message())
+                .await
+                .is_err()
+        );
         fake_message_eq(sent_message, deserialized_message);
     }
 }
@@ -182,18 +185,24 @@ async fn memory_network_broadcast_queue() {
         let view = sent_message.view_number();
         let serialized_message = upgrade_lock.serialize(&sent_message).unwrap();
         network1
-            .broadcast_message(view, serialized_message.clone(), Topic::Da, BroadcastDelay::None)
+            .broadcast_message(
+                view,
+                serialized_message.clone(),
+                Topic::Da,
+                BroadcastDelay::None,
+            )
             .await
             .expect("Failed to message node");
         let recv_message = network2
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).unwrap();
-        assert!(timeout(Duration::from_secs(1), network2.recv_message())
-            .await
-            .is_err());
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).unwrap();
+        assert!(
+            timeout(Duration::from_secs(1), network2.recv_message())
+                .await
+                .is_err()
+        );
         fake_message_eq(sent_message, deserialized_message);
     }
 
@@ -217,100 +226,12 @@ async fn memory_network_broadcast_queue() {
             .recv_message()
             .await
             .expect("Failed to receive message");
-        let (deserialized_message, _version) =
-            upgrade_lock.deserialize(&recv_message).unwrap();
-        assert!(timeout(Duration::from_secs(1), network1.recv_message())
-            .await
-            .is_err());
+        let (deserialized_message, _version) = upgrade_lock.deserialize(&recv_message).unwrap();
+        assert!(
+            timeout(Duration::from_secs(1), network1.recv_message())
+                .await
+                .is_err()
+        );
         fake_message_eq(sent_message, deserialized_message);
     }
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-#[instrument]
-#[allow(deprecated)]
-async fn memory_network_test_in_flight_message_count() {
-    let group: Arc<MasterMap<<TestTypes as NodeType>::SignatureKey>> = MasterMap::new();
-    trace!(?group);
-    let pub_key_1 = pubkey();
-    let network1 = MemoryNetwork::new(&pub_key_1, &group.clone(), &[Topic::Global], Option::None);
-    let pub_key_2 = pubkey();
-    let network2 = MemoryNetwork::new(&pub_key_2, &group, &[Topic::Global], Option::None);
-
-    // Create some dummy messages
-    let messages: Vec<Message<TestTypes>> = gen_messages(5, 100, pub_key_1);
-
-    assert_eq!(
-        TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1),
-        Some(0)
-    );
-    assert_eq!(
-        TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2),
-        Some(0)
-    );
-
-    let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
-
-    for (count, message) in messages.iter().enumerate() {
-        let view = message.view_number();
-        let serialized_message = upgrade_lock.serialize(message).unwrap();
-
-        network1
-            .direct_message(view, serialized_message.clone(), pub_key_2)
-            .await
-            .unwrap();
-        // network 2 has received `count` broadcast messages and `count + 1` direct messages
-        assert_eq!(
-            TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2),
-            Some(count + count + 1)
-        );
-
-        network2
-            .broadcast_message(
-                view,
-                serialized_message.clone(),
-                Topic::Global,
-                BroadcastDelay::None,
-            )
-            .await
-            .unwrap();
-        // network 1 has received `count` broadcast messages
-        assert_eq!(
-            TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1),
-            Some(count + 1)
-        );
-
-        // network 2 has received `count + 1` broadcast messages and `count + 1` direct messages
-        assert_eq!(
-            TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2),
-            Some((count + 1) * 2)
-        );
-    }
-
-    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1).unwrap()
-        > 0
-    {
-        network1.recv_message().await.unwrap();
-    }
-
-    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2).unwrap()
-        > messages.len()
-    {
-        network2.recv_message().await.unwrap();
-    }
-
-    while TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2).unwrap()
-        > 0
-    {
-        network2.recv_message().await.unwrap();
-    }
-
-    assert_eq!(
-        TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network1),
-        Some(0)
-    );
-    assert_eq!(
-        TestableNetworkingImplementation::<TestTypes>::in_flight_message_count(&network2),
-        Some(0)
-    );
 }

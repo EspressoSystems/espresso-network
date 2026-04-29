@@ -12,5 +12,7 @@ format_strings = true
 
 ignore = [
   # the contract bindings are generated files
-  "contracts/rust/adapter/src/bindings"
+  "contracts/rust/adapter/src/bindings",
+  # tonic-prost generated protobuf stubs
+  "**/*.api.v[0-9]*.rs",
 ]

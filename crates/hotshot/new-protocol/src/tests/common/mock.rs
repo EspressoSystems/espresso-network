@@ -3,7 +3,7 @@ pub mod testing {
 
     use async_trait::async_trait;
     use hotshot::{traits::NetworkError, types::SignatureKey};
-    use hotshot_example_types::node_types::TestTypes;
+    use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
     use hotshot_types::{
         BoxSyncFuture,
         data::{EpochNumber, ViewNumber},
@@ -17,7 +17,7 @@ pub mod testing {
 
     use crate::coordinator::Coordinator;
 
-    pub type MockCoordinator = Coordinator<TestTypes, MockNetwork>;
+    pub type MockCoordinator = Coordinator<TestTypes, MockNetwork, TestStorage<TestTypes>>;
 
     #[derive(Clone, Default)]
     pub struct MockNetwork {

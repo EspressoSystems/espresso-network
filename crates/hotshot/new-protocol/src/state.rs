@@ -7,6 +7,7 @@ use committable::{Commitment, Committable};
 use hotshot::traits::{BlockPayload, ValidatedState};
 use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    message::UpgradeLock,
     traits::{
         block_contents::{BlockHeader, BuilderFee},
         node_implementation::NodeType,
@@ -17,10 +18,7 @@ use hotshot_types::{
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
 
-use crate::{
-    helpers::{proposal_commitment, upgrade_lock},
-    message::Proposal,
-};
+use crate::{helpers::proposal_commitment, message::Proposal};
 
 pub struct UpdateLeaf<T: NodeType> {
     pub view: ViewNumber,
@@ -94,6 +92,7 @@ pub struct StateManager<T: NodeType> {
     state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, ViewNumber)>,
     header_requests: HashMap<ViewNumber, AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
+    upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
 }
 
@@ -114,13 +113,14 @@ enum Completed<T: NodeType> {
 }
 
 impl<T: NodeType> StateManager<T> {
-    pub fn new(instance: Arc<T::InstanceState>) -> Self {
+    pub fn new(instance: Arc<T::InstanceState>, upgrade_lock: UpgradeLock<T>) -> Self {
         Self {
             instance,
             validated_states: BTreeMap::new(),
             state_requests: HashMap::new(),
             header_requests: HashMap::new(),
             pending_requests: HashMap::new(),
+            upgrade_lock,
             tasks: JoinSet::new(),
         }
     }
@@ -163,6 +163,7 @@ impl<T: NodeType> StateManager<T> {
 
         let Some(parent_entry) = self.validated_states.get(&request.parent_view).cloned() else {
             self.insert_empty_state(request.proposal);
+            self.start_pending(commitment);
             return;
         };
 
@@ -171,7 +172,7 @@ impl<T: NodeType> StateManager<T> {
         let view = request.view;
         let payload_size = request.payload_size;
 
-        let Ok(upgrade_lock) = upgrade_lock::<T>().version(view) else {
+        let Ok(upgrade_lock) = self.upgrade_lock.version(view) else {
             error!(%view, "unsupported version");
             return;
         };
@@ -234,7 +235,13 @@ impl<T: NodeType> StateManager<T> {
 
         let parent_view = request.parent_proposal.view_number();
         let Some(parent_entry) = self.validated_states.get(&parent_view).cloned() else {
-            error!(view = %request.view, "parent state not found for header request");
+            // Parent state not available yet (e.g. its proposal is still
+            // being validated).  Queue the request so it is retried once
+            // the state for the parent view is inserted.
+            self.pending_requests
+                .entry(parent_commitment)
+                .or_default()
+                .push(Pending::Header(request));
             return;
         };
 
@@ -243,7 +250,7 @@ impl<T: NodeType> StateManager<T> {
         let epoch = request.epoch;
         let parent_proposal = request.parent_proposal;
 
-        let Ok(version) = upgrade_lock::<T>().version(view) else {
+        let Ok(version) = self.upgrade_lock.version(view) else {
             error!(%view, "unsupported version");
             return;
         };

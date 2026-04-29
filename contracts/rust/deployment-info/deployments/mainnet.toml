@@ -1,4 +1,4 @@
-# fetched at block 24921098 (2026-04-20T12:25:59Z)
+# fetched at block 24940938 (2026-04-23T06:46:11Z)
 network = "mainnet"
 
 [multisigs.espresso_labs]
@@ -101,8 +101,8 @@ version = "2.0.0"
 [fee_contract]
 status = "deployed"
 address = "0x9fce21c3f7600aa63392a5f5713986b39bb98884"
-owner_address = "0x34f5af5158171ffd2475d21db5fc3b311f221982"
-owner_name = "espresso_labs"
+owner_address = "0x67861f1ef4db9bcaddd8c5e86db92386dd4ec700"
+owner_name = "ops_timelock"
 version = "1.0.0"
 
 [light_client]

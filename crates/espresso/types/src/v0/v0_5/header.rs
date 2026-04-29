@@ -1,20 +1,19 @@
-use crate::{
-    v0::impls::StakeTableHash,
-    v0_3::RewardAmount,
-    v0_4::RewardMerkleCommitmentV2,
-    v0_5::{LeaderCounts, MAX_VALIDATORS},
-    NsTable, TimestampMillis,
-};
+use ark_serialize::CanonicalSerialize;
+use committable::{Commitment, Committable, RawCommitmentBuilder};
+use hotshot_types::{data::VidCommitment, utils::BuilderCommitment};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
     BlockMerkleCommitment, BuilderSignature, FeeInfo, FeeMerkleCommitment, L1BlockInfo,
     ResolvableChainConfig,
 };
-use ark_serialize::CanonicalSerialize;
-use committable::{Commitment, Committable, RawCommitmentBuilder};
-use hotshot_types::data::VidCommitment;
-use hotshot_types::utils::BuilderCommitment;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use crate::{
+    NsTable, TimestampMillis,
+    v0::impls::StakeTableHash,
+    v0_3::RewardAmount,
+    v0_4::RewardMerkleCommitmentV2,
+    v0_5::{LeaderCounts, MAX_VALIDATORS},
+};
 
 mod leader_counts_serde {
     use super::*;
@@ -91,7 +90,6 @@ impl Committable for Header {
         self.reward_merkle_tree_root
             .serialize_with_mode(&mut rwd_bytes, ark_serialize::Compress::Yes)
             .unwrap();
-
 
         let leader_counts_bytes: Vec<u8> = self
             .leader_counts

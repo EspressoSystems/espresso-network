@@ -8,14 +8,14 @@ use std::collections::HashMap;
 
 use hotshot_example_types::{
     node_types::{
-        CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestConsecutiveLeaderTypes, TestTypes, TestTypesRandomizedLeader
+        CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS,
+        TestConsecutiveLeaderTypes, TestTypes, TestTypesRandomizedLeader,
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
-    block_builder::SimpleBuilderImplementation,
-    test_builder::TestDescription,
+    block_builder::SimpleBuilderImplementation, test_builder::TestDescription,
     view_sync_task::ViewSyncTaskDescription,
 };
 

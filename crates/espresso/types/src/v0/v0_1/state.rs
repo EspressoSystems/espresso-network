@@ -1,8 +1,8 @@
 use committable::Commitment;
 use jf_merkle_tree_compat::{
+    MerkleTreeScheme,
     prelude::{LightWeightSHA3MerkleTree, Sha3Digest, Sha3Node},
     universal_merkle_tree::UniversalMerkleTree,
-    MerkleTreeScheme,
 };
 
 use super::{FeeAccount, FeeAmount};
