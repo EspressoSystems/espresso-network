@@ -16,6 +16,7 @@ use hotshot_new_protocol::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
+    epoch_root_vote_collector::EpochRootVoteCollector,
     network::Network,
     outbox::Outbox,
     proposal::ProposalValidator,
@@ -106,10 +107,18 @@ async fn build_coordinator(
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
     let upgrade_lock = bench_upgrade_lock();
 
+    let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
+        [0u8; 32],
+        cfg.node_id,
+    );
+    let state_private_key = state_key_pair.sign_key_ref().clone();
+
     let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
         private_key.clone(),
+        state_private_key,
+        cfg.total_nodes,
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
@@ -120,6 +129,8 @@ async fn build_coordinator(
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let epoch_root_collector =
+        EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -147,7 +158,8 @@ async fn build_coordinator(
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-    let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
+    let proposal_validator =
+        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
     let net = Network::new(network, membership.clone(), upgrade_lock);
 
@@ -166,6 +178,7 @@ async fn build_coordinator(
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
         .checkpoint_collector(checkpoint_collector)
+        .epoch_root_collector(epoch_root_collector)
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)

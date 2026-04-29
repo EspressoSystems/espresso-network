@@ -14,8 +14,9 @@ use hotshot_types::{
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
         block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
-        storage::Storage as StorageTrait,
+        signature_key::StateSignatureKey, storage::Storage as StorageTrait,
     },
+    utils::is_epoch_root,
     vote::HasViewNumber,
 };
 use tokio::{select, sync::oneshot};
@@ -30,6 +31,7 @@ use crate::{
         timer::Timer,
     },
     epoch::{EpochManager, EpochRootResult},
+    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -69,6 +71,7 @@ pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
     timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
     checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
+    epoch_root_collector: EpochRootVoteCollector<T>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
@@ -89,6 +92,7 @@ pub struct Coordinator<T: NodeType, N, S: StorageTrait<T>> {
 #[bon]
 impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coordinator<T, N, S> {
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
+    #[allow(clippy::too_many_arguments)]
     pub fn maker(
         membership_coordinator: EpochMembershipCoordinator<T>,
         network: N,
@@ -96,6 +100,8 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
         upgrade_lock: UpgradeLock<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+        state_private_key: <T::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
+        stake_table_capacity: usize,
         timeout_duration: Duration,
         storage: S,
     ) -> Self {
@@ -103,6 +109,8 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
             membership_coordinator.clone(),
             public_key.clone(),
             private_key.clone(),
+            state_private_key,
+            stake_table_capacity,
             upgrade_lock.clone(),
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
@@ -140,7 +148,14 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
-            .checkpoint_collector(VoteCollector::new(membership_coordinator.clone(), lock))
+            .checkpoint_collector(VoteCollector::new(
+                membership_coordinator.clone(),
+                lock.clone(),
+            ))
+            .epoch_root_collector(EpochRootVoteCollector::new(
+                membership_coordinator.clone(),
+                lock,
+            ))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
                 membership_coordinator.clone(),
@@ -153,6 +168,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
             ))
             .proposal_validator(ProposalValidator::new(
                 membership_coordinator.clone(),
+                initializer.epoch_height,
                 upgrade_lock,
             ))
             .storage(Storage::new(storage, private_key))
@@ -338,6 +354,9 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                 Some(cert2) = self.vote2_collector.next() => {
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
+                Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
+                    return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })
+                }
                 Some(item) = self.proposal_validator.next() => match item {
                     Ok(validated) => {
                         let s = validated.message.vid_share.clone();
@@ -496,7 +515,18 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                     None
                 },
                 ConsensusMessage::Vote1(vote1) => {
-                    self.vote1_collector.accumulate_vote(vote1.vote).await;
+                    let bn = vote1.vote.data.block_number.unwrap_or(0);
+                    let epoch_height = *self.consensus.epoch_height;
+                    if is_epoch_root(bn, epoch_height) {
+                        // An epoch-root Vote1 MUST carry a state_vote.
+                        // Reject otherwise.
+                        vote1.state_vote.as_ref()?;
+                        self.epoch_root_collector.accumulate(vote1.clone()).await;
+                    } else {
+                        self.vote1_collector
+                            .accumulate_vote(vote1.vote.clone())
+                            .await;
+                    }
                     self.vid_reconstructor
                         .handle_vid_share(vote1.vid_share, None);
                     None
@@ -801,6 +831,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
         self.vote2_collector.gc(view, epoch);
         self.timeout_collector.gc(view, epoch);
         self.timeout_one_honest_collector.gc(view, epoch);
+        self.epoch_root_collector.gc(view, epoch);
         self.epoch_manager.gc(epoch);
         self.block_builder.gc(view);
         self.pending_proposal_fetches.gc(view);

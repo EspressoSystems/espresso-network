@@ -6202,6 +6202,7 @@ dependencies = [
  "bincode",
  "derive_more 2.1.1",
  "hotshot-types",
+ "hotshot-utils",
  "jf-pcs",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.7.0)",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
@@ -6215,6 +6216,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6365,6 +6367,7 @@ dependencies = [
  "committable",
  "futures",
  "hotshot",
+ "hotshot-contract-adapter",
  "hotshot-example-types",
  "hotshot-testing",
  "hotshot-types",
