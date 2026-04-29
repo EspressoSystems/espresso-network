@@ -430,7 +430,7 @@ impl TestData {
                     view_number,
                     epoch,
                     &next_stake_table_state,
-                    num_nodes as u64,
+                    ((2 * num_nodes) / 3 + 1) as u64,
                 );
                 prev_state_cert = Some(state_cert);
                 // Always propagate cert1 at epoch root so next view's justify_qc

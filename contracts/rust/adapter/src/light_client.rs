@@ -1,6 +1,6 @@
 //! Helpers and test mocks for Light Client logic
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use alloy::{
     primitives::{FixedBytes, U256},
@@ -186,12 +186,16 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
     });
 
     let mut accumulated_stake = U256::from(0);
+    let mut seen_keys = HashSet::new();
     let signed_state_digest = derive_signed_state_digest(
         &state_cert.light_client_state,
         &state_cert.next_stake_table_state,
         &state_cert.auth_root,
     );
     for (key, sig, sig_v2) in state_cert.signatures.iter() {
+        if !seen_keys.insert(key.clone()) {
+            bail!("Duplicate signature for key: {key:?}");
+        }
         if let Some(stake) = state_key_map.get(key) {
             accumulated_stake += *stake;
             #[allow(clippy::collapsible_else_if)]
