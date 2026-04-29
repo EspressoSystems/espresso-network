@@ -19,6 +19,6 @@ pub mod memory_network;
 /// The Push CDN network
 pub mod push_cdn_network;
 
-pub use cliquenet_network::Cliquenet;
+pub use cliquenet_network::{Cliquenet, collect_window_peers};
 pub use compat_network::CompatNetwork;
 pub use hotshot_types::traits::network::{NetworkError, NetworkReliability};

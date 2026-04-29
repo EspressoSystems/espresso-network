@@ -364,6 +364,15 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
                         self.vid_reconstructor.handle_vid_share(s.clone(), m);
                         self.storage.append_vid(s);
                         self.storage.append_proposal(validated.message.proposal.data.clone());
+
+                        // Make sure the network is updated with the correct epoch and view
+                        // once a proposal is validated
+                        self.network
+                            .update_view(
+                                validated.message.proposal.data.view_number,
+                                validated.message.proposal.data.epoch,
+                            )
+                            .await;
                         return Ok(ConsensusInput::Proposal(validated.sender, validated.message))
                     }
                     Err(e) => {

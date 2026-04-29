@@ -360,6 +360,19 @@ where
         self.catchup_map.lock().await.remove(&epoch);
     }
 
+    /// Get the stake table for `epoch`, blocking on catchup if necessary.
+    ///
+    /// Unlike `stake_table_for_epoch`, this returns the result rather than
+    /// kicking off catchup and immediately returning an error. Used at startup
+    /// to drive the existing catchup chain synchronously before consensus is
+    /// running.
+    pub async fn wait_for_stake_table(&self, epoch: EpochNumber) -> Result<EpochMembership<TYPES>> {
+        match self.stake_table_for_epoch(Some(epoch)).await {
+            Ok(mem) => Ok(mem),
+            Err(_) => self.wait_for_catchup(epoch).await,
+        }
+    }
+
     /// Call this method if you think catchup is in progress for a given epoch
     /// and you want to wait for it to finish and get the stake table.
     /// If it's not, it will try to return the stake table if already available.
