@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["sealed"],"struct":["Empty","SetInitializer","SetMembershipCoordinator","SetNetwork","SetPrivateKey","SetPublicKey","SetStorage","SetTimeoutDuration","SetUpgradeLock"],"trait":["IsComplete","IsSet","IsUnset","State"]};
+window.SIDEBAR_ITEMS = {"mod":["sealed"],"struct":["Empty","SetInitializer","SetMembershipCoordinator","SetNetwork","SetPrivateKey","SetPublicKey","SetStakeTableCapacity","SetStatePrivateKey","SetStorage","SetTimeoutDuration","SetUpgradeLock"],"trait":["IsComplete","IsSet","IsUnset","State"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {};
+window.SIDEBAR_ITEMS = {"fn":["derive_signed_state_digest","validate_light_client_state_update_certificate"]};

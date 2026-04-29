@@ -35,7 +35,7 @@
 <a href=#35 id=35 data-nosnippet>35</a>        node_implementation::NodeType,
 <a href=#36 id=36 data-nosnippet>36</a>        signature_key::{SignatureKey, StateSignatureKey},
 <a href=#37 id=37 data-nosnippet>37</a>    },
-<a href=#38 id=38 data-nosnippet>38</a>    utils::is_epoch_transition,
+<a href=#38 id=38 data-nosnippet>38</a>    utils::{is_epoch_root, is_epoch_transition},
 <a href=#39 id=39 data-nosnippet>39</a>    vote::{Certificate, HasViewNumber},
 <a href=#40 id=40 data-nosnippet>40</a>};
 <a href=#41 id=41 data-nosnippet>41</a>
@@ -1036,4 +1036,18 @@
 <a href=#1036 id=1036 data-nosnippet>1036</a>        <span class="self">self</span>.qc.view_number()
 <a href=#1037 id=1037 data-nosnippet>1037</a>    }
 <a href=#1038 id=1038 data-nosnippet>1038</a>}
+<a href=#1039 id=1039 data-nosnippet>1039</a>
+<a href=#1040 id=1040 data-nosnippet>1040</a><span class="doccomment">/// Check that a light client state update certificate corresponds to a given QC:
+<a href=#1041 id=1041 data-nosnippet>1041</a>/// the QC is for an epoch root block, the epochs match, and the view numbers match.
+<a href=#1042 id=1042 data-nosnippet>1042</a></span><span class="kw">pub fn </span>check_qc_state_cert_correspondence&lt;TYPES: NodeType&gt;(
+<a href=#1043 id=1043 data-nosnippet>1043</a>    qc: <span class="kw-2">&amp;</span>QuorumCertificate2&lt;TYPES&gt;,
+<a href=#1044 id=1044 data-nosnippet>1044</a>    state_cert: <span class="kw-2">&amp;</span>LightClientStateUpdateCertificateV2&lt;TYPES&gt;,
+<a href=#1045 id=1045 data-nosnippet>1045</a>    epoch_height: u64,
+<a href=#1046 id=1046 data-nosnippet>1046</a>) -&gt; bool {
+<a href=#1047 id=1047 data-nosnippet>1047</a>    qc.data
+<a href=#1048 id=1048 data-nosnippet>1048</a>        .block_number
+<a href=#1049 id=1049 data-nosnippet>1049</a>        .is_some_and(|bn| is_epoch_root(bn, epoch_height))
+<a href=#1050 id=1050 data-nosnippet>1050</a>        &amp;&amp; <span class="prelude-val">Some</span>(state_cert.epoch) == qc.data.epoch()
+<a href=#1051 id=1051 data-nosnippet>1051</a>        &amp;&amp; qc.view_number().u64() == state_cert.light_client_state.view_number
+<a href=#1052 id=1052 data-nosnippet>1052</a>}
 </code></pre></div></section></main></body></html>
