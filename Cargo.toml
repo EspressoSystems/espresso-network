@@ -149,7 +149,7 @@ bigdecimal = "0.4.8"
 bimap = "0.6.3"
 bincode = "1.3.3"
 bitvec = { version = "1", features = ["serde"] }
-blake3 = "1.5"
+blake3 = "1"
 bon = "3.8.2"
 bs58 = "0.5.1"
 bytemuck = { version = "1.19", features = ["derive"] }
@@ -238,7 +238,7 @@ jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "
     "parallel",
 ] }
 jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.2.0" }
-jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.4.0" }
+jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", branch = "cl/mtiter" }
 jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.3.1", features = [
     "std",
 ] }
