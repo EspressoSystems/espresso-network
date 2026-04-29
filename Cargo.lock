@@ -3155,22 +3155,21 @@ dependencies = [
 name = "cliquenet"
 version = "0.1.0"
 dependencies = [
- "bimap",
  "bon",
+ "bs58",
  "bytes 1.11.1",
  "criterion 0.8.2",
- "hotshot-types",
- "nohash-hasher",
+ "ed25519-compact",
  "parking_lot",
  "quickcheck",
  "rand 0.10.1",
- "scopeguard",
+ "serde",
+ "serde_bytes",
  "snow",
- "test-utils",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
- "tracing-subscriber 0.3.23",
 ]
 
 [[package]]
@@ -6203,6 +6202,7 @@ dependencies = [
  "bincode",
  "derive_more 2.1.1",
  "hotshot-types",
+ "hotshot-utils",
  "jf-pcs",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-plonk-v0.7.0)",
  "jf-plonk 0.7.0 (git+https://github.com/EspressoSystems/jellyfish?branch=jf-relation-v0.5.0-compat)",
@@ -6216,6 +6216,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6366,6 +6367,7 @@ dependencies = [
  "committable",
  "futures",
  "hotshot",
+ "hotshot-contract-adapter",
  "hotshot-example-types",
  "hotshot-testing",
  "hotshot-types",
@@ -6387,6 +6389,7 @@ name = "hotshot-new-protocol-bench"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-broadcast",
  "async-lock 3.4.2",
  "clap 4.6.1",
  "cliquenet",
@@ -6686,12 +6689,12 @@ dependencies = [
  "blake3",
  "bs58",
  "clap 4.6.1",
+ "cliquenet",
  "committable",
  "derive_more 2.1.1",
  "digest 0.10.7",
  "displaydoc",
  "dyn-clone",
- "ed25519-compact",
  "either",
  "futures",
  "generic-array 1.3.5",
@@ -6924,7 +6927,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -9080,12 +9083,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nohash-hasher"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
-
-[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10855,7 +10852,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -13319,6 +13316,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
+ "hashbrown 0.15.5",
  "pin-project-lite 0.2.17",
  "tokio",
 ]
@@ -14396,9 +14394,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.7"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f31141ce3fc3e300ae89b78c0dd67f9708061d1d2eda54b8209346fd6be9a92c"
+checksum = "804f18a4ac2676ffb4e8b5b5fa9ae38af06df08162314f96a68d2a363e21a8ca"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -14418,14 +14416,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.7",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.7"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
+checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
 dependencies = [
  "rustls-pki-types",
 ]

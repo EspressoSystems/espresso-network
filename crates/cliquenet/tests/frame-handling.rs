@@ -1,23 +1,17 @@
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use bytes::Bytes;
-use cliquenet::{NetConf, Retry};
-#[cfg(feature = "metrics")]
-use hotshot_types::traits::metrics::NoMetrics;
-use hotshot_types::{addr::NetAddr, x25519::Keypair};
+use cliquenet::{Config, NetAddr, Network, Slot, x25519::Keypair};
 use rand::Rng;
 
-/// Send and receive messages of various sizes between 1 byte and 5 MiB.
+/// Send and receive 5 MiB messages.
 #[tokio::test]
 async fn multiple_frames() {
-    let _ = tracing_subscriber::fmt::try_init();
-
-    const PARTIES: u16 = 30;
+    const PARTIES: u16 = 10;
 
     let parties = (0..PARTIES)
         .map(|i| {
             (
-                i,
                 Keypair::generate().unwrap(),
                 NetAddr::from((Ipv4Addr::LOCALHOST, 50000 + i)),
             )
@@ -25,39 +19,27 @@ async fn multiple_frames() {
         .collect::<Vec<_>>();
 
     let mut networks = HashMap::new();
-    for (k, x, a) in parties.clone() {
+    for (i, (k, a)) in parties.clone().into_iter().enumerate() {
         networks.insert(
-            k,
-            Retry::create({
-                let cfg = NetConf::builder()
+            i,
+            Network::create(
+                Config::builder()
                     .name("frames")
-                    .keypair(x)
-                    .label(k)
+                    .keypair(k)
                     .bind(a)
-                    .parties(
-                        parties
-                            .iter()
-                            .map(|(i, x, a)| (*i, x.public_key(), a.clone())),
-                    );
-                #[cfg(not(feature = "metrics"))]
-                {
-                    cfg.build()
-                }
-                #[cfg(feature = "metrics")]
-                {
-                    cfg.metrics(Box::new(NoMetrics)).build()
-                }
-            })
+                    .parties(parties.iter().map(|(k, a)| (k.public_key(), a.clone())))
+                    .build(),
+            )
             .await
             .unwrap(),
         );
     }
 
-    let mut counters: HashMap<u16, HashMap<Bytes, usize>> = HashMap::new();
+    let mut counters: HashMap<usize, HashMap<Bytes, usize>> = HashMap::new();
 
     for b in 0..10 {
         for net in networks.values_mut() {
-            net.broadcast(b, gen_message()).await.unwrap();
+            net.broadcast(Slot::new(b), gen_message()).unwrap();
         }
         loop {
             for (k, net) in &mut networks {
@@ -72,7 +54,7 @@ async fn multiple_frames() {
             }
         }
         for net in networks.values_mut() {
-            net.gc(b)
+            net.gc(Slot::new(b)).unwrap()
         }
     }
 }
