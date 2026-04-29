@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["CONNECT_ATTEMPTS","LATENCY","PEER_IQUEUE_CAP","PEER_OQUEUE_CAP"],"fn":["peer_counters","peer_gauges"],"struct":["NetworkMetrics"]};

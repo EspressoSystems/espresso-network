@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MAX_NOISE_MESSAGE_SIZE","MAX_PAYLOAD_SIZE"],"mod":["frame","trailer"],"struct":["Ack","MsgId","Slot"]};

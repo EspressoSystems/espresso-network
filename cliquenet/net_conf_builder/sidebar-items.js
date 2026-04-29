@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"mod":["sealed"],"struct":["Empty","SetBind","SetKeypair","SetLabel","SetMaxMessageSize","SetMetrics","SetName","SetParties","SetPeerCapacityEgress","SetPeerCapacityIngress","SetRetryDelays","SetTotalCapacityEgress","SetTotalCapacityIngress"],"trait":["IsComplete","IsSet","IsUnset","State"]};

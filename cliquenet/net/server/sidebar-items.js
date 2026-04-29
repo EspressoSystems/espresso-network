@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PeerState"],"fn":["append_trailer","remove_trailer","trailer_type"],"struct":["Party","Server"]};

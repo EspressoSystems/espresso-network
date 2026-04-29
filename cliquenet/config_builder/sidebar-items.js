@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["sealed"],"struct":["Empty","SetBind","SetConnectTimeout","SetHandshakeTimeout","SetKeypair","SetMaxMessageSize","SetMaxRetryDelay","SetName","SetParties","SetPeerBudget","SetReceiveTimeout","SetRetryDelays"],"trait":["IsComplete","IsSet","IsUnset","State"]};

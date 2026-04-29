@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_BUCKET"],"enum":["Target"],"fn":["retry"],"struct":["Bucket","Buffer","Inner","Message","Pending","Retry","Trailer"],"type":["Result"]};

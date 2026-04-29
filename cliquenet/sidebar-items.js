@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["LAST_DELAY","MAX_MESSAGE_SIZE","NUM_DELAYS"],"enum":["NetworkError","Role"],"mod":["chan","error","frame","id","metrics","net","net_conf_builder","retry","time"],"struct":["Id","NetConf","NetConfBuilder","Network","NetworkDown"]};
+window.SIDEBAR_ITEMS = {"enum":["NetAddr","RetryPolicy","Role","SendAction"],"mod":["addr","config_builder","connection","error","msg","net","queue","time","x25519"],"struct":["Config","ConfigBuilder","Network","NetworkController","NetworkReceiver","SendCommand","SendCommandBuilder","Slot"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["FrameType"],"struct":["Header","InvalidHeader"]};

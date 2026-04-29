@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"static":["EPOCH"],"struct":["Countdown","Inner","Timestamp"]};
+window.SIDEBAR_ITEMS = {"struct":["Countdown"]};
