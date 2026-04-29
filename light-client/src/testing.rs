@@ -13,8 +13,8 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, EpochVersion, Leaf2, NamespaceId, NodeState,
-    NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Leaf2, NamespaceId,
+    NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
     StakeTableState, Transaction,
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
@@ -243,6 +243,13 @@ impl Quorum for AlwaysTrueQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
         Ok(())
     }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -250,6 +257,13 @@ pub struct AlwaysFalseQuorum;
 
 impl Quorum for AlwaysFalseQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
+        bail!("always false quorum");
+    }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
         bail!("always false quorum");
     }
 }
@@ -289,6 +303,13 @@ impl Quorum for VersionCheckQuorum {
         );
         Ok(())
     }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A quorum which verifies that epoch change QCs are provided, but does not check signatures.
@@ -311,6 +332,13 @@ impl Quorum for EpochChangeQuorum {
         if V::version() >= EpochVersion::version() {
             cert.verify_next_epoch_qc(self.epoch_height)?;
         }
+        Ok(())
+    }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
         Ok(())
     }
 }

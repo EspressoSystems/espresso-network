@@ -15,7 +15,10 @@ use hotshot_query_service::{
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
+use hotshot_types::{
+    simple_certificate::CertificatePair,
+    utils::{epoch_from_block_number, root_block_in_epoch},
+};
 use itertools::izip;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use light_client::consensus::{
@@ -23,8 +26,84 @@ use light_client::consensus::{
 };
 use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
+
+/// Build a leaf proof for the new protocol (cert2-based finality).
+async fn get_leaf_proof_new_protocol<State>(
+    state: &State,
+    requested: usize,
+    finalized: Option<usize>,
+    fetch_timeout: Duration,
+) -> Result<LeafProof, Error>
+where
+    State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
+    for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
+{
+    if let Some(finalized) = finalized {
+        if finalized <= requested {
+            return Err(Error::Custom {
+                message: format!(
+                    "finalized leaf height ({finalized}) must be greater than requested \
+                     ({requested})"
+                ),
+                status: StatusCode::BAD_REQUEST,
+            });
+        }
+
+        let mut leaves = state.get_leaf_range(requested..finalized).await;
+        let mut proof = LeafProof::default();
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf
+                .with_timeout(fetch_timeout)
+                .await
+                .ok_or_else(|| not_found("missing leaves"))?;
+            proof.push(leaf);
+        }
+        return Ok(proof);
+    }
+
+    let cert2 = state
+        .read()
+        .await
+        .map_err(internal)?
+        .load_cert2_at_or_above(requested as u64)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| not_found("no cert2 finality proof available"))?;
+
+    // Build the leaf chain from requested up to and including the cert2 leaf.
+    let cert2_height = cert2.data.block_number as usize;
+    if cert2_height < requested {
+        return Err(not_found(
+            "cert2 finality proof is older than requested leaf",
+        ));
+    }
+
+    let mut leaves = state.get_leaf_range(requested..cert2_height + 1).await;
+    let mut proof = LeafProof::default();
+    let mut cert1 = None;
+
+    while let Some(leaf) = leaves.next().await {
+        let leaf = leaf
+            .with_timeout(fetch_timeout)
+            .await
+            .ok_or_else(|| not_found("missing leaves"))?;
+
+        if leaf.height() == cert2_height as u64 {
+            cert1 = Some(CertificatePair::non_epoch_change(leaf.qc().clone()));
+        }
+        proof.push(leaf);
+    }
+
+    let cert1 = cert1.ok_or_else(|| not_found("missing cert2 leaf"))?;
+    if cert1.leaf_commit() != cert2.data.leaf_commit {
+        return Err(internal("stored cert2 does not certify the cert2 leaf"));
+    }
+    proof.add_certificates(Arc::new(cert1), Arc::new(cert2));
+    Ok(proof)
+}
 
 async fn get_leaf_proof<State>(
     state: &State,
@@ -87,6 +166,7 @@ where
     // leaf in the chain is not already assumed finalized by the client, we must prove it finalized
     // by appending two more QCs.
     if finalized.is_none() {
+        // HotStuff2 QC 2-chain.
         let Some([committing_qc, deciding_qc]) = qc_chain else {
             return Err(not_found("missing QC 2-chain to prove finality"));
         };
@@ -286,7 +366,21 @@ where
             let finalized = req
                 .opt_integer_param("finalized")
                 .map_err(bad_param("finalized"))?;
-            get_leaf_proof(state, requested, finalized, fetch_timeout).await
+
+            // Check the version of the requested leaf to decide which finality proof
+            // to use.
+            let header = state
+                .get_header(requested)
+                .await
+                .with_timeout(fetch_timeout)
+                .await
+                .ok_or_else(|| not_found(format!("unknown header {requested}")))?;
+
+            if header.version() >= NEW_PROTOCOL_VERSION {
+                get_leaf_proof_new_protocol(state, requested, finalized, fetch_timeout).await
+            } else {
+                get_leaf_proof(state, requested, finalized, fetch_timeout).await
+            }
         }
         .boxed()
     })?
@@ -543,6 +637,13 @@ where
     }
 }
 
+fn internal(err: impl Display) -> Error {
+    Error::Custom {
+        message: err.to_string(),
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 fn not_found(msg: impl Into<String>) -> Error {
     Error::Custom {
         message: msg.into(),
@@ -569,7 +670,7 @@ mod test {
         },
     };
     use tide_disco::Error;
-    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::*;
     use crate::api::{
@@ -632,6 +733,37 @@ mod test {
         let proof = get_leaf_proof(&ds, 1, Some(2), Duration::MAX)
             .await
             .unwrap();
+        assert_eq!(
+            proof
+                .verify(LeafProofHint::assumption(leaves[1].leaf()))
+                .await
+                .unwrap(),
+            leaves[0]
+        );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_finalized_assumption() {
+        let storage = <DataSource as TestableSequencerDataSource>::create_storage().await;
+        let ds = DataSource::create(
+            DataSource::persistence_options(&storage),
+            Default::default(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        let leaves = leaf_chain(1..=2, NEW_PROTOCOL_VERSION).await;
+        {
+            let mut tx = ds.write().await.unwrap();
+            tx.insert_leaf(&leaves[0]).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let proof = get_leaf_proof_new_protocol(&ds, 1, Some(2), Duration::MAX)
+            .await
+            .unwrap();
+        assert!(matches!(proof.proof(), FinalityProof::Assumption));
         assert_eq!(
             proof
                 .verify(LeafProofHint::assumption(leaves[1].leaf()))

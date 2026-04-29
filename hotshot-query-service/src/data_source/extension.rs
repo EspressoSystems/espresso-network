@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use hotshot::types::Event;
 use hotshot_events_service::events_source::{EventFilterSet, EventsSource, StartupInfo};
+use hotshot_new_protocol::consensus::CoordinatorEvent;
 use hotshot_types::{data::VidShare, event::LegacyEvent, traits::node_implementation::NodeType};
 use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
@@ -27,10 +28,10 @@ use super::VersionedDataSource;
 use crate::{
     Header, Payload, QueryResult, Transaction,
     availability::{
-        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction, Fetch,
-        FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata, PayloadQueryData,
-        QueryableHeader, QueryablePayload, TransactionHash, UpdateAvailabilityData,
-        VidCommonMetadata, VidCommonQueryData,
+        AvailabilityDataSource, BlockId, BlockInfo, BlockQueryData, BlockWithTransaction,
+        Certificate2, Fetch, FetchStream, LeafId, LeafQueryData, NamespaceId, PayloadMetadata,
+        PayloadQueryData, QueryableHeader, QueryablePayload, TransactionHash,
+        UpdateAvailabilityData, VidCommonMetadata, VidCommonQueryData,
     },
     data_source::storage::pruning::PrunedHeightDataSource,
     explorer::{self, ExplorerDataSource, ExplorerHeader, ExplorerTransaction},
@@ -309,6 +310,10 @@ where
         h: TransactionHash<Types>,
     ) -> Fetch<BlockWithTransaction<Types>> {
         self.data_source.get_block_containing_transaction(h).await
+    }
+
+    async fn get_cert2(&self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
+        self.data_source.get_cert2(height).await
     }
 }
 
@@ -596,7 +601,8 @@ mod impl_testable_data_source {
         }
 
         async fn handle_event(&self, event: &Event<MockTypes>) {
-            self.update(event).await.unwrap();
+            let event = CoordinatorEvent::LegacyEvent(event.clone());
+            self.update(&event).await.unwrap();
         }
     }
 }

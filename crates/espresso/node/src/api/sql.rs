@@ -821,6 +821,29 @@ impl CatchupStorage for SqlStorage {
 
         Ok(chain)
     }
+
+    async fn get_cert2_at_or_above(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch cert2")?;
+        Ok(tx.load_cert2_at_or_above(height).await?)
+    }
+
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+        let mut tx = self
+            .read()
+            .await
+            .context(format!("opening transaction to fetch leaf at {height}"))?;
+        let lqd = tx
+            .get_leaf((height as usize).into())
+            .await
+            .context(format!("leaf {height} not available"))?;
+        Ok(lqd.leaf().clone())
+    }
 }
 
 impl RewardMerkleTreeDataSource for DataSource {
@@ -957,6 +980,17 @@ impl CatchupStorage for DataSource {
     }
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         self.as_ref().get_leaf_chain(height).await
+    }
+
+    async fn get_cert2_at_or_above(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        self.as_ref().get_cert2_at_or_above(height).await
+    }
+
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+        self.as_ref().get_leaf(height).await
     }
 }
 
