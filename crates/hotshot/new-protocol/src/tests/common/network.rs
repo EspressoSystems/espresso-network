@@ -16,7 +16,6 @@ use hotshot_types::{
     addr::NetAddr,
     epoch_membership::EpochMembershipCoordinator,
     traits::{
-        metrics::NoMetrics,
         network::{ConnectedNetwork, Topic},
         signature_key::SignatureKey,
     },
@@ -211,7 +210,7 @@ impl TestNetwork for CliquenetTestNetwork {
             .map(|i| {
                 let (public_key, private_key) =
                     BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64);
-                let keypair = Keypair::derive_from::<BLSPubKey>(&private_key);
+                let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
                 let port = test_utils::reserve_tcp_port()
                     .expect("OS should have ephemeral ports available");
                 let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
@@ -248,7 +247,6 @@ impl TestNetwork for CliquenetTestNetwork {
                 keypair.clone(),
                 addr.clone(),
                 peer_infos.clone(),
-                Box::new(NoMetrics),
             )
             .await
             .expect("cliquenet creation should succeed");
@@ -268,20 +266,13 @@ impl TestNetwork for CliquenetTestNetwork {
     async fn create_node(&self, node_index: usize) -> Cliquenet<BLSPubKey> {
         let (public_key, private_key) =
             BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
-        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key);
+        let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
         // Reuse the node's original address so peers (whose parties list
         // was fixed at startup) can still reach the restarted node.
         let addr = self.peer_infos[node_index].1.p2p_addr.clone();
-        let net = Cliquenet::create(
-            "test",
-            public_key,
-            keypair,
-            addr,
-            self.peer_infos.clone(),
-            Box::new(NoMetrics),
-        )
-        .await
-        .expect("cliquenet node creation should succeed");
+        let net = Cliquenet::create("test", public_key, keypair, addr, self.peer_infos.clone())
+            .await
+            .expect("cliquenet node creation should succeed");
         self.node_networks
             .lock()
             .await

@@ -30,7 +30,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    traits::signature_key::SignatureKey,
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
@@ -59,7 +59,7 @@ async fn create_network(
     private_key: &<BLSPubKey as SignatureKey>::PrivateKey,
     cfg: &NodeConfig,
 ) -> Result<Cliquenet<BLSPubKey>> {
-    let keypair = Keypair::derive_from::<BLSPubKey>(private_key);
+    let keypair = Keypair::derive_from::<BLSPubKey>(private_key)?;
     let bind_addr: NetAddr = cfg
         .bind_addr
         .parse()
@@ -72,7 +72,7 @@ async fn create_network(
             continue; // skip self
         }
         let (peer_pk, peer_sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
-        let peer_keypair = Keypair::derive_from::<BLSPubKey>(&peer_sk);
+        let peer_keypair = Keypair::derive_from::<BLSPubKey>(&peer_sk)?;
         let peer_addr: NetAddr = addr_str
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid peer address '{addr_str}': {e}"))?;
@@ -85,16 +85,9 @@ async fn create_network(
         ));
     }
 
-    let net = Cliquenet::create(
-        "bench",
-        *public_key,
-        keypair,
-        bind_addr,
-        parties,
-        Box::new(NoMetrics),
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("failed to create cliquenet: {e}"))?;
+    let net = Cliquenet::create("bench", *public_key, keypair, bind_addr, parties)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to create cliquenet: {e}"))?;
 
     Ok(net)
 }
