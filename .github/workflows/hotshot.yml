@@ -94,6 +94,7 @@ jobs:
           name: ${{ steps.artifact-name.outputs.name }}
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
+          retention-days: 1
 
   test-new-protocol:
     runs-on: ubuntu-latest
@@ -135,6 +136,7 @@ jobs:
           name: nextest-junit-hotshot-new-protocol
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
+          retention-days: 1
 
   test-examples:
     strategy:

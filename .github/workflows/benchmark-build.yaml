@@ -42,6 +42,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: x86_64-unknown-linux-gnu-services-bench
+          retention-days: 1
           path: |
             target/release/orchestrator
             target/release/cdn-broker
@@ -86,6 +87,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: aarch64-unknown-linux-gnu-services-bench
+          retention-days: 1
           path: |
             target/release/orchestrator
             target/release/cdn-broker

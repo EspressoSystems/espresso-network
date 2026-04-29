@@ -78,6 +78,7 @@ jobs:
         with:
           name: cargo-timings-build-amd-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
+          retention-days: 1
 
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
@@ -97,6 +98,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: amd-${{ matrix.binary }}
+          retention-days: 1
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
@@ -140,6 +142,7 @@ jobs:
         with:
           name: cargo-timings-build-arm-${{ matrix.binary }}
           path: target/cargo-timings/cargo-timing.html
+          retention-days: 1
 
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
@@ -158,6 +161,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: arm-${{ matrix.binary }}
+          retention-days: 1
           path: |
             upload/${{ matrix.binary == 'other' && '*' || matrix.binary }}
 
@@ -235,6 +239,7 @@ jobs:
           name: ${{ matrix.service }}-docker-image
           path: ${{ runner.temp }}/${{ matrix.service }}.tar
           if-no-files-found: error
+          retention-days: 1
 
       - name: Build and push docker (non-PR)
         if: github.event_name != 'pull_request'
