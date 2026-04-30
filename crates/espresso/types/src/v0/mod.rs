@@ -1,4 +1,5 @@
-pub use hotshot_new_protocol::message::{Certificate2, Proposal as NewProposal};
+pub use hotshot_new_protocol::message::Certificate2;
+pub use hotshot_types::new_protocol::Proposal as NewProposal;
 use hotshot_types::{
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
@@ -167,8 +168,6 @@ pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;
 
 pub type Event = hotshot::types::Event<SeqTypes>;
-
-pub use hotshot_new_protocol::consensus::{CoordinatorEvent, NewDecideEvent};
 
 pub type PubKey = BLSPubKey;
 pub type PrivKey = <PubKey as SignatureKey>::PrivateKey;
