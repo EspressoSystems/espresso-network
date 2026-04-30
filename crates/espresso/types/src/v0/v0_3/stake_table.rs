@@ -106,6 +106,23 @@ impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
     ///
     /// Encodes only protocol-version-gated requirements; stake and delegation checks
     /// live in `select_active_validator_set`.
+    ///
+    /// # Liveness during the CLIQUENET upgrade transition
+    ///
+    /// The active validator set for epoch N is selected at the epoch root header in
+    /// epoch N-2, using that root header's protocol version (see `Fetcher::fetch`).
+    /// When CLIQUENET activates at some epoch K, the roots for epochs K and K+1 are
+    /// pre-CLIQUENET headers, so those active sets were selected without this filter
+    /// and may include validators missing `x25519_key` or `p2p_addr`.
+    ///
+    /// In epochs K and K+1, the cliquenet network silently skips peers without
+    /// connect info (no panic, no error), but they still count toward the quorum
+    /// threshold. Liveness through the transition therefore requires the eligible
+    /// subset of validators to hold >= 2/3 of total active stake. From epoch K+2
+    /// onward, roots are post-CLIQUENET and this filter applies.
+    ///
+    /// Operators are warned at startup on the version immediately preceding
+    /// CLIQUENET if their on-chain entry is missing network info.
     pub fn is_eligible(&self, protocol_version: Version) -> bool {
         if protocol_version >= CLIQUENET_VERSION
             && (self.x25519_key.is_none() || self.p2p_addr.is_none())

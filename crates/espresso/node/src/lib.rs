@@ -649,6 +649,15 @@ where
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
     info!("Stake reloaded");
 
+    check_cliquenet_info_registered(
+        &membership,
+        &validator_config.public_key,
+        genesis.base_version,
+        genesis.chain_config.stake_table_contract,
+        &l1_client,
+    )
+    .await;
+
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
@@ -777,6 +786,72 @@ where
 
 pub fn empty_builder_commitment() -> BuilderCommitment {
     BuilderCommitment::from_bytes([])
+}
+
+/// On the version immediately preceding CLIQUENET, log an error if this
+/// validator has a stake-table entry without an x25519 key or p2p address.
+/// Skipped unless StakeTableV3 is deployed (otherwise the operator has no
+/// actionable path), detected via `getVersion()` on the proxy.
+async fn check_cliquenet_info_registered(
+    membership: &EpochCommittees,
+    pub_key: &BLSPubKey,
+    current_version: vbs::version::Version,
+    stake_table_contract: Option<alloy::primitives::Address>,
+    l1_client: &espresso_types::v0::L1Client,
+) {
+    if current_version != versions::VID2_UPGRADE_VERSION {
+        return;
+    }
+    let Some(addr) = stake_table_contract else {
+        return;
+    };
+    let stake_table =
+        hotshot_contract_adapter::sol_types::StakeTableV3::new(addr, l1_client.provider.clone());
+    let mut major = None;
+    let mut last_err = None;
+    for attempt in 1..=3 {
+        match stake_table.getVersion().call().await {
+            Ok(v) => {
+                major = Some(v.majorVersion);
+                break;
+            },
+            Err(e) => {
+                tracing::warn!(attempt, %e, "failed to read StakeTable getVersion(), retrying");
+                last_err = Some(e);
+                if attempt < 3 {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            },
+        }
+    }
+    let Some(major) = major else {
+        tracing::warn!(
+            err = ?last_err,
+            "could not read StakeTable getVersion() after 3 attempts; skipping check"
+        );
+        return;
+    };
+    if major < 3 {
+        tracing::info!(
+            major,
+            "StakeTableV3 not deployed; skipping network-info registration check"
+        );
+        return;
+    }
+    let Some(cfg) = membership.latest_peer_config(pub_key) else {
+        return;
+    };
+    if cfg.connect_info.is_some() {
+        return;
+    }
+    tracing::error!(
+        bls_key = %pub_key,
+        "Validator has no x25519 key or p2p address registered on-chain. After the CLIQUENET \
+         upgrade activates, the validator will be excluded from the active set and stop earning \
+         rewards. To fix: (1) generate an x25519 keypair if needed (`keygen --scheme x25519 \
+         --out keys.env`), then (2) register it on-chain (`staking-cli update-network-config \
+         --x25519-key <ESPRESSO_NODE_PUBLIC_X25519_KEY> --p2p-addr <host:port>`)."
+    );
 }
 
 #[cfg(any(test, feature = "testing"))]

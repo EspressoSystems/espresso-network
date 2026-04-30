@@ -1708,6 +1708,22 @@ impl EpochCommittees {
         self.fixed_block_reward
     }
 
+    /// Find the most recent stake-table entry for `key`, scanning loaded epochs
+    /// from highest to lowest and falling back to the genesis bootstrap committee.
+    pub fn latest_peer_config(&self, key: &PubKey) -> Option<PeerConfig<SeqTypes>> {
+        let mut epochs: Vec<&Epoch> = self.state.keys().collect();
+        epochs.sort_by(|a, b| b.cmp(a));
+        for epoch in epochs {
+            if let Some(cfg) = self.state.get(epoch).and_then(|c| c.stake_table.get(key)) {
+                return Some(cfg.clone());
+            }
+        }
+        self.non_epoch_committee
+            .indexed_stake_table
+            .get(key)
+            .cloned()
+    }
+
     /// Fetch the fixed block reward and update it if its None.
     /// We used a fixed block reward for version v3
     /// Version v4 uses the dynamic block reward
