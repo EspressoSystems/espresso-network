@@ -40,6 +40,7 @@ jobs:
           name: rust-docs
           path: target/doc
           if-no-files-found: error
+          retention-days: 1
 
   doc-contracts:
     runs-on: ubuntu-24.04
@@ -64,6 +65,7 @@ jobs:
           name: contract-docs
           path: docs/book
           if-no-files-found: error
+          retention-days: 1
 
   deploy:
     needs: [doc-rust, doc-contracts]

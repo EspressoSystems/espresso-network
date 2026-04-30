@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, marker::PhantomData, time::Duration};
 
+use async_trait::async_trait;
 use hotshot::{traits::BlockPayload, types::SignatureKey};
+use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
         DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
@@ -13,17 +15,23 @@ use hotshot_types::{
 use tokio::{spawn, task::JoinHandle, time::sleep};
 use tracing::{error, warn};
 
-use crate::message::Proposal;
+use crate::message::{Certificate2, Proposal};
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
 
-pub struct Storage<T: NodeType, S: StorageTrait<T>> {
+/// New protocol storage extension for data that is not part of the legacy HotShot storage trait.
+#[async_trait]
+pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
+    async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()>;
+}
+
+pub struct Storage<T: NodeType, S: NewProtocolStorage<T>> {
     storage: S,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     handles: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
 }
 
-impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
+impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     pub fn new(storage: S, private_key: <T::SignatureKey as SignatureKey>::PrivateKey) -> Self {
         Self {
             storage,
@@ -95,6 +103,22 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
         self.handles.entry(view_number).or_default().push(handle);
     }
 
+    pub fn append_cert2(&mut self, view: ViewNumber, cert2: Certificate2<T>) {
+        let storage = self.storage.clone();
+        let handle = spawn(async move {
+            loop {
+                match storage.append_cert2(view, cert2.clone()).await {
+                    Ok(()) => return,
+                    Err(err) => {
+                        warn!(%err, %view, "failed to append cert2, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
+    }
+
     pub fn append_proposal(&mut self, proposal: Proposal<T>) {
         let view = proposal.view_number;
         let storage = self.storage.clone();
@@ -145,5 +169,12 @@ impl<T: NodeType, S: StorageTrait<T>> Storage<T, S> {
             }
         }
         self.handles = keep;
+    }
+}
+
+#[async_trait]
+impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
+    async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
+        Ok(())
     }
 }

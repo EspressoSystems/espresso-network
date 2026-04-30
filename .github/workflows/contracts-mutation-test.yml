@@ -91,6 +91,7 @@ jobs:
           name: mutants
           path: mutants/
           if-no-files-found: error
+          retention-days: 1
 
   build-diff-test:
     runs-on: ubuntu-latest
@@ -113,6 +114,7 @@ jobs:
           name: diff-test
           path: target/debug/diff-test
           if-no-files-found: error
+          retention-days: 1
 
   test-shard:
     needs: [generate, build-diff-test]
@@ -169,6 +171,7 @@ jobs:
           name: results-${{ matrix.shard }}
           path: results-${{ matrix.shard }}.json
           if-no-files-found: error
+          retention-days: 1
 
   report:
     needs: [generate, test-shard]
@@ -207,3 +210,4 @@ jobs:
           name: mutation-report
           path: mutation-report.md
           if-no-files-found: error
+          retention-days: 1

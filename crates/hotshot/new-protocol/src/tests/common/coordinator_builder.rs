@@ -17,7 +17,7 @@ use hotshot_types::{
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
     simple_vote::QuorumData2,
-    traits::{signature_key::SignatureKey, storage::Storage as StorageTrait},
+    traits::{signature_key::SignatureKey, storage::Storage as _},
 };
 
 use crate::{
