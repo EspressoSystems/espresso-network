@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    future::Future,
     path::PathBuf,
     str::FromStr,
     sync::Arc,
@@ -202,6 +203,10 @@ pub struct Options {
     /// Pruning parameters for ephemeral consensus storage.
     #[clap(flatten)]
     pub(crate) consensus_pruning: ConsensusPruningOptions,
+
+    /// Retry/backoff parameters for PostgreSQL serialization conflicts.
+    #[clap(flatten)]
+    pub(crate) serializable_retry: SerializableRetryOptions,
 
     /// Specifies the maximum number of concurrent fetch requests allowed from peers.
     #[clap(long, env = "ESPRESSO_NODE_FETCH_RATE_LIMIT")]
@@ -680,6 +685,80 @@ impl Default for ConsensusPruningOptions {
     }
 }
 
+/// Configuration for retrying transactions aborted by PostgreSQL serialization conflicts (error
+/// 40001).  Under SERIALIZABLE isolation these aborts are expected and safe to retry from scratch.
+#[derive(Parser, Clone, Copy, Debug)]
+pub struct SerializableRetryOptions {
+    /// Maximum number of retries on PostgreSQL serialization conflicts.
+    #[clap(
+        long = "serializable-retry-max",
+        env = "ESPRESSO_NODE_SERIALIZABLE_RETRY_MAX",
+        default_value = "100"
+    )]
+    retry_max: u32,
+
+    /// Initial delay before retrying after a PostgreSQL serialization conflict.
+    #[clap(
+        long = "serializable-backoff-base",
+        env = "ESPRESSO_NODE_SERIALIZABLE_BACKOFF_BASE",
+        default_value = "10ms",
+        value_parser = parse_duration
+    )]
+    backoff_base: Duration,
+
+    /// Maximum delay between retries after a PostgreSQL serialization conflict.
+    #[clap(
+        long = "serializable-backoff-max",
+        env = "ESPRESSO_NODE_SERIALIZABLE_BACKOFF_MAX",
+        default_value = "500ms",
+        value_parser = parse_duration
+    )]
+    backoff_max: Duration,
+
+    /// Multiplier applied to the backoff delay between successive retries.
+    #[clap(
+        long = "serializable-backoff-factor",
+        env = "ESPRESSO_NODE_SERIALIZABLE_BACKOFF_FACTOR",
+        default_value = "2"
+    )]
+    backoff_factor: u32,
+
+    /// Backoff jitter as a ratio of the backoff delay, numerator:denominator.
+    #[clap(
+        long = "serializable-backoff-jitter",
+        env = "ESPRESSO_NODE_SERIALIZABLE_BACKOFF_JITTER",
+        default_value = "5:10"
+    )]
+    backoff_jitter: Ratio,
+
+    /// When set, enable verbose diagnostic logging on PostgreSQL serialization conflicts.  Each
+    /// retried conflict spawns a background query against `pg_stat_activity` and `pg_locks` to
+    /// log concurrent sessions and predicate locks. Off by default.
+    #[clap(
+        long = "serializable-pg-stat-diag",
+        env = "ESPRESSO_NODE_SERIALIZABLE_PG_STAT_DIAG"
+    )]
+    pg_stat_diag: bool,
+}
+
+impl Default for SerializableRetryOptions {
+    fn default() -> Self {
+        Self::parse_from(std::iter::empty::<String>())
+    }
+}
+
+impl SerializableRetryOptions {
+    fn backoff(&self) -> BackoffParams {
+        BackoffParams::new(
+            self.backoff_base,
+            self.backoff_max,
+            self.backoff_factor,
+            self.backoff_jitter,
+            self.retry_max,
+        )
+    }
+}
+
 #[async_trait]
 impl PersistenceOptions for Options {
     type Persistence = Persistence;
@@ -694,6 +773,8 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
             gc_opt: self.consensus_pruning,
+            serializable_backoff: self.serializable_retry.backoff(),
+            serializable_pg_stat_diag: self.serializable_retry.pg_stat_diag,
             internal_metrics: PersistenceMetricsValue::default(),
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
@@ -729,6 +810,12 @@ impl DataMigration {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
+    /// Backoff parameters for retrying transactions aborted by PostgreSQL
+    /// serialization conflicts (error 40001).
+    serializable_backoff: BackoffParams,
+    /// When true, retried serialization conflicts trigger a background `pg_stat_activity` /
+    /// `pg_locks` snapshot for diagnostics.
+    serializable_pg_stat_diag: bool,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
 }
@@ -736,6 +823,37 @@ pub struct Persistence {
 /// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
 /// Transactions that fail with this code are safe to retry from scratch.
 const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
+
+/// Expands to the unqualified name of the enclosing function/method as a `&'static str`.
+/// Useful as the `op` argument to [`Persistence::serializable_retry`].
+///
+/// Implementation note: defines an inner `fn`, asks `std::any::type_name` for the path of its
+/// function-item type (something like `crate::module::Persistence::is_migration_complete::__f`),
+/// then strips the trailing `::__f` and takes the last `::` segment.
+macro_rules! function_name {
+    () => {{
+        fn __f() {}
+        fn type_name_of<T>(_: T) -> &'static str {
+            ::std::any::type_name::<T>()
+        }
+        let full: &'static str = type_name_of(__f);
+        // Strip the trailing "::__f" (5 bytes) and take the last "::" segment.
+        let trimmed: &'static str = &full[..full.len() - 5];
+        let name: &'static str = match trimmed.rfind("::") {
+            Some(idx) => &trimmed[idx + 2..],
+            None => trimmed,
+        };
+        name
+    }};
+}
+
+/// Calls [`Persistence::serializable_retry`] with `op` set to the unqualified name of the
+/// enclosing function via [`function_name!`].
+macro_rules! serializable_retry {
+    ($self:expr, $f:expr) => {
+        $self.serializable_retry(function_name!(), $f)
+    };
+}
 
 #[derive(Debug)]
 struct DecidedLeaf {
@@ -807,6 +925,29 @@ fn decide_events_from_chain(
 }
 
 impl Persistence {
+    /// Run `f` under our `serializable_backoff` retry policy, retrying only on PostgreSQL
+    /// serialization conflicts.  When `serializable_pg_stat_diag` is enabled, each retried
+    /// conflict spawns a background `pg_stat_activity` / `pg_locks` snapshot tagged with `op`;
+    /// otherwise the predicate is a plain stateless check and `op` is unused at runtime.
+    ///
+    /// Most callers should use the [`serializable_retry!`] macro, which auto-fills `op`.
+    async fn serializable_retry<F, Fut, T>(&self, op: &'static str, f: F) -> anyhow::Result<T>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = anyhow::Result<T>>,
+    {
+        if self.serializable_pg_stat_diag {
+            self.serializable_backoff
+                .retry_if(is_serialization_error_with_diag(self.db.pool(), op), f)
+                .await
+        } else {
+            let _ = op;
+            self.serializable_backoff
+                .retry_if(is_serialization_error, f)
+                .await
+        }
+    }
+
     /// Ensure the `leaf_hash` column is populated for all existing quorum proposals.
     ///
     /// This column was added in a migration, but because it requires computing a commitment of the
@@ -814,57 +955,51 @@ impl Persistence {
     /// check if there are any just-migrated quorum proposals with a `NULL` value for this column,
     /// and if so we populate the column manually.
     async fn migrate_quorum_proposal_leaf_hashes(&self) -> anyhow::Result<()> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(SERIALIZABLE_RETRY_MAX, is_serialization_error_with_diag(self.db.pool(), "migrate_quorum_proposal_leaf_hashes"), || async {
-                let mut tx = self.db.write().await?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
 
-                let mut proposals = tx.fetch("SELECT * FROM quorum_proposals");
+            let mut proposals = tx.fetch("SELECT * FROM quorum_proposals");
 
-                let mut updates = vec![];
-                while let Some(row) = proposals.next().await {
-                    let row = row?;
+            let mut updates = vec![];
+            while let Some(row) = proposals.next().await {
+                let row = row?;
 
-                    let hash: Option<String> = row.try_get("leaf_hash")?;
-                    if hash.is_none() {
-                        let view: i64 = row.try_get("view")?;
-                        let data: Vec<u8> = row.try_get("data")?;
-                        let proposal: Proposal<SeqTypes, QuorumProposal<SeqTypes>> =
-                            bincode::deserialize(&data)?;
-                        let leaf = Leaf::from_quorum_proposal(&proposal.data);
-                        let leaf_hash = Committable::commit(&leaf);
-                        tracing::info!(view, %leaf_hash, "populating quorum proposal leaf hash");
-                        updates.push((view, leaf_hash.to_string()));
-                    }
+                let hash: Option<String> = row.try_get("leaf_hash")?;
+                if hash.is_none() {
+                    let view: i64 = row.try_get("view")?;
+                    let data: Vec<u8> = row.try_get("data")?;
+                    let proposal: Proposal<SeqTypes, QuorumProposal<SeqTypes>> =
+                        bincode::deserialize(&data)?;
+                    let leaf = Leaf::from_quorum_proposal(&proposal.data);
+                    let leaf_hash = Committable::commit(&leaf);
+                    tracing::info!(view, %leaf_hash, "populating quorum proposal leaf hash");
+                    updates.push((view, leaf_hash.to_string()));
                 }
-                drop(proposals);
+            }
+            drop(proposals);
 
-                tx.upsert("quorum_proposals", ["view", "leaf_hash"], ["view"], updates)
-                    .await?;
+            tx.upsert("quorum_proposals", ["view", "leaf_hash"], ["view"], updates)
+                .await?;
 
-                tx.commit().await
-            })
-            .await
+            tx.commit().await
+        })
+        .await
     }
 
     async fn is_migration_complete(&self, name: &str, table_name: &str) -> anyhow::Result<bool> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "is_migration_complete"),
-                || async {
-                    let mut tx = self.db.read().await?;
-                    let (completed,): (bool,) = query_as(
-                        "SELECT completed FROM data_migrations WHERE name = $1 AND table_name = $2",
-                    )
-                    .bind(name)
-                    .bind(table_name)
-                    .fetch_one(tx.as_mut())
-                    .await
-                    .context("migration tracking row missing - schema may be out of sync")?;
-                    Ok(completed)
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.read().await?;
+            let (completed,): (bool,) = query_as(
+                "SELECT completed FROM data_migrations WHERE name = $1 AND table_name = $2",
             )
+            .bind(name)
+            .bind(table_name)
+            .fetch_one(tx.as_mut())
             .await
+            .context("migration tracking row missing - schema may be out of sync")?;
+            Ok(completed)
+        })
+        .await
     }
 
     async fn mark_migration_complete(
@@ -902,22 +1037,17 @@ impl Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
-        let mut last_processed_view: Option<i64> = SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "generate_decide_events_init"),
-                || async {
-                    Ok(self
-                        .db
-                        .read()
-                        .await?
-                        .fetch_optional(
-                            "SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1",
-                        )
-                        .await?
-                        .map(|row| row.get("last_processed_view")))
-                },
-            )
+        let mut last_processed_view: Option<i64> = serializable_retry!(self, || async {
+                Ok(self
+                    .db
+                    .read()
+                    .await?
+                    .fetch_optional(
+                        "SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1",
+                    )
+                    .await?
+                    .map(|row| row.get("last_processed_view")))
+            })
             .await?;
         loop {
             // In SQLite, overlapping read and write transactions can lead to database errors. To
@@ -1162,80 +1292,73 @@ impl Persistence {
             // this point, or shut down, and fail to complete this update. At worst this will lead
             // to us sending a duplicate decide event the next time we are called; this is fine as
             // the event consumer is required to be idempotent.
-            SERIALIZABLE_BACKOFF
-                .retry_if(
-                    SERIALIZABLE_RETRY_MAX,
-                    is_serialization_error_with_diag(self.db.pool(), "generate_decide_events"),
-                    || async {
-                        let mut tx = self.db.write().await?;
-                        tx.upsert(
-                            "event_stream",
-                            ["id", "last_processed_view"],
-                            ["id"],
-                            [(1i32, to_view_i64)],
-                        )
-                        .await?;
-
-                        // Store all the finalized state certs
-                        for (epoch, state_cert_bytes) in &serialized_state_certs {
-                            tx.upsert(
-                                "finalized_state_cert",
-                                ["epoch", "state_cert"],
-                                ["epoch"],
-                                [(*epoch, state_cert_bytes.clone())],
-                            )
-                            .await?;
-                        }
-
-                        // Delete the data that has been fully processed.
-                        tx.execute(
-                            query("DELETE FROM vid_share2 where view >= $1 AND view <= $2")
-                                .bind(from_view_i64)
-                                .bind(to_view_i64),
-                        )
-                        .await?;
-                        tx.execute(
-                            query("DELETE FROM da_proposal2 where view >= $1 AND view <= $2")
-                                .bind(from_view_i64)
-                                .bind(to_view_i64),
-                        )
-                        .await?;
-                        tx.execute(
-                            query("DELETE FROM quorum_proposals2 where view >= $1 AND view <= $2")
-                                .bind(from_view_i64)
-                                .bind(to_view_i64),
-                        )
-                        .await?;
-                        tx.execute(
-                            query(
-                                "DELETE FROM quorum_certificate2 where view >= $1 AND view <= $2",
-                            )
-                            .bind(from_view_i64)
-                            .bind(to_view_i64),
-                        )
-                        .await?;
-                        tx.execute(
-                            query("DELETE FROM state_cert where view >= $1 AND view <= $2")
-                                .bind(from_view_i64)
-                                .bind(to_view_i64),
-                        )
-                        .await?;
-
-                        // Clean up leaves, but do not delete the most recent one (all leaves with a view
-                        // number less than the given value). This is necessary to ensure that, in case of
-                        // a restart, we can resume from the last decided leaf.
-                        tx.execute(
-                            query("DELETE FROM anchor_leaf2 WHERE view >= $1 AND view < $2")
-                                .bind(from_view_i64)
-                                .bind(to_view_i64),
-                        )
-                        .await?;
-
-                        tx.commit().await?;
-                        Ok(())
-                    },
+            serializable_retry!(self, || async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "event_stream",
+                    ["id", "last_processed_view"],
+                    ["id"],
+                    [(1i32, to_view_i64)],
                 )
                 .await?;
+
+                // Store all the finalized state certs
+                for (epoch, state_cert_bytes) in &serialized_state_certs {
+                    tx.upsert(
+                        "finalized_state_cert",
+                        ["epoch", "state_cert"],
+                        ["epoch"],
+                        [(*epoch, state_cert_bytes.clone())],
+                    )
+                    .await?;
+                }
+
+                // Delete the data that has been fully processed.
+                tx.execute(
+                    query("DELETE FROM vid_share2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM da_proposal2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM quorum_proposals2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM quorum_certificate2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+                tx.execute(
+                    query("DELETE FROM state_cert where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+
+                // Clean up leaves, but do not delete the most recent one (all leaves with a view
+                // number less than the given value). This is necessary to ensure that, in case of
+                // a restart, we can resume from the last decided leaf.
+                tx.execute(
+                    query("DELETE FROM anchor_leaf2 WHERE view >= $1 AND view < $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
+
+                tx.commit().await?;
+                Ok(())
+            })
+            .await?;
             last_processed_view = Some(to_view_i64);
         }
     }
@@ -1276,72 +1399,57 @@ impl Persistence {
 
     #[tracing::instrument(skip(self))]
     async fn prune(&self, cur_view: ViewNumber) -> anyhow::Result<()> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(SERIALIZABLE_RETRY_MAX, is_serialization_error_with_diag(self.db.pool(), "prune"), || async {
-                let mut tx = self.db.write().await?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
 
-                // Prune everything older than the target retention period.
+            // Prune everything older than the target retention period.
+            prune_to_view(
+                &mut tx,
+                cur_view.u64().saturating_sub(self.gc_opt.target_retention),
+            )
+            .await?;
+
+            // Check our storage usage; if necessary we will prune more aggressively (up to the
+            // minimum retention) to get below the target usage.
+            #[cfg(feature = "embedded-db")]
+            let usage_query = format!(
+                "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
+                PRUNE_TABLES
+                    .iter()
+                    .map(|table| format!("'{table}'"))
+                    .join(",")
+            );
+
+            #[cfg(not(feature = "embedded-db"))]
+            let usage_query = {
+                let table_sizes = PRUNE_TABLES
+                    .iter()
+                    .map(|table| format!("pg_table_size('{table}')"))
+                    .join(" + ");
+                format!("SELECT {table_sizes}")
+            };
+
+            let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
+            tracing::debug!(usage, "consensus storage usage after pruning");
+
+            if (usage as u64) > self.gc_opt.target_usage {
+                tracing::warn!(
+                    usage,
+                    gc_opt = ?self.gc_opt,
+                    "consensus storage is running out of space, pruning to minimum retention"
+                );
                 prune_to_view(
                     &mut tx,
-                    cur_view.u64().saturating_sub(self.gc_opt.target_retention),
+                    cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
                 )
                 .await?;
+            }
 
-                // Check our storage usage; if necessary we will prune more aggressively (up to the
-                // minimum retention) to get below the target usage.
-                #[cfg(feature = "embedded-db")]
-                let usage_query = format!(
-                    "SELECT sum(pgsize) FROM dbstat WHERE name IN ({})",
-                    PRUNE_TABLES
-                        .iter()
-                        .map(|table| format!("'{table}'"))
-                        .join(",")
-                );
-
-                #[cfg(not(feature = "embedded-db"))]
-                let usage_query = {
-                    let table_sizes = PRUNE_TABLES
-                        .iter()
-                        .map(|table| format!("pg_table_size('{table}')"))
-                        .join(" + ");
-                    format!("SELECT {table_sizes}")
-                };
-
-                let (usage,): (i64,) = query_as(&usage_query).fetch_one(tx.as_mut()).await?;
-                tracing::debug!(usage, "consensus storage usage after pruning");
-
-                if (usage as u64) > self.gc_opt.target_usage {
-                    tracing::warn!(
-                        usage,
-                        gc_opt = ?self.gc_opt,
-                        "consensus storage is running out of space, pruning to minimum retention"
-                    );
-                    prune_to_view(
-                        &mut tx,
-                        cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
-                    )
-                    .await?;
-                }
-
-                tx.commit().await
-            })
-            .await
+            tx.commit().await
+        })
+        .await
     }
 }
-
-/// Maximum number of retries on PostgreSQL serialization conflicts (error 40001).
-const SERIALIZABLE_RETRY_MAX: u32 = 100;
-
-/// Backoff parameters for retrying transactions aborted by PostgreSQL serialization conflicts.
-const SERIALIZABLE_BACKOFF: BackoffParams = BackoffParams::new(
-    Duration::from_millis(10),
-    Duration::from_millis(500),
-    2,
-    Ratio {
-        numerator: 5,
-        denominator: 10,
-    },
-);
 
 fn is_serialization_error(err: &anyhow::Error) -> bool {
     err.chain()
@@ -1698,54 +1806,40 @@ impl SequencerPersistence for Persistence {
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
         tracing::info!("loading config from Postgres");
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_config"),
-                || async {
-                    // Select the most recent config (although there should only be one).
-                    let Some(row) = self
-                        .db
-                        .read()
-                        .await?
-                        .fetch_optional(
-                            "SELECT config FROM network_config ORDER BY id DESC LIMIT 1",
-                        )
-                        .await?
-                    else {
-                        tracing::info!("config not found");
-                        return Ok(None);
-                    };
-                    let json = row.try_get("config")?;
+        serializable_retry!(self, || async {
+            // Select the most recent config (although there should only be one).
+            let Some(row) = self
+                .db
+                .read()
+                .await?
+                .fetch_optional("SELECT config FROM network_config ORDER BY id DESC LIMIT 1")
+                .await?
+            else {
+                tracing::info!("config not found");
+                return Ok(None);
+            };
+            let json = row.try_get("config")?;
 
-                    let json = migrate_network_config(json)
-                        .context("migration of network config failed")?;
-                    let config = serde_json::from_value(json).context("malformed config file")?;
+            let json =
+                migrate_network_config(json).context("migration of network config failed")?;
+            let config = serde_json::from_value(json).context("malformed config file")?;
 
-                    Ok(Some(config))
-                },
-            )
-            .await
+            Ok(Some(config))
+        })
+        .await
     }
 
     async fn save_config(&self, cfg: &NetworkConfig) -> anyhow::Result<()> {
         tracing::info!("saving config to database");
         let json = serde_json::to_value(cfg)?;
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "save_config"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.execute(
-                        query("INSERT INTO network_config (config) VALUES ($1)").bind(json.clone()),
-                    )
-                    .await?;
-                    tx.commit().await
-                },
-            )
-            .await
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.execute(query("INSERT INTO network_config (config) VALUES ($1)").bind(json.clone()))
+                .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn persist_decided_leaves(
@@ -1778,23 +1872,18 @@ impl SequencerPersistence for Persistence {
 
         // Append the new leaves. We do this in its own transaction because even if GC or the
         // event consumer later fails, there is no need to abort the storage of the leaves.
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "append_decided_leaves"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "anchor_leaf2",
-                        ["view", "leaf", "qc", "next_epoch_qc"],
-                        ["view"],
-                        values.clone(),
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "anchor_leaf2",
+                ["view", "leaf", "qc", "next_epoch_qc"],
+                ["view"],
+                values.clone(),
             )
             .await?;
+            tx.commit().await
+        })
+        .await?;
 
         Ok(())
     }
@@ -1818,224 +1907,177 @@ impl SequencerPersistence for Persistence {
     }
 
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_latest_acted_view"),
-                || async {
-                    Ok(self
-                        .db
-                        .read()
-                        .await?
-                        .fetch_optional(query("SELECT view FROM highest_voted_view WHERE id = 0"))
-                        .await?
-                        .map(|row| {
-                            let view: i64 = row.get("view");
-                            ViewNumber::new(view as u64)
-                        }))
-                },
-            )
-            .await
+        serializable_retry!(self, || async {
+            Ok(self
+                .db
+                .read()
+                .await?
+                .fetch_optional(query("SELECT view FROM highest_voted_view WHERE id = 0"))
+                .await?
+                .map(|row| {
+                    let view: i64 = row.get("view");
+                    ViewNumber::new(view as u64)
+                }))
+        })
+        .await
     }
 
     async fn load_restart_view(&self) -> anyhow::Result<Option<ViewNumber>> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_restart_view"),
-                || async {
-                    Ok(self
-                        .db
-                        .read()
-                        .await?
-                        .fetch_optional(query("SELECT view FROM restart_view WHERE id = 0"))
-                        .await?
-                        .map(|row| {
-                            let view: i64 = row.get("view");
-                            ViewNumber::new(view as u64)
-                        }))
-                },
-            )
-            .await
+        serializable_retry!(self, || async {
+            Ok(self
+                .db
+                .read()
+                .await?
+                .fetch_optional(query("SELECT view FROM restart_view WHERE id = 0"))
+                .await?
+                .map(|row| {
+                    let view: i64 = row.get("view");
+                    ViewNumber::new(view as u64)
+                }))
+        })
+        .await
     }
 
     async fn load_anchor_leaf(
         &self,
     ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_anchor_leaf"),
-                || async {
-                    let Some(row) = self
-                        .db
-                        .read()
-                        .await?
-                        .fetch_optional(
-                            "SELECT leaf, qc FROM anchor_leaf2 ORDER BY view DESC LIMIT 1",
-                        )
-                        .await?
-                    else {
-                        return Ok(None);
-                    };
+        serializable_retry!(self, || async {
+            let Some(row) = self
+                .db
+                .read()
+                .await?
+                .fetch_optional("SELECT leaf, qc FROM anchor_leaf2 ORDER BY view DESC LIMIT 1")
+                .await?
+            else {
+                return Ok(None);
+            };
 
-                    let leaf_bytes: Vec<u8> = row.get("leaf");
-                    let leaf2: Leaf2 = bincode::deserialize(&leaf_bytes)?;
+            let leaf_bytes: Vec<u8> = row.get("leaf");
+            let leaf2: Leaf2 = bincode::deserialize(&leaf_bytes)?;
 
-                    let qc_bytes: Vec<u8> = row.get("qc");
-                    let qc2: QuorumCertificate2<SeqTypes> = bincode::deserialize(&qc_bytes)?;
+            let qc_bytes: Vec<u8> = row.get("qc");
+            let qc2: QuorumCertificate2<SeqTypes> = bincode::deserialize(&qc_bytes)?;
 
-                    Ok(Some((leaf2, qc2)))
-                },
-            )
-            .await
+            Ok(Some((leaf2, qc2)))
+        })
+        .await
     }
 
     async fn load_anchor_view(&self) -> anyhow::Result<ViewNumber> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_anchor_view"),
-                || async {
-                    let mut tx = self.db.read().await?;
-                    let (view,) =
-                        query_as::<(i64,)>("SELECT coalesce(max(view), 0) FROM anchor_leaf2")
-                            .fetch_one(tx.as_mut())
-                            .await?;
-                    Ok(ViewNumber::new(view as u64))
-                },
-            )
-            .await
+        serializable_retry!(self, || async {
+            let mut tx = self.db.read().await?;
+            let (view,) = query_as::<(i64,)>("SELECT coalesce(max(view), 0) FROM anchor_leaf2")
+                .fetch_one(tx.as_mut())
+                .await?;
+            Ok(ViewNumber::new(view as u64))
+        })
+        .await
     }
 
     async fn load_da_proposal(
         &self,
         view: ViewNumber,
     ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal2<SeqTypes>>>> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_da_proposal"),
-                || async {
-                    let result = self
-                        .db
-                        .read()
-                        .await?
-                        .fetch_optional(
-                            query("SELECT data FROM da_proposal2 where view = $1")
-                                .bind(view.u64() as i64),
-                        )
-                        .await?;
+        serializable_retry!(self, || async {
+            let result = self
+                .db
+                .read()
+                .await?
+                .fetch_optional(
+                    query("SELECT data FROM da_proposal2 where view = $1").bind(view.u64() as i64),
+                )
+                .await?;
 
-                    result
-                        .map(|row| {
-                            let bytes: Vec<u8> = row.get("data");
-                            anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
-                        })
-                        .transpose()
-                },
-            )
-            .await
+            result
+                .map(|row| {
+                    let bytes: Vec<u8> = row.get("data");
+                    anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
+                })
+                .transpose()
+        })
+        .await
     }
 
     async fn load_vid_share(
         &self,
         view: ViewNumber,
     ) -> anyhow::Result<Option<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_vid_share"),
-                || async {
-                    let result = self
-                        .db
-                        .read()
-                        .await?
-                        .fetch_optional(
-                            query("SELECT data FROM vid_share2 where view = $1")
-                                .bind(view.u64() as i64),
-                        )
-                        .await?;
+        serializable_retry!(self, || async {
+            let result = self
+                .db
+                .read()
+                .await?
+                .fetch_optional(
+                    query("SELECT data FROM vid_share2 where view = $1").bind(view.u64() as i64),
+                )
+                .await?;
 
-                    result
-                        .map(|row| {
-                            let bytes: Vec<u8> = row.get("data");
-                            anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
-                        })
-                        .transpose()
-                },
-            )
-            .await
+            result
+                .map(|row| {
+                    let bytes: Vec<u8> = row.get("data");
+                    anyhow::Result::<_>::Ok(bincode::deserialize(&bytes)?)
+                })
+                .transpose()
+        })
+        .await
     }
 
     async fn load_quorum_proposals(
         &self,
     ) -> anyhow::Result<BTreeMap<ViewNumber, Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>>>
     {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_quorum_proposals"),
-                || async {
-                    let rows = self
-                        .db
-                        .read()
-                        .await?
-                        .fetch_all("SELECT * FROM quorum_proposals2")
-                        .await?;
+        serializable_retry!(self, || async {
+            let rows = self
+                .db
+                .read()
+                .await?
+                .fetch_all("SELECT * FROM quorum_proposals2")
+                .await?;
 
-                    Ok(BTreeMap::from_iter(
-                        rows.into_iter()
-                            .map(|row| {
-                                let view: i64 = row.get("view");
-                                let view_number: ViewNumber = ViewNumber::new(view.try_into()?);
-                                let bytes: Vec<u8> = row.get("data");
-                                let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-                                    bincode::deserialize(&bytes).or_else(|error| {
-                                        bincode::deserialize::<
-                                            Proposal<
-                                                SeqTypes,
-                                                QuorumProposalWrapperLegacy<SeqTypes>,
-                                            >,
-                                        >(&bytes)
-                                        .map(convert_proposal)
-                                        .inspect_err(|err_v3| {
-                                            tracing::warn!(
-                                                ?view_number,
-                                                %error,
-                                                %err_v3,
-                                                "ignoring malformed quorum proposal DB row"
-                                            );
-                                        })
-                                    })?;
-                                Ok((view_number, proposal))
-                            })
-                            .collect::<anyhow::Result<Vec<_>>>()?,
-                    ))
-                },
-            )
-            .await
+            Ok(BTreeMap::from_iter(
+                rows.into_iter()
+                    .map(|row| {
+                        let view: i64 = row.get("view");
+                        let view_number: ViewNumber = ViewNumber::new(view.try_into()?);
+                        let bytes: Vec<u8> = row.get("data");
+                        let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
+                            bincode::deserialize(&bytes).or_else(|error| {
+                                bincode::deserialize::<
+                                    Proposal<SeqTypes, QuorumProposalWrapperLegacy<SeqTypes>>,
+                                >(&bytes)
+                                .map(convert_proposal)
+                                .inspect_err(|err_v3| {
+                                    tracing::warn!(
+                                        ?view_number,
+                                        %error,
+                                        %err_v3,
+                                        "ignoring malformed quorum proposal DB row"
+                                    );
+                                })
+                            })?;
+                        Ok((view_number, proposal))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?,
+            ))
+        })
+        .await
     }
 
     async fn load_quorum_proposal(
         &self,
         view: ViewNumber,
     ) -> anyhow::Result<Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>> {
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "load_quorum_proposal"),
-                || async {
-                    let mut tx = self.db.read().await?;
-                    let (data,) = query_as::<(Vec<u8>,)>(
-                        "SELECT data FROM quorum_proposals2 WHERE view = $1 LIMIT 1",
-                    )
-                    .bind(view.u64() as i64)
-                    .fetch_one(tx.as_mut())
-                    .await?;
-                    let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-                        bincode::deserialize(&data).or_else(|error| {
-                            bincode::deserialize::<
+        serializable_retry!(self, || async {
+            let mut tx = self.db.read().await?;
+            let (data,) = query_as::<(Vec<u8>,)>(
+                "SELECT data FROM quorum_proposals2 WHERE view = $1 LIMIT 1",
+            )
+            .bind(view.u64() as i64)
+            .fetch_one(tx.as_mut())
+            .await?;
+            let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
+                bincode::deserialize(&data).or_else(|error| {
+                    bincode::deserialize::<
                                 Proposal<SeqTypes, QuorumProposalWrapperLegacy<SeqTypes>>,
                             >(&data)
                             .map(convert_proposal)
@@ -2043,11 +2085,10 @@ impl SequencerPersistence for Persistence {
                                 "Failed to deserialize quorum proposal for view {view}. \
                                  error={error}"
                             ))
-                        })?;
-                    Ok(proposal)
-                },
-            )
-            .await
+                })?;
+            Ok(proposal)
+        })
+        .await
     }
 
     async fn append_vid(
@@ -2059,22 +2100,17 @@ impl SequencerPersistence for Persistence {
         let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
-        let res = SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "append_vid"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "vid_share2",
-                        ["view", "data", "payload_hash"],
-                        ["view"],
-                        [(view as i64, data_bytes.clone(), payload_hash.to_string())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
-            )
+        let res = serializable_retry!(self, || async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "vid_share2",
+                    ["view", "data", "payload_hash"],
+                    ["view"],
+                    [(view as i64, data_bytes.clone(), payload_hash.to_string())],
+                )
+                .await?;
+                tx.commit().await
+            })
             .await;
         self.internal_metrics
             .internal_append_vid_duration
@@ -2092,22 +2128,17 @@ impl SequencerPersistence for Persistence {
         let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
-        let res = SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "append_da"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "da_proposal",
-                        ["view", "data", "payload_hash"],
-                        ["view"],
-                        [(view as i64, data_bytes.clone(), vid_commit.to_string())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
-            )
+        let res = serializable_retry!(self, || async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "da_proposal",
+                    ["view", "data", "payload_hash"],
+                    ["view"],
+                    [(view as i64, data_bytes.clone(), vid_commit.to_string())],
+                )
+                .await?;
+                tx.commit().await
+            })
             .await;
         self.internal_metrics
             .internal_append_da_duration
@@ -2126,35 +2157,30 @@ impl SequencerPersistence for Persistence {
             return Ok(());
         }
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "record_action"),
-                || async {
-                    let stmt = format!(
-                        "INSERT INTO highest_voted_view (id, view) VALUES (0, $1)
+        serializable_retry!(self, || async {
+            let stmt = format!(
+                "INSERT INTO highest_voted_view (id, view) VALUES (0, $1)
                 ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(highest_voted_view.view, \
-                         excluded.view)"
-                    );
+                 excluded.view)"
+            );
 
-                    let mut tx = self.db.write().await?;
-                    tx.execute(query(&stmt).bind(view.u64() as i64)).await?;
+            let mut tx = self.db.write().await?;
+            tx.execute(query(&stmt).bind(view.u64() as i64)).await?;
 
-                    if matches!(action, HotShotAction::Vote) {
-                        let restart_view = view + 1;
-                        let stmt = format!(
-                            "INSERT INTO restart_view (id, view) VALUES (0, $1)
+            if matches!(action, HotShotAction::Vote) {
+                let restart_view = view + 1;
+                let stmt = format!(
+                    "INSERT INTO restart_view (id, view) VALUES (0, $1)
                     ON CONFLICT (id) DO UPDATE SET view = {MAX_FN}(restart_view.view, \
-                             excluded.view)"
-                        );
-                        tx.execute(query(&stmt).bind(restart_view.u64() as i64))
-                            .await?;
-                    }
+                     excluded.view)"
+                );
+                tx.execute(query(&stmt).bind(restart_view.u64() as i64))
+                    .await?;
+            }
 
-                    tx.commit().await
-                },
-            )
-            .await
+            tx.commit().await
+        })
+        .await
     }
 
     async fn append_quorum_proposal2(
@@ -2173,37 +2199,32 @@ impl SequencerPersistence for Persistence {
         let justify_qc_leaf_commit = justify_qc.data.leaf_commit.to_string();
 
         let now = Instant::now();
-        let res = SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "append_quorum_proposal2"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "quorum_proposals2",
-                        ["view", "leaf_hash", "data"],
-                        ["view"],
-                        [(
-                            view_number as i64,
-                            leaf_hash.to_string(),
-                            proposal_bytes.clone(),
-                        )],
-                    )
-                    .await?;
-                    tx.upsert(
-                        "quorum_certificate2",
-                        ["view", "leaf_hash", "data"],
-                        ["view"],
-                        [(
-                            justify_qc_view,
-                            justify_qc_leaf_commit.clone(),
-                            justify_qc_bytes.clone(),
-                        )],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
-            )
+        let res = serializable_retry!(self, || async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "quorum_proposals2",
+                    ["view", "leaf_hash", "data"],
+                    ["view"],
+                    [(
+                        view_number as i64,
+                        leaf_hash.to_string(),
+                        proposal_bytes.clone(),
+                    )],
+                )
+                .await?;
+                tx.upsert(
+                    "quorum_certificate2",
+                    ["view", "leaf_hash", "data"],
+                    ["view"],
+                    [(
+                        justify_qc_view,
+                        justify_qc_leaf_commit.clone(),
+                        justify_qc_bytes.clone(),
+                    )],
+                )
+                .await?;
+                tx.commit().await
+            })
             .await;
         self.internal_metrics
             .internal_append_quorum2_duration
@@ -2277,23 +2298,18 @@ impl SequencerPersistence for Persistence {
         };
         let upgrade_certificate_bytes =
             bincode::serialize(&certificate).context("serializing upgrade certificate")?;
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "store_upgrade_certificate"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "upgrade_certificate",
-                        ["id", "data"],
-                        ["id"],
-                        [(true, upgrade_certificate_bytes.clone())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "upgrade_certificate",
+                ["id", "data"],
+                ["id"],
+                [(true, upgrade_certificate_bytes.clone())],
             )
-            .await
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn migrate_anchor_leaf(&self) -> anyhow::Result<()> {
@@ -2925,9 +2941,8 @@ impl SequencerPersistence for Persistence {
         high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
         let qc2_bytes = bincode::serialize(&high_qc).context("serializing next epoch qc")?;
-        SERIALIZABLE_BACKOFF
+        self.serializable_backoff
             .retry_if(
-                SERIALIZABLE_RETRY_MAX,
                 is_serialization_error_with_diag(
                     self.db.pool(),
                     "store_next_epoch_quorum_certificate",
@@ -2972,18 +2987,13 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let eqc_bytes =
             bincode::serialize(&(high_qc, next_epoch_high_qc)).context("serializing eqc")?;
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "store_eqc"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert("eqc", ["id", "data"], ["id"], [(true, eqc_bytes.clone())])
-                        .await?;
-                    tx.commit().await
-                },
-            )
-            .await
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert("eqc", ["id", "data"], ["id"], [(true, eqc_bytes.clone())])
+                .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_eqc(
@@ -3020,22 +3030,17 @@ impl SequencerPersistence for Persistence {
         let data_bytes = bincode::serialize(proposal).unwrap();
 
         let now = Instant::now();
-        let res = SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "append_da2"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "da_proposal2",
-                        ["view", "data", "payload_hash"],
-                        ["view"],
-                        [(view as i64, data_bytes.clone(), vid_commit.to_string())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
-            )
+        let res = serializable_retry!(self, || async {
+                let mut tx = self.db.write().await?;
+                tx.upsert(
+                    "da_proposal2",
+                    ["view", "data", "payload_hash"],
+                    ["view"],
+                    [(view as i64, data_bytes.clone(), vid_commit.to_string())],
+                )
+                .await?;
+                tx.commit().await
+            })
             .await;
         self.internal_metrics
             .internal_append_da2_duration
@@ -3050,23 +3055,18 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let epoch_i64 = epoch.u64() as i64;
         let drb_result_vec = Vec::from(drb_result);
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "store_drb_result"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "epoch_drb_and_root",
-                        ["epoch", "drb_result"],
-                        ["epoch"],
-                        [(epoch_i64, drb_result_vec.clone())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "drb_result"],
+                ["epoch"],
+                [(epoch_i64, drb_result_vec.clone())],
             )
-            .await
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_epoch_root(
@@ -3078,23 +3078,18 @@ impl SequencerPersistence for Persistence {
         let block_header_bytes =
             bincode::serialize(&block_header).context("serializing block header")?;
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "store_epoch_root"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "epoch_drb_and_root",
-                        ["epoch", "block_header"],
-                        ["epoch"],
-                        [(epoch_i64, block_header_bytes.clone())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "block_header"],
+                ["epoch"],
+                [(epoch_i64, block_header_bytes.clone())],
             )
-            .await
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_drb_input(&self, drb_input: DrbInput) -> anyhow::Result<()> {
@@ -3114,23 +3109,18 @@ impl SequencerPersistence for Persistence {
         let drb_input_bytes = bincode::serialize(&drb_input)
             .context("Failed to serialize DrbInput. This is not fatal, but should never happen.")?;
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "store_drb_input"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "drb",
-                        ["epoch", "drb_input"],
-                        ["epoch"],
-                        [(drb_epoch_i64, drb_input_bytes.clone())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "drb",
+                ["epoch", "drb_input"],
+                ["epoch"],
+                [(drb_epoch_i64, drb_input_bytes.clone())],
             )
-            .await
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_drb_input(&self, epoch: u64) -> anyhow::Result<DrbInput> {
@@ -3161,23 +3151,18 @@ impl SequencerPersistence for Persistence {
         let state_cert_bytes = bincode::serialize(&state_cert)
             .context("serializing light client state update certificate")?;
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "add_state_cert"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "state_cert",
-                        ["view", "state_cert"],
-                        ["view"],
-                        [(view_number, state_cert_bytes.clone())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "state_cert",
+                ["view", "state_cert"],
+                ["view"],
+                [(view_number, state_cert_bytes.clone())],
             )
-            .await
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_state_cert(
@@ -3265,23 +3250,18 @@ impl SequencerPersistence for Persistence {
         let bytes = bincode::serialize(&cert)
             .with_context(|| format!("Failed to serialize state cert for epoch {epoch}"))?;
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "insert_state_cert"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "finalized_state_cert",
-                        ["epoch", "state_cert"],
-                        ["epoch"],
-                        [(epoch_i64, bytes.clone())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "finalized_state_cert",
+                ["epoch", "state_cert"],
+                ["epoch"],
+                [(epoch_i64, bytes.clone())],
             )
-            .await
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_start_epoch_info(&self) -> anyhow::Result<Vec<InitializerEpochInfo<SeqTypes>>> {
@@ -3429,28 +3409,23 @@ impl MembershipPersistence for Persistence {
         let stake_table_hash_bytes = stake_table_hash
             .map(|h| bincode::serialize(&h).context("serializing stake table hash"))
             .transpose()?;
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "store_stake"),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "epoch_drb_and_root",
-                        ["epoch", "stake", "block_reward", "stake_table_hash"],
-                        ["epoch"],
-                        [(
-                            epoch_i64,
-                            stake_table_bytes.clone(),
-                            reward_bytes.clone(),
-                            stake_table_hash_bytes.clone(),
-                        )],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "epoch_drb_and_root",
+                ["epoch", "stake", "block_reward", "stake_table_hash"],
+                ["epoch"],
+                [(
+                    epoch_i64,
+                    stake_table_bytes.clone(),
+                    reward_bytes.clone(),
+                    stake_table_hash_bytes.clone(),
+                )],
             )
-            .await
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn store_events(
@@ -3470,68 +3445,63 @@ impl MembershipPersistence for Persistence {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "store_events"),
-                || async {
-                    let mut tx = self.db.write().await?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
 
-                    // check last l1 block if there is any
-                    let last_processed_l1_block = query_as::<(i64,)>(
-                        "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
-                    )
-                    .fetch_optional(tx.as_mut())
-                    .await?
-                    .map(|(l1,)| l1);
-
-                    tracing::debug!("last l1 finalizes in database = {last_processed_l1_block:?}");
-
-                    // skip events storage if the database already has higher l1 block events
-                    let serialized_events_len = serialized_events.len();
-                    if last_processed_l1_block > Some(l1_finalized_i64) {
-                        tracing::debug!(
-                            ?last_processed_l1_block,
-                            l1_finalized,
-                            serialized_events_len,
-                            "last l1 finalized stored is already higher"
-                        );
-                        return Ok(());
-                    }
-
-                    if !serialized_events.is_empty() {
-                        let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
-                            "INSERT INTO stake_table_events (l1_block, log_index, event) ",
-                        );
-
-                        query_builder.push_values(
-                            serialized_events.iter().cloned(),
-                            |mut b, (l1_block, log_index, event)| {
-                                b.push_bind(l1_block).push_bind(log_index).push_bind(event);
-                            },
-                        );
-
-                        query_builder.push(" ON CONFLICT DO NOTHING");
-                        let query = query_builder.build();
-
-                        query.execute(tx.as_mut()).await?;
-                    }
-
-                    // update l1 block
-                    tx.upsert(
-                        "stake_table_events_l1_block",
-                        ["id", "last_l1_block"],
-                        ["id"],
-                        [(0_i32, l1_finalized_i64)],
-                    )
-                    .await?;
-
-                    tx.commit().await?;
-
-                    Ok(())
-                },
+            // check last l1 block if there is any
+            let last_processed_l1_block = query_as::<(i64,)>(
+                "SELECT last_l1_block FROM stake_table_events_l1_block where id = 0",
             )
-            .await
+            .fetch_optional(tx.as_mut())
+            .await?
+            .map(|(l1,)| l1);
+
+            tracing::debug!("last l1 finalizes in database = {last_processed_l1_block:?}");
+
+            // skip events storage if the database already has higher l1 block events
+            let serialized_events_len = serialized_events.len();
+            if last_processed_l1_block > Some(l1_finalized_i64) {
+                tracing::debug!(
+                    ?last_processed_l1_block,
+                    l1_finalized,
+                    serialized_events_len,
+                    "last l1 finalized stored is already higher"
+                );
+                return Ok(());
+            }
+
+            if !serialized_events.is_empty() {
+                let mut query_builder: sqlx::QueryBuilder<Db> = sqlx::QueryBuilder::new(
+                    "INSERT INTO stake_table_events (l1_block, log_index, event) ",
+                );
+
+                query_builder.push_values(
+                    serialized_events.iter().cloned(),
+                    |mut b, (l1_block, log_index, event)| {
+                        b.push_bind(l1_block).push_bind(log_index).push_bind(event);
+                    },
+                );
+
+                query_builder.push(" ON CONFLICT DO NOTHING");
+                let query = query_builder.build();
+
+                query.execute(tx.as_mut()).await?;
+            }
+
+            // update l1 block
+            tx.upsert(
+                "stake_table_events_l1_block",
+                ["id", "last_l1_block"],
+                ["id"],
+                [(0_i32, l1_finalized_i64)],
+            )
+            .await?;
+
+            tx.commit().await?;
+
+            Ok(())
+        })
+        .await
     }
 
     /// Loads all events from persistent storage up to the specified L1 block.
@@ -3662,40 +3632,33 @@ impl MembershipPersistence for Persistence {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "store_all_validators"),
-                || async {
-                    let mut tx = self.db.write().await?;
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
 
-                    let mut query_builder = QueryBuilder::new(
-                        "INSERT INTO stake_table_validators (epoch, address, validator) ",
-                    );
+            let mut query_builder = QueryBuilder::new(
+                "INSERT INTO stake_table_validators (epoch, address, validator) ",
+            );
 
-                    query_builder.push_values(
-                        serialized_validators.iter().cloned(),
-                        |mut b, (address, validator)| {
-                            b.push_bind(epoch_i64)
-                                .push_bind(address)
-                                .push_bind(validator);
-                        },
-                    );
-
-                    query_builder.push(
-                        " ON CONFLICT (epoch, address) DO UPDATE SET validator = \
-                         EXCLUDED.validator",
-                    );
-
-                    let query = query_builder.build();
-
-                    query.execute(tx.as_mut()).await?;
-
-                    tx.commit().await?;
-                    Ok(())
+            query_builder.push_values(
+                serialized_validators.iter().cloned(),
+                |mut b, (address, validator)| {
+                    b.push_bind(epoch_i64)
+                        .push_bind(address)
+                        .push_bind(validator);
                 },
-            )
-            .await
+            );
+
+            query_builder
+                .push(" ON CONFLICT (epoch, address) DO UPDATE SET validator = EXCLUDED.validator");
+
+            let query = query_builder.build();
+
+            query.execute(tx.as_mut()).await?;
+
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     async fn load_all_validators(
@@ -3747,26 +3710,21 @@ impl DhtPersistentStorage for Persistence {
         let stmt = "INSERT INTO libp2p_dht (id, serialized_records) VALUES (0, $1) ON CONFLICT \
                     (id) DO UPDATE SET serialized_records = $1";
 
-        SERIALIZABLE_BACKOFF
-            .retry_if(
-                SERIALIZABLE_RETRY_MAX,
-                is_serialization_error_with_diag(self.db.pool(), "DhtPersistentStorage::save"),
-                || async {
-                    // Execute the query
-                    let mut tx = self
-                        .db
-                        .write()
-                        .await
-                        .with_context(|| "failed to start an atomic DB transaction")?;
-                    tx.execute(query(stmt).bind(to_save.clone()))
-                        .await
-                        .with_context(|| "failed to execute DB query")?;
+        serializable_retry!(self, || async {
+            // Execute the query
+            let mut tx = self
+                .db
+                .write()
+                .await
+                .with_context(|| "failed to start an atomic DB transaction")?;
+            tx.execute(query(stmt).bind(to_save.clone()))
+                .await
+                .with_context(|| "failed to execute DB query")?;
 
-                    // Commit the state
-                    tx.commit().await.with_context(|| "failed to commit to DB")
-                },
-            )
-            .await
+            // Commit the state
+            tx.commit().await.with_context(|| "failed to commit to DB")
+        })
+        .await
     }
 
     /// Load the DHT from the database
@@ -4878,6 +4836,20 @@ mod test {
         })))
     }
 
+    /// Backoff parameters for the retry-mechanism unit tests below.  These mirror the production
+    /// defaults of `SerializableRetryOptions` but live here so the tests are independent of any
+    /// production-side refactoring of those defaults.
+    const TEST_BACKOFF: BackoffParams = BackoffParams::new(
+        Duration::from_millis(10),
+        Duration::from_millis(500),
+        2,
+        Ratio {
+            numerator: 5,
+            denominator: 10,
+        },
+        100,
+    );
+
     #[test]
     fn test_is_serialization_error() {
         // PostgreSQL error code 40001 must be recognised as a serialization failure.
@@ -4899,8 +4871,8 @@ mod test {
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = calls.clone();
 
-        let result = SERIALIZABLE_BACKOFF
-            .retry_if(SERIALIZABLE_RETRY_MAX, is_serialization_error, || {
+        let result = TEST_BACKOFF
+            .retry_if(is_serialization_error, || {
                 let calls = calls_clone.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
@@ -4919,8 +4891,8 @@ mod test {
         let calls_clone = calls.clone();
 
         // The closure fails twice with a serialization error, then succeeds on the third attempt.
-        let result = SERIALIZABLE_BACKOFF
-            .retry_if(SERIALIZABLE_RETRY_MAX, is_serialization_error, || {
+        let result = TEST_BACKOFF
+            .retry_if(is_serialization_error, || {
                 let calls = calls_clone.clone();
                 async move {
                     let n = calls.fetch_add(1, Ordering::SeqCst);
@@ -4942,9 +4914,9 @@ mod test {
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = calls.clone();
 
-        // The closure always fails; retry must give up after SERIALIZABLE_RETRY_MAX (5) retries.
-        let result: anyhow::Result<()> = SERIALIZABLE_BACKOFF
-            .retry_if(SERIALIZABLE_RETRY_MAX, is_serialization_error, || {
+        // The closure always fails; retry must give up after TEST_BACKOFF.retry_max retries.
+        let result: anyhow::Result<()> = TEST_BACKOFF
+            .retry_if(is_serialization_error, || {
                 let calls = calls_clone.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
@@ -4964,8 +4936,8 @@ mod test {
         let calls_clone = calls.clone();
 
         // Non-serialization errors must not be retried.
-        let result: anyhow::Result<()> = SERIALIZABLE_BACKOFF
-            .retry_if(SERIALIZABLE_RETRY_MAX, is_serialization_error, || {
+        let result: anyhow::Result<()> = TEST_BACKOFF
+            .retry_if(is_serialization_error, || {
                 let calls = calls_clone.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
@@ -4976,6 +4948,17 @@ mod test {
 
         assert!(result.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// Verify that [`function_name!`] resolves to the unqualified name of the enclosing
+    /// function, both from a nested helper and from the test fn itself.
+    #[test]
+    fn test_function_name_macro() {
+        fn outer_test_fn() -> &'static str {
+            function_name!()
+        }
+        assert_eq!(outer_test_fn(), "outer_test_fn");
+        assert_eq!(function_name!(), "test_function_name_macro");
     }
 }
 
@@ -5115,7 +5098,7 @@ mod postgres_tests {
     }
 
     /// Verify that concurrent calls to `record_action` all succeed under
-    /// PostgreSQL SERIALIZABLE isolation. `SERIALIZABLE_BACKOFF.retry_if` handles any
+    /// PostgreSQL SERIALIZABLE isolation. `self.serializable_backoff.retry_if` handles any
     /// 40001 serialization failures that arise when many tasks race to update
     /// the same row.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
