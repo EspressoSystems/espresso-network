@@ -2,6 +2,7 @@ mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
+mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
@@ -39,7 +40,7 @@ use hotshot::{
     traits::implementations::{
         CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, GossipConfig, KeyPair,
         Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
-        derive_libp2p_multiaddr, derive_libp2p_peer_id,
+        collect_window_peers, derive_libp2p_multiaddr, derive_libp2p_peer_id,
     },
     types::SignatureKey,
 };
@@ -74,7 +75,10 @@ use tracing::info;
 use url::Url;
 use vbs::version::StaticVersion;
 
-use crate::request_response::data_source::Storage as RequestResponseStorage;
+use crate::{
+    request_response::data_source::Storage as RequestResponseStorage,
+    startup_catchup::bootstrap_epoch_window,
+};
 
 pub const RECENT_STAKE_TABLES_LIMIT: u64 = 20;
 
@@ -657,6 +661,15 @@ where
         &persistence.clone(),
     );
 
+    // Walk the existing catchup chain forward from persistence + genesis seeding
+    // to populate stake tables for the current epoch window before cliquenet is
+    // constructed. Without this, a fresh-join or cold-restart node cannot know
+    // which validators to dial.
+    let current_epoch = bootstrap_epoch_window(&coordinator, epoch_height)
+        .await
+        .context("startup stake-table catchup failed")?;
+    info!(%current_epoch, "Startup catchup complete");
+
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
 
     let instance_state = NodeState {
@@ -728,14 +741,10 @@ where
     // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
     // for the fast finality consensus upgrade i.e Coordinator.
     let cliquenet = {
-        let peers = coordinator
-            .stake_table_for_epoch(None)
-            .await?
-            .stake_table()
-            .await
-            .0
-            .into_iter()
-            .filter_map(|cfg| Some((cfg.stake_table_entry.stake_key, cfg.connect_info?)));
+        // Build cliquenet's initial peer set from the same sliding window
+        // (`N-1 ∪ N ∪ N+1`, each with main + DA) that `on_epoch_change` would
+        // produce. `current_epoch` was determined by `bootstrap_epoch_window`.
+        let peers = collect_window_peers(&coordinator, current_epoch).await;
 
         Cliquenet::<PubKey>::create(
             "sequencer",
