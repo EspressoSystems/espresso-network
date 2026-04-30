@@ -22,7 +22,7 @@ use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::election::Membership,
 };
 
-const STAKE_TABLE_CATCHUP_TIMEOUT: Duration = Duration::from_secs(5);
+const STAKE_TABLE_CATCHUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Walk forward from the highest already-known epoch until peers can no
 /// longer serve the next epoch root leaf, populating the membership with
