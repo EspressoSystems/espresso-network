@@ -14,11 +14,15 @@
 //!
 //! See the design discussion at `/home/brendon/.claude/plans/we-are-working-on-breezy-tower.md`.
 
+use std::time::Duration;
+
 use anyhow::{Context, ensure};
 use espresso_types::SeqTypes;
 use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::election::Membership,
 };
+
+const STAKE_TABLE_CATCHUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Walk forward from the highest already-known epoch until peers can no
 /// longer serve the next epoch root leaf, populating the membership with
@@ -75,18 +79,35 @@ pub async fn bootstrap_epoch_window(
 
     // Walk forward; each successful iteration drives `add_epoch_root` via
     // the existing catchup machinery, persisting the new stake table.
+    //
+    // The underlying `fetch_leaf` retries forever, so each step is bounded
+    // by `STAKE_TABLE_CATCHUP_TIMEOUT`.  When it times out we treat this as the stake table
+    // not being available yet.
     loop {
         let target = highest + 1;
-        match coordinator.wait_for_stake_table(target).await {
-            Ok(_) => {
+        let result = tokio::time::timeout(
+            STAKE_TABLE_CATCHUP_TIMEOUT,
+            coordinator.wait_for_stake_table(target),
+        )
+        .await;
+        match result {
+            Ok(Ok(_)) => {
                 tracing::info!(%target, "bootstrap_epoch_window: derived stake table");
                 highest = target;
             },
-            Err(err) => {
+            Ok(Err(err)) => {
                 tracing::info!(
                     %target,
                     %err,
-                    "bootstrap_epoch_window: peers exhausted; treating as live tip",
+                    "bootstrap_epoch_window: catchup failed; treating as live tip",
+                );
+                break;
+            },
+            Err(_) => {
+                tracing::info!(
+                    %target,
+                    timeout_secs = STAKE_TABLE_CATCHUP_TIMEOUT.as_secs(),
+                    "bootstrap_epoch_window: catchup timed out; treating as live tip",
                 );
                 break;
             },
