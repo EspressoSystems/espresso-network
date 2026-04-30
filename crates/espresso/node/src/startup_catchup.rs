@@ -11,8 +11,6 @@
 //! highest already-known epoch (loaded from persistence by `reload_stake`)
 //! until peers can no longer serve the next epoch root leaf — which is the
 //! point at which the live network currently is.
-//!
-//! See the design discussion at `/home/brendon/.claude/plans/we-are-working-on-breezy-tower.md`.
 
 use std::time::Duration;
 
