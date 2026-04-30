@@ -11,6 +11,7 @@ use hotshot::{
     traits::{BlockPayload, ValidatedState, implementations::MemoryNetwork},
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
 };
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
@@ -28,15 +29,19 @@ use hotshot_types::{
         ViewNumber, vid_commitment,
     },
     epoch_membership::EpochMembershipCoordinator,
+    light_client::{StakeTableState, StateKeyPair},
     message::Proposal as SignedProposal,
     simple_certificate::TimeoutCertificate2,
-    simple_vote::{QuorumVote2, TimeoutData2, TimeoutVote2, Vote2Data},
+    simple_vote::{
+        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, Vote2Data,
+    },
     traits::{
         EncodeBytes,
         block_contents::{BlockHeader, BuilderFee},
         election::Membership,
         network::TestableNetworkingImplementation,
-        signature_key::{SignatureKey, StakeTableEntryType},
+        node_implementation::NodeImplementation,
+        signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     },
     utils::{
         BuilderCommitment, epoch_from_block_number, is_epoch_root, is_epoch_transition,
@@ -70,6 +75,8 @@ pub struct TestView {
     pub cert1: Certificate1<TestTypes>,
     pub cert2: Certificate2<TestTypes>,
     pub timeout_cert: TimeoutCertificate2<TestTypes>,
+    pub epoch_height: u64,
+    pub stake_table_state: hotshot_types::light_client::StakeTableState,
 }
 
 impl TestView {
@@ -127,7 +134,8 @@ impl TestView {
     }
 
     /// Build a Vote1 Event from a specific validator, carrying that validator's
-    /// QuorumVote2 and VID share.
+    /// QuorumVote2 and VID share. On epoch-root views, also includes a valid
+    /// `LightClientStateUpdateVote2` signed with the node's Schnorr key.
     pub fn vote1_input(&self, node_index: u64) -> Message<TestTypes, Validated> {
         let (pub_key, priv_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index);
         let data = hotshot_types::simple_vote::QuorumData2 {
@@ -151,11 +159,27 @@ impl TestView {
             .find(|s| s.recipient_key == pub_key)
             .expect("VID share not found for node")
             .clone();
+
+        let block_number = BlockHeader::<TestTypes>::block_number(&self.proposal.data.block_header);
+        let state_vote = if self.epoch_height > 0 && is_epoch_root(block_number, self.epoch_height)
+        {
+            Some(build_state_vote_for_test(
+                &self.proposal.data.block_header,
+                self.view_number,
+                self.epoch_number,
+                &self.stake_table_state,
+                node_index,
+            ))
+        } else {
+            None
+        };
+
         Message {
             sender: self.leader_public_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote1(Vote1 {
                 vote,
                 vid_share,
+                state_vote,
             })),
         }
     }
@@ -238,7 +262,8 @@ impl TestData {
         epoch_height: u64,
         num_nodes: usize,
     ) -> Self {
-        let membership = mock_membership_with_num_nodes(num_nodes).await;
+        crate::logging::init_test_logging();
+        let (membership, _storage) = mock_membership_with_num_nodes(num_nodes, epoch_height).await;
         let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
         let upgrade = TEST_VERSIONS.vid2;
@@ -257,6 +282,11 @@ impl TestData {
         // DRB results computed from epoch root leaves, keyed by target epoch.
         // With difficulty 0 the DRB equals SHA256(bincode(root_leaf.justify_qc.signatures)).
         let mut computed_drbs: HashMap<u64, hotshot_types::drb::DrbResult> = HashMap::new();
+        // When the previous view's block is an epoch root, the current view's
+        // proposal MUST carry a matching state_cert (new-protocol invariant).
+        let mut prev_state_cert: Option<
+            hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<TestTypes>,
+        > = None;
 
         for gen_view in &gen_views {
             let view_number = gen_view.view_number;
@@ -285,12 +315,19 @@ impl TestData {
 
             // ---- epoch-aware patching ----
             let needs_justify_update = prev_new_cert1.is_some();
-            let needs_drb = epoch > EpochNumber::genesis() + 1
+            // Match the guard in `consensus.rs` maybe_propose / handle_proposal:
+            // transitions in epoch >= 2 (`> genesis`) must carry
+            // `next_drb_result`.
+            let needs_drb = epoch > EpochNumber::genesis()
                 && epoch_height > 0
                 && is_epoch_transition(block_number, epoch_height);
 
             if let Some(new_cert1) = prev_new_cert1.take() {
                 proposal.justify_qc = new_cert1;
+            }
+            // Attach state_cert when justify_qc points at an epoch-root block.
+            if let Some(sc) = prev_state_cert.take() {
+                proposal.state_cert = Some(sc);
             }
             if needs_drb {
                 let next_epoch = *epoch + 1;
@@ -376,6 +413,33 @@ impl TestData {
             if is_last_block(block_number, epoch_height) {
                 prev_new_cert2 = Some(cert2.clone());
             }
+            // Build a state_cert when this block is an epoch root, so the
+            // next view's proposal (whose justify_qc is this cert1) can
+            // attach it. Propagate the cert1 too, since we always need to
+            // rebuild it when this view is epoch root (state_cert.view must
+            // match cert1.view, and the current cert1 already reflects that).
+            if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
+                // Compute next-epoch stake commitment (same committee in tests).
+                let next_stake_table_state = epoch_membership
+                    .next_epoch_stake_table()
+                    .await
+                    .expect("next epoch stake table")
+                    .stake_table()
+                    .await
+                    .commitment(num_nodes)
+                    .expect("stake table commitment");
+                let state_cert = build_state_cert_for_test(
+                    &proposal.block_header,
+                    view_number,
+                    epoch,
+                    &next_stake_table_state,
+                    ((2 * num_nodes) / 3 + 1) as u64,
+                );
+                prev_state_cert = Some(state_cert);
+                // Always propagate cert1 at epoch root so next view's justify_qc
+                // matches — tests may have otherwise skipped the propagation.
+                prev_new_cert1 = Some(cert1.clone());
+            }
 
             let timeout_cert = build_timeout_cert(
                 view_number,
@@ -385,6 +449,15 @@ impl TestData {
                 leader_private_key,
             )
             .await;
+
+            let stake_table_state = epoch_membership
+                .next_epoch_stake_table()
+                .await
+                .expect("next epoch stake table")
+                .stake_table()
+                .await
+                .commitment(num_nodes)
+                .expect("stake table commitment");
 
             views.push(TestView {
                 view_number,
@@ -397,6 +470,8 @@ impl TestData {
                 cert1,
                 cert2,
                 timeout_cert,
+                epoch_height,
+                stake_table_state,
             });
         }
         Self { views }
@@ -404,12 +479,19 @@ impl TestData {
 }
 
 pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
-    mock_membership_with_num_nodes(10).await
+    mock_membership_with_num_nodes(10, 10).await.0
 }
 
 pub async fn mock_membership_with_num_nodes(
     num_nodes: usize,
-) -> EpochMembershipCoordinator<TestTypes> {
+    epoch_height: u64,
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+) {
+    // Unit-test callers don't have a real Coordinator network to share,
+    // so spin up an isolated MemoryNetwork just for the `Leaf2Fetcher`.
+    // These tests don't actually exercise peer catchup.
     let network =
         <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
             num_nodes,
@@ -421,22 +503,55 @@ pub async fn mock_membership_with_num_nodes(
             &mut HashMap::new(),
         )(0)
         .await;
+    let (pk, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let (mut coordinator, storage) =
+        mock_membership_with_network::<MemoryImpl>(num_nodes, epoch_height, network, pk).await;
+    // Install a dummy external channel so Leaf2Fetcher::fetch_leaf
+    // doesn't panic on `self.network_receiver.expect(...)` when these
+    // unit tests incidentally drive catchup.
+    let (_tx, rx) = async_broadcast::broadcast(1);
+    coordinator.set_external_channel(rx).await;
+    (coordinator, storage)
+}
+
+/// Create a mock membership coordinator for `num_nodes` validators.
+///
+/// The `network` is shared with the node's [`Coordinator`] — the
+/// membership's `Leaf2Fetcher` uses it to SEND catchup direct-messages,
+/// while the Coordinator is the sole owner of the receive loop.
+/// Returns the coordinator along with the [`TestStorage`] its internal
+/// `StrictMembership` uses.  The same `TestStorage` should be supplied to
+/// the node's [`Coordinator`] so that `Leaf2Fetcher` can read leaves the
+/// Coordinator writes during catchup.
+pub async fn mock_membership_with_network<I>(
+    num_nodes: usize,
+    epoch_height: u64,
+    network: Arc<<I as NodeImplementation<TestTypes>>::Network>,
+    public_key: BLSPubKey,
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+)
+where
+    I: NodeImplementation<TestTypes>,
+{
     let members = gen_node_lists(
         num_nodes as u64,
         num_nodes as u64,
         &TestNodeStakes::default(),
     )
     .0;
+    let storage = TestStorage::<TestTypes>::default();
     let membership = Arc::new(RwLock::new(StrictMembership::<
         TestTypes,
         StaticStakeTable<BLSPubKey, SchnorrPubKey>,
-    >::new::<MemoryImpl>(
+    >::new::<I>(
         members.clone(),
         members.clone(),
-        TestStorage::default(),
+        storage.clone(),
         network,
-        members[0].stake_table_entry.public_key(),
-        10,
+        public_key,
+        epoch_height,
     )));
     // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.)
     membership
@@ -451,7 +566,11 @@ pub async fn mock_membership_with_num_nodes(
     coordinator
         .set_drb_difficulty_selector(std::sync::Arc::new(|_version| Box::pin(async { 0u64 })))
         .await;
-    coordinator
+    // Callers that need the `Leaf2Fetcher` external channel wired up
+    // install it themselves — `build_test_coordinator` wires a real
+    // channel to its Coordinator; `mock_membership` installs a dummy
+    // for unit tests that don't exercise real catchup.
+    (coordinator, storage)
 }
 
 pub fn key_map_with_num_nodes(num_nodes: u64) -> BTreeMap<BLSPubKey, BLSPrivKey> {
@@ -461,6 +580,96 @@ pub fn key_map_with_num_nodes(num_nodes: u64) -> BTreeMap<BLSPubKey, BLSPrivKey>
         map.insert(public_key, private_key);
     }
     map
+}
+
+/// Build a `LightClientStateUpdateCertificateV2` by aggregating state votes
+/// from `num_signers` nodes — used in test data to attach to proposals whose
+/// justify_qc is epoch-root.
+pub fn build_state_cert_for_test(
+    block_header: &<TestTypes as hotshot_types::traits::node_implementation::NodeType>::BlockHeader,
+    view_number: ViewNumber,
+    epoch: EpochNumber,
+    next_stake_table_state: &StakeTableState,
+    num_signers: u64,
+) -> hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2<TestTypes> {
+    let light_client_state =
+        <_ as BlockHeader<TestTypes>>::get_light_client_state(block_header, view_number)
+            .expect("get_light_client_state");
+    let auth_root = <_ as BlockHeader<TestTypes>>::auth_root(block_header).expect("auth_root");
+
+    let mut signatures = Vec::with_capacity(num_signers as usize);
+    for i in 0..num_signers {
+        let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], i);
+        let state_sign_key = state_key_pair.sign_key_ref();
+        let v2_sig =
+            <<TestTypes as hotshot_types::traits::node_implementation::NodeType>::StateSignatureKey
+                as LCV2StateSignatureKey>::sign_state(
+                state_sign_key,
+                &light_client_state,
+                next_stake_table_state,
+            )
+            .expect("LCV2 sign");
+        let digest =
+            derive_signed_state_digest(&light_client_state, next_stake_table_state, &auth_root);
+        let v3_sig =
+            <<TestTypes as hotshot_types::traits::node_implementation::NodeType>::StateSignatureKey
+                as LCV3StateSignatureKey>::sign_state(state_sign_key, digest)
+                .expect("LCV3 sign");
+        signatures.push((state_key_pair.ver_key(), v3_sig, v2_sig));
+    }
+    hotshot_types::simple_certificate::LightClientStateUpdateCertificateV2 {
+        epoch,
+        light_client_state,
+        next_stake_table_state: *next_stake_table_state,
+        signatures,
+        auth_root,
+    }
+}
+
+/// Build a `LightClientStateUpdateVote2` for a node voting on an epoch-root leaf.
+///
+/// Signs with the Schnorr key generated from the same `(seed=[0u8; 32], index)`
+/// pair used by `ValidatorConfig::generated_from_seed_indexed`, so the
+/// signatures verify against the stake table's `state_ver_key`s in tests.
+pub fn build_state_vote_for_test(
+    block_header: &<TestTypes as hotshot_types::traits::node_implementation::NodeType>::BlockHeader,
+    view_number: ViewNumber,
+    epoch: EpochNumber,
+    next_stake_table_state: &StakeTableState,
+    node_index: u64,
+) -> LightClientStateUpdateVote2<TestTypes> {
+    let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
+    let state_sign_key = state_key_pair.sign_key_ref();
+
+    let light_client_state =
+        <_ as BlockHeader<TestTypes>>::get_light_client_state(block_header, view_number)
+            .expect("get_light_client_state");
+    let auth_root = <_ as BlockHeader<TestTypes>>::auth_root(block_header).expect("auth_root");
+
+    let v2_signature =
+        <<TestTypes as hotshot_types::traits::node_implementation::NodeType>::StateSignatureKey
+            as LCV2StateSignatureKey>::sign_state(
+            state_sign_key,
+            &light_client_state,
+            next_stake_table_state,
+        )
+        .expect("LCV2 sign");
+    let signed_state_digest =
+        derive_signed_state_digest(&light_client_state, next_stake_table_state, &auth_root);
+    let signature =
+        <<TestTypes as hotshot_types::traits::node_implementation::NodeType>::StateSignatureKey
+            as LCV3StateSignatureKey>::sign_state(state_sign_key, signed_state_digest)
+            .expect("LCV3 sign");
+
+    LightClientStateUpdateVote2 {
+        epoch,
+        light_client_state,
+        next_stake_table_state: *next_stake_table_state,
+        signature,
+        v2_signature,
+        auth_root,
+        signed_state_digest,
+    }
 }
 
 /// A mock block with its derived commitments and metadata.
@@ -571,6 +780,10 @@ impl ConsensusHarness {
 
     pub async fn new_with_epoch_height(node_index: u64, epoch_height: u64) -> Self {
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+        let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
+            [0u8; 32], node_index,
+        );
+        let state_private_key = state_key_pair.sign_key_ref().clone();
         let membership = mock_membership().await;
         let instance = Arc::new(TestInstanceState::default());
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
@@ -583,6 +796,8 @@ impl ConsensusHarness {
             membership.clone(),
             public_key,
             private_key,
+            state_private_key,
+            10,
             test_upgrade_lock(),
             genesis_leaf,
             epoch_height,

@@ -1,35 +1,63 @@
-mod chan;
-mod error;
-mod frame;
-mod id;
+mod addr;
+mod connection;
+mod msg;
 mod net;
+mod queue;
 mod time;
 
-#[cfg(feature = "metrics")]
-mod metrics;
+pub mod error;
+pub mod x25519;
 
-pub mod retry;
+use std::{fmt, num::NonZeroUsize, time::Duration};
 
-use std::{cmp::max, fmt, num::NonZeroUsize, sync::Arc};
-
+pub use addr::NetAddr;
 use bon::Builder;
-pub use error::{NetworkDown, NetworkError};
-#[cfg(feature = "metrics")]
-use hotshot_types::traits::metrics::Metrics;
-use hotshot_types::{
-    addr::NetAddr,
-    x25519::{Keypair, PublicKey},
+pub use msg::Slot;
+pub use net::{
+    Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
+    SendCommandBuilder,
 };
-pub use id::Id;
-pub use net::Network;
-pub use retry::Retry;
-use tokio::sync::Semaphore;
 
-/// Max. number of bytes for a message (potentially consisting of several frames).
-pub const MAX_MESSAGE_SIZE: usize = 8 * 1024 * 1024;
+use crate::x25519::{Keypair, PublicKey};
 
-const NUM_DELAYS: usize = 5;
-const LAST_DELAY: usize = NUM_DELAYS - 1;
+#[derive(Debug, Builder)]
+pub struct Config {
+    /// Network name.
+    name: &'static str,
+
+    /// DH keypair
+    keypair: Keypair,
+
+    /// Address to bind to.
+    bind: NetAddr,
+
+    /// Network members with public key and network address.
+    #[builder(with = <_>::from_iter)]
+    parties: Vec<(PublicKey, NetAddr)>,
+
+    #[builder(default = NonZeroUsize::new(100).expect("100 > 0"))]
+    peer_budget: NonZeroUsize,
+
+    /// Max. number of bytes per message to send or receive.
+    #[builder(default = NonZeroUsize::new(10485760).expect("10485760 > 0"))]
+    max_message_size: NonZeroUsize,
+
+    /// Retry delays in seconds.
+    #[builder(default = vec![1, 3, 5, 15, 30])]
+    retry_delays: Vec<u8>,
+
+    #[builder(default = Duration::from_secs(30))]
+    max_retry_delay: Duration,
+
+    #[builder(default = Duration::from_secs(30))]
+    connect_timeout: Duration,
+
+    #[builder(default = Duration::from_secs(10))]
+    handshake_timeout: Duration,
+
+    #[builder(default = Duration::from_secs(30))]
+    receive_timeout: Duration,
+}
 
 /// Network peer role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -55,57 +83,5 @@ impl fmt::Display for Role {
             Self::Active => f.write_str("active"),
             Self::Passive => f.write_str("passive"),
         }
-    }
-}
-
-#[derive(Debug, Builder)]
-pub struct NetConf<K> {
-    /// Network name.
-    name: &'static str,
-
-    /// Network public key.
-    label: K,
-
-    /// DH keypair
-    keypair: Keypair,
-
-    /// Address to bind to.
-    bind: NetAddr,
-
-    /// Committee members with key material and bind address.
-    #[builder(with = <_>::from_iter)]
-    parties: Vec<(K, PublicKey, NetAddr)>,
-
-    /// Egress channel capacity per peer.
-    #[builder(default = 64)]
-    peer_capacity_egress: usize,
-
-    /// Ingress channel capacity per peer.
-    #[builder(default = 32)]
-    peer_capacity_ingress: usize,
-
-    /// Total egress channel capacity.
-    #[builder(default = NonZeroUsize::new(max(peer_capacity_egress * parties.len(), 1)).unwrap())]
-    total_capacity_egress: NonZeroUsize,
-
-    /// Total ingress channel capacity.
-    #[builder(default = NonZeroUsize::new(max(peer_capacity_ingress * parties.len(), 1)).unwrap())]
-    total_capacity_ingress: NonZeroUsize,
-
-    /// Max. number of bytes per message to send or receive.
-    #[builder(default = MAX_MESSAGE_SIZE)]
-    max_message_size: usize,
-
-    /// Default retry delays in seconds.
-    #[builder(default = [1, 3, 5, 15, 30])]
-    retry_delays: [u8; NUM_DELAYS],
-
-    #[cfg(feature = "metrics")]
-    metrics: Box<dyn Metrics>,
-}
-
-impl<K> NetConf<K> {
-    fn new_budget(&self) -> Arc<Semaphore> {
-        Arc::new(Semaphore::new(self.peer_capacity_ingress))
     }
 }

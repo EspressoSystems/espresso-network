@@ -240,7 +240,10 @@ async fn test_leader_proposal_via_cpu_tasks() {
 /// multiple decisions.
 #[tokio::test]
 async fn test_multi_view_decide_via_cpu_tasks() {
-    let test_data = TestData::new(5).await;
+    // Block 5 is an epoch root at epoch_height=10 (the harness default), so
+    // TestData must also use epoch_height=10 for the generator to attach the
+    // state_cert/state_votes that the coordinator's routing now requires.
+    let test_data = TestData::new_with_epoch_height(5, 10).await;
     let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
@@ -481,9 +484,9 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
     // Long timer: 27 views across 3 epochs takes more than the default 2s.
     let mut harness = TestHarness::new(8).await;
 
-    // ---- Epoch 1 (views 1-10) ----
+    // ---- Epoch 1 views 1-5 ----
     // Block 5 decision triggers epoch root → DRB for epoch 3 is computed.
-    run_views_integration(&mut harness, &test_data, &leader_key, 0..10).await;
+    run_views_integration(&mut harness, &test_data, &leader_key, 0..5).await;
 
     // Wait for the DRB result from the EpochManager to arrive.
     harness
@@ -492,6 +495,9 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
             |inputs| any(inputs, is_timeout),
         )
         .await;
+
+    // ---- Epoch 1 views 6-10 ----
+    run_views_integration(&mut harness, &test_data, &leader_key, 5..10).await;
 
     // ---- Epoch 1 → 2 boundary ----
     cross_epoch_boundary(&mut harness, &test_data, &leader_key, 9).await;
@@ -523,16 +529,20 @@ async fn test_node_votes_with_computed_drb_in_epoch3() {
     // Long timer: 27 views across 3 epochs takes more than the default 2s.
     let mut harness = TestHarness::new_with_timer(0, std::time::Duration::from_secs(30)).await;
 
-    // ---- Epoch 1 (views 1-10) ----
-    run_views_integration(&mut harness, &test_data, &node_key, 0..10).await;
+    // ---- Epoch 1 views 1-5 ----
+    // Block 5 decision triggers epoch root → DRB for epoch 3 is computed.
+    run_views_integration(&mut harness, &test_data, &node_key, 0..5).await;
 
-    // Wait for the DRB result from the EpochManager.
+    // Wait for the DRB result from the EpochManager to arrive.
     harness
         .process_until(
             |inputs| any(inputs, is_drb_result),
             |inputs| any(inputs, is_timeout),
         )
         .await;
+
+    // ---- Epoch 1 views 6-10 ----
+    run_views_integration(&mut harness, &test_data, &node_key, 5..10).await;
 
     // ---- Epoch 1 → 2 boundary ----
     cross_epoch_boundary(&mut harness, &test_data, &node_key, 9).await;

@@ -6,8 +6,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::From;
-use espresso_types::{PubKey, v0::traits::SequencerPersistence};
-use hotshot::types::Event;
+use espresso_types::{CoordinatorEvent, PubKey, v0::traits::SequencerPersistence};
 use hotshot_query_service::data_source::UpdateDataSource;
 use hotshot_types::traits::network::ConnectedNetwork;
 
@@ -31,9 +30,12 @@ where
     P: SequencerPersistence,
     D: SequencerDataSource + Debug + Send + Sync + 'static,
 {
-    async fn handle_event(&self, event: &Event<SeqTypes>) -> anyhow::Result<()> {
-        if let Err(height) = self.inner.update(event).await {
-            bail!("failed to update API state after {height}: {event:?}",);
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+        let CoordinatorEvent::LegacyEvent(hotshot_event) = event else {
+            return Ok(());
+        };
+        if let Err(height) = self.inner.update(hotshot_event).await {
+            bail!("failed to update API state after {height}: {hotshot_event:?}",);
         }
         Ok(())
     }

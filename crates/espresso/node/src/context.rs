@@ -141,7 +141,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = initializer.epoch_height;
 
-        let coordinator = Coordinator::<SeqTypes, CN>::maker()
+        let coordinator = Coordinator::<SeqTypes, CN, Arc<P>>::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer)
@@ -151,7 +151,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             ))
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
+            .state_private_key(validator_config.state_private_key.clone())
+            .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
+            .storage(Arc::clone(&persistence))
             .make();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
@@ -516,52 +519,46 @@ async fn handle_events<N, P>(
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
 
-        match event {
-            CoordinatorEvent::LegacyEvent(ref hotshot_event) => {
-                // Handle external messages from the legacy protocol.
+        match &event {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
                     hotshot_event.event
                     && let Err(err) = external_event_handler.handle_event(data).await
                 {
                     tracing::warn!("Failed to handle legacy external message: {:?}", err);
                 }
-
-                // Persistence and state signer consume the original HotShot event.
-                persistence
-                    .handle_event(hotshot_event, &event_consumer)
-                    .await;
-                state_signer
-                    .write()
-                    .await
-                    .handle_event(hotshot_event, &consensus_handle)
-                    .await;
-
-                // Forward to the event streaming service.
-                if let Some(events_streamer) = events_streamer.as_ref() {
-                    events_streamer
-                        .write()
-                        .await
-                        .handle_event(hotshot_event.clone())
-                        .await;
-                }
             },
-            CoordinatorEvent::NewDecide(_new_decide) => {
-                // TODO: Handle new protocol decide events.
-                // This will need to translate NewDecideEvent into the format
-                // expected by persistence, state signer, and events streamer.
-            },
-            CoordinatorEvent::ExternalMessageReceived { ref data, .. } => {
+            CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
-            CoordinatorEvent::QuorumProposal { .. } => {
-                // Handled by the proposal fetcher via its own event stream.
-            },
-            CoordinatorEvent::ViewChanged { .. } => {
-                // View changes are tracked internally by the adapter.
-            },
+            _ => {},
         }
+
+        let persistence_fut = persistence.handle_event(&event, &event_consumer);
+
+        let state_signer_fut = async {
+            state_signer
+                .write()
+                .await
+                .handle_event(&event, consensus_handle.as_ref())
+                .await;
+        };
+
+        let events_streamer_fut = async {
+            if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event
+                && let Some(events_streamer) = events_streamer.as_ref()
+            {
+                events_streamer
+                    .write()
+                    .await
+                    .handle_event(hotshot_event.clone())
+                    .await;
+            }
+        };
+
+        tokio::join!(persistence_fut, state_signer_fut, events_streamer_fut);
     }
 }
 

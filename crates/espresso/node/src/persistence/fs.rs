@@ -14,8 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
-    SeqTypes, StakeTableHash,
+    AuthenticatedValidatorMap, CoordinatorEvent, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
+    RegisteredValidatorMap, SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -27,6 +27,7 @@ use hotshot::InitializerEpochInfo;
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
+use hotshot_new_protocol::message::Certificate2;
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposalWrapper,
@@ -277,6 +278,10 @@ impl Inner {
         self.path.join("state_cert")
     }
 
+    fn decided_cert2_dir_path(&self) -> PathBuf {
+        self.path.join("decided_cert2")
+    }
+
     fn update_migration(&mut self) -> anyhow::Result<()> {
         let path = self.migration();
         let bytes = bincode::serialize(&self.migrated)?;
@@ -491,28 +496,22 @@ impl Inner {
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            {
-                // Insert the deciding QC at the appropriate position, with the last decide event in the
-                // chain.
-                let deciding_qc = if let Some(deciding_qc) = &deciding_qc {
-                    (deciding_qc.view_number() == cert.view_number() + 1)
-                        .then_some(deciding_qc.clone())
-                } else {
-                    None
-                };
+            let deciding_qc = deciding_qc
+                .as_ref()
+                .filter(|qc| qc.view_number() == cert.view_number() + 1)
+                .cloned();
+            consumer
+                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
+                    view_number: view,
+                    event: EventType::Decide {
+                        committing_qc: Arc::new(cert),
+                        deciding_qc,
+                        leaf_chain: Arc::new(vec![leaf]),
+                        block_size: None,
+                    },
+                }))
+                .await?;
 
-                consumer
-                    .handle_event(&Event {
-                        view_number: view,
-                        event: EventType::Decide {
-                            committing_qc: Arc::new(cert),
-                            deciding_qc,
-                            leaf_chain: Arc::new(vec![leaf]),
-                            block_size: None,
-                        },
-                    })
-                    .await?;
-            }
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
                     // If we have a chain of consecutive leaves, extend the current interval of
@@ -974,6 +973,39 @@ impl SequencerPersistence for Persistence {
                 Ok(())
             },
         )
+    }
+
+    async fn append_cert2(
+        &self,
+        view: ViewNumber,
+        cert2: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let dir_path = inner.decided_cert2_dir_path();
+        fs::create_dir_all(dir_path.clone()).context("failed to create decided_cert2 dir")?;
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
+        inner.replace(
+            &file_path,
+            |_| Ok(true),
+            |mut file| {
+                let bytes = bincode::serialize(&cert2).context("serialize cert2")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let dir_path = inner.decided_cert2_dir_path();
+        let file_path = dir_path.join(view.u64().to_string()).with_extension("bin");
+        if !file_path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&file_path).context("read cert2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize cert2")?,
+        ))
     }
     async fn load_quorum_proposals(
         &self,
@@ -2332,7 +2364,7 @@ mod test {
         data::QuorumProposal2,
         light_client::LightClientState,
         simple_certificate::QuorumCertificate,
-        simple_vote::QuorumData,
+        simple_vote::{QuorumData, Vote2Data},
         traits::{EncodeBytes, block_contents::GENESIS_VID_NUM_STORAGE_NODES},
         vid::advz::advz_scheme,
     };
@@ -2770,6 +2802,26 @@ mod test {
                 .into_iter()
                 .collect::<BTreeMap<_, _>>()
         );
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_cert2_persisted_as_bin() {
+        let tmp = Persistence::tmp_storage().await;
+        let storage = Persistence::connect(&tmp).await;
+        let view = ViewNumber::new(7);
+        let leaf = Leaf2::genesis(&Default::default(), &NodeState::mock(), MOCK_UPGRADE.base).await;
+        let data = Vote2Data {
+            leaf_commit: leaf.commit(),
+            epoch: EpochNumber::new(1),
+            block_number: leaf.height(),
+        };
+        let cert2 = Certificate2::new(data.clone(), data.commit(), view, None, PhantomData);
+
+        storage.append_cert2(view, cert2.clone()).await.unwrap();
+
+        assert!(tmp.path().join("decided_cert2/7.bin").is_file());
+        assert!(!tmp.path().join("decided_cert2/7.txt").exists());
+        assert_eq!(storage.load_cert2(view).await.unwrap(), Some(cert2));
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

@@ -9,6 +9,7 @@ use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
+use hotshot_new_protocol::{message::Certificate2, storage::NewProtocolStorage};
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
@@ -39,7 +40,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, Event, FeeAccount, FeeAccountProof,
+    AuthenticatedValidatorMap, BlockMerkleTree, CoordinatorEvent, FeeAccount, FeeAccountProof,
     FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
@@ -787,26 +788,29 @@ pub trait SequencerPersistence:
     }
 
     /// Update storage based on an event from consensus.
-    async fn handle_event(&self, event: &Event, consumer: &(impl EventConsumer + 'static)) {
-        if let EventType::Decide {
-            leaf_chain,
-            committing_qc,
-            deciding_qc,
-            ..
-        } = &event.event
+    async fn handle_event(
+        &self,
+        event: &CoordinatorEvent<SeqTypes>,
+        consumer: &(impl EventConsumer + 'static),
+    ) {
+        if let CoordinatorEvent::LegacyEvent(hotshot_event) = event
+            && let EventType::Decide {
+                leaf_chain,
+                committing_qc,
+                deciding_qc,
+                ..
+            } = &hotshot_event.event
         {
             let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-                // No new leaves.
                 return;
             };
 
-            // Associate each decided leaf with a QC.
             let chain = leaf_chain.iter().zip(
-                // The first (most recent) leaf corresponds to the QC triggering the decide event.
-                std::iter::once((**committing_qc).clone())
-                    // Moving backwards in the chain, each leaf corresponds with the subsequent
-                    // leaf's justify QC.
-                    .chain(leaf_chain.iter().map(|leaf| CertificatePair::for_parent(&leaf.leaf))),
+                std::iter::once((**committing_qc).clone()).chain(
+                    leaf_chain
+                        .iter()
+                        .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
+                ),
             );
 
             if let Err(err) = self
@@ -816,7 +820,6 @@ pub trait SequencerPersistence:
                 tracing::error!(
                     "failed to save decided leaves, chain may not be up to date: {err:#}"
                 );
-                return;
             }
         }
     }
@@ -877,6 +880,23 @@ pub trait SequencerPersistence:
         &self,
         proposal: &Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>>,
     ) -> anyhow::Result<()>;
+
+    /// Persist cert2 for the given view.
+    async fn append_cert2(
+        &self,
+        _view: ViewNumber,
+        _cert2: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load a persisted cert2 by view, if any.
+    async fn load_cert2(
+        &self,
+        _view: ViewNumber,
+    ) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        Ok(None)
+    }
 
     /// Update the current eQC in storage.
     async fn store_eqc(
@@ -974,7 +994,7 @@ pub trait SequencerPersistence:
 
 #[async_trait]
 pub trait EventConsumer: Debug + Send + Sync {
-    async fn handle_event(&self, event: &Event) -> anyhow::Result<()>;
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -982,7 +1002,7 @@ impl<T> EventConsumer for Box<T>
 where
     T: EventConsumer + ?Sized,
 {
-    async fn handle_event(&self, event: &Event) -> anyhow::Result<()> {
+    async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         (**self).handle_event(event).await
     }
 }
@@ -992,7 +1012,7 @@ pub struct NullEventConsumer;
 
 #[async_trait]
 impl EventConsumer for NullEventConsumer {
-    async fn handle_event(&self, _event: &Event) -> anyhow::Result<()> {
+    async fn handle_event(&self, _event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
     }
 }
@@ -1117,6 +1137,17 @@ impl<P: SequencerPersistence> Storage<SeqTypes> for Arc<P> {
         state_cert: LightClientStateUpdateCertificateV2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).add_state_cert(state_cert).await
+    }
+}
+
+#[async_trait]
+impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
+    async fn append_cert2(
+        &self,
+        view: ViewNumber,
+        cert: Certificate2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        (**self).append_cert2(view, cert).await
     }
 }
 

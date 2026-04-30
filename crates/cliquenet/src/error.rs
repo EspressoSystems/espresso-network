@@ -1,9 +1,9 @@
 use std::io;
 
-use hotshot_types::addr::NetAddr;
 use thiserror::Error;
 
-use crate::frame::InvalidHeader;
+pub use crate::{addr::InvalidNetAddr, msg::InvalidHeader};
+use crate::{addr::NetAddr, x25519::PublicKey};
 
 /// The empty type has no values.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -23,6 +23,14 @@ pub enum NetworkError {
     /// The received frame header is not valid.
     #[error("invalid frame header: {0}")]
     InvalidFrameHeader(#[from] InvalidHeader),
+
+    /// The received message trailer is not valid.
+    #[error("invalid message trailer")]
+    InvalidTrailer,
+
+    /// The received ack frame is not valid.
+    #[error("invalid ack frame")]
+    InvalidAck,
 
     /// The received frame has an unknown type.
     #[error("unknown frame type: {0}")]
@@ -51,20 +59,13 @@ pub enum NetworkError {
     /// An operation timed out.
     #[error("timeout")]
     Timeout,
-}
 
-#[derive(Debug, Error)]
-#[error("network down")]
-pub struct NetworkDown(());
+    /// A peer's I/O processing has been interrupted.
+    #[error("peer process interrupted")]
+    PeerInterrupt,
 
-impl NetworkDown {
-    pub(crate) const fn new() -> Self {
-        Self(())
-    }
-}
-
-impl From<NetworkDown> for NetworkError {
-    fn from(_: NetworkDown) -> Self {
-        Self::ChannelClosed
-    }
+    /// We have accumulated too many ACKs for a peer that we can not send
+    /// to the remote, meaning we can read fine, but not write properly.
+    #[error("too many pending acks for peer {0}")]
+    TooManyPendingAcks(PublicKey),
 }

@@ -2,7 +2,7 @@ use hotshot::traits::NetworkError;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    message::{EXTERNAL_MESSAGE_VERSION, UpgradeLock},
+    message::{EXTERNAL_MESSAGE_VERSION, MessageKind, UpgradeLock},
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, Topic},
         node_implementation::NodeType,
@@ -10,7 +10,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 
-use crate::message::{Message, Unchecked, Validated};
+use crate::message::{Message, MessageType, Unchecked, Validated};
 
 pub type Result<T> = std::result::Result<T, NetworkError>;
 
@@ -75,7 +75,24 @@ where
                 }
                 Ok(m)
             },
-            Err(err) => Err(NetworkError::FailedToDeserialize(err.to_string())),
+            Err(primary_err) => {
+                // Fallback: bytes may be a hotshot-types `Message<T>` carrying
+                // an `External` payload (this is how `Leaf2Fetcher` in the
+                // membership layer frames leaf-catchup requests/responses).
+                // If so, surface it as `MessageType::External` so the
+                // Coordinator can route it to the membership external
+                // channel just like a native new-protocol external message.
+                if let Ok((_v, hs_msg)) =
+                    versions::decode::<hotshot_types::message::Message<T>>(&bytes)
+                    && let MessageKind::External(data) = hs_msg.kind
+                {
+                    return Ok(Message {
+                        sender: hs_msg.sender,
+                        message_type: MessageType::External(data),
+                    });
+                }
+                Err(NetworkError::FailedToDeserialize(primary_err.to_string()))
+            },
         }
     }
 

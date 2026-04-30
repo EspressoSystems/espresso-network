@@ -4,7 +4,7 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use hotshot_task_impls::helpers::derive_signed_state_digest;
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     light_client::{
         LCV3StateSignatureRequestBody, LCV3StateSignaturesBundle, LightClientState, StateVerKey,

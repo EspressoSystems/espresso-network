@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::tests::common::{network::MemoryTestNetwork, runner::TestRunner};
 
 #[tokio::test(flavor = "multi_thread")]
@@ -27,7 +25,6 @@ async fn ten_nodes_decide_over_memory_network() {
     TestRunner {
         num_nodes: 10,
         target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
         ..Default::default()
     }
     .run::<MemoryTestNetwork>()

@@ -78,6 +78,14 @@ binary(test_epoch_success_types_randomized_leader)
 """
 retries = 3
 
+# New-protocol integration tests (crates/hotshot/new-protocol). Some restart
+# and late-start tests have max_runtime up to 500s, so we give them more
+# headroom than the default profile's 360s termination.
+[profile.new-protocol]
+slow-timeout = { period = "2m", terminate-after = 3 }
+default-filter = 'package(hotshot-new-protocol)'
+retries = 0
+
 [profile.slow]
 slow-timeout = "2m"
 default-filter = 'package(espresso-dev-node) | package(slow-tests)'
