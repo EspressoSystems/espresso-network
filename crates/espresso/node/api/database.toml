@@ -12,16 +12,16 @@ Works with both PostgreSQL and SQLite backends (via embedded-db feature; disk us
 PATH = ["oldest-block"]
 METHOD = "GET"
 DOC = """
-Get the block height of the oldest (smallest height) block present in the database.
+Get the oldest (smallest height) block present in the database.
 
-Returns null if no blocks are stored.
+Returns the full block, or null if no blocks are stored.
 """
 
 [route.get_oldest_leaf]
 PATH = ["oldest-leaf"]
 METHOD = "GET"
 DOC = """
-Get the block height of the oldest (smallest height) leaf present in the database.
+Get the oldest (smallest height) leaf present in the database.
 
-Returns null if no leaves are stored.
+Returns the full leaf, or null if no leaves are stored.
 """
