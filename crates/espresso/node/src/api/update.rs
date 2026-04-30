@@ -6,9 +6,9 @@ use anyhow::bail;
 use async_trait::async_trait;
 use derivative::Derivative;
 use derive_more::From;
-use espresso_types::{CoordinatorEvent, PubKey, v0::traits::SequencerPersistence};
+use espresso_types::{PubKey, v0::traits::SequencerPersistence};
 use hotshot_query_service::data_source::UpdateDataSource;
-use hotshot_types::traits::network::ConnectedNetwork;
+use hotshot_types::{new_protocol::CoordinatorEvent, traits::network::ConnectedNetwork};
 
 use super::{StorageState, data_source::SequencerDataSource};
 use crate::{EventConsumer, SeqTypes};

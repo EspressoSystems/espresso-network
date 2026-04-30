@@ -846,6 +846,7 @@ pub mod testing {
         event::LeafInfo,
         light_client::StateKeyPair,
         message::UpgradeLock,
+        new_protocol::CoordinatorEvent,
         signature_key::BLSKeyPair,
         traits::{
             EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
@@ -863,7 +864,6 @@ pub mod testing {
     use super::*;
     use crate::{
         catchup::ParallelStateCatchup,
-        consensus_handle::CoordinatorEvent,
         persistence::no_storage::{self, NoStorage},
     };
 
@@ -1622,13 +1622,13 @@ mod test {
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         event::LeafInfo,
+        new_protocol::CoordinatorEvent,
         traits::block_contents::{BlockHeader, BlockPayload},
     };
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
 
     use self::testing::run_test_builder;
     use super::*;
-    use crate::consensus_handle::CoordinatorEvent;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {

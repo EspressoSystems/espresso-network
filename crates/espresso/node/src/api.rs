@@ -1736,7 +1736,8 @@ pub mod test_helpers {
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
-        event::LeafInfo, light_client::LCV3StateSignatureRequestBody, traits::metrics::NoMetrics,
+        event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
+        new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
     };
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
@@ -1753,7 +1754,6 @@ pub mod test_helpers {
     use super::*;
     use crate::{
         catchup::NullStateCatchup,
-        consensus_handle::CoordinatorEvent,
         network,
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
@@ -2669,7 +2669,7 @@ mod api_tests {
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
-        use espresso_types::CoordinatorEvent;
+        use hotshot_types::new_protocol::CoordinatorEvent;
 
         #[derive(Clone, Copy, Debug)]
         struct FailConsumer;
@@ -3076,6 +3076,7 @@ mod test {
         ValidatorConfig,
         data::EpochNumber,
         event::LeafInfo,
+        new_protocol::CoordinatorEvent,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
     };
@@ -3105,7 +3106,6 @@ mod test {
         sql::DataSource as SqlDataSource,
     };
     use super::*;
-    use crate::consensus_handle::CoordinatorEvent;
 
     async fn wait_until_block_height(
         client: &Client<ServerError, StaticVersion<0, 1>>,
