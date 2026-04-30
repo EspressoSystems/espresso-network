@@ -40,6 +40,7 @@ pub mod event;
 pub mod hotshot_config_file;
 pub mod light_client;
 pub mod message;
+pub mod new_protocol;
 
 /// Holds the network configuration specification for HotShot nodes.
 pub mod network;

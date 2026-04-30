@@ -11,6 +11,7 @@ use hotshot_types::{
     data::{Leaf2, QuorumProposalWrapper, ViewNumber},
     event::{Event, EventType},
     message::Proposal,
+    new_protocol::CoordinatorEvent,
     traits::{
         ValidatedState as _,
         metrics::{Counter, Gauge, Metrics},
@@ -22,7 +23,7 @@ use tracing::Instrument;
 
 use crate::{
     SeqTypes,
-    consensus_handle::{ConsensusHandle, CoordinatorEvent},
+    consensus_handle::ConsensusHandle,
     context::{ConsensusNode, TaskList},
 };
 

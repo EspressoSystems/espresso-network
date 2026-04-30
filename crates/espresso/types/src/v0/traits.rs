@@ -18,6 +18,7 @@ use hotshot_types::{
     drb::{DrbInput, DrbResult},
     event::{HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
+    new_protocol::CoordinatorEvent,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
@@ -40,8 +41,8 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, BlockMerkleTree, CoordinatorEvent, FeeAccount, FeeAccountProof,
-    FeeMerkleCommitment, Leaf2, NetworkConfig, PubKey, SeqTypes,
+    AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
+    Leaf2, NetworkConfig, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,

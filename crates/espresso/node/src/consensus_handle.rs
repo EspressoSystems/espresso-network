@@ -9,7 +9,6 @@ use std::{
 use async_broadcast::InactiveReceiver;
 use async_lock::RwLock;
 use committable::Commitment;
-pub use espresso_types::{CoordinatorEvent, NewDecideEvent};
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot::types::SystemContextHandle;
 use hotshot_new_protocol::{
@@ -24,6 +23,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     event::Event,
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
+    new_protocol::{CoordinatorEvent, NewDecideEvent},
     traits::{
         ValidatedState, network::ConnectedNetwork, node_implementation::NodeType,
         signature_key::SignatureKey,

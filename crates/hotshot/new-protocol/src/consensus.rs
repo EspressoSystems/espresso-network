@@ -114,68 +114,6 @@ pub enum ConsensusOutput<T: NodeType> {
     },
 }
 
-/// Decided leaves plus the certificates and VID shares needed by the node adapter
-/// to persist and broadcast them. Emitted by the coordinator.
-#[derive(Clone, Debug)]
-pub struct NewDecideEvent<T: NodeType> {
-    pub leaves: Vec<Leaf2<T>>,
-    /// Certificate1 (QC) that certifies the most recent (first) leaf in the chain.
-    /// Each older leaf's cert1 is the next leaf's `justify_qc`.
-    pub cert1: Certificate1<T>,
-    pub cert2: Option<Certificate2<T>>,
-    pub vid_shares: Vec<Option<SignedProposal<T, VidDisperseShare2<T>>>>,
-}
-
-/// High-level event emitted by the coordinator adapter. Covers both legacy HotShot
-/// events and new-protocol coordinator events.
-#[derive(Clone, Debug)]
-pub enum CoordinatorEvent<T: NodeType> {
-    LegacyEvent(hotshot::types::Event<T>),
-    NewDecide(NewDecideEvent<T>),
-    ViewChanged {
-        view_number: ViewNumber,
-    },
-    QuorumProposal {
-        proposal: SignedProposal<T, Proposal<T>>,
-        sender: T::SignatureKey,
-    },
-    ExternalMessageReceived {
-        sender: T::SignatureKey,
-        data: Vec<u8>,
-    },
-}
-
-impl<T: NodeType> std::fmt::Display for CoordinatorEvent<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LegacyEvent(event) => {
-                write!(f, "Legacy: {} view={}", event.event, event.view_number)
-            },
-            Self::NewDecide(event) => {
-                let view = event
-                    .leaves
-                    .first()
-                    .map(|leaf| *leaf.view_number())
-                    .unwrap_or_default();
-                write!(f, "NewDecide: view={view}")
-            },
-            Self::ViewChanged { view_number } => {
-                write!(f, "ViewChanged: view={view_number}")
-            },
-            Self::QuorumProposal { proposal, .. } => {
-                write!(
-                    f,
-                    "QuorumProposal: view={} epoch={}",
-                    proposal.data.view_number, proposal.data.epoch
-                )
-            },
-            Self::ExternalMessageReceived { .. } => {
-                write!(f, "ExternalMessageReceived")
-            },
-        }
-    }
-}
-
 pub struct Consensus<T: NodeType> {
     proposals: BTreeMap<ViewNumber, Proposal<T>>,
     signed_proposals: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
