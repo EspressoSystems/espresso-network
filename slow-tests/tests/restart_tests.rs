@@ -814,7 +814,7 @@ impl TestNetwork {
 
     /// Deploy stake contracts and delegate.
     async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
-        let stake_table_version = StakeTableContractVersion::V2;
+        let stake_table_version = StakeTableContractVersion::V3;
         let delegation_config = DelegationConfig::EqualAmounts;
 
         let anvil_instance = &self.anvil.anvil();
@@ -885,7 +885,8 @@ impl TestNetwork {
 
         match stake_table_version {
             StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await,
-            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+            StakeTableContractVersion::V2 => args.deploy_to_stake_table_v2(&mut contracts).await,
+            StakeTableContractVersion::V3 => args.deploy_to_stake_table_v3(&mut contracts).await,
         }
         .context("failed to deploy contracts")?;
 

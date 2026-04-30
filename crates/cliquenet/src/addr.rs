@@ -111,16 +111,35 @@ impl std::str::FromStr for NetAddr {
     type Err = InvalidNetAddr;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(InvalidNetAddr(()));
+        }
+
         let parse = |a: &str, p: Option<&str>| {
             let p: u16 = if let Some(p) = p {
                 p.parse().map_err(|_| InvalidNetAddr(()))?
             } else {
                 0
             };
+            // Strip brackets from IPv6 addresses like `[::1]`.
+            let a = if a.starts_with('[') && a.ends_with(']') {
+                &a[1..a.len() - 1]
+            } else {
+                a
+            };
             IpAddr::from_str(a)
                 .map(|a| Self::Inet(a, p))
                 .or_else(|_| Ok(Self::Name(a.to_string().into(), p)))
         };
+
+        // Handle bracketed IPv6 like `[::1]:8080` or `[::1]` (no port).
+        if s.starts_with('[') {
+            return match s.rfind("]:") {
+                Some(i) => parse(&s[..i + 1], Some(&s[i + 2..])),
+                None => parse(s, None),
+            };
+        }
+
         match s.rsplit_once(':') {
             None => parse(s, None),
             Some((a, p)) => parse(a, Some(p)),
@@ -160,38 +179,37 @@ impl<'de> Deserialize<'de> for NetAddr {
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::{iter::repeat_with, net::IpAddr};
+
+    use quickcheck::{Arbitrary, Gen, quickcheck};
 
     use super::NetAddr;
 
+    impl Arbitrary for NetAddr {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let port = u16::arbitrary(g);
+            if bool::arbitrary(g) {
+                let len = u8::arbitrary(g);
+                let host: String = repeat_with(|| char::arbitrary(g))
+                    .filter(|c| !"[]".contains(*c))
+                    .take(len.into())
+                    .collect();
+                NetAddr::Name(host.into(), port)
+            } else {
+                let ip = IpAddr::arbitrary(g);
+                NetAddr::Inet(ip, port)
+            }
+        }
+    }
+
+    quickcheck! {
+        fn prop_to_string_parse_identity(a: NetAddr) -> bool {
+            a.to_string().parse().ok() == Some(a)
+        }
+    }
+
     #[test]
-    fn test_parse() {
-        let a: NetAddr = "127.0.0.1:1234".parse().unwrap();
-        let NetAddr::Inet(a, p) = a else {
-            unreachable!()
-        };
-        assert_eq!(IpAddr::from([127, 0, 0, 1]), a);
-        assert_eq!(1234, p);
-
-        let a: NetAddr = "::1:1234".parse().unwrap();
-        let NetAddr::Inet(a, p) = a else {
-            unreachable!()
-        };
-        assert_eq!("::1".parse::<IpAddr>().unwrap(), a);
-        assert_eq!(1234, p);
-
-        let a: NetAddr = "localhost:1234".parse().unwrap();
-        let NetAddr::Name(h, p) = a else {
-            unreachable!()
-        };
-        assert_eq!("localhost", &h);
-        assert_eq!(1234, p);
-
-        let a: NetAddr = "sub.domain.com:1234".parse().unwrap();
-        let NetAddr::Name(h, p) = a else {
-            unreachable!()
-        };
-        assert_eq!("sub.domain.com", &h);
-        assert_eq!(1234, p);
+    fn empty_is_invalid() {
+        assert!("".parse::<NetAddr>().is_err())
     }
 }

@@ -8,7 +8,7 @@ use alloy::{
     providers::{Provider, WalletProvider},
 };
 use anyhow::Context as _;
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use espresso_contract_deployer::{
     Contract, Contracts, DeployedContracts, OwnableContract, build_provider, build_provider_ledger,
     builder::DeployerArgsBuilder,
@@ -41,7 +41,7 @@ use vbs::version::StaticVersion;
 /// in the deployment process. The generated .env file will include all the addresses passed in as
 /// well as those newly deployed.
 #[derive(Clone, Debug, Parser)]
-
+#[command(group = ArgGroup::new("timelock_trigger").args(["perform_timelock_operation", "upgrade_stake_table_v3"]).multiple(true))]
 struct Options {
     /// A JSON-RPC endpoint for the L1 to deploy to.
     #[clap(
@@ -168,6 +168,10 @@ struct Options {
     #[clap(long, default_value = "false")]
     upgrade_stake_table_v2: bool,
 
+    /// Option to upgrade to StakeTable V3
+    #[clap(long, default_value = "false")]
+    upgrade_stake_table_v3: bool,
+
     /// Option to deploy RewardClaimV1 proxy
     #[clap(long, default_value = "false")]
     deploy_reward_claim_v1: bool,
@@ -246,6 +250,11 @@ struct Options {
     /// Path to write calldata output (default: stdout)
     #[clap(long, name = "CALLDATA_OUT")]
     pub calldata_out: Option<PathBuf>,
+
+    /// Directory to write calldata outputs when a single operation produces multiple files
+    /// (e.g. `schedule.json` + `execute.json` for a timelock-owned V3 stake table upgrade).
+    #[clap(long, name = "CALLDATA_OUT_DIR")]
+    pub calldata_out_dir: Option<PathBuf>,
 
     /// Stake table capacity for the prover circuit
     #[clap(short, long, env = "ESPRESSO_STAKE_TABLE_CAPACITY", default_value_t = DEFAULT_STAKE_TABLE_CAPACITY)]
@@ -385,7 +394,7 @@ struct Options {
     #[clap(
         long,
         env = "ESPRESSO_TIMELOCK_OPERATION_SALT",
-        requires = "perform_timelock_operation"
+        requires = "timelock_trigger"
     )]
     timelock_operation_salt: Option<String>,
 
@@ -393,7 +402,7 @@ struct Options {
     #[clap(
         long,
         env = "ESPRESSO_TIMELOCK_OPERATION_DELAY",
-        requires = "perform_timelock_operation"
+        requires = "timelock_trigger"
     )]
     timelock_operation_delay: Option<u64>,
 
@@ -544,6 +553,9 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     if let Some(path) = opt.calldata_out {
         args_builder.output_path(path);
     }
+    if let Some(dir) = opt.calldata_out_dir {
+        args_builder.output_dir(dir);
+    }
     if let Some(multisig) = opt.multisig_address {
         args_builder.multisig(multisig);
     }
@@ -671,6 +683,23 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     }
     if opt.use_timelock_owner {
         args_builder.use_timelock_owner(true);
+    }
+
+    if opt.upgrade_stake_table_v3 && opt.use_timelock_owner {
+        let salt = opt.timelock_operation_salt.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --timelock-operation-salt or ESPRESSO_TIMELOCK_OPERATION_SALT env \
+                 var when upgrading StakeTable to V3 with --use-timelock-owner"
+            )
+        })?;
+        let delay = opt.timelock_operation_delay.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Must provide --timelock-operation-delay or ESPRESSO_TIMELOCK_OPERATION_DELAY env \
+                 var when upgrading StakeTable to V3 with --use-timelock-owner"
+            )
+        })?;
+        args_builder.timelock_operation_salt(salt);
+        args_builder.timelock_operation_delay(U256::from(delay));
     }
 
     if opt.perform_timelock_operation {
@@ -833,6 +862,9 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     }
     if opt.upgrade_stake_table_v2 {
         args.deploy(&mut contracts, Contract::StakeTableV2).await?;
+    }
+    if opt.upgrade_stake_table_v3 {
+        args.deploy(&mut contracts, Contract::StakeTableV3).await?;
     }
 
     // then perform the timelock operation if any

@@ -89,7 +89,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
         .persistences(persistence.clone())
         .pos_hook(
             DelegationConfig::default(),
-            StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3,
             Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION),
         )
         .await?
@@ -164,7 +164,7 @@ async fn test_reward_claims_e2e() -> anyhow::Result<()> {
     // Create claimer wallet and provider for claiming rewards
     let claimer_provider = ProviderBuilder::new()
         .wallet(EthereumWallet::from(
-            network.cfg.staking_priv_keys()[0].0.clone(),
+            network.cfg.staking_priv_keys()[0].signer.clone(),
         ))
         .connect_http(l1_url.clone());
     let claimer_address = claimer_provider.default_signer_address();

@@ -5,7 +5,7 @@ use alloy::{
 use anyhow::{Context as _, Result, bail};
 use hotshot_contract_adapter::{
     reward::RewardClaimInput,
-    sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2},
+    sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV3},
 };
 use url::Url;
 
@@ -22,7 +22,7 @@ async fn fetch_reward_claim_data(
     espresso_url: &Url,
     claimer_address: Address,
 ) -> Result<Option<RewardClaimData>> {
-    let stake_table = StakeTableV2::new(stake_table_address, &provider);
+    let stake_table = StakeTableV3::new(stake_table_address, &provider);
     let token_address = stake_table
         .token()
         .call()
@@ -153,7 +153,7 @@ pub async fn fetch_claim_rewards_inputs(
 #[cfg(test)]
 mod test {
     use alloy::primitives::{U256, utils::parse_ether};
-    use hotshot_contract_adapter::sol_types::{RewardClaim, StakeTableV2};
+    use hotshot_contract_adapter::sol_types::{RewardClaim, StakeTableV3};
 
     use super::*;
     use crate::{deploy::TestSystem, receipt::ReceiptExt as _, transaction::Transaction};
@@ -175,7 +175,7 @@ mod test {
         let receipt = tx.send(&system.provider).await?.assert_success().await?;
 
         let event = receipt
-            .decoded_log::<StakeTableV2::WithdrawalClaimed>()
+            .decoded_log::<StakeTableV3::WithdrawalClaimed>()
             .unwrap();
         assert_eq!(event.amount, amount);
 
@@ -199,7 +199,7 @@ mod test {
         let receipt = tx.send(&system.provider).await?.assert_success().await?;
 
         let event = receipt
-            .decoded_log::<StakeTableV2::ValidatorExitClaimed>()
+            .decoded_log::<StakeTableV3::ValidatorExitClaimed>()
             .unwrap();
         assert_eq!(event.amount, amount);
 

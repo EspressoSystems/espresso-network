@@ -8,9 +8,10 @@ use async_lock::{Mutex, RwLock};
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use derive_more::derive::{From, Into};
 use hotshot::types::SignatureKey;
-use hotshot_contract_adapter::sol_types::StakeTableV2::{
-    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
-    UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2,
+use hotshot_contract_adapter::sol_types::StakeTableV3::{
+    CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, P2pAddrUpdated,
+    Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2, ValidatorRegistered,
+    ValidatorRegisteredV2, ValidatorRegisteredV3, X25519KeyUpdated,
 };
 use hotshot_types::{
     PeerConfig, addr::NetAddr, data::EpochNumber, light_client::StateVerKey,
@@ -21,6 +22,8 @@ use jf_utils::to_bytes;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinHandle;
+use vbs::version::Version;
+use versions::CLIQUENET_VERSION;
 
 use super::L1Client;
 use crate::{
@@ -98,6 +101,19 @@ impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
     pub fn into_inner(self) -> RegisteredValidator<KEY> {
         self.0
     }
+
+    /// Whether this validator can participate in consensus at `protocol_version`.
+    ///
+    /// Encodes only protocol-version-gated requirements; stake and delegation checks
+    /// live in `select_active_validator_set`.
+    pub fn is_eligible(&self, protocol_version: Version) -> bool {
+        if protocol_version >= CLIQUENET_VERSION
+            && (self.x25519_key.is_none() || self.p2p_addr.is_none())
+        {
+            return false;
+        }
+        true
+    }
 }
 
 impl<KEY: SignatureKey> std::ops::Deref for AuthenticatedValidator<KEY> {
@@ -152,8 +168,16 @@ impl<KEY: SignatureKey> Committable for RegisteredValidator<KEY> {
             .fixed_size_field("stake", &to_fixed_bytes(self.stake))
             .constant_str("commission")
             .u16(self.commission);
-        //.var_size_field("x25519_key", self.x25519_key.as_ref().map(|k| k.as_slice()).unwrap_or_default())
-        //.var_size_field("p2p_addr", self.p2p_addr.as_ref().map(|a| a.to_string()).unwrap_or_default().as_bytes());
+
+        // x25519_key and p2p_addr are included in the commitment only when set.
+        // They are None until StakeTableV3 is deployed and the validator sets them.
+        // This maintains backwards compatibility with pre-V3 commitments.
+        if let Some(key) = &self.x25519_key {
+            builder = builder.var_size_field("x25519_key", key.as_slice());
+        }
+        if let Some(addr) = &self.p2p_addr {
+            builder = builder.var_size_field("p2p_addr", addr.to_string().as_bytes());
+        }
 
         builder = builder.constant_str("delegators");
         for (address, stake) in self.delegators.iter().sorted() {
@@ -232,6 +256,9 @@ pub enum StakeTableEvent {
     KeyUpdate(ConsensusKeysUpdated),
     KeyUpdateV2(ConsensusKeysUpdatedV2),
     CommissionUpdate(CommissionUpdated),
+    RegisterV3(ValidatorRegisteredV3),
+    X25519KeyUpdate(X25519KeyUpdated),
+    P2pAddrUpdate(P2pAddrUpdated),
 }
 
 #[derive(Debug, Error)]
@@ -264,6 +291,10 @@ pub enum StakeTableError {
     InvalidCommission(Address, u16),
     #[error("Schnorr key already used: {0}")]
     SchnorrKeyAlreadyUsed(String),
+    #[error("x25519 key already used: {0}")]
+    X25519KeyAlreadyUsed(String),
+    #[error("Invalid x25519 key: {0}")]
+    InvalidX25519Key(String),
     #[error("Stake table event decode error {0}")]
     StakeTableEventDecodeError(#[from] alloy::sol_types::Error),
     #[error("Stake table events sorting error: {0}")]
@@ -326,8 +357,8 @@ pub enum EventSortingError {
     #[error("Missing log index in log")]
     MissingLogIndex,
 
-    #[error("Invalid stake table V2 event")]
-    InvalidStakeTableV2Event,
+    #[error("Invalid stake table event")]
+    InvalidStakeTableEvent,
 }
 
 #[cfg(test)]
@@ -337,9 +368,30 @@ mod tests {
     use alloy::primitives::{Address, U256};
     use committable::Committable;
     use hotshot::types::{BLSPubKey, SignatureKey};
-    use hotshot_types::light_client::StateVerKey;
+    use hotshot_types::{addr::NetAddr, light_client::StateVerKey, x25519};
 
     use super::RegisteredValidator;
+
+    /// Both x25519_key and p2p_addr must independently affect the commitment.
+    #[test]
+    fn test_commitment_changes_with_x25519_and_p2p_fields() {
+        let base = RegisteredValidator::<BLSPubKey>::mock();
+        assert!(base.x25519_key.is_none());
+        assert!(base.p2p_addr.is_none());
+        let commit_base = base.commit();
+
+        let mut with_x25519 = base.clone();
+        with_x25519.x25519_key = Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
+        let commit_x25519 = with_x25519.commit();
+
+        let mut with_p2p = base.clone();
+        with_p2p.p2p_addr = Some("127.0.0.1:8080".parse::<NetAddr>().unwrap());
+        let commit_p2p = with_p2p.commit();
+
+        assert_ne!(commit_base, commit_x25519);
+        assert_ne!(commit_base, commit_p2p);
+        assert_ne!(commit_x25519, commit_p2p);
+    }
 
     /// Unauthenticated validators must produce a different commitment than authenticated ones.
     /// This ensures validators with invalid signatures are distinguishable in the commitment tree.

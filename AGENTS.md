@@ -70,6 +70,9 @@ just demo-native                      # Full local network via process-compose
 - Use `forge fmt` before committing
 - Upgradeable contracts: V2 extends V1, never modify V1 storage
 - Events: Emit for all state changes that external systems need to track
+- Contract ABIs are supersets: V3 includes all V2 types, V2 includes all V1 types. Always use the
+  latest version's Rust bindings (`StakeTableV3`) for runtime code (contract calls, event decoding).
+  V1/V2 bindings are only needed in deploy/upgrade code.
 
 ## Architecture Overview
 

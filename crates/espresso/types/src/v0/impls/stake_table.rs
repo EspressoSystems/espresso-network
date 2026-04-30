@@ -26,14 +26,16 @@ use futures::future::BoxFuture;
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenInstance},
-    StakeTableV2::{
+    StakeTableV3::{
         self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-        StakeTableV2Events, Undelegated, UndelegatedV2, ValidatorExit, ValidatorExitV2,
-        ValidatorRegistered, ValidatorRegisteredV2,
+        P2pAddrUpdated, StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit,
+        ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3,
+        X25519KeyUpdated,
     },
 };
 use hotshot_types::{
     PeerConfig, PeerConnectInfo,
+    addr::NetAddr,
     data::{EpochNumber, ViewNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     drb::{
         DrbResult,
@@ -50,6 +52,7 @@ use hotshot_types::{
     utils::{
         epoch_from_block_number, is_epoch_root, root_block_in_epoch, transition_block_for_epoch,
     },
+    x25519,
 };
 use humantime::format_duration;
 use indexmap::IndexMap;
@@ -58,6 +61,7 @@ use num_traits::{FromPrimitive, Zero};
 use thiserror::Error;
 use tokio::{spawn, time::sleep};
 use tracing::Instrument;
+use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
 
 #[cfg(any(test, feature = "testing"))]
@@ -118,75 +122,78 @@ impl DisplayLog for Log {
     }
 }
 
-impl TryFrom<StakeTableV2Events> for StakeTableEvent {
+impl TryFrom<StakeTableV3Events> for StakeTableEvent {
     type Error = anyhow::Error;
 
-    fn try_from(value: StakeTableV2Events) -> anyhow::Result<Self> {
+    fn try_from(value: StakeTableV3Events) -> anyhow::Result<Self> {
         match value {
-            StakeTableV2Events::ValidatorRegistered(v) => Ok(StakeTableEvent::Register(v)),
-            StakeTableV2Events::ValidatorRegisteredV2(v) => Ok(StakeTableEvent::RegisterV2(v)),
-            StakeTableV2Events::ValidatorExit(v) => Ok(StakeTableEvent::Deregister(v)),
-            StakeTableV2Events::ValidatorExitV2(v) => Ok(StakeTableEvent::DeregisterV2(v)),
-            StakeTableV2Events::Delegated(v) => Ok(StakeTableEvent::Delegate(v)),
-            StakeTableV2Events::Undelegated(v) => Ok(StakeTableEvent::Undelegate(v)),
-            StakeTableV2Events::UndelegatedV2(v) => Ok(StakeTableEvent::UndelegateV2(v)),
-            StakeTableV2Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
-            StakeTableV2Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
-            StakeTableV2Events::CommissionUpdated(v) => Ok(StakeTableEvent::CommissionUpdate(v)),
-            StakeTableV2Events::ExitEscrowPeriodUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::ExitEscrowPeriodUpdated({v:?})"
+            StakeTableV3Events::ValidatorRegistered(v) => Ok(StakeTableEvent::Register(v)),
+            StakeTableV3Events::ValidatorRegisteredV2(v) => Ok(StakeTableEvent::RegisterV2(v)),
+            StakeTableV3Events::ValidatorRegisteredV3(v) => Ok(StakeTableEvent::RegisterV3(v)),
+            StakeTableV3Events::ValidatorExit(v) => Ok(StakeTableEvent::Deregister(v)),
+            StakeTableV3Events::ValidatorExitV2(v) => Ok(StakeTableEvent::DeregisterV2(v)),
+            StakeTableV3Events::Delegated(v) => Ok(StakeTableEvent::Delegate(v)),
+            StakeTableV3Events::Undelegated(v) => Ok(StakeTableEvent::Undelegate(v)),
+            StakeTableV3Events::UndelegatedV2(v) => Ok(StakeTableEvent::UndelegateV2(v)),
+            StakeTableV3Events::ConsensusKeysUpdated(v) => Ok(StakeTableEvent::KeyUpdate(v)),
+            StakeTableV3Events::ConsensusKeysUpdatedV2(v) => Ok(StakeTableEvent::KeyUpdateV2(v)),
+            StakeTableV3Events::CommissionUpdated(v) => Ok(StakeTableEvent::CommissionUpdate(v)),
+            StakeTableV3Events::X25519KeyUpdated(v) => Ok(StakeTableEvent::X25519KeyUpdate(v)),
+            StakeTableV3Events::P2pAddrUpdated(v) => Ok(StakeTableEvent::P2pAddrUpdate(v)),
+            StakeTableV3Events::ExitEscrowPeriodUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::ExitEscrowPeriodUpdated({v:?})"
             )),
-            StakeTableV2Events::Initialized(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Initialized({v:?})"
+            StakeTableV3Events::Initialized(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Initialized({v:?})"
             )),
-            StakeTableV2Events::MaxCommissionIncreaseUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MaxCommissionIncreaseUpdated({v:?})"
+            StakeTableV3Events::MaxCommissionIncreaseUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::MaxCommissionIncreaseUpdated({v:?})"
             )),
-            StakeTableV2Events::MinCommissionUpdateIntervalUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MinCommissionUpdateIntervalUpdated({v:?})"
+            StakeTableV3Events::MinCommissionUpdateIntervalUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::MinCommissionUpdateIntervalUpdated({v:?})"
             )),
-            StakeTableV2Events::OwnershipTransferred(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::OwnershipTransferred({v:?})"
+            StakeTableV3Events::OwnershipTransferred(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::OwnershipTransferred({v:?})"
             )),
-            StakeTableV2Events::Paused(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Paused({v:?})"
+            StakeTableV3Events::Paused(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Paused({v:?})"
             )),
-            StakeTableV2Events::RoleAdminChanged(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::RoleAdminChanged({v:?})"
+            StakeTableV3Events::RoleAdminChanged(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::RoleAdminChanged({v:?})"
             )),
-            StakeTableV2Events::RoleGranted(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::RoleGranted({v:?})"
+            StakeTableV3Events::RoleGranted(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::RoleGranted({v:?})"
             )),
-            StakeTableV2Events::RoleRevoked(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::RoleRevoked({v:?})"
+            StakeTableV3Events::RoleRevoked(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::RoleRevoked({v:?})"
             )),
-            StakeTableV2Events::Unpaused(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Unpaused({v:?})"
+            StakeTableV3Events::Unpaused(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Unpaused({v:?})"
             )),
-            StakeTableV2Events::Upgraded(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Upgraded({v:?})"
+            StakeTableV3Events::Upgraded(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Upgraded({v:?})"
             )),
-            StakeTableV2Events::WithdrawalClaimed(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::WithdrawalClaimed({v:?})"
+            StakeTableV3Events::WithdrawalClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::WithdrawalClaimed({v:?})"
             )),
-            StakeTableV2Events::ValidatorExitClaimed(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::ValidatorExitClaimed({v:?})"
+            StakeTableV3Events::ValidatorExitClaimed(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::ValidatorExitClaimed({v:?})"
             )),
-            StakeTableV2Events::Withdrawal(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::Withdrawal({v:?})"
+            StakeTableV3Events::Withdrawal(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::Withdrawal({v:?})"
             )),
-            StakeTableV2Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MetadataUriUpdated({v:?})"
+            StakeTableV3Events::MetadataUriUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::MetadataUriUpdated({v:?})"
             )),
-            StakeTableV2Events::MinDelegateAmountUpdated(v) => Err(anyhow::anyhow!(
-                "Unsupported StakeTableV2Events::MinDelegateAmountUpdated({v:?})"
+            StakeTableV3Events::MinDelegateAmountUpdated(v) => Err(anyhow::anyhow!(
+                "Unsupported StakeTableV3Events::MinDelegateAmountUpdated({v:?})"
             )),
         }
     }
 }
 
 fn sort_stake_table_events(
-    event_logs: Vec<(StakeTableV2Events, Log)>,
+    event_logs: Vec<(StakeTableV3Events, Log)>,
 ) -> Result<Vec<(EventKey, StakeTableEvent)>, EventSortingError> {
     let mut events: Vec<(EventKey, StakeTableEvent)> = Vec::new();
 
@@ -202,7 +209,7 @@ fn sort_stake_table_events(
         let k = key(&log)?;
         let evt: StakeTableEvent = e
             .try_into()
-            .map_err(|_| EventSortingError::InvalidStakeTableV2Event)?;
+            .map_err(|_| EventSortingError::InvalidStakeTableEvent)?;
         events.push((k, evt));
     }
 
@@ -216,6 +223,7 @@ pub struct StakeTableState {
     validator_exits: HashSet<Address>,
     used_bls_keys: HashSet<BLSPubKey>,
     used_schnorr_keys: HashSet<SchnorrPubKey>,
+    used_x25519_keys: HashSet<x25519::PublicKey>,
 }
 
 impl Committable for StakeTableState {
@@ -241,6 +249,17 @@ impl Committable for StakeTableState {
             key.serialize_with_mode(&mut schnorr_key_bytes, ark_serialize::Compress::Yes)
                 .unwrap();
             builder = builder.var_size_bytes(&schnorr_key_bytes);
+        }
+
+        // Only include used_x25519_keys when non-empty to preserve the pre-fast-finality commitment
+        // value for stake tables that have no x25519 keys yet. Same pattern as x25519_key /
+        // p2p_addr on RegisteredValidator. Backward compatibility is cross-checked by
+        // REFERENCE_V4_HEADER_COMMITMENT in reference_tests.rs.
+        if !self.used_x25519_keys.is_empty() {
+            builder = builder.constant_str("used_x25519_keys");
+            for key in self.used_x25519_keys.iter().sorted() {
+                builder = builder.var_size_bytes(key.as_slice());
+            }
         }
 
         builder = builder.constant_str("validator_exits");
@@ -269,6 +288,7 @@ impl StakeTableState {
             validator_exits,
             used_bls_keys,
             used_schnorr_keys,
+            used_x25519_keys: HashSet::new(),
         }
     }
 
@@ -286,6 +306,10 @@ impl StakeTableState {
 
     pub fn used_schnorr_keys(&self) -> &HashSet<SchnorrPubKey> {
         &self.used_schnorr_keys
+    }
+
+    pub fn used_x25519_keys(&self) -> &HashSet<x25519::PublicKey> {
+        &self.used_x25519_keys
     }
 
     pub fn validator_exits(&self) -> &HashSet<Address> {
@@ -612,6 +636,126 @@ impl StakeTableState {
                     .ok_or(StakeTableError::ValidatorNotFound(validator))?;
                 val.commission = newCommission;
             },
+
+            StakeTableEvent::RegisterV3(ref reg) => {
+                let authenticated = reg.authenticate().is_ok();
+                if !authenticated {
+                    tracing::warn!(
+                        account = ?reg.account,
+                        "Validator registered with invalid signature"
+                    );
+                }
+
+                let ValidatorRegisteredV3 {
+                    account,
+                    blsVK,
+                    schnorrVK,
+                    commission,
+                    x25519Key,
+                    p2pAddr,
+                    ..
+                } = reg;
+
+                let stake_table_key: BLSPubKey = (*blsVK).into();
+                let state_ver_key: SchnorrPubKey = (*schnorrVK).into();
+
+                if x25519Key.0 == [0u8; 32] {
+                    return Err(StakeTableError::InvalidX25519Key("zero key".into()));
+                }
+                let x25519_key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
+                    .map_err(|e| StakeTableError::InvalidX25519Key(format!("{e}")))?;
+
+                // Parse p2p addr
+                let p2p_addr = match p2pAddr.parse::<NetAddr>() {
+                    Ok(addr) => Some(addr),
+                    Err(e) => {
+                        if !p2pAddr.is_empty() {
+                            tracing::warn!(%e, account = ?account, "Failed to parse p2p addr");
+                        }
+                        None
+                    },
+                };
+
+                if self.validator_exits.contains(account) {
+                    return Err(StakeTableError::ValidatorAlreadyExited(*account));
+                }
+
+                let entry = self.validators.entry(*account);
+                if let indexmap::map::Entry::Occupied(_) = entry {
+                    return Err(StakeTableError::AlreadyRegistered(*account));
+                }
+
+                if self.used_bls_keys.contains(&stake_table_key) {
+                    return Err(StakeTableError::BlsKeyAlreadyUsed(
+                        stake_table_key.to_string(),
+                    ));
+                }
+
+                if self.used_schnorr_keys.contains(&state_ver_key) {
+                    return Err(StakeTableError::SchnorrKeyAlreadyUsed(
+                        state_ver_key.to_string(),
+                    ));
+                }
+
+                if self.used_x25519_keys.contains(&x25519_key) {
+                    return Err(StakeTableError::X25519KeyAlreadyUsed(
+                        x25519_key.to_string(),
+                    ));
+                }
+
+                // All checks ok, applying changes
+                self.used_bls_keys.insert(stake_table_key);
+                self.used_schnorr_keys.insert(state_ver_key.clone());
+                self.used_x25519_keys.insert(x25519_key);
+
+                entry.or_insert(RegisteredValidator {
+                    account: *account,
+                    stake_table_key,
+                    state_ver_key,
+                    stake: U256::ZERO,
+                    commission: *commission,
+                    delegators: HashMap::new(),
+                    authenticated,
+                    x25519_key: Some(x25519_key),
+                    p2p_addr,
+                });
+            },
+
+            StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
+                validator,
+                x25519Key,
+            }) => {
+                let val = self
+                    .validators
+                    .get_mut(&validator)
+                    .ok_or(StakeTableError::ValidatorNotFound(validator))?;
+
+                let key = x25519::PublicKey::try_from(x25519Key.0.as_slice())
+                    .map_err(|e| StakeTableError::InvalidX25519Key(format!("{e}")))?;
+                if self.used_x25519_keys.contains(&key) {
+                    return Err(StakeTableError::X25519KeyAlreadyUsed(key.to_string()));
+                }
+                self.used_x25519_keys.insert(key);
+                val.x25519_key = Some(key);
+            },
+
+            StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+                validator,
+                ref p2pAddr,
+            }) => {
+                let val = self
+                    .validators
+                    .get_mut(&validator)
+                    .ok_or(StakeTableError::ValidatorNotFound(validator))?;
+
+                match p2pAddr.parse::<NetAddr>() {
+                    Ok(addr) => val.p2p_addr = Some(addr),
+                    Err(e) => {
+                        tracing::warn!(%e, validator = ?validator, "Failed to parse p2p addr");
+                        val.p2p_addr = None;
+                    },
+                }
+            },
         }
 
         Ok(Ok(()))
@@ -646,8 +790,9 @@ pub fn validators_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
 /// Filters out unauthenticated validator candidates, those without stake, and selects
 /// the top [`MAX_VALIDATORS`] staked validators.
 /// Returns a new AuthenticatedValidatorMap containing only the selected validators.
-pub fn select_active_validator_set(
+pub(crate) fn select_active_validator_set(
     candidates: &RegisteredValidatorMap,
+    protocol_version: Version,
 ) -> Result<AuthenticatedValidatorMap, StakeTableError> {
     let total_candidates = candidates.len();
 
@@ -666,6 +811,15 @@ pub fn select_active_validator_set(
                     }
                     if cv.stake.is_zero() {
                         tracing::info!("Validator {address:?} does not have any stake");
+                        return None;
+                    }
+                    if !cv.is_eligible(protocol_version) {
+                        tracing::debug!(
+                            ?address,
+                            has_x25519 = cv.x25519_key.is_some(),
+                            has_p2p = cv.p2p_addr.is_some(),
+                            "Validator not eligible at protocol version {protocol_version}"
+                        );
                         return None;
                     }
                     Some((*address, cv))
@@ -728,25 +882,62 @@ pub fn select_active_validator_set(
 
 #[derive(Clone, Debug)]
 pub struct ValidatorSet {
-    pub all_validators: RegisteredValidatorMap,
-    pub active_validators: AuthenticatedValidatorMap,
-    pub stake_table_hash: Option<StakeTableHash>,
+    pub(crate) all_validators: RegisteredValidatorMap,
+    pub(crate) active_validators: AuthenticatedValidatorMap,
+    pub(crate) stake_table_hash: Option<StakeTableHash>,
+    /// The protocol version at which `active_validators` was selected.
+    pub(crate) protocol_version: Version,
 }
 
-/// Extract the active validator set from the L1 stake table events.
-pub(crate) fn validator_set_from_l1_events<I: Iterator<Item = StakeTableEvent>>(
-    events: I,
-) -> Result<ValidatorSet, StakeTableError> {
-    let (all_validators, stake_table_hash) = validators_from_l1_events(events)?;
-    let active_validators = select_active_validator_set(&all_validators)?;
+impl ValidatorSet {
+    /// Derive a validator set from a stake-table state at a given protocol version.
+    pub fn from_state(
+        state: &StakeTableState,
+        protocol_version: Version,
+    ) -> Result<Self, StakeTableError> {
+        let active_validators = select_active_validator_set(state.validators(), protocol_version)?;
+        Ok(Self {
+            all_validators: state.validators().clone(),
+            active_validators,
+            stake_table_hash: Some(state.commit()),
+            protocol_version,
+        })
+    }
 
-    let validator_set = ValidatorSet {
-        all_validators,
-        active_validators,
-        stake_table_hash: Some(stake_table_hash),
-    };
+    /// Derive a validator set directly from L1 events.
+    pub fn from_l1_events<I: Iterator<Item = StakeTableEvent>>(
+        events: I,
+        protocol_version: Version,
+    ) -> Result<Self, StakeTableError> {
+        let (all_validators, stake_table_hash) = validators_from_l1_events(events)?;
+        let active_validators = select_active_validator_set(&all_validators, protocol_version)?;
+        Ok(Self {
+            all_validators,
+            active_validators,
+            stake_table_hash: Some(stake_table_hash),
+            protocol_version,
+        })
+    }
 
-    Ok(validator_set)
+    /// All registered validators known when this set was derived.
+    pub fn all_validators(&self) -> &RegisteredValidatorMap {
+        &self.all_validators
+    }
+
+    /// Validators selected to participate in consensus at `protocol_version`.
+    pub fn active_validators(&self) -> &AuthenticatedValidatorMap {
+        &self.active_validators
+    }
+
+    /// Commitment of the underlying stake-table state, if known.
+    pub fn stake_table_hash(&self) -> Option<StakeTableHash> {
+        self.stake_table_hash
+    }
+
+    /// Protocol version at which the active set was selected.
+    pub fn protocol_version(&self) -> Version {
+        self.protocol_version
+    }
 }
 
 impl std::fmt::Debug for StakeTableEvent {
@@ -767,6 +958,15 @@ impl std::fmt::Debug for StakeTableEvent {
             StakeTableEvent::KeyUpdateV2(event) => write!(f, "KeyUpdateV2({:?})", event.account),
             StakeTableEvent::CommissionUpdate(event) => {
                 write!(f, "CommissionUpdate({:?})", event.validator)
+            },
+            StakeTableEvent::RegisterV3(event) => {
+                write!(f, "RegisterV3({:?})", event.account)
+            },
+            StakeTableEvent::X25519KeyUpdate(event) => {
+                write!(f, "X25519KeyUpdate({:?})", event.validator)
+            },
+            StakeTableEvent::P2pAddrUpdate(event) => {
+                write!(f, "P2pAddrUpdate({:?})", event.validator)
             },
         }
     }
@@ -985,9 +1185,9 @@ impl Fetcher {
     /// - `Ok(true)` if the event is valid and should be processed
     /// - `Ok(false)` if the event should be skipped (non-fatal error)
     /// - `Err(StakeTableError)` if a fatal error occurs
-    fn validate_event(event: &StakeTableV2Events, log: &Log) -> Result<bool, StakeTableError> {
+    fn validate_event(event: &StakeTableV3Events, log: &Log) -> Result<bool, StakeTableError> {
         match event {
-            StakeTableV2Events::ConsensusKeysUpdatedV2(evt) => {
+            StakeTableV3Events::ConsensusKeysUpdatedV2(evt) => {
                 if let Err(err) = evt.authenticate() {
                     tracing::warn!(
                         %err,
@@ -997,14 +1197,12 @@ impl Fetcher {
                     return Ok(false);
                 }
             },
-            StakeTableV2Events::CommissionUpdated(CommissionUpdated {
-                validator,
-                newCommission,
-                ..
-            }) if *newCommission > COMMISSION_BASIS_POINTS => {
+            StakeTableV3Events::CommissionUpdated(evt)
+                if evt.newCommission > COMMISSION_BASIS_POINTS =>
+            {
                 return Err(StakeTableError::InvalidCommission(
-                    *validator,
-                    *newCommission,
+                    evt.validator,
+                    evt.newCommission,
                 ));
             },
             _ => {},
@@ -1039,7 +1237,7 @@ impl Fetcher {
         from_block: Option<u64>,
         to_block: u64,
     ) -> Result<Vec<(EventKey, StakeTableEvent)>, StakeTableError> {
-        let stake_table_contract = StakeTableV2::new(contract, l1_client.provider.clone());
+        let stake_table_contract = StakeTableV3::new(contract, l1_client.provider.clone());
         let max_retry_duration = l1_client.options().l1_events_max_retry_duration;
         let retry_delay = l1_client.options().l1_retry_delay;
         // get the block number when the contract was initialized
@@ -1092,6 +1290,7 @@ impl Fetcher {
                             .events([
                                 ValidatorRegistered::SIGNATURE,
                                 ValidatorRegisteredV2::SIGNATURE,
+                                ValidatorRegisteredV3::SIGNATURE,
                                 ValidatorExit::SIGNATURE,
                                 ValidatorExitV2::SIGNATURE,
                                 Delegated::SIGNATURE,
@@ -1100,6 +1299,8 @@ impl Fetcher {
                                 ConsensusKeysUpdated::SIGNATURE,
                                 ConsensusKeysUpdatedV2::SIGNATURE,
                                 CommissionUpdated::SIGNATURE,
+                                X25519KeyUpdated::SIGNATURE,
+                                P2pAddrUpdated::SIGNATURE,
                             ])
                             .address(contract)
                             .from_block(from)
@@ -1114,7 +1315,7 @@ impl Fetcher {
                 .into_iter()
                 .filter_map(|log| {
                     let event =
-                        StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
+                        StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data).ok()?;
                     match Self::validate_event(&event, &log) {
                         Ok(true) => Some(Ok((event, log))),
                         Ok(false) => None,
@@ -1185,7 +1386,7 @@ impl Fetcher {
             .ok_or(FetchRewardError::MissingStakeTableContract)?;
 
         let provider = self.l1_client.provider.clone();
-        let stake_table = StakeTableV2::new(stake_table_contract, provider.clone());
+        let stake_table = StakeTableV3::new(stake_table_contract, provider.clone());
 
         // Get the block number where the stake table was initialized
         // Stake table contract has the token contract address
@@ -1369,7 +1570,11 @@ impl Fetcher {
             },
         };
 
-        match validator_set_from_l1_events(events.into_iter().map(|(_, e)| e)) {
+        // Selection runs at the epoch root header's protocol version: that header's
+        // `next_stake_table_hash` was computed under the active-set rules in effect at the root,
+        // so events spanning an upgrade are intentionally evaluated under the root's rules rather
+        // than each event's wall-clock version.
+        match ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), header.version()) {
             Ok(res) => Ok(res),
             Err(e) => {
                 bail!("failed to construct stake table {e:?}");
@@ -2642,6 +2847,8 @@ pub mod testing {
         pub commission: u16,
         pub bls_sig: G1PointSol,
         pub schnorr_sig: Bytes,
+        pub x25519_key: [u8; 32],
+        pub p2p_addr: String,
     }
 
     impl TestValidator {
@@ -2663,6 +2870,8 @@ pub mod testing {
             let bls_sig = sign_address_bls(&bls_key_pair, account);
             let schnorr_key_pair = StateKeyPair::generate_from_seed_indexed(seed, 0);
             let schnorr_sig = sign_address_schnorr(&schnorr_key_pair, account);
+            let mut x25519_key = [0u8; 32];
+            rng.fill_bytes(&mut x25519_key);
             Self {
                 account,
                 bls_vk: bls_key_pair.ver_key().to_affine().into(),
@@ -2670,7 +2879,33 @@ pub mod testing {
                 commission,
                 bls_sig: bls_sig.into(),
                 schnorr_sig: StateSignatureSol::from(schnorr_sig).into(),
+                x25519_key,
+                p2p_addr: "127.0.0.1:9000".to_string(),
             }
+        }
+
+        pub fn with_x25519_key(mut self, x25519_key: [u8; 32]) -> Self {
+            self.x25519_key = x25519_key;
+            self
+        }
+
+        pub fn with_p2p_addr(mut self, p2p_addr: impl Into<String>) -> Self {
+            self.p2p_addr = p2p_addr.into();
+            self
+        }
+
+        pub fn x25519_update(&self, x25519_key: [u8; 32]) -> StakeTableEvent {
+            StakeTableEvent::X25519KeyUpdate(X25519KeyUpdated {
+                validator: self.account,
+                x25519Key: alloy::primitives::FixedBytes(x25519_key),
+            })
+        }
+
+        pub fn p2p_update(&self, p2p_addr: impl Into<String>) -> StakeTableEvent {
+            StakeTableEvent::P2pAddrUpdate(P2pAddrUpdated {
+                validator: self.account,
+                p2pAddr: p2p_addr.into(),
+            })
         }
     }
 
@@ -2695,6 +2930,22 @@ pub mod testing {
                 blsSig: value.bls_sig.into(),
                 schnorrSig: value.schnorr_sig.clone(),
                 metadataUri: "dummy-meta".to_string(),
+            }
+        }
+    }
+
+    impl From<&TestValidator> for ValidatorRegisteredV3 {
+        fn from(value: &TestValidator) -> Self {
+            Self {
+                account: value.account,
+                blsVK: value.bls_vk,
+                schnorrVK: value.schnorr_vk,
+                commission: value.commission,
+                blsSig: value.bls_sig.into(),
+                schnorrSig: value.schnorr_sig.clone(),
+                metadataUri: "dummy-meta".to_string(),
+                x25519Key: alloy::primitives::FixedBytes(value.x25519_key),
+                p2pAddr: value.p2p_addr.clone(),
             }
         }
     }
@@ -2785,6 +3036,7 @@ mod tests {
     use hotshot_types::signature_key::BLSKeyPair;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
+    use versions::{CLIQUENET_VERSION, DA_UPGRADE_VERSION, VID2_UPGRADE_VERSION};
 
     use super::*;
     use crate::{L1ClientOptions, v0::impls::testing::*};
@@ -2831,7 +3083,7 @@ mod tests {
         ]
         .to_vec();
 
-        let validators_set = validator_set_from_l1_events(events.iter().cloned())?;
+        let validators_set = ValidatorSet::from_l1_events(events.iter().cloned(), EPOCH_VERSION)?;
         let st = validators_set.active_validators;
         let st_val_1 = st.get(&val_1.account).unwrap();
         // final staked amount should be 10 (delegated) - 7 (undelegated) + 5 (Delegated)
@@ -2848,7 +3100,7 @@ mod tests {
 
         events.push(ValidatorExit::from(&val_1).into());
 
-        let validator_set = validator_set_from_l1_events(events.iter().cloned())?;
+        let validator_set = ValidatorSet::from_l1_events(events.iter().cloned(), EPOCH_VERSION)?;
         let st = validator_set.active_validators;
         // The first validator should have been removed
         assert_eq!(st.get(&val_1.account), None);
@@ -2863,7 +3115,7 @@ mod tests {
         events.push(ValidatorExit::from(&val_2).into());
 
         // This should fail because the validator has exited and no longer exists in the stake table.
-        assert!(validator_set_from_l1_events(events.iter().cloned()).is_err());
+        assert!(ValidatorSet::from_l1_events(events.iter().cloned(), EPOCH_VERSION).is_err());
 
         Ok(())
     }
@@ -2940,8 +3192,8 @@ mod tests {
 
         let minimum_stake = highest_stake / U256::from(VID_TARGET_TOTAL_STAKE);
 
-        let selected_validators =
-            select_active_validator_set(&candidates).expect("Failed to select validators");
+        let selected_validators = select_active_validator_set(&candidates, EPOCH_VERSION)
+            .expect("Failed to select validators");
         assert!(
             selected_validators.len() <= MAX_VALIDATORS,
             "validators len is {}, expected at most {MAX_VALIDATORS}",
@@ -2968,13 +3220,18 @@ mod tests {
     // duplicated BLS keys via the update keys events.
     #[rstest::rstest]
     fn test_regression_non_unique_bls_keys_not_discarded(
-        #[values(StakeTableContractVersion::V1, StakeTableContractVersion::V2)]
+        #[values(
+            StakeTableContractVersion::V1,
+            StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3
+        )]
         version: StakeTableContractVersion,
     ) {
         let val = TestValidator::random();
         let register: StakeTableEvent = match version {
             StakeTableContractVersion::V1 => ValidatorRegistered::from(&val).into(),
             StakeTableContractVersion::V2 => ValidatorRegisteredV2::from(&val).into(),
+            StakeTableContractVersion::V3 => StakeTableEvent::RegisterV3((&val).into()),
         };
         let delegate: StakeTableEvent = Delegated {
             delegator: Address::random(),
@@ -2985,14 +3242,20 @@ mod tests {
 
         // first ensure that wan build a valid stake table
         assert!(
-            validator_set_from_l1_events(vec![register.clone(), delegate.clone()].into_iter())
-                .is_ok()
+            ValidatorSet::from_l1_events(
+                vec![register.clone(), delegate.clone()].into_iter(),
+                EPOCH_VERSION,
+            )
+            .is_ok()
         );
 
         // add the invalid key update (re-using the same consensus keys)
         let key_update = ConsensusKeysUpdated::from(&val).into();
-        let err = validator_set_from_l1_events(vec![register, delegate, key_update].into_iter())
-            .unwrap_err();
+        let err = ValidatorSet::from_l1_events(
+            vec![register, delegate, key_update].into_iter(),
+            EPOCH_VERSION,
+        )
+        .unwrap_err();
 
         let bls: BLSPubKey = val.bls_vk.into();
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
@@ -3034,6 +3297,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_register_validator(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::default();
         let validator = TestValidator::random();
@@ -3041,6 +3305,7 @@ mod tests {
         let event = match version {
             StakeTableContractVersion::V1 => StakeTableEvent::Register((&validator).into()),
             StakeTableContractVersion::V2 => StakeTableEvent::RegisterV2((&validator).into()),
+            StakeTableContractVersion::V3 => StakeTableEvent::RegisterV3((&validator).into()),
         };
 
         state.apply_event(event).unwrap().unwrap();
@@ -3052,6 +3317,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_validator_already_registered(#[case] version: StakeTableContractVersion) {
         let mut stake_table_state = StakeTableState::default();
 
@@ -3064,6 +3330,9 @@ mod tests {
             },
             StakeTableContractVersion::V2 => {
                 stake_table_state.apply_event(StakeTableEvent::RegisterV2((&test_validator).into()))
+            },
+            StakeTableContractVersion::V3 => {
+                stake_table_state.apply_event(StakeTableEvent::RegisterV3((&test_validator).into()))
             },
         }
         .unwrap()
@@ -3090,6 +3359,25 @@ mod tests {
             Err(StakeTableError::AlreadyRegistered(account)) if account == test_validator.account,
             "Expected AlreadyRegistered error. version ={version:?} result={v2_already_registered_result:?}",
 
+        );
+
+        // attempt using V3 registration with a different x25519 key (should also fail
+        // with AlreadyRegistered because the validator address is already registered)
+        let v3_already_registered_result =
+            stake_table_state
+                .clone()
+                .apply_event(StakeTableEvent::RegisterV3(
+                    (&test_validator
+                        .clone()
+                        .with_x25519_key([43u8; 32])
+                        .with_p2p_addr("127.0.0.1:9001"))
+                        .into(),
+                ));
+
+        pretty_assertions::assert_matches!(
+            v3_already_registered_result,
+            Err(StakeTableError::AlreadyRegistered(account)) if account == test_validator.account,
+            "Expected AlreadyRegistered error. version ={version:?} result={v3_already_registered_result:?}",
         );
     }
 
@@ -3122,7 +3410,7 @@ mod tests {
         });
         state.apply_event(event).unwrap().unwrap();
 
-        let active = select_active_validator_set(state.validators());
+        let active = select_active_validator_set(state.validators(), EPOCH_VERSION);
         match active {
             Err(_) => {}, // No validators is valid - means the unauthenticated one was filtered
             Ok(map) => {
@@ -3153,6 +3441,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_deregister_validator(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::default();
         let val = TestValidator::random();
@@ -3162,10 +3451,12 @@ mod tests {
 
         let dereg = match version {
             StakeTableContractVersion::V1 => StakeTableEvent::Deregister((&val).into()),
-            StakeTableContractVersion::V2 => StakeTableEvent::DeregisterV2(ValidatorExitV2 {
-                validator: val.account,
-                unlocksAt: U256::from(1000u64),
-            }),
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+                StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+                    validator: val.account,
+                    unlocksAt: U256::from(1000u64),
+                })
+            },
         };
         state.apply_event(dereg).unwrap().unwrap();
         assert!(!state.validators.contains_key(&val.account));
@@ -3174,6 +3465,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_delegate_and_undelegate(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::default();
         let val = TestValidator::random();
@@ -3200,13 +3492,15 @@ mod tests {
                 validator: val.account,
                 amount,
             }),
-            StakeTableContractVersion::V2 => StakeTableEvent::UndelegateV2(UndelegatedV2 {
-                delegator,
-                validator: val.account,
-                amount,
-                unlocksAt: U256::from(2000u64),
-                undelegationId: 1,
-            }),
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+                StakeTableEvent::UndelegateV2(UndelegatedV2 {
+                    delegator,
+                    validator: val.account,
+                    amount,
+                    unlocksAt: U256::from(2000u64),
+                    undelegationId: 1,
+                })
+            },
         };
         state.apply_event(undelegate_event).unwrap().unwrap();
         let validator = state.validators.get(&val.account).unwrap();
@@ -3216,6 +3510,7 @@ mod tests {
     #[rstest]
     #[case::v1(StakeTableContractVersion::V1)]
     #[case::v2(StakeTableContractVersion::V2)]
+    #[case::v3(StakeTableContractVersion::V3)]
     fn test_key_update_event(#[case] version: StakeTableContractVersion) {
         let mut state = StakeTableState::default();
         let val = TestValidator::random();
@@ -3230,7 +3525,9 @@ mod tests {
 
         let event = match version {
             StakeTableContractVersion::V1 => StakeTableEvent::KeyUpdate((&new_keys).into()),
-            StakeTableContractVersion::V2 => StakeTableEvent::KeyUpdateV2((&new_keys).into()),
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
+                StakeTableEvent::KeyUpdateV2((&new_keys).into())
+            },
         };
 
         state.apply_event(event).unwrap().unwrap();
@@ -3297,12 +3594,9 @@ mod tests {
         let bls_key_pair = BLSKeyPair::generate(&mut rng);
 
         let val2 = TestValidator {
-            account: val1.account,
             bls_vk: bls_key_pair.ver_key().to_affine().into(),
-            schnorr_vk: val1.schnorr_vk,
-            commission: val1.commission,
             bls_sig: sign_address_bls(&bls_key_pair, val1.account).into(),
-            schnorr_sig: val1.clone().schnorr_sig,
+            ..val1.clone()
         };
         let event1 = StakeTableEvent::RegisterV2((&val1).into());
         let event2 = StakeTableEvent::KeyUpdateV2((&val2).into());
@@ -3607,7 +3901,7 @@ mod tests {
 
         // Reconstruct stake table from events
         let reconstructed_stake_table =
-            validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+            ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
                 .unwrap()
                 .active_validators;
 
@@ -3860,14 +4154,22 @@ mod tests {
         KeyUpdate,
         CommissionUpdate,
         Exit,
+        X25519KeyUpdate,
+        P2pAddrUpdate,
     }
 
+    // Regression for PR #3903: validators with invalid signatures used to be dropped during
+    // registration, so any later event targeting them failed with ValidatorNotFound and broke
+    // stake table reconstruction. Now they're stored with authenticated=false and subsequent
+    // events must succeed against them (though they stay out of the active consensus set).
     #[rstest]
     #[case::delegate(EventType::Delegate)]
     #[case::undelegate(EventType::Undelegate)]
     #[case::key_update(EventType::KeyUpdate)]
     #[case::commission_update(EventType::CommissionUpdate)]
     #[case::exit(EventType::Exit)]
+    #[case::x25519_key_update(EventType::X25519KeyUpdate)]
+    #[case::p2p_addr_update(EventType::P2pAddrUpdate)]
     fn test_events_targeting_unauthenticated_validator(
         #[case] event_type: EventType,
     ) -> anyhow::Result<()> {
@@ -3954,14 +4256,508 @@ mod tests {
                 assert!(!state.validators().contains_key(&val.account));
                 return Ok(());
             },
+            EventType::X25519KeyUpdate => {
+                let new_x25519_key = [99u8; 32];
+                state.apply_event(val.x25519_update(new_x25519_key))??;
+
+                let validator = state.validators().get(&val.account).context("validator")?;
+                let expected = x25519::PublicKey::try_from(new_x25519_key.as_slice())
+                    .expect("valid x25519 key");
+                assert_eq!(validator.x25519_key, Some(expected));
+                assert!(!validator.authenticated);
+            },
+            EventType::P2pAddrUpdate => {
+                state.apply_event(val.p2p_update("10.0.0.1:9000"))??;
+
+                let validator = state.validators().get(&val.account).context("validator")?;
+                let expected: NetAddr = "10.0.0.1:9000".parse().expect("valid p2p addr");
+                assert_eq!(validator.p2p_addr, Some(expected));
+                assert!(!validator.authenticated);
+            },
         }
 
-        let active = select_active_validator_set(state.validators());
+        let active = select_active_validator_set(state.validators(), EPOCH_VERSION);
         match active {
             Err(StakeTableError::NoValidValidators) => {},
             Err(e) => bail!("Unexpected error: {e}"),
             Ok(map) => assert!(!map.contains_key(&val.account)),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_sets_x25519_and_p2p() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(registered.authenticated);
+
+        let expected_x25519 =
+            x25519::PublicKey::try_from(val.x25519_key.as_slice()).expect("valid x25519 key");
+        assert_eq!(registered.x25519_key, Some(expected_x25519));
+
+        let expected_p2p: NetAddr = val.p2p_addr.parse().expect("valid p2p addr");
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_invalid_sig() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+        let other = TestValidator::random();
+
+        // Build a V3 registration with val's keys but other's BLS sig (mismatched)
+        let bad_val = TestValidator {
+            bls_sig: other.bls_sig,
+            ..val.clone()
+        };
+        let event = StakeTableEvent::RegisterV3((&bad_val).into());
+
+        let mut state = StakeTableState::default();
+        state.apply_event(event)??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert!(!registered.authenticated);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_hostname_p2p() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        // Empty p2p addr: NetAddr parses it as Name("", 0) which is still Some.
+        // Non-IP strings become NetAddr::Name variant.
+        let val = val.with_p2p_addr("my-host:9000");
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        let expected_p2p: NetAddr = "my-host:9000".parse().unwrap();
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_invalid_p2p_addr_degrades_to_none() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        let val = val.with_p2p_addr("host:notaport");
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert_eq!(registered.p2p_addr, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_x25519_key_update_sets_value() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        assert_eq!(
+            state.validators().get(&val.account).unwrap().x25519_key,
+            None
+        );
+
+        let x25519_key = [99u8; 32];
+        state.apply_event(val.x25519_update(x25519_key))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        let expected_x25519 =
+            x25519::PublicKey::try_from(x25519_key.as_slice()).expect("valid x25519 key");
+        assert_eq!(registered.x25519_key, Some(expected_x25519));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_p2p_addr_update_sets_value() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        assert_eq!(state.validators().get(&val.account).unwrap().p2p_addr, None);
+
+        let p2p_addr = "10.0.0.1:8080";
+        state.apply_event(val.p2p_update(p2p_addr))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        let expected_p2p: NetAddr = p2p_addr.parse().expect("valid p2p addr");
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_p2p_addr_unparsable_sets_none() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        // Set a valid address first.
+        state.apply_event(val.p2p_update("10.0.0.1:8080"))??;
+        assert!(
+            state
+                .validators()
+                .get(&val.account)
+                .unwrap()
+                .p2p_addr
+                .is_some()
+        );
+
+        // An address with an invalid port that Rust's NetAddr parser rejects degrades to None.
+        state.apply_event(val.p2p_update("host:notaport"))??;
+        assert_eq!(state.validators().get(&val.account).unwrap().p2p_addr, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_x25519_key_update_unknown_validator() {
+        let mut state = StakeTableState::default();
+        let unknown = TestValidator::random();
+
+        let result = state.apply_event(unknown.x25519_update([1u8; 32]));
+        assert_matches!(
+            result,
+            Err(StakeTableError::ValidatorNotFound(addr)) if addr == unknown.account
+        );
+    }
+
+    #[test]
+    fn test_p2p_addr_update_unknown_validator() {
+        let mut state = StakeTableState::default();
+        let unknown = TestValidator::random();
+
+        let result = state.apply_event(unknown.p2p_update("127.0.0.1:9000"));
+        assert_matches!(
+            result,
+            Err(StakeTableError::ValidatorNotFound(addr)) if addr == unknown.account
+        );
+    }
+
+    #[test]
+    fn test_x25519_key_update_duplicate() -> anyhow::Result<()> {
+        let shared_key = [55u8; 32];
+        let val1 = TestValidator::random().with_x25519_key(shared_key);
+        let val2 = TestValidator::random().with_x25519_key([2u8; 32]);
+
+        let mut state = StakeTableState::default();
+        // Register both validators via V3
+        state.apply_event(StakeTableEvent::RegisterV3((&val1).into()))??;
+        state.apply_event(StakeTableEvent::RegisterV3((&val2).into()))??;
+
+        // Try to update val2's x25519 key to the same as val1's
+        let result = state.apply_event(val2.x25519_update(shared_key));
+        assert_matches!(result, Err(StakeTableError::X25519KeyAlreadyUsed(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_p2p_addr_update_hostname() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        state.apply_event(val.p2p_update("my-node.example.com:9000"))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        let expected_p2p: NetAddr = "my-node.example.com:9000".parse().unwrap();
+        assert_eq!(registered.p2p_addr, Some(expected_p2p));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_duplicate_bls_key() -> anyhow::Result<()> {
+        let val1 = TestValidator::random();
+        let mut val2 = TestValidator::random();
+        val2.bls_vk = val1.bls_vk;
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val1).into()))??;
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val2).into()));
+        assert_matches!(result, Err(StakeTableError::BlsKeyAlreadyUsed(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_duplicate_schnorr_key() -> anyhow::Result<()> {
+        let val1 = TestValidator::random();
+        let mut val2 = TestValidator::random();
+        val2.schnorr_vk = val1.schnorr_vk;
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val1).into()))??;
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val2).into()));
+        assert_matches!(result, Err(StakeTableError::SchnorrKeyAlreadyUsed(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_duplicate_x25519_key() -> anyhow::Result<()> {
+        let shared_x25519 = [7u8; 32];
+        let val1 = TestValidator::random().with_x25519_key(shared_x25519);
+        let val2 = TestValidator::random().with_x25519_key(shared_x25519);
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val1).into()))??;
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val2).into()));
+        assert_matches!(result, Err(StakeTableError::X25519KeyAlreadyUsed(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_rejects_exited_validator() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+        state.apply_event(StakeTableEvent::DeregisterV2(ValidatorExitV2 {
+            validator: val.account,
+            unlocksAt: U256::from(1000u64),
+        }))??;
+
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
+        assert_matches!(
+            result,
+            Err(StakeTableError::ValidatorAlreadyExited(addr)) if addr == val.account
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_register_v3_zero_x25519_errors() -> anyhow::Result<()> {
+        let val = TestValidator::random().with_x25519_key([0u8; 32]);
+
+        let mut state = StakeTableState::default();
+        let result = state.apply_event(StakeTableEvent::RegisterV3((&val).into()));
+        assert_matches!(result, Err(StakeTableError::InvalidX25519Key(_)));
+
+        Ok(())
+    }
+
+    /// `used_x25519_keys` must be part of the state commitment. Without this,
+    /// nodes diverging on x25519 uniqueness tracking would produce identical
+    /// state hashes and the divergence would go undetected.
+    #[test]
+    fn test_state_commit_includes_used_x25519_keys() -> anyhow::Result<()> {
+        let val = TestValidator::random();
+
+        let mut state_without = StakeTableState::default();
+        state_without.apply_event(StakeTableEvent::RegisterV2((&val).into()))??;
+
+        let mut state_with = state_without.clone();
+        state_with
+            .used_x25519_keys
+            .insert(x25519::PublicKey::try_from([7u8; 32].as_slice()).unwrap());
+
+        assert_ne!(state_without.commit(), state_with.commit());
+        Ok(())
+    }
+
+    // --- CLIQUENET_VERSION selection filter tests ---
+
+    /// Construct a `RegisteredValidator` with both x25519_key and p2p_addr populated.
+    fn complete_mock_validator() -> RegisteredValidator<BLSPubKey> {
+        let mut v = RegisteredValidator::<BLSPubKey>::mock();
+        v.x25519_key = Some(x25519::PublicKey::try_from([42u8; 32].as_slice()).unwrap());
+        v.p2p_addr = Some("127.0.0.1:9000".parse().unwrap());
+        v
+    }
+
+    /// Pre-upgrade: validators with missing x25519/p2p fields must still be selected.
+    #[test]
+    fn test_select_pre_upgrade_includes_validators_missing_network_info() {
+        let mut map = RegisteredValidatorMap::new();
+
+        let incomplete = RegisteredValidator::<BLSPubKey>::mock();
+        assert!(incomplete.x25519_key.is_none());
+        assert!(incomplete.p2p_addr.is_none());
+        map.insert(incomplete.account, incomplete.clone());
+
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, EPOCH_VERSION).unwrap();
+        assert!(active.contains_key(&incomplete.account));
+        assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: validator missing x25519_key is filtered out.
+    #[test]
+    fn test_select_post_upgrade_excludes_missing_x25519() {
+        let mut map = RegisteredValidatorMap::new();
+
+        let mut missing_x25519 = complete_mock_validator();
+        missing_x25519.x25519_key = None;
+        map.insert(missing_x25519.account, missing_x25519.clone());
+
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        assert!(!active.contains_key(&missing_x25519.account));
+        assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: validator missing p2p_addr is filtered out.
+    #[test]
+    fn test_select_post_upgrade_excludes_missing_p2p() {
+        let mut map = RegisteredValidatorMap::new();
+
+        let mut missing_p2p = complete_mock_validator();
+        missing_p2p.p2p_addr = None;
+        map.insert(missing_p2p.account, missing_p2p.clone());
+
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        assert!(!active.contains_key(&missing_p2p.account));
+        assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: a single complete validator is kept.
+    #[test]
+    fn test_select_post_upgrade_keeps_complete() {
+        let mut map = RegisteredValidatorMap::new();
+        let complete = complete_mock_validator();
+        map.insert(complete.account, complete.clone());
+
+        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        assert!(active.contains_key(&complete.account));
+    }
+
+    /// Post-upgrade: if all validators are incomplete, selection returns
+    /// `NoValidValidators`.
+    #[test]
+    fn test_select_post_upgrade_all_incomplete_fails() {
+        let mut map = RegisteredValidatorMap::new();
+        for _ in 0..5 {
+            let v = RegisteredValidator::<BLSPubKey>::mock();
+            map.insert(v.account, v);
+        }
+
+        let result = select_active_validator_set(&map, CLIQUENET_VERSION);
+        assert_matches!(result, Err(StakeTableError::NoValidValidators));
+    }
+
+    /// Post-upgrade: when more than MAX_VALIDATORS complete validators exist alongside
+    /// incomplete ones, only complete validators appear in the result and the count is
+    /// clamped to MAX_VALIDATORS.
+    #[test]
+    fn test_select_post_upgrade_top_n_only_complete() {
+        let mut map = RegisteredValidatorMap::new();
+        let mut complete_accounts = HashSet::new();
+        let mut incomplete_accounts = HashSet::new();
+
+        // Build MAX_VALIDATORS + 50 validators, alternating complete/incomplete. Give
+        // complete validators higher stake than incomplete ones so both the filter and
+        // the stake-based top-N truncation cleanly pick complete ones.
+        for i in 0..(MAX_VALIDATORS + 50) {
+            if i % 2 == 0 {
+                let mut v = complete_mock_validator();
+                v.stake = U256::from(1_000_000_000_u64 + i as u64);
+                complete_accounts.insert(v.account);
+                map.insert(v.account, v);
+            } else {
+                let mut v = RegisteredValidator::<BLSPubKey>::mock();
+                v.stake = U256::from(10_u64);
+                incomplete_accounts.insert(v.account);
+                map.insert(v.account, v);
+            }
+        }
+
+        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+
+        assert!(
+            active.len() <= MAX_VALIDATORS,
+            "active has {} validators, expected at most {}",
+            active.len(),
+            MAX_VALIDATORS
+        );
+        for addr in active.keys() {
+            assert!(
+                complete_accounts.contains(addr),
+                "incomplete validator {addr:?} ended up in active set"
+            );
+            assert!(!incomplete_accounts.contains(addr));
+        }
+    }
+
+    /// Verify the version boundary: the filter only kicks in at/after
+    /// `CLIQUENET_VERSION`. A validator missing the x25519 key must be retained at
+    /// every prior version and rejected at `CLIQUENET_VERSION`.
+    #[test]
+    fn test_select_version_boundary() {
+        let mut v = complete_mock_validator();
+        v.x25519_key = None;
+        let mut map = RegisteredValidatorMap::new();
+        map.insert(v.account, v.clone());
+
+        for protocol_version in [
+            EPOCH_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            DA_UPGRADE_VERSION,
+            VID2_UPGRADE_VERSION,
+        ] {
+            let active = select_active_validator_set(&map, protocol_version).unwrap();
+            assert!(
+                active.contains_key(&v.account),
+                "missing x25519 validator should be included at protocol version \
+                 {protocol_version}",
+            );
+        }
+
+        let result = select_active_validator_set(&map, CLIQUENET_VERSION);
+        assert_matches!(result, Err(StakeTableError::NoValidValidators));
+    }
+
+    /// Integration test: a RegisterV3 event with an unparsable p2p address results in
+    /// `p2p_addr: None`, which is accepted pre-upgrade and rejected post-upgrade.
+    #[test]
+    fn test_p2p_parse_fail_pre_upgrade_included_post_upgrade_excluded() -> anyhow::Result<()> {
+        let val = TestValidator::random().with_p2p_addr("host:notaport");
+
+        let mut state = StakeTableState::default();
+        state.apply_event(StakeTableEvent::RegisterV3((&val).into()))??;
+        // Delegate so the validator passes the stake/delegator checks.
+        state.apply_event(StakeTableEvent::Delegate(Delegated {
+            delegator: Address::random(),
+            validator: val.account,
+            amount: U256::from(100),
+        }))??;
+
+        let registered = state.validators().get(&val.account).unwrap();
+        assert_eq!(registered.p2p_addr, None);
+
+        // Pre-upgrade: the validator is selected.
+        let pre = select_active_validator_set(state.validators(), EPOCH_VERSION).unwrap();
+        assert!(pre.contains_key(&val.account));
+
+        // Post-upgrade: the sole validator is filtered out, so selection fails.
+        let post = select_active_validator_set(state.validators(), CLIQUENET_VERSION);
+        assert_matches!(post, Err(StakeTableError::NoValidValidators));
+
         Ok(())
     }
 }

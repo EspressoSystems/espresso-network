@@ -26,10 +26,10 @@ use espresso_contract_deployer::{HttpProviderWithWallet, build_provider, build_s
 use espresso_types::parse_duration;
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use hotshot_contract_adapter::{
-    sol_types::{EspToken, StakeTableV2},
+    sol_types::{EspToken, StakeTableV3},
     stake_table::StakeTableContractVersion,
 };
-use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
+use hotshot_types::{addr::NetAddr, light_client::StateKeyPair, signature_key::BLSKeyPair, x25519};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use thiserror::Error;
@@ -44,6 +44,14 @@ use crate::{
     transaction::Transaction,
     tx_log::{TxInput, TxLog, TxPhase, execute_signed_tx_log, sign_all_transactions},
 };
+
+/// A set of cryptographic keys for a validator node used in staking operations.
+pub struct StakingKeySet {
+    pub signer: PrivateKeySigner,
+    pub bls: BLSKeyPair,
+    pub state: StateKeyPair,
+    pub x25519: x25519::Keypair,
+}
 
 #[derive(Debug, Error)]
 pub enum CreateTransactionsError {
@@ -229,6 +237,8 @@ pub struct RegistrationInfo {
     pub from: Address,
     pub commission: Commission,
     pub payload: NodeSignatures,
+    pub x25519_key: x25519::PublicKey,
+    pub p2p_addr: NetAddr,
 }
 
 /// Delegation info used by staking UI service tests.
@@ -257,6 +267,8 @@ enum StakeTableTx {
         from: Address,
         commission: Commission,
         payload: Box<NodeSignatures>,
+        x25519_key: x25519::PublicKey,
+        p2p_addr: NetAddr,
     },
     Approve {
         from: Address,
@@ -293,6 +305,7 @@ struct ValidatorConfig {
     commission: Commission,
     bls_key_pair: BLSKeyPair,
     state_key_pair: StateKeyPair,
+    x25519: x25519::Keypair,
     index: usize,
 }
 
@@ -366,14 +379,22 @@ impl<P: Provider + Clone> TransactionProcessor<P> {
                 from,
                 commission,
                 payload,
+                x25519_key,
+                p2p_addr,
             } => {
                 let metadata_uri = "https://example.com/metadata".parse()?;
+                let (x25519_key, p2p_addr) = match self.version {
+                    StakeTableContractVersion::V3 => (Some(x25519_key), Some(p2p_addr)),
+                    _ => (None, None),
+                };
                 Transaction::RegisterValidator {
                     stake_table: self.stake_table,
                     commission,
                     metadata_uri,
                     payload: *payload,
                     version: self.version,
+                    x25519_key,
+                    p2p_addr,
                 }
                 .send(self.provider(from)?)
                 .await
@@ -668,7 +689,7 @@ impl<P: Provider + Clone> StakingTransactions<P> {
                 |input| {
                     match input.phase {
                         TxPhase::Delegate => {
-                            let call = StakeTableV2::delegateCall {
+                            let call = StakeTableV3::delegateCall {
                                 validator: input.to,
                                 amount: input.amount,
                             };
@@ -716,12 +737,16 @@ impl<P: Provider + Clone> StakingTransactions<P> {
                     from,
                     commission,
                     payload,
+                    x25519_key,
+                    p2p_addr,
                 } = tx
                 {
                     Some(RegistrationInfo {
                         from: *from,
                         commission: *commission,
                         payload: *payload.clone(),
+                        x25519_key: *x25519_key,
+                        p2p_addr: p2p_addr.clone(),
                     })
                 } else {
                     None
@@ -801,7 +826,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
         rpc_url: Url,
         token_holder: &(impl Provider + WalletProvider<Wallet = EthereumWallet>),
         stake_table: Address,
-        validators: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
+        validators: Vec<StakingKeySet>,
         num_delegators_per_validator: Option<u64>,
         config: DelegationConfig,
     ) -> Result<Self, CreateTransactionsError> {
@@ -836,16 +861,15 @@ impl StakingTransactions<HttpProviderWithWallet> {
         let mut rng = ChaCha20Rng::from_seed(seed);
 
         let mut validator_info = vec![];
-        for (val_index, (signer, bls_key_pair, state_key_pair)) in
-            validators.into_iter().enumerate()
-        {
+        for (val_index, key_set) in validators.into_iter().enumerate() {
             let commission = Commission::try_from(100u64 + 10u64 * val_index as u64)?;
 
             validator_info.push(ValidatorConfig {
-                signer,
+                signer: key_set.signer,
                 commission,
-                bls_key_pair,
-                state_key_pair,
+                bls_key_pair: key_set.bls,
+                state_key_pair: key_set.state,
+                x25519: key_set.x25519,
                 index: val_index,
             });
         }
@@ -889,9 +913,12 @@ impl StakingTransactions<HttpProviderWithWallet> {
             }
         }
 
-        let st = StakeTableV2::new(stake_table, &token_holder_provider);
+        let st = StakeTableV3::new(stake_table, &token_holder_provider);
         let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
-        if let StakeTableContractVersion::V2 = version {
+        if matches!(
+            version,
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3
+        ) {
             let min_delegate_amount = st.minDelegateAmount().call().await?;
             for delegator in &delegator_info {
                 if delegator.delegate_amount < min_delegate_amount {
@@ -940,10 +967,15 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
             let payload =
                 NodeSignatures::create(address, &validator.bls_key_pair, &validator.state_key_pair);
+            let p2p_addr = format!("127.0.0.1:{}", 8080 + address.0[19] as u16)
+                .parse()
+                .expect("valid net addr");
             registration.push_back(StakeTableTx::RegisterValidator {
                 from: address,
                 commission: validator.commission,
                 payload: Box::new(payload),
+                x25519_key: validator.x25519.public_key(),
+                p2p_addr,
             });
         }
 
@@ -1082,11 +1114,12 @@ pub(crate) async fn stake_for_demo(
         let state_private_key = parse_state_priv_key(&dotenvy::var(format!(
             "ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"
         ))?)?;
-        validator_keys.push((
+        validator_keys.push(StakingKeySet {
             signer,
-            consensus_private_key,
-            StateKeyPair::from_sign_key(state_private_key),
-        ));
+            bls: consensus_private_key,
+            state: StateKeyPair::from_sign_key(state_private_key),
+            x25519: x25519::Keypair::generate().expect("failed to generate x25519 keypair"),
+        });
     }
 
     StakingTransactions::create(
@@ -1319,7 +1352,7 @@ pub(crate) async fn delegate_for_demo(
                             .with_call(&call)
                     },
                     TxPhase::Delegate => {
-                        let call = StakeTableV2::delegateCall {
+                        let call = StakeTableV3::delegateCall {
                             validator: input.to,
                             amount: input.amount,
                         };
@@ -1397,7 +1430,7 @@ pub(crate) async fn undelegate_for_demo(
                         let client = client.clone();
                         async move {
                             let provider = ProviderBuilder::new().connect_client(client);
-                            let stake_table = StakeTableV2::new(stake_table_addr, &provider);
+                            let stake_table = StakeTableV3::new(stake_table_addr, &provider);
                             let amount = stake_table
                                 .delegations(validator, signer.address())
                                 .call()
@@ -1455,7 +1488,7 @@ pub(crate) async fn undelegate_for_demo(
             tracing::info!("signing {} transactions...", tx_inputs.len());
             let signed_txs =
                 sign_all_transactions(&query_provider, &wallets, tx_inputs, concurrency, |input| {
-                    let call = StakeTableV2::undelegateCall {
+                    let call = StakeTableV3::undelegateCall {
                         validator: input.to,
                         amount: input.amount,
                     };
@@ -1679,7 +1712,7 @@ pub(crate) async fn churn_for_demo(config: &Config, params: ChurnParams) -> Resu
     execute_signed_tx_log(funder_provider, &log, concurrency, false).await?;
 
     let query_provider = ProviderBuilder::new().connect_client(shared_client.clone());
-    let stake_table = StakeTableV2::new(config.stake_table_address, &query_provider);
+    let stake_table = StakeTableV3::new(config.stake_table_address, &query_provider);
 
     let mut rng = ChaCha20Rng::seed_from_u64(DELEGATOR_SEED);
 
@@ -1973,7 +2006,7 @@ mod test {
 
     #[test_log::test(tokio::test)]
     async fn test_delegation_below_minimum() -> Result<()> {
-        let system = TestSystem::deploy().await?;
+        let system = TestSystem::deploy_version(StakeTableContractVersion::V2).await?;
 
         // Set min delegate amount higher than the demo amounts (100-500 ESP range)
         let high_min = parse_ether("2000")?;

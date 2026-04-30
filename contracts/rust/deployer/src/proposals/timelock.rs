@@ -3,14 +3,17 @@ use alloy::{
     providers::Provider,
     rpc::types::TransactionReceipt,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::ValueEnum;
 use hotshot_contract_adapter::sol_types::{
     EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
+    StakeTableV3,
 };
 
 use crate::{
-    Contract, Contracts, OwnableContract, proposals::multisig::encode_generic_calldata,
+    Contract, Contracts, OwnableContract,
+    output::CalldataInfo,
+    proposals::multisig::{encode_generic_calldata, encode_upgrade_calldata},
     retry_until_true,
 };
 
@@ -459,7 +462,8 @@ async fn perform_timelock_operation_via_multisig(
     // Determine function signature and arguments based on operation type
     let (function_signature, function_args) = match operation_type {
         TimelockOperationType::Schedule => (
-            "schedule(address,uint256,bytes,bytes32,bytes32,uint256)",
+            "schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 \
+             salt, uint256 delay)",
             vec![
                 operation.target.to_string(),
                 operation.value.to_string(),
@@ -470,7 +474,8 @@ async fn perform_timelock_operation_via_multisig(
             ],
         ),
         TimelockOperationType::Execute => (
-            "execute(address,uint256,bytes,bytes32,bytes32)",
+            "execute(address target, uint256 value, bytes payload, bytes32 predecessor, bytes32 \
+             salt)",
             vec![
                 operation.target.to_string(),
                 operation.value.to_string(),
@@ -479,7 +484,7 @@ async fn perform_timelock_operation_via_multisig(
                 operation.salt.to_string(),
             ],
         ),
-        TimelockOperationType::Cancel => ("cancel(bytes32)", vec![operation_id.to_string()]),
+        TimelockOperationType::Cancel => ("cancel(bytes32 id)", vec![operation_id.to_string()]),
     };
 
     tracing::info!(
@@ -504,4 +509,267 @@ async fn perform_timelock_operation_via_multisig(
     );
 
     Ok(operation_id)
+}
+
+/// Parameters for proposing a StakeTable V3 upgrade through a timelock owner.
+#[derive(Clone, Debug)]
+pub struct StakeTableV3TimelockProposalParams {
+    /// Salt for the timelock `schedule`/`execute` operation.
+    pub salt: B256,
+    /// Delay for the timelock `schedule` operation (must be >= the timelock min delay).
+    pub delay: U256,
+}
+
+/// Encoded timelock transactions for a StakeTable V3 upgrade.
+///
+/// `schedule` is submitted first (by a timelock proposer), then after the delay
+/// elapses `execute` is submitted (by a timelock executor).
+pub struct StakeTableV3TimelockProposal {
+    pub schedule: CalldataInfo,
+    pub execute: CalldataInfo,
+    /// Address of the freshly deployed StakeTableV3 implementation.
+    pub v3_impl_addr: Address,
+    /// Timelock address that must submit both txs.
+    pub timelock_addr: Address,
+}
+
+/// Encode timelock `schedule` + `execute` calldata wrapping a StakeTable V3 upgrade.
+///
+/// The inner payload is `proxy.upgradeToAndCall(v3_impl, init_data)` where
+/// `init_data` is `initializeV3()` calldata (or empty if the proxy is already at V3).
+///
+/// This is a pure encoding helper: it does not deploy contracts or make RPC calls,
+/// which keeps it unit-testable without an Anvil instance.
+pub fn encode_stake_table_v3_timelock_proposal(
+    proxy_addr: Address,
+    v3_impl_addr: Address,
+    timelock_addr: Address,
+    init_data: Bytes,
+    params: &StakeTableV3TimelockProposalParams,
+) -> Result<StakeTableV3TimelockProposal> {
+    // Inner call: proxy.upgradeToAndCall(v3_impl, init_data).
+    let upgrade_calldata = encode_upgrade_calldata(proxy_addr, v3_impl_addr, init_data)?;
+
+    let schedule = encode_generic_calldata(
+        timelock_addr,
+        "schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, \
+         uint256 delay)",
+        vec![
+            proxy_addr.to_string(),
+            U256::ZERO.to_string(),
+            upgrade_calldata.data.to_string(),
+            B256::ZERO.to_string(),
+            params.salt.to_string(),
+            params.delay.to_string(),
+        ],
+        U256::ZERO,
+    )?
+    .with_description(format!(
+        "Schedule StakeTable V2 -> V3 upgrade via timelock {timelock_addr:#x} (proxy \
+         {proxy_addr:#x}, impl {v3_impl_addr:#x})"
+    ));
+
+    let execute = encode_generic_calldata(
+        timelock_addr,
+        "execute(address target, uint256 value, bytes payload, bytes32 predecessor, bytes32 salt)",
+        vec![
+            proxy_addr.to_string(),
+            U256::ZERO.to_string(),
+            upgrade_calldata.data.to_string(),
+            B256::ZERO.to_string(),
+            params.salt.to_string(),
+        ],
+        U256::ZERO,
+    )?
+    .with_description(format!(
+        "Execute StakeTable V2 -> V3 upgrade via timelock {timelock_addr:#x} (proxy \
+         {proxy_addr:#x}, impl {v3_impl_addr:#x})"
+    ));
+
+    Ok(StakeTableV3TimelockProposal {
+        schedule,
+        execute,
+        v3_impl_addr,
+        timelock_addr,
+    })
+}
+
+/// Upgrade the stake table proxy to StakeTableV3 through a timelock owner.
+///
+/// Deploys the V3 implementation, then encodes `schedule(...)` and `execute(...)`
+/// timelock calldata. The inner payload is `upgradeToAndCall(v3_impl, initializeV3())`
+/// targeting the stake table proxy. Mirrors `upgrade_stake_table_v3_multisig_owner`
+/// but routes through the timelock instead of a multisig.
+pub async fn upgrade_stake_table_v3_timelock_proposal(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+    params: StakeTableV3TimelockProposalParams,
+) -> Result<StakeTableV3TimelockProposal> {
+    let expected_major_version: u8 = 3;
+
+    tracing::info!("Encoding StakeTableProxy -> StakeTableV3 upgrade via timelock owner");
+    let proxy_addr = contracts
+        .address(Contract::StakeTableProxy)
+        .ok_or_else(|| anyhow!("StakeTableProxy not found, can't upgrade"))?;
+
+    let proxy = StakeTableV3::new(proxy_addr, &provider);
+
+    // The proxy owner must be the OpsTimelock for this flow.
+    let owner_addr = proxy.owner().call().await?;
+    let timelock_addr =
+        derive_timelock_address_from_contract_type(OwnableContract::StakeTableProxy, contracts)?;
+    if owner_addr != timelock_addr {
+        anyhow::bail!(
+            "StakeTableProxy owner {owner_addr:#x} is not the OpsTimelock {timelock_addr:#x}"
+        );
+    }
+
+    // V3 requires V2 as a prerequisite.
+    let version = proxy.getVersion().call().await?;
+    if version.majorVersion < 2 {
+        anyhow::bail!(
+            "StakeTableProxy must be at major version >= 2 to upgrade to V3, found {}",
+            version.majorVersion
+        );
+    }
+
+    let v3_impl_addr = contracts
+        .deploy(
+            Contract::StakeTableV3,
+            StakeTableV3::deploy_builder(&provider),
+        )
+        .await?;
+
+    // If already at V3, skip initializeV3() to avoid the "already initialized" revert.
+    let init_data =
+        if crate::already_initialized(&provider, proxy_addr, expected_major_version).await? {
+            tracing::info!(
+                "StakeTableProxy already initialized at V{expected_major_version}, skipping \
+                 initializeV3()"
+            );
+            Bytes::new()
+        } else {
+            StakeTableV3::new(Address::ZERO, &provider)
+                .initializeV3()
+                .calldata()
+                .to_owned()
+        };
+
+    encode_stake_table_v3_timelock_proposal(
+        proxy_addr,
+        v3_impl_addr,
+        timelock_addr,
+        init_data,
+        &params,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::{
+        primitives::{Address, U256},
+        sol_types::SolCall,
+    };
+    use hotshot_contract_adapter::sol_types::OpsTimelock;
+
+    use super::*;
+
+    /// Verify that `encode_stake_table_v3_timelock_proposal` produces non-empty
+    /// `schedule` + `execute` calldata targeting the timelock, with the inner
+    /// payload matching `proxy.upgradeToAndCall(v3_impl, initializeV3())`.
+    #[test]
+    fn test_encode_stake_table_v3_timelock_proposal() -> Result<()> {
+        let proxy_addr = Address::random();
+        let v3_impl_addr = Address::random();
+        let timelock_addr = Address::random();
+        let salt = B256::repeat_byte(0x42);
+        let delay = U256::from(3600);
+        let init_data: Bytes = StakeTableV3::initializeV3Call {}.abi_encode().into();
+
+        let proposal = encode_stake_table_v3_timelock_proposal(
+            proxy_addr,
+            v3_impl_addr,
+            timelock_addr,
+            init_data.clone(),
+            &StakeTableV3TimelockProposalParams { salt, delay },
+        )?;
+
+        assert_eq!(proposal.timelock_addr, timelock_addr);
+        assert_eq!(proposal.v3_impl_addr, v3_impl_addr);
+        assert_eq!(proposal.schedule.to, timelock_addr);
+        assert_eq!(proposal.execute.to, timelock_addr);
+        assert!(proposal.schedule.data.len() > 4);
+        assert!(proposal.execute.data.len() > 4);
+
+        // The inner payload the timelock will run is
+        // `proxy.upgradeToAndCall(v3_impl, initializeV3())`.
+        let expected_inner: Bytes = StakeTableV3::upgradeToAndCallCall {
+            newImplementation: v3_impl_addr,
+            data: init_data,
+        }
+        .abi_encode()
+        .into();
+
+        let expected_schedule = OpsTimelock::scheduleCall {
+            target: proxy_addr,
+            value: U256::ZERO,
+            data: expected_inner.clone(),
+            predecessor: B256::ZERO,
+            salt,
+            delay,
+        }
+        .abi_encode();
+        assert_eq!(proposal.schedule.data.to_vec(), expected_schedule);
+
+        let expected_execute = OpsTimelock::executeCall {
+            target: proxy_addr,
+            value: U256::ZERO,
+            payload: expected_inner,
+            predecessor: B256::ZERO,
+            salt,
+        }
+        .abi_encode();
+        assert_eq!(proposal.execute.data.to_vec(), expected_execute);
+
+        Ok(())
+    }
+
+    /// When the proxy is already at V3, the inner `upgradeToAndCall` carries
+    /// empty init data so we don't re-run `initializeV3()`.
+    #[test]
+    fn test_encode_stake_table_v3_timelock_proposal_already_initialized() -> Result<()> {
+        let proxy_addr = Address::random();
+        let v3_impl_addr = Address::random();
+        let timelock_addr = Address::random();
+        let salt = B256::ZERO;
+        let delay = U256::ZERO;
+
+        let proposal = encode_stake_table_v3_timelock_proposal(
+            proxy_addr,
+            v3_impl_addr,
+            timelock_addr,
+            Bytes::new(),
+            &StakeTableV3TimelockProposalParams { salt, delay },
+        )?;
+
+        let expected_inner: Bytes = StakeTableV3::upgradeToAndCallCall {
+            newImplementation: v3_impl_addr,
+            data: Bytes::new(),
+        }
+        .abi_encode()
+        .into();
+
+        let expected_schedule = OpsTimelock::scheduleCall {
+            target: proxy_addr,
+            value: U256::ZERO,
+            data: expected_inner,
+            predecessor: B256::ZERO,
+            salt,
+            delay,
+        }
+        .abi_encode();
+        assert_eq!(proposal.schedule.data.to_vec(), expected_schedule);
+
+        Ok(())
+    }
 }

@@ -6,7 +6,7 @@ mod test {
     };
     use anyhow::Result;
     use hotshot_contract_adapter::{
-        sol_types::StakeTableV2, stake_table::StakeTableContractVersion,
+        sol_types::StakeTableV3, stake_table::StakeTableContractVersion,
     };
     use rstest::rstest;
 
@@ -15,6 +15,7 @@ mod test {
     #[rstest]
     #[case(StakeTableContractVersion::V1)]
     #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
     async fn test_delegate(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;
@@ -29,7 +30,7 @@ mod test {
         };
         let receipt = tx.send(&system.provider).await?.assert_success().await?;
 
-        let event = receipt.decoded_log::<StakeTableV2::Delegated>().unwrap();
+        let event = receipt.decoded_log::<StakeTableV3::Delegated>().unwrap();
         assert_eq!(event.validator, validator_address);
         assert_eq!(event.amount, amount);
 
@@ -39,6 +40,7 @@ mod test {
     #[rstest]
     #[case(StakeTableContractVersion::V1)]
     #[case(StakeTableContractVersion::V2)]
+    #[case(StakeTableContractVersion::V3)]
     #[tokio::test]
     async fn test_undelegate(#[case] version: StakeTableContractVersion) -> Result<()> {
         let system = TestSystem::deploy_version(version).await?;
@@ -56,13 +58,13 @@ mod test {
 
         match version {
             StakeTableContractVersion::V1 => {
-                let event = receipt.decoded_log::<StakeTableV2::Undelegated>().unwrap();
+                let event = receipt.decoded_log::<StakeTableV3::Undelegated>().unwrap();
                 assert_eq!(event.validator, validator_address);
                 assert_eq!(event.amount, amount);
             },
-            StakeTableContractVersion::V2 => {
+            StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => {
                 let event = receipt
-                    .decoded_log::<StakeTableV2::UndelegatedV2>()
+                    .decoded_log::<StakeTableV3::UndelegatedV2>()
                     .unwrap();
                 assert_eq!(event.validator, validator_address);
                 assert_eq!(event.amount, amount);

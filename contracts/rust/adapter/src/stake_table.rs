@@ -17,10 +17,7 @@ use jf_signature::{
     schnorr,
 };
 
-use crate::sol_types::{
-    StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
-    *,
-};
+use crate::sol_types::{StakeTableV3, *};
 
 // Allows us to implement From on existing Bytes type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,19 +26,25 @@ pub struct StateSignatureSol(pub Bytes);
 #[derive(Debug, Clone, Copy, Default)]
 pub enum StakeTableContractVersion {
     V1,
-    #[default]
     V2,
+    #[default]
+    V3,
 }
 
-impl TryFrom<getVersionReturn> for StakeTableContractVersion {
+fn version_from_major(major: u8) -> anyhow::Result<StakeTableContractVersion> {
+    match major {
+        1 => Ok(StakeTableContractVersion::V1),
+        2 => Ok(StakeTableContractVersion::V2),
+        3 => Ok(StakeTableContractVersion::V3),
+        _ => anyhow::bail!("Unsupported stake table contract version: {major}"),
+    }
+}
+
+impl TryFrom<StakeTableV3::getVersionReturn> for StakeTableContractVersion {
     type Error = anyhow::Error;
 
-    fn try_from(value: getVersionReturn) -> anyhow::Result<Self> {
-        match value.majorVersion {
-            1 => Ok(StakeTableContractVersion::V1),
-            2 => Ok(StakeTableContractVersion::V2),
-            _ => anyhow::bail!("Unsupported stake table contract version: {:?}", value),
-        }
+    fn try_from(value: StakeTableV3::getVersionReturn) -> anyhow::Result<Self> {
+        version_from_major(value.majorVersion)
     }
 }
 
@@ -172,8 +175,8 @@ pub enum StakeTableSolError {
     InvalidSchnorrSignature(#[from] jf_signature::SignatureError),
 }
 
-impl ValidatorRegisteredV2 {
-    /// verified the BLS and Schnorr signatures in the event
+impl StakeTableV3::ValidatorRegisteredV3 {
+    /// Verify the BLS and Schnorr signatures in the event
     pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
@@ -181,13 +184,11 @@ impl ValidatorRegisteredV2 {
             self.schnorrVK,
             self.blsSig.into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 
-impl ConsensusKeysUpdatedV2 {
-    /// verified the BLS and Schnorr signatures in the event
+impl StakeTableV3::ValidatorRegisteredV2 {
     pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
@@ -195,17 +196,19 @@ impl ConsensusKeysUpdatedV2 {
             self.schnorrVK,
             self.blsSig.into(),
             &self.schnorrSig,
-        )?;
-        Ok(())
+        )
     }
 }
 
-impl From<StakeTable::ValidatorRegistered> for StakeTableV2::InitialCommission {
-    fn from(value: StakeTable::ValidatorRegistered) -> Self {
-        Self {
-            validator: value.account,
-            commission: value.commission,
-        }
+impl StakeTableV3::ConsensusKeysUpdatedV2 {
+    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+        authenticate_stake_table_validator_event(
+            self.account,
+            self.blsVK,
+            self.schnorrVK,
+            self.blsSig.into(),
+            &self.schnorrSig,
+        )
     }
 }
 
@@ -220,7 +223,7 @@ mod test {
     use super::{StateSignatureSol, sign_address_bls, sign_address_schnorr};
     use crate::sol_types::{
         G1PointSol, G2PointSol,
-        StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
+        StakeTableV3::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
     };
 
     fn check_round_trip(pk: BLSPubKey) {
@@ -310,5 +313,109 @@ mod test {
             bad_schnorr_event.schnorrSig = StateSignatureSol::from(wrong_schnorr_sig).into();
             assert!(bad_schnorr_event.authenticate().is_err());
         }
+    }
+}
+
+// Solidity `validateP2pAddr` and Rust `NetAddr::from_str` both parse `host:port` strings.
+// If Solidity accepts an address that Rust rejects, the validator's p2p address is silently
+// dropped and they become unreachable for cliquenet. This proptest deploys StakeTableV3
+// on anvil and fuzzes the property: Solidity accepts => Rust accepts.
+#[cfg(test)]
+mod proptest_p2p_addr {
+    use alloy::providers::ProviderBuilder;
+    use hotshot_types::addr::NetAddr;
+    use proptest::{
+        prelude::*,
+        test_runner::{Config as ProptestConfig, TestRunner},
+    };
+
+    use crate::sol_types::StakeTableV3;
+
+    fn p2p_addr_strategy() -> impl Strategy<Value = String> {
+        prop_oneof![
+            // Valid IPv4:port
+            (1..255u8, 1..255u8, 1..255u8, 1..255u8, 1..65535u16)
+                .prop_map(|(a, b, c, d, p)| format!("{a}.{b}.{c}.{d}:{p}")),
+            // Valid hostname:port
+            ("[a-z][a-z0-9.-]{0,20}", 1..65535u16).prop_map(|(h, p)| format!("{h}:{p}")),
+            // Edge: missing port
+            "[a-z][a-z0-9.-]{0,20}".prop_map(|h| h.to_string()),
+            // Edge: empty string
+            Just("".to_string()),
+            // Edge: port 0
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:0")),
+            // Edge: leading zero port
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:08080")),
+            // Edge: port too large
+            "[a-z]{1,10}".prop_map(|h| format!("{h}:99999")),
+            // Edge: non-digit port
+            ("[a-z]{1,10}", "[a-z]{1,5}").prop_map(|(h, p)| format!("{h}:{p}")),
+            // Edge: just a colon
+            Just(":".to_string()),
+            // Edge: colon at start
+            (1..65535u16).prop_map(|p| format!(":{p}")),
+            // Multiple colons (IPv6-like)
+            (1..65535u16).prop_map(|p| format!("::1:{p}")),
+            // Bracketed IPv6
+            (1..65535u16).prop_map(|p| format!("[::1]:{p}")),
+            // Two valid addresses concatenated
+            (1..255u8, 1..255u8, 1..65535u16, 1..65535u16)
+                .prop_map(|(a, b, p1, p2)| format!("{a}.{b}.0.1:{p1},{a}.{b}.0.2:{p2}")),
+            // Host with special chars
+            ("[a-z]{1,5}", 1..65535u16).prop_map(|(h, p)| format!("{h}_name:{p}")),
+            // Whitespace in host or port
+            ("[a-z]{1,5}", 1..65535u16).prop_map(|(h, p)| format!(" {h}:{p} ")),
+            // Double colon before port
+            "[a-z]{1,5}".prop_map(|h| format!("{h}::8080")),
+            // Long host (around Solidity 512 byte boundary)
+            (400..600usize, 1..65535u16).prop_map(|(len, p)| format!("{}:{p}", "a".repeat(len))),
+            // Random bytes (UTF-8 lossy, up to Solidity max of 512)
+            prop::collection::vec(any::<u8>(), 0..512)
+                .prop_map(|v| String::from_utf8_lossy(&v).to_string()),
+        ]
+    }
+
+    #[test]
+    fn solidity_rust_p2p_validation_equivalence() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet();
+        let contract_addr = rt.block_on(async {
+            let contract = StakeTableV3::deploy(&provider).await.unwrap();
+            *contract.address()
+        });
+        let contract = StakeTableV3::new(contract_addr, &provider);
+
+        let cases = std::env::var("PROPTEST_CASES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(512);
+        let mut runner = TestRunner::new(ProptestConfig {
+            cases,
+            ..ProptestConfig::default()
+        });
+
+        runner
+            .run(&p2p_addr_strategy(), |addr_str| {
+                let (sol_valid, rust_valid) = rt.block_on(async {
+                    let sol_valid = contract
+                        .validateP2pAddr(addr_str.clone())
+                        .call()
+                        .await
+                        .is_ok();
+                    let rust_valid = addr_str.parse::<NetAddr>().is_ok();
+                    (sol_valid, rust_valid)
+                });
+
+                if sol_valid {
+                    prop_assert!(
+                        rust_valid,
+                        "Solidity accepted '{}' but Rust rejected it",
+                        addr_str
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
     }
 }

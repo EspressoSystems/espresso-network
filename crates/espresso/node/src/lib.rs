@@ -798,10 +798,7 @@ pub mod testing {
             },
             layers::AnvilProvider,
         },
-        signers::{
-            k256::ecdsa::SigningKey,
-            local::{LocalSigner, PrivateKeySigner},
-        },
+        signers::{k256::ecdsa::SigningKey, local::LocalSigner},
     };
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
@@ -838,7 +835,6 @@ pub mod testing {
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
-        signature_key::BLSKeyPair,
         traits::{
             EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
             signature_key::BuilderSignatureKey,
@@ -846,7 +842,7 @@ pub mod testing {
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::{DelegationConfig, StakingTransactions};
+    use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
@@ -987,14 +983,19 @@ pub mod testing {
         priv_keys: &[BLSPrivKey],
         state_key_pairs: &[StateKeyPair],
         num_nodes: usize,
-    ) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+    ) -> Vec<StakingKeySet> {
         let seed = [42u8; 32];
         let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
         let eth_key_pairs = (0..num_nodes).map(|_| SigningKey::random(&mut rng).into());
         eth_key_pairs
             .zip(priv_keys.iter())
             .zip(state_key_pairs.iter())
-            .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
+            .map(|((eth, bls), state)| StakingKeySet {
+                signer: eth,
+                bls: bls.clone().into(),
+                state: state.clone(),
+                x25519: x25519::Keypair::generate().expect("x25519 keypair"),
+            })
             .collect()
     }
 
@@ -1095,7 +1096,7 @@ pub mod testing {
                         .safe_exit_timelock_executors(vec![self.signer.address()])
                         .build()
                         .unwrap();
-                    args.deploy_all(&mut contracts)
+                    args.deploy_to_stake_table_v3(&mut contracts)
                         .await
                         .expect("failed to deploy all contracts");
 
@@ -1305,7 +1306,7 @@ pub mod testing {
             self.upgrades.clone()
         }
 
-        pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+        pub fn staking_priv_keys(&self) -> Vec<StakingKeySet> {
             staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
         }
 
@@ -1314,11 +1315,11 @@ pub mod testing {
         ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
             self.staking_priv_keys()
                 .into_iter()
-                .map(|(signer, ..)| {
+                .map(|key_set| {
                     (
-                        signer.address(),
+                        key_set.signer.address(),
                         ProviderBuilder::new()
-                            .wallet(EthereumWallet::from(signer))
+                            .wallet(EthereumWallet::from(key_set.signer))
                             .connect_http(self.l1_url.clone()),
                     )
                 })

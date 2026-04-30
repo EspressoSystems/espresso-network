@@ -6,7 +6,7 @@
 
 use alloy::{
     network::Ethereum,
-    primitives::{Address, Bytes, U256},
+    primitives::{Address, Bytes, FixedBytes, U256},
     providers::{PendingTransactionBuilder, Provider},
     rpc::types::{TransactionInput, TransactionRequest},
     sol_types::SolCall,
@@ -16,19 +16,20 @@ use espresso_safe_tx_builder::FunctionInfo;
 use hotshot_contract_adapter::{
     evm::DecodeRevert,
     sol_types::{
-        EdOnBN254PointSol,
         EspToken::{EspTokenErrors, approveCall, transferCall},
-        G1PointSol, G2PointSol,
+        G1PointSol,
         RewardClaim::{RewardClaimErrors, claimRewardsCall},
-        StakeTableV2::{
-            StakeTableV2Errors, claimValidatorExitCall, claimWithdrawalCall, delegateCall,
+        StakeTableV3::{
+            StakeTableV3Errors, claimValidatorExitCall, claimWithdrawalCall, delegateCall,
             deregisterValidatorCall, registerValidatorCall, registerValidatorV2Call,
-            undelegateCall, updateCommissionCall, updateConsensusKeysCall,
-            updateConsensusKeysV2Call, updateMetadataUriCall,
+            registerValidatorV3Call, undelegateCall, updateCommissionCall, updateConsensusKeysCall,
+            updateConsensusKeysV2Call, updateMetadataUriCall, updateNetworkConfigCall,
+            updateP2pAddrCall, updateX25519KeyCall,
         },
     },
     stake_table::{StakeTableContractVersion, StateSignatureSol},
 };
+use hotshot_types::{addr::NetAddr, x25519};
 
 use crate::{
     metadata::MetadataUri, output::format_esp, parse::Commission, signature::NodeSignatures,
@@ -70,6 +71,10 @@ pub enum Transaction {
         metadata_uri: MetadataUri,
         payload: NodeSignatures,
         version: StakeTableContractVersion,
+        /// Required for V3 registration.
+        x25519_key: Option<x25519::PublicKey>,
+        /// Required for V3 registration.
+        p2p_addr: Option<NetAddr>,
     },
     UpdateConsensusKeys {
         stake_table: Address,
@@ -87,6 +92,19 @@ pub enum Transaction {
         stake_table: Address,
         metadata_uri: MetadataUri,
     },
+    UpdateNetworkConfig {
+        stake_table: Address,
+        x25519_key: x25519::PublicKey,
+        p2p_addr: NetAddr,
+    },
+    UpdateX25519Key {
+        stake_table: Address,
+        x25519_key: x25519::PublicKey,
+    },
+    UpdateP2pAddr {
+        stake_table: Address,
+        p2p_addr: NetAddr,
+    },
     Transfer {
         token: Address,
         to: Address,
@@ -98,8 +116,8 @@ impl Transaction {
     /// Returns the contract address, encoded calldata, and optional function info for this state
     /// change. Function info is `None` for calls with struct arguments that cannot be represented
     /// as simple string values for Safe TX Builder.
-    pub fn calldata(self) -> (Address, Bytes, Option<FunctionInfo>) {
-        match self {
+    pub fn calldata(self) -> Result<(Address, Bytes, Option<FunctionInfo>)> {
+        Ok(match self {
             Self::Approve {
                 token,
                 spender,
@@ -188,29 +206,69 @@ impl Transaction {
                 metadata_uri,
                 payload,
                 version,
+                x25519_key,
+                p2p_addr,
             } => match version {
-                StakeTableContractVersion::V1 => (
+                StakeTableContractVersion::V1 => {
+                    if x25519_key.is_some() || p2p_addr.is_some() {
+                        bail!(
+                            "--x25519-key and --p2p-addr are only supported on StakeTable V3; the \
+                             deployed contract is V1"
+                        );
+                    }
+                    (
+                        stake_table,
+                        registerValidatorCall::from((
+                            payload.bls_vk.into(),
+                            payload.schnorr_vk.into(),
+                            G1PointSol::from(payload.bls_signature).into(),
+                            commission.to_evm(),
+                        ))
+                        .abi_encode()
+                        .into(),
+                        None,
+                    )
+                },
+                StakeTableContractVersion::V2 => {
+                    if x25519_key.is_some() || p2p_addr.is_some() {
+                        bail!(
+                            "--x25519-key and --p2p-addr are only supported on StakeTable V3; the \
+                             deployed contract is V2"
+                        );
+                    }
+                    (
+                        stake_table,
+                        registerValidatorV2Call::from((
+                            payload.bls_vk.into(),
+                            payload.schnorr_vk.into(),
+                            G1PointSol::from(payload.bls_signature).into(),
+                            StateSignatureSol::from(payload.schnorr_signature).into(),
+                            commission.to_evm(),
+                            metadata_uri.to_string(),
+                        ))
+                        .abi_encode()
+                        .into(),
+                        None,
+                    )
+                },
+                StakeTableContractVersion::V3 => (
                     stake_table,
-                    registerValidatorCall::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
-                        G1PointSol::from(payload.bls_signature).into(),
-                        commission.to_evm(),
-                    ))
-                    .abi_encode()
-                    .into(),
-                    None,
-                ),
-                StakeTableContractVersion::V2 => (
-                    stake_table,
-                    registerValidatorV2Call::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
-                        G1PointSol::from(payload.bls_signature).into(),
-                        StateSignatureSol::from(payload.schnorr_signature).into(),
-                        commission.to_evm(),
-                        metadata_uri.to_string(),
-                    ))
+                    registerValidatorV3Call {
+                        blsVK: payload.bls_vk.into(),
+                        schnorrVK: payload.schnorr_vk.into(),
+                        blsSig: G1PointSol::from(payload.bls_signature).into(),
+                        schnorrSig: StateSignatureSol::from(payload.schnorr_signature).into(),
+                        commission: commission.to_evm(),
+                        metadataUri: metadata_uri.to_string(),
+                        x25519Key: FixedBytes(
+                            x25519_key
+                                .context("V3 registration requires --x25519-key")?
+                                .as_bytes(),
+                        ),
+                        p2pAddr: p2p_addr
+                            .context("V3 registration requires --p2p-addr")?
+                            .to_string(),
+                    }
                     .abi_encode()
                     .into(),
                     None,
@@ -224,19 +282,19 @@ impl Transaction {
                 StakeTableContractVersion::V1 => (
                     stake_table,
                     updateConsensusKeysCall::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
+                        payload.bls_vk.into(),
+                        payload.schnorr_vk.into(),
                         G1PointSol::from(payload.bls_signature).into(),
                     ))
                     .abi_encode()
                     .into(),
                     None,
                 ),
-                StakeTableContractVersion::V2 => (
+                StakeTableContractVersion::V2 | StakeTableContractVersion::V3 => (
                     stake_table,
                     updateConsensusKeysV2Call::from((
-                        G2PointSol::from(payload.bls_vk),
-                        EdOnBN254PointSol::from(payload.schnorr_vk),
+                        payload.bls_vk.into(),
+                        payload.schnorr_vk.into(),
                         G1PointSol::from(payload.bls_signature).into(),
                         StateSignatureSol::from(payload.schnorr_signature).into(),
                     ))
@@ -283,6 +341,64 @@ impl Transaction {
                     args: vec![metadata_uri.to_string()],
                 }),
             ),
+            Self::UpdateNetworkConfig {
+                stake_table,
+                x25519_key,
+                p2p_addr,
+            } => {
+                let x25519_bytes = FixedBytes(x25519_key.as_bytes());
+                let p2p_addr_str = p2p_addr.to_string();
+                (
+                    stake_table,
+                    updateNetworkConfigCall {
+                        x25519Key: x25519_bytes,
+                        p2pAddr: p2p_addr_str.clone(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateNetworkConfig(bytes32 x25519Key, string p2pAddr)"
+                            .to_string(),
+                        args: vec![x25519_bytes.to_string(), p2p_addr_str],
+                    }),
+                )
+            },
+            Self::UpdateX25519Key {
+                stake_table,
+                x25519_key,
+            } => {
+                let x25519_bytes = FixedBytes(x25519_key.as_bytes());
+                (
+                    stake_table,
+                    updateX25519KeyCall {
+                        x25519Key: x25519_bytes,
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateX25519Key(bytes32 x25519Key)".to_string(),
+                        args: vec![x25519_bytes.to_string()],
+                    }),
+                )
+            },
+            Self::UpdateP2pAddr {
+                stake_table,
+                p2p_addr,
+            } => {
+                let p2p_addr_str = p2p_addr.to_string();
+                (
+                    stake_table,
+                    updateP2pAddrCall {
+                        p2pAddr: p2p_addr_str.clone(),
+                    }
+                    .abi_encode()
+                    .into(),
+                    Some(FunctionInfo {
+                        signature: "updateP2pAddr(string p2pAddr)".to_string(),
+                        args: vec![p2p_addr_str],
+                    }),
+                )
+            },
             Self::Transfer { token, to, amount } => (
                 token,
                 transferCall { to, value: amount }.abi_encode().into(),
@@ -291,7 +407,7 @@ impl Transaction {
                     args: vec![to.to_string(), amount.to_string()],
                 }),
             ),
-        }
+        })
     }
 
     pub fn description(&self) -> String {
@@ -338,17 +454,26 @@ impl Transaction {
                 format!("Update commission to {}", new_commission)
             },
             Self::UpdateMetadataUri { .. } => "Update metadata URI".to_string(),
+            Self::UpdateNetworkConfig { .. } => {
+                "Set network config (x25519 key and p2p address)".to_string()
+            },
+            Self::UpdateX25519Key { x25519_key, .. } => {
+                format!("Set x25519 key to {}", x25519_key)
+            },
+            Self::UpdateP2pAddr { p2p_addr, .. } => {
+                format!("Set p2p address to {}", p2p_addr)
+            },
             Self::Transfer { to, amount, .. } => {
                 format!("Transfer {} ESP to {}", format_esp(*amount), to)
             },
         }
     }
 
-    fn to_transaction_request(&self) -> TransactionRequest {
-        let (to, data, _) = self.clone().calldata();
-        TransactionRequest::default()
+    fn to_transaction_request(&self) -> Result<TransactionRequest> {
+        let (to, data, _) = self.clone().calldata()?;
+        Ok(TransactionRequest::default()
             .to(to)
-            .input(TransactionInput::new(data))
+            .input(TransactionInput::new(data)))
     }
 
     /// Validates the delegate amount against the minimum required by the contract.
@@ -361,10 +486,13 @@ impl Transaction {
             ..
         } = self
         {
-            use hotshot_contract_adapter::sol_types::StakeTableV2;
-            let st = StakeTableV2::new(*stake_table, provider);
+            use hotshot_contract_adapter::sol_types::StakeTableV3;
+            let st = StakeTableV3::new(*stake_table, provider);
             let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
-            if matches!(version, StakeTableContractVersion::V2) {
+            if matches!(
+                version,
+                StakeTableContractVersion::V2 | StakeTableContractVersion::V3
+            ) {
                 let min_amount = st.minDelegateAmount().call().await?;
                 if amount < &min_amount {
                     bail!(
@@ -392,12 +520,15 @@ impl Transaction {
             | Self::UpdateConsensusKeys { .. }
             | Self::DeregisterValidator { .. }
             | Self::UpdateCommission { .. }
-            | Self::UpdateMetadataUri { .. } => result.maybe_decode_revert::<StakeTableV2Errors>(),
+            | Self::UpdateMetadataUri { .. }
+            | Self::UpdateNetworkConfig { .. }
+            | Self::UpdateX25519Key { .. }
+            | Self::UpdateP2pAddr { .. } => result.maybe_decode_revert::<StakeTableV3Errors>(),
         }
     }
 
     pub async fn simulate(&self, provider: &impl Provider, from: Address) -> Result<()> {
-        let tx = self.to_transaction_request().from(from);
+        let tx = self.to_transaction_request()?.from(from);
         let result = provider.call(tx).await;
         self.decode_revert(result)
             .context("Transaction simulation failed")?;
@@ -413,7 +544,7 @@ impl Transaction {
         provider: impl Provider,
     ) -> Result<PendingTransactionBuilder<Ethereum>> {
         self.log_intent();
-        let tx = self.to_transaction_request();
+        let tx = self.to_transaction_request()?;
         let pending = provider.send_transaction(tx).await;
         self.decode_revert(pending)
     }
@@ -466,6 +597,15 @@ mod tests {
                 "transfer(address to, uint256 value)",
                 transferCall::SELECTOR,
             ),
+            (
+                "updateNetworkConfig(bytes32 x25519Key, string p2pAddr)",
+                updateNetworkConfigCall::SELECTOR,
+            ),
+            (
+                "updateX25519Key(bytes32 x25519Key)",
+                updateX25519KeyCall::SELECTOR,
+            ),
+            ("updateP2pAddr(string p2pAddr)", updateP2pAddrCall::SELECTOR),
         ];
 
         for (named_sig, expected_selector) in cases {
