@@ -976,6 +976,52 @@ impl ChainConfigPersistence for Transaction<Write> {
 }
 
 impl super::data_source::DatabaseMetadataSource for SqlStorage {
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch oldest block")?;
+        let row = sqlx::query("SELECT MIN(height) AS height FROM header")
+            .fetch_one(tx.as_mut())
+            .await
+            .context("failed to query oldest block height")?;
+        let height: Option<i64> = row.try_get("height")?;
+        match height {
+            None => Ok(None),
+            Some(h) => Ok(Some(
+                tx.get_block(hotshot_query_service::availability::BlockId::<SeqTypes>::from(
+                    h as usize,
+                ))
+                .await
+                .context(format!("block {h} not available"))?,
+            )),
+        }
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<SeqTypes>>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch oldest leaf")?;
+        let row = sqlx::query("SELECT MIN(height) AS height FROM leaf2")
+            .fetch_one(tx.as_mut())
+            .await
+            .context("failed to query oldest leaf height")?;
+        let height: Option<i64> = row.try_get("height")?;
+        match height {
+            None => Ok(None),
+            Some(h) => Ok(Some(
+                tx.get_leaf(LeafId::<SeqTypes>::from(h as usize))
+                    .await
+                    .context(format!("leaf {h} not available"))?,
+            )),
+        }
+    }
+
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
         let mut tx = self
             .read()
@@ -1064,6 +1110,18 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
 impl super::data_source::DatabaseMetadataSource for DataSource {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
         self.as_ref().get_table_sizes().await
+    }
+
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
+        self.as_ref().get_oldest_block().await
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<SeqTypes>>> {
+        self.as_ref().get_oldest_leaf().await
     }
 }
 

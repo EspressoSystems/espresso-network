@@ -7,3 +7,21 @@ Get the sizes of all database tables.
 Returns a list of table size information, including row counts (estimated for PostgreSQL) and disk usage.
 Works with both PostgreSQL and SQLite backends (via embedded-db feature; disk usage currently PostgreSQL only).
 """
+
+[route.get_oldest_block]
+PATH = ["oldest-block"]
+METHOD = "GET"
+DOC = """
+Get the block height of the oldest (smallest height) block present in the database.
+
+Returns null if no blocks are stored.
+"""
+
+[route.get_oldest_leaf]
+PATH = ["oldest-leaf"]
+METHOD = "GET"
+DOC = """
+Get the block height of the oldest (smallest height) leaf present in the database.
+
+Returns null if no leaves are stored.
+"""

@@ -18,7 +18,7 @@ use espresso_types::{
 use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
-    availability::{AvailabilityDataSource, VidCommonQueryData},
+    availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
     fetching::provider::{AnyProvider, QueryServiceProvider},
     node::NodeDataSource,
@@ -375,6 +375,16 @@ pub struct TableSize {
 pub(crate) trait DatabaseMetadataSource {
     /// Get the sizes of all tables in the database.
     fn get_table_sizes(&self) -> impl Send + Future<Output = anyhow::Result<Vec<TableSize>>>;
+
+    /// Get the oldest block in the database, or `None` if empty.
+    fn get_oldest_block(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<BlockQueryData<SeqTypes>>>>;
+
+    /// Get the oldest leaf in the database, or `None` if empty.
+    fn get_oldest_leaf(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<LeafQueryData<SeqTypes>>>>;
 }
 
 #[cfg(any(test, feature = "testing"))]
