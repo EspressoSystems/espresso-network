@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+"""Show current release status for the Espresso Network repo.
+
+Displays floating Docker tags and where they point, recent YYYYMMDD git
+tags with their Release/Pre-release classification and originating branch,
+and active release branches with any tags not on main.
+
+Requires `gh` authenticated (`gh auth login`).
+"""
+
+import argparse
+import json
+import logging
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from typing import Any, NamedTuple
+
+ORG = "espressosystems"
+REPO = "espresso-network"
+HTTPS_REMOTE = "https://github.com/EspressoSystems/espresso-network.git"
+GHCR_REPO = "espressosystems/espresso-network/espresso-node"
+FLOATING_TAGS = ["mainnet", "mainnet.canary", "decaf", "decaf.canary"]
+PROMOTE_WORKFLOW = "promote-docker-tag.yml"
+
+MANIFEST_ACCEPT = ", ".join([
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+])
+
+VERSION_TAG_RE = re.compile(r"^20\d{2}[01]\d[0-3]\d(\..+)?$")
+ANY_DATE_TAG_RE = re.compile(r"^20\d{2}[01]\d[0-3]\d")
+
+log = logging.getLogger("release-status")
+
+
+class ReleaseBranch(NamedTuple):
+    name: str
+    sha: str
+    author: str
+    date: datetime
+
+
+@contextmanager
+def timed(label: str) -> Iterator[None]:
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        log.debug("%s took %.3fs", label, time.perf_counter() - t0)
+
+
+def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    log.debug("run: %s", " ".join(cmd))
+    t0 = time.perf_counter()
+    result = subprocess.run(cmd, check=check, capture_output=True, text=True)
+    log.debug("  -> %.3fs", time.perf_counter() - t0)
+    return result
+
+
+def gh_json(path: str) -> Any:
+    try:
+        result = run(["gh", "api", path])
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip()
+        print(f"error: gh api {path} failed: {stderr}", file=sys.stderr)
+        if "HTTP 401" in stderr or "authentication" in stderr.lower():
+            print("hint: run `gh auth login`", file=sys.stderr)
+        sys.exit(1)
+    return json.loads(result.stdout) if result.stdout.strip() else None
+
+
+def ago(delta: timedelta) -> str:
+    secs = max(int(delta.total_seconds()), 0)
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    days = secs // 86400
+    if days < 365:
+        return f"{days}d ago"
+    return f"{days // 365}y ago"
+
+
+def parse_ts(s: str) -> datetime:
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    return datetime.fromisoformat(s).astimezone(timezone.utc)
+
+
+_ghcr_token: str | None = None
+
+
+def ghcr_token() -> str:
+    global _ghcr_token
+    if _ghcr_token is None:
+        url = f"https://ghcr.io/token?scope=repository:{GHCR_REPO}:pull"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            _ghcr_token = json.loads(resp.read())["token"]
+    return _ghcr_token
+
+
+def tag_digest(tag: str) -> str | None:
+    url = f"https://ghcr.io/v2/{GHCR_REPO}/manifests/{tag}"
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {ghcr_token()}",
+        "Accept": MANIFEST_ACCEPT,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    for m in data.get("manifests", []):
+        platform = m.get("platform", {})
+        if platform.get("architecture") == "amd64" and platform.get("os") == "linux":
+            return m.get("digest")
+    return None
+
+
+def fetch_promote_runs() -> list[dict[str, Any]]:
+    data = gh_json(f"/repos/{ORG}/{REPO}/actions/workflows/{PROMOTE_WORKFLOW}/runs?per_page=100")
+    return data.get("workflow_runs", []) if data else []
+
+
+def fetch_release_classification() -> dict[str, str]:
+    data = gh_json(f"/repos/{ORG}/{REPO}/releases?per_page=100")
+    return {
+        rel["tag_name"]: "Pre-release" if rel.get("prerelease") else "Release"
+        for rel in (data or [])
+        if rel.get("tag_name")
+    }
+
+
+def git_tag_dates() -> dict[str, datetime]:
+    result = run(
+        ["git", "for-each-ref", "--format=%(refname:short) %(creatordate:iso-strict)", "refs/tags/20*"]
+    )
+    out: dict[str, datetime] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            out[parts[0]] = parse_ts(parts[1])
+    return out
+
+
+def git_tags_merged_into(ref: str) -> set[str]:
+    result = run(["git", "tag", "--merged", ref])
+    return set(result.stdout.split())
+
+
+def git_release_branches() -> list[ReleaseBranch]:
+    result = run(
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname:short)\t%(objectname:short)\t%(authorname)\t%(authordate:iso-strict)",
+            "refs/remotes/origin/release-*",
+        ]
+    )
+    branches: list[ReleaseBranch] = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        name, sha, author, date = parts
+        branches.append(ReleaseBranch(name.removeprefix("origin/"), sha, author, parse_ts(date)))
+    return branches
+
+
+def promote_run_for(runs: list[dict[str, Any]], floating_tag: str, release_tag: str) -> dict[str, Any] | None:
+    matches = [
+        r for r in runs
+        if r.get("conclusion") == "success"
+        and floating_tag in (r.get("display_title") or r.get("name") or "")
+        and release_tag in (r.get("display_title") or r.get("name") or "")
+    ]
+    return max(matches, key=lambda r: r["created_at"]) if matches else None
+
+
+def section_floating(
+    now: datetime,
+    digests: dict[str, str | None],
+    candidate_tags: list[str],
+    promote_runs: list[dict[str, Any]],
+) -> None:
+    print("Floating Docker tags")
+    print("====================")
+    targets: dict[str, str | None] = {}
+    for ft in FLOATING_TAGS:
+        fd = digests.get(ft)
+        if fd is None:
+            targets[ft] = None
+        else:
+            targets[ft] = next((t for t in candidate_tags if digests.get(t) == fd), "(no matching version tag)")
+    name_w = max(len(t) for t in FLOATING_TAGS)
+    target_w = max((len(v or "(not set)") for v in targets.values()), default=12)
+    for ft in FLOATING_TAGS:
+        target = targets[ft]
+        if target is None:
+            print(f"  {ft:<{name_w}}  -> (not set)")
+            continue
+        r = promote_run_for(promote_runs, ft, target)
+        age = f"(promoted {ago(now - parse_ts(r['created_at']))})" if r else "(unknown)"
+        print(f"  {ft:<{name_w}}  -> {target:<{target_w}}  {age}")
+
+
+def section_tags(
+    now: datetime,
+    days: int,
+    tag_dates: dict[str, datetime],
+    classes: dict[str, str],
+    main_tags: set[str],
+    branch_tags: dict[str, set[str]],
+) -> None:
+    title = f"Tags (last {days} days)" if days > 0 else "Tags (all)"
+    print(title)
+    print("=" * len(title))
+    cutoff = now - timedelta(days=days) if days > 0 else None
+
+    def resolve_branch(tag: str) -> str:
+        for branch, tags in branch_tags.items():
+            if tag in tags and tag not in main_tags:
+                return branch
+        return "main" if tag in main_tags else "?"
+
+    rows: list[tuple[str, str, str, datetime]] = []
+    for tag, dt in tag_dates.items():
+        if not ANY_DATE_TAG_RE.match(tag):
+            continue
+        if cutoff and dt < cutoff:
+            continue
+        rows.append((tag, classes.get(tag, "?"), resolve_branch(tag), dt))
+    rows.sort(key=lambda r: r[3], reverse=True)
+    if not rows:
+        print("  (none)")
+        return
+    tag_w = max(len(r[0]) for r in rows)
+    cls_w = max(len(r[1]) for r in rows)
+    br_w = max(len(r[2]) for r in rows)
+    for tag, cls, branch, dt in rows:
+        print(f"  {tag:<{tag_w}}  {cls:<{cls_w}}  {branch:<{br_w}}  {ago(now - dt)}")
+
+
+def section_branches(
+    now: datetime,
+    days: int,
+    release_branches: list[ReleaseBranch],
+    tag_dates: dict[str, datetime],
+    classes: dict[str, str],
+    main_tags: set[str],
+    branch_tags: dict[str, set[str]],
+    include_empty: bool,
+) -> None:
+    title = "Active release branches"
+    print(title)
+    print("=" * len(title))
+    cutoff = now - timedelta(days=days) if days > 0 else None
+
+    entries: list[tuple[ReleaseBranch, list[tuple[str, str, datetime]]]] = []
+    for branch in release_branches:
+        if cutoff and branch.date < cutoff:
+            continue
+        extras = [t for t in branch_tags.get(branch.name, set()) if t not in main_tags and ANY_DATE_TAG_RE.match(t)]
+        rows = [(t, classes.get(t, "?"), tag_dates[t]) for t in extras if t in tag_dates]
+        rows.sort(key=lambda r: r[2], reverse=True)
+        if not rows and not include_empty:
+            continue
+        entries.append((branch, rows))
+
+    entries.sort(key=lambda e: e[0].date, reverse=True)
+    if not entries:
+        print("  (none)")
+        return
+    name_w = max(len(e[0].name) for e in entries)
+    for i, (branch, rows) in enumerate(entries):
+        if i > 0:
+            print()
+        print(f"  {branch.name:<{name_w}}  HEAD {branch.sha}  ({branch.author}, {ago(now - branch.date)})")
+        if not rows:
+            print("    (no release tags)")
+            continue
+        print("    Tags from this branch (not on main):")
+        tag_w = max(len(r[0]) for r in rows)
+        cls_w = max(len(r[1]) for r in rows)
+        for tag, cls, tdt in rows:
+            print(f"      {tag:<{tag_w}}  {cls:<{cls_w}}  {ago(now - tdt)}")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(prog="release-status", description="Show current release status.")
+    p.add_argument("--days", type=int, default=45, help="time window in days (default 45, 0 = no filter)")
+    p.add_argument("--floating", action="store_true", help="only show floating tags section")
+    p.add_argument("--all-branches", action="store_true", help="show release branches even if they have no release tags")
+    p.add_argument("--no-fetch", action="store_true", help="skip fetching tags/branches from the remote first")
+    p.add_argument(
+        "--loglevel",
+        default="warning",
+        choices=["debug", "info", "warning", "error"],
+        help="log verbosity (debug shows per-command timing)",
+    )
+    args = p.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, args.loglevel.upper()),
+        format="[%(asctime)s.%(msecs)03d] %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+    )
+
+    t_start = time.perf_counter()
+    now = datetime.now(timezone.utc)
+
+    def do_fetch() -> None:
+        run(
+            [
+                "git", "fetch", "--quiet", HTTPS_REMOTE,
+                "refs/tags/20*:refs/tags/20*",
+                "refs/heads/release-*:refs/remotes/origin/release-*",
+                "refs/heads/main:refs/remotes/origin/main",
+            ],
+            check=False,
+        )
+
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        fetch_future = pool.submit(do_fetch) if not args.no_fetch else None
+        runs_future = pool.submit(fetch_promote_runs)
+        floating_digest_futures = {t: pool.submit(tag_digest, t) for t in FLOATING_TAGS}
+        if not args.floating:
+            classes_future = pool.submit(fetch_release_classification)
+
+        if fetch_future:
+            with timed("git fetch"):
+                fetch_future.result()
+
+        tag_dates = git_tag_dates()
+        cutoff = now - timedelta(days=args.days) if args.days > 0 else None
+        candidate_tags = sorted(
+            (t for t, dt in tag_dates.items() if VERSION_TAG_RE.match(t) and (cutoff is None or dt >= cutoff)),
+            key=lambda t: tag_dates[t],
+            reverse=True,
+        )
+        candidate_digest_futures = {t: pool.submit(tag_digest, t) for t in candidate_tags}
+
+        if not args.floating:
+            main_tags_future = pool.submit(git_tags_merged_into, "origin/main")
+            release_branches_future = pool.submit(git_release_branches)
+
+        with timed("tag digests"):
+            digests: dict[str, str | None] = {t: fut.result() for t, fut in floating_digest_futures.items()}
+            digests.update({t: fut.result() for t, fut in candidate_digest_futures.items()})
+        with timed("gh workflow runs"):
+            promote_runs = runs_future.result()
+
+        section_floating(now, digests, candidate_tags, promote_runs)
+
+        if args.floating:
+            log.debug("total %.3fs", time.perf_counter() - t_start)
+            return
+
+        with timed("git release branches"):
+            release_branches = release_branches_future.result()
+        with timed("git branch tag lookups"):
+            branch_tags_futures = {
+                b.name: pool.submit(git_tags_merged_into, f"origin/{b.name}") for b in release_branches
+            }
+            branch_tags = {name: fut.result() for name, fut in branch_tags_futures.items()}
+        with timed("gh releases"):
+            classes = classes_future.result()
+        with timed("git main tags"):
+            main_tags = main_tags_future.result()
+
+    print()
+    section_tags(now, args.days, tag_dates, classes, main_tags, branch_tags)
+    print()
+    section_branches(now, args.days, release_branches, tag_dates, classes, main_tags, branch_tags, args.all_branches)
+    log.debug("total %.3fs", time.perf_counter() - t_start)
+
+
+if __name__ == "__main__":
+    main()
