@@ -1,11 +1,8 @@
-use crate::tests::common::{network::CliquenetTestNetwork, runner::TestRunner};
+use crate::tests::common::runner::TestRunner;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn five_nodes_decide_same_chain_over_cliquenet() {
-    TestRunner::default()
-        .run::<CliquenetTestNetwork>()
-        .await
-        .unwrap();
+    TestRunner::default().run().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -15,7 +12,7 @@ async fn three_nodes_decide_over_cliquenet() {
         target_decisions: 50,
         ..Default::default()
     }
-    .run::<CliquenetTestNetwork>()
+    .run()
     .await
     .unwrap();
 }
@@ -27,7 +24,7 @@ async fn epoch_changes_over_cliquenet() {
         target_decisions: 50,
         ..Default::default()
     }
-    .run::<CliquenetTestNetwork>()
+    .run()
     .await
     .unwrap();
 }

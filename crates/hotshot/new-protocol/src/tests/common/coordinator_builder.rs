@@ -2,10 +2,7 @@ use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use async_broadcast::Sender;
 use committable::Committable;
-use hotshot::{
-    traits::NodeImplementation,
-    types::{BLSPubKey, Event},
-};
+use hotshot::types::{BLSPubKey, Event};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -42,15 +39,15 @@ use crate::{
 /// certificate and proposal so that the view-1 leader can propose without any
 /// external injection.  The initial `ViewChanged` and (for the leader)
 /// `RequestBlockAndHeader` outputs are already queued in the outbox.
-pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
+pub async fn build_test_coordinator<N: Network<TestTypes>>(
     node_index: u64,
-    network: I::Network,
+    network: N,
     mut membership: EpochMembershipCoordinator<TestTypes>,
     storage: TestStorage<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
 ) -> (
-    Coordinator<TestTypes, I::Network, TestStorage<TestTypes>>,
+    Coordinator<TestTypes, N, TestStorage<TestTypes>>,
     Sender<Event<TestTypes>>,
 ) {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
@@ -144,8 +141,6 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
-
-    let network = Network::new(network, membership.clone(), upgrade_lock);
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
