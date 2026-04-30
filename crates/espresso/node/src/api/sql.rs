@@ -991,9 +991,9 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
         match height {
             None => Ok(None),
             Some(h) => Ok(Some(
-                tx.get_block(hotshot_query_service::availability::BlockId::<SeqTypes>::from(
-                    h as usize,
-                ))
+                tx.get_block(
+                    hotshot_query_service::availability::BlockId::<SeqTypes>::from(h as usize),
+                )
                 .await
                 .context(format!("block {h} not available"))?,
             )),

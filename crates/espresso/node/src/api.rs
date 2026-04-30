@@ -829,17 +829,15 @@ where
 
     async fn get_oldest_block(
         &self,
-    ) -> anyhow::Result<
-        Option<hotshot_query_service::availability::BlockQueryData<crate::SeqTypes>>,
-    > {
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<crate::SeqTypes>>>
+    {
         self.inner().get_oldest_block().await
     }
 
     async fn get_oldest_leaf(
         &self,
-    ) -> anyhow::Result<
-        Option<hotshot_query_service::availability::LeafQueryData<crate::SeqTypes>>,
-    > {
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<crate::SeqTypes>>>
+    {
         self.inner().get_oldest_leaf().await
     }
 }
