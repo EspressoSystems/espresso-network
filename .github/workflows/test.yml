@@ -314,7 +314,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/free-disk-space
       - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      - uses: cachix/cachix-action@v17
         continue-on-error: true
         with:
           name: espresso-systems-private
@@ -500,7 +500,7 @@ jobs:
       - name: Post/update PR comment
         if: ${{ github.event_name == 'pull_request' }}
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: nextest-test
           path: junit-artifacts/pr-comment.md
