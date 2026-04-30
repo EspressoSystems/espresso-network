@@ -729,6 +729,24 @@ where
                     .map_err(|err| Error::internal(format!("failed to get table sizes: {err:#}")))
             }
             .boxed()
+        })?
+        .at("get_oldest_block", |_req, state| {
+            async move {
+                state
+                    .read(|state| state.get_oldest_block().boxed())
+                    .await
+                    .map_err(|err| Error::internal(format!("failed to get oldest block: {err:#}")))
+            }
+            .boxed()
+        })?
+        .at("get_oldest_leaf", |_req, state| {
+            async move {
+                state
+                    .read(|state| state.get_oldest_leaf().boxed())
+                    .await
+                    .map_err(|err| Error::internal(format!("failed to get oldest leaf: {err:#}")))
+            }
+            .boxed()
         })?;
 
     Ok(api)
