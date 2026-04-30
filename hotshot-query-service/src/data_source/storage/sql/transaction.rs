@@ -537,6 +537,47 @@ impl Transaction<Prune> {
             .await
             .context("deleting headers")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
+
+        // Garbage-collect payloads and VID common that are no longer referenced by any header.
+        // We delete headers first so that the NOT EXISTS check is a simple orphan scan: a payload
+        // row is safe to remove iff no header row still points to it.  This avoids the need to
+        // reason about the prune range at all, correctly handles the case where multiple pruned
+        // blocks share the same payload, and under SSI creates per-payload predicate locks on
+        // header_payload_hash_ns_table_idx rather than a full-table scan, so concurrent inserts of
+        // unrelated blocks do not generate spurious serialization failures.
+        let res = query(
+            "DELETE FROM payload AS p
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM header WHERE payload_hash = p.hash AND ns_table = p.ns_table
+              )",
+        )
+        .execute(self.as_mut())
+        .await
+        .context("garbage collecting payloads")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "garbage collected payloads"
+        );
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
+
+        let res = query(
+            "DELETE FROM vid_common AS v
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM header WHERE payload_hash = v.hash
+              )",
+        )
+        .execute(self.as_mut())
+        .await
+        .context("garbage collecting VID common")?;
+        tracing::debug!(
+            rows_affected = res.rows_affected(),
+            "garbage collected VID common"
+        );
 
         let res = query(
             "DELETE FROM payload AS p
