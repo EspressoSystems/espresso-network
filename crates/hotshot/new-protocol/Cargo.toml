@@ -12,6 +12,7 @@ rewind = []
 stats = []
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }

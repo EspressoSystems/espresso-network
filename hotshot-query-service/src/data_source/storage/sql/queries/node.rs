@@ -304,7 +304,7 @@ where
         Ok(cert2)
     }
 
-    async fn load_cert2_at_or_above(
+    async fn load_earliest_cert2(
         &mut self,
         height: u64,
     ) -> QueryResult<Option<Certificate2<Types>>> {

@@ -2,6 +2,7 @@ use std::{
     cmp::Ordering,
     collections::HashMap,
     fmt::{Debug, Display},
+    ops::RangeInclusive,
     sync::Arc,
     time::Duration,
 };
@@ -30,6 +31,7 @@ use futures::{
     future::{Future, FutureExt, TryFuture, TryFutureExt},
     stream::FuturesUnordered,
 };
+use hotshot_new_protocol::utils::verify_leaf_chain_with_cert2;
 use hotshot_types::{
     ValidatorConfig,
     data::ViewNumber,
@@ -41,7 +43,7 @@ use hotshot_types::{
         ValidatedState as ValidatedStateTrait,
         metrics::{Counter, CounterFamily, Metrics},
     },
-    utils::{verify_leaf_chain, verify_leaf_chain_with_cert2},
+    utils::verify_leaf_chain,
 };
 use itertools::Itertools;
 use jf_merkle_tree_compat::{ForgetableMerkleTreeScheme, MerkleTreeScheme, prelude::MerkleNode};
@@ -611,8 +613,11 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
-    /// Get a cert2 that finalizes a block at or above `height`.
-    fn get_cert2_at_or_above(
+    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    ///
+    /// "Earliest" means the cert2 with the smallest finalized block height that is still greater
+    /// than or equal to the requested `height`.
+    fn load_earliest_cert2(
         &self,
         _height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Option<Certificate2<SeqTypes>>>> {
@@ -623,6 +628,16 @@ pub(crate) trait CatchupStorage: Sync {
     fn get_leaf(&self, _height: u64) -> impl Send + Future<Output = anyhow::Result<Leaf2>> {
         async {
             bail!("leaf fetch is not supported for this data source");
+        }
+    }
+
+    /// Load decided leaves in the given inclusive height range.
+    fn get_leaf_range(
+        &self,
+        _range: RangeInclusive<u64>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>> {
+        async {
+            bail!("leaf range fetch is not supported for this data source");
         }
     }
 }
@@ -689,15 +704,19 @@ where
         self.inner().get_leaf_chain(height).await
     }
 
-    async fn get_cert2_at_or_above(
+    async fn load_earliest_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
-        self.inner().get_cert2_at_or_above(height).await
+        self.inner().load_earliest_cert2(height).await
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
         self.inner().get_leaf(height).await
+    }
+
+    async fn get_leaf_range(&self, range: RangeInclusive<u64>) -> anyhow::Result<Vec<Leaf2>> {
+        self.inner().get_leaf_range(range).await
     }
 }
 
@@ -734,14 +753,14 @@ where
             // New protocol: cert2 alone proves finality.
             let cert2 = self
                 .db
-                .get_cert2_at_or_above(height)
+                .load_earliest_cert2(height)
                 .await?
                 .context("no cert2 available for new-protocol leaf")?;
 
             let cert2_height = cert2.data.block_number;
             let mut leaves = vec![leaf];
-            for h in (height + 1)..=cert2_height {
-                leaves.push(self.db.get_leaf(h).await?);
+            if height < cert2_height {
+                leaves.extend(self.db.get_leaf_range(height + 1..=cert2_height).await?);
             }
 
             verify_leaf_chain_with_cert2(

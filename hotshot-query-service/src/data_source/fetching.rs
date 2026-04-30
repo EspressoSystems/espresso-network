@@ -1751,7 +1751,7 @@ where
     for<'a> S::Transaction<'a>: UpdateAvailabilityStorage<Types>,
     P: AvailabilityProvider<Types>,
 {
-    /// Get a cert2 from local storage
+    /// Load a cert2 from availability storage
     async fn get_cert2(self: &Arc<Self>, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),

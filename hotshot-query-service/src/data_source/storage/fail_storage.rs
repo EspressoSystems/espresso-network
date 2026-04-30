@@ -590,12 +590,12 @@ where
         self.inner.load_cert2(height).await
     }
 
-    async fn load_cert2_at_or_above(
+    async fn load_earliest_cert2(
         &mut self,
         height: u64,
     ) -> QueryResult<Option<Certificate2<Types>>> {
         self.maybe_fail_read(FailableAction::Any).await?;
-        self.inner.load_cert2_at_or_above(height).await
+        self.inner.load_earliest_cert2(height).await
     }
 }
 

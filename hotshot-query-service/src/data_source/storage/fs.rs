@@ -62,6 +62,7 @@ use crate::{
 const CACHED_LEAVES_COUNT: usize = 100;
 const CACHED_BLOCKS_COUNT: usize = 100;
 const CACHED_VID_COMMON_COUNT: usize = 100;
+const CACHED_CERT2_COUNT: usize = 100;
 
 #[derive(custom_debug::Debug)]
 pub struct FileSystemStorageInner<Types>
@@ -83,7 +84,7 @@ where
     block_storage: LedgerLog<BlockQueryData<Types>>,
     vid_storage: LedgerLog<(VidCommonQueryData<Types>, Option<VidShare>)>,
     latest_qc_chain: Option<[CertificatePair<Types>; 2]>,
-    cert2s: BTreeMap<u64, Certificate2<Types>>,
+    cert2_storage: LedgerLog<Certificate2<Types>>,
 }
 
 impl<Types> FileSystemStorageInner<Types>
@@ -204,8 +205,8 @@ where
                 leaf_storage: LedgerLog::create(loader, "leaves", CACHED_LEAVES_COUNT)?,
                 block_storage: LedgerLog::create(loader, "blocks", CACHED_BLOCKS_COUNT)?,
                 vid_storage: LedgerLog::create(loader, "vid_common", CACHED_VID_COMMON_COUNT)?,
+                cert2_storage: LedgerLog::create(loader, "cert2", CACHED_CERT2_COUNT)?,
                 latest_qc_chain: None,
-                cert2s: BTreeMap::new(),
             }),
             metrics: Default::default(),
         })
@@ -229,6 +230,8 @@ where
             "vid_common",
             CACHED_VID_COMMON_COUNT,
         )?;
+        let cert2_storage =
+            LedgerLog::<Certificate2<Types>>::open(loader, "cert2", CACHED_CERT2_COUNT)?;
 
         let mut index_by_block_hash = HashMap::new();
         let mut index_by_payload_hash = HashMap::new();
@@ -276,9 +279,9 @@ where
                 leaf_storage,
                 block_storage,
                 vid_storage,
+                cert2_storage,
                 top_storage: None,
                 latest_qc_chain: None,
-                cert2s: BTreeMap::new(),
             }),
             metrics: Default::default(),
         })
@@ -290,6 +293,7 @@ where
         inner.leaf_storage.skip_version()?;
         inner.block_storage.skip_version()?;
         inner.vid_storage.skip_version()?;
+        inner.cert2_storage.skip_version()?;
         if let Some(store) = &mut inner.top_storage {
             store.commit_version()?;
         }
@@ -344,6 +348,7 @@ where
         self.leaf_storage.revert_version().unwrap();
         self.block_storage.revert_version().unwrap();
         self.vid_storage.revert_version().unwrap();
+        self.cert2_storage.revert_version().unwrap();
     }
 }
 
@@ -378,6 +383,7 @@ where
         self.inner.leaf_storage.commit_version().await?;
         self.inner.block_storage.commit_version().await?;
         self.inner.vid_storage.commit_version().await?;
+        self.inner.cert2_storage.commit_version().await?;
         if let Some(store) = &mut self.inner.top_storage {
             store.commit_version()?;
         }
@@ -660,7 +666,7 @@ where
         height: u64,
         cert2: Certificate2<Types>,
     ) -> anyhow::Result<()> {
-        self.inner.cert2s.insert(height, cert2);
+        self.inner.cert2_storage.insert(height as usize, cert2)?;
         Ok(())
     }
 
@@ -900,19 +906,25 @@ where
     }
 
     async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>> {
-        Ok(self.inner.cert2s.get(&height).cloned())
+        Ok(self
+            .inner
+            .cert2_storage
+            .iter()
+            .nth(height as usize)
+            .flatten())
     }
 
-    async fn load_cert2_at_or_above(
+    async fn load_earliest_cert2(
         &mut self,
         height: u64,
     ) -> QueryResult<Option<Certificate2<Types>>> {
         Ok(self
             .inner
-            .cert2s
-            .range(height..)
-            .next()
-            .map(|(_, c)| c.clone()))
+            .cert2_storage
+            .iter()
+            .skip(height as usize)
+            .flatten()
+            .next())
     }
 }
 

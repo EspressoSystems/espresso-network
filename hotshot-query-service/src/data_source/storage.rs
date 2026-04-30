@@ -299,8 +299,11 @@ where
 
     async fn load_cert2(&mut self, height: u64) -> QueryResult<Option<Certificate2<Types>>>;
 
-    /// Load the first cert2 at or above the given height.
-    async fn load_cert2_at_or_above(
+    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    ///
+    /// "Earliest" means the cert2 with the smallest finalized block height that is still greater
+    /// than or equal to the requested `height`.
+    async fn load_earliest_cert2(
         &mut self,
         height: u64,
     ) -> QueryResult<Option<Certificate2<Types>>>;

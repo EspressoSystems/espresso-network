@@ -55,7 +55,17 @@ use crate::{
 ///   HotShot event is emitted
 #[async_trait]
 pub trait UpdateDataSource<Types: NodeType>: UpdateAvailabilityData<Types> {
-    /// Update query state based on a consensus event (legacy or new protocol).
+    /// Update query state based on consensus event.
+    ///
+    /// The caller is responsible for authenticating `event`. This function does not perform any
+    /// authentication, and if given an invalid `event` (one which does not follow from the latest
+    /// known state of the ledger) it may panic or silently accept the invalid `event`. This allows
+    /// the best possible performance in the case where the query service and the HotShot instance
+    /// are running in the same process (and thus the event stream, directly from HotShot) is
+    /// trusted.
+    ///
+    /// If you want to update the data source with an untrusted event, for example one received from
+    /// a peer over the network, you must authenticate it first.
     ///
     /// # Returns
     ///
@@ -187,33 +197,49 @@ where
                 }
             },
             CoordinatorEvent::NewDecide(decide) => {
-                let Some(newest_leaf) = decide.leaves.first() else {
+                let Some(leaf) = decide.leaves.first() else {
                     tracing::error!("new decide event contained no leaves");
                     return Ok(());
                 };
 
-                if let Some(cert2) = &decide.cert2
-                    && cert2.data.leaf_commit != Committable::commit(newest_leaf)
-                {
+                if decide.vid_shares.len() != decide.leaves.len() {
                     tracing::error!(
-                        height = newest_leaf.block_header().block_number(),
-                        cert2_leaf = %cert2.data.leaf_commit,
-                        newest_leaf = %Committable::commit(newest_leaf),
-                        "new decide event cert2 does not certify the newest leaf"
+                        height = leaf.height(),
+                        leaf_count = decide.leaves.len(),
+                        vid_share_count = decide.vid_shares.len(),
+                        "invalid new decide event: leaf/VID share count mismatch"
                     );
-                    return Err(newest_leaf.block_header().block_number());
+                    return Err(leaf.height());
                 }
 
-                for (index, leaf) in decide.leaves.iter().enumerate().rev() {
+                if let Some(cert2) = &decide.cert2
+                    && cert2.data.leaf_commit != Committable::commit(leaf)
+                {
+                    tracing::error!(
+                        height = leaf.height(),
+                        cert2_leaf = %cert2.data.leaf_commit,
+                        newest_leaf = %Committable::commit(leaf),
+                        "new decide event cert2 does not certify the newest leaf"
+                    );
+                    return Err(leaf.height());
+                }
+
+                // `cert1` certifies the newest leaf; each newer leaf's justify_qc
+                // certifies the next older leaf.
+                let certifying_qcs = once(decide.cert1.clone())
+                    .chain(decide.leaves.iter().map(|leaf| leaf.justify_qc()))
+                    .take(decide.leaves.len())
+                    .collect::<Vec<_>>();
+
+                for (index, ((leaf, vid_share), qc)) in decide
+                    .leaves
+                    .iter()
+                    .zip(&decide.vid_shares)
+                    .zip(certifying_qcs)
+                    .enumerate()
+                    .rev()
+                {
                     let height = leaf.block_header().block_number();
-                    let qc = if index == 0 {
-                        // cert1 certifies the newest leaf.
-                        decide.cert1.clone()
-                    } else {
-                        // Each newer leaf's justify_qc certifies the next older leaf.
-                        decide.leaves[index - 1].justify_qc()
-                    };
-                    let vid_share = &decide.vid_shares[index];
 
                     let leaf_data = match LeafQueryData::new(leaf.clone(), qc) {
                         Ok(leaf) => leaf,
@@ -252,11 +278,10 @@ where
 
                     let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
 
-                    // Attach cert2 to the newest leaf. The cert2 match was checked above.
-                    if index == 0
-                        && let Some(cert2) = &decide.cert2
-                    {
-                        info = info.with_cert2(cert2.clone());
+                    if index == 0 {
+                        if let Some(cert2) = &decide.cert2 {
+                            info = info.with_cert2(cert2.clone());
+                        }
                     }
 
                     if let Err(err) = self.append(info).await {

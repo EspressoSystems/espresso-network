@@ -822,7 +822,7 @@ impl CatchupStorage for SqlStorage {
         Ok(chain)
     }
 
-    async fn get_cert2_at_or_above(
+    async fn load_earliest_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
@@ -830,7 +830,7 @@ impl CatchupStorage for SqlStorage {
             .read()
             .await
             .context("opening transaction to fetch cert2")?;
-        Ok(tx.load_cert2_at_or_above(height).await?)
+        Ok(tx.load_earliest_cert2(height).await?)
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
@@ -843,6 +843,28 @@ impl CatchupStorage for SqlStorage {
             .await
             .context(format!("leaf {height} not available"))?;
         Ok(lqd.leaf().clone())
+    }
+
+    async fn get_leaf_range(
+        &self,
+        range: std::ops::RangeInclusive<u64>,
+    ) -> anyhow::Result<Vec<Leaf2>> {
+        let start = *range.start();
+        let end = *range.end();
+        let mut tx = self.read().await.context(format!(
+            "opening transaction to fetch leaves from {start} through {end}"
+        ))?;
+
+        if start > end {
+            return Ok(vec![]);
+        }
+
+        let leaves = tx.get_leaf_range(start as usize..=end as usize).await?;
+        Ok(leaves
+            .into_iter()
+            .flatten()
+            .map(|leaf| leaf.leaf().clone())
+            .collect())
     }
 }
 
@@ -982,15 +1004,22 @@ impl CatchupStorage for DataSource {
         self.as_ref().get_leaf_chain(height).await
     }
 
-    async fn get_cert2_at_or_above(
+    async fn load_earliest_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
-        self.as_ref().get_cert2_at_or_above(height).await
+        self.as_ref().load_earliest_cert2(height).await
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
         self.as_ref().get_leaf(height).await
+    }
+
+    async fn get_leaf_range(
+        &self,
+        range: std::ops::RangeInclusive<u64>,
+    ) -> anyhow::Result<Vec<Leaf2>> {
+        self.as_ref().get_leaf_range(range).await
     }
 }
 
