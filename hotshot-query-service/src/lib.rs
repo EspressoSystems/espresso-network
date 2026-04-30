@@ -435,12 +435,14 @@ use derive_more::{Deref, From, Into};
 pub use error::Error;
 use futures::{future::BoxFuture, stream::StreamExt};
 use hotshot::types::SystemContextHandle;
-use hotshot_new_protocol::consensus::CoordinatorEvent;
 pub use hotshot_query_service_types::{
     ErrorSnafu, Header, Leaf2, Metadata, MissingSnafu, NotFoundSnafu, Payload, QueryError,
     QueryResult, QuorumCertificate, SignatureKey, Transaction,
 };
-use hotshot_types::traits::node_implementation::{NodeImplementation, NodeType};
+use hotshot_types::{
+    new_protocol::CoordinatorEvent,
+    traits::node_implementation::{NodeImplementation, NodeType},
+};
 pub use resolvable::Resolvable;
 use task::BackgroundTask;
 use tide_disco::{App, method::ReadState};

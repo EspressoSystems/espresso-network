@@ -53,7 +53,10 @@ pub(crate) fn is_send_timeout_cert(output: &ConsensusOutput<TestTypes>) -> bool 
 }
 
 pub(crate) fn is_cert1(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::Certificate1(_))
+    matches!(
+        input,
+        ConsensusInput::Certificate1(_) | ConsensusInput::EpochRootCertificates { .. }
+    )
 }
 
 pub(crate) fn is_cert2(input: &ConsensusInput<TestTypes>) -> bool {

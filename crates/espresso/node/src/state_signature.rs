@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
 use hotshot::types::{Event, EventType, SchnorrPubKey};
-use hotshot_task_impls::helpers::derive_signed_state_digest;
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{EpochNumber, Leaf2},
     event::LeafInfo,
@@ -13,6 +13,7 @@ use hotshot_types::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
         StakeTableState, StateSignKey, StateSignature, StateVerKey,
     },
+    new_protocol::CoordinatorEvent,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
@@ -28,10 +29,7 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::{
-    SeqTypes,
-    consensus_handle::{ConsensusHandle, CoordinatorEvent},
-};
+use crate::{SeqTypes, consensus_handle::ConsensusHandle};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;

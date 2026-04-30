@@ -18,10 +18,10 @@ use async_trait::async_trait;
 use committable::Committable;
 use futures::future::Future;
 use hotshot::types::EventType;
-use hotshot_new_protocol::consensus::CoordinatorEvent;
 use hotshot_types::{
     data::{Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ns_table::parse_ns_table},
     event::LeafInfo,
+    new_protocol::CoordinatorEvent,
     traits::{
         block_contents::{BlockHeader, BlockPayload, EncodeBytes, GENESIS_VID_NUM_STORAGE_NODES},
         node_implementation::NodeType,

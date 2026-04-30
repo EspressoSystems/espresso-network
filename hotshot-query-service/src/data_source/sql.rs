@@ -322,7 +322,7 @@ where
 pub mod testing {
     use async_trait::async_trait;
     use hotshot::types::Event;
-    use hotshot_new_protocol::consensus::CoordinatorEvent;
+    use hotshot_types::new_protocol::CoordinatorEvent;
     pub use sql::testing::TmpDb;
 
     use super::*;

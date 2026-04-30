@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use alloy::primitives::{FixedBytes, U256};
 use anyhow::bail;
 use espresso_types::SeqTypes;
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_query_service::availability::Error;
-use hotshot_task_impls::helpers::derive_signed_state_digest;
 use hotshot_types::{
     light_client::StateVerKey,
     simple_certificate::LightClientStateUpdateCertificateV2,

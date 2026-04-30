@@ -240,7 +240,10 @@ async fn test_leader_proposal_via_cpu_tasks() {
 /// multiple decisions.
 #[tokio::test]
 async fn test_multi_view_decide_via_cpu_tasks() {
-    let test_data = TestData::new(5).await;
+    // Block 5 is an epoch root at epoch_height=10 (the harness default), so
+    // TestData must also use epoch_height=10 for the generator to attach the
+    // state_cert/state_votes that the coordinator's routing now requires.
+    let test_data = TestData::new_with_epoch_height(5, 10).await;
     let mut harness = TestHarness::new(0).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 

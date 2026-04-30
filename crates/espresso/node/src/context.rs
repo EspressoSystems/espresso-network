@@ -29,6 +29,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
+    new_protocol::CoordinatorEvent,
     storage_metrics::StorageMetricsValue,
     traits::{metrics::Metrics, network::ConnectedNetwork},
 };
@@ -41,7 +42,7 @@ use url::Url;
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
-    consensus_handle::{ConsensusHandle, CoordinatorEvent},
+    consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -151,6 +152,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
             ))
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
+            .state_private_key(validator_config.state_private_key.clone())
+            .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
             .make();

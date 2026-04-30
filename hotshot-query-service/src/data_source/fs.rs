@@ -305,7 +305,7 @@ where
 mod impl_testable_data_source {
     use async_trait::async_trait;
     use hotshot::types::Event;
-    use hotshot_new_protocol::consensus::CoordinatorEvent;
+    use hotshot_types::new_protocol::CoordinatorEvent;
     use tempfile::TempDir;
 
     use super::*;
