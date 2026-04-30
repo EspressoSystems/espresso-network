@@ -5,8 +5,8 @@ use committable::Committable;
 use espresso_types::{Certificate2, Leaf2, SeqTypes};
 use hotshot_query_service_types::availability::LeafQueryData;
 use hotshot_types::{
-    data::EpochNumber, epoch_membership::EpochMembership, simple_vote::HasEpoch,
-    traits::block_contents::BlockHeader, vote::HasViewNumber,
+    data::EpochNumber, epoch_membership::EpochMembership, simple_certificate::QuorumCertificate2,
+    simple_vote::HasEpoch, traits::block_contents::BlockHeader, vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
 use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
@@ -40,10 +40,7 @@ pub enum FinalityProof {
     /// The finality follows from a Certificate2 in the new protocol.
     ///
     /// Certificate2 proves finality.
-    NewProtocol {
-        cert1: Arc<Certificate>,
-        cert2: Arc<Certificate2<SeqTypes>>,
-    },
+    NewProtocol { cert2: Arc<Certificate2<SeqTypes>> },
 
     /// The finality follows from a 3-chain of QCs using the original HotStuff commit rule.
     ///
@@ -117,6 +114,13 @@ pub struct LeafProof {
 
     /// Some extra data proving finality for the last leaf in `leaves`.
     proof: FinalityProof,
+
+    /// QC certifying the requested leaf, serialized only for cert2 proofs.
+    ///
+    /// This is needed to reconstruct [`LeafQueryData`] when the proof is a single leaf finalized
+    /// directly by Certificate2, which does not itself contain a QC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    leaf_qc: Option<QuorumCertificate2<SeqTypes>>,
 }
 
 impl LeafProof {
@@ -196,9 +200,8 @@ impl LeafProof {
 
                 precommit_qc.qc().clone()
             },
-            (FinalityProof::NewProtocol { cert1, cert2 }, LeafProofHint::Quorum(quorum)) => {
-                // Certificate2 proves finality. Certificate1 is still needed here because this
-                // method returns LeafQueryData, which includes the QC certifying `curr`.
+            (FinalityProof::NewProtocol { cert2 }, LeafProofHint::Quorum(quorum)) => {
+                // Certificate2 proves finality for `curr`.
                 let version = curr.block_header().version();
                 ensure!(
                     version >= NEW_PROTOCOL_VERSION,
@@ -209,16 +212,8 @@ impl LeafProof {
                     "cert2 leaf commitment does not match leaf"
                 );
                 ensure!(
-                    cert1.leaf_commit() == curr.commit(),
-                    "cert1 leaf commitment does not match leaf"
-                );
-                ensure!(
-                    cert1.view_number() == cert2.view_number(),
-                    "cert1 and cert2 certify different views"
-                );
-                ensure!(
-                    cert1.epoch() == cert2.epoch(),
-                    "cert1 and cert2 certify different epochs"
+                    cert2.view_number() == curr.view_number(),
+                    "cert2 view number does not match leaf"
                 );
                 ensure!(
                     cert2.data.block_number == curr.block_header().block_number(),
@@ -229,12 +224,10 @@ impl LeafProof {
                     .verify_cert2(cert2, version)
                     .await
                     .context("verifying cert2 signature")?;
-                quorum
-                    .verify(cert1, version)
-                    .await
-                    .context("verifying cert1 signature")?;
 
-                cert1.qc().clone()
+                self.leaf_qc
+                    .clone()
+                    .context("missing QC for requested leaf")?
             },
             (proof, hint) => {
                 let required = match proof {
@@ -352,16 +345,16 @@ impl LeafProof {
         };
     }
 
-    /// Complete a finality proof using the new protocol certificates.
-    pub fn add_certificates(
+    /// Complete a finality proof using the new protocol Certificate2.
+    pub fn add_certificate(
         &mut self,
-        cert1: Arc<Certificate>,
         cert2: Arc<Certificate2<SeqTypes>>,
+        leaf_qc: QuorumCertificate2<SeqTypes>,
     ) {
         debug_assert!(cert2.data.leaf_commit == self.leaves[self.leaves.len() - 1].commit());
-        debug_assert!(cert1.leaf_commit() == self.leaves[self.leaves.len() - 1].commit());
 
-        self.proof = FinalityProof::NewProtocol { cert1, cert2 };
+        self.leaf_qc = Some(leaf_qc);
+        self.proof = FinalityProof::NewProtocol { cert2 };
     }
 
     /// Inspect the raw finality proof within the larger proof.

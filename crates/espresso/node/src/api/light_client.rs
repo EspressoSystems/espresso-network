@@ -1,6 +1,7 @@
 use std::{fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
+use committable::Committable;
 use espresso_types::{BlockMerkleTree, NsProof, SeqTypes};
 use futures::{
     TryStreamExt,
@@ -15,10 +16,7 @@ use hotshot_query_service::{
     node::BlockId,
     types::HeightIndexed,
 };
-use hotshot_types::{
-    simple_certificate::CertificatePair,
-    utils::{epoch_from_block_number, root_block_in_epoch},
-};
+use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use itertools::izip;
 use jf_merkle_tree_compat::MerkleTreeScheme;
 use light_client::consensus::{
@@ -40,17 +38,15 @@ where
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
     let requested = requested_leaf.height() as usize;
-    let (endpoint, qc_chain) = {
-        // Grab the endpoint and the final QC chain in the same transaction, to ensure that
-        // the QC chain actually corresponds to the endpoint block (and is not subject to
-        // concurrent updates).
-        let mut tx = state.read().await.map_err(internal)?;
-        let height = NodeStorage::block_height(&mut tx).await.map_err(internal)?;
-        let qc_chain = tx.latest_qc_chain().await.map_err(internal)?;
-        (height, qc_chain)
-    };
+    // Grab the endpoint and the final QC chain in the same transaction, to ensure that
+    // the QC chain actually corresponds to the endpoint block (and is not subject to
+    // concurrent updates).
+    let mut tx = state.read().await.map_err(internal)?;
+    let latest_height = NodeStorage::block_height(&mut tx).await.map_err(internal)?;
+    let qc_chain = tx.latest_qc_chain().await.map_err(internal)?;
+    drop(tx);
 
-    let mut leaves = state.get_leaf_range(requested + 1..endpoint).await;
+    let mut leaves = state.get_leaf_range(requested + 1..latest_height).await;
     let mut proof = LeafProof::default();
     proof.push(requested_leaf);
 
@@ -76,7 +72,13 @@ where
     Ok(proof)
 }
 
-/// Build a leaf proof for the new protocol (cert2-based finality).
+/// Build a leaf proof for the new protocol using certificate2 finality.
+///
+/// Certificate2 directly commits the leaf at `cert2.data.block_number`. The indirect commit rule then
+/// commits all of that leaf's uncommitted ancestors. If cert2 directly commits the requested leaf,
+/// the proof contains only that leaf plus cert2. Otherwise, the proof includes the chain from the
+/// requested leaf through the directly committed descendant; the verifier checks parent commitments
+/// to prove the requested leaf is on that finalized chain.
 async fn get_leaf_proof_with_cert2<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
@@ -86,49 +88,60 @@ where
     State: AvailabilityDataSource<SeqTypes> + VersionedDataSource,
     for<'a> State::ReadOnly<'a>: NodeStorage<SeqTypes>,
 {
-    let requested = requested_leaf.height() as usize;
+    let requested_height = requested_leaf.height();
     let cert2 = state
         .read()
         .await
         .map_err(internal)?
-        .load_earliest_cert2(requested as u64)
+        .load_earliest_cert2(requested_height)
         .await
         .map_err(internal)?
         .ok_or_else(|| not_found("no cert2 finality proof available"))?;
 
-    // Build the leaf chain from requested up to and including the cert2 leaf.
-    let cert2_height = cert2.data.block_number as usize;
-    if cert2_height < requested {
+    let cert2_height = cert2.data.block_number;
+    if cert2_height < requested_height {
         return Err(not_found(
             "cert2 finality proof is older than requested leaf",
         ));
     }
 
     let mut proof = LeafProof::default();
-    let mut cert2_leaf_height = requested_leaf.height();
-    let mut cert1 = CertificatePair::non_epoch_change(requested_leaf.qc().clone());
+    let requested_leaf_qc = requested_leaf.qc().clone();
+
+    if cert2_height == requested_height {
+        if requested_leaf.leaf().commit() != cert2.data.leaf_commit {
+            return Err(internal("stored cert2 does not finalize the expected leaf"));
+        }
+        proof.push(requested_leaf);
+        proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
+        return Ok(proof);
+    }
 
     proof.push(requested_leaf);
-    let mut leaves = state.get_leaf_range(requested + 1..cert2_height + 1).await;
+    let mut leaves = state
+        .get_leaf_range(requested_height as usize + 1..cert2_height as usize + 1)
+        .await;
+    // Extend the proof chain until we reach the leaf directly committed by cert2. Once that leaf is
+    // present and matches cert2's commitment, the requested leaf is finalized by the indirect
+    // commit rule.
     while let Some(leaf) = leaves.next().await {
         let leaf = leaf
             .with_timeout(fetch_timeout)
             .await
             .ok_or_else(|| not_found("missing leaves"))?;
 
-        cert2_leaf_height = leaf.height();
-        cert1 = CertificatePair::non_epoch_change(leaf.qc().clone());
+        if leaf.height() == cert2_height {
+            if leaf.leaf().commit() != cert2.data.leaf_commit {
+                return Err(internal("stored cert2 does not finalize the expected leaf"));
+            }
+            proof.push(leaf);
+            proof.add_certificate(Arc::new(cert2), requested_leaf_qc);
+            return Ok(proof);
+        }
         proof.push(leaf);
     }
 
-    if cert2_leaf_height != cert2_height as u64 {
-        return Err(not_found("missing cert2 leaf"));
-    }
-    if cert1.leaf_commit() != cert2.data.leaf_commit {
-        return Err(internal("stored cert2 does not certify the cert2 leaf"));
-    }
-    proof.add_certificates(Arc::new(cert1), Arc::new(cert2));
-    Ok(proof)
+    Err(not_found("missing cert2 leaf"))
 }
 
 async fn get_leaf_proof_with_finalized_assumption<State>(
