@@ -13,6 +13,7 @@ use hotshot_types::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
         StakeTableState, StateSignKey, StateSignature, StateVerKey,
     },
+    new_protocol::CoordinatorEvent,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
@@ -28,10 +29,7 @@ use surf_disco::{Client, Url};
 use tide_disco::error::ServerError;
 use vbs::version::StaticVersionType;
 
-use crate::{
-    SeqTypes,
-    consensus_handle::{ConsensusHandle, CoordinatorEvent},
-};
+use crate::{SeqTypes, consensus_handle::ConsensusHandle};
 
 /// A relay server that's collecting and serving the light client state signatures
 pub mod relay_server;

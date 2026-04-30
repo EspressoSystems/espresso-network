@@ -149,8 +149,7 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        CoordinatorEvent, Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey,
-        SeqTypes, ValidatedState,
+        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
         traits::{
             EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
             PersistenceOptions, SequencerPersistence,
@@ -175,6 +174,7 @@ mod tests {
         event::{EventType, HotShotAction, LeafInfo},
         light_client::StateKeyPair,
         message::{Proposal, UpgradeLock, convert_proposal},
+        new_protocol::CoordinatorEvent,
         simple_certificate::{
             CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
             UpgradeCertificate,
