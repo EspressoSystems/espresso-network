@@ -30,7 +30,7 @@ use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSI
 use crate::{
     NodeState, SeqTypes,
     api::{RewardMerkleTreeDataSource, RewardMerkleTreeV2Data},
-    catchup::{CatchupStorage, SqlStateCatchup},
+    catchup::CatchupStorage,
     persistence::ChainConfigPersistence,
 };
 
@@ -413,7 +413,15 @@ where
     // Use a separate rewards calculator for the state loop so it doesn't
     // interfere with consensus, which may be on a very different epoch.
     instance.epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
-    let peers = SqlStateCatchup::new(storage.clone(), Default::default());
+    // Use the node-wide peer-aware catchup so we can fetch parent state from
+    // remote peers when the local DB has been pruned. Without peer fallback, a
+    // pruned node whose `last_state_height` is behind `pruned_height + 1`
+    // wedges forever: `ValidatedState::from_header` returns commitment-only
+    // trees, `apply_proposal` requests fee/reward account proofs at the parent
+    // height, the local DB no longer has them, and the loop retries every
+    // second without progress, leaving `last_merklized_state_height = 0` and
+    // every reward-claim-input request 404'ing.
+    let peers = instance.state_catchup.clone();
 
     // get last saved merklized state
     let (last_height, parent_leaf, mut leaves) = {
