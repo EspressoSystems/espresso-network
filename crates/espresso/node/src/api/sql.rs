@@ -990,13 +990,14 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
         let height: Option<i64> = row.try_get("height")?;
         match height {
             None => Ok(None),
-            Some(h) => Ok(Some(
-                tx.get_block(
-                    hotshot_query_service::availability::BlockId::<SeqTypes>::from(h as usize),
-                )
-                .await
-                .context(format!("block {h} not available"))?,
-            )),
+            Some(h) => {
+                let h = usize::try_from(h).context("block height out of range")?;
+                Ok(Some(
+                    tx.get_block(hotshot_query_service::availability::BlockId::<SeqTypes>::from(h))
+                        .await
+                        .context(format!("block {h} not available"))?,
+                ))
+            },
         }
     }
 
@@ -1014,11 +1015,14 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
         let height: Option<i64> = row.try_get("height")?;
         match height {
             None => Ok(None),
-            Some(h) => Ok(Some(
-                tx.get_leaf(LeafId::<SeqTypes>::from(h as usize))
-                    .await
-                    .context(format!("leaf {h} not available"))?,
-            )),
+            Some(h) => {
+                let h = usize::try_from(h).context("leaf height out of range")?;
+                Ok(Some(
+                    tx.get_leaf(LeafId::<SeqTypes>::from(h))
+                        .await
+                        .context(format!("leaf {h} not available"))?,
+                ))
+            },
         }
     }
 
