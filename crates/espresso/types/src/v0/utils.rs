@@ -277,6 +277,12 @@ pub struct BackoffParams {
     /// Disable retries and just fail after one failed attempt.
     #[clap(short, long, env = "ESPRESSO_SEQUENCER_CATCHUP_BACKOFF_DISABLE")]
     disable: bool,
+
+    /// Maximum number of retries for [`retry_if`](Self::retry_if). Not exposed as a CLI flag —
+    /// callers that care set this programmatically via [`new`](Self::new); other callers that only
+    /// use [`retry`](Self::retry) (which retries indefinitely) get a sane default.
+    #[clap(skip = 100u32)]
+    retry_max: u32,
 }
 
 impl Default for BackoffParams {
@@ -286,13 +292,20 @@ impl Default for BackoffParams {
 }
 
 impl BackoffParams {
-    pub const fn new(base: Duration, max: Duration, factor: u32, jitter: Ratio) -> Self {
+    pub const fn new(
+        base: Duration,
+        max: Duration,
+        factor: u32,
+        jitter: Ratio,
+        retry_max: u32,
+    ) -> Self {
         Self {
             base,
             max,
             factor,
             jitter,
             disable: false,
+            retry_max,
         }
     }
 
@@ -327,18 +340,18 @@ impl BackoffParams {
         unreachable!()
     }
 
-    /// Like [`retry`](Self::retry) but stops after `max_retries` retries and only retries when
+    /// Like [`retry`](Self::retry) but stops after `self.retry_max` retries and only retries when
     /// `should_retry` returns `true` for the error. The closure takes no arguments; capture any
     /// needed state in the closure itself.
     pub async fn retry_if<Fut, T>(
         &self,
-        max_retries: u32,
         should_retry: impl Fn(&anyhow::Error) -> bool,
         f: impl Fn() -> Fut,
     ) -> anyhow::Result<T>
     where
         Fut: Future<Output = anyhow::Result<T>>,
     {
+        let max_retries = self.retry_max;
         let mut delay = self.base;
         for i in 0usize.. {
             match f().await {
