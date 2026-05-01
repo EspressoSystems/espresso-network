@@ -31,7 +31,6 @@ struct MockRewardClaimInput {
 impl v1::RewardApi for TestApi {
     type RewardClaimInput = MockRewardClaimInput;
     type RewardBalance = u128;
-    type LatestRewardBalance = u128;
     type RewardAccountQueryData = (u128, Vec<u8>);
     type RewardAmounts = (Vec<(u128, u128)>, u64);
     type RewardMerkleTreeData = Vec<u8>;
@@ -69,7 +68,7 @@ impl v1::RewardApi for TestApi {
     async fn get_latest_reward_balance(
         &self,
         address: String,
-    ) -> Result<Self::LatestRewardBalance> {
+    ) -> Result<Self::RewardBalance> {
         tracing::info!("v1: get_latest_reward_balance(address={})", address);
         Ok(750_000_000_000_000_000) // 0.75 ESP
     }

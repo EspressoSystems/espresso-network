@@ -392,7 +392,6 @@ where
 {
     type RewardClaimInput = InternalRewardClaimInput;
     type RewardBalance = InternalRewardAmount;
-    type LatestRewardBalance = U256;
     type RewardAccountQueryData = InternalRewardAccountQueryData;
     type RewardAmounts = Vec<(alloy::primitives::Address, U256)>;
     type RewardMerkleTreeData = Vec<u8>;
@@ -473,7 +472,7 @@ where
     async fn get_latest_reward_balance(
         &self,
         address: String,
-    ) -> anyhow::Result<Self::LatestRewardBalance> {
+    ) -> anyhow::Result<Self::RewardBalance> {
         let addr: alloy::primitives::Address = address
             .parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
@@ -486,7 +485,7 @@ where
                 anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
             })?;
 
-        Ok(proof.balance)
+        Ok(InternalRewardAmount(proof.balance))
     }
 
     async fn get_reward_account_proof(
