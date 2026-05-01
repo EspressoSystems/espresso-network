@@ -533,7 +533,6 @@ async fn create_network(
         .name("test")
         .keypair(parties[i].0.clone().into())
         .bind(parties[i].2.clone())
-        .random_connect_delay(false)
         .parties(
             peer_infos
                 .iter()

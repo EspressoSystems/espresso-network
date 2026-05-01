@@ -95,19 +95,13 @@ impl Connection {
                 .expect("valid noise params yield valid handshake state")
         };
 
-        let mut delays = once({
-            if conf.random_connect_delay {
-                Duration::from_millis(rand::rng().random_range(0..1000))
-            } else {
-                Duration::ZERO
-            }
-        })
-        .chain(
-            conf.retry_delays
+        let mut delays = once(Duration::from_millis(rand::rng().random_range(0..1000)))
+            .chain(
+                conf.retry_delays
                 .iter()
                 .map(|&d| Duration::from_secs(d.into())),
-        )
-        .chain(repeat(conf.max_retry_delay));
+            )
+            .chain(repeat(conf.max_retry_delay));
 
         let addr = addr.to_string();
         let node = conf.keypair.public_key();
