@@ -45,10 +45,11 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], cfg.node_id);
     info!(node_id = cfg.node_id, %public_key, "starting node");
 
-    let membership = make_membership(cfg.total_nodes).await;
+    let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    let coordinator = build_coordinator(public_key, private_key, membership, network, &cfg).await;
+    let coordinator =
+        build_coordinator(public_key, private_key, membership, network, client, &cfg).await;
 
     run_instrumented(coordinator, &cfg).await
 }
@@ -97,6 +98,7 @@ async fn build_coordinator(
     private_key: <BLSPubKey as SignatureKey>::PrivateKey,
     membership: EpochMembershipCoordinator<TestTypes>,
     network: Cliquenet<BLSPubKey>,
+    client: hotshot_new_protocol::client::CoordinatorClient<TestTypes>,
     cfg: &NodeConfig,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
@@ -188,6 +190,7 @@ async fn build_coordinator(
             TestStorage::default(),
             private_key,
         ))
+        .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(timer)

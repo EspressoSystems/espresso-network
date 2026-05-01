@@ -57,6 +57,21 @@ where
         Ok(())
     }
 
+    /// Send raw, pre-serialized bytes as a direct message.
+    ///
+    /// Used to forward leaf-fetcher catchup messages from the membership
+    /// layer; the payload is already framed as a `hotshot_types::Message`
+    /// carrying an `External` blob, so we skip our protocol's serialization.
+    pub async fn direct_message_raw(
+        &self,
+        view: ViewNumber,
+        bytes: Vec<u8>,
+        to: T::SignatureKey,
+    ) -> Result<()> {
+        self.network.direct_message(view, bytes, to).await?;
+        Ok(())
+    }
+
     pub async fn update_view(&mut self, v: ViewNumber, e: EpochNumber) {
         self.network
             .update_view(v, Some(e), self.membership_coordinator.clone())

@@ -235,7 +235,7 @@ impl TestRunner {
                 continue;
             };
 
-            let (membership, storage) = network_state
+            let (membership, storage, client) = network_state
                 .create_membership(i, self.num_nodes, self.epoch_height)
                 .await;
             let (coord, external_events_tx) = build_test_coordinator::<N::Impl>(
@@ -243,6 +243,7 @@ impl TestRunner {
                 network,
                 membership,
                 storage,
+                client,
                 self.epoch_height,
                 self.view_timeout,
             )
@@ -312,7 +313,7 @@ impl TestRunner {
                                 network_state.shutdown_node(change.idx).await;
                                 // Create a fresh coordinator from genesis.
                                 let net = network_state.create_node(change.idx).await;
-                                let (membership, storage) = network_state
+                                let (membership, storage, client) = network_state
                                     .create_membership(
                                         change.idx,
                                         self.num_nodes,
@@ -325,6 +326,7 @@ impl TestRunner {
                                         net,
                                         membership,
                                         storage,
+                                        client,
                                         self.epoch_height,
                                         self.view_timeout,
                                     )

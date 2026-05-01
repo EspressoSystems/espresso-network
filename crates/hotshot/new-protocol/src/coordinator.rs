@@ -307,6 +307,32 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                 self.pending_proposal_fetches
                     .push(view, leaf_commitment, respond);
             },
+            ClientRequest::SendLeafRequest {
+                view,
+                payload,
+                recipient,
+                respond,
+            } => {
+                let result = self
+                    .network
+                    .direct_message_raw(view, payload, recipient)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("send leaf request: {e}"));
+                let _ = respond.send(result);
+            },
+            ClientRequest::SendLeafResponse {
+                view,
+                payload,
+                recipient,
+                respond,
+            } => {
+                let result = self
+                    .network
+                    .direct_message_raw(view, payload, recipient)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("send leaf response: {e}"));
+                let _ = respond.send(result);
+            },
         }
         Ok(())
     }
