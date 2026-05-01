@@ -445,6 +445,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: StorageTrait<T>> Coor
         &mut self.outbox
     }
 
+    pub fn vid_reconstructor(&self) -> &VidReconstructor<T> {
+        &self.vid_reconstructor
+    }
+
     pub fn coordinator_outbox(&self) -> &Outbox<CoordinatorOutput<T>> {
         &self.coordinator_outbox
     }

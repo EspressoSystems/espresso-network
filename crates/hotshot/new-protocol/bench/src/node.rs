@@ -216,6 +216,15 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         match coordinator.next_consensus_input().await {
             Ok(input) => {
                 metrics.on_input(&input);
+                // For BlockReconstructed, also record when the share threshold was
+                // reached (i.e. when AvidmGf2::recover started). The reconstructor
+                // populates this on the same view's first `try_reconstruct` call;
+                // the BlockReconstructed input fires when recover finishes.
+                if let ConsensusInput::BlockReconstructed(view, _) = &input
+                    && let Some(ts) = coordinator.vid_reconstructor().threshold_reached_ns(*view)
+                {
+                    metrics.on_vid_threshold(**view, ts);
+                }
                 coordinator.apply_consensus(input).await;
             },
             Err(err)
@@ -233,6 +242,14 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
 
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
+
+            // Capture the view of a SendProposal so we can stamp `unicast_done`
+            // after `process_consensus_output` finishes the per-recipient fan-out.
+            let sent_proposal_view = if let ConsensusOutput::SendProposal(p, _) = &output {
+                Some(*p.data.view_number)
+            } else {
+                None
+            };
 
             // Intercept block requests and inject test block (bypassing BlockBuilder).
             if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
@@ -269,6 +286,9 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     return Err(anyhow::anyhow!("{err}"));
                 }
                 warn!(%err, "recoverable error processing output");
+            }
+            if let Some(view) = sent_proposal_view {
+                metrics.on_unicast_done(view);
             }
         }
 

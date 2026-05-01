@@ -15,9 +15,18 @@ pub struct ViewMetrics {
     pub block_built_ns: Option<i128>,
     pub vid_disperse_ns: Option<i128>,
     pub proposal_sent_ns: Option<i128>,
+    /// Leader-side: when the per-recipient unicast loop in
+    /// `coordinator::process_consensus_output(SendProposal)` returned. Subtract
+    /// `proposal_sent_ns` to measure the cost of leader-side fan-out (serialize +
+    /// clone + queue into Cliquenet × N-1).
+    pub proposal_unicast_done_ns: Option<i128>,
     pub proposal_recv_ns: Option<i128>,
     pub state_validated_ns: Option<i128>,
     pub vote1_sent_ns: Option<i128>,
+    /// Replica-side: when 2N/3+1 VID shares had been collected and AvidmGf2::recover
+    /// was about to start. `block_reconstructed_ns - vid_threshold_reached_ns`
+    /// isolates pure recover CPU time from the upstream share-collection wait.
+    pub vid_threshold_reached_ns: Option<i128>,
     pub block_reconstructed_ns: Option<i128>,
     pub cert1_formed_ns: Option<i128>,
     pub vote2_sent_ns: Option<i128>,
@@ -50,6 +59,22 @@ impl MetricsCollector {
             view,
             ..Default::default()
         })
+    }
+
+    /// Stamp the moment leader-side proposal fan-out finished. Called by the bench
+    /// loop after `process_consensus_output(SendProposal)` returns.
+    pub fn on_unicast_done(&mut self, view: u64) {
+        let ts = Self::now_ns();
+        self.view_mut(view).proposal_unicast_done_ns = Some(ts);
+    }
+
+    /// Record the moment 2N/3+1 shares were available locally for `view`. The
+    /// bench reads this via `Coordinator::vid_reconstructor().threshold_reached_ns()`.
+    pub fn on_vid_threshold(&mut self, view: u64, ns: i128) {
+        let m = self.view_mut(view);
+        if m.vid_threshold_reached_ns.is_none() {
+            m.vid_threshold_reached_ns = Some(ns);
+        }
     }
 
     /// Record a consensus input event.

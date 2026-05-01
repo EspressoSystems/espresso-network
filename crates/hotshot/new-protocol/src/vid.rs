@@ -123,6 +123,11 @@ pub struct VidReconstructor<T: NodeType> {
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<Result<VidReconstructOutput<T>, ()>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
+    /// Wall-clock unix nanoseconds at which `try_reconstruct` first fired for a view —
+    /// i.e., when 2N/3+1 shares had been accumulated and `AvidmGf2::recover` was about
+    /// to start. Subtract this from `block_reconstructed_ns` to isolate recover CPU time
+    /// from share-collection time. Cleared by `gc`.
+    threshold_reached_ns: BTreeMap<ViewNumber, i128>,
 }
 
 impl<T: NodeType> VidReconstructor<T> {
@@ -132,7 +137,15 @@ impl<T: NodeType> VidReconstructor<T> {
             reconstructed: BTreeSet::new(),
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
+            threshold_reached_ns: BTreeMap::new(),
         }
+    }
+
+    /// Wall-clock unix nanoseconds at which the share threshold for `view` was first
+    /// reached, if it has been reached. Returns `None` for views that haven't yet
+    /// triggered `try_reconstruct`.
+    pub fn threshold_reached_ns(&self, view: ViewNumber) -> Option<i128> {
+        self.threshold_reached_ns.get(&view).copied()
     }
 
     pub(crate) fn handle_vid_share<M>(&mut self, share: VidDisperseShare2<T>, metadata: M)
@@ -206,6 +219,15 @@ impl<T: NodeType> VidReconstructor<T> {
             return;
         };
         let epoch = accumulator.epoch.unwrap_or(EpochNumber::genesis());
+        // Record the moment we have enough shares to start recovery. Done before
+        // `spawn_blocking` so the timestamp captures the actual handoff to the
+        // CPU-bound recover task, not the recover finish time.
+        self.threshold_reached_ns.entry(view).or_insert_with(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as i128)
+                .unwrap_or(0)
+        });
         let task = self.tasks.spawn_blocking(move || {
             let Ok(result) = AvidmGf2Scheme::recover(&common, &shares) else {
                 // TODO: Handle error
@@ -232,5 +254,6 @@ impl<T: NodeType> VidReconstructor<T> {
         }
         self.calculations = keep;
         self.accumulators = self.accumulators.split_off(&view_number);
+        self.threshold_reached_ns = self.threshold_reached_ns.split_off(&view_number);
     }
 }
