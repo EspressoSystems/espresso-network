@@ -39,8 +39,12 @@ pub enum FinalityProof {
 
     /// The finality follows from a Certificate2 in the new protocol.
     ///
-    /// Certificate2 proves finality.
-    NewProtocol { cert2: Arc<Certificate2<SeqTypes>> },
+    /// Certificate2 proves finality. The QC is needed to reconstruct the returned
+    /// [`LeafQueryData`] when the proof contains only the leaf committed by cert2.
+    NewProtocol {
+        cert2: Arc<Certificate2<SeqTypes>>,
+        leaf_qc: Box<QuorumCertificate2<SeqTypes>>,
+    },
 
     /// The finality follows from a 3-chain of QCs using the original HotStuff commit rule.
     ///
@@ -114,13 +118,6 @@ pub struct LeafProof {
 
     /// Some extra data proving finality for the last leaf in `leaves`.
     proof: FinalityProof,
-
-    /// QC certifying the requested leaf, serialized only for cert2 proofs.
-    ///
-    /// This is needed to reconstruct [`LeafQueryData`] when the proof is a single leaf finalized
-    /// directly by Certificate2, which does not itself contain a QC.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    leaf_qc: Option<QuorumCertificate2<SeqTypes>>,
 }
 
 impl LeafProof {
@@ -200,7 +197,7 @@ impl LeafProof {
 
                 precommit_qc.qc().clone()
             },
-            (FinalityProof::NewProtocol { cert2 }, LeafProofHint::Quorum(quorum)) => {
+            (FinalityProof::NewProtocol { cert2, leaf_qc }, LeafProofHint::Quorum(quorum)) => {
                 // Certificate2 proves finality for `curr`.
                 let version = curr.block_header().version();
                 ensure!(
@@ -225,9 +222,7 @@ impl LeafProof {
                     .await
                     .context("verifying cert2 signature")?;
 
-                self.leaf_qc
-                    .clone()
-                    .context("missing QC for requested leaf")?
+                leaf_qc.as_ref().clone()
             },
             (proof, hint) => {
                 let required = match proof {
@@ -353,8 +348,10 @@ impl LeafProof {
     ) {
         debug_assert!(cert2.data.leaf_commit == self.leaves[self.leaves.len() - 1].commit());
 
-        self.leaf_qc = Some(leaf_qc);
-        self.proof = FinalityProof::NewProtocol { cert2 };
+        self.proof = FinalityProof::NewProtocol {
+            cert2,
+            leaf_qc: Box::new(leaf_qc),
+        };
     }
 
     /// Inspect the raw finality proof within the larger proof.

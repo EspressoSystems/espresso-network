@@ -278,10 +278,10 @@ where
 
                     let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
 
-                    if index == 0 {
-                        if let Some(cert2) = &decide.cert2 {
-                            info = info.with_cert2(cert2.clone());
-                        }
+                    if index == 0
+                        && let Some(cert2) = &decide.cert2
+                    {
+                        info = info.with_cert2(cert2.clone());
                     }
 
                     if let Err(err) = self.append(info).await {
