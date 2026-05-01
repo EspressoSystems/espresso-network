@@ -25,7 +25,7 @@
 <a href=#25 id=25 data-nosnippet>25</a>    <span class="kw">async fn </span>append_cert2(<span class="kw-2">&amp;</span><span class="self">self</span>, view: ViewNumber, cert: Certificate2&lt;T&gt;) -&gt; anyhow::Result&lt;()&gt;;
 <a href=#26 id=26 data-nosnippet>26</a>}
 <a href=#27 id=27 data-nosnippet>27</a>
-<a href=#28 id=28 data-nosnippet>28</a><span class="kw">pub struct </span>Storage&lt;T: NodeType, S: NewProtocolStorage&lt;T&gt;&gt; {
+<a href=#28 id=28 data-nosnippet>28</a><span class="kw">pub struct </span>Storage&lt;T: NodeType, S&gt; {
 <a href=#29 id=29 data-nosnippet>29</a>    storage: S,
 <a href=#30 id=30 data-nosnippet>30</a>    private_key: &lt;T::SignatureKey <span class="kw">as </span>SignatureKey&gt;::PrivateKey,
 <a href=#31 id=31 data-nosnippet>31</a>    handles: BTreeMap&lt;ViewNumber, Vec&lt;JoinHandle&lt;()&gt;&gt;&gt;,

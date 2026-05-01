@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["is_critical"],"struct":["Network"],"type":["Result"]};
+window.SIDEBAR_ITEMS = {"enum":["NetworkError","PeerRole"],"mod":["cliquenet"],"trait":["Network"],"type":["Result"]};

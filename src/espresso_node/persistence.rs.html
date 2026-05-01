@@ -149,32 +149,32 @@
 <a href=#149 id=149 data-nosnippet>149</a>        network_config::light_client_genesis_from_stake_table,
 <a href=#150 id=150 data-nosnippet>150</a>    };
 <a href=#151 id=151 data-nosnippet>151</a>    <span class="kw">use </span>espresso_types::{
-<a href=#152 id=152 data-nosnippet>152</a>        CoordinatorEvent, Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey,
-<a href=#153 id=153 data-nosnippet>153</a>        SeqTypes, ValidatedState,
-<a href=#154 id=154 data-nosnippet>154</a>        traits::{
-<a href=#155 id=155 data-nosnippet>155</a>            EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
-<a href=#156 id=156 data-nosnippet>156</a>            PersistenceOptions, SequencerPersistence,
-<a href=#157 id=157 data-nosnippet>157</a>        },
-<a href=#158 id=158 data-nosnippet>158</a>        v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
-<a href=#159 id=159 data-nosnippet>159</a>    };
-<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">use </span>futures::{StreamExt, TryStreamExt, future::join_all};
-<a href=#161 id=161 data-nosnippet>161</a>    <span class="kw">use </span>hotshot::{
-<a href=#162 id=162 data-nosnippet>162</a>        InitializerEpochInfo,
-<a href=#163 id=163 data-nosnippet>163</a>        types::{BLSPubKey, SignatureKey},
-<a href=#164 id=164 data-nosnippet>164</a>    };
-<a href=#165 id=165 data-nosnippet>165</a>    <span class="kw">use </span>hotshot_contract_adapter::{
-<a href=#166 id=166 data-nosnippet>166</a>        sol_types::StakeTableV2::Delegated, stake_table::StakeTableContractVersion,
-<a href=#167 id=167 data-nosnippet>167</a>    };
-<a href=#168 id=168 data-nosnippet>168</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
-<a href=#169 id=169 data-nosnippet>169</a>    <span class="kw">use </span>hotshot_query_service::{availability::BlockQueryData, testing::mocks::MOCK_UPGRADE};
-<a href=#170 id=170 data-nosnippet>170</a>    <span class="kw">use </span>hotshot_types::{
-<a href=#171 id=171 data-nosnippet>171</a>        data::{
-<a href=#172 id=172 data-nosnippet>172</a>            DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-<a href=#173 id=173 data-nosnippet>173</a>            ViewNumber, ns_table::parse_ns_table, vid_commitment, vid_disperse::AvidMDisperseShare,
-<a href=#174 id=174 data-nosnippet>174</a>        },
-<a href=#175 id=175 data-nosnippet>175</a>        event::{EventType, HotShotAction, LeafInfo},
-<a href=#176 id=176 data-nosnippet>176</a>        light_client::StateKeyPair,
-<a href=#177 id=177 data-nosnippet>177</a>        message::{Proposal, UpgradeLock, convert_proposal},
+<a href=#152 id=152 data-nosnippet>152</a>        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+<a href=#153 id=153 data-nosnippet>153</a>        traits::{
+<a href=#154 id=154 data-nosnippet>154</a>            EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
+<a href=#155 id=155 data-nosnippet>155</a>            PersistenceOptions, SequencerPersistence,
+<a href=#156 id=156 data-nosnippet>156</a>        },
+<a href=#157 id=157 data-nosnippet>157</a>        v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
+<a href=#158 id=158 data-nosnippet>158</a>    };
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">use </span>futures::{StreamExt, TryStreamExt, future::join_all};
+<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">use </span>hotshot::{
+<a href=#161 id=161 data-nosnippet>161</a>        InitializerEpochInfo,
+<a href=#162 id=162 data-nosnippet>162</a>        types::{BLSPubKey, SignatureKey},
+<a href=#163 id=163 data-nosnippet>163</a>    };
+<a href=#164 id=164 data-nosnippet>164</a>    <span class="kw">use </span>hotshot_contract_adapter::{
+<a href=#165 id=165 data-nosnippet>165</a>        sol_types::StakeTableV2::Delegated, stake_table::StakeTableContractVersion,
+<a href=#166 id=166 data-nosnippet>166</a>    };
+<a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">use </span>hotshot_example_types::node_types::TEST_VERSIONS;
+<a href=#168 id=168 data-nosnippet>168</a>    <span class="kw">use </span>hotshot_query_service::{availability::BlockQueryData, testing::mocks::MOCK_UPGRADE};
+<a href=#169 id=169 data-nosnippet>169</a>    <span class="kw">use </span>hotshot_types::{
+<a href=#170 id=170 data-nosnippet>170</a>        data::{
+<a href=#171 id=171 data-nosnippet>171</a>            DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
+<a href=#172 id=172 data-nosnippet>172</a>            ViewNumber, ns_table::parse_ns_table, vid_commitment, vid_disperse::AvidMDisperseShare,
+<a href=#173 id=173 data-nosnippet>173</a>        },
+<a href=#174 id=174 data-nosnippet>174</a>        event::{EventType, HotShotAction, LeafInfo},
+<a href=#175 id=175 data-nosnippet>175</a>        light_client::StateKeyPair,
+<a href=#176 id=176 data-nosnippet>176</a>        message::{Proposal, UpgradeLock, convert_proposal},
+<a href=#177 id=177 data-nosnippet>177</a>        new_protocol::CoordinatorEvent,
 <a href=#178 id=178 data-nosnippet>178</a>        simple_certificate::{
 <a href=#179 id=179 data-nosnippet>179</a>            CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
 <a href=#180 id=180 data-nosnippet>180</a>            UpgradeCertificate,

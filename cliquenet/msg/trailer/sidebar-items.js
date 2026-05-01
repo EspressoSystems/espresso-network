@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["TrailerType"],"struct":["Trailer"]};
+window.SIDEBAR_ITEMS = {"constant":["NO_ACK","STD"],"enum":["Trailer","TrailerBytes"]};

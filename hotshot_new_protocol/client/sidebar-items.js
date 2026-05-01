@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ClientRequest","QueryError"],"struct":["ClientApi","CoordinatorClient"]};
+window.SIDEBAR_ITEMS = {"enum":["ClientRequest","QueryError"],"struct":["ClientApi","ClientLeafFetcherNetwork","CoordinatorClient"]};
