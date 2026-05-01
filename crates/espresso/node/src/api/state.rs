@@ -391,7 +391,7 @@ where
     D: RewardMerkleTreeDataSource,
 {
     type RewardClaimInput = InternalRewardClaimInput;
-    type RewardBalance = U256;
+    type RewardBalance = InternalRewardAmount;
     type RewardAccountQueryData = InternalRewardAccountQueryData;
     type RewardAmounts = Vec<(alloy::primitives::Address, U256)>;
     type RewardMerkleTreeData = Vec<u8>;
@@ -466,20 +466,17 @@ where
                 )
             })?;
 
-        // Return the balance directly (U256)
-        Ok(proof.balance)
+        Ok(InternalRewardAmount(proof.balance))
     }
 
     async fn get_latest_reward_balance(
         &self,
         address: String,
     ) -> anyhow::Result<Self::RewardBalance> {
-        // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
 
-        // Load the latest reward account proof from the data source
         let proof = self
             .data_source
             .load_latest_reward_account_proof_v2(addr.into())
@@ -488,8 +485,7 @@ where
                 anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
             })?;
 
-        // Return the balance directly (U256)
-        Ok(proof.balance)
+        Ok(InternalRewardAmount(proof.balance))
     }
 
     async fn get_reward_account_proof(
