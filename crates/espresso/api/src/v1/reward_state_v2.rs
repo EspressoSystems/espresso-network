@@ -15,8 +15,11 @@ pub trait RewardApi {
     /// Type for reward claim input data (must be serializable to JSON)
     type RewardClaimInput: Serialize + Send + Sync;
 
-    /// Type for reward balance queries (must be serializable to JSON)
+    /// Type for reward balance at a specific height (must be serializable to JSON)
     type RewardBalance: Serialize + Send + Sync;
+
+    /// Type for latest reward balance (may differ from RewardBalance)
+    type LatestRewardBalance: Serialize + Send + Sync;
 
     /// Type for reward account proof queries (must be serializable to JSON)
     type RewardAccountQueryData: Serialize + Send + Sync;
@@ -59,7 +62,7 @@ pub trait RewardApi {
     async fn get_latest_reward_balance(
         &self,
         address: String,
-    ) -> anyhow::Result<Self::RewardBalance>;
+    ) -> anyhow::Result<Self::LatestRewardBalance>;
 
     /// Get Merkle proof for a reward account at a specific height
     ///

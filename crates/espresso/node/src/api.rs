@@ -7576,15 +7576,57 @@ mod test {
 
                 // Both servers share the same underlying SQL data source; compare responses
                 // for each per-address endpoint under reward-state-v2.
-                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/proof/{height}/{address}")).await?;
-                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-claim-input/{height}/{address}")).await?;
-                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-balance/{height}/{address}")).await?;
-                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/proof/latest/{address}")).await?;
-                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-balance/latest/{address}")).await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/proof/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-balance/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/proof/latest/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-balance/latest/{address}"),
+                )
+                .await?;
             }
 
-            compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-amounts/{height}/0/1000")).await?;
-            compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-merkle-tree-v2/{height}")).await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
+            )
+            .await?;
         }
 
         Ok(())
