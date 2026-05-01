@@ -9,7 +9,18 @@ use hotshot_example_types::{
     storage_types::TestStorage,
 };
 use hotshot_new_protocol::{
-    block::{BlockBuilder, BlockBuilderConfig}, client::CoordinatorClient, consensus::{Consensus, ConsensusInput, ConsensusOutput}, coordinator::{Coordinator, timer::Timer}, epoch::EpochManager, epoch_root_vote_collector::EpochRootVoteCollector, network::cliquenet::Cliquenet, outbox::Outbox, proposal::ProposalValidator, state::StateManager, vid::{VidDisperser, VidReconstructor}, vote::VoteCollector
+    block::{BlockBuilder, BlockBuilderConfig},
+    client::CoordinatorClient,
+    consensus::{Consensus, ConsensusInput, ConsensusOutput},
+    coordinator::{Coordinator, timer::Timer},
+    epoch::EpochManager,
+    epoch_root_vote_collector::EpochRootVoteCollector,
+    network::cliquenet::Cliquenet,
+    outbox::Outbox,
+    proposal::ProposalValidator,
+    state::StateManager,
+    vid::{VidDisperser, VidReconstructor},
+    vote::VoteCollector,
 };
 use hotshot_types::{
     PeerConnectInfo,
