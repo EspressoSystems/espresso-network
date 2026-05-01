@@ -34,7 +34,6 @@ use hotshot_types::{
     },
     traits::{
         election::Membership,
-        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{NodeImplementation, NodeType},
     },
@@ -173,9 +172,6 @@ where
                                             config.known_nodes_with_stake.clone(),
                                             config.known_da_nodes.clone(),
                                             storage.clone(),
-                                            Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
-                                                network.clone(),
-                                            )),
                                             validator_config.public_key.clone(),
                                             config.epoch_height,
                                         );
@@ -264,9 +260,6 @@ where
                                         node.handle.hotshot.config.known_nodes_with_stake.clone(),
                                         node.handle.hotshot.config.known_da_nodes.clone(),
                                         node.handle.storage().clone(),
-                                        Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
-                                            generated_network.clone(),
-                                        )),
                                         node.handle.public_key().clone(),
                                         node.handle.hotshot.config.epoch_height,
                                     )));

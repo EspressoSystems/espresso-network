@@ -36,7 +36,6 @@ use hotshot_types::{
     storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
-        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
     },
@@ -449,9 +448,6 @@ where
                             config.known_nodes_with_stake.clone(),
                             config.known_da_nodes.clone(),
                             storage.clone(),
-                            Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
-                                network.clone(),
-                            )),
                             public_key.clone(),
                             config.epoch_height,
                         ),
@@ -479,7 +475,6 @@ where
                         config.known_nodes_with_stake.clone(),
                         config.known_da_nodes.clone(),
                         storage.clone(),
-                        Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(network)),
                         public_key.clone(),
                         config.epoch_height,
                     ),

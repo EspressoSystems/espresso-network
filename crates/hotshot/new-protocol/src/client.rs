@@ -10,7 +10,7 @@ use hotshot_types::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{message::Proposal, state::UpdateLeaf};
+use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -93,15 +93,15 @@ impl<T: NodeType> ClientApi<T> {
         .await?
     }
 
-    pub async fn send_leaf_request(
+    pub async fn send_external_message(
         &self,
         view: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
-    ) -> Result<anyhow::Result<()>, QueryError> {
+    ) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(
-            ClientRequest::SendLeafRequest {
+            ClientRequest::SendExternalMessage {
                 view,
                 payload,
                 recipient,
@@ -109,26 +109,7 @@ impl<T: NodeType> ClientApi<T> {
             },
             rx,
         )
-        .await
-    }
-
-    pub async fn send_leaf_response(
-        &self,
-        view: ViewNumber,
-        payload: Vec<u8>,
-        recipient: T::SignatureKey,
-    ) -> Result<anyhow::Result<()>, QueryError> {
-        let (respond, rx) = oneshot::channel();
-        self.call(
-            ClientRequest::SendLeafResponse {
-                view,
-                payload,
-                recipient,
-                respond,
-            },
-            rx,
-        )
-        .await
+        .await?
     }
 
     async fn call<A>(
@@ -205,17 +186,11 @@ pub(crate) enum ClientRequest<T: NodeType> {
         leaf_commitment: Commitment<Leaf2<T>>,
         respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
     },
-    SendLeafRequest {
+    SendExternalMessage {
         view: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
-        respond: oneshot::Sender<anyhow::Result<()>>,
-    },
-    SendLeafResponse {
-        view: ViewNumber,
-        payload: Vec<u8>,
-        recipient: T::SignatureKey,
-        respond: oneshot::Sender<anyhow::Result<()>>,
+        respond: oneshot::Sender<Result<(), QueryError>>,
     },
 }
 
@@ -227,6 +202,9 @@ pub enum QueryError {
 
     #[error("coordinator dropped the response")]
     ResponseDropped,
+
+    #[error("coordinator error: {0}")]
+    Coordinator(#[from] CoordinatorError),
 }
 
 /// `LeafFetcherNetwork` impl that routes catchup direct-messages through
@@ -254,9 +232,9 @@ impl<T: NodeType> LeafFetcherNetwork<T> for ClientLeafFetcherNetwork<T> {
         recipient: T::SignatureKey,
     ) -> anyhow::Result<()> {
         self.client
-            .send_leaf_request(view, payload, recipient)
-            .await
-            .map_err(|e| anyhow::anyhow!("client: {e}"))?
+            .send_external_message(view, payload, recipient)
+            .await?;
+        Ok(())
     }
 
     async fn send_leaf_response(
@@ -266,8 +244,8 @@ impl<T: NodeType> LeafFetcherNetwork<T> for ClientLeafFetcherNetwork<T> {
         recipient: T::SignatureKey,
     ) -> anyhow::Result<()> {
         self.client
-            .send_leaf_response(view, payload, recipient)
-            .await
-            .map_err(|e| anyhow::anyhow!("client: {e}"))?
+            .send_external_message(view, payload, recipient)
+            .await?;
+        Ok(())
     }
 }

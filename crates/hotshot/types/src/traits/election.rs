@@ -20,7 +20,7 @@ use crate::{
     drb::DrbResult,
     event::Event,
     stake_table::{HSStakeTable, supermajority_threshold},
-    traits::{leaf_fetcher_network::LeafFetcherNetwork, signature_key::StakeTableEntryType},
+    traits::signature_key::StakeTableEntryType,
 };
 
 pub struct NoStakeTableHash;
@@ -48,7 +48,6 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         stake_committee_members: Vec<PeerConfig<TYPES>>,
         da_committee_members: Vec<PeerConfig<TYPES>>,
         storage: Self::Storage,
-        leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         public_key: TYPES::SignatureKey,
         epoch_height: u64,
     ) -> Self;

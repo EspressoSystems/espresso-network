@@ -36,10 +36,7 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
-    traits::{
-        EncodeBytes, election::Membership, leaf_fetcher_network::ConnectedNetworkLeafFetcher,
-        node_implementation::NodeType,
-    },
+    traits::{EncodeBytes, election::Membership, node_implementation::NodeType},
     utils::{View, ViewInner, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber, Vote},
 };
@@ -135,9 +132,6 @@ where
         hotshot_config.known_nodes_with_stake.clone(),
         hotshot_config.known_da_nodes.clone(),
         storage.clone(),
-        Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
-            network.clone(),
-        )),
         public_key.clone(),
         launcher.metadata.test_config.epoch_height,
     )));

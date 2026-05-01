@@ -558,17 +558,16 @@ pub async fn mock_membership_with_leaf_fetcher_network(
     )
     .0;
     let storage = TestStorage::<TestTypes>::default();
-    let membership = Arc::new(RwLock::new(StrictMembership::<
-        TestTypes,
-        StaticStakeTable<BLSPubKey, SchnorrPubKey>,
-    >::new(
-        members.clone(),
-        members.clone(),
-        storage.clone(),
-        leaf_fetcher_network,
-        public_key,
-        epoch_height,
-    )));
+    let mut strict_membership =
+        StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
+            members.clone(),
+            members.clone(),
+            storage.clone(),
+            public_key,
+            epoch_height,
+        );
+    strict_membership.set_leaf_fetcher_network(leaf_fetcher_network);
+    let membership = Arc::new(RwLock::new(strict_membership));
     // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.)
     membership
         .write()

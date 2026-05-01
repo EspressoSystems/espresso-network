@@ -42,8 +42,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
-        block_contents::BlockHeader, election::Membership,
-        leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType,
+        block_contents::BlockHeader, election::Membership, node_implementation::NodeType,
         signature_key::StakeTableEntryType,
     },
     utils::{
@@ -2100,7 +2099,6 @@ impl Membership<SeqTypes> for EpochCommittees {
         _committee_members: Vec<PeerConfig<SeqTypes>>,
         _da_members: Vec<PeerConfig<SeqTypes>>,
         _storage: Self::Storage,
-        _leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<SeqTypes>>,
         _public_key: <SeqTypes as NodeType>::SignatureKey,
         _epoch_height: u64,
     ) -> Self {

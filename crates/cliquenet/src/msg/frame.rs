@@ -44,9 +44,9 @@ impl Header {
         }
     }
 
-    /// Create a new, unvalidated header from the given bytes.
-    pub fn unvalidated(bytes: [u8; Self::SIZE]) -> Self {
-        Self(u32::from_be_bytes(bytes))
+    /// Create a new, unvalidated header.
+    pub fn unvalidated(n: u32) -> Self {
+        Self(n)
     }
 
     /// Create a data header with the given payload length.

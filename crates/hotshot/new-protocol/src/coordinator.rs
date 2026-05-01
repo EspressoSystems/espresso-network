@@ -13,14 +13,14 @@ use hotshot_types::{
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
-        block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
+        block_contents::BlockHeader, node_implementation::NodeType,
         signature_key::StateSignatureKey,
     },
     utils::is_epoch_root,
     vote::HasViewNumber,
 };
 use tokio::{select, sync::oneshot};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
@@ -48,8 +48,9 @@ use crate::{
     vote::VoteCollector,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum CoordinatorOutput<T: NodeType> {
-    Consensus(Box<ConsensusOutput<T>>),
+    Consensus(ConsensusOutput<T>),
     ExternalMessageReceived {
         sender: T::SignatureKey,
         data: Vec<u8>,
@@ -57,10 +58,10 @@ pub enum CoordinatorOutput<T: NodeType> {
 }
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, N, S: NewProtocolStorage<T>> {
+pub struct Coordinator<T: NodeType, N, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
-    network: Network<T, N>,
+    network: N,
     state_manager: StateManager<T>,
     #[builder(default)]
     client: CoordinatorClient<T>,
@@ -89,8 +90,11 @@ pub struct Coordinator<T: NodeType, N, S: NewProtocolStorage<T>> {
 }
 
 #[bon]
-impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>>
-    Coordinator<T, N, S>
+impl<T, N, S> Coordinator<T, N, S>
+where
+    T: NodeType,
+    N: Network<T>,
+    S: NewProtocolStorage<T>,
 {
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     #[allow(clippy::too_many_arguments)]
@@ -125,11 +129,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         let lock = upgrade_lock.clone();
         Self::builder()
             .consensus(consensus)
-            .network(Network::new(
-                network,
-                membership_coordinator.clone(),
-                lock.clone(),
-            ))
+            .network(network)
             .state_manager(state_manager)
             .vid_disperser(VidDisperser::new(membership_coordinator.clone()))
             .vid_reconstructor(VidReconstructor::new())
@@ -183,10 +183,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
             .build()
     }
 
-    pub fn client_api(&self) -> &ClientApi<T> {
-        self.client.handle()
-    }
-
     /// Bootstrap the coordinator so the view-1 leader can propose.
     ///
     /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
@@ -218,123 +214,8 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         }
     }
 
-    fn get_matching_proposal(
-        &self,
-        view: ViewNumber,
-        leaf_commitment: Commitment<Leaf2<T>>,
-    ) -> Option<SignedProposal<T, Proposal<T>>> {
-        let proposal = self.consensus.signed_proposal(&view)?;
-        (proposal_commitment(&proposal.data) == leaf_commitment).then(|| proposal.clone())
-    }
-
-    fn proposal_request_message(
-        &self,
-        view: ViewNumber,
-    ) -> Result<Message<T, message::Validated>, CoordinatorError> {
-        let request = self
-            .consensus
-            .signed_proposal_fetch_request(view)
-            .map_err(|err| {
-                CoordinatorError::regular(format!("failed to sign proposal request: {err}"))
-                    .context("sign proposal request")
-            })?;
-
-        Ok(Message {
-            sender: self.public_key.clone(),
-            message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(request)),
-        })
-    }
-
-    async fn broadcast_proposal_request(
-        &mut self,
-        message: Message<T, message::Validated>,
-    ) -> Result<(), CoordinatorError> {
-        self.network
-            .broadcast(message)
-            .await
-            .map_err(|err| CoordinatorError::from(err).context("broadcast proposal request"))
-    }
-
-    async fn handle_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
-        match request {
-            ClientRequest::CurrentView(tx) => {
-                let _ = tx.send(self.consensus.current_view());
-            },
-            ClientRequest::CurrentEpoch(tx) => {
-                let _ = tx.send(self.consensus.current_epoch());
-            },
-            ClientRequest::DecidedLeaf(tx) => {
-                let _ = tx.send(self.consensus.last_decided_leaf().clone());
-            },
-            ClientRequest::DecidedState(tx) => {
-                let view = self.consensus.last_decided_view();
-                let _ = tx.send(self.state_manager.get_state(&view));
-            },
-            ClientRequest::UndecidedLeaves(tx) => {
-                let _ = tx.send(self.consensus.undecided_leaves().cloned().collect());
-            },
-            ClientRequest::GetState { view, respond } => {
-                let _ = respond.send(self.state_manager.get_state(&view));
-            },
-            ClientRequest::GetStateAndDelta { view, respond } => {
-                let _ = respond.send(self.state_manager.get_state_and_delta(&view));
-            },
-            ClientRequest::UpdateLeaf { update, respond } => {
-                self.state_manager.update_state(update);
-                let _ = respond.send(());
-            },
-            ClientRequest::SubmitTransaction { tx, respond } => {
-                self.block_builder.on_submit_transaction(tx);
-                let _ = respond.send(());
-            },
-            ClientRequest::RequestProposal {
-                view,
-                leaf_commitment,
-                respond,
-            } => {
-                if let Some(proposal) = self.get_matching_proposal(view, leaf_commitment) {
-                    let _ = respond.send(Ok(proposal));
-                    return Ok(());
-                }
-
-                let already_pending = self
-                    .pending_proposal_fetches
-                    .contains_request(view, leaf_commitment);
-                if !already_pending {
-                    let message = self.proposal_request_message(view)?;
-                    self.broadcast_proposal_request(message).await?;
-                }
-                self.pending_proposal_fetches
-                    .push(view, leaf_commitment, respond);
-            },
-            ClientRequest::SendLeafRequest {
-                view,
-                payload,
-                recipient,
-                respond,
-            } => {
-                let result = self
-                    .network
-                    .direct_message_raw(view, payload, recipient)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("send leaf request: {e}"));
-                let _ = respond.send(result);
-            },
-            ClientRequest::SendLeafResponse {
-                view,
-                payload,
-                recipient,
-                respond,
-            } => {
-                let result = self
-                    .network
-                    .direct_message_raw(view, payload, recipient)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("send leaf response: {e}"));
-                let _ = respond.send(result);
-            },
-        }
-        Ok(())
+    pub async fn stop(mut self) {
+        self.network.shutdown().await
     }
 
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
@@ -360,13 +241,13 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     return Ok(input)
                 }
                 Some(output) = self.state_manager.next() => {
-                    if let Some(input) = self.on_state_manager_output(output).await {
+                    if let Some(input) = self.on_state_manager_output(output) {
                         return Ok(input)
                     }
                 }
                 Some(request) = self.client.next_request() => {
-                    if let Err(err) = self.handle_request(request).await {
-                        tracing::error!(%err, "error while handling client request");
+                    if let Err(err) = self.on_client_request(request) {
+                        error!(%err, "error while handling client request");
                     }
                 }
                 Some(tcert) = self.timeout_collector.next() => {
@@ -487,6 +368,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         self.consensus.apply(input, &mut self.outbox).await;
     }
 
+    pub fn node_id(&self) -> &KeyPrefix {
+        &self.node_id
+    }
+
     pub fn outbox(&self) -> &Outbox<ConsensusOutput<T>> {
         &self.outbox
     }
@@ -507,7 +392,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         self.consensus.current_view()
     }
 
-    pub async fn on_state_manager_output(
+    pub fn client_api(&self) -> &ClientApi<T> {
+        self.client.handle()
+    }
+
+    pub fn on_state_manager_output(
         &mut self,
         output: StateManagerOutput<T>,
     ) -> Option<ConsensusInput<T>> {
@@ -627,7 +516,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                         )),
                     };
 
-                    if let Err(err) = self.network.unicast(message.sender, response).await {
+                    if let Err(err) =
+                        self.network
+                            .unicast(request.view_number(), &message.sender, &response)
+                    {
                         let err = CoordinatorError::from(err).context("proposal response");
                         warn!(%err, "network error while sending proposal response");
                     }
@@ -681,8 +573,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     )),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
             },
             ConsensusOutput::LeafDecided { leaves, cert2, .. } => {
@@ -712,7 +603,10 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                             ProposalMessage::validated(proposal.clone(), vid_share),
                         )),
                     };
-                    if let Err(err) = self.network.unicast(recipient_key, message).await {
+                    if let Err(err) =
+                        self.network
+                            .unicast(message.view_number(), &recipient_key, &message)
+                    {
                         let err = CoordinatorError::from(err).context("vid share unicast");
                         if err.severity == Severity::Critical {
                             return Err(err);
@@ -730,8 +624,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     )),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
@@ -743,8 +636,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                         )),
                     };
                     self.network
-                        .unicast(leader, message)
-                        .await
+                        .unicast(message.view_number(), &leader, &message)
                         .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
                 }
             },
@@ -754,8 +646,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
             },
             ConsensusOutput::SendVote2(vote2) => {
@@ -764,8 +655,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
             },
             ConsensusOutput::SendEpochChange(epoch_change) => {
@@ -776,8 +666,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     )),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
@@ -789,8 +678,7 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
                     )),
                 };
                 self.network
-                    .broadcast(message)
-                    .await
+                    .broadcast(message.view_number(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
             },
             ConsensusOutput::ProposalValidated { .. } => {},
@@ -841,12 +729,11 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
             message_type: MessageType::Block(msg),
         };
         self.network
-            .unicast(leader, message)
-            .await
+            .unicast(message.view_number(), &leader, &message)
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
-    async fn leader(&self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+    async fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let membership = self
             .membership_coordinator
             .membership_for_epoch(Some(epoch))
@@ -855,10 +742,106 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         membership.leader(view).await.ok()
     }
 
+    fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
+        match request {
+            ClientRequest::CurrentView(tx) => {
+                let _ = tx.send(self.consensus.current_view());
+            },
+            ClientRequest::CurrentEpoch(tx) => {
+                let _ = tx.send(self.consensus.current_epoch());
+            },
+            ClientRequest::DecidedLeaf(tx) => {
+                let _ = tx.send(self.consensus.last_decided_leaf().clone());
+            },
+            ClientRequest::DecidedState(tx) => {
+                let view = self.consensus.last_decided_leaf().view_number();
+                let _ = tx.send(self.state_manager.get_state(&view));
+            },
+            ClientRequest::UndecidedLeaves(tx) => {
+                let _ = tx.send(self.consensus.undecided_leaves().cloned().collect());
+            },
+            ClientRequest::GetState { view, respond } => {
+                let _ = respond.send(self.state_manager.get_state(&view));
+            },
+            ClientRequest::GetStateAndDelta { view, respond } => {
+                let _ = respond.send(self.state_manager.get_state_and_delta(&view));
+            },
+            ClientRequest::SubmitTransaction { tx, respond } => {
+                self.block_builder.on_submit_transaction(tx);
+                let _ = respond.send(());
+            },
+            ClientRequest::UpdateLeaf { update, respond } => {
+                self.state_manager.update_state(update);
+                let _ = respond.send(());
+            },
+            ClientRequest::RequestProposal {
+                view,
+                leaf_commitment,
+                respond,
+            } => {
+                if let Some(proposal) = self.consensus.signed_proposal(&view)
+                    && proposal_commitment(&proposal.data) == leaf_commitment
+                {
+                    let _ = respond.send(Ok(proposal.clone()));
+                    return Ok(());
+                }
+                if !self
+                    .pending_proposal_fetches
+                    .contains_request(view, leaf_commitment)
+                {
+                    let request =
+                        self.consensus
+                            .signed_proposal_fetch_request(view)
+                            .map_err(|err| {
+                                let err = format!("failed to sign proposal request: {err}");
+                                CoordinatorError::regular(err).context("sign proposal request")
+                            })?;
+
+                    let message = Message {
+                        sender: self.public_key.clone(),
+                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(
+                            request,
+                        )),
+                    };
+
+                    self.network
+                        .broadcast(message.view_number(), &message)
+                        .map_err(|err| {
+                            CoordinatorError::from(err).context("broadcast proposal request")
+                        })?;
+                }
+                self.pending_proposal_fetches
+                    .push(view, leaf_commitment, respond);
+            },
+            ClientRequest::SendExternalMessage {
+                view,
+                payload,
+                recipient,
+                respond,
+            } => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::External(payload),
+                };
+                let result = self
+                    .network
+                    .unicast(view, &recipient, &message)
+                    .map_err(|err| {
+                        CoordinatorError::from(err)
+                            .context("send external message")
+                            .into()
+                    });
+                let _ = respond.send(result);
+            },
+        }
+
+        Ok(())
+    }
+
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         self.consensus.gc(view, epoch);
         self.checkpoint_collector.gc(view, epoch);
-        self.network.gc(view, epoch);
+        let _ = self.network.gc(view); // TODO
         self.state_manager.gc(view);
         self.vid_disperser.gc(view);
         self.vid_reconstructor.gc(view);
@@ -871,10 +854,6 @@ impl<T: NodeType, N: ConnectedNetwork<T::SignatureKey>, S: NewProtocolStorage<T>
         self.block_builder.gc(view);
         self.pending_proposal_fetches.gc(view);
         self.storage.gc(view);
-    }
-
-    pub fn node_id(&self) -> &KeyPrefix {
-        &self.node_id
     }
 }
 

@@ -35,10 +35,7 @@ use hotshot_types::{
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
     storage_metrics::StorageMetricsValue,
-    traits::{
-        election::Membership, leaf_fetcher_network::ConnectedNetworkLeafFetcher, network::Topic,
-        signature_key::SignatureKey as _,
-    },
+    traits::{election::Membership, network::Topic, signature_key::SignatureKey as _},
 };
 use test_utils::reserve_tcp_port;
 use tokio::{
@@ -198,9 +195,6 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                             known_nodes_with_stake_clone.clone(),
                             known_nodes_with_stake_clone,
                             hs_storage.clone(),
-                            Arc::new(ConnectedNetworkLeafFetcher::<MockTypes, _>::new(
-                                network.clone(),
-                            )),
                             pub_keys[node_id],
                             config.epoch_height,
                         )));

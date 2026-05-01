@@ -32,7 +32,9 @@ pub struct StrictMembership<
     inner: StakeTable,
     epochs: HashSet<EpochNumber>,
     drbs: HashSet<EpochNumber>,
-    fetcher: Arc<RwLock<Leaf2Fetcher<TYPES>>>,
+    storage: TestStorage<TYPES>,
+    public_key: TYPES::SignatureKey,
+    fetcher: Option<Arc<RwLock<Leaf2Fetcher<TYPES>>>>,
     epoch_height: u64,
 }
 
@@ -53,6 +55,21 @@ where
 impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
     StrictMembership<TYPES, StakeTable>
 {
+    /// Test-only: install the leaf-fetcher network. Required before any test
+    /// exercises catchup (`get_epoch_root`/`get_epoch_drb`); other tests can
+    /// skip this entirely.
+    pub fn set_leaf_fetcher_network(
+        &mut self,
+        leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<TYPES>>,
+    ) {
+        let fetcher = Leaf2Fetcher::new(
+            leaf_fetcher_network,
+            self.storage.clone(),
+            self.public_key.clone(),
+        );
+        self.fetcher = Some(Arc::new(RwLock::new(fetcher)));
+    }
+
     fn assert_has_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {
             return;
@@ -84,12 +101,9 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
         quorum_members: Vec<hotshot_types::PeerConfig<TYPES>>,
         da_members: Vec<hotshot_types::PeerConfig<TYPES>>,
         storage: Self::Storage,
-        leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         public_key: TYPES::SignatureKey,
         epoch_height: u64,
     ) -> Self {
-        let fetcher = Leaf2Fetcher::new(leaf_fetcher_network, storage, public_key);
-
         Self {
             inner: TestStakeTable::new(
                 quorum_members.into_iter().map(Into::into).collect(),
@@ -97,16 +111,17 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
             ),
             epochs: HashSet::new(),
             drbs: HashSet::new(),
-            fetcher: RwLock::new(fetcher).into(),
+            storage,
+            public_key,
+            fetcher: None,
             epoch_height,
         }
     }
 
     async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
-        self.fetcher
-            .write()
-            .await
-            .set_external_channel(external_channel)
+        if let Some(fetcher) = &self.fetcher {
+            fetcher.write().await.set_external_channel(external_channel)
+        }
     }
 
     fn stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<TYPES> {
@@ -292,7 +307,10 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
         let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
 
         let stake_table = membership_reader.inner.stake_table(Some(*epoch));
-        let fetcher = membership_reader.fetcher.clone();
+        let fetcher = membership_reader
+            .fetcher
+            .clone()
+            .expect("get_epoch_root called before set_leaf_fetcher_network");
 
         drop(membership_reader);
 
@@ -337,6 +355,8 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
             let membership_reader = membership.read().await;
             let stake_table = membership_reader.inner.stake_table(Some(previous_epoch));
             drop(membership_reader);
+
+            let fetcher = fetcher.expect("get_epoch_drb called before set_leaf_fetcher_network");
 
             let mut drb_leaf = None;
 
