@@ -249,7 +249,7 @@ impl Connection {
         let h = recv_frame(&mut self.stream, &mut a).await?;
         let mut b = [0u8; 64];
         let n = self.state.read_message(&a[..h.len().into()], &mut b)?;
-        let h = Hello::from_bytes(&b[..n]).ok_or_else(|| io::Error::other("invalid hello"))?;
+        let h = Hello::from_bytes(&b[..n]).ok_or(NetworkError::InvalidHello)?;
         Ok(h)
     }
 }
