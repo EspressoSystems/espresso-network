@@ -7424,7 +7424,9 @@ mod test {
             .build();
 
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
+        println!("AXUM PORT = {axum_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -7434,11 +7436,11 @@ mod test {
             .try_into()
             .unwrap();
 
+        let mut api_opts = Options::with_port(api_port).catchup(Default::default());
+        api_opts.http.axum_port = Some(axum_port);
+
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port).catchup(Default::default()),
-            ))
+            .api_config(SqlDataSource::options(&storage[0], api_opts))
             .network_config(network_config)
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
@@ -7473,7 +7475,7 @@ mod test {
 
         // validate proof returned from the api
         if upgrade.base == EPOCH_VERSION {
-            // V1 case
+            // V1 case — axum only implements the v2 reward tree, so no axum comparison here
             wait_until_block_height(&client, "reward-state/block-height", height).await;
 
             network.stop_consensus().await;
@@ -7511,6 +7513,8 @@ mod test {
 
             network.stop_consensus().await;
 
+            let http = reqwest::Client::new();
+
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v2
@@ -7547,7 +7551,162 @@ mod test {
                     .unwrap();
 
                 assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
+
+                // Compare axum v1 responses against tide-disco responses for each address.
+                // The axum v1 routes are at /v1/reward-state-v2/... while tide-disco serves
+                // at /reward-state-v2/... — both share the same underlying SQL data source.
+
+                let tide_proof: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{api_port}/reward-state-v2/proof/{height}/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                let axum_proof: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{axum_port}/v1/reward-state-v2/proof/{height}/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                assert_eq!(
+                    tide_proof, axum_proof,
+                    "proof/{height}/{address}: tide and axum v1 responses differ"
+                );
+
+                let tide_claim: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{api_port}/reward-state-v2/reward-claim-input/{height}/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                let axum_claim: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{axum_port}/v1/reward-state-v2/reward-claim-input/{height}/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                assert_eq!(
+                    tide_claim, axum_claim,
+                    "reward-claim-input/{height}/{address}: tide and axum v1 responses differ"
+                );
+
+                let tide_balance: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{api_port}/reward-state-v2/reward-balance/{height}/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                let axum_balance: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{axum_port}/v1/reward-state-v2/reward-balance/{height}/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                assert_eq!(
+                    tide_balance, axum_balance,
+                    "reward-balance/{height}/{address}: tide and axum v1 responses differ"
+                );
+
+                let tide_latest_proof: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{api_port}/reward-state-v2/proof/latest/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                let axum_latest_proof: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{axum_port}/v1/reward-state-v2/proof/latest/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                assert_eq!(
+                    tide_latest_proof, axum_latest_proof,
+                    "proof/latest/{address}: tide and axum v1 responses differ"
+                );
+
+                let tide_latest_balance: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{api_port}/reward-state-v2/reward-balance/latest/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                let axum_latest_balance: serde_json::Value = http
+                    .get(format!(
+                        "http://localhost:{axum_port}/v1/reward-state-v2/reward-balance/latest/{address}"
+                    ))
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                assert_eq!(
+                    tide_latest_balance, axum_latest_balance,
+                    "reward-balance/latest/{address}: tide and axum v1 responses differ"
+                );
             }
+
+            // Compare reward-amounts (paginated list of all balances at the decided height).
+            let tide_amounts: serde_json::Value = http
+                .get(format!(
+                    "http://localhost:{api_port}/reward-state-v2/reward-amounts/{height}/0/1000"
+                ))
+                .send()
+                .await?
+                .json()
+                .await?;
+            let axum_amounts: serde_json::Value = http
+                .get(format!(
+                    "http://localhost:{axum_port}/v1/reward-state-v2/reward-amounts/{height}/0/1000"
+                ))
+                .send()
+                .await?
+                .json()
+                .await?;
+            assert_eq!(
+                tide_amounts, axum_amounts,
+                "reward-amounts/{height}/0/1000: tide and axum v1 responses differ"
+            );
+
+            // Compare reward-merkle-tree-v2. NOTE: this is expected to fail — tide-disco
+            // returns the raw bincode bytes as a JSON byte array, while axum v1 deserializes
+            // them first and returns a structured {"balances":[...]} object.
+            let tide_tree: serde_json::Value = http
+                .get(format!(
+                    "http://localhost:{api_port}/reward-state-v2/reward-merkle-tree-v2/{height}"
+                ))
+                .send()
+                .await?
+                .json()
+                .await?;
+            let axum_tree: serde_json::Value = http
+                .get(format!(
+                    "http://localhost:{axum_port}/v1/reward-state-v2/reward-merkle-tree-v2/{height}"
+                ))
+                .send()
+                .await?
+                .json()
+                .await?;
+            assert_eq!(
+                tide_tree, axum_tree,
+                "reward-merkle-tree-v2/{height}: tide and axum v1 responses differ"
+            );
         }
 
         Ok(())
