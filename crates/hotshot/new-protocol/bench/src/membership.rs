@@ -36,15 +36,19 @@ pub async fn make_membership(
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
 
-    let mut strict_membership =
-        StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
-            members.clone(),
-            members.clone(),
-            TestStorage::default(),
-            public_key,
-            u64::MAX,
-        );
-    strict_membership.set_leaf_fetcher_network(leaf_fetcher_network);
+    let mut strict_membership = StrictMembership::<
+        TestTypes,
+        StaticStakeTable<BLSPubKey, SchnorrPubKey>,
+    >::new(members.clone(), members.clone(), public_key, u64::MAX);
+    // Bench doesn't drive catchup events into the fetcher; install a
+    // disconnected receiver so the fetcher's listener is wired but idle.
+    let (_tx, rx) = async_broadcast::broadcast(1);
+    strict_membership.set_leaf_fetcher(
+        leaf_fetcher_network,
+        TestStorage::default(),
+        public_key,
+        rx,
+    );
     let membership = Arc::new(RwLock::new(strict_membership));
 
     membership

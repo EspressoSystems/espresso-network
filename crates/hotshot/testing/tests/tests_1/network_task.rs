@@ -58,7 +58,6 @@ async fn test_network_task() {
     let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
         all_nodes.clone(),
         all_nodes,
-        storage.clone(),
         public_key,
         config.epoch_height,
     )));
@@ -234,7 +233,6 @@ async fn test_network_storage_fail() {
     let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
         all_nodes.clone(),
         all_nodes,
-        storage.clone(),
         public_key,
         config.epoch_height,
     )));

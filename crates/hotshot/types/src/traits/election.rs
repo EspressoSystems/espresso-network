@@ -8,7 +8,6 @@
 use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
 
 use alloy::primitives::U256;
-use async_broadcast::Receiver;
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::Result;
@@ -18,7 +17,6 @@ use crate::{
     PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
-    event::Event,
     stake_table::{HSStakeTable, supermajority_threshold},
     traits::signature_key::StakeTableEntryType,
 };
@@ -36,9 +34,6 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
 
-    /// Storage type used by the underlying fetcher
-    type Storage;
-
     type StakeTableHash: Committable;
 
     /// Create a committee
@@ -47,17 +42,9 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         // but they should not have voting power.
         stake_committee_members: Vec<PeerConfig<TYPES>>,
         da_committee_members: Vec<PeerConfig<TYPES>>,
-        storage: Self::Storage,
         public_key: TYPES::SignatureKey,
         epoch_height: u64,
     ) -> Self;
-
-    fn set_external_channel(
-        &mut self,
-        _external_channel: Receiver<Event<TYPES>>,
-    ) -> impl std::future::Future<Output = ()> + Send {
-        async {}
-    }
 
     fn total_stake(&self, epoch: Option<EpochNumber>) -> U256 {
         self.stake_table(epoch)

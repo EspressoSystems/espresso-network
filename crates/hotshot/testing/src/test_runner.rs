@@ -74,7 +74,7 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
 {
     /// execute test
     ///
@@ -447,7 +447,6 @@ where
                         <TYPES as NodeType>::Membership::new(
                             config.known_nodes_with_stake.clone(),
                             config.known_da_nodes.clone(),
-                            storage.clone(),
                             public_key.clone(),
                             config.epoch_height,
                         ),
@@ -474,7 +473,6 @@ where
                     <TYPES as NodeType>::Membership::new(
                         config.known_nodes_with_stake.clone(),
                         config.known_da_nodes.clone(),
-                        storage.clone(),
                         public_key.clone(),
                         config.epoch_height,
                     ),

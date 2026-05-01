@@ -245,7 +245,6 @@ async fn init_consensus(
                 let membership = MockMembership::new(
                     known_nodes_with_stake_clone.clone(),
                     known_nodes_with_stake_clone,
-                    storage.clone(),
                     pub_keys[node_id],
                     config.epoch_height,
                 );

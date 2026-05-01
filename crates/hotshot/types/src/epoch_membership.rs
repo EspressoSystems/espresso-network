@@ -4,7 +4,7 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
+use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::{Mutex, RwLock};
 use committable::Commitment;
 use hotshot_utils::{anytrace::*, *};
@@ -15,7 +15,6 @@ use crate::{
     PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::{DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result},
-    event::Event,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
@@ -96,14 +95,6 @@ where
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
         }
-    }
-
-    pub async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
-        self.membership
-            .write()
-            .await
-            .set_external_channel(external_channel)
-            .await;
     }
 
     /// Get a reference to the membership

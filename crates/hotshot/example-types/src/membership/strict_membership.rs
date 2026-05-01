@@ -32,8 +32,6 @@ pub struct StrictMembership<
     inner: StakeTable,
     epochs: HashSet<EpochNumber>,
     drbs: HashSet<EpochNumber>,
-    storage: TestStorage<TYPES>,
-    public_key: TYPES::SignatureKey,
     fetcher: Option<Arc<RwLock<Leaf2Fetcher<TYPES>>>>,
     epoch_height: u64,
 }
@@ -55,18 +53,18 @@ where
 impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
     StrictMembership<TYPES, StakeTable>
 {
-    /// Test-only: install the leaf-fetcher network. Required before any test
-    /// exercises catchup (`get_epoch_root`/`get_epoch_drb`); other tests can
-    /// skip this entirely.
-    pub fn set_leaf_fetcher_network(
+    /// Test-only: install a fully wired leaf fetcher. Required before any
+    /// test exercises catchup (`get_epoch_root`/`get_epoch_drb`); other tests
+    /// can skip this entirely.
+    pub fn set_leaf_fetcher(
         &mut self,
-        leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<TYPES>>,
+        network: Arc<dyn LeafFetcherNetwork<TYPES>>,
+        storage: TestStorage<TYPES>,
+        public_key: TYPES::SignatureKey,
+        channel: Receiver<Event<TYPES>>,
     ) {
-        let fetcher = Leaf2Fetcher::new(
-            leaf_fetcher_network,
-            self.storage.clone(),
-            self.public_key.clone(),
-        );
+        let mut fetcher = Leaf2Fetcher::new(network, storage, public_key);
+        fetcher.set_external_channel(channel);
         self.fetcher = Some(Arc::new(RwLock::new(fetcher)));
     }
 
@@ -95,13 +93,11 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
 {
     type Error = anyhow::Error;
     type StakeTableHash = NoStakeTableHash;
-    type Storage = TestStorage<TYPES>;
 
     fn new(
         quorum_members: Vec<hotshot_types::PeerConfig<TYPES>>,
         da_members: Vec<hotshot_types::PeerConfig<TYPES>>,
-        storage: Self::Storage,
-        public_key: TYPES::SignatureKey,
+        _public_key: TYPES::SignatureKey,
         epoch_height: u64,
     ) -> Self {
         Self {
@@ -111,16 +107,8 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
             ),
             epochs: HashSet::new(),
             drbs: HashSet::new(),
-            storage,
-            public_key,
             fetcher: None,
             epoch_height,
-        }
-    }
-
-    async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
-        if let Some(fetcher) = &self.fetcher {
-            fetcher.write().await.set_external_channel(external_channel)
         }
     }
 

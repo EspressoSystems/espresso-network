@@ -346,7 +346,7 @@ pub trait RunDa<
 > where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     TYPES: NodeType<Transaction = TestTransaction>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
@@ -391,7 +391,6 @@ pub trait RunDa<
         let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
             config.config.known_nodes_with_stake.clone(),
             config.config.known_da_nodes.clone(),
-            storage.clone(),
             pk.clone(),
             config.config.epoch_height,
         )));
@@ -638,7 +637,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -719,7 +718,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -821,7 +820,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -903,7 +902,7 @@ pub async fn main_entry_point<
 ) where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
 {
     // Initialize logging

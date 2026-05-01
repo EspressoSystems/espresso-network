@@ -105,7 +105,7 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
 {
     type Event = Event<TYPES>;
     type Error = Error;
@@ -171,7 +171,6 @@ where
                                         let memberships = <TYPES as NodeType>::Membership::new(
                                             config.known_nodes_with_stake.clone(),
                                             config.known_da_nodes.clone(),
-                                            storage.clone(),
                                             validator_config.public_key.clone(),
                                             config.epoch_height,
                                         );
@@ -259,7 +258,6 @@ where
                                     Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
                                         node.handle.hotshot.config.known_nodes_with_stake.clone(),
                                         node.handle.hotshot.config.known_da_nodes.clone(),
-                                        node.handle.storage().clone(),
                                         node.handle.public_key().clone(),
                                         node.handle.hotshot.config.epoch_height,
                                     )));

@@ -194,7 +194,6 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                         let membership = Arc::new(RwLock::new(MockMembership::new(
                             known_nodes_with_stake_clone.clone(),
                             known_nodes_with_stake_clone,
-                            hs_storage.clone(),
                             pub_keys[node_id],
                             config.epoch_height,
                         )));

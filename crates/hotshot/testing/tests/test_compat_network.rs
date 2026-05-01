@@ -103,13 +103,8 @@ async fn cliquenet_epoch_change_retains_prev_epoch_validator_then_removes() {
 
     let quorum = vec![v0.public_config(), v1.public_config()];
 
-    let mut membership = <TestTypes as NodeType>::Membership::new(
-        quorum.clone(),
-        quorum.clone(),
-        storage.clone(),
-        v0.public_key,
-        10,
-    );
+    let mut membership =
+        <TestTypes as NodeType>::Membership::new(quorum.clone(), quorum.clone(), v0.public_key, 10);
 
     // Mark epochs 1 through 5 as having stake tables available.
     for e in 1..5 {
@@ -335,7 +330,6 @@ async fn make_coordinator(
     let mut membership = <TestTypes as NodeType>::Membership::new(
         peer_configs.clone(),
         peer_configs,
-        storage.clone(),
         public_key,
         10,
     );
