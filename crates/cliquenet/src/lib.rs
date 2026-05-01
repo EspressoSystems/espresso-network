@@ -51,6 +51,10 @@ pub struct Config {
     #[builder(default = Duration::from_secs(30))]
     max_retry_delay: Duration,
 
+    /// Randomly delay the initial connect attempt between 0 and 1s.
+    #[builder(default = true)]
+    random_connect_delay: bool,
+
     #[builder(default = Duration::from_secs(30))]
     connect_timeout: Duration,
 
