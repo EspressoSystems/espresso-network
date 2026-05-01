@@ -71,29 +71,29 @@ pub mod v1 {
     //=========================================================================
 
     /// Get namespace proof by block height
-    /// Path: GET /v1/availability/namespace/{namespace}/block/{height}
+    /// Path: GET /v1/availability/block/{height}/namespace/{namespace}
     pub const NAMESPACE_PROOF_BY_HEIGHT_ROUTE: &str =
-        "/v1/availability/namespace/{namespace}/block/{height}";
+        "/v1/availability/block/{height}/namespace/{namespace}";
 
     /// Get namespace proof by block hash
-    /// Path: GET /v1/availability/namespace/{namespace}/block/hash/{hash}
+    /// Path: GET /v1/availability/block/hash/{hash}/namespace/{namespace}
     pub const NAMESPACE_PROOF_BY_HASH_ROUTE: &str =
-        "/v1/availability/namespace/{namespace}/block/hash/{hash}";
+        "/v1/availability/block/hash/{hash}/namespace/{namespace}";
 
     /// Get namespace proof by payload hash
-    /// Path: GET /v1/availability/namespace/{namespace}/block/payload-hash/{payload_hash}
+    /// Path: GET /v1/availability/block/payload-hash/{payload-hash}/namespace/{namespace}
     pub const NAMESPACE_PROOF_BY_PAYLOAD_HASH_ROUTE: &str =
-        "/v1/availability/namespace/{namespace}/block/payload-hash/{payload_hash}";
+        "/v1/availability/block/payload-hash/{payload-hash}/namespace/{namespace}";
 
     /// Get namespace proofs for a range of blocks
-    /// Path: GET /v1/availability/namespace/{namespace}/blocks/{from}/{until}
+    /// Path: GET /v1/availability/block/{from}/{until}/namespace/{namespace}
     pub const NAMESPACE_PROOF_RANGE_ROUTE: &str =
-        "/v1/availability/namespace/{namespace}/blocks/{from}/{until}";
+        "/v1/availability/block/{from}/{until}/namespace/{namespace}";
 
     /// Generate proof of incorrect encoding
-    /// Path: GET /v1/availability/incorrect-encoding/{namespace}/block/{block_number}
+    /// Path: GET /v1/availability/incorrect-encoding-proof/{block_number}
     pub const INCORRECT_ENCODING_PROOF_ROUTE: &str =
-        "/v1/availability/incorrect-encoding/{namespace}/block/{block_number}";
+        "/v1/availability/incorrect-encoding-proof/{block_number}";
 
     /// Get light client state certificate (V1)
     /// Path: GET /v1/availability/state-cert/{epoch}
