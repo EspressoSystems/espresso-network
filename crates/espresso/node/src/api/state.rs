@@ -394,7 +394,7 @@ where
     type RewardBalance = U256;
     type RewardAccountQueryData = InternalRewardAccountQueryData;
     type RewardAmounts = Vec<(alloy::primitives::Address, U256)>;
-    type RewardMerkleTreeData = InternalRewardTreeData;
+    type RewardMerkleTreeData = Vec<u8>;
 
     async fn get_reward_claim_input(
         &self,
@@ -594,21 +594,8 @@ where
         &self,
         height: u64,
     ) -> anyhow::Result<Self::RewardMerkleTreeData> {
-        // Load the raw merkle tree bytes
-        let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
+        self.data_source.load_tree(height).await.map_err(|err| {
             anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
-        })?;
-
-        // Deserialize to internal RewardMerkleTreeV2Data
-        let tree_data: InternalRewardTreeData =
-            bincode::deserialize(&tree_bytes).map_err(|err| {
-                anyhow::anyhow!(
-                    "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                    height,
-                    err
-                )
-            })?;
-
-        Ok(tree_data)
+        })
     }
 }
