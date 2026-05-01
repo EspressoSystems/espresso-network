@@ -1,40 +1,31 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use async_lock::RwLock;
-use hotshot::{
-    traits::implementations::MemoryNetwork,
-    types::{BLSPubKey, SchnorrPubKey},
-};
+use hotshot::types::{BLSPubKey, SchnorrPubKey};
 use hotshot_example_types::{
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
-    node_types::{MemoryImpl, TestTypes},
+    node_types::TestTypes,
     storage_types::TestStorage,
 };
+use hotshot_new_protocol::client::{ClientLeafFetcherNetwork, CoordinatorClient};
 use hotshot_testing::{node_stake::TestNodeStakes, test_builder::gen_node_lists};
 use hotshot_types::{
-    data::EpochNumber,
-    epoch_membership::EpochMembershipCoordinator,
-    traits::{
-        election::Membership, network::TestableNetworkingImplementation,
-        signature_key::StakeTableEntryType,
-    },
+    data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::election::Membership,
 };
 
 /// Create an `EpochMembershipCoordinator<TestTypes>` with `num_nodes` validators.
-pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<TestTypes> {
-    // Throwaway network; actual networking uses Cliquenet.
-    let network =
-        <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
-            num_nodes,
-            0,
-            1,
-            num_nodes,
-            None,
-            Duration::from_secs(1),
-            &mut HashMap::new(),
-        )(0)
-        .await;
-
+///
+/// The membership's `Leaf2Fetcher` routes catchup messages through the
+/// returned [`CoordinatorClient`] — this client must be installed on the
+/// node's `Coordinator` (`.client(...)`) so messages are dispatched over
+/// the Coordinator's owned `Network`.
+pub async fn make_membership(
+    num_nodes: usize,
+    public_key: BLSPubKey,
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    CoordinatorClient<TestTypes>,
+) {
     let members = gen_node_lists(
         num_nodes as u64,
         num_nodes as u64,
@@ -42,15 +33,18 @@ pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<Tes
     )
     .0;
 
+    let client = CoordinatorClient::<TestTypes>::default();
+    let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
+
     let membership = Arc::new(RwLock::new(StrictMembership::<
         TestTypes,
         StaticStakeTable<BLSPubKey, SchnorrPubKey>,
-    >::new::<MemoryImpl>(
+    >::new(
         members.clone(),
         members.clone(),
         TestStorage::default(),
-        network,
-        members[0].stake_table_entry.public_key(),
+        leaf_fetcher_network,
+        public_key,
         u64::MAX,
     )));
 
@@ -59,5 +53,7 @@ pub async fn make_membership(num_nodes: usize) -> EpochMembershipCoordinator<Tes
         .await
         .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
-    EpochMembershipCoordinator::new(membership, u64::MAX, &TestStorage::<TestTypes>::default())
+    let coordinator =
+        EpochMembershipCoordinator::new(membership, u64::MAX, &TestStorage::<TestTypes>::default());
+    (coordinator, client)
 }
