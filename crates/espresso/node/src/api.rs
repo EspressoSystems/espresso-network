@@ -7411,6 +7411,28 @@ mod test {
         Ok(())
     }
 
+    async fn compare_endpoints(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let tide: serde_json::Value = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .json()
+            .await?;
+        let axum: serde_json::Value = http
+            .get(format!("http://localhost:{axum_port}/v1/{path}"))
+            .send()
+            .await?
+            .json()
+            .await?;
+        assert_eq!(tide, axum, "v1/{path}: tide and axum v1 responses differ");
+        Ok(())
+    }
+
     #[rstest]
     #[case(POS_V3)]
     #[case(POS_V4)]
@@ -7552,161 +7574,17 @@ mod test {
 
                 assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
 
-                // Compare axum v1 responses against tide-disco responses for each address.
-                // The axum v1 routes are at /v1/reward-state-v2/... while tide-disco serves
-                // at /reward-state-v2/... — both share the same underlying SQL data source.
-
-                let tide_proof: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{api_port}/reward-state-v2/proof/{height}/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                let axum_proof: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{axum_port}/v1/reward-state-v2/proof/{height}/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                assert_eq!(
-                    tide_proof, axum_proof,
-                    "proof/{height}/{address}: tide and axum v1 responses differ"
-                );
-
-                let tide_claim: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{api_port}/reward-state-v2/reward-claim-input/{height}/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                let axum_claim: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{axum_port}/v1/reward-state-v2/reward-claim-input/{height}/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                assert_eq!(
-                    tide_claim, axum_claim,
-                    "reward-claim-input/{height}/{address}: tide and axum v1 responses differ"
-                );
-
-                let tide_balance: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{api_port}/reward-state-v2/reward-balance/{height}/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                let axum_balance: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{axum_port}/v1/reward-state-v2/reward-balance/{height}/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                assert_eq!(
-                    tide_balance, axum_balance,
-                    "reward-balance/{height}/{address}: tide and axum v1 responses differ"
-                );
-
-                let tide_latest_proof: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{api_port}/reward-state-v2/proof/latest/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                let axum_latest_proof: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{axum_port}/v1/reward-state-v2/proof/latest/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                assert_eq!(
-                    tide_latest_proof, axum_latest_proof,
-                    "proof/latest/{address}: tide and axum v1 responses differ"
-                );
-
-                let tide_latest_balance: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{api_port}/reward-state-v2/reward-balance/latest/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                let axum_latest_balance: serde_json::Value = http
-                    .get(format!(
-                        "http://localhost:{axum_port}/v1/reward-state-v2/reward-balance/latest/{address}"
-                    ))
-                    .send()
-                    .await?
-                    .json()
-                    .await?;
-                assert_eq!(
-                    tide_latest_balance, axum_latest_balance,
-                    "reward-balance/latest/{address}: tide and axum v1 responses differ"
-                );
+                // Both servers share the same underlying SQL data source; compare responses
+                // for each per-address endpoint under reward-state-v2.
+                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/proof/{height}/{address}")).await?;
+                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-claim-input/{height}/{address}")).await?;
+                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-balance/{height}/{address}")).await?;
+                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/proof/latest/{address}")).await?;
+                compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-balance/latest/{address}")).await?;
             }
 
-            // Compare reward-amounts (paginated list of all balances at the decided height).
-            let tide_amounts: serde_json::Value = http
-                .get(format!(
-                    "http://localhost:{api_port}/reward-state-v2/reward-amounts/{height}/0/1000"
-                ))
-                .send()
-                .await?
-                .json()
-                .await?;
-            let axum_amounts: serde_json::Value = http
-                .get(format!(
-                    "http://localhost:{axum_port}/v1/reward-state-v2/reward-amounts/{height}/0/1000"
-                ))
-                .send()
-                .await?
-                .json()
-                .await?;
-            assert_eq!(
-                tide_amounts, axum_amounts,
-                "reward-amounts/{height}/0/1000: tide and axum v1 responses differ"
-            );
-
-            // Compare reward-merkle-tree-v2. NOTE: this is expected to fail — tide-disco
-            // returns the raw bincode bytes as a JSON byte array, while axum v1 deserializes
-            // them first and returns a structured {"balances":[...]} object.
-            let tide_tree: serde_json::Value = http
-                .get(format!(
-                    "http://localhost:{api_port}/reward-state-v2/reward-merkle-tree-v2/{height}"
-                ))
-                .send()
-                .await?
-                .json()
-                .await?;
-            let axum_tree: serde_json::Value = http
-                .get(format!(
-                    "http://localhost:{axum_port}/v1/reward-state-v2/reward-merkle-tree-v2/{height}"
-                ))
-                .send()
-                .await?
-                .json()
-                .await?;
-            assert_eq!(
-                tide_tree, axum_tree,
-                "reward-merkle-tree-v2/{height}: tide and axum v1 responses differ"
-            );
+            compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-amounts/{height}/0/1000")).await?;
+            compare_endpoints(&http, api_port, axum_port, &format!("reward-state-v2/reward-merkle-tree-v2/{height}")).await?;
         }
 
         Ok(())
