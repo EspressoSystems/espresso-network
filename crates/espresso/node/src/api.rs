@@ -2115,6 +2115,7 @@ pub mod test_helpers {
                                 .await
                             }
                         }
+                        .boxed()
                     }),
             )
             .await;
