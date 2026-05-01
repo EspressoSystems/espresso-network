@@ -23,6 +23,8 @@ use hotshot_types::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::client::CoordinatorClient;
+
 /// Abstracts creation of a connected set of test networks.
 ///
 /// Implementations produce `num_nodes` interconnected network instances.  The
@@ -62,11 +64,16 @@ pub trait TestNetwork {
     fn shutdown_node(&self, node_index: usize) -> impl std::future::Future<Output = ()>;
 
     /// Create an independent membership coordinator whose internal
-    /// fetcher is connected to this test network so epoch catchup can
-    /// reach peers.  The returned [`TestStorage`] is the storage the
-    /// membership's `Leaf2Fetcher` reads from; the caller is expected
-    /// to share it with the node's `Coordinator` so self-produced
-    /// proposals land in the same store.
+    /// fetcher routes catchup messages through a fresh
+    /// [`CoordinatorClient`] (not through the test network directly).
+    /// The returned [`CoordinatorClient`] must be installed on the
+    /// node's `Coordinator` (`build_test_coordinator` does this)
+    /// so the routed messages are actually drained and dispatched
+    /// over the node's owned `Network`.
+    ///
+    /// The returned [`TestStorage`] is the storage the membership's
+    /// `Leaf2Fetcher` reads from; share it with the `Coordinator`
+    /// so self-produced proposals land in the same store.
     fn create_membership(
         &self,
         node_index: usize,
@@ -76,6 +83,7 @@ pub trait TestNetwork {
         Output = (
             EpochMembershipCoordinator<TestTypes>,
             TestStorage<TestTypes>,
+            CoordinatorClient<TestTypes>,
         ),
     >;
 }
@@ -158,26 +166,10 @@ impl TestNetwork for MemoryTestNetwork {
     ) -> (
         EpochMembershipCoordinator<TestTypes>,
         TestStorage<TestTypes>,
+        CoordinatorClient<TestTypes>,
     ) {
-        let (pk, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
-        // Share the node's actual Coordinator network with the membership's
-        // Leaf2Fetcher.  Leaf2Fetcher only SENDS; only the Coordinator
-        // drains the receive channel.  MemoryNetwork is Clone (inner Arc
-        // state shared) so cloning hands out an alias.
-        let net = self
-            .node_networks
-            .lock()
-            .unwrap()
-            .get(&node_index)
-            .expect("node network must exist before create_membership")
-            .clone();
-        super::utils::mock_membership_with_network::<MemoryNetworkImpl>(
-            num_nodes,
-            epoch_height,
-            Arc::new(net),
-            pk,
-        )
-        .await
+        let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
+        super::utils::mock_membership_with_client(num_nodes, epoch_height, public_key).await
     }
 }
 
@@ -297,25 +289,9 @@ impl TestNetwork for CliquenetTestNetwork {
     ) -> (
         EpochMembershipCoordinator<TestTypes>,
         TestStorage<TestTypes>,
+        CoordinatorClient<TestTypes>,
     ) {
-        let (pk, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
-        // Share the node's actual Cliquenet with the membership's
-        // Leaf2Fetcher so catchup requests/responses travel over the
-        // real TCP transport.  Cliquenet is Clone (inner Arc) so this
-        // hands out an alias.
-        let net = self
-            .node_networks
-            .lock()
-            .await
-            .get(&node_index)
-            .expect("node network must exist before create_membership")
-            .clone();
-        super::utils::mock_membership_with_network::<CliquenetImpl>(
-            num_nodes,
-            epoch_height,
-            Arc::new(net),
-            pk,
-        )
-        .await
+        let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], node_index as u64);
+        super::utils::mock_membership_with_client(num_nodes, epoch_height, public_key).await
     }
 }

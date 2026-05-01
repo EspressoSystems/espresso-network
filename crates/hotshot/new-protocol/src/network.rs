@@ -27,6 +27,8 @@ pub trait Network<T: NodeType> {
 
     fn receive(&mut self) -> impl Future<Output = Result<Message<T, Unchecked>>> + Send;
 
+    fn shutdown(&mut self) -> impl Future<Output = ()> + Send;
+
     fn gc(&mut self, v: ViewNumber) -> Result<()>;
 
     fn add_peers(&mut self, r: PeerRole, ps: Vec<(T::SignatureKey, Self::PeerData)>) -> Result<()>;

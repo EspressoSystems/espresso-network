@@ -214,6 +214,10 @@ where
         }
     }
 
+    pub async fn stop(mut self) {
+        self.network.shutdown().await
+    }
+
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
         loop {
             select! {
@@ -808,6 +812,26 @@ where
                 }
                 self.pending_proposal_fetches
                     .push(view, leaf_commitment, respond);
+            },
+            ClientRequest::SendExternalMessage {
+                view,
+                payload,
+                recipient,
+                respond,
+            } => {
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::External(payload),
+                };
+                let result = self
+                    .network
+                    .unicast(view, &recipient, &message)
+                    .map_err(|err| {
+                        CoordinatorError::from(err)
+                            .context("send external message")
+                            .into()
+                    });
+                let _ = respond.send(result);
             },
         }
 

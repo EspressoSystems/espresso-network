@@ -2,10 +2,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 use hotshot_types::data::ViewNumber;
 
-use crate::tests::common::{
-    network::{CliquenetTestNetwork, MemoryTestNetwork},
-    runner::{NodeAction, NodeChange, TestRunner},
-};
+use crate::tests::common::runner::{NodeAction, NodeChange, TestRunner};
 
 /// Helper: collect view numbers from an iterator.
 fn views(iter: impl IntoIterator<Item = u64>) -> BTreeSet<ViewNumber> {
@@ -23,22 +20,21 @@ fn views(iter: impl IntoIterator<Item = u64>) -> BTreeSet<ViewNumber> {
 /// epoch boundaries.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_one_node_with_epochs() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        epoch_height: 10,
-        node_changes: vec![(
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(30)
+        .epoch_height(10)
+        .node_changes(vec![(
             11,
             vec![NodeChange {
                 idx: 5,
                 action: NodeAction::Restart,
             }],
-        )],
-        ..Default::default()
-    }
-    .run::<CliquenetTestNetwork>()
-    .await
-    .unwrap();
+        )])
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
 /// 10 nodes, f=3 restart from blank state simultaneously at view 15,
@@ -53,11 +49,11 @@ async fn restart_f_nodes_with_epochs() {
     // restart are 17(7), 18(8), 19(9) — they should propose while catching
     // up.  Views 27(7), 28(8), 29(9) are in the epoch transition zone and
     // may also fail if the DRB hasn't arrived yet, but this tests that it does.
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        epoch_height: 10,
-        node_changes: vec![(
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(30)
+        .epoch_height(10)
+        .node_changes(vec![(
             11,
             vec![
                 NodeChange {
@@ -73,12 +69,11 @@ async fn restart_f_nodes_with_epochs() {
                     action: NodeAction::Restart,
                 },
             ],
-        )],
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
+        )])
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
 // TODO: This test currently builds a brand-new chain from genesis after
@@ -122,24 +117,23 @@ async fn restart_f_nodes_with_epochs() {
 async fn late_start_one_node_with_epochs() {
     // Node 9 is leader for 9, 19, 29, 39.  It rejoins right after
     // it would have led for view 39 and should propose at view 49 in epoch 3
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 50,
-        max_runtime: Duration::from_secs(500),
-        epoch_height: 15,
-        expected_failed_views: views([9, 19, 29, 39]),
-        node_changes: vec![(
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(50)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(15)
+        .expected_failed_views(views([9, 19, 29, 39]))
+        .node_changes(vec![(
             39,
             vec![NodeChange {
                 idx: 9,
                 action: NodeAction::Start,
             }],
-        )],
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
+        )])
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
 /// 10 nodes, f=3 start late at view 20, epoch_height=10.
@@ -148,13 +142,13 @@ async fn late_start_one_node_with_epochs() {
 /// minimum quorum for n=10).  At view 23 they all join simultaneously.
 #[tokio::test(flavor = "multi_thread")]
 async fn late_start_f_nodes_with_epochs() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 50,
-        max_runtime: Duration::from_secs(500),
-        epoch_height: 15,
-        expected_failed_views: views([7, 8, 9, 17, 18, 19, 27, 28, 29, 37, 38, 39]),
-        node_changes: vec![
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(50)
+        .max_runtime(Duration::from_secs(500))
+        .epoch_height(15)
+        .expected_failed_views(views([7, 8, 9, 17, 18, 19, 27, 28, 29, 37, 38, 39]))
+        .node_changes(vec![
             (
                 37,
                 vec![
@@ -175,10 +169,9 @@ async fn late_start_f_nodes_with_epochs() {
                     action: NodeAction::Start,
                 }],
             ),
-        ],
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
+        ])
+        .build()
+        .run()
+        .await
+        .unwrap();
 }

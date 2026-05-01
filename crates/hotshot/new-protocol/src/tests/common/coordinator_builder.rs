@@ -19,6 +19,7 @@ use hotshot_types::{
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
+    client::CoordinatorClient,
     consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
@@ -44,6 +45,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     network: N,
     mut membership: EpochMembershipCoordinator<TestTypes>,
     storage: TestStorage<TestTypes>,
+    client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
 ) -> (
@@ -158,6 +160,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
         .storage(crate::storage::Storage::new(storage, private_key))
+        .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(Timer::new(

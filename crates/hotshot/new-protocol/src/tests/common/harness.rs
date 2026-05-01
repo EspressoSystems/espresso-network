@@ -57,8 +57,9 @@ impl TestHarness {
         );
         let state_private_key = state_key_pair.sign_key_ref().clone();
         let instance = Arc::new(TestInstanceState::default());
-        let (membership, storage) =
-            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT).await;
+        let (membership, storage, client) =
+            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key)
+                .await;
         let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
@@ -136,6 +137,7 @@ impl TestHarness {
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
             .storage(crate::storage::Storage::new(storage, private_key))
+            .client(client)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
             .timer(Timer::new(

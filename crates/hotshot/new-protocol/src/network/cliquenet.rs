@@ -146,6 +146,12 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         Ok(m)
     }
 
+    async fn shutdown(&mut self) {
+        if let Ok(done) = self.inner.shutdown() {
+            done.await
+        }
+    }
+
     fn gc(&mut self, v: ViewNumber) -> Result<(), NetworkError> {
         self.inner.gc(Slot::new(*v)).map_err(to_network_error)
     }
@@ -193,6 +199,9 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
 
 impl<T: NodeType> Cliquenet<T> {
     fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>, NetworkError> {
+        if let MessageType::External(bytes) = &m.message_type {
+            return Ok(bytes.clone());
+        }
         self.upgrade_lock
             .serialize(m)
             .map_err(|e| NetworkError::Io(format!("serialization error: {e}").into()))
