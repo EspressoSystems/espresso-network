@@ -2,9 +2,9 @@ use std::{collections::BTreeSet, time::Duration};
 
 use crate::tests::common::runner::TestRunner;
 
-/// 10 nodes, 1 down over Cliquenet.
+/// 10 nodes, 1 down.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_one_down_cliquenet() {
+async fn ten_nodes_one_down() {
     TestRunner::builder()
         .num_nodes(10)
         .target_decisions(30)
@@ -16,9 +16,9 @@ async fn ten_nodes_one_down_cliquenet() {
         .unwrap();
 }
 
-/// 10 nodes, 2 down over Cliquenet.
+/// 10 nodes, 2 down.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_two_down_cliquenet() {
+async fn ten_nodes_two_down() {
     TestRunner::builder()
         .num_nodes(10)
         .target_decisions(30)
@@ -30,9 +30,9 @@ async fn ten_nodes_two_down_cliquenet() {
         .unwrap();
 }
 
-/// 10 nodes, f=3 down over Cliquenet.
+/// 10 nodes, f=3 down.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_f_down_cliquenet() {
+async fn ten_nodes_f_down() {
     TestRunner::builder()
         .num_nodes(10)
         .target_decisions(30)
@@ -44,9 +44,9 @@ async fn ten_nodes_f_down_cliquenet() {
         .unwrap();
 }
 
-/// 10 nodes, 1 down, with epochs over Cliquenet.
+/// 10 nodes, 1 down, with epochs.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_one_down_with_epochs_cliquenet() {
+async fn ten_nodes_one_down_with_epochs() {
     TestRunner::builder()
         .num_nodes(10)
         .target_decisions(30)
@@ -59,9 +59,9 @@ async fn ten_nodes_one_down_with_epochs_cliquenet() {
         .unwrap();
 }
 
-/// 10 nodes, f=3 down, with epochs over Cliquenet.
+/// 10 nodes, f=3 down, with epochs.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_f_down_with_epochs_cliquenet() {
+async fn ten_nodes_f_down_with_epochs() {
     TestRunner::builder()
         .num_nodes(10)
         .target_decisions(30)
