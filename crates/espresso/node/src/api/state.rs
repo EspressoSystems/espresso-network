@@ -393,7 +393,7 @@ where
     type RewardClaimInput = InternalRewardClaimInput;
     type RewardBalance = InternalRewardAmount;
     type RewardAccountQueryData = InternalRewardAccountQueryData;
-    type RewardAmounts = Vec<(alloy::primitives::Address, U256)>;
+    type RewardAmounts = Vec<(alloy::primitives::Address, InternalRewardAmount)>;
     type RewardMerkleTreeData = Vec<u8>;
 
     async fn get_reward_claim_input(
@@ -576,11 +576,10 @@ where
         let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
         let slice = &tree_data.balances[offset_usize..end];
 
-        // Reverse order (matching Tide implementation) and convert to (Address, U256)
-        let result: Vec<(alloy::primitives::Address, U256)> = slice
+        let result: Vec<(alloy::primitives::Address, InternalRewardAmount)> = slice
             .iter()
             .rev()
-            .map(|(account, amount)| (account.0, amount.0))
+            .map(|(account, amount)| (account.0, *amount))
             .collect();
 
         Ok(result)
