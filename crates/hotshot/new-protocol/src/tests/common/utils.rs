@@ -46,7 +46,7 @@ use hotshot_types::{
 
 use crate::{
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
-    helpers::{proposal_commitment, upgrade_lock},
+    helpers::{proposal_commitment, test_upgrade_lock},
     message::{
         Certificate1, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
         ProposalMessage, TimeoutVoteMessage, Validated, Vote1, Vote2,
@@ -142,7 +142,7 @@ impl TestView {
             self.view_number,
             &pub_key,
             &priv_key,
-            &upgrade_lock(),
+            &test_upgrade_lock(),
         )
         .expect("Failed to sign QuorumVote2");
         let vid_share = self
@@ -173,7 +173,7 @@ impl TestView {
             self.view_number,
             &pub_key,
             &priv_key,
-            &upgrade_lock(),
+            &test_upgrade_lock(),
         )
         .expect("Failed to sign Vote2");
         Message {
@@ -198,7 +198,7 @@ impl TestView {
             self.view_number,
             &pub_key,
             &priv_key,
-            &upgrade_lock(),
+            &test_upgrade_lock(),
         )
         .expect("Failed to sign TimeoutVote2");
         Message {
@@ -583,6 +583,7 @@ impl ConsensusHarness {
             membership.clone(),
             public_key,
             private_key,
+            test_upgrade_lock(),
             genesis_leaf,
             epoch_height,
         );
@@ -656,7 +657,7 @@ impl ConsensusHarness {
                     Some(*epoch),
                     Some(*epoch),
                     metadata,
-                    &upgrade_lock(),
+                    &test_upgrade_lock(),
                 )
                 .await
                 .unwrap();
@@ -736,7 +737,7 @@ pub(crate) async fn build_cert1(
         view_number,
         public_key,
         private_key,
-        &upgrade_lock::<TestTypes>(),
+        &test_upgrade_lock::<TestTypes>(),
     )
     .await
 }
@@ -761,7 +762,7 @@ pub(crate) async fn build_cert2(
         view_number,
         public_key,
         private_key,
-        &upgrade_lock::<TestTypes>(),
+        &test_upgrade_lock::<TestTypes>(),
     )
     .await
 }
@@ -783,7 +784,7 @@ async fn build_timeout_cert(
         view_number,
         public_key,
         private_key,
-        &upgrade_lock::<TestTypes>(),
+        &test_upgrade_lock::<TestTypes>(),
     )
     .await
 }

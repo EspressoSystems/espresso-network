@@ -17,7 +17,7 @@ use hotshot_types::{
 };
 
 use crate::{
-    helpers::proposal_commitment,
+    helpers::{proposal_commitment, test_upgrade_lock},
     message::Proposal,
     state::{HeaderRequest, StateManager, StateManagerOutput, StateRequest},
     tests::common::utils::{TestData, TestView},
@@ -79,7 +79,8 @@ fn make_header_request(
 }
 
 async fn new_manager() -> StateManager<TestTypes> {
-    let mut manager = StateManager::new(Arc::new(TestInstanceState::default()));
+    let mut manager =
+        StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
     let genesis_state = TestValidatedState::default();
     let genesis_leaf = Leaf2::<TestTypes>::genesis(
         &genesis_state,
@@ -124,7 +125,8 @@ fn count_header_created(events: &[StateManagerOutput<TestTypes>]) -> usize {
 /// State request with missing parent inserts empty state (no output produced).
 #[tokio::test]
 async fn test_state_request_missing_parent_inserts_empty() {
-    let mut manager = StateManager::new(Arc::new(TestInstanceState::default()));
+    let mut manager =
+        StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
     let test_data = TestData::new(2).await;
 
     // View 1's parent is genesis (view 0), which isn't seeded.

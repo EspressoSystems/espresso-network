@@ -138,7 +138,7 @@ where
                     ),
                     status: StatusCode::NOT_FOUND,
                 })
-                .map(|proof| proof.balance)
+                .map(|proof| RewardAmount(proof.balance))
         }
         .boxed()
     })?

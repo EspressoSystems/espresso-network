@@ -627,10 +627,10 @@ where
     D: RewardMerkleTreeDataSource,
 {
     type RewardClaimInput = InternalRewardClaimInput;
-    type RewardBalance = U256;
+    type RewardBalance = InternalRewardAmount;
     type RewardAccountQueryData = InternalRewardAccountQueryData;
-    type RewardAmounts = Vec<(alloy::primitives::Address, U256)>;
-    type RewardMerkleTreeData = InternalRewardTreeData;
+    type RewardAmounts = Vec<(alloy::primitives::Address, InternalRewardAmount)>;
+    type RewardMerkleTreeData = Vec<u8>;
 
     async fn get_reward_claim_input(
         &self,
@@ -702,20 +702,17 @@ where
                 )
             })?;
 
-        // Return the balance directly (U256)
-        Ok(proof.balance)
+        Ok(InternalRewardAmount(proof.balance))
     }
 
     async fn get_latest_reward_balance(
         &self,
         address: String,
     ) -> anyhow::Result<Self::RewardBalance> {
-        // Parse the Ethereum address
         let addr: alloy::primitives::Address = address
             .parse()
             .map_err(|_| anyhow::anyhow!("invalid ethereum address: {}", address))?;
 
-        // Load the latest reward account proof from the data source
         let proof = self
             .data_source
             .load_latest_reward_account_proof_v2(addr.into())
@@ -724,8 +721,7 @@ where
                 anyhow::anyhow!("failed to load latest reward account {}: {}", address, err)
             })?;
 
-        // Return the balance directly (U256)
-        Ok(proof.balance)
+        Ok(InternalRewardAmount(proof.balance))
     }
 
     async fn get_reward_account_proof(
@@ -816,11 +812,10 @@ where
         let end = std::cmp::min(offset_usize + limit_usize, tree_data.balances.len());
         let slice = &tree_data.balances[offset_usize..end];
 
-        // Reverse order (matching Tide implementation) and convert to (Address, U256)
-        let result: Vec<(alloy::primitives::Address, U256)> = slice
+        let result: Vec<(alloy::primitives::Address, InternalRewardAmount)> = slice
             .iter()
             .rev()
-            .map(|(account, amount)| (account.0, amount.0))
+            .map(|(account, amount)| (account.0, *amount))
             .collect();
 
         Ok(result)
@@ -830,22 +825,9 @@ where
         &self,
         height: u64,
     ) -> anyhow::Result<Self::RewardMerkleTreeData> {
-        // Load the raw merkle tree bytes
-        let tree_bytes = self.data_source.load_tree(height).await.map_err(|err| {
+        self.data_source.load_tree(height).await.map_err(|err| {
             anyhow::anyhow!("failed to load reward tree at height {}: {}", height, err)
-        })?;
-
-        // Deserialize to internal RewardMerkleTreeV2Data
-        let tree_data: InternalRewardTreeData =
-            bincode::deserialize(&tree_bytes).map_err(|err| {
-                anyhow::anyhow!(
-                    "failed to deserialize RewardMerkleTreeV2Data at height {}: {}",
-                    height,
-                    err
-                )
-            })?;
-
-        Ok(tree_data)
+        })
     }
 }
 

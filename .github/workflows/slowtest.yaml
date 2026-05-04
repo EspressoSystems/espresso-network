@@ -48,9 +48,9 @@ jobs:
       - uses: ./.github/actions/free-disk-space
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - uses: foundry-rs/foundry-toolchain@v1
       - uses: taiki-e/install-action@just

@@ -8,6 +8,7 @@ use hotshot_types::data::{EpochNumber, ViewNumber};
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
+    helpers::test_upgrade_lock,
     message::{DedupManifest, TransactionMessage},
     tests::common::utils::mock_membership,
 };
@@ -45,6 +46,7 @@ async fn builder() -> BlockBuilder<TestTypes> {
         Arc::new(TestInstanceState::default()),
         mock_membership().await,
         small_config(),
+        test_upgrade_lock(),
     )
 }
 
@@ -102,6 +104,7 @@ async fn test_dedup_window() {
             dedup_window_size: 2,
             ..small_config()
         },
+        test_upgrade_lock(),
     );
     let t = tx(1);
 

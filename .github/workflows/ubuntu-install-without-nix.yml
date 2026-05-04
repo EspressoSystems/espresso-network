@@ -22,9 +22,9 @@ jobs:
           submodules: recursive
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
 
       - name: Enable Rust Caching
         uses: Swatinem/rust-cache@v2

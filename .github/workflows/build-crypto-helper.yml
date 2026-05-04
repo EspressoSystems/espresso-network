@@ -44,9 +44,14 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Install Protoc
+        if: runner.os == 'macOS'
+        run: brew install protobuf
 
       - name: Set Environment
         # Install tools and set environment variables like this example

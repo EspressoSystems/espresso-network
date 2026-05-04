@@ -1,4 +1,4 @@
-# fetched at block 10697033 (2026-04-20T12:25:48Z)
+# fetched at block 10747609 (2026-04-28T07:02:00Z)
 network = "decaf"
 
 [multisigs.espresso_labs]
@@ -65,22 +65,22 @@ name = "espresso_labs"
 [esp_token]
 status = "deployed"
 address = "0xb3e655a030e2e34a18b72757b40be086a8f43f3b"
-owner_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
-owner_name = "espresso_labs"
+owner_address = "0x0eb0ef3b5a46a444c38da452055bddb273550d5c"
+owner_name = "safe_exit_timelock"
 version = "2.0.0"
 
 [fee_contract]
 status = "deployed"
 address = "0x42835083fd1d3fc5d799b5f6815ae4bf2623e6d0"
-owner_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
-owner_name = "espresso_labs"
+owner_address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+owner_name = "ops_timelock"
 version = "1.0.0"
 
 [light_client]
 status = "deployed"
 address = "0x303872bb82a191771321d4828888920100d0b3e4"
-owner_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
-owner_name = "espresso_labs"
+owner_address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+owner_name = "ops_timelock"
 version = "3.0.0"
 
 [reward_claim]
@@ -95,8 +95,8 @@ pauser_name = "espresso_labs"
 [stake_table]
 status = "deployed"
 address = "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037"
-default_admin_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
-default_admin_name = "espresso_labs"
+default_admin_address = "0x8e3b6563d683b87964104a2c3a4bf542bb70767f"
+default_admin_name = "ops_timelock"
 version = "2.0.0"
 pauser_address = "0xb76834e371b666feee48e5d7d9a97ca08b5a0620"
 pauser_name = "espresso_labs"
