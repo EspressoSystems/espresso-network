@@ -7531,7 +7531,18 @@ mod test {
             }
         } else {
             // V2 case
+
+            // Submit a transaction so we have a block with actual namespace data for
+            // availability parity tests. Both servers share the same SQL data source, so they
+            // must return identical responses.
+            let avail_ns = NamespaceId::from(42_u32);
+            let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
+            network.server.submit_transaction(avail_tx.clone()).await.unwrap();
+            let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
+
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+            // Wait for the availability query service to index avail_block.
+            wait_until_block_height(&client, "node/block-height", avail_block).await;
 
             network.stop_consensus().await;
 
@@ -7627,6 +7638,60 @@ mod test {
                 &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
             )
             .await?;
+
+            // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
+
+            // Namespace proof by height
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+
+            // Namespace proof by block hash and payload hash
+            let avail_header: Header = client
+                .get(&format!("availability/header/{avail_block}"))
+                .send()
+                .await
+                .unwrap();
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/hash/{}/namespace/{avail_ns}",
+                    avail_header.commit()
+                ),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/payload-hash/{}/namespace/{avail_ns}",
+                    avail_header.payload_commitment()
+                ),
+            )
+            .await?;
+
+            // Namespace proof range
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                    avail_block + 1
+                ),
+            )
+            .await?;
+
+            // State certificate parity (epoch 1 is complete after 4 epochs)
+            compare_endpoints(&http, api_port, axum_port, "availability/state-cert/1").await?;
+            compare_endpoints(&http, api_port, axum_port, "availability/state-cert-v2/1").await?;
         }
 
         Ok(())

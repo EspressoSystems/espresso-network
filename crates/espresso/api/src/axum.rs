@@ -213,8 +213,9 @@ where
     };
 
     // Availability API handlers
+    // Route: /v1/availability/block/{height}/namespace/{namespace}
     let get_namespace_proof_by_height =
-        |State(state): State<S>, Path((namespace, height)): Path<(u32, u64)>| async move {
+        |State(state): State<S>, Path((height, namespace)): Path<(u64, u32)>| async move {
             state
                 .get_namespace_proof(v1::availability::BlockId::Height(height), namespace)
                 .await
@@ -222,8 +223,9 @@ where
                 .map_err(ApiError::Internal)
         };
 
+    // Route: /v1/availability/block/hash/{hash}/namespace/{namespace}
     let get_namespace_proof_by_hash =
-        |State(state): State<S>, Path((namespace, hash)): Path<(u32, String)>| async move {
+        |State(state): State<S>, Path((hash, namespace)): Path<(String, u32)>| async move {
             state
                 .get_namespace_proof(v1::availability::BlockId::Hash(hash), namespace)
                 .await
@@ -231,8 +233,9 @@ where
                 .map_err(ApiError::Internal)
         };
 
+    // Route: /v1/availability/block/payload-hash/{payload-hash}/namespace/{namespace}
     let get_namespace_proof_by_payload_hash =
-        |State(state): State<S>, Path((namespace, payload_hash)): Path<(u32, String)>| async move {
+        |State(state): State<S>, Path((payload_hash, namespace)): Path<(String, u32)>| async move {
             state
                 .get_namespace_proof(
                     v1::availability::BlockId::PayloadHash(payload_hash),
@@ -243,8 +246,9 @@ where
                 .map_err(ApiError::Internal)
         };
 
+    // Route: /v1/availability/block/{from}/{until}/namespace/{namespace}
     let get_namespace_proof_range =
-        |State(state): State<S>, Path((namespace, from, until)): Path<(u32, u64, u64)>| async move {
+        |State(state): State<S>, Path((from, until, namespace)): Path<(u64, u64, u32)>| async move {
             state
                 .get_namespace_proof_range(from, until, namespace)
                 .await
@@ -253,7 +257,7 @@ where
         };
 
     let get_incorrect_encoding_proof =
-        |State(state): State<S>, Path((namespace, block_number)): Path<(u32, u64)>| async move {
+        |State(state): State<S>, Path((block_number, namespace)): Path<(u64, u32)>| async move {
             state
                 .get_incorrect_encoding_proof(
                     v1::availability::BlockId::Height(block_number),
