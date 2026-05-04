@@ -5,16 +5,15 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 use std::{collections::BTreeMap, sync::Arc};
 
-use alloy::transports::BoxFuture;
 use anyhow::Context;
 use async_broadcast::{Receiver, RecvError};
-use hotshot::traits::NodeImplementation;
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::Leaf2,
     event::{Event, EventType},
     message::{Message, MessageKind},
     traits::{
-        block_contents::BlockHeader, network::ConnectedNetwork, node_implementation::NodeType,
+        block_contents::BlockHeader, leaf_fetcher_network::LeafFetcherNetwork,
+        node_implementation::NodeType,
     },
     vote::HasViewNumber,
 };
@@ -24,75 +23,23 @@ use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::Stat
 use crate::storage_types::TestStorage;
 
 pub struct Leaf2Fetcher<TYPES: NodeType> {
-    pub network_functions: NetworkFunctions<TYPES>,
+    pub network: Arc<dyn LeafFetcherNetwork<TYPES>>,
     pub storage: TestStorage<TYPES>,
     pub listener: Option<JoinHandle<()>>,
     pub public_key: TYPES::SignatureKey,
     pub network_receiver: Option<Receiver<Event<TYPES>>>,
 }
 
-pub type RecvMessageFn =
-    std::sync::Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<Vec<u8>>> + Send + Sync>;
-
-pub type DirectMessageFn<TYPES> = std::sync::Arc<
-    dyn Fn(
-            ViewNumber,
-            Vec<u8>,
-            <TYPES as NodeType>::SignatureKey,
-        ) -> BoxFuture<'static, anyhow::Result<()>>
-        + Send
-        + Sync,
->;
-
-#[derive(Clone)]
-pub struct NetworkFunctions<TYPES: NodeType> {
-    direct_message: DirectMessageFn<TYPES>,
-}
-
-pub async fn direct_message_impl<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
-    view: ViewNumber,
-    message: Vec<u8>,
-    recipient: <TYPES as NodeType>::SignatureKey,
-) -> anyhow::Result<()> {
-    network
-        .direct_message(view, message, recipient.clone())
-        .await
-        .context(format!("Failed to send message to recipient {recipient}"))
-}
-
-pub fn direct_message_fn<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
-) -> DirectMessageFn<TYPES> {
-    Arc::new(move |view, message, recipient| {
-        let network = network.clone();
-        Box::pin(direct_message_impl::<TYPES, I>(
-            network, view, message, recipient,
-        ))
-    })
-}
-
-pub fn network_functions<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    network: Arc<<I as NodeImplementation<TYPES>>::Network>,
-) -> NetworkFunctions<TYPES> {
-    let direct_message = direct_message_fn::<TYPES, I>(network.clone());
-
-    NetworkFunctions { direct_message }
-}
-
 impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
-    pub fn new<I: NodeImplementation<TYPES>>(
-        network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+    pub fn new(
+        network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         storage: TestStorage<TYPES>,
         public_key: TYPES::SignatureKey,
     ) -> Self {
-        let listener = None;
-
-        let network_functions: NetworkFunctions<TYPES> = network_functions::<TYPES, I>(network);
         Self {
-            network_functions,
+            network,
             storage,
-            listener,
+            listener: None,
             public_key,
             network_receiver: None,
         }
@@ -101,7 +48,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
     pub fn set_external_channel(&mut self, mut network_receiver: Receiver<Event<TYPES>>) {
         let public_key = self.public_key.clone();
         let storage = self.storage.clone();
-        let network_functions = self.network_functions.clone();
+        let network = self.network.clone();
 
         self.network_receiver = Some(network_receiver.clone());
 
@@ -156,12 +103,13 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
                             BincodeSerializer::<StaticVersion<0, 0>>::serialize(&leaf_response)
                                 .expect("Failed to serialize leaf response");
 
-                        if let Err(e) = (network_functions.direct_message)(
-                            view.u64().into(),
-                            serialized_leaf_response,
-                            requester,
-                        )
-                        .await
+                        if let Err(e) = network
+                            .send_leaf_response(
+                                view.u64().into(),
+                                serialized_leaf_response,
+                                requester,
+                            )
+                            .await
                         {
                             tracing::error!(
                                 "Failed to send leaf response in test membership fetcher: {e}, \
@@ -229,12 +177,10 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             BincodeSerializer::<StaticVersion<0, 0>>::serialize(&leaf_request)
                 .expect("Failed to serialize leaf request");
 
-        if let Err(e) = (self.network_functions.direct_message)(
-            view.u64().into(),
-            serialized_leaf_request,
-            source,
-        )
-        .await
+        if let Err(e) = self
+            .network
+            .send_leaf_request(view.u64().into(), serialized_leaf_request, source)
+            .await
         {
             tracing::error!("Failed to send leaf request in test membership fetcher: {e}");
         };

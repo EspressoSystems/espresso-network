@@ -60,6 +60,7 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, TestableBlock},
         election::Membership,
+        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::ConnectedNetwork,
         node_implementation::NodeType,
         states::TestableState,
@@ -388,11 +389,13 @@ pub trait RunDa<
         let epoch_height = config.config.epoch_height;
         let storage = TestStorage::<TYPES>::default();
 
-        let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new::<NODE>(
+        let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
             config.config.known_nodes_with_stake.clone(),
             config.config.known_da_nodes.clone(),
             storage.clone(),
-            network.clone(),
+            Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
+                network.clone(),
+            )),
             pk.clone(),
             config.config.epoch_height,
         )));
