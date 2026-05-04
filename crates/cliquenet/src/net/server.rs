@@ -663,6 +663,10 @@ impl Party {
         let NetAddr::Inet(ip, _) = &self.addr else {
             return false;
         };
+        // A wildcard registered address (`0.0.0.0` / `::`) accepts any inbound IP.
+        if ip.is_unspecified() {
+            return false;
+        }
         *ip != addr
     }
 }
