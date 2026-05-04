@@ -20,7 +20,7 @@ use crate::{
     drb::DrbResult,
     event::Event,
     stake_table::{HSStakeTable, supermajority_threshold},
-    traits::{node_implementation::NodeImplementation, signature_key::StakeTableEntryType},
+    traits::{leaf_fetcher_network::LeafFetcherNetwork, signature_key::StakeTableEntryType},
 };
 
 pub struct NoStakeTableHash;
@@ -42,13 +42,13 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     type StakeTableHash: Committable;
 
     /// Create a committee
-    fn new<I: NodeImplementation<TYPES>>(
+    fn new(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
         // but they should not have voting power.
         stake_committee_members: Vec<PeerConfig<TYPES>>,
         da_committee_members: Vec<PeerConfig<TYPES>>,
         storage: Self::Storage,
-        network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+        leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         public_key: TYPES::SignatureKey,
         epoch_height: u64,
     ) -> Self;

@@ -1,126 +1,72 @@
-use hotshot::traits::NetworkError;
+pub mod cliquenet;
+
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    message::{EXTERNAL_MESSAGE_VERSION, MessageKind, UpgradeLock},
-    traits::{
-        network::{BroadcastDelay, ConnectedNetwork, Topic},
-        node_implementation::NodeType,
-    },
-    vote::HasViewNumber,
+    traits::node_implementation::NodeType,
 };
 
-use crate::message::{Message, MessageType, Unchecked, Validated};
+use crate::message::{Message, Unchecked, Validated};
 
-pub type Result<T> = std::result::Result<T, NetworkError>;
+type Result<T> = std::result::Result<T, NetworkError>;
 
-pub struct Network<T: NodeType, N> {
-    network: N,
-    membership_coordinator: EpochMembershipCoordinator<T>,
-    upgrade_lock: UpgradeLock<T>,
+pub trait Network<T: NodeType> {
+    type PeerData;
+
+    fn broadcast(&mut self, v: ViewNumber, m: &Message<T, Validated>) -> Result<()>;
+
+    fn unicast(
+        &mut self,
+        v: ViewNumber,
+        to: &T::SignatureKey,
+        m: &Message<T, Validated>,
+    ) -> Result<()>;
+
+    fn multicast(
+        &mut self,
+        v: ViewNumber,
+        to: Vec<&T::SignatureKey>,
+        m: &Message<T, Validated>,
+    ) -> Result<()>;
+
+    fn receive(&mut self) -> impl Future<Output = Result<Message<T, Unchecked>>> + Send;
+
+    fn shutdown(&mut self) -> impl Future<Output = ()> + Send;
+
+    fn gc(&mut self, v: ViewNumber) -> Result<()>;
+
+    fn add_peers(&mut self, r: PeerRole, ps: Vec<(T::SignatureKey, Self::PeerData)>) -> Result<()>;
+    fn remove_peers(&mut self, ps: Vec<&T::SignatureKey>) -> Result<()>;
+    fn assign_role(&mut self, r: PeerRole, ps: Vec<&T::SignatureKey>) -> Result<()>;
+
+    /// Refresh the peer set for the given epoch using the membership coordinator.
+    ///
+    /// Implementations should reconcile their active peer set against the
+    /// stake tables of the surrounding epoch window (e-1, e, e+1).
+    fn on_epoch_change(
+        &mut self,
+        epoch: EpochNumber,
+        coord: &EpochMembershipCoordinator<T>,
+    ) -> impl Future<Output = Result<()>> + Send;
 }
 
-impl<T, N> Network<T, N>
-where
-    T: NodeType,
-    N: ConnectedNetwork<T::SignatureKey>,
-{
-    pub fn new(n: N, m: EpochMembershipCoordinator<T>, u: UpgradeLock<T>) -> Self {
-        Self {
-            network: n,
-            membership_coordinator: m,
-            upgrade_lock: u,
-        }
-    }
-    pub fn gc(&mut self, _view_number: ViewNumber, _epoch: EpochNumber) {
-        // TODO: Implement
-    }
-
-    pub async fn receive(&mut self) -> Result<Message<T, Unchecked>> {
-        let m = self.network.recv_message().await?;
-        self.deserialize(m)
-    }
-
-    pub async fn broadcast(&mut self, msg: Message<T, Validated>) -> Result<()> {
-        let view = msg.view_number();
-        let bytes = self.serialize(&msg)?;
-        self.network
-            .broadcast_message(view, bytes, Topic::Global, BroadcastDelay::None)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn unicast(&mut self, to: T::SignatureKey, msg: Message<T, Validated>) -> Result<()> {
-        let view = msg.view_number();
-        let bytes = self.serialize(&msg)?;
-        self.network.direct_message(view, bytes, to).await?;
-        Ok(())
-    }
-
-    pub async fn update_view(&mut self, v: ViewNumber, e: EpochNumber) {
-        self.network
-            .update_view(v, Some(e), self.membership_coordinator.clone())
-            .await;
-    }
-
-    fn deserialize(&self, bytes: Vec<u8>) -> Result<Message<T, Unchecked>> {
-        match self
-            .upgrade_lock
-            .deserialize::<Message<T, Unchecked>>(&bytes)
-        {
-            Ok((m, v)) => {
-                if v == EXTERNAL_MESSAGE_VERSION && !m.is_external() {
-                    let e = "received a non-external message with version 0.0".to_string();
-                    return Err(NetworkError::FailedToDeserialize(e));
-                }
-                Ok(m)
-            },
-            Err(primary_err) => {
-                // Fallback: bytes may be a hotshot-types `Message<T>` carrying
-                // an `External` payload (this is how `Leaf2Fetcher` in the
-                // membership layer frames leaf-catchup requests/responses).
-                // If so, surface it as `MessageType::External` so the
-                // Coordinator can route it to the membership external
-                // channel just like a native new-protocol external message.
-                if let Ok((_v, hs_msg)) =
-                    versions::decode::<hotshot_types::message::Message<T>>(&bytes)
-                    && let MessageKind::External(data) = hs_msg.kind
-                {
-                    return Ok(Message {
-                        sender: hs_msg.sender,
-                        message_type: MessageType::External(data),
-                    });
-                }
-                Err(NetworkError::FailedToDeserialize(primary_err.to_string()))
-            },
-        }
-    }
-
-    fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>> {
-        self.upgrade_lock
-            .serialize(m)
-            .map_err(|e| NetworkError::FailedToSerialize(e.to_string()))
-    }
+#[derive(Clone, Copy, Debug)]
+pub enum PeerRole {
+    Active,
+    Passive,
 }
 
-pub fn is_critical(e: &NetworkError) -> bool {
-    match e {
-        NetworkError::ChannelReceiveError(_)
-        | NetworkError::ChannelSendError(_)
-        | NetworkError::ConfigError(_)
-        | NetworkError::ListenError(_)
-        | NetworkError::ShutDown
-        | NetworkError::Unimplemented => true,
+#[derive(Debug, thiserror::Error)]
+pub enum NetworkError {
+    #[error("{0}")]
+    Io(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-        NetworkError::FailedToDeserialize(_)
-        | NetworkError::FailedToSerialize(_)
-        | NetworkError::LookupError(_)
-        | NetworkError::MessageReceiveError(_)
-        | NetworkError::MessageSendError(_)
-        | NetworkError::NoPeersYet
-        | NetworkError::RequestCancelled
-        | NetworkError::Timeout(_) => false,
+    #[error("{0}")]
+    Critical(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
 
-        NetworkError::Multiple(es) => es.iter().any(is_critical),
+impl NetworkError {
+    pub fn is_critical(&self) -> bool {
+        matches!(self, Self::Critical(_))
     }
 }

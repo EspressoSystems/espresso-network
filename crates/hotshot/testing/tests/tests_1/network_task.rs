@@ -23,7 +23,10 @@ use hotshot_types::{
     consensus::OuterConsensus,
     data::ViewNumber,
     message::UpgradeLock,
-    traits::{election::Membership, node_implementation::NodeType},
+    traits::{
+        election::Membership, leaf_fetcher_network::ConnectedNetworkLeafFetcher,
+        node_implementation::NodeType,
+    },
 };
 use tokio::time::timeout;
 
@@ -55,13 +58,13 @@ async fn test_network_task() {
 
     let all_nodes = config.known_nodes_with_stake.clone();
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<
-        MemoryImpl,
-    >(
+    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
         all_nodes.clone(),
         all_nodes,
         storage.clone(),
-        network.clone(),
+        Arc::new(ConnectedNetworkLeafFetcher::<TestTypes, _>::new(
+            network.clone(),
+        )),
         public_key,
         config.epoch_height,
     )));
@@ -234,13 +237,13 @@ async fn test_network_storage_fail() {
     let all_nodes = config.known_nodes_with_stake.clone();
     let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new::<
-        MemoryImpl,
-    >(
+    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
         all_nodes.clone(),
         all_nodes,
         storage.clone(),
-        network.clone(),
+        Arc::new(ConnectedNetworkLeafFetcher::<TestTypes, _>::new(
+            network.clone(),
+        )),
         public_key,
         config.epoch_height,
     )));

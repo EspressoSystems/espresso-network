@@ -7,10 +7,7 @@ use hotshot::{
     traits::implementations::{Cliquenet, CompatNetwork, MasterMap, MemoryNetwork},
     types::SignatureKey,
 };
-use hotshot_example_types::{
-    node_types::{MemoryImpl, TestTypes},
-    storage_types::TestStorage,
-};
+use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     PeerConfig, PeerConnectInfo, ValidatorConfig,
     addr::NetAddr,
@@ -22,6 +19,7 @@ use hotshot_types::{
     simple_vote::UpgradeProposalData,
     traits::{
         election::Membership,
+        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::{ConnectedNetwork, Topic},
         node_implementation::NodeType,
     },
@@ -113,11 +111,11 @@ async fn cliquenet_epoch_change_retains_prev_epoch_validator_then_removes() {
 
     let quorum = vec![v0.public_config(), v1.public_config()];
 
-    let mut membership = <TestTypes as NodeType>::Membership::new::<MemoryImpl>(
+    let mut membership = <TestTypes as NodeType>::Membership::new(
         quorum.clone(),
         quorum.clone(),
         storage.clone(),
-        network,
+        Arc::new(ConnectedNetworkLeafFetcher::<TestTypes, _>::new(network)),
         v0.public_key,
         10,
     );
@@ -350,11 +348,11 @@ async fn make_coordinator(
     let peer_configs: Vec<PeerConfig<TestTypes>> =
         validators.iter().map(|v| v.public_config()).collect();
 
-    let mut membership = <TestTypes as NodeType>::Membership::new::<MemoryImpl>(
+    let mut membership = <TestTypes as NodeType>::Membership::new(
         peer_configs.clone(),
         peer_configs,
         storage.clone(),
-        network,
+        Arc::new(ConnectedNetworkLeafFetcher::<TestTypes, _>::new(network)),
         public_key,
         10,
     );

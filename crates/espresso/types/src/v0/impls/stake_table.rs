@@ -42,9 +42,8 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
-        block_contents::BlockHeader,
-        election::Membership,
-        node_implementation::{NodeImplementation, NodeType},
+        block_contents::BlockHeader, election::Membership,
+        leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType,
         signature_key::StakeTableEntryType,
     },
     utils::{
@@ -2095,13 +2094,13 @@ impl Membership<SeqTypes> for EpochCommittees {
     type StakeTableHash = StakeTableState;
 
     // DO NOT USE. Dummy constructor to comply w/ trait.
-    fn new<I: NodeImplementation<SeqTypes>>(
+    fn new(
         // TODO remove `new` from trait and remove this fn as well.
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         _committee_members: Vec<PeerConfig<SeqTypes>>,
         _da_members: Vec<PeerConfig<SeqTypes>>,
         _storage: Self::Storage,
-        _network: Arc<<I as NodeImplementation<SeqTypes>>::Network>,
+        _leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<SeqTypes>>,
         _public_key: <SeqTypes as NodeType>::SignatureKey,
         _epoch_height: u64,
     ) -> Self {

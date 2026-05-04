@@ -19,7 +19,7 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::coordinator::Coordinator;
+use hotshot_new_protocol::{coordinator::Coordinator, network::Network};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -93,10 +93,14 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     validator_config: ValidatorConfig<SeqTypes>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P> {
+impl<N, P> SequencerContext<N, P>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+{
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init<CN: ConnectedNetwork<PubKey>>(
+    pub async fn init<T: Network<SeqTypes> + Send + 'static>(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -106,7 +110,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
-        coordinator_network: CN,
+        coordinator_network: T,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
@@ -176,25 +180,29 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         tracing::info!(%current_epoch, "Startup catchup complete");
 
         // Push the resolved peer window into the coordinator network. For
-        // cliquenet this dials the N-1/N/N+1 sliding window via
-        // `on_epoch_change`. For other `ConnectedNetwork` impls the default
-        // `update_view` is a no-op.
-        coordinator_network
-            .update_view::<SeqTypes>(
-                ViewNumber::genesis(),
-                Some(current_epoch),
-                membership_coordinator.clone(),
-            )
-            .await;
+        // cliquenet this dials the N-1/N/N+1 sliding window for the current
+        // epoch before consensus starts.
+        let mut coordinator_network = coordinator_network;
+        if let Err(err) = coordinator_network
+            .on_epoch_change(current_epoch, &membership_coordinator)
+            .await
+        {
+            tracing::warn!(%current_epoch, %err, "coordinator network on_epoch_change failed at startup");
+        }
 
-        let coordinator = Coordinator::<SeqTypes, CN, Arc<P>>::maker()
+        let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer_for_coordinator)
-            .upgrade_lock(UpgradeLock::from_certificate(
-                upgrade,
-                &initializer_for_coordinator.decided_upgrade_certificate,
-            ))
+            .upgrade_lock({
+                // TODO: The Coordinator and HotShot each create their own UpgradeLock
+                // from the same inputs. They need to share a single lock so that upgrade
+                // certificate updates are visible to both.
+                UpgradeLock::from_certificate(
+                    upgrade,
+                    &initializer_for_coordinator.decided_upgrade_certificate,
+                )
+            })
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .state_private_key(validator_config.state_private_key.clone())
