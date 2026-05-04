@@ -468,7 +468,7 @@ impl Peer {
                                     if *off < buf.len() {
                                         continue
                                     }
-                                    let hdr = Header::unvalidated(*buf);
+                                    let hdr = Header::unvalidated(u32::from_be_bytes(*buf));
                                     fbuf.resize(hdr.len().into(), 0);
                                     rstate = ReadState::Frame { hdr, off: 0, buf: &mut fbuf }
                                 }
@@ -508,23 +508,29 @@ impl Peer {
                                                     );
                                                     return Err(NetworkError::InvalidTrailer);
                                                 };
-                                                if t.ty.is_ack() {
-                                                    obound_acks.push_back(Ack::from((t.slot, t.id)));
-                                                }
-                                                if t.slot >= self.lower_bound {
-                                                    let p = read_permit.take();
-                                                    debug_assert!(p.is_some());
-                                                    if self.tx.send((self.conn.key, msg, p)).is_err() {
-                                                        return Err(NetworkError::ChannelClosed)
+                                                let slot = match t {
+                                                    Trailer::Std { slot, id } => {
+                                                        obound_acks.push_back(Ack::from((slot, id)));
+                                                        Some(slot)
                                                     }
-                                                    trace!(
-                                                        name = %self.conf.name,
-                                                        node = %self.conf.keypair.public_key(),
-                                                        peer = %self.conn.key,
-                                                        addr = %self.conn.addr,
-                                                        "message delivered"
-                                                    );
+                                                    Trailer::NoAck { slot } => Some(slot),
+                                                    Trailer::Unknown => None
+                                                };
+                                                if let Some(s) = slot && s < self.lower_bound {
+                                                    continue
                                                 }
+                                                let p = read_permit.take();
+                                                debug_assert!(p.is_some());
+                                                if self.tx.send((self.conn.key, msg, p)).is_err() {
+                                                    return Err(NetworkError::ChannelClosed)
+                                                }
+                                                trace!(
+                                                    name = %self.conf.name,
+                                                    node = %self.conf.keypair.public_key(),
+                                                    peer = %self.conn.key,
+                                                    addr = %self.conn.addr,
+                                                    "message delivered"
+                                                );
                                             }
                                             rstate = ReadState::Header { off: 0, buf: [0; _] };
                                         }

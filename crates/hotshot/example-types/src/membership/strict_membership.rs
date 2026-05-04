@@ -12,7 +12,8 @@ use hotshot_types::{
     traits::{
         block_contents::BlockHeader,
         election::{Membership, NoStakeTableHash},
-        node_implementation::{NodeImplementation, NodeType},
+        leaf_fetcher_network::LeafFetcherNetwork,
+        node_implementation::NodeType,
         signature_key::StakeTableEntryType,
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
@@ -79,15 +80,15 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
     type StakeTableHash = NoStakeTableHash;
     type Storage = TestStorage<TYPES>;
 
-    fn new<I: NodeImplementation<TYPES>>(
+    fn new(
         quorum_members: Vec<hotshot_types::PeerConfig<TYPES>>,
         da_members: Vec<hotshot_types::PeerConfig<TYPES>>,
         storage: Self::Storage,
-        network: Arc<<I as NodeImplementation<TYPES>>::Network>,
+        leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         public_key: TYPES::SignatureKey,
         epoch_height: u64,
     ) -> Self {
-        let fetcher = Leaf2Fetcher::new::<I>(network, storage, public_key);
+        let fetcher = Leaf2Fetcher::new(leaf_fetcher_network, storage, public_key);
 
         Self {
             inner: TestStakeTable::new(
