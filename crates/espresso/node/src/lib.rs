@@ -369,7 +369,7 @@ where
 
     // Only the orchestrator bootstrap path publishes these into the stake table; overridden
     // below when needed.
-    let validator_config = ValidatorConfig {
+    let mut validator_config = ValidatorConfig {
         public_key: pub_key,
         private_key: network_params.private_staking_key,
         stake_value: U256::ONE,
@@ -424,8 +424,9 @@ where
             );
 
             // Publish our cliquenet `connect_info` into the stake table from
-            // `CLIQUENET_VERSION` on, so peers can dial us.
-            let mut validator_config = validator_config.clone();
+            // `CLIQUENET_VERSION` on, so peers can dial us. Modify `validator_config`
+            // in place so the same `connect_info` is sent later when posting to
+            // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
             if genesis.base_version >= versions::CLIQUENET_VERSION {
                 let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
                     "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
@@ -438,7 +439,7 @@ where
 
             let config = get_complete_config(
                 &orchestrator_client,
-                validator_config,
+                validator_config.clone(),
                 // Register in our Libp2p advertise address and public key so other nodes
                 // can contact us on startup
                 Some(libp2p_advertise_address),
