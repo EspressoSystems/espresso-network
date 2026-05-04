@@ -1772,6 +1772,7 @@ where
             return Ok(None);
         };
 
+        // TODO: verify cert2 before accepting and storing it.
         self.store(&(height, cert2.clone())).await;
         Ok(Some(cert2))
     }

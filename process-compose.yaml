@@ -150,6 +150,16 @@ processes:
         condition: process_completed
     availability: *exit-ok
 
+  wait-for-l1-finalized:
+    command: scripts/wait-for-l1-finalized
+    namespace: setup
+    environment:
+      - L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
+    depends_on:
+      stake-for-demo:
+        condition: process_completed
+    availability: *exit-ok
+
   orchestrator:
     command: orchestrator
     environment:
@@ -208,7 +218,7 @@ processes:
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_0_TONIC_PORT}
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_0}
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_0}
-      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
+      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_0}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_POSTGRES_HOST=localhost
@@ -247,6 +257,8 @@ processes:
         condition: process_healthy
       stake-for-demo:
         condition: process_completed
+      wait-for-l1-finalized:
+        condition: process_completed
     availability: *run-forever
 
     readiness_probe:
@@ -266,7 +278,7 @@ processes:
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_1_TONIC_PORT}
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_1}
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_1}
-      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
+      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_2_API_PORT}
       - ESPRESSO_NODE_POSTGRES_HOST=localhost
@@ -306,6 +318,8 @@ processes:
         condition: process_healthy
       stake-for-demo:
         condition: process_completed
+      wait-for-l1-finalized:
+        condition: process_completed
     readiness_probe:
       http_get:
         scheme: http
@@ -324,7 +338,7 @@ processes:
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_2_TONIC_PORT}
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
-      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
+      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_3_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2
@@ -357,6 +371,8 @@ processes:
         condition: process_healthy
       stake-for-demo:
         condition: process_completed
+      wait-for-l1-finalized:
+        condition: process_completed
     readiness_probe:
       http_get:
         scheme: http
@@ -375,7 +391,7 @@ processes:
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_3_TONIC_PORT}
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_3}
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_3}
-      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
+      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_4_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3
@@ -408,6 +424,8 @@ processes:
         condition: process_healthy
       stake-for-demo:
         condition: process_completed
+      wait-for-l1-finalized:
+        condition: process_completed
     readiness_probe:
       http_get:
         scheme: http
@@ -427,7 +445,7 @@ processes:
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_4_TONIC_PORT}
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
-      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
+      - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq4
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_4}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_4}
@@ -457,6 +475,8 @@ processes:
       marshal_0:
         condition: process_healthy
       stake-for-demo:
+        condition: process_completed
+      wait-for-l1-finalized:
         condition: process_completed
     readiness_probe:
       http_get:

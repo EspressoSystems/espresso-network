@@ -5,6 +5,7 @@ use espresso_node::api::data_source::StakeTableWithEpochNumber;
 use espresso_types::SeqTypes;
 use hotshot_types::{PeerConfig, utils::epoch_from_block_number};
 use url::Url;
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{
     common::{NativeDemo, TestRequirements, load_genesis_file},
@@ -80,6 +81,30 @@ async fn test_native_demo_drb_header_base() -> Result<()> {
     };
 
     assert_native_demo_works(progress_requirements).await?;
+
+    Ok(())
+}
+
+/// Checks if the native demo works when started directly on the new protocol version.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_ff_base() -> Result<()> {
+    let genesis_path = "data/genesis/demo-ff.toml";
+    let genesis = load_genesis_file(genesis_path)?;
+
+    assert_eq!(genesis.base_version, NEW_PROTOCOL_VERSION);
+    assert_eq!(genesis.upgrade_version, NEW_PROTOCOL_VERSION);
+    assert_eq!(genesis.genesis_version, NEW_PROTOCOL_VERSION);
+
+    let _child = NativeDemo::run(
+        None,
+        Some(vec![(
+            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
+            // process compose runs from the root of the repo
+            genesis_path.to_string(),
+        )]),
+    );
+
+    assert_native_demo_works(Default::default()).await?;
 
     Ok(())
 }

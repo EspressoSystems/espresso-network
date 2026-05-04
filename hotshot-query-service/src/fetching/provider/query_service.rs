@@ -14,7 +14,6 @@ use std::fmt::Debug;
 
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
-use committable::Committable;
 use futures::{TryFutureExt, future::try_join_all};
 use hotshot_types::{
     data::{VidCommitment, VidCommon, ns_table},
@@ -24,6 +23,7 @@ use hotshot_types::{
         avidm::{AvidMScheme, init_avidm_param},
         avidm_gf2::AvidmGf2Scheme,
     },
+    vote::HasViewNumber,
 };
 use jf_advz::VidScheme;
 use surf_disco::{Client, Url};
@@ -245,10 +245,20 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             "received leaf with the wrong hash ({})",
             leaf.hash()
         );
+        // Authenticate the QC by `(view, data)` rather than full commit. See `LeafRequest` for
+        // the rationale and the TODO to revert this once writers store the qc (child's
+        // justify_qc) instead of the decide-event cert1.
         ensure!(
-            leaf.qc().commit() == req.expected_qc,
-            "received leaf with the wrong QC ({})",
-            leaf.qc().commit()
+            leaf.qc().view_number() == req.expected_qc_view,
+            "received leaf with QC for wrong view ({}, expected {})",
+            leaf.qc().view_number(),
+            req.expected_qc_view,
+        );
+        ensure!(
+            leaf.qc().data == req.expected_qc_data,
+            "received leaf with QC for wrong data ({:?}, expected {:?})",
+            leaf.qc().data,
+            req.expected_qc_data,
         );
 
         Ok(leaf)
@@ -275,24 +285,33 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             leaves.end()
         );
 
-        // Verify hash chaining.
         let mut expected_leaf = req.last_leaf;
-        let mut expected_qc = req.last_qc;
+        let mut expected_qc_view = req.last_qc_view;
+        let mut expected_qc_data = req.last_qc_data;
         for leaf in leaves.iter().rev() {
             let leaf_hash = leaf.hash();
-            let qc_hash = leaf.qc().commit();
+            let qc = leaf.qc();
             ensure!(
                 leaf_hash == expected_leaf,
                 "received leaf {} with wrong hash {leaf_hash}",
                 leaf.height(),
             );
             ensure!(
-                qc_hash == expected_qc,
-                "received leaf {} with wrong QC {qc_hash}",
-                leaf.height()
+                qc.view_number() == expected_qc_view,
+                "received leaf {} with QC for wrong view ({}, expected {expected_qc_view})",
+                leaf.height(),
+                qc.view_number(),
             );
+            ensure!(
+                qc.data == expected_qc_data,
+                "received leaf {} with QC for wrong data ({:?}, expected {expected_qc_data:?})",
+                leaf.height(),
+                qc.data,
+            );
+            let parent_qc = leaf.leaf().justify_qc();
             expected_leaf = leaf.leaf().parent_commitment();
-            expected_qc = leaf.leaf().justify_qc().commit();
+            expected_qc_view = parent_qc.view_number();
+            expected_qc_data = parent_qc.data;
         }
 
         Ok(leaves)
@@ -492,6 +511,7 @@ mod test {
     #[allow(deprecated)]
     use generic_array::GenericArray;
     use hotshot_example_types::node_types::{EpochVersion, TEST_VERSIONS};
+    use hotshot_types::{data::ViewNumber, simple_vote::QuorumData2};
     use rand::RngCore;
     use test_utils::reserve_tcp_port;
     use tide_disco::{Api, App, error::ServerError};
@@ -1421,10 +1441,16 @@ mod test {
     fn random_leaf_request() -> LeafRequest<MockTypes> {
         let mut bytes = [0; 32];
         rand::thread_rng().fill_bytes(&mut bytes);
+        let leaf_commit = Commitment::from_raw(bytes);
         LeafRequest {
             height: 1,
-            expected_leaf: Commitment::from_raw(bytes),
-            expected_qc: Commitment::from_raw(bytes),
+            expected_leaf: leaf_commit,
+            expected_qc_view: ViewNumber::new(rand::random()),
+            expected_qc_data: QuorumData2 {
+                leaf_commit,
+                epoch: None,
+                block_number: None,
+            },
         }
     }
 
@@ -1592,7 +1618,8 @@ mod test {
                 start: 0,
                 end: req.height + 1,
                 last_leaf: req.expected_leaf,
-                last_qc: req.expected_qc,
+                last_qc_view: req.expected_qc_view,
+                last_qc_data: req.expected_qc_data,
             })
             .await
             .unwrap_err();
@@ -2665,7 +2692,8 @@ mod test {
                     start: 0,
                     end: 5,
                     last_leaf: leaves[4].hash(),
-                    last_qc: leaves[4].qc().commit(),
+                    last_qc_view: leaves[4].qc().view_number(),
+                    last_qc_data: leaves[4].qc().data,
                 })
                 .await
                 .unwrap(),
