@@ -132,6 +132,9 @@ pub struct NetworkParams {
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
     pub cliquenet_bind_addr: NetAddr,
+    /// Address to advertise to other nodes for cliquenet (registered in the stake table).
+    /// Required from `CLIQUENET_VERSION` onward; ignored on earlier versions.
+    pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
     /// The address to send to other Libp2p nodes to contact us
@@ -364,6 +367,13 @@ where
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
     let state_key_pair = StateKeyPair::from_sign_key(network_params.private_state_key);
+
+    // The x25519 keypair and cliquenet advertise address get published in the stake table only
+    // when we register with the orchestrator (the fresh-network bootstrap path). On the persistence
+    // and peer-fetch paths the values from `validator_config` are not published, and once the
+    // stake-table-v3 contract is the source of truth they will come from L1. So we default to
+    // `None` and override below in the orchestrator branch when the network is already on
+    // `CLIQUENET_VERSION` and we therefore need real values to register.
     let validator_config = ValidatorConfig {
         public_key: pub_key,
         private_key: network_params.private_staking_key,
@@ -371,8 +381,8 @@ where
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
-        x25519_keypair: Some(x25519::Keypair::from(&network_params.x25519_secret_key)),
-        p2p_addr: Some(network_params.cliquenet_bind_addr.clone()),
+        x25519_keypair: None,
+        p2p_addr: None,
     };
 
     // Derive our Libp2p public key from our private key
@@ -417,9 +427,24 @@ where
             tracing::warn!(
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
+
+            // Registering with the orchestrator publishes our `connect_info` (x25519 key and
+            // cliquenet advertise address) into the stake table so peers can dial us. These
+            // are required from `CLIQUENET_VERSION` on; before then they are unused.
+            let mut validator_config = validator_config.clone();
+            if genesis.base_version >= versions::CLIQUENET_VERSION {
+                let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
+                    "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
+                     Cliquenet network from the orchestrator",
+                )?;
+                validator_config.x25519_keypair =
+                    Some(x25519::Keypair::from(&network_params.x25519_secret_key));
+                validator_config.p2p_addr = Some(advertise_addr);
+            }
+
             let config = get_complete_config(
                 &orchestrator_client,
-                validator_config.clone(),
+                validator_config,
                 // Register in our Libp2p advertise address and public key so other nodes
                 // can contact us on startup
                 Some(libp2p_advertise_address),
