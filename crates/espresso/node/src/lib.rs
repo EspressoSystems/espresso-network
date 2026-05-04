@@ -132,8 +132,7 @@ pub struct NetworkParams {
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
     pub cliquenet_bind_addr: NetAddr,
-    /// Address to advertise to other nodes for cliquenet (registered in the stake table).
-    /// Required from `CLIQUENET_VERSION` onward; ignored on earlier versions.
+    /// Cliquenet address to advertise to other nodes (registered in the stake table).
     pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
@@ -368,12 +367,8 @@ where
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
     let state_key_pair = StateKeyPair::from_sign_key(network_params.private_state_key);
 
-    // The x25519 keypair and cliquenet advertise address get published in the stake table only
-    // when we register with the orchestrator (the fresh-network bootstrap path). On the persistence
-    // and peer-fetch paths the values from `validator_config` are not published, and once the
-    // stake-table-v3 contract is the source of truth they will come from L1. So we default to
-    // `None` and override below in the orchestrator branch when the network is already on
-    // `CLIQUENET_VERSION` and we therefore need real values to register.
+    // Only the orchestrator bootstrap path publishes these into the stake table; overridden
+    // below when needed.
     let validator_config = ValidatorConfig {
         public_key: pub_key,
         private_key: network_params.private_staking_key,
@@ -428,9 +423,8 @@ where
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
 
-            // Registering with the orchestrator publishes our `connect_info` (x25519 key and
-            // cliquenet advertise address) into the stake table so peers can dial us. These
-            // are required from `CLIQUENET_VERSION` on; before then they are unused.
+            // Publish our cliquenet `connect_info` into the stake table from
+            // `CLIQUENET_VERSION` on, so peers can dial us.
             let mut validator_config = validator_config.clone();
             if genesis.base_version >= versions::CLIQUENET_VERSION {
                 let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(

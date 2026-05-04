@@ -73,9 +73,8 @@ pub struct Options {
 
     /// The address to advertise to other nodes for cliquenet (in `host:port` | `ip:port` form).
     ///
-    /// Required when starting on the Cliquenet protocol version or later. Goes into the
-    /// stake table so peers can dial us, so it must be a publicly reachable address (not
-    /// `0.0.0.0`).
+    /// Only used for orchestrator-based setup (test networks). On real networks the address
+    /// must be registered in the stake table contract instead.
     #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS")]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
