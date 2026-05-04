@@ -603,10 +603,6 @@ processes:
     depends_on:
       espresso-node-0:
         condition: process_healthy
-      # We don't directly depend on the builder, but transactions will not be finalized until it has
-      # started, so there is no point in starting before then.
-      permissionless-builder:
-        condition: process_healthy
     readiness_probe:
       http_get:
         scheme: http
