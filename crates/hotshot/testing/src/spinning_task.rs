@@ -34,6 +34,7 @@ use hotshot_types::{
     },
     traits::{
         election::Membership,
+        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{NodeImplementation, NodeType},
     },
@@ -168,11 +169,13 @@ where
                                                 node_id < config.da_staked_committee_size as u64,
                                             );
 
-                                        let memberships = <TYPES as NodeType>::Membership::new::<I>(
+                                        let memberships = <TYPES as NodeType>::Membership::new(
                                             config.known_nodes_with_stake.clone(),
                                             config.known_da_nodes.clone(),
                                             storage.clone(),
-                                            network.clone(),
+                                            Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
+                                                network.clone(),
+                                            )),
                                             validator_config.public_key.clone(),
                                             config.epoch_height,
                                         );
@@ -256,16 +259,17 @@ where
 
                                 let storage = node.handle.storage().clone();
 
-                                let membership = Arc::new(RwLock::new(
-                                    <TYPES as NodeType>::Membership::new::<I>(
+                                let membership =
+                                    Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
                                         node.handle.hotshot.config.known_nodes_with_stake.clone(),
                                         node.handle.hotshot.config.known_da_nodes.clone(),
                                         node.handle.storage().clone(),
-                                        generated_network.clone(),
+                                        Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
+                                            generated_network.clone(),
+                                        )),
                                         node.handle.public_key().clone(),
                                         node.handle.hotshot.config.epoch_height,
-                                    ),
-                                ));
+                                    )));
 
                                 let config = node.handle.hotshot.config.clone();
 
