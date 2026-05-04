@@ -975,7 +975,7 @@ impl ChainConfigPersistence for Transaction<Write> {
     }
 }
 
-impl super::data_source::DatabaseMetadataSource for SqlStorage {
+impl super::data_source::PruningDataSource for SqlStorage {
     async fn get_oldest_block(
         &self,
     ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
@@ -1025,7 +1025,9 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             },
         }
     }
+}
 
+impl super::data_source::DatabaseMetadataSource for SqlStorage {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
         let mut tx = self
             .read()
@@ -1115,7 +1117,9 @@ impl super::data_source::DatabaseMetadataSource for DataSource {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
         self.as_ref().get_table_sizes().await
     }
+}
 
+impl super::data_source::PruningDataSource for DataSource {
     async fn get_oldest_block(
         &self,
     ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {

@@ -375,13 +375,19 @@ pub struct TableSize {
 pub(crate) trait DatabaseMetadataSource {
     /// Get the sizes of all tables in the database.
     fn get_table_sizes(&self) -> impl Send + Future<Output = anyhow::Result<Vec<TableSize>>>;
+}
 
-    /// Get the oldest block in the database, or `None` if empty.
+/// Data source for pruning state: the oldest retained block and leaf.
+///
+/// SQL backends return the actual oldest entry; the filesystem backend always returns `None`
+/// since it does not prune.
+pub(crate) trait PruningDataSource {
+    /// Get the oldest block in storage, or `None` if empty or unsupported.
     fn get_oldest_block(
         &self,
     ) -> impl Send + Future<Output = anyhow::Result<Option<BlockQueryData<SeqTypes>>>>;
 
-    /// Get the oldest leaf in the database, or `None` if empty.
+    /// Get the oldest leaf in storage, or `None` if empty or unsupported.
     fn get_oldest_leaf(
         &self,
     ) -> impl Send + Future<Output = anyhow::Result<Option<LeafQueryData<SeqTypes>>>>;

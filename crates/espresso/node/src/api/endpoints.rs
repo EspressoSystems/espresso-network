@@ -46,7 +46,7 @@ use vbs::version::{StaticVersion, StaticVersionType};
 
 use super::data_source::{
     CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeStateDataSource,
-    StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
+    PruningDataSource, StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
 };
 use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence, api::RewardMerkleTreeDataSource};
 
@@ -510,7 +510,8 @@ where
         + Sync
         + StakeTableDataSource<SeqTypes>
         + NodeDataSource<SeqTypes>
-        + AvailabilityDataSource<SeqTypes>,
+        + AvailabilityDataSource<SeqTypes>
+        + PruningDataSource,
 {
     // Extend the base API
     let mut options = node::Options::default();
@@ -705,6 +706,30 @@ where
                 })
         }
         .boxed()
+    })?
+    .at("get_oldest_block", |_req, state| {
+        async move {
+            state
+                .read(|state| state.get_oldest_block().boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get oldest block: {err:#}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })
+        }
+        .boxed()
+    })?
+    .at("get_oldest_leaf", |_req, state| {
+        async move {
+            state
+                .read(|state| state.get_oldest_leaf().boxed())
+                .await
+                .map_err(|err| node::Error::Custom {
+                    message: format!("failed to get oldest leaf: {err:#}"),
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                })
+        }
+        .boxed()
     })?;
 
     Ok(api)
@@ -720,34 +745,15 @@ where
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/database.toml"))?;
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
 
-    api.with_version(api_ver)
-        .at("get_table_sizes", |_req, state| {
-            async move {
-                state
-                    .read(|state| state.get_table_sizes().boxed())
-                    .await
-                    .map_err(|err| Error::internal(format!("failed to get table sizes: {err:#}")))
-            }
-            .boxed()
-        })?
-        .at("get_oldest_block", |_req, state| {
-            async move {
-                state
-                    .read(|state| state.get_oldest_block().boxed())
-                    .await
-                    .map_err(|err| Error::internal(format!("failed to get oldest block: {err:#}")))
-            }
-            .boxed()
-        })?
-        .at("get_oldest_leaf", |_req, state| {
-            async move {
-                state
-                    .read(|state| state.get_oldest_leaf().boxed())
-                    .await
-                    .map_err(|err| Error::internal(format!("failed to get oldest leaf: {err:#}")))
-            }
-            .boxed()
-        })?;
+    api.with_version(api_ver).at("get_table_sizes", |_req, state| {
+        async move {
+            state
+                .read(|state| state.get_table_sizes().boxed())
+                .await
+                .map_err(|err| Error::internal(format!("failed to get table sizes: {err:#}")))
+        }
+        .boxed()
+    })?;
 
     Ok(api)
 }
