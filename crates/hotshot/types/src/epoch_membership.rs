@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use versions::DRB_FIX_VERSION;
 
 use crate::{
-    PeerConfig,
+    PeerConfig, PeerConnectInfo,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::{DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result},
     event::Event,
@@ -21,6 +21,7 @@ use crate::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::NodeType,
+        signature_key::StakeTableEntryType,
         storage::{
             LoadDrbProgressFn, Storage, StoreDrbProgressFn, StoreDrbResultFn, load_drb_progress_fn,
             store_drb_progress_fn, store_drb_result_fn,
@@ -194,6 +195,59 @@ where
         Err(warn!(
             "Stake table for Epoch {epoch:?} Unavailable. Starting catchup"
         ))
+    }
+
+    /// Return the union of the stake table and DA committee for `epoch`,
+    /// keyed by signature key. Each entry's `Option<PeerConnectInfo>`
+    /// reflects whether the peer has connection info registered.
+    ///
+    /// Returns `None` if the stake table for `epoch` is unavailable
+    /// (e.g. catchup is still in progress).
+    pub async fn epoch_peers(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Option<HashMap<TYPES::SignatureKey, Option<PeerConnectInfo>>> {
+        let membership = self.stake_table_for_epoch(epoch).await.ok()?;
+        let st = membership.stake_table().await;
+        let da = membership.da_stake_table().await;
+        Some(
+            st.0.into_iter()
+                .chain(da.0)
+                .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
+                .collect(),
+        )
+    }
+
+    /// Collect the union of `epoch-1`, `epoch`, and `epoch+1` stake tables
+    /// (each merged with its DA committee) as a flat map of peers to dial.
+    ///
+    /// Newest-wins ordering for `connect_info`: next overrides curr overrides
+    /// prev. Entries with no `connect_info` are filtered out.
+    ///
+    /// Used to seed networks like cliquenet with the same window
+    /// `on_epoch_change` would build for `epoch`.
+    pub async fn window_peers(
+        &self,
+        epoch: EpochNumber,
+    ) -> HashMap<TYPES::SignatureKey, PeerConnectInfo> {
+        let curr = self.epoch_peers(Some(epoch)).await.unwrap_or_default();
+        let prev = if *epoch > 0 {
+            self.epoch_peers(Some(epoch - 1)).await.unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+        let next = self.epoch_peers(Some(epoch + 1)).await.unwrap_or_default();
+
+        // Newest-wins merge: start from prev, overlay curr and next.
+        let mut merged: HashMap<TYPES::SignatureKey, Option<PeerConnectInfo>> = prev;
+        for (k, v) in curr.into_iter().chain(next) {
+            merged.insert(k, v);
+        }
+
+        merged
+            .into_iter()
+            .filter_map(|(k, v)| v.map(|info| (k, info)))
+            .collect()
     }
 
     /// Catches the membership up to the epoch passed as an argument.

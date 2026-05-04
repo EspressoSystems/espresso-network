@@ -18,11 +18,10 @@ use hotshot_types::{
     boxed_sync,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    stake_table::HSStakeTable,
     traits::{
         network::{BroadcastDelay, ConnectedNetwork, NetworkError, Topic},
         node_implementation::NodeType,
-        signature_key::{SignatureKey, StakeTableEntryType},
+        signature_key::SignatureKey,
     },
     x25519::{Keypair, PublicKey},
 };
@@ -114,14 +113,6 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
     where
         U: NodeType<SignatureKey = K>,
     {
-        // Collect peer connect infos from stake table.
-        let connect_infos = |a: HSStakeTable<U>, b: HSStakeTable<U>| {
-            a.0.into_iter()
-                .chain(b.0)
-                .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
-                .collect()
-        };
-
         let mut our_epoch = self.epoch.lock().await;
 
         if epoch <= *our_epoch {
@@ -130,41 +121,26 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         }
 
         // Validators of the new epoch.
-        let curr_infos = {
-            let Ok(membership) = coord.stake_table_for_epoch(Some(epoch)).await else {
-                error!(%epoch, "no stake table available");
-                return;
-            };
-            let st = membership.stake_table().await;
-            let da = membership.da_stake_table().await;
-            connect_infos(st, da)
+        let Some(curr_infos) = coord.epoch_peers(Some(epoch)).await else {
+            error!(%epoch, "no stake table available");
+            return;
         };
 
         // Validators leaving are retained as peers for one additional epoch.
         let prev_infos = if *epoch > 0 {
-            if let Ok(membership) = coord.stake_table_for_epoch(Some(epoch - 1)).await {
-                let st = membership.stake_table().await;
-                let da = membership.da_stake_table().await;
-                connect_infos(st, da)
-            } else {
+            coord.epoch_peers(Some(epoch - 1)).await.unwrap_or_else(|| {
                 info!(%epoch, "previous epoch's stake table unavailable");
                 HashMap::new()
-            }
+            })
         } else {
             HashMap::new()
         };
 
         // Validators joining in the next epoch are connected to early.
-        let next_infos = {
-            if let Ok(membership) = coord.stake_table_for_epoch(Some(epoch + 1)).await {
-                let st = membership.stake_table().await;
-                let da = membership.da_stake_table().await;
-                connect_infos(st, da)
-            } else {
-                info!(%epoch, "next epoch's stake table not available");
-                HashMap::new()
-            }
-        };
+        let next_infos = coord.epoch_peers(Some(epoch + 1)).await.unwrap_or_else(|| {
+            info!(%epoch, "next epoch's stake table not available");
+            HashMap::new()
+        });
 
         // Since connection information may be updated, we need to merge them,
         // preferring the newest epoch's data, i.e. `next(curr(prev))`.
@@ -269,58 +245,6 @@ impl<K: SignatureKey + 'static> Cliquenet<K> {
         }
         None
     }
-}
-
-/// Collect the union of `prev`, `curr`, and `next` epoch stake tables (each
-/// merged with its DA committee) as a flat map of peers to dial.
-///
-/// Used at startup to seed cliquenet with the same window `on_epoch_change`
-/// would build for `epoch`, before any epoch transition has occurred.
-/// Newest-wins ordering for `connect_info`: next overrides curr overrides prev.
-/// Entries with no `connect_info` are filtered out.
-pub async fn collect_window_peers<U>(
-    coord: &EpochMembershipCoordinator<U>,
-    epoch: EpochNumber,
-) -> HashMap<U::SignatureKey, PeerConnectInfo>
-where
-    U: NodeType,
-{
-    let curr = fetch_epoch_peers(coord, Some(epoch)).await;
-    let prev = if *epoch > 0 {
-        fetch_epoch_peers(coord, Some(epoch - 1)).await
-    } else {
-        HashMap::new()
-    };
-    let next = fetch_epoch_peers(coord, Some(epoch + 1)).await;
-
-    // Newest-wins merge: start from prev, overlay curr and next.
-    let mut merged: HashMap<U::SignatureKey, Option<PeerConnectInfo>> = prev;
-    for (k, v) in curr.into_iter().chain(next) {
-        merged.insert(k, v);
-    }
-
-    merged
-        .into_iter()
-        .filter_map(|(k, v)| v.map(|info| (k, info)))
-        .collect()
-}
-
-async fn fetch_epoch_peers<U>(
-    coord: &EpochMembershipCoordinator<U>,
-    epoch: Option<EpochNumber>,
-) -> HashMap<U::SignatureKey, Option<PeerConnectInfo>>
-where
-    U: NodeType,
-{
-    let Ok(membership) = coord.stake_table_for_epoch(epoch).await else {
-        return HashMap::new();
-    };
-    let st = membership.stake_table().await;
-    let da = membership.da_stake_table().await;
-    st.0.into_iter()
-        .chain(da.0)
-        .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
-        .collect()
 }
 
 #[async_trait]

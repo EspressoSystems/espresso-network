@@ -6,8 +6,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{EXTERNAL_MESSAGE_VERSION, MessageKind, UpgradeLock},
-    stake_table::HSStakeTable,
-    traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
+    traits::node_implementation::NodeType,
     x25519::Keypair,
 };
 use tracing::{error, info};
@@ -221,33 +220,26 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         }
 
         // Validators of the new epoch.
-        let curr_infos = match fetch_epoch_peers(coord, Some(epoch)).await {
-            Some(infos) => infos,
-            None => {
-                error!(%epoch, "no stake table available");
-                return Ok(());
-            },
+        let Some(curr_infos) = coord.epoch_peers(Some(epoch)).await else {
+            error!(%epoch, "no stake table available");
+            return Ok(());
         };
 
         // Validators leaving are retained as peers for one additional epoch.
         let prev_infos = if *epoch > 0 {
-            fetch_epoch_peers(coord, Some(epoch - 1))
-                .await
-                .unwrap_or_else(|| {
-                    info!(%epoch, "previous epoch's stake table unavailable");
-                    HashMap::new()
-                })
+            coord.epoch_peers(Some(epoch - 1)).await.unwrap_or_else(|| {
+                info!(%epoch, "previous epoch's stake table unavailable");
+                HashMap::new()
+            })
         } else {
             HashMap::new()
         };
 
         // Validators joining in the next epoch are connected to early.
-        let next_infos = fetch_epoch_peers(coord, Some(epoch + 1))
-            .await
-            .unwrap_or_else(|| {
-                info!(%epoch, "next epoch's stake table not available");
-                HashMap::new()
-            });
+        let next_infos = coord.epoch_peers(Some(epoch + 1)).await.unwrap_or_else(|| {
+            info!(%epoch, "next epoch's stake table not available");
+            HashMap::new()
+        });
 
         // Since connection information may be updated, we need to merge them,
         // preferring the newest epoch's data, i.e. `next(curr(prev))`.
@@ -320,29 +312,6 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         self.epoch = epoch;
         Ok(())
     }
-}
-
-/// Fetch the merged stake-table + DA-stake-table peer infos for `epoch`.
-///
-/// Returns `None` if no stake table is available for the epoch.
-async fn fetch_epoch_peers<T: NodeType>(
-    coord: &EpochMembershipCoordinator<T>,
-    epoch: Option<EpochNumber>,
-) -> Option<HashMap<T::SignatureKey, Option<PeerConnectInfo>>> {
-    let membership = coord.stake_table_for_epoch(epoch).await.ok()?;
-    let st = membership.stake_table().await;
-    let da = membership.da_stake_table().await;
-    Some(connect_infos::<T>(st, da))
-}
-
-fn connect_infos<T: NodeType>(
-    a: HSStakeTable<T>,
-    b: HSStakeTable<T>,
-) -> HashMap<T::SignatureKey, Option<PeerConnectInfo>> {
-    a.0.into_iter()
-        .chain(b.0)
-        .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
-        .collect()
 }
 
 impl<T: NodeType> Cliquenet<T> {
