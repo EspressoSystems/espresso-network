@@ -745,15 +745,16 @@ where
     let toml = toml::from_str::<toml::Value>(include_str!("../../api/database.toml"))?;
     let mut api = Api::<S, Error, ApiVer>::new(toml)?;
 
-    api.with_version(api_ver).at("get_table_sizes", |_req, state| {
-        async move {
-            state
-                .read(|state| state.get_table_sizes().boxed())
-                .await
-                .map_err(|err| Error::internal(format!("failed to get table sizes: {err:#}")))
-        }
-        .boxed()
-    })?;
+    api.with_version(api_ver)
+        .at("get_table_sizes", |_req, state| {
+            async move {
+                state
+                    .read(|state| state.get_table_sizes().boxed())
+                    .await
+                    .map_err(|err| Error::internal(format!("failed to get table sizes: {err:#}")))
+            }
+            .boxed()
+        })?;
 
     Ok(api)
 }
