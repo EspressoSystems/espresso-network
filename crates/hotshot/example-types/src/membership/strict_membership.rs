@@ -20,7 +20,7 @@ use hotshot_types::{
 };
 
 use crate::{
-    membership::{fetcher::Leaf2Fetcher, stake_table::TestStakeTable},
+    membership::{TestableMembership, fetcher::Leaf2Fetcher, stake_table::TestStakeTable},
     storage_types::TestStorage,
 };
 
@@ -51,12 +51,9 @@ where
 }
 
 impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
-    StrictMembership<TYPES, StakeTable>
+    TestableMembership<TYPES> for StrictMembership<TYPES, StakeTable>
 {
-    /// Test-only: install a fully wired leaf fetcher. Required before any
-    /// test exercises catchup (`get_epoch_root`/`get_epoch_drb`); other tests
-    /// can skip this entirely.
-    pub fn set_leaf_fetcher(
+    fn set_leaf_fetcher(
         &mut self,
         network: Arc<dyn LeafFetcherNetwork<TYPES>>,
         storage: TestStorage<TYPES>,
@@ -67,7 +64,11 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
         fetcher.set_external_channel(channel);
         self.fetcher = Some(Arc::new(RwLock::new(fetcher)));
     }
+}
 
+impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
+    StrictMembership<TYPES, StakeTable>
+{
     fn assert_has_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {
             return;

@@ -575,7 +575,8 @@ pub async fn mock_membership_with_leaf_fetcher_network(
         async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
     external_events_tx.set_overflow(true);
     external_events_rx.set_overflow(true);
-    strict_membership.set_leaf_fetcher(
+    hotshot_example_types::membership::TestableMembership::set_leaf_fetcher(
+        &mut strict_membership,
         leaf_fetcher_network,
         storage.clone(),
         public_key,

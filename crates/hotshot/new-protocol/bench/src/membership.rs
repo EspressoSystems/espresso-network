@@ -3,7 +3,9 @@ use std::sync::Arc;
 use async_lock::RwLock;
 use hotshot::types::{BLSPubKey, SchnorrPubKey};
 use hotshot_example_types::{
-    membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
+    membership::{
+        TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
+    },
     node_types::TestTypes,
     storage_types::TestStorage,
 };

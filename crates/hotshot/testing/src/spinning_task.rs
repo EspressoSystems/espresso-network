@@ -19,6 +19,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
+    membership::TestableMembership,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
     testable_delay::DelayConfig,
@@ -105,7 +106,7 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
 {
     type Event = Event<TYPES>;
     type Error = Error;
@@ -315,14 +316,31 @@ where
                                     state_cert,
                                 );
                                 // We assign node's public key and stake value rather than read from config file since it's a test
-                                let validator_config = ValidatorConfig::generated_from_seed_indexed(
-                                    [0u8; 32],
-                                    node_id,
-                                    self.node_stakes.get(node_id),
-                                    // For tests, make the node DA based on its index
-                                    node_id < config.da_staked_committee_size as u64,
-                                );
+                                let validator_config: ValidatorConfig<TYPES> =
+                                    ValidatorConfig::generated_from_seed_indexed(
+                                        [0u8; 32],
+                                        node_id,
+                                        self.node_stakes.get(node_id),
+                                        // For tests, make the node DA based on its index
+                                        node_id < config.da_staked_committee_size as u64,
+                                    );
                                 let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
+                                // Install the test leaf fetcher on the
+                                // restarted node's membership before the
+                                // SystemContext spins up, so epoch-root
+                                // catchup is wired against the same external
+                                // channel the network task forwards events to.
+                                membership.write().await.set_leaf_fetcher(
+                                    Arc::new(
+                                        hotshot_types::traits::leaf_fetcher_network::ConnectedNetworkLeafFetcher::<
+                                            TYPES,
+                                            _,
+                                        >::new(generated_network.clone()),
+                                    ),
+                                    storage.clone(),
+                                    validator_config.public_key.clone(),
+                                    node.handle.event_stream_known_impl(),
+                                );
                                 let context =
                                     TestRunner::<TYPES, I, N>::add_node_with_config_and_channels(
                                         node_id,

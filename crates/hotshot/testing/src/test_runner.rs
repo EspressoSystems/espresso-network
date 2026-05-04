@@ -21,6 +21,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
+    membership::TestableMembership,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
@@ -28,7 +29,7 @@ use hotshot_task_impls::events::HotShotEvent;
 use hotshot_types::{
     HotShotConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
-    constants::EVENT_CHANNEL_SIZE,
+    constants::{EVENT_CHANNEL_SIZE, EXTERNAL_EVENT_CHANNEL_SIZE},
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::INITIAL_DRB_RESULT,
     epoch_membership::EpochMembershipCoordinator,
@@ -36,6 +37,7 @@ use hotshot_types::{
     storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
+        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
     },
@@ -74,7 +76,7 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
 {
     /// execute test
     ///
@@ -503,15 +505,36 @@ where
 
         // Then start the necessary tasks
         for (node_id, network, memberships, config, storage) in uninitialized_nodes {
+            let memberships = Arc::new(RwLock::new(memberships));
+            let public_key = ValidatorConfig::<TYPES>::generated_from_seed_indexed(
+                [0u8; 32],
+                node_id,
+                self.launcher.metadata.node_stakes.get(node_id),
+                node_id < config.da_staked_committee_size as u64,
+            )
+            .public_key;
             let handle = create_test_handle(
                 self.launcher.metadata.clone(),
                 node_id,
                 network.clone(),
-                Arc::new(RwLock::new(memberships)),
+                Arc::clone(&memberships),
                 config.clone(),
-                storage,
+                storage.clone(),
             )
             .await;
+            // Install the test leaf fetcher so epoch-root catchup has a
+            // working network and a receiver wired into the same external
+            // channel the network task forwards `ExternalMessageReceived`
+            // events to. Done after `create_test_handle` returns but before
+            // `start_consensus` so no catchup events can be missed.
+            memberships.write().await.set_leaf_fetcher(
+                Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
+                    network.clone(),
+                )),
+                storage,
+                public_key,
+                handle.event_stream_known_impl(),
+            );
 
             match node_id.cmp(&(config.da_staked_committee_size as u64 - 1)) {
                 std::cmp::Ordering::Less => {
@@ -552,29 +575,34 @@ where
         validator_config: ValidatorConfig<TYPES>,
         storage: I::Storage,
     ) -> Arc<SystemContext<TYPES, I>> {
-        // Get key pair for certificate aggregation
-        let private_key = validator_config.private_key.clone();
-        let public_key = validator_config.public_key.clone();
-        let state_private_key = validator_config.state_private_key.clone();
-        let epoch_height = config.epoch_height;
+        let internal_chan = async_broadcast::broadcast(EVENT_CHANNEL_SIZE);
+        let external_chan = async_broadcast::broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
 
-        SystemContext::new(
-            public_key,
-            private_key,
-            state_private_key,
+        let memberships = Arc::new(RwLock::new(memberships));
+        // Install the test leaf fetcher before consensus starts so epoch
+        // catchup (`get_epoch_root` / `get_epoch_drb`) has a working network
+        // and a receiver wired into the same external channel the network
+        // task uses to forward `ExternalMessageReceived` events.
+        memberships.write().await.set_leaf_fetcher(
+            Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
+                network.clone(),
+            )),
+            storage.clone(),
+            validator_config.public_key.clone(),
+            external_chan.1.new_receiver(),
+        );
+
+        Self::add_node_with_config_and_channels(
             node_id,
+            network,
+            memberships,
+            initializer,
             config,
             upgrade,
-            EpochMembershipCoordinator::new(
-                Arc::new(RwLock::new(memberships)),
-                epoch_height,
-                &storage.clone(),
-            ),
-            network,
-            initializer,
-            ConsensusMetricsValue::default(),
+            validator_config,
             storage,
-            StorageMetricsValue::default(),
+            internal_chan,
+            external_chan,
         )
         .await
     }
