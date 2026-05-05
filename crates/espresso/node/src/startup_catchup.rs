@@ -114,11 +114,7 @@ pub async fn bootstrap_epoch_window(
 
     // `highest` corresponds to N+1 (the leaf at root_block_in_epoch(N-1) is
     // the last finalized one peers can serve). So current epoch N = highest - 1.
-    let current = if *highest >= 1 {
-        EpochNumber::new(highest.saturating_sub(1))
-    } else {
-        highest
-    };
+    let current = EpochNumber::new(highest.saturating_sub(1));
 
     let m = membership.read().await;
     ensure!(

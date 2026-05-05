@@ -277,9 +277,8 @@ where
                         self.storage.append_vid(s);
                         self.storage.append_proposal(validated.message.proposal.data.clone());
 
-                        // Refresh the network's peer set when the proposal's
-                        // epoch advances so cliquenet keeps connections to the
-                        // surrounding stake-table window in sync.
+                        // Refresh the network's peer set when a proposal is validated
+                        // on_epoch_change should return immediately if the epoch is not new
                         let epoch = validated.message.proposal.data.epoch;
                         if let Err(err) = self
                             .network
