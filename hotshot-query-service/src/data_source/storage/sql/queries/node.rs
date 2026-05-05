@@ -401,8 +401,10 @@ where
                 // We can easily find the end of the range from the start by finding the maximum
                 // height which is still present between the start and the next range's start.
                 let query = format!(
-                    "SELECT max(height) from {table}
-                      WHERE height < $1 AND {indicator_column} IS NOT NULL"
+                    "SELECT height FROM {table}
+                      WHERE height < $1 AND {indicator_column} IS NOT NULL
+                      ORDER BY height DESC
+                      LIMIT 1"
                 );
                 let upper_bound = if i + 1 < range_starts.len() {
                     range_starts[i + 1].0

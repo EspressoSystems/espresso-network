@@ -8,7 +8,6 @@
 use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
 
 use alloy::primitives::U256;
-use async_broadcast::Receiver;
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_utils::anytrace::Result;
@@ -18,9 +17,8 @@ use crate::{
     PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
-    event::Event,
     stake_table::{HSStakeTable, supermajority_threshold},
-    traits::{node_implementation::NodeImplementation, signature_key::StakeTableEntryType},
+    traits::signature_key::StakeTableEntryType,
 };
 
 pub struct NoStakeTableHash;
@@ -36,29 +34,17 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// The error type returned by methods like `lookup_leader`.
     type Error: std::fmt::Display;
 
-    /// Storage type used by the underlying fetcher
-    type Storage;
-
     type StakeTableHash: Committable;
 
     /// Create a committee
-    fn new<I: NodeImplementation<TYPES>>(
+    fn new(
         // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
         // but they should not have voting power.
         stake_committee_members: Vec<PeerConfig<TYPES>>,
         da_committee_members: Vec<PeerConfig<TYPES>>,
-        storage: Self::Storage,
-        network: Arc<<I as NodeImplementation<TYPES>>::Network>,
         public_key: TYPES::SignatureKey,
         epoch_height: u64,
     ) -> Self;
-
-    fn set_external_channel(
-        &mut self,
-        _external_channel: Receiver<Event<TYPES>>,
-    ) -> impl std::future::Future<Output = ()> + Send {
-        async {}
-    }
 
     fn total_stake(&self, epoch: Option<EpochNumber>) -> U256 {
         self.stake_table(epoch)
@@ -234,6 +220,13 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
 
     /// Get first epoch if epochs are enabled, `None` otherwise
     fn first_epoch(&self) -> Option<EpochNumber>;
+
+    /// Get the highest epoch for which a stake table is currently in memory,
+    /// or `None` if no stake tables are loaded. Used at startup to find the
+    /// point from which to walk forward catching up missing epochs.
+    fn highest_known_epoch(&self) -> Option<EpochNumber> {
+        None
+    }
 
     /// Returns the commitment of the stake table for the given epoch,
     /// Errors if the stake table is not available for the given epoch

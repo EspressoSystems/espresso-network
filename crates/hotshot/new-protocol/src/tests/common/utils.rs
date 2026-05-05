@@ -1,21 +1,20 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
-    time::Duration,
 };
 
 use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use futures::StreamExt;
 use hotshot::{
-    traits::{BlockPayload, ValidatedState, implementations::MemoryNetwork},
+    traits::{BlockPayload, ValidatedState},
     types::{BLSPrivKey, BLSPubKey, SchnorrPubKey},
 };
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata},
     membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
-    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
+    node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
@@ -39,8 +38,6 @@ use hotshot_types::{
         EncodeBytes,
         block_contents::{BlockHeader, BuilderFee},
         election::Membership,
-        network::TestableNetworkingImplementation,
-        node_implementation::NodeImplementation,
         signature_key::{LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey},
     },
     utils::{
@@ -50,6 +47,7 @@ use hotshot_types::{
 };
 
 use crate::{
+    client::{ClientLeafFetcherNetwork, CoordinatorClient},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     helpers::{proposal_commitment, test_upgrade_lock},
     message::{
@@ -263,7 +261,9 @@ impl TestData {
         num_nodes: usize,
     ) -> Self {
         crate::logging::init_test_logging();
-        let (membership, _storage) = mock_membership_with_num_nodes(num_nodes, epoch_height).await;
+        let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+        let (membership, _storage, _client) =
+            mock_membership_with_num_nodes(num_nodes, epoch_height, public_key).await;
         let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
         let upgrade = TEST_VERSIONS.vid2;
@@ -479,62 +479,82 @@ impl TestData {
 }
 
 pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
-    mock_membership_with_num_nodes(10, 10).await.0
+    let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let (coordinator, ..) = mock_membership_with_num_nodes(10, 10, public_key).await;
+    coordinator
 }
 
 pub async fn mock_membership_with_num_nodes(
     num_nodes: usize,
     epoch_height: u64,
-) -> (
-    EpochMembershipCoordinator<TestTypes>,
-    TestStorage<TestTypes>,
-) {
-    // Unit-test callers don't have a real Coordinator network to share,
-    // so spin up an isolated MemoryNetwork just for the `Leaf2Fetcher`.
-    // These tests don't actually exercise peer catchup.
-    let network =
-        <MemoryNetwork<BLSPubKey> as TestableNetworkingImplementation<TestTypes>>::generator(
-            num_nodes,
-            0,
-            1,
-            num_nodes,
-            None,
-            Duration::from_secs(1),
-            &mut HashMap::new(),
-        )(0)
-        .await;
-    let (pk, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
-    let (mut coordinator, storage) =
-        mock_membership_with_network::<MemoryImpl>(num_nodes, epoch_height, network, pk).await;
-    // Install a dummy external channel so Leaf2Fetcher::fetch_leaf
-    // doesn't panic on `self.network_receiver.expect(...)` when these
-    // unit tests incidentally drive catchup.
-    let (_tx, rx) = async_broadcast::broadcast(1);
-    coordinator.set_external_channel(rx).await;
-    (coordinator, storage)
-}
-
-/// Create a mock membership coordinator for `num_nodes` validators.
-///
-/// The `network` is shared with the node's [`Coordinator`] — the
-/// membership's `Leaf2Fetcher` uses it to SEND catchup direct-messages,
-/// while the Coordinator is the sole owner of the receive loop.
-/// Returns the coordinator along with the [`TestStorage`] its internal
-/// `StrictMembership` uses.  The same `TestStorage` should be supplied to
-/// the node's [`Coordinator`] so that `Leaf2Fetcher` can read leaves the
-/// Coordinator writes during catchup.
-pub async fn mock_membership_with_network<I>(
-    num_nodes: usize,
-    epoch_height: u64,
-    network: Arc<<I as NodeImplementation<TestTypes>>::Network>,
     public_key: BLSPubKey,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
-)
-where
-    I: NodeImplementation<TestTypes>,
-{
+    CoordinatorClient<TestTypes>,
+) {
+    let (coord, storage, client, _external_events_tx) =
+        mock_membership_with_client(num_nodes, epoch_height, public_key).await;
+    (coord, storage, client)
+}
+
+/// Create a mock membership coordinator for `num_nodes` validators.
+///
+/// The membership's `Leaf2Fetcher` is wired to a fresh
+/// [`CoordinatorClient`] via [`ClientLeafFetcherNetwork`] — catchup
+/// direct-messages are routed through the `Coordinator` (which owns the
+/// only `Network` handle).  The returned `CoordinatorClient` must be
+/// installed on the node's `Coordinator` (via `.client(...)`) so the
+/// routed messages are actually drained and dispatched.
+///
+/// The returned [`TestStorage`] is the storage the membership's
+/// `Leaf2Fetcher` reads from; share it with the `Coordinator` so
+/// self-produced proposals land in the same store.  The returned
+/// [`Sender`] is the tx half of the external-events channel feeding the
+/// membership's `Leaf2Fetcher`; pass it into `build_test_coordinator` so
+/// the coordinator forwards `ExternalMessageReceived` events to it.
+pub async fn mock_membership_with_client(
+    num_nodes: usize,
+    epoch_height: u64,
+    public_key: BLSPubKey,
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+    CoordinatorClient<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+) {
+    let client = CoordinatorClient::<TestTypes>::default();
+    let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
+    let (coord, storage, external_events_tx) = mock_membership_with_leaf_fetcher_network(
+        num_nodes,
+        epoch_height,
+        leaf_fetcher_network,
+        public_key,
+    )
+    .await;
+    (coord, storage, client, external_events_tx)
+}
+
+/// Build a mock membership coordinator wired to an arbitrary
+/// `LeafFetcherNetwork`.  `public_key` is the node's identity — peers
+/// will send leaf-fetcher responses back to this key, so passing the
+/// wrong one means responses don't return to this node's fetcher.
+///
+/// Creates and installs the external-events channel internally; the
+/// returned [`Sender`] is the tx half — hand it to the coordinator so it
+/// forwards `ExternalMessageReceived` events to the fetcher.
+pub async fn mock_membership_with_leaf_fetcher_network(
+    num_nodes: usize,
+    epoch_height: u64,
+    leaf_fetcher_network: Arc<
+        dyn hotshot_types::traits::leaf_fetcher_network::LeafFetcherNetwork<TestTypes>,
+    >,
+    public_key: BLSPubKey,
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+) {
     let members = gen_node_lists(
         num_nodes as u64,
         num_nodes as u64,
@@ -542,17 +562,27 @@ where
     )
     .0;
     let storage = TestStorage::<TestTypes>::default();
-    let membership = Arc::new(RwLock::new(StrictMembership::<
+    let mut strict_membership = StrictMembership::<
         TestTypes,
         StaticStakeTable<BLSPubKey, SchnorrPubKey>,
-    >::new::<I>(
-        members.clone(),
-        members.clone(),
+    >::new(
+        members.clone(), members.clone(), public_key, epoch_height
+    );
+    // Channel used by the Coordinator to forward ExternalMessageReceived
+    // events to the membership's Leaf2Fetcher (drives epoch catchup).
+    // Overflow is enabled so slow listeners don't stall the Coordinator.
+    let (mut external_events_tx, mut external_events_rx) =
+        async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
+    external_events_tx.set_overflow(true);
+    external_events_rx.set_overflow(true);
+    hotshot_example_types::membership::TestableMembership::set_leaf_fetcher(
+        &mut strict_membership,
+        leaf_fetcher_network,
         storage.clone(),
-        network,
         public_key,
-        epoch_height,
-    )));
+        external_events_rx,
+    );
+    let membership = Arc::new(RwLock::new(strict_membership));
     // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.)
     membership
         .write()
@@ -566,11 +596,7 @@ where
     coordinator
         .set_drb_difficulty_selector(std::sync::Arc::new(|_version| Box::pin(async { 0u64 })))
         .await;
-    // Callers that need the `Leaf2Fetcher` external channel wired up
-    // install it themselves — `build_test_coordinator` wires a real
-    // channel to its Coordinator; `mock_membership` installs a dummy
-    // for unit tests that don't exercise real catchup.
-    (coordinator, storage)
+    (coordinator, storage, external_events_tx)
 }
 
 pub fn key_map_with_num_nodes(num_nodes: u64) -> BTreeMap<BLSPubKey, BLSPrivKey> {

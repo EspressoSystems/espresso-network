@@ -827,6 +827,14 @@ impl Client for TestClient {
         Ok(PayloadProof::new(payload, vid_common))
     }
 
+    async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            proofs.push(self.payload_proof(i).await?);
+        }
+        Ok(proofs)
+    }
+
     async fn namespace_proof(
         &self,
         height: u64,
@@ -879,6 +887,10 @@ impl Client for TestClient {
             proofs.push(self.namespace_proof(i, namespace).await?);
         }
         Ok(proofs)
+    }
+
+    async fn cert2(&self, _height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
+        Ok(None)
     }
 }
 

@@ -25,7 +25,7 @@ pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
     async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()>;
 }
 
-pub struct Storage<T: NodeType, S: NewProtocolStorage<T>> {
+pub struct Storage<T: NodeType, S> {
     storage: S,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     handles: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,

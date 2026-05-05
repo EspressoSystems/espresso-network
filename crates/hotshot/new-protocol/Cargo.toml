@@ -1,10 +1,10 @@
 [package]
-authors = { workspace = true }
-description = "Implementation of Fast Finality Protocol"
-edition = { workspace = true }
 name = "hotshot-new-protocol"
-version = { workspace = true }
+description = "Implementation of Fast Finality Protocol"
 license = "MIT"
+authors = { workspace = true }
+edition = { workspace = true }
+version = { workspace = true }
 
 [features]
 example-upgrade = []

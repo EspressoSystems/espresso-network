@@ -79,7 +79,18 @@ DOC = """
 This Endpoint fetches a leaf chain which decides a specified block height.  This endpoint should be used
 For catching up the stake table, where `:height` is the block height of the epoch root you want to catchup to
 
-Returns a list of leaves which includes `:height` as the last leaf and should prove the block with `:height` was decided.  
+Returns a list of leaves which includes `:height` as the last leaf and should prove the block with `:height` was decided.
+"""
+
+[route.cert2]
+PATH = ["/:height/cert2"]
+":height" = "Integer"
+DOC = """
+
+Fetches the earliest cert2 whose finalized block height is
+at or above `:height`.
+
+Returns 404 if no cert2 with height >= `:height` is available
 """
 
 [route.reward_account]
