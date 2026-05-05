@@ -235,6 +235,13 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
     /// Get first epoch if epochs are enabled, `None` otherwise
     fn first_epoch(&self) -> Option<EpochNumber>;
 
+    /// Get the highest epoch for which a stake table is currently in memory,
+    /// or `None` if no stake tables are loaded. Used at startup to find the
+    /// point from which to walk forward catching up missing epochs.
+    fn highest_known_epoch(&self) -> Option<EpochNumber> {
+        None
+    }
+
     /// Returns the commitment of the stake table for the given epoch,
     /// Errors if the stake table is not available for the given epoch
     fn stake_table_hash(&self, _epoch: EpochNumber) -> Option<Commitment<Self::StakeTableHash>> {

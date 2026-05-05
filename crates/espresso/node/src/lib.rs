@@ -2,6 +2,7 @@ mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
+mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
@@ -750,15 +751,6 @@ where
     // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
     // for the fast finality consensus upgrade i.e Coordinator.
     let cliquenet = {
-        let peers = coordinator
-            .stake_table_for_epoch(None)
-            .await?
-            .stake_table()
-            .await
-            .0
-            .into_iter()
-            .filter_map(|cfg| Some((cfg.stake_table_entry.stake_key, cfg.connect_info?)));
-
         // TODO: This creates a separate UpgradeLock from the one HotShot will
         // use. They should share a single lock so upgrade certificate updates
         // are visible to both.
@@ -767,7 +759,7 @@ where
             pub_key,
             network_params.x25519_secret_key.into(),
             network_params.cliquenet_bind_addr.clone(),
-            peers,
+            vec![], // Initialize with no peers, they are set during init.
             UpgradeLock::new(version_upgrade),
         )
         .await?

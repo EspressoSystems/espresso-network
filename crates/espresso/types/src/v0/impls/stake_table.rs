@@ -2570,6 +2570,10 @@ impl Membership<SeqTypes> for EpochCommittees {
         self.first_epoch
     }
 
+    fn highest_known_epoch(&self) -> Option<EpochNumber> {
+        self.state.keys().max().copied()
+    }
+
     fn stake_table_hash(&self, epoch: Epoch) -> Option<StakeTableHash> {
         let committee = self.state.get(&epoch)?;
         committee.stake_table_hash
