@@ -888,6 +888,10 @@ impl Client for TestClient {
         }
         Ok(proofs)
     }
+
+    async fn cert2(&self, _height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
+        Ok(None)
+    }
 }
 
 fn register_validator_events(
