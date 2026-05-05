@@ -2,6 +2,7 @@ mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
+mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
@@ -132,6 +133,8 @@ pub struct NetworkParams {
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
     pub cliquenet_bind_addr: NetAddr,
+    /// Cliquenet address to advertise to other nodes (registered in the stake table).
+    pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
     /// The address to send to other Libp2p nodes to contact us
@@ -364,15 +367,18 @@ where
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
     let state_key_pair = StateKeyPair::from_sign_key(network_params.private_state_key);
-    let validator_config = ValidatorConfig {
+
+    // Only the orchestrator bootstrap path publishes these into the stake table; overridden
+    // below when needed.
+    let mut validator_config = ValidatorConfig {
         public_key: pub_key,
         private_key: network_params.private_staking_key,
         stake_value: U256::ONE,
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
-        x25519_keypair: Some(x25519::Keypair::from(&network_params.x25519_secret_key)),
-        p2p_addr: Some(network_params.cliquenet_bind_addr.clone()),
+        x25519_keypair: None,
+        p2p_addr: None,
     };
 
     // Derive our Libp2p public key from our private key
@@ -417,6 +423,21 @@ where
             tracing::warn!(
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
+
+            // Publish our cliquenet `connect_info` into the stake table from
+            // `CLIQUENET_VERSION` on, so peers can dial us. Modify `validator_config`
+            // in place so the same `connect_info` is sent later when posting to
+            // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
+            if genesis.base_version >= versions::CLIQUENET_VERSION {
+                let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
+                    "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
+                     Cliquenet network from the orchestrator",
+                )?;
+                validator_config.x25519_keypair =
+                    Some(x25519::Keypair::from(&network_params.x25519_secret_key));
+                validator_config.p2p_addr = Some(advertise_addr);
+            }
+
             let config = get_complete_config(
                 &orchestrator_client,
                 validator_config.clone(),
@@ -730,15 +751,6 @@ where
     // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
     // for the fast finality consensus upgrade i.e Coordinator.
     let cliquenet = {
-        let peers = coordinator
-            .stake_table_for_epoch(None)
-            .await?
-            .stake_table()
-            .await
-            .0
-            .into_iter()
-            .filter_map(|cfg| Some((cfg.stake_table_entry.stake_key, cfg.connect_info?)));
-
         // TODO: This creates a separate UpgradeLock from the one HotShot will
         // use. They should share a single lock so upgrade certificate updates
         // are visible to both.
@@ -747,7 +759,7 @@ where
             pub_key,
             network_params.x25519_secret_key.into(),
             network_params.cliquenet_bind_addr.clone(),
-            peers,
+            vec![], // Initialize with no peers, they are set during init.
             UpgradeLock::new(version_upgrade),
         )
         .await?

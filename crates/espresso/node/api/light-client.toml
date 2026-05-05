@@ -105,6 +105,14 @@ DOC = """
 Fetch a payload plus the VID common data needed to recompute and verify its hash.
 """
 
+[route.payload_range]
+PATH = ["/payload/:start/:end"]
+":start" = "Integer"
+":end" = "Integer"
+DOC = """
+Fetch a list of payload proofs for each block in the range `[:start, :end)`.
+"""
+
 [route.namespace]
 PATH = ["/namespace/:height/:namespace"]
 ":height" = "Integer"

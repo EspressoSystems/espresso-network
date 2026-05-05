@@ -262,10 +262,10 @@ impl TestRunner {
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
-            let (membership, storage, client) =
+            let (membership, storage, client, external_events_tx) =
                 mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key).await;
 
-            let (coord, external_events_tx) = build_test_coordinator(
+            let coord = build_test_coordinator(
                 i as u64,
                 network,
                 membership,
@@ -352,7 +352,7 @@ impl TestRunner {
                                 // Create a fresh coordinator from genesis.
                                 let net =
                                     create_network(change.idx, &parties, &self.upgrade_lock).await;
-                                let (membership, storage, client) = {
+                                let (membership, storage, client, external_events_tx) = {
                                     let k = parties[change.idx].1;
                                     mock_membership_with_client(
                                         self.num_nodes,
@@ -361,7 +361,7 @@ impl TestRunner {
                                     )
                                     .await
                                 };
-                                let (coord, external_events_tx) = build_test_coordinator(
+                                let coord = build_test_coordinator(
                                     change.idx as u64,
                                     net,
                                     membership,

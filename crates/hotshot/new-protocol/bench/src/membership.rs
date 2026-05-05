@@ -3,7 +3,9 @@ use std::sync::Arc;
 use async_lock::RwLock;
 use hotshot::types::{BLSPubKey, SchnorrPubKey};
 use hotshot_example_types::{
-    membership::{static_committee::StaticStakeTable, strict_membership::StrictMembership},
+    membership::{
+        TestableMembership, static_committee::StaticStakeTable, strict_membership::StrictMembership,
+    },
     node_types::TestTypes,
     storage_types::TestStorage,
 };
@@ -36,17 +38,20 @@ pub async fn make_membership(
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
 
-    let membership = Arc::new(RwLock::new(StrictMembership::<
+    let mut strict_membership = StrictMembership::<
         TestTypes,
         StaticStakeTable<BLSPubKey, SchnorrPubKey>,
-    >::new(
-        members.clone(),
-        members.clone(),
-        TestStorage::default(),
+    >::new(members.clone(), members.clone(), public_key, u64::MAX);
+    // Bench doesn't drive catchup events into the fetcher; install a
+    // disconnected receiver so the fetcher's listener is wired but idle.
+    let (_tx, rx) = async_broadcast::broadcast(1);
+    strict_membership.set_leaf_fetcher(
         leaf_fetcher_network,
+        TestStorage::default(),
         public_key,
-        u64::MAX,
-    )));
+        rx,
+    );
+    let membership = Arc::new(RwLock::new(strict_membership));
 
     membership
         .write()
