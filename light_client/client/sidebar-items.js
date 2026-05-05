@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["fmt_block_id"],"struct":["QueryServiceClient"],"trait":["Client"]};
+window.SIDEBAR_ITEMS = {"enum":["FallbackClientBuilderError"],"fn":["fmt_block_id"],"struct":["FallbackClient","FallbackClientBuilder","QueryServiceClient"],"trait":["Client"],"type":["HttpClient"]};
