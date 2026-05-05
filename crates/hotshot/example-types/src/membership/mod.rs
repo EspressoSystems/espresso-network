@@ -6,6 +6,19 @@
 
 //! elections used for consensus
 
+use std::sync::Arc;
+
+use async_broadcast::Receiver;
+use hotshot_types::{
+    event::Event,
+    traits::{
+        election::Membership, leaf_fetcher_network::LeafFetcherNetwork,
+        node_implementation::NodeType,
+    },
+};
+
+use crate::storage_types::TestStorage;
+
 /// leader completely randomized every view
 pub mod randomized_committee;
 
@@ -28,3 +41,19 @@ pub mod fetcher;
 pub mod stake_table;
 
 pub mod strict_membership;
+
+/// Test-only extension of [`Membership`] that lets tests install the
+/// `Leaf2Fetcher` wiring needed for epoch-root catchup. Production
+/// memberships don't need this — only types that route catchup through a
+/// test fetcher (e.g. `StrictMembership`) implement it.
+pub trait TestableMembership<TYPES: NodeType>: Membership<TYPES> {
+    /// Install a fully wired leaf fetcher. Must be called before any code
+    /// path that triggers catchup (`get_epoch_root` / `get_epoch_drb`).
+    fn set_leaf_fetcher(
+        &mut self,
+        network: Arc<dyn LeafFetcherNetwork<TYPES>>,
+        storage: TestStorage<TYPES>,
+        public_key: TYPES::SignatureKey,
+        channel: Receiver<Event<TYPES>>,
+    );
+}

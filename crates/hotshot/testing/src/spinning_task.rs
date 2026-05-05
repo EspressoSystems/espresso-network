@@ -19,6 +19,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestBlockHeader,
+    membership::TestableMembership,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
     testable_delay::DelayConfig,
@@ -34,7 +35,6 @@ use hotshot_types::{
     },
     traits::{
         election::Membership,
-        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{NodeImplementation, NodeType},
     },
@@ -106,7 +106,7 @@ impl<
 where
     I: TestableNodeImplementation<TYPES>,
     I: NodeImplementation<TYPES, Network = N, Storage = TestStorage<TYPES>>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
 {
     type Event = Event<TYPES>;
     type Error = Error;
@@ -172,10 +172,6 @@ where
                                         let memberships = <TYPES as NodeType>::Membership::new(
                                             config.known_nodes_with_stake.clone(),
                                             config.known_da_nodes.clone(),
-                                            storage.clone(),
-                                            Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
-                                                network.clone(),
-                                            )),
                                             validator_config.public_key.clone(),
                                             config.epoch_height,
                                         );
@@ -263,10 +259,6 @@ where
                                     Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
                                         node.handle.hotshot.config.known_nodes_with_stake.clone(),
                                         node.handle.hotshot.config.known_da_nodes.clone(),
-                                        node.handle.storage().clone(),
-                                        Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
-                                            generated_network.clone(),
-                                        )),
                                         node.handle.public_key().clone(),
                                         node.handle.hotshot.config.epoch_height,
                                     )));
@@ -324,14 +316,31 @@ where
                                     state_cert,
                                 );
                                 // We assign node's public key and stake value rather than read from config file since it's a test
-                                let validator_config = ValidatorConfig::generated_from_seed_indexed(
-                                    [0u8; 32],
-                                    node_id,
-                                    self.node_stakes.get(node_id),
-                                    // For tests, make the node DA based on its index
-                                    node_id < config.da_staked_committee_size as u64,
-                                );
+                                let validator_config: ValidatorConfig<TYPES> =
+                                    ValidatorConfig::generated_from_seed_indexed(
+                                        [0u8; 32],
+                                        node_id,
+                                        self.node_stakes.get(node_id),
+                                        // For tests, make the node DA based on its index
+                                        node_id < config.da_staked_committee_size as u64,
+                                    );
                                 let internal_chan = broadcast(EVENT_CHANNEL_SIZE);
+                                // Install the test leaf fetcher on the
+                                // restarted node's membership before the
+                                // SystemContext spins up, so epoch-root
+                                // catchup is wired against the same external
+                                // channel the network task forwards events to.
+                                membership.write().await.set_leaf_fetcher(
+                                    Arc::new(
+                                        hotshot_types::traits::leaf_fetcher_network::ConnectedNetworkLeafFetcher::<
+                                            TYPES,
+                                            _,
+                                        >::new(generated_network.clone()),
+                                    ),
+                                    storage.clone(),
+                                    validator_config.public_key.clone(),
+                                    node.handle.event_stream_known_impl(),
+                                );
                                 let context =
                                     TestRunner::<TYPES, I, N>::add_node_with_config_and_channels(
                                         node_id,
