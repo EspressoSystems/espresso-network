@@ -1,25 +1,37 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
     time::Duration,
 };
 
 use async_broadcast::Sender;
+use bon::Builder;
 use committable::Committable;
 use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
-use hotshot_types::{data::ViewNumber, traits::network::ConnectedNetwork, vote::HasViewNumber};
+use hotshot_types::{
+    PeerConnectInfo, addr::NetAddr, data::ViewNumber, message::UpgradeLock,
+    traits::signature_key::SignatureKey, vote::HasViewNumber, x25519::Keypair,
+};
 use tokio::{
-    sync::mpsc::{self, UnboundedSender},
+    select,
+    sync::{
+        mpsc::{self, UnboundedSender},
+        oneshot,
+    },
     task::JoinHandle,
-    time::timeout,
+    time::{Instant, timeout},
 };
 use tracing::{debug, info};
 
 use crate::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
-    tests::common::{coordinator_builder::build_test_coordinator, network::TestNetwork},
+    helpers::test_upgrade_lock,
+    network::{Network, cliquenet::Cliquenet},
+    tests::common::{
+        coordinator_builder::build_test_coordinator, utils::mock_membership_with_client,
+    },
 };
 
 /// Action to apply to a node at a specific view.
@@ -46,44 +58,48 @@ pub enum NodeAction {
 }
 
 /// Configuration for a multi-node integration test.
+#[derive(Builder)]
 pub struct TestRunner {
     /// Number of nodes in the test network.
-    pub num_nodes: usize,
+    #[builder(default = 5)]
+    num_nodes: usize,
+
     /// Number of leaves each node must decide before the test passes.
-    pub target_decisions: usize,
+    #[builder(default = 10)]
+    target_decisions: usize,
+
     /// Maximum wall-clock time before the test is considered failed.
-    pub max_runtime: Duration,
+    #[builder(default = Duration::from_secs(300))]
+    max_runtime: Duration,
+
     /// Epoch height passed to each coordinator (0 = no epochs).
-    pub epoch_height: u64,
+    #[builder(default = 100)]
+    epoch_height: u64,
+
     /// Per-node view timeout duration.
-    pub view_timeout: Duration,
+    #[builder(default = Duration::from_secs(5))]
+    view_timeout: Duration,
+
     /// Views that are expected to timeout.  If a node times out in a view
     /// not in this set the test fails.  If a node decides a leaf for a view
     /// in this set the test also fails.
-    pub expected_failed_views: BTreeSet<ViewNumber>,
+    #[builder(default)]
+    expected_failed_views: BTreeSet<ViewNumber>,
+
     /// Node indices that are offline for the entire test.  Down nodes do
     /// not run a coordinator.  Views where a down node is leader are
     /// expected to timeout.
-    pub down_nodes: BTreeSet<usize>,
+    #[builder(default)]
+    down_nodes: BTreeSet<usize>,
+
     /// View-triggered node changes.  Each entry is `(view, changes)`.
     /// Changes are applied when any node first decides a leaf at or past
     /// the specified view.
-    pub node_changes: Vec<(u64, Vec<NodeChange>)>,
-}
+    #[builder(default)]
+    node_changes: Vec<(u64, Vec<NodeChange>)>,
 
-impl Default for TestRunner {
-    fn default() -> Self {
-        Self {
-            num_nodes: 5,
-            target_decisions: 100,
-            max_runtime: Duration::from_secs(300),
-            epoch_height: 1000,
-            view_timeout: Duration::from_secs(5),
-            expected_failed_views: BTreeSet::new(),
-            down_nodes: BTreeSet::new(),
-            node_changes: Vec::new(),
-        }
-    }
+    #[builder(skip = test_upgrade_lock())]
+    upgrade_lock: UpgradeLock<TestTypes>,
 }
 
 #[derive(Debug)]
@@ -217,32 +233,44 @@ impl TestRunner {
     /// When `node_changes` is non-empty, nodes are dynamically started,
     /// restarted, or shut down at the specified views.  Verification is
     /// adjusted to account for the dynamic topology.
-    pub async fn run<N: TestNetwork>(&self) -> Result<(), TestError> {
+    pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
-        let initially_down = self.initially_down_nodes();
-        let (network_state, networks) = N::create(self.num_nodes, &initially_down).await;
 
+        let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
         let mut generations: Vec<u64> = vec![0; self.num_nodes];
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<TaggedEvent>();
         let mut currently_down = initially_down;
 
+        let mut cancels = HashMap::new();
+
+        // Generate keys and addresses for all nodes.
+        let parties = (0..self.num_nodes)
+            .map(|i| {
+                let (public_key, private_key) =
+                    BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64);
+                let keypair = Keypair::derive_from::<BLSPubKey>(&private_key).unwrap();
+                let port = test_utils::reserve_tcp_port()
+                    .expect("OS should have ephemeral ports available");
+                let addr = NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+                (keypair, public_key, addr)
+            })
+            .collect::<Vec<_>>();
+
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
-        for (i, network) in networks.into_iter().enumerate() {
-            let Some(network) = network else {
-                node_handles.push(None);
-                continue;
-            };
+        for (i, (_, public_key, _)) in parties.iter().enumerate() {
+            let network = create_network(i, &parties, &self.upgrade_lock).await;
 
-            let (membership, storage) = network_state
-                .create_membership(i, self.num_nodes, self.epoch_height)
-                .await;
-            let (coord, external_events_tx) = build_test_coordinator::<N::Impl>(
+            let (membership, storage, client) =
+                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key).await;
+
+            let (coord, external_events_tx) = build_test_coordinator(
                 i as u64,
                 network,
                 membership,
                 storage,
+                client,
                 self.epoch_height,
                 self.view_timeout,
             )
@@ -250,13 +278,20 @@ impl TestRunner {
 
             let tx = event_tx.clone();
             let generation = generations[i];
-            node_handles.push(Some(tokio::spawn(run_node(
-                coord,
-                tx,
-                i,
-                generation,
-                external_events_tx,
-            ))));
+            node_handles.push(if currently_down.contains(&i) {
+                None
+            } else {
+                let (cancel_tx, cancel_rx) = oneshot::channel();
+                cancels.insert(i, cancel_tx);
+                Some(tokio::spawn(run_node(
+                    coord,
+                    tx,
+                    i,
+                    generation,
+                    external_events_tx,
+                    cancel_rx,
+                )))
+            });
         }
 
         // Build pending changes sorted by view.
@@ -276,14 +311,14 @@ impl TestRunner {
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut max_decided_view: u64 = 0;
 
-        let deadline = tokio::time::Instant::now() + self.max_runtime;
+        let deadline = Instant::now() + self.max_runtime;
         while node_commits
             .iter()
             .enumerate()
             .any(|(i, s)| !currently_down.contains(&i) && s.len() < self.target_decisions)
         {
             let remaining = deadline
-                .checked_duration_since(tokio::time::Instant::now())
+                .checked_duration_since(Instant::now())
                 .ok_or(TestError::Timeout)?;
 
             // Apply pending node changes when progress reaches their view.
@@ -303,43 +338,53 @@ impl TestRunner {
                         );
                         match change.action {
                             NodeAction::Restart | NodeAction::Start => {
+                                if let Some(tx) = cancels.remove(&change.idx) {
+                                    let (a, b) = oneshot::channel();
+                                    if tx.send(a).is_ok() {
+                                        let _ = b.await;
+                                    }
+                                }
                                 // Kill existing task if any.
                                 if let Some(handle) = node_handles[change.idx].take() {
                                     handle.abort();
+                                    let _ = handle.await;
                                 }
-                                // Shut down the old network so its internal
-                                // buffers don't block broadcasts.
-                                network_state.shutdown_node(change.idx).await;
                                 // Create a fresh coordinator from genesis.
-                                let net = network_state.create_node(change.idx).await;
-                                let (membership, storage) = network_state
-                                    .create_membership(
-                                        change.idx,
+                                let net =
+                                    create_network(change.idx, &parties, &self.upgrade_lock).await;
+                                let (membership, storage, client) = {
+                                    let k = parties[change.idx].1;
+                                    mock_membership_with_client(
                                         self.num_nodes,
                                         self.epoch_height,
+                                        k,
                                     )
-                                    .await;
-                                let (coord, external_events_tx) =
-                                    build_test_coordinator::<N::Impl>(
-                                        change.idx as u64,
-                                        net,
-                                        membership,
-                                        storage,
-                                        self.epoch_height,
-                                        self.view_timeout,
-                                    )
-                                    .await;
+                                    .await
+                                };
+                                let (coord, external_events_tx) = build_test_coordinator(
+                                    change.idx as u64,
+                                    net,
+                                    membership,
+                                    storage,
+                                    client,
+                                    self.epoch_height,
+                                    self.view_timeout,
+                                )
+                                .await;
                                 // Bump the generation so stale events queued
                                 // by the aborted task are ignored.
                                 generations[change.idx] += 1;
                                 let tx = event_tx.clone();
                                 let generation = generations[change.idx];
+                                let (cancel_tx, cancel_rx) = oneshot::channel();
+                                cancels.insert(change.idx, cancel_tx);
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
                                     tx,
                                     change.idx,
                                     generation,
                                     external_events_tx,
+                                    cancel_rx,
                                 )));
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
@@ -466,17 +511,53 @@ impl TestRunner {
     }
 }
 
+async fn create_network(
+    i: usize,
+    parties: &[(Keypair, BLSPubKey, NetAddr)],
+    lock: &UpgradeLock<TestTypes>,
+) -> Cliquenet<TestTypes> {
+    let peer_infos: Vec<(BLSPubKey, PeerConnectInfo)> = parties
+        .iter()
+        .map(|(kp, pk, addr)| {
+            (
+                *pk,
+                PeerConnectInfo {
+                    x25519_key: kp.public_key(),
+                    p2p_addr: addr.clone(),
+                },
+            )
+        })
+        .collect();
+
+    let config = cliquenet::Config::builder()
+        .name("test")
+        .keypair(parties[i].0.clone().into())
+        .bind(parties[i].2.clone())
+        .random_connect_delay(false)
+        .parties(
+            peer_infos
+                .iter()
+                .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
+        )
+        .build();
+
+    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone())
+        .await
+        .unwrap()
+}
+
 /// Event loop for a single node.  Processes coordinator inputs, collects
 /// decided leaf commits, and forwards them to the test runner.  All events
 /// are tagged with the node's index and generation so the runner can
 /// multiplex a single receive channel across every node and drop events
 /// from tasks that have been superseded by a restart.
-async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
+async fn run_node<N: Network<TestTypes>>(
     mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,
     generation: u64,
     external_events_tx: Sender<Event<TestTypes>>,
+    mut cancel: oneshot::Receiver<oneshot::Sender<()>>,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
     let mut last_view = ViewNumber::genesis();
@@ -489,11 +570,20 @@ async fn run_node<N: ConnectedNetwork<BLSPubKey>>(
     };
 
     loop {
-        match coord.next_consensus_input().await {
-            Ok(input) => coord.apply_consensus(input).await,
-            Err(err) if err.severity == Severity::Critical => break,
-            Err(_) => continue,
-        };
+        select! {
+            i = coord.next_consensus_input() => match i {
+                Ok(input) => coord.apply_consensus(input).await,
+                Err(err) if err.severity == Severity::Critical => break,
+                Err(_) => continue,
+            },
+            x = &mut cancel => {
+                coord.stop().await;
+                if let Ok(tx) = x {
+                    let _ = tx.send(());
+                }
+                return
+            }
+        }
 
         while let Some(output) = coord.outbox_mut().pop_front() {
             if let ConsensusOutput::LeafDecided { leaves, .. } = &output {

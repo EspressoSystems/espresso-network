@@ -75,6 +75,7 @@ where
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
         cliquenet_bind_addr: opt.cliquenet_bind_address,
+        cliquenet_advertise_addr: opt.cliquenet_advertise_address,
         x25519_secret_key: x25519,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,

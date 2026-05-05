@@ -32,6 +32,10 @@ pub enum NetworkError {
     #[error("invalid ack frame")]
     InvalidAck,
 
+    /// The received hello frame is not valid.
+    #[error("invalid hello frame")]
+    InvalidHello,
+
     /// The received frame has an unknown type.
     #[error("unknown frame type: {0}")]
     UnknownFrameType(u8),

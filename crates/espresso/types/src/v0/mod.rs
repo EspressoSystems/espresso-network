@@ -1,3 +1,5 @@
+pub use hotshot_new_protocol::message::Certificate2;
+pub use hotshot_types::new_protocol::Proposal as NewProposal;
 use hotshot_types::{
     signature_key::{BLSPubKey, SchnorrPubKey},
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
@@ -44,7 +46,7 @@ use vbs::version::StaticVersion;
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7, v0_8);
     };
 }
 

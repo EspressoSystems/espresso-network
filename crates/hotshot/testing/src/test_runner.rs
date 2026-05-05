@@ -36,6 +36,7 @@ use hotshot_types::{
     storage_metrics::StorageMetricsValue,
     traits::{
         election::Membership,
+        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
     },
@@ -444,11 +445,13 @@ where
                     let hotshot = Self::add_node_with_config(
                         node_id,
                         network.clone(),
-                        <TYPES as NodeType>::Membership::new::<I>(
+                        <TYPES as NodeType>::Membership::new(
                             config.known_nodes_with_stake.clone(),
                             config.known_da_nodes.clone(),
                             storage.clone(),
-                            network.clone(),
+                            Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
+                                network.clone(),
+                            )),
                             public_key.clone(),
                             config.epoch_height,
                         ),
@@ -472,11 +475,11 @@ where
                 uninitialized_nodes.push((
                     node_id,
                     network.clone(),
-                    <TYPES as NodeType>::Membership::new::<I>(
+                    <TYPES as NodeType>::Membership::new(
                         config.known_nodes_with_stake.clone(),
                         config.known_da_nodes.clone(),
                         storage.clone(),
-                        network,
+                        Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(network)),
                         public_key.clone(),
                         config.epoch_height,
                     ),
