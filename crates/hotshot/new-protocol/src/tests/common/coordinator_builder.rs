@@ -1,8 +1,7 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
-use async_broadcast::Sender;
 use committable::Committable;
-use hotshot::types::{BLSPubKey, Event};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -43,30 +42,17 @@ use crate::{
 pub async fn build_test_coordinator<N: Network<TestTypes>>(
     node_index: u64,
     network: N,
-    mut membership: EpochMembershipCoordinator<TestTypes>,
+    membership: EpochMembershipCoordinator<TestTypes>,
     storage: TestStorage<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> (
-    Coordinator<TestTypes, N, TestStorage<TestTypes>>,
-    Sender<Event<TestTypes>>,
-) {
+) -> Coordinator<TestTypes, N, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
     let instance = Arc::new(TestInstanceState::default());
     let upgrade_lock = test_upgrade_lock();
-
-    // Channel used by the Coordinator to forward ExternalMessageReceived
-    // events to the Membership's Leaf2Fetcher.  The fetcher drives epoch
-    // catchup (leaf request/response over external messages).  Overflow
-    // is enabled so slow listeners don't stall the Coordinator.
-    let (mut external_events_tx, mut external_events_rx) =
-        async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
-    external_events_tx.set_overflow(true);
-    external_events_rx.set_overflow(true);
-    membership.set_external_channel(external_events_rx).await;
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -180,7 +166,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         let _ = coordinator.process_consensus_output(output).await;
     }
 
-    (coordinator, external_events_tx)
+    coordinator
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.

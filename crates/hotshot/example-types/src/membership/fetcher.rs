@@ -185,7 +185,7 @@ impl<TYPES: NodeType> Leaf2Fetcher<TYPES> {
             tracing::error!("Failed to send leaf request in test membership fetcher: {e}");
         };
 
-        tokio::time::timeout(std::time::Duration::from_millis(20), async {
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
             loop {
                 match network_receiver.recv_direct().await {
                     Ok(Event {

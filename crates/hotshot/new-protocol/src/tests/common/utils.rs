@@ -493,14 +493,9 @@ pub async fn mock_membership_with_num_nodes(
     TestStorage<TestTypes>,
     CoordinatorClient<TestTypes>,
 ) {
-    let (mut coordinator, storage, client) =
+    let (coord, storage, client, _external_events_tx) =
         mock_membership_with_client(num_nodes, epoch_height, public_key).await;
-    // Install a dummy external channel so Leaf2Fetcher::fetch_leaf
-    // doesn't panic on `self.network_receiver.expect(...)` when these
-    // unit tests incidentally drive catchup.
-    let (_tx, rx) = async_broadcast::broadcast(1);
-    coordinator.set_external_channel(rx).await;
-    (coordinator, storage, client)
+    (coord, storage, client)
 }
 
 /// Create a mock membership coordinator for `num_nodes` validators.
@@ -514,7 +509,10 @@ pub async fn mock_membership_with_num_nodes(
 ///
 /// The returned [`TestStorage`] is the storage the membership's
 /// `Leaf2Fetcher` reads from; share it with the `Coordinator` so
-/// self-produced proposals land in the same store.
+/// self-produced proposals land in the same store.  The returned
+/// [`Sender`] is the tx half of the external-events channel feeding the
+/// membership's `Leaf2Fetcher`; pass it into `build_test_coordinator` so
+/// the coordinator forwards `ExternalMessageReceived` events to it.
 pub async fn mock_membership_with_client(
     num_nodes: usize,
     epoch_height: u64,
@@ -523,23 +521,28 @@ pub async fn mock_membership_with_client(
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
     CoordinatorClient<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
 ) {
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
-    let (coord, storage) = mock_membership_with_leaf_fetcher_network(
+    let (coord, storage, external_events_tx) = mock_membership_with_leaf_fetcher_network(
         num_nodes,
         epoch_height,
         leaf_fetcher_network,
         public_key,
     )
     .await;
-    (coord, storage, client)
+    (coord, storage, client, external_events_tx)
 }
 
 /// Build a mock membership coordinator wired to an arbitrary
 /// `LeafFetcherNetwork`.  `public_key` is the node's identity — peers
 /// will send leaf-fetcher responses back to this key, so passing the
 /// wrong one means responses don't return to this node's fetcher.
+///
+/// Creates and installs the external-events channel internally; the
+/// returned [`Sender`] is the tx half — hand it to the coordinator so it
+/// forwards `ExternalMessageReceived` events to the fetcher.
 pub async fn mock_membership_with_leaf_fetcher_network(
     num_nodes: usize,
     epoch_height: u64,
@@ -550,6 +553,7 @@ pub async fn mock_membership_with_leaf_fetcher_network(
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
 ) {
     let members = gen_node_lists(
         num_nodes as u64,
@@ -558,17 +562,27 @@ pub async fn mock_membership_with_leaf_fetcher_network(
     )
     .0;
     let storage = TestStorage::<TestTypes>::default();
-    let membership = Arc::new(RwLock::new(StrictMembership::<
+    let mut strict_membership = StrictMembership::<
         TestTypes,
         StaticStakeTable<BLSPubKey, SchnorrPubKey>,
     >::new(
-        members.clone(),
-        members.clone(),
-        storage.clone(),
+        members.clone(), members.clone(), public_key, epoch_height
+    );
+    // Channel used by the Coordinator to forward ExternalMessageReceived
+    // events to the membership's Leaf2Fetcher (drives epoch catchup).
+    // Overflow is enabled so slow listeners don't stall the Coordinator.
+    let (mut external_events_tx, mut external_events_rx) =
+        async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
+    external_events_tx.set_overflow(true);
+    external_events_rx.set_overflow(true);
+    hotshot_example_types::membership::TestableMembership::set_leaf_fetcher(
+        &mut strict_membership,
         leaf_fetcher_network,
+        storage.clone(),
         public_key,
-        epoch_height,
-    )));
+        external_events_rx,
+    );
+    let membership = Arc::new(RwLock::new(strict_membership));
     // Initialize epoch data so membership works with epoch-aware versions (VID2 etc.)
     membership
         .write()
@@ -582,11 +596,7 @@ pub async fn mock_membership_with_leaf_fetcher_network(
     coordinator
         .set_drb_difficulty_selector(std::sync::Arc::new(|_version| Box::pin(async { 0u64 })))
         .await;
-    // Callers that need the `Leaf2Fetcher` external channel wired up
-    // install it themselves — `build_test_coordinator` wires a real
-    // channel to its Coordinator; `mock_membership` installs a dummy
-    // for unit tests that don't exercise real catchup.
-    (coordinator, storage)
+    (coordinator, storage, external_events_tx)
 }
 
 pub fn key_map_with_num_nodes(num_nodes: u64) -> BTreeMap<BLSPubKey, BLSPrivKey> {
