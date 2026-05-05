@@ -1091,8 +1091,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         // Builds a legacy 3-chain from undecided leaves in memory. New-protocol heights fall
         // through to the storage path.
-        //
-        // TODO: under the new protocol, also serve from memory
         let mut leaves = self.consensus_handle().await.undecided_leaves().await;
         leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves

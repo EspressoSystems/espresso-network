@@ -268,10 +268,10 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             .await
             .with_context(|| "failed to request leaf chain")?;
 
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-
         let result = if leaf_chain[0].block_header().version() >= NEW_PROTOCOL_VERSION {
             // New protocol: pair the leaf range with its finalizing cert2 for verification.
+            let upgrade_lock =
+                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
             let cert2 = self
                 .request_indefinitely(
                     Request::Cert2(height),
@@ -303,6 +303,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             .await
             .with_context(|| "leaf chain verification with cert2 failed")?
         } else {
+            let upgrade_lock =
+                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
             verify_leaf_chain(
                 leaf_chain,
                 &stake_table,

@@ -107,9 +107,8 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
 
             Request::Leaf(height) => {
-                // Try in-memory undecided leaves first. Fall back to storage,
-                //
-                // TODO: under the new protocol, also serve from memory
+                // Legacy heights can be served from in-memory undecided leaves; new-protocol
+                // heights always fall through to storage.
                 if let Ok(leaf_chain) =
                     legacy_leaf_chain_from_memory(&*self.consensus_handle, *height).await
                 {

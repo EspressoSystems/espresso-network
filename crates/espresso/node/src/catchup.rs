@@ -371,8 +371,6 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-
         // Fetch the leaf chain. For new protocol heights this is a leaf range
         // `[height..=cert2_height]`
         // for legacy-protocol heights it's a 3-chain.
@@ -392,6 +390,8 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             .ok_or_else(|| anyhow!("empty leaf chain returned for height {height}"))?;
 
         if first.block_header().version() >= NEW_PROTOCOL_VERSION {
+            let upgrade_lock =
+                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
             let cert2 = self
                 .fetch(retry, |client| async move {
                     let cert2 = client
@@ -414,6 +414,8 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
             .await
             .with_context(|| format!("failed to verify leaf chain with cert2 at height {height}"))
         } else {
+            let upgrade_lock =
+                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
             verify_leaf_chain(
                 leaf_chain,
                 &stake_table,
