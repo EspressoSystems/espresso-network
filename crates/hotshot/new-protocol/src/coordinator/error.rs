@@ -1,9 +1,7 @@
 use std::fmt;
 
-use hotshot::traits::NetworkError;
-
 use crate::{
-    block::BlockError, epoch::EpochManagerError, network::is_critical, proposal::ValidationError,
+    block::BlockError, epoch::EpochManagerError, network::NetworkError, proposal::ValidationError,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -92,7 +90,7 @@ pub enum ErrorSource {
 
 impl From<NetworkError> for CoordinatorError {
     fn from(e: NetworkError) -> Self {
-        if is_critical(&e) {
+        if e.is_critical() {
             Self::critical(e)
         } else {
             Self::regular(e)

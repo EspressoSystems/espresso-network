@@ -2,7 +2,6 @@ use std::{
     cmp::Ordering,
     collections::HashMap,
     fmt::{Debug, Display},
-    ops::RangeInclusive,
     sync::Arc,
     time::Duration,
 };
@@ -372,28 +371,61 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         stake_table: HSStakeTable<SeqTypes>,
         success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        // Get the leaf chain
+        // Fetch the leaf chain. For new protocol heights this is a leaf range
+        // `[height..=cert2_height]`
+        // for legacy-protocol heights it's a 3-chain.
         let leaf_chain = self
             .fetch(retry, |client| async move {
-                let leaf = client
+                let chain = client
                     .get::<Vec<Leaf2>>(&format!("catchup/{height}/leafchain"))
                     .send()
                     .await?;
-                anyhow::Ok(leaf)
+                anyhow::Ok(chain)
             })
             .await
             .with_context(|| format!("failed to fetch leaf chain at height {height}"))?;
 
-        // Verify it, returning the leaf at the given height
-        verify_leaf_chain(
-            leaf_chain,
-            &stake_table,
-            success_threshold,
-            height,
-            &UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION)),
-        )
-        .await
-        .with_context(|| format!("failed to verify leaf chain at height {height}"))
+        let first = leaf_chain
+            .first()
+            .ok_or_else(|| anyhow!("empty leaf chain returned for height {height}"))?;
+
+        if first.block_header().version() >= NEW_PROTOCOL_VERSION {
+            let upgrade_lock =
+                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
+            let cert2 = self
+                .fetch(retry, |client| async move {
+                    let cert2 = client
+                        .get::<Certificate2<SeqTypes>>(&format!("catchup/{height}/cert2"))
+                        .send()
+                        .await?;
+                    anyhow::Ok(cert2)
+                })
+                .await
+                .with_context(|| format!("failed to fetch cert2 for height {height}"))?;
+
+            verify_leaf_chain_with_cert2(
+                leaf_chain,
+                &stake_table,
+                success_threshold,
+                height,
+                &upgrade_lock,
+                cert2,
+            )
+            .await
+            .with_context(|| format!("failed to verify leaf chain with cert2 at height {height}"))
+        } else {
+            let upgrade_lock =
+                UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
+            verify_leaf_chain(
+                leaf_chain,
+                &stake_table,
+                success_threshold,
+                height,
+                &upgrade_lock,
+            )
+            .await
+            .with_context(|| format!("failed to verify leaf chain at height {height}"))
+        }
     }
 
     async fn try_fetch_reward_merkle_tree_v2(
@@ -630,16 +662,6 @@ pub(crate) trait CatchupStorage: Sync {
             bail!("leaf fetch is not supported for this data source");
         }
     }
-
-    /// Load decided leaves in the given inclusive height range.
-    fn get_leaf_range(
-        &self,
-        _range: RangeInclusive<u64>,
-    ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>> {
-        async {
-            bail!("leaf range fetch is not supported for this data source");
-        }
-    }
 }
 
 impl CatchupStorage for hotshot_query_service::data_source::MetricsDataSource {}
@@ -714,10 +736,6 @@ where
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
         self.inner().get_leaf(height).await
     }
-
-    async fn get_leaf_range(&self, range: RangeInclusive<u64>) -> anyhow::Result<Vec<Leaf2>> {
-        self.inner().get_leaf_range(range).await
-    }
 }
 
 #[derive(Debug)]
@@ -741,56 +759,15 @@ where
         &self,
         _retry: usize,
         height: u64,
-        stake_table: HSStakeTable<SeqTypes>,
-        success_threshold: U256,
+        _stake_table: HSStakeTable<SeqTypes>,
+        _success_threshold: U256,
     ) -> anyhow::Result<Leaf2> {
-        let upgrade_lock = UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(EPOCH_VERSION));
-
-        // Load the leaf to check which protocol version it belongs to.
-        let leaf = self.db.get_leaf(height).await?;
-
-        if leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
-            // New protocol: cert2 alone proves finality.
-            let cert2 = self
-                .db
-                .load_earliest_cert2(height)
-                .await?
-                .context("no cert2 available for new-protocol leaf")?;
-
-            let cert2_height = cert2.data.block_number;
-            let mut leaves = vec![leaf];
-            if height < cert2_height {
-                leaves.extend(self.db.get_leaf_range(height + 1..=cert2_height).await?);
-            }
-
-            verify_leaf_chain_with_cert2(
-                leaves,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-                cert2,
-            )
+        // Leaves in our local DB were verified before they were stored, so we can return the leaf
+        // at `height` directly without re-verifying.
+        self.db
+            .get_leaf(height)
             .await
-            .with_context(|| "failed to verify leaf chain with cert2")
-        } else {
-            // Legacy protocol: build a 3-chain and verify.
-            let leaf_chain = self
-                .db
-                .get_leaf_chain(height)
-                .await
-                .with_context(|| "failed to get leaf chain from DB")?;
-
-            verify_leaf_chain(
-                leaf_chain,
-                &stake_table,
-                success_threshold,
-                height,
-                &upgrade_lock,
-            )
-            .await
-            .with_context(|| "failed to verify leaf chain")
-        }
+            .with_context(|| format!("failed to load leaf at height {height} from DB"))
     }
 
     // TODO: add a test for the account proof validation

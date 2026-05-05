@@ -67,6 +67,29 @@ pub trait UpdateDataSource<Types: NodeType>: UpdateAvailabilityData<Types> {
     /// If you want to update the data source with an untrusted event, for example one received from
     /// a peer over the network, you must authenticate it first.
     ///
+    ///
+    /// For each decided leaf the query service stores a `BlockInfo` containing the leaf paired
+    /// with a QC that certifies it (`LeafQueryData`), the block payload and VID data when
+    /// available, and only on the **newest** leaf in the batch, it stores the proof that finalizes it:
+    /// a `qc_chain` for legacy protocol set via `BlockInfo::with_qc_chain`, or a `cert2` for new protocol set
+    /// via `BlockInfo::with_cert2`. The two protocols differ only in where those pieces come
+    /// from:
+    ///
+    /// In both events leaves arrive in **newest → oldest** order (`leaves[0]` is the leaf being
+    /// finalized; each subsequent leaf is its ancestor reached via `justify_qc`). For the new
+    /// protocol, `vid_shares` is parallel to `leaves` (same ordering, one share per leaf). The
+    /// handler iterates in reverse so heights are appended ascending.
+    ///
+    /// - **Legacy (`CoordinatorEvent::LegacyEvent` → `EventType::Decide`).** The newest leaf is
+    ///   certified by `committing_qc`; each older leaf is certified by the *next-newer* leaf's
+    ///   `justify_qc`. The newest leaf's `qc_chain` is set to `[committing_qc, deciding_qc]` —
+    ///   the two consecutive QCs that decide it under the legacy 3-chain rule.
+    ///
+    /// - **New protocol (`CoordinatorEvent::NewDecide`).** The newest leaf is certified by
+    ///   `cert1`; older leaves are again certified by the next leaf's `justify_qc`. When a
+    ///   `cert2` is present, it is attached to the newest leaf. Under the new protocol a single
+    ///   `cert2` finalizes that leaf directly, replacing the legacy QC chain.
+    ///
     /// # Returns
     ///
     /// If all provided data is successfully inserted into the database, returns `Ok(())`. If any
@@ -278,6 +301,10 @@ where
 
                     let mut info = BlockInfo::new(leaf_data, block_data, vid_common, vid_share);
 
+                    // Attach `cert2` only to the newest leaf in the batch (`leaves[0]`, which is
+                    // `index == 0` since we iterate in reverse). Under the new protocol a single
+                    // `cert2` finalizes that leaf directly
+                    // older leaves in the batch are finalized using indirect rule
                     if index == 0
                         && let Some(cert2) = &decide.cert2
                     {

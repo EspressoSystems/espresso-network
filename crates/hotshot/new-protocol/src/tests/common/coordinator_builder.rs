@@ -1,11 +1,7 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
-use async_broadcast::Sender;
 use committable::Committable;
-use hotshot::{
-    traits::NodeImplementation,
-    types::{BLSPubKey, Event},
-};
+use hotshot::types::BLSPubKey;
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -22,6 +18,7 @@ use hotshot_types::{
 
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
+    client::CoordinatorClient,
     consensus::Consensus,
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
@@ -42,32 +39,20 @@ use crate::{
 /// certificate and proposal so that the view-1 leader can propose without any
 /// external injection.  The initial `ViewChanged` and (for the leader)
 /// `RequestBlockAndHeader` outputs are already queued in the outbox.
-pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
+pub async fn build_test_coordinator<N: Network<TestTypes>>(
     node_index: u64,
-    network: I::Network,
-    mut membership: EpochMembershipCoordinator<TestTypes>,
+    network: N,
+    membership: EpochMembershipCoordinator<TestTypes>,
     storage: TestStorage<TestTypes>,
+    client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> (
-    Coordinator<TestTypes, I::Network, TestStorage<TestTypes>>,
-    Sender<Event<TestTypes>>,
-) {
+) -> Coordinator<TestTypes, N, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
     let instance = Arc::new(TestInstanceState::default());
     let upgrade_lock = test_upgrade_lock();
-
-    // Channel used by the Coordinator to forward ExternalMessageReceived
-    // events to the Membership's Leaf2Fetcher.  The fetcher drives epoch
-    // catchup (leaf request/response over external messages).  Overflow
-    // is enabled so slow listeners don't stall the Coordinator.
-    let (mut external_events_tx, mut external_events_rx) =
-        async_broadcast::broadcast::<hotshot_types::event::Event<TestTypes>>(1024);
-    external_events_tx.set_overflow(true);
-    external_events_rx.set_overflow(true);
-    membership.set_external_channel(external_events_rx).await;
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -145,8 +130,6 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
-    let network = Network::new(network, membership.clone(), upgrade_lock);
-
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
         .network(network)
@@ -163,6 +146,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
         .storage(crate::storage::Storage::new(storage, private_key))
+        .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(Timer::new(
@@ -182,7 +166,7 @@ pub async fn build_test_coordinator<I: NodeImplementation<TestTypes>>(
         let _ = coordinator.process_consensus_output(output).await;
     }
 
-    (coordinator, external_events_tx)
+    coordinator
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.

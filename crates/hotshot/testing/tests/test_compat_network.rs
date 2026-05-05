@@ -7,10 +7,7 @@ use hotshot::{
     traits::implementations::{Cliquenet, CompatNetwork, MasterMap, MemoryNetwork},
     types::SignatureKey,
 };
-use hotshot_example_types::{
-    node_types::{MemoryImpl, TestTypes},
-    storage_types::TestStorage,
-};
+use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     PeerConfig, PeerConnectInfo, ValidatorConfig,
     addr::NetAddr,
@@ -102,25 +99,12 @@ async fn cliquenet_epoch_change_retains_prev_epoch_validator_then_removes() {
     let v1 = make_validator(1);
     let v2 = make_validator(2);
 
-    let master = MasterMap::<BLSPubKey>::new();
     let storage = TestStorage::<TestTypes>::default();
-    let network = Arc::new(MemoryNetwork::new(
-        &v0.public_key,
-        &master,
-        &[Topic::Global],
-        None,
-    ));
 
     let quorum = vec![v0.public_config(), v1.public_config()];
 
-    let mut membership = <TestTypes as NodeType>::Membership::new::<MemoryImpl>(
-        quorum.clone(),
-        quorum.clone(),
-        storage.clone(),
-        network,
-        v0.public_key,
-        10,
-    );
+    let mut membership =
+        <TestTypes as NodeType>::Membership::new(quorum.clone(), quorum.clone(), v0.public_key, 10);
 
     // Mark epochs 1 through 5 as having stake tables available.
     for e in 1..5 {
@@ -337,24 +321,15 @@ async fn make_coordinator(
     validators: &[&ValidatorConfig<TestTypes>],
     epochs: u64,
 ) -> EpochMembershipCoordinator<TestTypes> {
-    let master = MasterMap::<BLSPubKey>::new();
     let public_key = validators[0].public_key;
-    let network = Arc::new(MemoryNetwork::new(
-        &public_key,
-        &master,
-        &[Topic::Global],
-        None,
-    ));
     let storage = TestStorage::<TestTypes>::default();
 
     let peer_configs: Vec<PeerConfig<TestTypes>> =
         validators.iter().map(|v| v.public_config()).collect();
 
-    let mut membership = <TestTypes as NodeType>::Membership::new::<MemoryImpl>(
+    let mut membership = <TestTypes as NodeType>::Membership::new(
         peer_configs.clone(),
         peer_configs,
-        storage.clone(),
-        network,
         public_key,
         10,
     );
