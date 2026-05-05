@@ -63,6 +63,11 @@ pub async fn verify_leaf_chain_with_cert2<T: NodeType>(
         if justify_qc.view_number() != leaf.view_number()
             || justify_qc.data().leaf_commit != leaf.commit()
         {
+            tracing::warn!(
+                view = ?leaf.view_number(),
+                expected_view = ?justify_qc.view_number(),
+                "leaf is off the leafchain path; expected only after a view timeout"
+            );
             continue;
         }
         ensure!(

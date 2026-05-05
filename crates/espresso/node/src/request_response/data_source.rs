@@ -107,47 +107,20 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
 
             Request::Leaf(height) => {
-                // Try to get the leaves from memory first, then fall back to storage
-                let mut leaves = self.consensus_handle.undecided_leaves().await;
-                leaves.sort_by_key(|l| l.view_number());
-
-                if let Some((position, mut last_leaf)) =
-                    leaves.iter().find_position(|l| l.height() == *height)
+                // Try in-memory undecided leaves first. Fall back to storage,
+                //
+                // TODO: under the new protocol, also serve from memory
+                if let Ok(leaf_chain) =
+                    legacy_leaf_chain_from_memory(&*self.consensus_handle, *height).await
                 {
-                    let mut leaf_chain = vec![last_leaf.clone()];
-                    for leaf in leaves.iter().skip(position + 1) {
-                        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-                            leaf_chain.push(leaf.clone());
-                        } else {
-                            continue;
-                        }
-                        if leaf.view_number() == last_leaf.view_number() + 1 {
-                            // one away from decide
-                            last_leaf = leaf;
-                            break;
-                        }
-                        last_leaf = leaf;
-                    }
-
-                    // Make sure we got one more leaf to confirm the decide
-                    for leaf in leaves
-                        .iter()
-                        .skip_while(|l| l.view_number() <= last_leaf.view_number())
-                    {
-                        if leaf.justify_qc().view_number() == last_leaf.view_number() {
-                            leaf_chain.push(leaf.clone());
-                            return Ok(Response::Leaf(leaf_chain));
-                        }
-                    }
+                    return Ok(Response::Leaf(leaf_chain));
                 }
 
-                // Fall back to storage
                 let leaf_chain = match &self.storage {
                     Some(Storage::Sql(storage)) => storage
                         .get_leaf_chain(*height)
                         .await
                         .with_context(|| "failed to get leaf from sql storage")?,
-                    // TODO: Actually implement FS storage for some of these
                     Some(Storage::Fs(_)) => bail!("fs storage not supported for leaf"),
                     _ => bail!("storage was not initialized"),
                 };
@@ -337,6 +310,21 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                     None => bail!("State certificate for epoch {epoch} not found"),
                 }
             },
+            Request::Cert2(height) => {
+                let cert2 = match &self.storage {
+                    Some(Storage::Sql(storage)) => storage
+                        .load_earliest_cert2(*height)
+                        .await
+                        .with_context(|| "failed to load cert2 from sql storage")?,
+                    Some(Storage::Fs(_)) => bail!("fs storage not supported for cert2"),
+                    _ => bail!("storage was not initialized"),
+                };
+
+                match cert2 {
+                    Some(cert2) => Ok(Response::Cert2(cert2)),
+                    None => bail!("no cert2 available for height {height}"),
+                }
+            },
             Request::RewardMerkleTreeV2(height, view) => {
                 // Try to get the reward merkle tree from memory first, then fall back to storage
                 if let Some(state) = self.consensus_handle.state(ViewNumber::new(*view)).await {
@@ -364,6 +352,49 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
         }
     }
+}
+
+/// Build a legacy-protocol 3-chain leaf chain decided at `height` from in-memory undecided leaves.
+///
+/// Returns an error if the chain cannot be assembled from memory (e.g. the height is below the
+/// latest decided leaf).
+async fn legacy_leaf_chain_from_memory<I: NodeImplementation<SeqTypes>>(
+    consensus_handle: &ConsensusHandle<SeqTypes, I>,
+    height: u64,
+) -> anyhow::Result<Vec<espresso_types::Leaf2>> {
+    let mut leaves = consensus_handle.undecided_leaves().await;
+    leaves.sort_by_key(|l| l.view_number());
+
+    let (position, mut last_leaf) = leaves
+        .iter()
+        .find_position(|l| l.height() == height)
+        .ok_or_else(|| anyhow::anyhow!("leaf at height {height} not in memory"))?;
+
+    let mut leaf_chain = vec![last_leaf.clone()];
+    for leaf in leaves.iter().skip(position + 1) {
+        if leaf.justify_qc().view_number() == last_leaf.view_number() {
+            leaf_chain.push(leaf.clone());
+        } else {
+            continue;
+        }
+        if leaf.view_number() == last_leaf.view_number() + 1 {
+            last_leaf = leaf;
+            break;
+        }
+        last_leaf = leaf;
+    }
+
+    for leaf in leaves
+        .iter()
+        .skip_while(|l| l.view_number() <= last_leaf.view_number())
+    {
+        if leaf.justify_qc().view_number() == last_leaf.view_number() {
+            leaf_chain.push(leaf.clone());
+            return Ok(leaf_chain);
+        }
+    }
+
+    anyhow::bail!("incomplete leaf chain in memory for height {height}")
 }
 
 /// Get a partial snapshot of the given reward state, which contains only the specified accounts.

@@ -916,6 +916,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         self.inner().get_leaf_chain(height).await
     }
 
+    async fn get_cert2(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        self.inner().load_earliest_cert2(height).await
+    }
+
     #[tracing::instrument(skip(self, instance))]
     async fn get_reward_accounts_v2(
         &self,
@@ -1082,6 +1089,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     }
 
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        // Builds a legacy 3-chain from undecided leaves in memory. New-protocol heights fall
+        // through to the storage path.
+        //
+        // TODO: under the new protocol, also serve from memory
         let mut leaves = self.consensus_handle().await.undecided_leaves().await;
         leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves
