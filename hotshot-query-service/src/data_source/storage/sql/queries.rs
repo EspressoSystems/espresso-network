@@ -358,13 +358,10 @@ impl<Mode> Transaction<Mode> {
     ) -> QueryResult<Header<Types>> {
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id.into())?;
-        // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
-        // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {HEADER_COLUMNS}
                FROM header AS h
               WHERE {where_clause}
-              ORDER BY h.height
               LIMIT 1"
         );
 
