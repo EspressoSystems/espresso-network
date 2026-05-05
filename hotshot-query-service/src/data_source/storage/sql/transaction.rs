@@ -183,14 +183,17 @@ impl TransactionMode for Read {
     async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
         // With Postgres, we explicitly set the transaction mode to specify that we want the
         // strongest possible consistency semantics in case of competing transactions
-        // (SERIALIZABLE), and we want to wait until this is possible rather than failing
-        // (DEFERRABLE).
+        // (SERIALIZABLE) and that this transaction is read-only. We deliberately do NOT
+        // include DEFERRABLE: that would make the transaction wait at the start until it
+        // could get a safe serializable snapshot, which is undesirable for query-service
+        // reads that should respond promptly. SSI conflicts on reads are avoided by
+        // per-query filters (e.g. `height > pruned_height`) instead.
         //
         // With SQLite, there is nothing to be done here, as SQLite automatically starts
         // transactions in read-only mode, and always has serializable concurrency unless we
         // explicitly opt in to dirty reads with a pragma.
         #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
+        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY")
             .await?;
 
         Ok(())
