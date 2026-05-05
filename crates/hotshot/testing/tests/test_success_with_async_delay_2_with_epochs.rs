@@ -8,8 +8,7 @@ use std::{collections::HashMap, time::Duration};
 
 use hotshot_example_types::{
     node_types::{
-        CliquenetImpl, CombinedImpl, CompatNetImpl, Libp2pImpl, PushCdnImpl, TEST_VERSIONS,
-        TestTwoStakeTablesTypes, TestTypes,
+        CombinedImpl, Libp2pImpl, PushCdnImpl, TEST_VERSIONS, TestTwoStakeTablesTypes, TestTypes,
     },
     testable_delay::{DelayConfig, DelayOptions, DelaySettings, SupportedTraitTypesForAsyncDelay},
 };
@@ -22,7 +21,7 @@ use hotshot_testing::{
 
 cross_tests!(
     TestName: test_success_with_async_delay_2_with_epochs,
-    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [Libp2pImpl, PushCdnImpl, CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

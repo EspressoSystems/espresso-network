@@ -16,7 +16,6 @@ pub use node_implementation::{NodeImplementation, TestableNodeImplementation};
 /// Module for publicly usable implementations of the traits
 pub mod implementations {
     pub use super::networking::{
-        Cliquenet, CompatNetwork,
         combined_network::{CombinedNetworks, UnderlyingCombinedNetworks},
         libp2p_network::{
             GossipConfig, Libp2pMetricsValue, Libp2pNetwork, PeerInfoVec, RequestResponseConfig,
