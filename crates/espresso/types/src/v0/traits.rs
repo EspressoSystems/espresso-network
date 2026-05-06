@@ -832,8 +832,16 @@ pub trait SequencerPersistence:
             },
             CoordinatorEvent::NewDecide(decide) => {
                 let Some(leaf) = decide.leaves.first() else {
+                    tracing::warn!("handle_event: NewDecide with empty leaves");
                     return;
                 };
+
+                tracing::info!(
+                    leaf_count = decide.leaves.len(),
+                    first_view = leaf.view_number().u64(),
+                    first_height = leaf.height(),
+                    "handle_event: processing NewDecide"
+                );
 
                 if decide.vid_shares.len() != decide.leaves.len() {
                     tracing::error!(

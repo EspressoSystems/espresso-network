@@ -137,6 +137,7 @@ impl<T: NodeType> BlockBuilder<T> {
         let membership = self.membership.clone();
 
         let handle = self.tasks.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {
                 view,
