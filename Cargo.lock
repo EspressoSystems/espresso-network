@@ -3285,7 +3285,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7526,7 +7526,7 @@ dependencies = [
 [[package]]
 name = "jf-merkle-tree"
 version = "0.4.2"
-source = "git+https://github.com/EspressoSystems/jellyfish?branch=cl%2Fmtiter#af8ae34908f261dece3c09d25ade3912e6c2d60f"
+source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.4.2#0d86d16d47e07cf9fe8934dfda4865a5c37d648f"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -10201,7 +10201,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -12153,7 +12153,7 @@ version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",

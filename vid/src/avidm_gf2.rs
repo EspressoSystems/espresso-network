@@ -229,7 +229,7 @@ impl VidScheme for AvidmGf2Scheme {
         // `proofs[range].to_vec()`, which would heap-clone every Vec<u8>
         // payload and every per-leaf proof at high num_ns × total_weights.
         //
-        // `mt.collect_leaves_with_proof()` returns leaves in ascending
+        // `mt.collect_leaves_with_proofs()` returns leaves in ascending
         // position order (DFS over children 0..ARITY), so we can drain the
         // iterator directly without an indexed placeholder Vec.
         let mut shares_iter = shares.into_iter();
@@ -238,7 +238,7 @@ impl VidScheme for AvidmGf2Scheme {
             .map(|range| shares_iter.by_ref().take(range.len()).collect())
             .collect();
         let mut proofs_iter = mt
-            .collect_leaves_with_proof()
+            .collect_leaves_with_proofs()
             .into_iter()
             .map(|(_, _, proof)| proof);
         let proof_groups: Vec<Vec<MerkleProof>> = ranges
