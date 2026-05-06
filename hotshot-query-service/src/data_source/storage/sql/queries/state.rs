@@ -77,9 +77,9 @@ where
         for node in nodes.iter() {
             hash_ids.insert(node.hash_id);
             if let Some(children) = &node.children {
-                let children: Vec<i32> =
+                let children: Vec<i64> =
                     serde_json::from_value(children.clone()).map_err(|e| QueryError::Error {
-                        message: format!("Error deserializing 'children' into Vec<i32>: {e}"),
+                        message: format!("Error deserializing 'children' into Vec<i64>: {e}"),
                     })?;
                 hash_ids.extend(children);
             }
@@ -92,7 +92,7 @@ where
             query
                 .query_as(&sql)
                 .fetch(self.as_mut())
-                .try_collect::<HashMap<i32, Vec<u8>>>()
+                .try_collect::<HashMap<i64, Vec<u8>>>()
                 .await?
         } else {
             HashMap::new()
@@ -116,11 +116,11 @@ where
                 match (children, children_bitvec, idx, entry) {
                     // If the row has children then its a branch
                     (Some(children), Some(children_bitvec), None, None) => {
-                        let children: Vec<i32> =
+                        let children: Vec<i64> =
                             serde_json::from_value(children.clone()).map_err(|e| {
                                 QueryError::Error {
                                     message: format!(
-                                        "Error deserializing 'children' into Vec<i32>: {e}"
+                                        "Error deserializing 'children' into Vec<i64>: {e}"
                                     ),
                                 }
                             })?;
@@ -366,7 +366,7 @@ pub(crate) fn build_hash_batch_insert(
 pub(crate) async fn batch_insert_hashes(
     hashes: Vec<Vec<u8>>,
     tx: &mut Transaction<Write>,
-) -> QueryResult<HashMap<Vec<u8>, i32>> {
+) -> QueryResult<HashMap<Vec<u8>, i64>> {
     if hashes.is_empty() {
         return Ok(HashMap::new());
     }
@@ -375,7 +375,7 @@ pub(crate) async fn batch_insert_hashes(
     let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
                UPDATE SET value = EXCLUDED.value RETURNING value, id";
 
-    let result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
+    let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
         .bind(&hashes)
         .fetch(tx.as_mut())
         .try_collect()
@@ -524,7 +524,7 @@ where
 pub(crate) struct Node {
     pub(crate) path: JsonValue,
     pub(crate) created: i64,
-    pub(crate) hash_id: i32,
+    pub(crate) hash_id: i64,
     pub(crate) children: Option<JsonValue>,
     pub(crate) children_bitvec: Option<BitVec>,
     pub(crate) idx: Option<JsonValue>,
@@ -662,7 +662,7 @@ impl Node {
         let sql = format!(
             r#"
             INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bigint[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
             ON CONFLICT (path, created) DO UPDATE SET
                 hash_id = EXCLUDED.hash_id,
                 children = EXCLUDED.children,
