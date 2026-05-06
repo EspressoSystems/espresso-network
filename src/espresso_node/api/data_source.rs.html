@@ -19,7 +19,7 @@
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>futures::future::{BoxFuture, Future};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>hotshot::types::BLSPubKey;
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>hotshot_query_service::{
-<a href=#22 id=22 data-nosnippet>22</a>    availability::{AvailabilityDataSource, VidCommonQueryData},
+<a href=#22 id=22 data-nosnippet>22</a>    availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData, VidCommonQueryData},
 <a href=#23 id=23 data-nosnippet>23</a>    data_source::{UpdateDataSource, VersionedDataSource},
 <a href=#24 id=24 data-nosnippet>24</a>    fetching::provider::AnyProvider,
 <a href=#25 id=25 data-nosnippet>25</a>    node::NodeDataSource,
@@ -396,23 +396,39 @@
 <a href=#396 id=396 data-nosnippet>396</a>    </span><span class="kw">fn </span>get_table_sizes(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;Vec&lt;TableSize&gt;&gt;&gt;;
 <a href=#397 id=397 data-nosnippet>397</a>}
 <a href=#398 id=398 data-nosnippet>398</a>
-<a href=#399 id=399 data-nosnippet>399</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
-<a href=#400 id=400 data-nosnippet>400</a></span><span class="kw">pub mod </span>testing {
-<a href=#401 id=401 data-nosnippet>401</a>    <span class="kw">use </span>super::{<span class="kw">super</span>::Options, <span class="kw-2">*</span>};
-<a href=#402 id=402 data-nosnippet>402</a>
-<a href=#403 id=403 data-nosnippet>403</a>    <span class="attr">#[async_trait]
-<a href=#404 id=404 data-nosnippet>404</a>    </span><span class="kw">pub trait </span>TestableSequencerDataSource: SequencerDataSource {
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="kw">type </span>Storage: Sync;
-<a href=#406 id=406 data-nosnippet>406</a>
-<a href=#407 id=407 data-nosnippet>407</a>        <span class="kw">async fn </span>create_storage() -&gt; <span class="self">Self</span>::Storage;
-<a href=#408 id=408 data-nosnippet>408</a>        <span class="kw">fn </span>persistence_options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>::Options;
-<a href=#409 id=409 data-nosnippet>409</a>        <span class="kw">fn </span>leaf_only_ds_options(
-<a href=#410 id=410 data-nosnippet>410</a>            _storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
-<a href=#411 id=411 data-nosnippet>411</a>            _opt: Options,
-<a href=#412 id=412 data-nosnippet>412</a>        ) -&gt; anyhow::Result&lt;Options&gt; {
-<a href=#413 id=413 data-nosnippet>413</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"not supported"</span>)
-<a href=#414 id=414 data-nosnippet>414</a>        }
-<a href=#415 id=415 data-nosnippet>415</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage, opt: Options) -&gt; Options;
-<a href=#416 id=416 data-nosnippet>416</a>    }
-<a href=#417 id=417 data-nosnippet>417</a>}
+<a href=#399 id=399 data-nosnippet>399</a><span class="doccomment">/// Data source for pruning state: the oldest retained block and leaf.
+<a href=#400 id=400 data-nosnippet>400</a>///
+<a href=#401 id=401 data-nosnippet>401</a>/// SQL backends return the actual oldest entry; the filesystem backend always returns `None`
+<a href=#402 id=402 data-nosnippet>402</a>/// since it does not prune.
+<a href=#403 id=403 data-nosnippet>403</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">trait </span>PruningDataSource {
+<a href=#404 id=404 data-nosnippet>404</a>    <span class="doccomment">/// Get the oldest block in storage, or `None` if empty or unsupported.
+<a href=#405 id=405 data-nosnippet>405</a>    </span><span class="kw">fn </span>get_oldest_block(
+<a href=#406 id=406 data-nosnippet>406</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#407 id=407 data-nosnippet>407</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;BlockQueryData&lt;SeqTypes&gt;&gt;&gt;&gt;;
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a>    <span class="doccomment">/// Get the oldest leaf in storage, or `None` if empty or unsupported.
+<a href=#410 id=410 data-nosnippet>410</a>    </span><span class="kw">fn </span>get_oldest_leaf(
+<a href=#411 id=411 data-nosnippet>411</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#412 id=412 data-nosnippet>412</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;LeafQueryData&lt;SeqTypes&gt;&gt;&gt;&gt;;
+<a href=#413 id=413 data-nosnippet>413</a>}
+<a href=#414 id=414 data-nosnippet>414</a>
+<a href=#415 id=415 data-nosnippet>415</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
+<a href=#416 id=416 data-nosnippet>416</a></span><span class="kw">pub mod </span>testing {
+<a href=#417 id=417 data-nosnippet>417</a>    <span class="kw">use </span>super::{<span class="kw">super</span>::Options, <span class="kw-2">*</span>};
+<a href=#418 id=418 data-nosnippet>418</a>
+<a href=#419 id=419 data-nosnippet>419</a>    <span class="attr">#[async_trait]
+<a href=#420 id=420 data-nosnippet>420</a>    </span><span class="kw">pub trait </span>TestableSequencerDataSource: SequencerDataSource {
+<a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">type </span>Storage: Sync;
+<a href=#422 id=422 data-nosnippet>422</a>
+<a href=#423 id=423 data-nosnippet>423</a>        <span class="kw">async fn </span>create_storage() -&gt; <span class="self">Self</span>::Storage;
+<a href=#424 id=424 data-nosnippet>424</a>        <span class="kw">fn </span>persistence_options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage) -&gt; <span class="self">Self</span>::Options;
+<a href=#425 id=425 data-nosnippet>425</a>        <span class="kw">fn </span>leaf_only_ds_options(
+<a href=#426 id=426 data-nosnippet>426</a>            _storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage,
+<a href=#427 id=427 data-nosnippet>427</a>            _opt: Options,
+<a href=#428 id=428 data-nosnippet>428</a>        ) -&gt; anyhow::Result&lt;Options&gt; {
+<a href=#429 id=429 data-nosnippet>429</a>            <span class="macro">anyhow::bail!</span>(<span class="string">"not supported"</span>)
+<a href=#430 id=430 data-nosnippet>430</a>        }
+<a href=#431 id=431 data-nosnippet>431</a>        <span class="kw">fn </span>options(storage: <span class="kw-2">&amp;</span><span class="self">Self</span>::Storage, opt: Options) -&gt; Options;
+<a href=#432 id=432 data-nosnippet>432</a>    }
+<a href=#433 id=433 data-nosnippet>433</a>}
 </code></pre></div></section></main></body></html>
