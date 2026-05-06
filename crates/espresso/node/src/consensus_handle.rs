@@ -15,7 +15,10 @@ use hotshot_new_protocol::{
     client::ClientApi,
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
-    harvest::{LegacyPreCutoverSeed, harvest_legacy_pre_cutover_seed, try_perform_handover},
+    harvest::{
+        LegacyPreCutoverSeed, forward_legacy_timeout_votes, harvest_legacy_pre_cutover_seed,
+        try_perform_handover,
+    },
     network::Network,
     state::UpdateLeaf,
     storage::NewProtocolStorage,
@@ -477,21 +480,6 @@ where
     pub async fn shut_down(&self) {
         self.coordinator_task.abort();
         self.legacy_handle.write().await.shut_down().await;
-    }
-}
-
-async fn forward_legacy_timeout_votes<T: NodeType>(
-    legacy_event_rx: InactiveReceiver<Event<T>>,
-    client_api: ClientApi<T>,
-) {
-    use hotshot_types::event::EventType;
-    let mut rx = legacy_event_rx.activate_cloned();
-    while let Some(event) = rx.next().await {
-        if let EventType::LegacyTimeoutVoteEmitted { vote } = event.event
-            && let Err(err) = client_api.submit_timeout_vote(vote).await
-        {
-            tracing::warn!(%err, "failed to forward legacy TimeoutVote2 to new-protocol coordinator");
-        }
     }
 }
 

@@ -870,12 +870,7 @@ where
                     "coordinator: applying legacy → new-protocol seed",
                 );
                 // Seed StateManager BEFORE handing the leaves to consensus.
-                // The new protocol's header builder and state validator
-                // pipeline against the parent view's stored state — without
-                // these entries, the first post-cutover header request
-                // queues forever (no parent) and peers can't validate the
-                // first post-cutover proposal (state validation never
-                // completes).
+                // Consensus needs the parent view's state extend.
                 let anchor_view = decided_anchor.view_number();
                 if let Some(state) = validated_states.get(&anchor_view).cloned() {
                     self.state_manager
@@ -898,17 +893,26 @@ where
                 // RequestBlockAndHeader for max_seeded_view + 1 so the
                 // post-cutover view proposes. Drain in place — the run loop
                 // only drains after `next_consensus_input` returns.
-                self.start().await;
-                let mut outputs = Vec::new();
-                while let Some(output) = self.outbox.pop_front() {
-                    outputs.push(output);
-                }
-                for output in outputs {
-                    if let Err(err) = self.process_consensus_output(output).await {
-                        tracing::warn!(
-                            %err,
-                            "error processing post-seed bootstrap output"
-                        );
+                //
+                // Skipped if no proposal was seeded at current_view (e.g.
+                // the legacy chain timed out and the harvest produced an
+                // empty undecided chain). In that case the TC2 forwarded
+                // through the timeout-vote bridge will advance the
+                // coordinator via `handle_timeout_certificate` instead.
+                let cur_view = self.consensus.current_view();
+                if self.consensus.proposal_at(cur_view).is_some() {
+                    self.start().await;
+                    let mut outputs = Vec::new();
+                    while let Some(output) = self.outbox.pop_front() {
+                        outputs.push(output);
+                    }
+                    for output in outputs {
+                        if let Err(err) = self.process_consensus_output(output).await {
+                            tracing::warn!(
+                                %err,
+                                "error processing post-seed bootstrap output"
+                            );
+                        }
                     }
                 }
                 let _ = respond.send(());
@@ -919,8 +923,21 @@ where
                 // success-threshold and one-honest collectors.
                 self.timeout_collector.accumulate_vote(vote.clone()).await;
                 self.timeout_one_honest_collector
-                    .accumulate_vote(vote)
+                    .accumulate_vote(vote.clone())
                     .await;
+                // Rebroadcast on cliquenet so peer coordinators can aggregate
+                // it too. The bridge only fires for the local legacy node, so
+                // without this each coordinator sees just one vote and TC2
+                // never forms at the cutover boundary.
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
+                        message::TimeoutVoteMessage { vote, lock: None },
+                    )),
+                };
+                if let Err(err) = self.network.broadcast(message.view_number(), &message) {
+                    tracing::warn!(%err, "failed to rebroadcast bridged timeout vote");
+                }
                 let _ = respond.send(());
             },
         }

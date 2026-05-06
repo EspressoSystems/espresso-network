@@ -4,10 +4,13 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use async_broadcast::InactiveReceiver;
 use committable::Committable;
+use futures::StreamExt;
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
     data::{Leaf2, ViewNumber},
+    event::{Event, EventType},
     simple_certificate::QuorumCertificate2,
     traits::node_implementation::NodeType,
 };
@@ -143,4 +146,26 @@ where
     }
 
     true
+}
+
+/// Forward `LegacyTimeoutVoteEmitted` events from the legacy task into the
+/// new-protocol coordinator's timeout collectors. Lets the first 0.8
+/// leader form a `TimeoutCertificate2` for the boundary view if 0.4
+/// timed out before its QC formed.
+///
+/// Run as a long-lived task. Spawned by `ConsensusHandle::new` in
+/// production and by the integration test for the same parity reason
+/// `try_perform_handover` is shared.
+pub async fn forward_legacy_timeout_votes<T: NodeType>(
+    legacy_event_rx: InactiveReceiver<Event<T>>,
+    client_api: ClientApi<T>,
+) {
+    let mut rx = legacy_event_rx.activate_cloned();
+    while let Some(event) = rx.next().await {
+        if let EventType::LegacyTimeoutVoteEmitted { vote } = event.event
+            && let Err(err) = client_api.submit_timeout_vote(vote).await
+        {
+            tracing::warn!(%err, "failed to forward legacy TimeoutVote2 to new-protocol coordinator");
+        }
+    }
 }

@@ -136,15 +136,10 @@ pub struct Consensus<T: NodeType> {
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
 
-    /// Views whose proposal/leaf were produced by the legacy (pre-0.8) protocol
-    /// and bridged into this Consensus instance via `seed_pre_cutover_leaf`.
-    ///
-    /// These views are exempt from the new-protocol VID-availability check in
-    /// `maybe_vote_2_and_update_lock`: their data was already certified
-    /// available under 0.4's DA mechanism, and their VID shares are V1
-    /// (AvidM) which cannot be reconstructed under V2. Cert1 for these views
-    /// is the inherited 0.4 `QuorumCertificate2`; Cert2 is freshly produced
-    /// post-cutover via Vote2.
+    /// Views bridged in from the legacy (pre-0.8) protocol via
+    /// `seed_pre_cutover_leaves`. Skipped by `maybe_vote_2_and_update_lock`
+    /// (V1 AvidM dispersal, no V2 reconstruction possible). Cert1 is the
+    /// inherited 0.4 QC; Cert2 forms post-cutover via Vote2.
     pre_cutover_views: BTreeSet<ViewNumber>,
 
     /// Certificates whose epoch membership was not yet available when they
@@ -276,10 +271,8 @@ impl<T: NodeType> Consensus<T> {
     /// land automatically when the first post-cutover proposal arrives,
     /// carrying it as `justify_qc` — see [`Self::register_proposal_justify_qc`].
     ///
-    /// All seeded views are added to `pre_cutover_views`, exempting them from
-    /// the V2 VID-reconstruction check in `maybe_vote_2_and_update_lock`
-    /// (those leaves were dispersed under AvidM/V1; their data availability
-    /// is inherited from 0.4's DA mechanism).
+    /// Seeded views are added to `pre_cutover_views`, which causes
+    /// `maybe_vote_2_and_update_lock` to skip them (V1 AvidM dispersal).
     pub fn seed_pre_cutover_leaves(&mut self, leaves: Vec<Leaf2<T>>) {
         let mut max_seeded_view = self.current_view;
         let mut max_seeded_epoch = self.current_epoch.unwrap_or(EpochNumber::genesis());
@@ -349,11 +342,23 @@ impl<T: NodeType> Consensus<T> {
     /// enters this Consensus instance after the legacy/new-protocol cutover.
     ///
     /// Idempotent: existing entries are not overwritten.
+    ///
+    /// Also bumps `locked_cert` to this QC if its view is higher than the
+    /// current locked view. The seeded pre-cutover chain advances
+    /// `locked_cert` here because `maybe_vote_2_and_update_lock` (which
+    /// would normally bump it) skips pre-cutover views.
     pub fn register_proposal_justify_qc(&mut self, justify_qc: &Certificate1<T>) {
         let parent_view = justify_qc.view_number();
         self.certs
             .entry(parent_view)
             .or_insert_with(|| justify_qc.clone());
+        if self
+            .locked_cert
+            .as_ref()
+            .is_none_or(|locked| locked.view_number() < parent_view)
+        {
+            self.locked_cert = Some(justify_qc.clone());
+        }
     }
 
     /// Advance the decided-anchor (`last_decided_leaf`/`last_decided_view`)
@@ -1389,15 +1394,17 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
+        // Pre-cutover leaves were dispersed under AvidM (V1) and certified
+        // available by 0.4's DA; the new protocol does not re-vote them.
+        // `seed_pre_cutover_leaves` marks them as voted, but make the
+        // exclusion explicit so this path stays single-mode.
+        if self.pre_cutover_views.contains(&view) {
+            return;
+        }
         if self.voted_2_views.contains(&view) {
             return;
         }
-        let is_pre_cutover = self.pre_cutover_views.contains(&view);
-        // Pre-cutover leaves are exempt from the V2 VID-availability check:
-        // their dispersal happened under AvidM (V1) and was certified
-        // available by 0.4's DA mechanism. Only fresh post-cutover proposals
-        // require V2 reconstruction before we Vote2.
-        if !is_pre_cutover && !self.blocks_reconstructed.contains_key(&view) {
+        if !self.blocks_reconstructed.contains_key(&view) {
             debug!("reconstructed block commitment not available");
             return;
         }
@@ -1418,22 +1425,17 @@ impl<T: NodeType> Consensus<T> {
             warn!(%view, "cert1 commitment does not match proposal commitment");
             return;
         }
-        // The proposal block commitment must match the reconstructed block commitment.
-        // Skip this check for pre-cutover leaves (they have V1 commitments and no
-        // V2 reconstruction is possible).
-        if !is_pre_cutover {
-            let reconstructed_block_commitment =
-                self.blocks_reconstructed.get(&view).expect("checked above");
-            let VidCommitment::V2(proposal_block_commitment) =
-                proposal.block_header.payload_commitment()
-            else {
-                warn!(%view, "proposal payload commitment is not a V2 VID commitment");
-                return;
-            };
-            if &proposal_block_commitment != reconstructed_block_commitment {
-                warn!(%view, "proposal commitment does not match reconstructed block commitment");
-                return;
-            }
+        let reconstructed_block_commitment =
+            self.blocks_reconstructed.get(&view).expect("checked above");
+        let VidCommitment::V2(proposal_block_commitment) =
+            proposal.block_header.payload_commitment()
+        else {
+            warn!(%view, "proposal payload commitment is not a V2 VID commitment");
+            return;
+        };
+        if &proposal_block_commitment != reconstructed_block_commitment {
+            warn!(%view, "proposal commitment does not match reconstructed block commitment");
+            return;
         }
 
         // We have a valid certificate, proposal, and reconstructed block
