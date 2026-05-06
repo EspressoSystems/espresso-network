@@ -19,12 +19,12 @@ use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 use super::{Provider, Request};
 use crate::{
     Payload,
-    availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+    availability::{BlockQueryData, Certificate2, LeafQueryData, VidCommonQueryData},
     data_source::AvailabilityProvider,
     fetching::{
         NonEmptyRange,
         request::{
-            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest,
+            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -56,6 +56,7 @@ type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest<Types>>>;
 type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest<Types>>>;
 type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
 type VidCommonRangeProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRangeRequest>>;
+type Cert2Provider<Types> = Arc<dyn DebugProvider<Types, Certificate2Request>>;
 
 /// Adaptor combining multiple data availability providers.
 ///
@@ -107,6 +108,7 @@ where
     leaf_range_providers: Vec<LeafRangeProvider<Types>>,
     vid_common_providers: Vec<VidCommonProvider<Types>>,
     vid_common_range_providers: Vec<VidCommonRangeProvider<Types>>,
+    cert2_providers: Vec<Cert2Provider<Types>>,
 }
 
 #[async_trait]
@@ -175,6 +177,16 @@ where
     }
 }
 
+#[async_trait]
+impl<Types> Provider<Types, Certificate2Request> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<Types>>> {
+        any_fetch(&self.cert2_providers, req).await
+    }
+}
+
 impl<Types> AnyProvider<Types>
 where
     Types: NodeType,
@@ -190,7 +202,8 @@ where
         self.leaf_providers.push(provider.clone());
         self.leaf_range_providers.push(provider.clone());
         self.vid_common_providers.push(provider.clone());
-        self.vid_common_range_providers.push(provider);
+        self.vid_common_range_providers.push(provider.clone());
+        self.cert2_providers.push(provider);
         self
     }
 

@@ -5,7 +5,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+    Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
+    Transaction,
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -280,6 +281,16 @@ pub(crate) trait CatchupDataSource: Sync {
         &self,
         height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
+
+    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    ///
+    /// Returns `None` when no cert2 height >= `height` is locally available
+    fn get_cert2(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<Certificate2<SeqTypes>>>> {
+        async { Ok(None) }
+    }
 
     /// Get the state of the requested `account`.
     ///

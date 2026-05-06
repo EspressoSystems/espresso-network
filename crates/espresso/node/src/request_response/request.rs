@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    FeeAccount, FeeMerkleTree, Leaf2,
+    Certificate2, FeeAccount, FeeMerkleTree, Leaf2,
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
@@ -39,6 +39,8 @@ pub enum Request {
     StateCert(u64),
     /// A request for data to reconstruct the reward merkle tree at a given height
     RewardMerkleTreeV2(u64, ViewNumber),
+    /// A request for the cert2 at or above the given height
+    Cert2(Height),
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the
@@ -63,6 +65,8 @@ pub enum Response {
     StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
     /// A response with data to reconstruct the reward merkle tree at a given height
     RewardMerkleTreeV2(Vec<u8>),
+    /// A response with the earliest cert2 (fast finality protocol)
+    Cert2(Certificate2<SeqTypes>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response
