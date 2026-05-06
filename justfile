@@ -230,7 +230,7 @@ test-demo test_name:
 			;;
 	esac
 	just build test "$features"
-	cargo nextest run -p tests $features --nocapture --profile integration -E "test(/$test\$/)"
+	cargo nextest run -p tests $features --nocapture --profile integration --retries 0 -E "test(/$test\$/)"
 
 check-features *args:
     cargo hack check --each-feature {{args}}

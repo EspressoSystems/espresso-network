@@ -480,7 +480,7 @@ impl Inner {
                 );
                 leaf.fill_block_payload_unchecked(payload);
             } else {
-                tracing::debug!(?v, "DA proposal not available at decide");
+                tracing::info!(?v, "DA proposal not available at decide");
             }
 
             let info = LeafInfo {
