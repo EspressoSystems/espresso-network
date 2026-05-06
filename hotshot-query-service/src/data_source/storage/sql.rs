@@ -1263,7 +1263,7 @@ pub mod testing {
                 (
                     "BIT(8)",
                     "BYTEA",
-                    "SERIAL PRIMARY KEY",
+                    "BIGSERIAL PRIMARY KEY",
                     "(data->>'test_merkle_tree_root')",
                 )
             };
