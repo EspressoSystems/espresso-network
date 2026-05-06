@@ -173,14 +173,13 @@ where
     async fn fetch_request(&self, (view, leaf): Request) {
         let span = tracing::warn_span!("fetch proposal", ?view, %leaf);
         let res: anyhow::Result<()> = async {
-            tracing::info!(?view, %leaf, "proposal fetcher: processing request");
             let anchor_view = self
                 .persistence
                 .load_anchor_view()
                 .await
                 .context("loading anchor view")?;
             if view <= anchor_view {
-                tracing::info!(?anchor_view, "skipping already-decided proposal");
+                tracing::debug!(?anchor_view, "skipping already-decided proposal");
                 return Ok(());
             }
 
@@ -190,7 +189,6 @@ where
                     // parent.
                     let view = proposal.data.justify_qc().view_number;
                     let leaf = proposal.data.justify_qc().data.leaf_commit;
-                    tracing::info!(parent_view = ?view, parent_leaf = %leaf, "proposal fetcher: found in storage, traversing parent");
                     self.request((view, leaf)).await;
                     return Ok(());
                 },
@@ -199,24 +197,16 @@ where
                 },
             }
 
-            tracing::info!(?view, %leaf, "proposal fetcher: requesting proposal from network");
             let future = self.consensus_handle.request_proposal(view, leaf).await?;
             let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
                 timeout(self.cfg.fetch_timeout, future)
                     .await
                     .context("timed out fetching proposal")?
                     .context("error fetching proposal")?;
-            tracing::info!(
-                ?view,
-                %leaf,
-                proposal_view = ?proposal.data.view_number(),
-                "proposal fetcher: received response from network"
-            );
             self.persistence
                 .append_quorum_proposal2(&proposal)
                 .await
                 .context("error saving fetched proposal")?;
-            tracing::info!(?view, "proposal fetcher: persisted fetched proposal");
 
             // Add the fetched leaf to consensus state, so consensus can make use of it.
             // Only update if the view is missing or DA-only (state() returns None for

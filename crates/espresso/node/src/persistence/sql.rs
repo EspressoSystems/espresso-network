@@ -1046,7 +1046,7 @@ impl Persistence {
                         // payload always is.
                         leaf.fill_block_payload_unchecked(Payload::empty().0);
                     } else {
-                        tracing::info!(?view, "DA proposal not available at decide");
+                        tracing::debug!(?view, "DA proposal not available at decide");
                     }
 
                     let state_cert = state_certs.get(&view).cloned();
