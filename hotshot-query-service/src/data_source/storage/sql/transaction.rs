@@ -393,6 +393,12 @@ where
 
 /// Low-level, general database queries and mutation.
 impl Transaction<Write> {
+    /// Maximum number of parameters allowed in a single query.
+    ///
+    /// This should be safely under the hard limit imposed by the Postgres client, which is either
+    /// 32,767 or 65,535.
+    const STATEMENT_MAX_PARAMETERS: usize = 30_000;
+
     pub async fn upsert<'p, const N: usize, R>(
         &mut self,
         table: &str,
@@ -421,27 +427,40 @@ impl Transaction<Write> {
             return Ok(());
         }
 
-        let mut query_builder =
-            QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
-        query_builder.push_values(rows, |mut b, row| {
-            row.bind(&mut b);
-        });
-        query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
+        // For very large upserts, we might need to proceed in chunks to avoid exceeding the maximum
+        // number of parameters in a single statement.
+        let rows_per_chunk = Self::STATEMENT_MAX_PARAMETERS / N;
+        let mut rows = rows.into_iter();
+        loop {
+            let chunk = rows.by_ref().take(rows_per_chunk).collect::<Vec<_>>();
+            if chunk.is_empty() {
+                break;
+            }
+            let num_rows = chunk.len();
+            tracing::debug!(num_rows, "upsert chunk");
 
-        let query = query_builder.build();
-        let statement = query.sql();
+            let mut query_builder =
+                QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
+            query_builder.push_values(chunk, |mut b, row| {
+                row.bind(&mut b);
+            });
+            query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
 
-        let res = self.execute(query).await.inspect_err(|err| {
-            tracing::error!(statement, "error in statement execution: {err:#}");
-        })?;
-        let rows_modified = res.rows_affected() as usize;
-        if rows_modified != num_rows {
-            let error = format!(
-                "unexpected number of rows modified: expected {num_rows}, got {rows_modified}. \
-                 query: {statement}"
-            );
-            tracing::error!(error);
-            bail!(error);
+            let query = query_builder.build();
+            let statement = query.sql();
+
+            let res = self.execute(query).await.inspect_err(|err| {
+                tracing::error!(statement, "error in statement execution: {err:#}");
+            })?;
+            let rows_modified = res.rows_affected() as usize;
+            if rows_modified != num_rows {
+                let error = format!(
+                    "unexpected number of rows modified: expected {num_rows}, got \
+                     {rows_modified}. query: {statement}"
+                );
+                tracing::error!(error);
+                bail!(error);
+            }
         }
         Ok(())
     }
@@ -923,5 +942,57 @@ impl PoolMetrics {
             reverts: metrics.create_counter("reverted_transactions".into(), None),
             drops: metrics.create_counter("dropped_transactions".into(), None),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::data_source::{
+        Transaction as _, VersionedDataSource,
+        sql::testing::TmpDb,
+        storage::{SqlStorage, StorageConnectionType},
+    };
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_upsert_many_rows() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Sequencer)
+            .await
+            .unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+        query(
+            "CREATE TABLE test (
+                a INT PRIMARY KEY,
+                b INT,
+                c INT
+            )",
+        )
+        .execute(tx.as_mut())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // use a non-integer number of chunks.
+        let n = (2 * Transaction::STATEMENT_MAX_PARAMETERS
+            + (Transaction::STATEMENT_MAX_PARAMETERS / 2)) as i32;
+        let rows = (0..n).map(|i| (i, i, i)).collect::<Vec<_>>();
+
+        let mut tx = storage.write().await.unwrap();
+        tx.upsert("test", ["a", "b", "c"], ["a"], rows.clone())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(
+            rows,
+            query_as("SELECT * FROM test ORDER BY a")
+                .fetch_all(tx.as_mut())
+                .await
+                .unwrap()
+        );
     }
 }
