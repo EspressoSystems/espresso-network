@@ -84,6 +84,11 @@ pub const ESTABLISHED_LIMIT: NonZeroU32 = NonZeroU32::new(ESTABLISHED_LIMIT_UNWR
 /// Number of connections to a single peer before logging an error
 pub const ESTABLISHED_LIMIT_UNWR: u32 = 10;
 
+/// AutoNAT confidence at which we treat a Private status as definitive enough
+/// to escalate from a transient warning to a loud operator-facing error.
+/// Matches libp2p-autonat's default `confidence_max`.
+const AUTONAT_CONFIDENCE_MAX: usize = 3;
+
 /// Network definition
 #[derive(derive_more::Debug)]
 pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
@@ -104,6 +109,9 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     dht_handler: DHTBehaviour<T::SignatureKey, D>,
     /// Channel to resend requests, set to Some when we call `spawn_listeners`
     resend_tx: Option<UnboundedSender<ClientRequest>>,
+    /// Whether we've already emitted the loud "not publicly reachable" error for the
+    /// current Private episode. Reset whenever AutoNAT leaves Private status.
+    autonat_private_logged: bool,
 }
 
 impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
@@ -355,6 +363,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     .unwrap_or(NonZeroUsize::new(4).unwrap()),
             ),
             resend_tx: None,
+            autonat_private_logged: false,
         })
     }
 
@@ -696,24 +705,37 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                         "AutoNAT: this node is publicly reachable at {addr} (was \
                                          {old:?})"
                                     );
+                                    self.autonat_private_logged = false;
                                 },
                                 autonat::NatStatus::Private => {
-                                    error!(
-                                        "AutoNAT: this node is NOT publicly reachable. Peers \
-                                         cannot direct-message us, so leader views will fail and \
-                                         we will accumulate missed slots. Fixes: set \
-                                         --libp2p-advertise-address (env \
-                                         ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS) to a publicly \
-                                         reachable host:port, and ensure inbound UDP at that port \
-                                         is open from the public internet (firewall/NAT/security \
-                                         group). Status transitioned {old:?} -> Private."
+                                    warn!(
+                                        "AutoNAT: probe reports this node may not be publicly \
+                                         reachable (was {old:?}). Treating as transient until \
+                                         confirmed by repeated probes."
                                     );
                                 },
                                 autonat::NatStatus::Unknown => {
                                     debug!("AutoNAT status: {old:?} -> Unknown");
+                                    self.autonat_private_logged = false;
                                 },
                             },
                         };
+                        let autonat = &self.swarm.behaviour().autonat;
+                        if matches!(autonat.nat_status(), autonat::NatStatus::Private)
+                            && autonat.confidence() >= AUTONAT_CONFIDENCE_MAX
+                            && !self.autonat_private_logged
+                        {
+                            error!(
+                                "AutoNAT: this node is NOT publicly reachable (confirmed by \
+                                 repeated probes). Peers cannot direct-message us, so leader \
+                                 views will fail and we will accumulate missed slots. Fixes: set \
+                                 --libp2p-advertise-address (env \
+                                 ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS) to a publicly reachable \
+                                 host:port, and ensure inbound UDP at that port is open from the \
+                                 public internet (firewall/NAT/security group)."
+                            );
+                            self.autonat_private_logged = true;
+                        }
                         None
                     },
                 };
