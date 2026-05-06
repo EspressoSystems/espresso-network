@@ -935,17 +935,15 @@ impl Persistence {
         consumer: &impl EventConsumer,
     ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = serializable_retry!(self, || async {
-                Ok(self
-                    .db
-                    .read()
-                    .await?
-                    .fetch_optional(
-                        "SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1",
-                    )
-                    .await?
-                    .map(|row| row.get("last_processed_view")))
-            })
-            .await?;
+            Ok(self
+                .db
+                .read()
+                .await?
+                .fetch_optional("SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1")
+                .await?
+                .map(|row| row.get("last_processed_view")))
+        })
+        .await?;
         loop {
             // In SQLite, overlapping read and write transactions can lead to database errors. To
             // avoid this:
@@ -954,9 +952,11 @@ impl Persistence {
             // - use the collected data to generate a "decide" event for the consumer.
             // - begin a write transaction to delete the data and update the event stream.
 
-            // Retry the entire read section on serialization failures (40001). Each `continue
-            // 'read` abandons the current transaction and starts fresh.
-            let (
+            // Retry the entire read section on serialization failures (40001) via
+            // `serializable_retry!`, which inherits the configured exponential backoff and
+            // retry-max from `serializable_backoff`. The closure returns `None` when there is no
+            // more work to do, which we propagate out of the outer function.
+            let Some((
                 from_view,
                 to_view,
                 leaves,
@@ -964,7 +964,7 @@ impl Persistence {
                 mut vid_shares,
                 mut da_proposals,
                 state_certs,
-            ) = 'read: loop {
+            )) = serializable_retry!(self, || async {
                 let mut tx = self.db.read().await?;
 
                 // Collect a chain of consecutive leaves, starting from the first view after the
@@ -994,13 +994,8 @@ impl Persistence {
                             if err.as_database_error().is_some_and(|e| {
                                 e.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE)
                             }) {
-                                tracing::warn!(
-                                    ?from_view,
-                                    "serialization conflict reading anchor_leaf2, retrying"
-                                );
                                 drop(rows);
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                                continue 'read;
+                                return Err(anyhow::Error::from(err));
                             }
                             // If there's an error getting a row, try generating an event with
                             // the rows we do have.
@@ -1043,7 +1038,7 @@ impl Persistence {
                 let Some(final_qc) = final_qc else {
                     // End event processing when there are no more decided views.
                     tracing::debug!(from_view, "no new leaves at decide");
-                    return Ok(());
+                    return Ok(None);
                 };
 
                 // Find the range of views encompassed by this leaf chain. All data in this
@@ -1052,29 +1047,13 @@ impl Persistence {
                 let to_view = leaves[leaves.len() - 1].view_number();
 
                 // Collect VID shares for the decide event.
-                let vid_rows = match tx
+                let vid_rows = tx
                     .fetch_all(
                         query("SELECT view, data FROM vid_share2 where view >= $1 AND view <= $2")
                             .bind(from_view.u64() as i64)
                             .bind(to_view.u64() as i64),
                     )
-                    .await
-                {
-                    Ok(rows) => rows,
-                    Err(err)
-                        if err.as_database_error().is_some_and(|e| {
-                            e.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE)
-                        }) =>
-                    {
-                        tracing::warn!(
-                            ?from_view,
-                            "serialization conflict reading vid_share2, retrying"
-                        );
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        continue 'read;
-                    },
-                    Err(err) => return Err(err.into()),
-                };
+                    .await?;
                 let vid_shares = vid_rows
                     .into_iter()
                     .map(|row| {
@@ -1088,7 +1067,7 @@ impl Persistence {
                     .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
                 // Collect DA proposals for the decide event.
-                let da_rows = match tx
+                let da_rows = tx
                     .fetch_all(
                         query(
                             "SELECT view, data FROM da_proposal2 where view >= $1 AND view <= $2",
@@ -1096,23 +1075,7 @@ impl Persistence {
                         .bind(from_view.u64() as i64)
                         .bind(to_view.u64() as i64),
                     )
-                    .await
-                {
-                    Ok(rows) => rows,
-                    Err(err)
-                        if err.as_database_error().is_some_and(|e| {
-                            e.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE)
-                        }) =>
-                    {
-                        tracing::warn!(
-                            ?from_view,
-                            "serialization conflict reading da_proposal2, retrying"
-                        );
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        continue 'read;
-                    },
-                    Err(err) => return Err(err.into()),
-                };
+                    .await?;
                 let da_proposals = da_rows
                     .into_iter()
                     .map(|row| {
@@ -1126,27 +1089,13 @@ impl Persistence {
                     .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
                 // Collect state certs for the decide event.
-                let state_certs = match Self::load_state_certs(&mut tx, from_view, to_view).await {
-                    Ok(certs) => certs,
-                    Err(err) if is_serialization_error(&err) => {
-                        tracing::warn!(
-                            ?from_view,
-                            "serialization conflict loading state certs, retrying"
-                        );
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        continue 'read;
-                    },
-                    Err(err) => {
-                        tracing::error!(
-                            ?from_view,
-                            ?to_view,
-                            "failed to load state certificates. error={err:#}"
-                        );
-                        return Err(err);
-                    },
-                };
+                let state_certs = Self::load_state_certs(&mut tx, from_view, to_view)
+                    .await
+                    .with_context(|| {
+                        format!("load_state_certs from_view={from_view:?} to_view={to_view:?}")
+                    })?;
                 drop(tx);
-                break 'read (
+                Ok(Some((
                     from_view,
                     to_view,
                     leaves,
@@ -1154,7 +1103,11 @@ impl Persistence {
                     vid_shares,
                     da_proposals,
                     state_certs,
-                );
+                )))
+            })
+            .await?
+            else {
+                return Ok(());
             };
 
             // Collate all the information by view number and construct a chain of leaves.
@@ -2038,17 +1991,17 @@ impl SequencerPersistence for Persistence {
 
         let now = Instant::now();
         let res = serializable_retry!(self, || async {
-                let mut tx = self.db.write().await?;
-                tx.upsert(
-                    "vid_share2",
-                    ["view", "data", "payload_hash"],
-                    ["view"],
-                    [(view as i64, data_bytes.clone(), payload_hash.to_string())],
-                )
-                .await?;
-                tx.commit().await
-            })
-            .await;
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "vid_share2",
+                ["view", "data", "payload_hash"],
+                ["view"],
+                [(view as i64, data_bytes.clone(), payload_hash.to_string())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await;
         self.internal_metrics
             .internal_append_vid_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -2066,17 +2019,17 @@ impl SequencerPersistence for Persistence {
 
         let now = Instant::now();
         let res = serializable_retry!(self, || async {
-                let mut tx = self.db.write().await?;
-                tx.upsert(
-                    "da_proposal",
-                    ["view", "data", "payload_hash"],
-                    ["view"],
-                    [(view as i64, data_bytes.clone(), vid_commit.to_string())],
-                )
-                .await?;
-                tx.commit().await
-            })
-            .await;
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "da_proposal",
+                ["view", "data", "payload_hash"],
+                ["view"],
+                [(view as i64, data_bytes.clone(), vid_commit.to_string())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await;
         self.internal_metrics
             .internal_append_da_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -2137,32 +2090,32 @@ impl SequencerPersistence for Persistence {
 
         let now = Instant::now();
         let res = serializable_retry!(self, || async {
-                let mut tx = self.db.write().await?;
-                tx.upsert(
-                    "quorum_proposals2",
-                    ["view", "leaf_hash", "data"],
-                    ["view"],
-                    [(
-                        view_number as i64,
-                        leaf_hash.to_string(),
-                        proposal_bytes.clone(),
-                    )],
-                )
-                .await?;
-                tx.upsert(
-                    "quorum_certificate2",
-                    ["view", "leaf_hash", "data"],
-                    ["view"],
-                    [(
-                        justify_qc_view,
-                        justify_qc_leaf_commit.clone(),
-                        justify_qc_bytes.clone(),
-                    )],
-                )
-                .await?;
-                tx.commit().await
-            })
-            .await;
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "quorum_proposals2",
+                ["view", "leaf_hash", "data"],
+                ["view"],
+                [(
+                    view_number as i64,
+                    leaf_hash.to_string(),
+                    proposal_bytes.clone(),
+                )],
+            )
+            .await?;
+            tx.upsert(
+                "quorum_certificate2",
+                ["view", "leaf_hash", "data"],
+                ["view"],
+                [(
+                    justify_qc_view,
+                    justify_qc_leaf_commit.clone(),
+                    justify_qc_bytes.clone(),
+                )],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await;
         self.internal_metrics
             .internal_append_quorum2_duration
             .add_point(now.elapsed().as_secs_f64());
@@ -2930,17 +2883,17 @@ impl SequencerPersistence for Persistence {
 
         let now = Instant::now();
         let res = serializable_retry!(self, || async {
-                let mut tx = self.db.write().await?;
-                tx.upsert(
-                    "da_proposal2",
-                    ["view", "data", "payload_hash"],
-                    ["view"],
-                    [(view as i64, data_bytes.clone(), vid_commit.to_string())],
-                )
-                .await?;
-                tx.commit().await
-            })
-            .await;
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "da_proposal2",
+                ["view", "data", "payload_hash"],
+                ["view"],
+                [(view as i64, data_bytes.clone(), vid_commit.to_string())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await;
         self.internal_metrics
             .internal_append_da2_duration
             .add_point(now.elapsed().as_secs_f64());
