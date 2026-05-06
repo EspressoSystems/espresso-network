@@ -13,21 +13,19 @@ testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-lock = { workspace = true }
-
-# Testing dependencies
-bitvec = { workspace = true, optional = true }
+async-trait = { workspace = true }
 clap = { workspace = true, optional = true }
 committable = { workspace = true }
 derivative = { workspace = true }
+derive_builder = { workspace = true }
 derive_more = { workspace = true }
 espresso-types = { workspace = true }
 futures = { workspace = true }
-hotshot-contract-adapter = { workspace = true, optional = true }
+hotshot-query-service = { workspace = true }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
 jf-merkle-tree-compat = { workspace = true }
-rand = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -38,10 +36,16 @@ tracing = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
 
+# Testing dependencies
+bitvec = { workspace = true, optional = true }
+hotshot-contract-adapter = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+
 [dev-dependencies]
 espresso-node = { workspace = true, default-features = false, features = [
     "testing",
 ] }
+itertools = { workspace = true }
 light-client = { path = ".", features = ["testing"] }
 pretty_assertions = { workspace = true }
 test-log = { workspace = true }

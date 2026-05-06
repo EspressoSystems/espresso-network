@@ -19,7 +19,7 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::coordinator::Coordinator;
+use hotshot_new_protocol::{coordinator::Coordinator, network::Network};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -29,6 +29,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
+    new_protocol::CoordinatorEvent,
     storage_metrics::StorageMetricsValue,
     traits::{metrics::Metrics, network::ConnectedNetwork},
 };
@@ -41,7 +42,7 @@ use url::Url;
 use crate::{
     Node, SeqTypes, SequencerApiVersion,
     catchup::ParallelStateCatchup,
-    consensus_handle::{ConsensusHandle, CoordinatorEvent},
+    consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
@@ -50,6 +51,7 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
+    startup_catchup::bootstrap_epoch_window,
     state_signature::{self, StateSigner},
 };
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
@@ -91,10 +93,14 @@ pub struct SequencerContext<N: ConnectedNetwork<PubKey>, P: SequencerPersistence
     validator_config: ValidatorConfig<SeqTypes>,
 }
 
-impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P> {
+impl<N, P> SequencerContext<N, P>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+{
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init<CN: ConnectedNetwork<PubKey>>(
+    pub async fn init<T: Network<SeqTypes> + Send + 'static>(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -104,7 +110,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
-        coordinator_network: CN,
+        coordinator_network: T,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
@@ -141,18 +147,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
 
         let epoch_height = initializer.epoch_height;
 
-        let coordinator = Coordinator::<SeqTypes, CN>::maker()
-            .membership_coordinator(membership_coordinator.clone())
-            .network(coordinator_network)
-            .initializer(&initializer)
-            .upgrade_lock(UpgradeLock::from_certificate(
-                upgrade,
-                &initializer.decided_upgrade_certificate,
-            ))
-            .public_key(validator_config.public_key)
-            .private_key(validator_config.private_key.clone())
-            .timeout_duration(Duration::from_secs(10))
-            .make();
+        let initializer_for_coordinator = initializer.clone();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
@@ -174,6 +169,47 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SequencerContext<N, P
         )
         .await?
         .0;
+
+        // `load_start_epoch_info` ran inside `SystemContext::init`, so
+        // `first_epoch` is now seeded on the shared membership. Walk the
+        // catchup chain forward to populate the stake-table window for the
+        // current epoch.
+        let current_epoch = bootstrap_epoch_window(&membership_coordinator, epoch_height)
+            .await
+            .context("startup stake-table catchup failed")?;
+        tracing::info!(%current_epoch, "Startup catchup complete");
+
+        // Push the resolved peer window into the coordinator network. For
+        // cliquenet this dials the N-1/N/N+1 sliding window for the current
+        // epoch before consensus starts.
+        let mut coordinator_network = coordinator_network;
+        if let Err(err) = coordinator_network
+            .on_epoch_change(current_epoch, &membership_coordinator)
+            .await
+        {
+            tracing::warn!(%current_epoch, %err, "coordinator network on_epoch_change failed at startup");
+        }
+
+        let coordinator = Coordinator::maker()
+            .membership_coordinator(membership_coordinator.clone())
+            .network(coordinator_network)
+            .initializer(&initializer_for_coordinator)
+            .upgrade_lock({
+                // TODO: The Coordinator and HotShot each create their own UpgradeLock
+                // from the same inputs. They need to share a single lock so that upgrade
+                // certificate updates are visible to both.
+                UpgradeLock::from_certificate(
+                    upgrade,
+                    &initializer_for_coordinator.decided_upgrade_certificate,
+                )
+            })
+            .public_key(validator_config.public_key)
+            .private_key(validator_config.private_key.clone())
+            .state_private_key(validator_config.state_private_key.clone())
+            .stake_table_capacity(stake_table_capacity)
+            .timeout_duration(Duration::from_secs(10))
+            .storage(Arc::clone(&persistence))
+            .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));
@@ -516,52 +552,46 @@ async fn handle_events<N, P>(
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
 
-        match event {
-            CoordinatorEvent::LegacyEvent(ref hotshot_event) => {
-                // Handle external messages from the legacy protocol.
+        match &event {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 if let hotshot_types::event::EventType::ExternalMessageReceived { ref data, .. } =
                     hotshot_event.event
                     && let Err(err) = external_event_handler.handle_event(data).await
                 {
                     tracing::warn!("Failed to handle legacy external message: {:?}", err);
                 }
-
-                // Persistence and state signer consume the original HotShot event.
-                persistence
-                    .handle_event(hotshot_event, &event_consumer)
-                    .await;
-                state_signer
-                    .write()
-                    .await
-                    .handle_event(hotshot_event, &consensus_handle)
-                    .await;
-
-                // Forward to the event streaming service.
-                if let Some(events_streamer) = events_streamer.as_ref() {
-                    events_streamer
-                        .write()
-                        .await
-                        .handle_event(hotshot_event.clone())
-                        .await;
-                }
             },
-            CoordinatorEvent::NewDecide(_new_decide) => {
-                // TODO: Handle new protocol decide events.
-                // This will need to translate NewDecideEvent into the format
-                // expected by persistence, state signer, and events streamer.
-            },
-            CoordinatorEvent::ExternalMessageReceived { ref data, .. } => {
+            CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
-            CoordinatorEvent::QuorumProposal { .. } => {
-                // Handled by the proposal fetcher via its own event stream.
-            },
-            CoordinatorEvent::ViewChanged { .. } => {
-                // View changes are tracked internally by the adapter.
-            },
+            _ => {},
         }
+
+        let persistence_fut = persistence.handle_event(&event, &event_consumer);
+
+        let state_signer_fut = async {
+            state_signer
+                .write()
+                .await
+                .handle_event(&event, consensus_handle.as_ref())
+                .await;
+        };
+
+        let events_streamer_fut = async {
+            if let CoordinatorEvent::LegacyEvent(ref hotshot_event) = event
+                && let Some(events_streamer) = events_streamer.as_ref()
+            {
+                events_streamer
+                    .write()
+                    .await
+                    .handle_event(hotshot_event.clone())
+                    .await;
+            }
+        };
+
+        tokio::join!(persistence_fut, state_signer_fut, events_streamer_fut);
     }
 }
 

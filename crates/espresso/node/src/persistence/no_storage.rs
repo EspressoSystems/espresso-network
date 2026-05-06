@@ -22,6 +22,7 @@ use hotshot_types::{
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::Proposal,
+    new_protocol::CoordinatorEvent,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate2, UpgradeCertificate,
@@ -88,7 +89,7 @@ impl SequencerPersistence for NoStorage {
             };
 
             consumer
-                .handle_event(&Event {
+                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
                     view_number,
                     event: EventType::Decide {
                         leaf_chain: Arc::new(vec![leaf_info.clone()]),
@@ -96,7 +97,7 @@ impl SequencerPersistence for NoStorage {
                         deciding_qc,
                         block_size: None,
                     },
-                })
+                }))
                 .await?;
         }
         Ok(())

@@ -85,6 +85,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: libespresso_crypto_helper-${{ matrix.target }}.${{ contains(matrix.target, 'apple-darwin') && 'dylib' || 'so' }}
+          retention-days: 1
           path: |
             target/lib/libespresso_crypto_helper-${{ matrix.target }}.${{ contains(matrix.target, 'apple-darwin') && 'dylib' || 'so' }}
 
@@ -92,6 +93,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: libespresso_crypto_helper-${{ matrix.target }}.${{ contains(matrix.target, 'apple-darwin') && 'dylib' || 'so' }}.sha256
+          retention-days: 1
           path: |
             target/lib/libespresso_crypto_helper-${{ matrix.target }}.${{ contains(matrix.target, 'apple-darwin') && 'dylib' || 'so' }}.sha256
 

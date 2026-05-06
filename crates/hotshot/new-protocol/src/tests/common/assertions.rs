@@ -53,7 +53,10 @@ pub(crate) fn is_send_timeout_cert(output: &ConsensusOutput<TestTypes>) -> bool 
 }
 
 pub(crate) fn is_cert1(input: &ConsensusInput<TestTypes>) -> bool {
-    matches!(input, ConsensusInput::Certificate1(_))
+    matches!(
+        input,
+        ConsensusInput::Certificate1(_) | ConsensusInput::EpochRootCertificates { .. }
+    )
 }
 
 pub(crate) fn is_cert2(input: &ConsensusInput<TestTypes>) -> bool {
@@ -112,15 +115,6 @@ where
     A: 'a,
 {
     items.into_iter().filter(|it| pred(it)).count()
-}
-
-pub(crate) fn has_epoch_change<'a, I>(outputs: I) -> bool
-where
-    I: IntoIterator<Item = &'a ConsensusOutput<TestTypes>>,
-{
-    outputs
-        .into_iter()
-        .any(|e| matches!(e, ConsensusOutput::SendEpochChange(_)))
 }
 
 pub(crate) fn has_request_drb_for_epoch<'a, I>(

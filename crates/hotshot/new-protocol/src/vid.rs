@@ -18,6 +18,7 @@ pub struct VidDisperseOutput<T: NodeType> {
 
 pub struct VidReconstructOutput<T: NodeType> {
     pub view: ViewNumber,
+    pub epoch: EpochNumber,
     pub payload_commitment: VidCommitment2,
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
@@ -107,6 +108,7 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
     seen_keys: HashSet<T::SignatureKey>,
     common: AvidmGf2Common,
     metadata: Option<<T::BlockPayload as BlockPayload<T>>::Metadata>,
+    epoch: Option<EpochNumber>,
 }
 
 impl<T: NodeType> VidShareAccumulator<T> {
@@ -145,6 +147,7 @@ impl<T: NodeType> VidReconstructor<T> {
         let recipient_key = share.recipient_key.clone();
         let weight = share.share.weight();
         let metadata = metadata.into();
+        let share_epoch = share.epoch;
         let accumulator = self
             .accumulators
             .entry(view)
@@ -154,6 +157,7 @@ impl<T: NodeType> VidReconstructor<T> {
                 seen_keys: HashSet::new(),
                 common: share.common.clone(),
                 metadata: None,
+                epoch: share_epoch,
             });
         if accumulator.metadata.is_none()
             && let Some(m) = metadata
@@ -201,6 +205,7 @@ impl<T: NodeType> VidReconstructor<T> {
         let Some(metadata) = accumulator.metadata.clone() else {
             return;
         };
+        let epoch = accumulator.epoch.unwrap_or(EpochNumber::genesis());
         let task = self.tasks.spawn_blocking(move || {
             let Ok(result) = AvidmGf2Scheme::recover(&common, &shares) else {
                 // TODO: Handle error
@@ -210,6 +215,7 @@ impl<T: NodeType> VidReconstructor<T> {
             let tx_commitments = payload.transaction_commitments(&metadata);
             Ok(VidReconstructOutput {
                 view,
+                epoch,
                 payload_commitment,
                 payload,
                 metadata,

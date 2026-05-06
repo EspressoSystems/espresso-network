@@ -5,7 +5,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+    Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
+    Transaction,
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -20,7 +21,7 @@ use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
     availability::{AvailabilityDataSource, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
-    fetching::provider::{AnyProvider, QueryServiceProvider},
+    fetching::provider::AnyProvider,
     node::NodeDataSource,
     status::StatusDataSource,
 };
@@ -32,6 +33,7 @@ use hotshot_types::{
     traits::{network::ConnectedNetwork, node_implementation::NodeType},
 };
 use indexmap::IndexMap;
+use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 
@@ -40,7 +42,12 @@ use super::{
     options::{Options, Query},
     sql,
 };
-use crate::{SeqTypes, SequencerApiVersion, U256, persistence, state_cert::StateCertFetchError};
+use crate::{
+    SeqTypes, U256,
+    api::{ApiState, LightClientProvider},
+    persistence,
+    state_cert::StateCertFetchError,
+};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -87,16 +94,18 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub fn provider(
+pub(super) async fn provider<N, P>(
     peers: impl IntoIterator<Item = Url>,
-    bind_version: SequencerApiVersion,
-) -> Provider {
-    let mut provider = Provider::default();
-    for peer in peers {
-        tracing::info!("will fetch missing data from {peer}");
-        provider = provider.with_provider(QueryServiceProvider::new(peer, bind_version));
-    }
-    provider
+    state: &ApiState<N, P>,
+    opt: LightClientOptions,
+    db_opt: LightClientSqliteOptions,
+) -> anyhow::Result<Provider>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+{
+    Ok(Provider::default()
+        .with_provider(LightClientProvider::new(peers, state.clone(), opt, db_opt).await?))
 }
 
 pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
@@ -272,6 +281,16 @@ pub(crate) trait CatchupDataSource: Sync {
         &self,
         height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
+
+    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    ///
+    /// Returns `None` when no cert2 height >= `height` is locally available
+    fn get_cert2(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<Certificate2<SeqTypes>>>> {
+        async { Ok(None) }
+    }
 
     /// Get the state of the requested `account`.
     ///

@@ -4,7 +4,7 @@ use std::{
 };
 
 use alloy::primitives::U256;
-use async_broadcast::{InactiveReceiver, Receiver, Sender, broadcast};
+use async_broadcast::{InactiveReceiver, Sender, broadcast};
 use async_lock::{Mutex, RwLock};
 use committable::Commitment;
 use hotshot_utils::{anytrace::*, *};
@@ -12,15 +12,15 @@ use sha2::{Digest, Sha256};
 use versions::DRB_FIX_VERSION;
 
 use crate::{
-    PeerConfig,
+    PeerConfig, PeerConnectInfo,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::{DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result},
-    event::Event,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
         election::Membership,
         node_implementation::NodeType,
+        signature_key::StakeTableEntryType,
         storage::{
             LoadDrbProgressFn, Storage, StoreDrbProgressFn, StoreDrbResultFn, load_drb_progress_fn,
             store_drb_progress_fn, store_drb_result_fn,
@@ -96,14 +96,6 @@ where
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
             drb_difficulty_selector: Arc::new(RwLock::new(None)),
         }
-    }
-
-    pub async fn set_external_channel(&mut self, external_channel: Receiver<Event<TYPES>>) {
-        self.membership
-            .write()
-            .await
-            .set_external_channel(external_channel)
-            .await;
     }
 
     /// Get a reference to the membership
@@ -194,6 +186,59 @@ where
         Err(warn!(
             "Stake table for Epoch {epoch:?} Unavailable. Starting catchup"
         ))
+    }
+
+    /// Return the union of the stake table and DA committee for `epoch`,
+    /// keyed by signature key. Each entry's `Option<PeerConnectInfo>`
+    /// reflects whether the peer has connection info registered.
+    ///
+    /// Returns `None` if the stake table for `epoch` is unavailable
+    /// (e.g. catchup is still in progress).
+    pub async fn epoch_peers(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> Option<HashMap<TYPES::SignatureKey, Option<PeerConnectInfo>>> {
+        let membership = self.stake_table_for_epoch(epoch).await.ok()?;
+        let st = membership.stake_table().await;
+        let da = membership.da_stake_table().await;
+        Some(
+            st.0.into_iter()
+                .chain(da.0)
+                .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
+                .collect(),
+        )
+    }
+
+    /// Collect the union of `epoch-1`, `epoch`, and `epoch+1` stake tables
+    /// (each merged with its DA committee) as a flat map of peers to dial.
+    ///
+    /// Newest-wins ordering for `connect_info`: next overrides curr overrides
+    /// prev. Entries with no `connect_info` are filtered out.
+    ///
+    /// Used to seed networks like cliquenet with the same window
+    /// `on_epoch_change` would build for `epoch`.
+    pub async fn window_peers(
+        &self,
+        epoch: EpochNumber,
+    ) -> HashMap<TYPES::SignatureKey, PeerConnectInfo> {
+        let curr = self.epoch_peers(Some(epoch)).await.unwrap_or_default();
+        let prev = if *epoch > 0 {
+            self.epoch_peers(Some(epoch - 1)).await.unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+        let next = self.epoch_peers(Some(epoch + 1)).await.unwrap_or_default();
+
+        // Newest-wins merge: start from prev, overlay curr and next.
+        let mut merged: HashMap<TYPES::SignatureKey, Option<PeerConnectInfo>> = prev;
+        for (k, v) in curr.into_iter().chain(next) {
+            merged.insert(k, v);
+        }
+
+        merged
+            .into_iter()
+            .filter_map(|(k, v)| v.map(|info| (k, info)))
+            .collect()
     }
 
     /// Catches the membership up to the epoch passed as an argument.
@@ -358,6 +403,19 @@ where
 
         // Remove the epoch from the catchup map to indicate that the catchup is complete
         self.catchup_map.lock().await.remove(&epoch);
+    }
+
+    /// Get the stake table for `epoch`, blocking on catchup if necessary.
+    ///
+    /// Unlike `stake_table_for_epoch`, this returns the result rather than
+    /// kicking off catchup and immediately returning an error. Used at startup
+    /// to drive the existing catchup chain synchronously before consensus is
+    /// running.
+    pub async fn wait_for_stake_table(&self, epoch: EpochNumber) -> Result<EpochMembership<TYPES>> {
+        match self.stake_table_for_epoch(Some(epoch)).await {
+            Ok(mem) => Ok(mem),
+            Err(_) => self.wait_for_catchup(epoch).await,
+        }
     }
 
     /// Call this method if you think catchup is in progress for a given epoch

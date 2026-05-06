@@ -2,6 +2,7 @@ mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;
+mod startup_catchup;
 
 pub mod api;
 pub mod catchup;
@@ -37,13 +38,14 @@ pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
     traits::implementations::{
-        CdnMetricsValue, CdnTopic, Cliquenet, CombinedNetworks, GossipConfig, KeyPair,
-        Libp2pNetwork, MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
+        CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
+        MemoryNetwork, PushCdnNetwork, RequestResponseConfig, WrappedSignatureKey,
         derive_libp2p_multiaddr, derive_libp2p_peer_id,
     },
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
+use hotshot_new_protocol::network::cliquenet::Cliquenet;
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -51,6 +53,7 @@ use hotshot_types::{
     data::ViewNumber,
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StateKeyPair, StateSignKey},
+    message::UpgradeLock,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::{
         metrics::{Metrics, NoMetrics},
@@ -130,6 +133,8 @@ pub struct NetworkParams {
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
     pub cliquenet_bind_addr: NetAddr,
+    /// Cliquenet address to advertise to other nodes (registered in the stake table).
+    pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
     /// The address to send to other Libp2p nodes to contact us
@@ -362,15 +367,18 @@ where
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
     let state_key_pair = StateKeyPair::from_sign_key(network_params.private_state_key);
-    let validator_config = ValidatorConfig {
+
+    // Only the orchestrator bootstrap path publishes these into the stake table; overridden
+    // below when needed.
+    let mut validator_config = ValidatorConfig {
         public_key: pub_key,
         private_key: network_params.private_staking_key,
         stake_value: U256::ONE,
         state_public_key: state_key_pair.ver_key(),
         state_private_key: state_key_pair.sign_key(),
         is_da,
-        x25519_keypair: Some(x25519::Keypair::from(&network_params.x25519_secret_key)),
-        p2p_addr: Some(network_params.cliquenet_bind_addr.clone()),
+        x25519_keypair: None,
+        p2p_addr: None,
     };
 
     // Derive our Libp2p public key from our private key
@@ -415,6 +423,21 @@ where
             tracing::warn!(
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
+
+            // Publish our cliquenet `connect_info` into the stake table from
+            // `CLIQUENET_VERSION` on, so peers can dial us. Modify `validator_config`
+            // in place so the same `connect_info` is sent later when posting to
+            // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
+            if genesis.base_version >= versions::CLIQUENET_VERSION {
+                let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
+                    "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
+                     Cliquenet network from the orchestrator",
+                )?;
+                validator_config.x25519_keypair =
+                    Some(x25519::Keypair::from(&network_params.x25519_secret_key));
+                validator_config.p2p_addr = Some(advertise_addr);
+            }
+
             let config = get_complete_config(
                 &orchestrator_client,
                 validator_config.clone(),
@@ -728,22 +751,16 @@ where
     // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
     // for the fast finality consensus upgrade i.e Coordinator.
     let cliquenet = {
-        let peers = coordinator
-            .stake_table_for_epoch(None)
-            .await?
-            .stake_table()
-            .await
-            .0
-            .into_iter()
-            .filter_map(|cfg| Some((cfg.stake_table_entry.stake_key, cfg.connect_info?)));
-
-        Cliquenet::<PubKey>::create(
-            "sequencer",
+        // TODO: This creates a separate UpgradeLock from the one HotShot will
+        // use. They should share a single lock so upgrade certificate updates
+        // are visible to both.
+        Cliquenet::create(
+            "espresso",
             pub_key,
             network_params.x25519_secret_key.into(),
             network_params.cliquenet_bind_addr.clone(),
-            peers,
-            metrics.clone(),
+            vec![], // Initialize with no peers, they are set during init.
+            UpgradeLock::new(version_upgrade),
         )
         .await?
     };
@@ -785,6 +802,7 @@ pub mod testing {
     use std::{
         cmp::max,
         collections::{BTreeMap, HashMap},
+        net::Ipv4Addr,
         time::Duration,
     };
 
@@ -839,6 +857,8 @@ pub mod testing {
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
+        message::UpgradeLock,
+        new_protocol::CoordinatorEvent,
         signature_key::BLSKeyPair,
         traits::{
             EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
@@ -856,7 +876,6 @@ pub mod testing {
     use super::*;
     use crate::{
         catchup::ParallelStateCatchup,
-        consensus_handle::CoordinatorEvent,
         persistence::no_storage::{self, NoStorage},
     };
 
@@ -1484,16 +1503,25 @@ pub mod testing {
                 "starting node",
             );
 
-            // The coordinator needs its own separate MemoryNetwork so it doesn't
-            // steal messages from HotShot's network. We use a separate MasterMap
-            // to avoid overwriting HotShot's entry in the shared master map.
-            let coordinator_master_map = Arc::new(MasterMap::new());
-            let coordinator_network = MemoryNetwork::new(
-                &my_peer_config.stake_table_entry.stake_key,
-                &coordinator_master_map,
-                &topics,
-                None,
-            );
+            let coordinator_network = {
+                let keypair = x25519::Keypair::derive_from::<PubKey>(&self.priv_keys[i])
+                    .expect("keypair derivation should succeed");
+                let port = test_utils::reserve_tcp_port()
+                    .expect("OS should have ephemeral ports available");
+                let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
+                let lock = UpgradeLock::<SeqTypes>::new(upgrade);
+                Cliquenet::create(
+                    "test-coordinator",
+                    my_peer_config.stake_table_entry.stake_key,
+                    keypair,
+                    addr,
+                    vec![],
+                    lock,
+                )
+                .await
+                .expect("cliquenet creation should succeed")
+            };
+
             SequencerContext::init(
                 NetworkConfig {
                     config,
@@ -1606,13 +1634,13 @@ mod test {
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_types::{
         event::LeafInfo,
+        new_protocol::CoordinatorEvent,
         traits::block_contents::{BlockHeader, BlockPayload},
     };
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
 
     use self::testing::run_test_builder;
     use super::*;
-    use crate::consensus_handle::CoordinatorEvent;
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_skeleton_instantiation() {

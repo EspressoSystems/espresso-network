@@ -1,5 +1,11 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
+use ::light_client::{
+    LightClient,
+    client::{FallbackClient, QueryServiceClient},
+    state::{Genesis, LightClientOptions},
+    storage::{LightClientSqliteOptions, SqliteStorage},
+};
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
 use async_lock::RwLock;
@@ -34,7 +40,11 @@ use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
-use hotshot_query_service::{availability::VidCommonQueryData, data_source::ExtensibleDataSource};
+use hotshot_query_service::{
+    availability::VidCommonQueryData,
+    data_source::ExtensibleDataSource,
+    fetching::{self, Provider},
+};
 use hotshot_types::{
     PeerConfig,
     data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
@@ -54,6 +64,7 @@ use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
+use url::Url;
 use vbs::version::Version;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
@@ -916,6 +927,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         self.inner().get_leaf_chain(height).await
     }
 
+    async fn get_cert2(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        self.inner().load_earliest_cert2(height).await
+    }
+
     #[tracing::instrument(skip(self, instance))]
     async fn get_reward_accounts_v2(
         &self,
@@ -1082,6 +1100,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     }
 
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        // Builds a legacy 3-chain from undecided leaves in memory. New-protocol heights fall
+        // through to the storage path.
         let mut leaves = self.consensus_handle().await.undecided_leaves().await;
         leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves
@@ -1711,6 +1731,74 @@ where
     }
 }
 
+/// [`Provider`] implementation wrapping a lazy [`LightClient`].
+///
+/// The [`LightClient`] requires a genesis to initialize itself, which we can get from the
+/// [`ApiState`]. However, the [`Provider`] instance must be provided to the API data source at
+/// initialization time, while the [`ApiState`] is only initialized lazily. This is a provider
+/// implementation which is itself initialized lazily: [`Provider::fetch`] calls will time out until
+/// the underlying [`ApiState`] is fully initialized, at which point this provider will start
+/// serving fetches using the [`LightClient`].
+#[derive(Debug)]
+struct LightClientProvider {
+    light_client: BoxLazy<LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>>,
+}
+
+impl LightClientProvider {
+    pub async fn new<N, P>(
+        peers: impl IntoIterator<Item = Url>,
+        state: ApiState<N, P>,
+        opt: LightClientOptions,
+        db_opt: LightClientSqliteOptions,
+    ) -> anyhow::Result<Self>
+    where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
+        let db = db_opt
+            .connect()
+            .await
+            .context("creating SQLite database for light client")?;
+        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
+        let init_light_client = async move {
+            let config = state.network_config().await;
+            let epoch_height = config.config.epoch_height;
+            let first_epoch =
+                epoch_from_block_number(config.config.epoch_start_block, epoch_height);
+
+            let genesis = Genesis {
+                epoch_height,
+
+                // Dynamic state starts from the third epoch, since we need the prior epoch's root
+                // to have the upgraded header with the stake table hash.
+                first_epoch_with_dynamic_stake_table: EpochNumber::new(first_epoch + 2),
+
+                stake_table: config
+                    .config
+                    .known_nodes_with_stake
+                    .into_iter()
+                    .map(|peer| peer.stake_table_entry)
+                    .collect(),
+            };
+            LightClient::from_genesis_with_options(db, client, genesis, opt)
+        };
+        Ok(Self {
+            light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
+        })
+    }
+}
+
+#[async_trait]
+impl<T> Provider<SeqTypes, T> for LightClientProvider
+where
+    T: fetching::Request<SeqTypes> + 'static,
+    LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>: Provider<SeqTypes, T>,
+{
+    async fn fetch(&self, req: T) -> Option<T::Response> {
+        self.light_client.as_ref().get().await.fetch(req).await
+    }
+}
+
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
     use std::{cmp::max, time::Duration};
@@ -1736,7 +1824,8 @@ pub mod test_helpers {
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
-        event::LeafInfo, light_client::LCV3StateSignatureRequestBody, traits::metrics::NoMetrics,
+        event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
+        new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
     };
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
@@ -1753,7 +1842,6 @@ pub mod test_helpers {
     use super::*;
     use crate::{
         catchup::NullStateCatchup,
-        consensus_handle::CoordinatorEvent,
         network,
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
@@ -2115,6 +2203,7 @@ pub mod test_helpers {
                                 .await
                             }
                         }
+                        .boxed()
                     }),
             )
             .await;
@@ -2669,12 +2758,14 @@ mod api_tests {
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
+        use hotshot_types::new_protocol::CoordinatorEvent;
+
         #[derive(Clone, Copy, Debug)]
         struct FailConsumer;
 
         #[async_trait]
         impl EventConsumer for FailConsumer {
-            async fn handle_event(&self, _: &Event<SeqTypes>) -> anyhow::Result<()> {
+            async fn handle_event(&self, _: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
                 bail!("mock error injection");
             }
         }
@@ -3074,6 +3165,7 @@ mod test {
         ValidatorConfig,
         data::EpochNumber,
         event::LeafInfo,
+        new_protocol::CoordinatorEvent,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
     };
@@ -3103,7 +3195,6 @@ mod test {
         sql::DataSource as SqlDataSource,
     };
     use super::*;
-    use crate::consensus_handle::CoordinatorEvent;
 
     async fn wait_until_block_height(
         client: &Client<ServerError, StaticVersion<0, 1>>,
@@ -5689,7 +5780,9 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).catchup(Default::default()),
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -5726,6 +5819,11 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                light_client: LightClientOptions {
+                    decaf: true,
+                    ..Default::default()
+                },
+                ..Default::default()
             },
             tmp_options(node_0_storage),
         );
@@ -5932,7 +6030,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port),
+                Options::with_port(api_port).light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -5967,6 +6065,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                ..Query::test()
             },
             tmp_options(node_0_storage),
         );
@@ -7161,7 +7260,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port),
+                Options::with_port(api_port).light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -7204,6 +7303,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                ..Query::test()
             },
             tmp_options(&new_storage),
         );

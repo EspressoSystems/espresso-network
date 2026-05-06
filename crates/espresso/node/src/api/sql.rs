@@ -42,7 +42,9 @@ use jf_merkle_tree_compat::{
 };
 use sqlx::{Encode, Row, Type};
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
+};
 
 use super::{
     BlocksFrontier,
@@ -491,7 +493,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
     ///
     /// For V5+ (epoch rewards), the reward tree is only stored at epoch boundaries.
     /// We resolve to the nearest epoch boundary to load the tree, verify it's V5+
-    /// (for V4→V5 upgrades), and store the generated proofs at `finalized_hotshot_height`.
+    /// (for V4→V5 upgrades), and store the generated proofs at the same boundary height.
     /// For V4 (per-block rewards), the tree exists at every block height.
     fn persist_reward_proofs(
         &self,
@@ -528,13 +530,10 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                 }
             };
 
-            if self.proof_exists(finalized_hotshot_height).await {
-                return Ok(());
-            }
-
             // Resolve which height to load the reward tree from.
             // V4: tree exists at every height. V5+: only at epoch boundaries.
             let mut tree_height = finalized_hotshot_height;
+            let mut proof_height = finalized_hotshot_height;
             if version >= EPOCH_REWARD_VERSION {
                 let epoch_height = node_state
                     .epoch_height
@@ -558,6 +557,11 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                         return Ok(());
                     }
                 }
+                proof_height = tree_height;
+            }
+
+            if self.proof_exists(proof_height).await {
+                return Ok(());
             }
 
             let permitted_tree = match self.load_reward_merkle_tree_v2(tree_height).await {
@@ -586,11 +590,8 @@ impl RewardMerkleTreeDataSource for SqlStorage {
                     ))
                 });
 
-            if let Err(err) = self.persist_proofs(finalized_hotshot_height, iter).await {
-                tracing::warn!(
-                    finalized_hotshot_height,
-                    "failed to persist proofs: {err:#}"
-                );
+            if let Err(err) = self.persist_proofs(proof_height, iter).await {
+                tracing::warn!(proof_height, "failed to persist proofs: {err:#}");
             }
 
             Ok(())
@@ -781,11 +782,33 @@ impl CatchupStorage for SqlStorage {
             .read()
             .await
             .context(format!("opening transaction to fetch leaf at {height}"))?;
-        let leaf = tx
+        let leaf: Leaf2 = tx
             .get_leaf((height as usize).into())
             .await
-            .context(format!("leaf {height} not available"))?;
-        let mut last_leaf: Leaf2 = leaf.leaf().clone();
+            .context(format!("leaf {height} not available"))?
+            .leaf()
+            .clone();
+
+        // New protocol: cert2 alone proves finality. Return the leaf range up to the finalizing
+        // cert2's height
+        if leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
+            let cert2: espresso_types::Certificate2<SeqTypes> =
+                tx.load_earliest_cert2(height).await?.context(format!(
+                    "no cert2 available for new-protocol leaf at {height}"
+                ))?;
+            let cert2_height = cert2.data.block_number;
+            let mut leaves = vec![leaf];
+            if height < cert2_height {
+                let descendants = tx
+                    .get_leaf_range((height as usize + 1)..=cert2_height as usize)
+                    .await?;
+                leaves.extend(descendants.into_iter().flatten().map(|l| l.leaf().clone()));
+            }
+            return Ok(leaves);
+        }
+
+        // Legacy protocol: build a 3-chain that decides `height`.
+        let mut last_leaf = leaf;
         let mut chain = vec![last_leaf.clone()];
         let mut h = height + 1;
 
@@ -821,6 +844,29 @@ impl CatchupStorage for SqlStorage {
         }
 
         Ok(chain)
+    }
+
+    async fn load_earliest_cert2(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch cert2")?;
+        Ok(tx.load_earliest_cert2(height).await?)
+    }
+
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+        let mut tx = self
+            .read()
+            .await
+            .context(format!("opening transaction to fetch leaf at {height}"))?;
+        let lqd = tx
+            .get_leaf((height as usize).into())
+            .await
+            .context(format!("leaf {height} not available"))?;
+        Ok(lqd.leaf().clone())
     }
 }
 
@@ -958,6 +1004,17 @@ impl CatchupStorage for DataSource {
     }
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         self.as_ref().get_leaf_chain(height).await
+    }
+
+    async fn load_earliest_cert2(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        self.as_ref().load_earliest_cert2(height).await
+    }
+
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+        self.as_ref().get_leaf(height).await
     }
 }
 
@@ -1605,9 +1662,10 @@ where
 pub(crate) mod impl_testable_data_source {
 
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
+    use light_client::state::LightClientOptions;
 
     use super::*;
-    use crate::api::{self, data_source::testing::TestableSequencerDataSource};
+    use crate::api::{self, data_source::testing::TestableSequencerDataSource, options::Query};
 
     pub fn tmp_options(db: &TmpDb) -> Options {
         #[cfg(not(feature = "embedded-db"))]
@@ -1652,7 +1710,17 @@ pub(crate) mod impl_testable_data_source {
         }
 
         fn options(storage: &Self::Storage, opt: api::Options) -> api::Options {
-            opt.query_sql(Default::default(), tmp_options(storage))
+            opt.query_sql(
+                Query {
+                    light_client: LightClientOptions {
+                        // Enable testnet features when running in tests.
+                        decaf: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                tmp_options(storage),
+            )
         }
     }
 }

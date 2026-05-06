@@ -464,7 +464,7 @@ where
             "updating state storage"
         );
 
-        let parent_leaf = storage.get_leaf(height).await;
+        let parent_leaf = AvailabilityDataSource::get_leaf(&*storage, height).await;
         let leaves = storage.subscribe_leaves(height + 1).await;
         (last_height, parent_leaf, leaves)
     };

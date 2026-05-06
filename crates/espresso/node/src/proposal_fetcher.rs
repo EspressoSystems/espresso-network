@@ -11,6 +11,7 @@ use hotshot_types::{
     data::{Leaf2, QuorumProposalWrapper, ViewNumber},
     event::{Event, EventType},
     message::Proposal,
+    new_protocol::CoordinatorEvent,
     traits::{
         ValidatedState as _,
         metrics::{Counter, Gauge, Metrics},
@@ -22,7 +23,7 @@ use tracing::Instrument;
 
 use crate::{
     SeqTypes,
-    consensus_handle::{ConsensusHandle, CoordinatorEvent},
+    consensus_handle::ConsensusHandle,
     context::{ConsensusNode, TaskList},
 };
 
@@ -133,17 +134,24 @@ where
     async fn scan(self) {
         let mut events = self.consensus_handle.event_stream();
         while let Some(event) = events.next().await {
-            let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::QuorumProposal { proposal, .. },
-                ..
-            }) = event
-            else {
-                continue;
+            let (parent_view, parent_leaf) = match event {
+                CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::QuorumProposal { proposal, .. },
+                    ..
+                }) => {
+                    let parent_view = proposal.data.justify_qc().view_number;
+                    let parent_leaf = proposal.data.justify_qc().data.leaf_commit;
+                    (parent_view, parent_leaf)
+                },
+                CoordinatorEvent::QuorumProposal { proposal, .. } => {
+                    let parent_view = proposal.data.justify_qc.view_number;
+                    let parent_leaf = proposal.data.justify_qc.data.leaf_commit;
+                    (parent_view, parent_leaf)
+                },
+                _ => continue,
             };
             // Whenever we see a quorum proposal, ensure we have the chain of proposals stretching back
             // to the anchor. This allows state replay from the decided state.
-            let parent_view = proposal.data.justify_qc().view_number;
-            let parent_leaf = proposal.data.justify_qc().data.leaf_commit;
             self.request((parent_view, parent_leaf)).await;
         }
     }

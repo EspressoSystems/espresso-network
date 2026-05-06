@@ -191,15 +191,12 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                         ));
                         let hs_storage: TestStorage<MockTypes> = TestStorage::default();
 
-                        let membership =
-                            Arc::new(RwLock::new(MockMembership::new::<MockNodeImpl>(
-                                known_nodes_with_stake_clone.clone(),
-                                known_nodes_with_stake_clone,
-                                hs_storage.clone(),
-                                network.clone(),
-                                pub_keys[node_id],
-                                config.epoch_height,
-                            )));
+                        let membership = Arc::new(RwLock::new(MockMembership::new(
+                            known_nodes_with_stake_clone.clone(),
+                            known_nodes_with_stake_clone,
+                            pub_keys[node_id],
+                            config.epoch_height,
+                        )));
 
                         membership
                             .write()

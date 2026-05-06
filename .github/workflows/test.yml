@@ -61,12 +61,14 @@ jobs:
           name: nextest-archive-postgres
           if-no-files-found: error
           path: nextest-archive-postgres.tar.zst
+          retention-days: 1
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-test-postgres
           path: target/cargo-timings/cargo-timing.html
+          retention-days: 1
 
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
@@ -105,12 +107,14 @@ jobs:
           name: nextest-archive-sqlite
           if-no-files-found: error
           path: nextest-archive-sqlite.tar.zst
+          retention-days: 1
 
       - name: Upload cargo timings
         uses: actions/upload-artifact@v7
         with:
           name: cargo-timings-test-sqlite
           path: target/cargo-timings/cargo-timing.html
+          retention-days: 1
 
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
@@ -143,6 +147,7 @@ jobs:
         with:
           name: cargo-timings-test-bins
           path: target/cargo-timings/cargo-timing.html
+          retention-days: 1
 
       - name: Cargo timing summary
         run: scripts/cargo-timing-summary target/cargo-timings/cargo-timing.html >> "$GITHUB_STEP_SUMMARY"
@@ -152,6 +157,7 @@ jobs:
         with:
           name: test-binaries
           if-no-files-found: error
+          retention-days: 1
           path: |
             target/debug/orchestrator
             target/debug/cdn-broker
@@ -203,6 +209,7 @@ jobs:
         with:
           name: test-binaries-sqlite
           if-no-files-found: error
+          retention-days: 1
           path: |
             target/debug/espresso-node-sqlite
 
@@ -237,6 +244,7 @@ jobs:
         with:
           name: test-binaries-dev-node
           if-no-files-found: error
+          retention-days: 1
           path: |
             target/debug/espresso-dev-node
 
@@ -272,6 +280,7 @@ jobs:
           name: nextest-junit-postgres-${{ matrix.partition }}
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
+          retention-days: 1
 
   test-sqlite:
     needs: build-test-artifacts-sqlite
@@ -306,6 +315,7 @@ jobs:
           name: nextest-junit-sqlite-${{ matrix.partition }}
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
+          retention-days: 1
 
   test-go-sdk:
     needs: build-test-bins-dev-node
@@ -393,6 +403,7 @@ jobs:
           name: nextest-junit-integration-${{ matrix.test-name }}
           if-no-files-found: ignore
           path: target/nextest/*/junit.xml
+          retention-days: 1
 
       - name: Show end of logs
         if: always()
@@ -411,6 +422,7 @@ jobs:
         with:
           name: process-compose-logs-integration-v${{ matrix.test-name  }}
           path: ${{ env.NATIVE_DEMO_LOGS }}
+          retention-days: 3
 
 
   demo-native:
@@ -453,6 +465,7 @@ jobs:
         with:
           name: process-compose-logs-test-demo-native
           path: ${{ env.PC_LOG_FILE }}
+          retention-days: 3
 
   nextest-report:
     needs: [test-postgres, test-sqlite, test-integration]
