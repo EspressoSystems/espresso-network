@@ -7537,7 +7537,11 @@ mod test {
             // must return identical responses.
             let avail_ns = NamespaceId::from(42_u32);
             let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
-            network.server.submit_transaction(avail_tx.clone()).await.unwrap();
+            network
+                .server
+                .submit_transaction(avail_tx.clone())
+                .await
+                .unwrap();
             let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
 
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;

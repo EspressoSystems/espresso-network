@@ -32,12 +32,15 @@ pub mod net_addr {
     }
 }
 /// IP address (v4 or v6) with port
+/// `host` is a socket-address-ready host string: plain dotted-decimal for IPv4
+/// (e.g. "192.0.2.1") and bracket-enclosed for IPv6 (e.g. "\[::1\]"), so that
+/// consumers can form a valid address with a simple "{host}:{port}" without
+/// inspecting the IP version.
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InetAddr {
-    /// IP address string (e.g., "127.0.0.1" or "::1")
     #[prost(string, tag = "1")]
-    pub ip: ::prost::alloc::string::String,
+    pub host: ::prost::alloc::string::String,
     #[prost(uint32, tag = "2")]
     pub port: u32,
 }

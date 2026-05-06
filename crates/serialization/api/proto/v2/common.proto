@@ -32,8 +32,12 @@ message NetAddr {
 }
 
 // IP address (v4 or v6) with port
+// `host` is a socket-address-ready host string: plain dotted-decimal for IPv4
+// (e.g. "192.0.2.1") and bracket-enclosed for IPv6 (e.g. "[::1]"), so that
+// consumers can form a valid address with a simple "{host}:{port}" without
+// inspecting the IP version.
 message InetAddr {
-  string ip = 1;    // IP address string (e.g., "127.0.0.1" or "::1")
+  string host = 1;
   uint32 port = 2;
 }
 

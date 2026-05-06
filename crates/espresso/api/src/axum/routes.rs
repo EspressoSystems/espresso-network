@@ -91,9 +91,9 @@ pub mod v1 {
         "/v1/availability/block/{from}/{until}/namespace/{namespace}";
 
     /// Generate proof of incorrect encoding
-    /// Path: GET /v1/availability/incorrect-encoding-proof/{block_number}
+    /// Path: GET /v1/availability/incorrect-encoding-proof/{block_number}/{namespace}
     pub const INCORRECT_ENCODING_PROOF_ROUTE: &str =
-        "/v1/availability/incorrect-encoding-proof/{block_number}";
+        "/v1/availability/incorrect-encoding-proof/{block_number}/{namespace}";
 
     /// Get light client state certificate (V1)
     /// Path: GET /v1/availability/state-cert/{epoch}

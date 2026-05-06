@@ -282,7 +282,7 @@ where
                     .to_string();
 
                 Ok(v2::Transaction {
-                    namespace: tx.namespace.0 as u32,
+                    namespace: u32::from(tx.namespace),
                     payload: payload_str,
                 })
             })
@@ -355,7 +355,10 @@ where
             let p2p_addr = match &info.p2p_addr {
                 hotshot_types::addr::NetAddr::Inet(ip, port) => v2::NetAddr {
                     addr_type: Some(v2::net_addr::AddrType::Inet(v2::InetAddr {
-                        ip: ip.to_string(),
+                        host: match ip {
+                            std::net::IpAddr::V4(_) => ip.to_string(),
+                            std::net::IpAddr::V6(_) => format!("[{ip}]"),
+                        },
                         port: *port as u32,
                     })),
                 },
@@ -991,14 +994,20 @@ where
         namespace_id: u32,
         block_height: u64,
     ) -> anyhow::Result<Self::IncorrectEncodingProof> {
+        use std::time::Duration;
+
         use espresso_types::{NamespaceId, NsProof};
         use futures::join;
-        use hotshot_query_service::availability::BlockId;
+        use hotshot_query_service::{
+            availability::BlockId, node::NodeDataSource as _, types::HeightIndexed as _,
+        };
+        use hotshot_types::{data::VidShare, vid::avidm::AvidMShare};
+
+        use super::data_source::RequestResponseDataSource as _;
 
         let ns_id = NamespaceId::from(namespace_id);
         let block_id = BlockId::Number(block_height as usize);
 
-        // Fetch block and VID common data
         let ds = &*self.data_source;
         let timeout = std::time::Duration::from_millis(500);
         let (block_fetch, vid_fetch) = join!(ds.get_block(block_id), ds.get_vid_common(block_id));
@@ -1012,11 +1021,6 @@ where
             anyhow::anyhow!("VID common data for block {} not found", block_height)
         })?;
 
-        // For incorrect encoding proof, we need special handling
-        // Note: Full incorrect encoding proof support with VID share fetching
-        // would require more complex implementation. For now, we return an error
-        // if the basic proof generation fails.
-
         let ns_table = block.payload().ns_table();
         let ns_index = ns_table.find_ns_id(&ns_id).ok_or_else(|| {
             anyhow::anyhow!(
@@ -1026,22 +1030,48 @@ where
             )
         })?;
 
-        // Try to generate a normal proof first
-        if let Some(_proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) {
+        if NsProof::new(block.payload(), &ns_index, vid_common.common()).is_some() {
             return Err(anyhow::anyhow!(
                 "block {} was correctly encoded",
                 block_height
             ));
         }
 
-        // If normal proof generation failed, it indicates incorrect encoding
-        // but we can't generate the full incorrect encoding proof without VID share fetching
-        Err(anyhow::anyhow!(
-            "Incorrect encoding detected for namespace {} in block {}, but full proof generation \
-             requires VID share fetching",
-            namespace_id,
-            block_height
-        ))
+        // Block has incorrect encoding — fetch VID shares to construct the proof.
+        let vid_shares_future = ds
+            .request_vid_shares(block_height, vid_common.clone(), Duration::from_secs(40))
+            .await;
+        let mut vid_shares = vid_shares_future
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to fetch VID shares: {e:#}"))?;
+
+        if let Ok(local_share) = ds.vid_share(block_height as usize).await {
+            vid_shares.push(local_share);
+        }
+
+        let avidm_shares: Vec<AvidMShare> = vid_shares
+            .into_iter()
+            .filter_map(|s| {
+                if let VidShare::V1(s) = s {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        match NsProof::v1_1_new_with_incorrect_encoding(
+            &avidm_shares,
+            ns_table,
+            &ns_index,
+            &vid_common.payload_hash(),
+            vid_common.common(),
+        ) {
+            Some(NsProof::V1IncorrectEncoding(proof)) => Ok(proof),
+            _ => Err(anyhow::anyhow!(
+                "failed to generate incorrect encoding proof"
+            )),
+        }
     }
 }
 
@@ -1279,13 +1309,20 @@ where
         block_id: espresso_api::v1::availability::BlockId,
         namespace: u32,
     ) -> anyhow::Result<Self::IncorrectEncodingProof> {
+        use std::time::Duration;
+
         use espresso_types::{NamespaceId, NsProof};
         use futures::join;
-        use hotshot_query_service::availability::BlockId as HsBlockId;
+        use hotshot_query_service::{
+            availability::BlockId as HsBlockId, node::NodeDataSource as _,
+            types::HeightIndexed as _,
+        };
+        use hotshot_types::{data::VidShare, vid::avidm::AvidMShare};
+
+        use super::data_source::RequestResponseDataSource as _;
 
         let ns_id = NamespaceId::from(namespace);
 
-        // Convert v1 BlockId to hotshot BlockId
         let hs_block_id = match block_id {
             espresso_api::v1::availability::BlockId::Height(h) => HsBlockId::Number(h as usize),
             espresso_api::v1::availability::BlockId::Hash(h) => {
@@ -1302,7 +1339,6 @@ where
             },
         };
 
-        // Fetch block and VID common data
         let ds = &*self.data_source;
         let timeout = std::time::Duration::from_millis(500);
         let (block_fetch, vid_fetch) =
@@ -1315,28 +1351,50 @@ where
         let block = block.ok_or_else(|| anyhow::anyhow!("block not found"))?;
         let vid_common = vid_common.ok_or_else(|| anyhow::anyhow!("VID common data not found"))?;
 
-        // For incorrect encoding proof, we need special handling
-        // Note: Full incorrect encoding proof support with VID share fetching
-        // would require more complex implementation. For now, we return an error
-        // if the basic proof generation fails.
-
         let ns_table = block.payload().ns_table();
         let ns_index = ns_table
             .find_ns_id(&ns_id)
             .ok_or_else(|| anyhow::anyhow!("namespace {} not present in block", namespace))?;
 
-        // Try to generate a normal proof first
-        if let Some(_proof) = NsProof::new(block.payload(), &ns_index, vid_common.common()) {
+        if NsProof::new(block.payload(), &ns_index, vid_common.common()).is_some() {
             return Err(anyhow::anyhow!("block was correctly encoded"));
         }
 
-        // If normal proof generation failed, it indicates incorrect encoding
-        // but we can't generate the full incorrect encoding proof without VID share fetching
-        Err(anyhow::anyhow!(
-            "Incorrect encoding detected for namespace {} but full proof generation requires VID \
-             share fetching",
-            namespace
-        ))
+        // Block has incorrect encoding — fetch VID shares to construct the proof.
+        let vid_shares_future = ds
+            .request_vid_shares(block.height(), vid_common.clone(), Duration::from_secs(40))
+            .await;
+        let mut vid_shares = vid_shares_future
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to fetch VID shares: {e:#}"))?;
+
+        if let Ok(local_share) = ds.vid_share(block.height() as usize).await {
+            vid_shares.push(local_share);
+        }
+
+        let avidm_shares: Vec<AvidMShare> = vid_shares
+            .into_iter()
+            .filter_map(|s| {
+                if let VidShare::V1(s) = s {
+                    Some(s)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        match NsProof::v1_1_new_with_incorrect_encoding(
+            &avidm_shares,
+            ns_table,
+            &ns_index,
+            &vid_common.payload_hash(),
+            vid_common.common(),
+        ) {
+            Some(NsProof::V1IncorrectEncoding(proof)) => Ok(proof),
+            _ => Err(anyhow::anyhow!(
+                "failed to generate incorrect encoding proof"
+            )),
+        }
     }
 
     async fn get_state_cert(&self, epoch: u64) -> anyhow::Result<Self::StateCertQueryDataV1> {
