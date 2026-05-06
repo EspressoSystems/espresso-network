@@ -987,6 +987,24 @@ where
         }
         .boxed()
     })?
+    .get("cert2", |req, state| {
+        async move {
+            let height = req
+                .integer_param("height")
+                .map_err(Error::from_request_error)?;
+            let response = state
+                .get_cert2(height)
+                .await
+                .map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, format!("{err:#}")))?;
+            response.ok_or_else(|| {
+                Error::catch_all(
+                    StatusCode::NOT_FOUND,
+                    format!("no cert2 available for height {height}"),
+                )
+            })
+        }
+        .boxed()
+    })?
     .get("reward_merkle_tree_v2", move |req, state| {
         async move {
             let (height, view) = parse_height_view(&req)?;

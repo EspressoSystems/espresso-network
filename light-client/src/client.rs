@@ -2,7 +2,7 @@ use std::{fmt::Debug, future::Future, pin::pin, time::Duration};
 
 use anyhow::{Context, Result};
 use derive_builder::Builder;
-use espresso_types::{NamespaceId, SeqTypes, v0_3::StakeTableEvent};
+use espresso_types::{Certificate2, NamespaceId, SeqTypes, v0_3::StakeTableEvent};
 use futures::{
     FutureExt, TryFuture, TryFutureExt,
     future::{BoxFuture, Either, select, select_ok},
@@ -96,6 +96,15 @@ pub trait Client: Send + Sync + 'static {
         &self,
         epoch: EpochNumber,
     ) -> impl Send + Future<Output = Result<Vec<StakeTableEvent>>>;
+
+    /// Get the finality certificate at the given height.
+    ///
+    /// The returned certificate is unverified. Callers must check the threshold signature
+    /// against the appropriate stake table and that it commits to the expected leaf.
+    fn cert2(
+        &self,
+        height: u64,
+    ) -> impl Send + Future<Output = Result<Option<Certificate2<SeqTypes>>>>;
 }
 
 type HttpClient = surf_disco::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
@@ -198,6 +207,14 @@ impl Client for QueryServiceClient {
         Ok(self
             .client
             .get(&format!("/light-client/stake-table/{epoch}"))
+            .send()
+            .await?)
+    }
+
+    async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
+        Ok(self
+            .client
+            .get(&format!("/availability/cert2/{height}"))
             .send()
             .await?)
     }
@@ -308,6 +325,11 @@ where
 
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
         self.get_any(&self.clients, |client| client.stake_table_events(epoch))
+            .await
+    }
+
+    async fn cert2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
+        self.get_any(&self.clients, |client| client.cert2(height))
             .await
     }
 }

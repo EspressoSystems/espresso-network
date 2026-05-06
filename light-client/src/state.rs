@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId, PubKey, SeqTypes, StakeTableState,
-    Transaction, select_active_validator_set,
+    Certificate2, DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId, PubKey, SeqTypes,
+    StakeTableState, Transaction, select_active_validator_set,
 };
 use futures::future::try_join;
 use hotshot_query_service_types::{
@@ -260,6 +260,34 @@ where
             .into_iter()
             .map(|leaf| leaf.header().clone())
             .collect())
+    }
+
+    /// Fetch and verify the [`Certificate2`] at the given block height.
+    ///
+    /// Returns `Ok(None)` if the server reports that no cert2 exists at this height
+    pub async fn fetch_certificate2(&self, height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
+        let Some(cert2) = self.server.cert2(height).await? else {
+            return Ok(None);
+        };
+
+        ensure!(
+            cert2.data.block_number == height,
+            "cert2 block number {} does not match requested height {height}",
+            cert2.data.block_number,
+        );
+
+        let header = self
+            .fetch_header(BlockId::Number(height as usize))
+            .await
+            .context("fetching header to determine cert2 version")?;
+
+        let quorum = StakeTableQuorum::new((cert2.data.epoch, self), self.epoch_height);
+        quorum
+            .verify_cert2(&cert2, header.version())
+            .await
+            .context("verifying cert2 signature")?;
+
+        Ok(Some(cert2))
     }
 
     /// Fetches leaves from the server in range [start_height, end_height) and verifies them by

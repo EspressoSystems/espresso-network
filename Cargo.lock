@@ -6358,6 +6358,7 @@ dependencies = [
 name = "hotshot-new-protocol"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-broadcast",
  "async-lock 3.4.2",
