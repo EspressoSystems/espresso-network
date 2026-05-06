@@ -110,7 +110,7 @@ where
         timeout_duration: Duration,
         storage: S,
     ) -> Self {
-        let consensus = Consensus::new(
+        let mut consensus = Consensus::new(
             membership_coordinator.clone(),
             public_key.clone(),
             private_key.clone(),
@@ -121,9 +121,28 @@ where
             initializer.epoch_height,
         );
 
-        let state_manager = StateManager::new(
+        let genesis_cert1 = initializer.high_qc.clone();
+        let genesis_proposal = message::Proposal {
+            block_header: initializer.anchor_leaf.block_header().clone(),
+            view_number: ViewNumber::genesis(),
+            epoch: EpochNumber::genesis(),
+            justify_qc: genesis_cert1.clone(),
+            next_epoch_justify_qc: None,
+            upgrade_certificate: None,
+            view_change_evidence: None,
+            next_drb_result: None,
+            state_cert: None,
+        };
+        consensus.seed_genesis(genesis_cert1, genesis_proposal);
+
+        let mut state_manager = StateManager::new(
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
+        );
+        state_manager.seed_state(
+            ViewNumber::genesis(),
+            initializer.anchor_state.clone(),
+            initializer.anchor_leaf.clone(),
         );
 
         let lock = upgrade_lock.clone();
@@ -299,7 +318,8 @@ where
                         return Err(CoordinatorError::critical(msg).context("gc certificate"))
                     };
                     self.gc(cert.view_number(), epoch);
-                }
+                } //blocks in storage
+                    //
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
@@ -849,22 +869,25 @@ where
         Ok(())
     }
 
-    fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        self.consensus.gc(view, epoch);
-        self.checkpoint_collector.gc(view, epoch);
-        let _ = self.network.gc(view); // TODO
-        self.state_manager.gc(view);
-        self.vid_disperser.gc(view);
-        self.vid_reconstructor.gc(view);
-        self.vote1_collector.gc(view, epoch);
-        self.vote2_collector.gc(view, epoch);
-        self.timeout_collector.gc(view, epoch);
-        self.timeout_one_honest_collector.gc(view, epoch);
-        self.epoch_root_collector.gc(view, epoch);
-        self.epoch_manager.gc(epoch);
-        self.block_builder.gc(view);
-        self.pending_proposal_fetches.gc(view);
-        self.storage.gc(view);
+    fn gc(&mut self, _view: ViewNumber, _epoch: EpochNumber) {
+        // GC disabled while debugging proposal fetcher: peers must keep
+        // signed_proposals/pending_proposal_fetches across decides so
+        // catching-up nodes can fetch parent proposals.
+        // self.consensus.gc(view, epoch);
+        // self.checkpoint_collector.gc(view, epoch);
+        // let _ = self.network.gc(view);
+        // self.state_manager.gc(view);
+        // self.vid_disperser.gc(view);
+        // self.vid_reconstructor.gc(view);
+        // self.vote1_collector.gc(view, epoch);
+        // self.vote2_collector.gc(view, epoch);
+        // self.timeout_collector.gc(view, epoch);
+        // self.timeout_one_honest_collector.gc(view, epoch);
+        // self.epoch_root_collector.gc(view, epoch);
+        // self.epoch_manager.gc(epoch);
+        // self.block_builder.gc(view);
+        // self.pending_proposal_fetches.gc(view);
+        // self.storage.gc(view);
     }
 }
 

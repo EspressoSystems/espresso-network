@@ -221,7 +221,7 @@ pub async fn custom_epoch_change_leaf_chain(
 ) -> Vec<LeafQueryData<SeqTypes>> {
     custom_leaf_chain(Upgrade::trivial(version), range, |proposal| {
         if is_epoch_transition(proposal.block_header.height(), epoch_height) {
-            let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.clone().into();
+            let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.into();
             let commit = data.commit();
             proposal.next_epoch_justify_qc = Some(NextEpochQuorumCertificate2::new(
                 data,
@@ -512,7 +512,7 @@ impl InnerTestClient {
                 block_number: Some(i as u64),
             };
             let quorum_data_comm = VersionedVoteData::new_infallible(
-                quorum_data.clone(),
+                quorum_data,
                 view_number,
                 &UpgradeLock::<SeqTypes>::new(upgrade),
             )

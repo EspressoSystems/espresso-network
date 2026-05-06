@@ -466,8 +466,9 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
-        self.last_decided_view = self.last_decided_view.max(view);
     }
+    // vote on a proposal before state exists
+    // block payloads separated
 
     #[instrument(level = "debug", skip_all)]
     async fn handle_proposal(

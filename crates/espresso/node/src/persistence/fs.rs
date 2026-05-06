@@ -36,7 +36,7 @@ use hotshot_types::{
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
-    new_protocol::CoordinatorEvent,
+    new_protocol::{CoordinatorEvent, NewDecideEvent},
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
@@ -283,6 +283,20 @@ impl Inner {
         self.path.join("decided_cert2")
     }
 
+    fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        let file_path = self
+            .decided_cert2_dir_path()
+            .join(view.u64().to_string())
+            .with_extension("bin");
+        if !file_path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&file_path).context("read cert2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize cert2")?,
+        ))
+    }
+
     fn update_migration(&mut self) -> anyhow::Result<()> {
         let path = self.migration();
         let bytes = bincode::serialize(&self.migrated)?;
@@ -449,10 +463,11 @@ impl Inner {
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
             // Include the VID share if available.
-            let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
-            if vid_share.is_none() {
+            let vid_proposal = self.load_vid_share(v)?;
+            if vid_proposal.is_none() {
                 tracing::debug!(?v, "VID share not available at decide");
             }
+            let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
 
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
@@ -465,7 +480,7 @@ impl Inner {
                 );
                 leaf.fill_block_payload_unchecked(payload);
             } else {
-                tracing::debug!(?v, "DA proposal not available at decide");
+                tracing::info!(?v, "DA proposal not available at decide");
             }
 
             let info = LeafInfo {
@@ -478,7 +493,7 @@ impl Inner {
                 delta: Default::default(),
             };
 
-            leaves.insert(v, (info, cert));
+            leaves.insert(v, (info, cert, vid_proposal));
         }
 
         // The invariant is that the oldest existing leaf in the `anchor_leaf` table -- if there is
@@ -494,15 +509,30 @@ impl Inner {
 
         let mut intervals = vec![];
         let mut current_interval = None;
-        for (view, (leaf, cert)) in leaves {
+        for (view, (leaf, cert, vid_proposal)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            let deciding_qc = deciding_qc
-                .as_ref()
-                .filter(|qc| qc.view_number() == cert.view_number() + 1)
-                .cloned();
-            consumer
-                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
+            let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
+                let vid_share = vid_proposal.and_then(|proposal| match proposal.data {
+                    VidDisperseShare::V2(share) => Some(Proposal {
+                        data: share,
+                        signature: proposal.signature,
+                        _pd: Default::default(),
+                    }),
+                    _ => None,
+                });
+                CoordinatorEvent::NewDecide(NewDecideEvent {
+                    leaves: vec![leaf.leaf],
+                    cert1: cert.qc().clone(),
+                    cert2: self.load_cert2(view)?,
+                    vid_shares: vec![vid_share],
+                })
+            } else {
+                let deciding_qc = deciding_qc
+                    .as_ref()
+                    .filter(|qc| qc.view_number() == cert.view_number() + 1)
+                    .cloned();
+                CoordinatorEvent::LegacyEvent(Event {
                     view_number: view,
                     event: EventType::Decide {
                         committing_qc: Arc::new(cert),
@@ -510,8 +540,9 @@ impl Inner {
                         leaf_chain: Arc::new(vec![leaf]),
                         block_size: None,
                     },
-                }))
-                .await?;
+                })
+            };
+            consumer.handle_event(&event).await?;
 
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {

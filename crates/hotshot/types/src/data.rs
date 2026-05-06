@@ -1552,7 +1552,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         };
 
         let justify_qc = QuorumCertificate2::new(
-            null_quorum_data.clone(),
+            null_quorum_data,
             null_quorum_data.commit(),
             genesis_view,
             None,
@@ -1908,7 +1908,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock);
+            VersionedVoteData::<_, _>::new_infallible(data, genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 

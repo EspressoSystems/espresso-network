@@ -44,6 +44,14 @@ fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Coordinat
                 tracing::error!("coordinator emitted LeafDecided with empty leaves");
                 return None;
             }
+            tracing::info!(
+                leaf_count = leaves.len(),
+                first_view = %leaves.first().map(|l| l.view_number().u64()).unwrap_or(0),
+                last_view = %leaves.last().map(|l| l.view_number().u64()).unwrap_or(0),
+                first_height = %leaves.first().map(|l| l.height()).unwrap_or(0),
+                last_height = %leaves.last().map(|l| l.height()).unwrap_or(0),
+                "consensus_handle: emitting NewDecide"
+            );
             Some(CoordinatorEvent::NewDecide(NewDecideEvent {
                 leaves: leaves.clone(),
                 cert1: cert1.clone(),

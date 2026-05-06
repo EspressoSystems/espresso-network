@@ -794,34 +794,106 @@ pub trait SequencerPersistence:
         event: &CoordinatorEvent<SeqTypes>,
         consumer: &(impl EventConsumer + 'static),
     ) {
-        if let CoordinatorEvent::LegacyEvent(hotshot_event) = event
-            && let EventType::Decide {
-                leaf_chain,
-                committing_qc,
-                deciding_qc,
-                ..
-            } = &hotshot_event.event
-        {
-            let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-                return;
-            };
+        match event {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
+                if let EventType::Decide {
+                    leaf_chain,
+                    committing_qc,
+                    deciding_qc,
+                    ..
+                } = &hotshot_event.event
+                {
+                    let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
+                        return;
+                    };
 
-            let chain = leaf_chain.iter().zip(
-                std::iter::once((**committing_qc).clone()).chain(
-                    leaf_chain
-                        .iter()
-                        .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
-                ),
-            );
+                    let chain = leaf_chain.iter().zip(
+                        std::iter::once((**committing_qc).clone()).chain(
+                            leaf_chain
+                                .iter()
+                                .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
+                        ),
+                    );
 
-            if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, deciding_qc.clone(), consumer)
-                .await
-            {
-                tracing::error!(
-                    "failed to save decided leaves, chain may not be up to date: {err:#}"
+                    if let Err(err) = self
+                        .append_decided_leaves(
+                            leaf.view_number(),
+                            chain,
+                            deciding_qc.clone(),
+                            consumer,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "failed to save decided leaves, chain may not be up to date: {err:#}"
+                        );
+                    }
+                }
+            },
+            CoordinatorEvent::NewDecide(decide) => {
+                let Some(leaf) = decide.leaves.first() else {
+                    tracing::warn!("handle_event: NewDecide with empty leaves");
+                    return;
+                };
+
+                tracing::info!(
+                    leaf_count = decide.leaves.len(),
+                    first_view = leaf.view_number().u64(),
+                    first_height = leaf.height(),
+                    "handle_event: processing NewDecide"
                 );
-            }
+
+                if decide.vid_shares.len() != decide.leaves.len() {
+                    tracing::error!(
+                        leaf_count = decide.leaves.len(),
+                        vid_share_count = decide.vid_shares.len(),
+                        "new protocol decide event has mismatched leaves and VID shares"
+                    );
+                    return;
+                }
+
+                for signed in decide.vid_shares.iter().flatten() {
+                    if let Err(err) = self.append_vid(&convert_proposal(signed.clone())).await {
+                        tracing::error!("failed to append VID share from new protocol: {err:#}");
+                    }
+                }
+
+                let leaf_infos = decide
+                    .leaves
+                    .iter()
+                    .zip(&decide.vid_shares)
+                    .map(|(leaf, vid_share)| {
+                        let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
+                        let vid_share = vid_share
+                            .as_ref()
+                            .map(|share| VidDisperseShare::V2(share.data.clone()));
+                        LeafInfo::new(leaf.clone(), state, None, vid_share, None)
+                    })
+                    .collect::<Vec<_>>();
+
+                // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
+                // next older leaf.
+                let certifying_qcs = std::iter::once(decide.cert1.clone())
+                    .chain(decide.leaves.iter().map(|leaf| leaf.justify_qc()))
+                    .take(decide.leaves.len())
+                    .map(CertificatePair::non_epoch_change);
+
+                if let Err(err) = self
+                    .append_decided_leaves(
+                        leaf.view_number(),
+                        leaf_infos.iter().zip(certifying_qcs),
+                        None,
+                        consumer,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        "failed to save decided leaves from new protocol, chain may not be up to \
+                         date: {err:#}"
+                    );
+                }
+            },
+            _ => {},
         }
     }
 
