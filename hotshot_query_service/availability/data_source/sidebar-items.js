@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BlockId","LeafId"],"struct":["BlockInfo"],"trait":["AvailabilityDataSource","UpdateAvailabilityData"],"type":["FetchStream"]};
+window.SIDEBAR_ITEMS = {"enum":["BlockId","LeafId"],"struct":["BlockInfo"],"trait":["AvailabilityDataSource","UpdateAvailabilityData"],"type":["Certificate2","FetchStream"]};

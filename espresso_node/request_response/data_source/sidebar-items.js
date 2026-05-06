@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Storage"],"fn":["retain_v1_reward_accounts","retain_v2_reward_accounts"],"struct":["DataSource"]};
+window.SIDEBAR_ITEMS = {"enum":["Storage"],"fn":["legacy_leaf_chain_from_memory","retain_v1_reward_accounts","retain_v2_reward_accounts"],"struct":["DataSource"]};

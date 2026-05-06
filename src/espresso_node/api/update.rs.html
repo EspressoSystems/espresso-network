@@ -31,13 +31,10 @@
 <a href=#31 id=31 data-nosnippet>31</a>    D: SequencerDataSource + Debug + Send + Sync + <span class="lifetime">'static</span>,
 <a href=#32 id=32 data-nosnippet>32</a>{
 <a href=#33 id=33 data-nosnippet>33</a>    <span class="kw">async fn </span>handle_event(<span class="kw-2">&amp;</span><span class="self">self</span>, event: <span class="kw-2">&amp;</span>CoordinatorEvent&lt;SeqTypes&gt;) -&gt; anyhow::Result&lt;()&gt; {
-<a href=#34 id=34 data-nosnippet>34</a>        <span class="kw">let </span>CoordinatorEvent::LegacyEvent(hotshot_event) = event <span class="kw">else </span>{
-<a href=#35 id=35 data-nosnippet>35</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#36 id=36 data-nosnippet>36</a>        };
-<a href=#37 id=37 data-nosnippet>37</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(height) = <span class="self">self</span>.inner.update(hotshot_event).<span class="kw">await </span>{
-<a href=#38 id=38 data-nosnippet>38</a>            <span class="macro">bail!</span>(<span class="string">"failed to update API state after {height}: {hotshot_event:?}"</span>,);
-<a href=#39 id=39 data-nosnippet>39</a>        }
-<a href=#40 id=40 data-nosnippet>40</a>        <span class="prelude-val">Ok</span>(())
-<a href=#41 id=41 data-nosnippet>41</a>    }
-<a href=#42 id=42 data-nosnippet>42</a>}
+<a href=#34 id=34 data-nosnippet>34</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(height) = <span class="self">self</span>.inner.update(event).<span class="kw">await </span>{
+<a href=#35 id=35 data-nosnippet>35</a>            <span class="macro">bail!</span>(<span class="string">"failed to update API state after {height}: {event:?}"</span>,);
+<a href=#36 id=36 data-nosnippet>36</a>        }
+<a href=#37 id=37 data-nosnippet>37</a>        <span class="prelude-val">Ok</span>(())
+<a href=#38 id=38 data-nosnippet>38</a>    }
+<a href=#39 id=39 data-nosnippet>39</a>}
 </code></pre></div></section></main></body></html>

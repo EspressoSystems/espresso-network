@@ -987,106 +987,124 @@
 <a href=#987 id=987 data-nosnippet>987</a>        }
 <a href=#988 id=988 data-nosnippet>988</a>        .boxed()
 <a href=#989 id=989 data-nosnippet>989</a>    })<span class="question-mark">?
-<a href=#990 id=990 data-nosnippet>990</a>    </span>.get(<span class="string">"reward_merkle_tree_v2"</span>, <span class="kw">move </span>|req, state| {
+<a href=#990 id=990 data-nosnippet>990</a>    </span>.get(<span class="string">"cert2"</span>, |req, state| {
 <a href=#991 id=991 data-nosnippet>991</a>        <span class="kw">async move </span>{
-<a href=#992 id=992 data-nosnippet>992</a>            <span class="kw">let </span>(height, view) = parse_height_view(<span class="kw-2">&amp;</span>req)<span class="question-mark">?</span>;
-<a href=#993 id=993 data-nosnippet>993</a>            state
-<a href=#994 id=994 data-nosnippet>994</a>                .get_reward_merkle_tree_v2(height, view)
-<a href=#995 id=995 data-nosnippet>995</a>                .<span class="kw">await
-<a href=#996 id=996 data-nosnippet>996</a>                </span>.map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, <span class="macro">format!</span>(<span class="string">"{err:#}"</span>)))
-<a href=#997 id=997 data-nosnippet>997</a>        }
-<a href=#998 id=998 data-nosnippet>998</a>        .boxed()
-<a href=#999 id=999 data-nosnippet>999</a>    })<span class="question-mark">?
-<a href=#1000 id=1000 data-nosnippet>1000</a>    </span>.get(<span class="string">"state_cert"</span>, |req, state| {
-<a href=#1001 id=1001 data-nosnippet>1001</a>        <span class="kw">async move </span>{
-<a href=#1002 id=1002 data-nosnippet>1002</a>            <span class="kw">let </span>epoch = req
-<a href=#1003 id=1003 data-nosnippet>1003</a>                .integer_param(<span class="string">"epoch"</span>)
-<a href=#1004 id=1004 data-nosnippet>1004</a>                .map_err(Error::from_request_error)<span class="question-mark">?</span>;
-<a href=#1005 id=1005 data-nosnippet>1005</a>            state
-<a href=#1006 id=1006 data-nosnippet>1006</a>                .get_state_cert(epoch)
-<a href=#1007 id=1007 data-nosnippet>1007</a>                .<span class="kw">await
-<a href=#1008 id=1008 data-nosnippet>1008</a>                </span>.map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, <span class="macro">format!</span>(<span class="string">"{err:#}"</span>)))
-<a href=#1009 id=1009 data-nosnippet>1009</a>        }
-<a href=#1010 id=1010 data-nosnippet>1010</a>        .boxed()
-<a href=#1011 id=1011 data-nosnippet>1011</a>    })<span class="question-mark">?</span>;
-<a href=#1012 id=1012 data-nosnippet>1012</a>
-<a href=#1013 id=1013 data-nosnippet>1013</a>    <span class="prelude-val">Ok</span>(api)
-<a href=#1014 id=1014 data-nosnippet>1014</a>}
-<a href=#1015 id=1015 data-nosnippet>1015</a>
-<a href=#1016 id=1016 data-nosnippet>1016</a><span class="kw">type </span>MerklizedStateApi&lt;N, P, D, ApiVer&gt; = Api&lt;AvailState&lt;N, P, D&gt;, merklized_state::Error, ApiVer&gt;;
-<a href=#1017 id=1017 data-nosnippet>1017</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>merklized_state&lt;N, P, D, S, <span class="kw">const </span>ARITY: usize&gt;(
-<a href=#1018 id=1018 data-nosnippet>1018</a>    api_ver: semver::Version,
-<a href=#1019 id=1019 data-nosnippet>1019</a>) -&gt; <span class="prelude-ty">Result</span>&lt;MerklizedStateApi&lt;N, P, D, SequencerApiVersion&gt;&gt;
-<a href=#1020 id=1020 data-nosnippet>1020</a><span class="kw">where
-<a href=#1021 id=1021 data-nosnippet>1021</a>    </span>N: ConnectedNetwork&lt;PubKey&gt;,
-<a href=#1022 id=1022 data-nosnippet>1022</a>    D: MerklizedStateDataSource&lt;SeqTypes, S, ARITY&gt;
-<a href=#1023 id=1023 data-nosnippet>1023</a>        + Send
-<a href=#1024 id=1024 data-nosnippet>1024</a>        + Sync
-<a href=#1025 id=1025 data-nosnippet>1025</a>        + MerklizedStateHeightPersistence
-<a href=#1026 id=1026 data-nosnippet>1026</a>        + <span class="lifetime">'static</span>,
-<a href=#1027 id=1027 data-nosnippet>1027</a>    S: MerklizedState&lt;SeqTypes, ARITY&gt;,
-<a href=#1028 id=1028 data-nosnippet>1028</a>    P: SequencerPersistence,
-<a href=#1029 id=1029 data-nosnippet>1029</a>    <span class="kw">for</span>&lt;<span class="lifetime">'a</span>&gt; &lt;S::Commit <span class="kw">as </span>TryFrom&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>TaggedBase64&gt;&gt;::Error: std::fmt::Display,
-<a href=#1030 id=1030 data-nosnippet>1030</a>{
-<a href=#1031 id=1031 data-nosnippet>1031</a>    <span class="kw">let </span>api = merklized_state::define_api::&lt;
-<a href=#1032 id=1032 data-nosnippet>1032</a>        AvailState&lt;N, P, D&gt;,
-<a href=#1033 id=1033 data-nosnippet>1033</a>        SeqTypes,
-<a href=#1034 id=1034 data-nosnippet>1034</a>        S,
-<a href=#1035 id=1035 data-nosnippet>1035</a>        SequencerApiVersion,
-<a href=#1036 id=1036 data-nosnippet>1036</a>        ARITY,
-<a href=#1037 id=1037 data-nosnippet>1037</a>    &gt;(<span class="kw-2">&amp;</span>Default::default(), api_ver)<span class="question-mark">?</span>;
-<a href=#1038 id=1038 data-nosnippet>1038</a>    <span class="prelude-val">Ok</span>(api)
-<a href=#1039 id=1039 data-nosnippet>1039</a>}
-<a href=#1040 id=1040 data-nosnippet>1040</a>
-<a href=#1041 id=1041 data-nosnippet>1041</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>config&lt;S, ApiVer: StaticVersionType + <span class="lifetime">'static</span>&gt;(
-<a href=#1042 id=1042 data-nosnippet>1042</a>    <span class="kw">_</span>: ApiVer,
-<a href=#1043 id=1043 data-nosnippet>1043</a>    api_ver: semver::Version,
-<a href=#1044 id=1044 data-nosnippet>1044</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Api&lt;S, Error, ApiVer&gt;&gt;
-<a href=#1045 id=1045 data-nosnippet>1045</a><span class="kw">where
-<a href=#1046 id=1046 data-nosnippet>1046</a>    </span>S: <span class="lifetime">'static </span>+ Send + Sync + ReadState,
-<a href=#1047 id=1047 data-nosnippet>1047</a>    S::State: Send + Sync + HotShotConfigDataSource,
+<a href=#992 id=992 data-nosnippet>992</a>            <span class="kw">let </span>height = req
+<a href=#993 id=993 data-nosnippet>993</a>                .integer_param(<span class="string">"height"</span>)
+<a href=#994 id=994 data-nosnippet>994</a>                .map_err(Error::from_request_error)<span class="question-mark">?</span>;
+<a href=#995 id=995 data-nosnippet>995</a>            <span class="kw">let </span>response = state
+<a href=#996 id=996 data-nosnippet>996</a>                .get_cert2(height)
+<a href=#997 id=997 data-nosnippet>997</a>                .<span class="kw">await
+<a href=#998 id=998 data-nosnippet>998</a>                </span>.map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, <span class="macro">format!</span>(<span class="string">"{err:#}"</span>)))<span class="question-mark">?</span>;
+<a href=#999 id=999 data-nosnippet>999</a>            response.ok_or_else(|| {
+<a href=#1000 id=1000 data-nosnippet>1000</a>                Error::catch_all(
+<a href=#1001 id=1001 data-nosnippet>1001</a>                    StatusCode::NOT_FOUND,
+<a href=#1002 id=1002 data-nosnippet>1002</a>                    <span class="macro">format!</span>(<span class="string">"no cert2 available for height {height}"</span>),
+<a href=#1003 id=1003 data-nosnippet>1003</a>                )
+<a href=#1004 id=1004 data-nosnippet>1004</a>            })
+<a href=#1005 id=1005 data-nosnippet>1005</a>        }
+<a href=#1006 id=1006 data-nosnippet>1006</a>        .boxed()
+<a href=#1007 id=1007 data-nosnippet>1007</a>    })<span class="question-mark">?
+<a href=#1008 id=1008 data-nosnippet>1008</a>    </span>.get(<span class="string">"reward_merkle_tree_v2"</span>, <span class="kw">move </span>|req, state| {
+<a href=#1009 id=1009 data-nosnippet>1009</a>        <span class="kw">async move </span>{
+<a href=#1010 id=1010 data-nosnippet>1010</a>            <span class="kw">let </span>(height, view) = parse_height_view(<span class="kw-2">&amp;</span>req)<span class="question-mark">?</span>;
+<a href=#1011 id=1011 data-nosnippet>1011</a>            state
+<a href=#1012 id=1012 data-nosnippet>1012</a>                .get_reward_merkle_tree_v2(height, view)
+<a href=#1013 id=1013 data-nosnippet>1013</a>                .<span class="kw">await
+<a href=#1014 id=1014 data-nosnippet>1014</a>                </span>.map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, <span class="macro">format!</span>(<span class="string">"{err:#}"</span>)))
+<a href=#1015 id=1015 data-nosnippet>1015</a>        }
+<a href=#1016 id=1016 data-nosnippet>1016</a>        .boxed()
+<a href=#1017 id=1017 data-nosnippet>1017</a>    })<span class="question-mark">?
+<a href=#1018 id=1018 data-nosnippet>1018</a>    </span>.get(<span class="string">"state_cert"</span>, |req, state| {
+<a href=#1019 id=1019 data-nosnippet>1019</a>        <span class="kw">async move </span>{
+<a href=#1020 id=1020 data-nosnippet>1020</a>            <span class="kw">let </span>epoch = req
+<a href=#1021 id=1021 data-nosnippet>1021</a>                .integer_param(<span class="string">"epoch"</span>)
+<a href=#1022 id=1022 data-nosnippet>1022</a>                .map_err(Error::from_request_error)<span class="question-mark">?</span>;
+<a href=#1023 id=1023 data-nosnippet>1023</a>            state
+<a href=#1024 id=1024 data-nosnippet>1024</a>                .get_state_cert(epoch)
+<a href=#1025 id=1025 data-nosnippet>1025</a>                .<span class="kw">await
+<a href=#1026 id=1026 data-nosnippet>1026</a>                </span>.map_err(|err| Error::catch_all(StatusCode::NOT_FOUND, <span class="macro">format!</span>(<span class="string">"{err:#}"</span>)))
+<a href=#1027 id=1027 data-nosnippet>1027</a>        }
+<a href=#1028 id=1028 data-nosnippet>1028</a>        .boxed()
+<a href=#1029 id=1029 data-nosnippet>1029</a>    })<span class="question-mark">?</span>;
+<a href=#1030 id=1030 data-nosnippet>1030</a>
+<a href=#1031 id=1031 data-nosnippet>1031</a>    <span class="prelude-val">Ok</span>(api)
+<a href=#1032 id=1032 data-nosnippet>1032</a>}
+<a href=#1033 id=1033 data-nosnippet>1033</a>
+<a href=#1034 id=1034 data-nosnippet>1034</a><span class="kw">type </span>MerklizedStateApi&lt;N, P, D, ApiVer&gt; = Api&lt;AvailState&lt;N, P, D&gt;, merklized_state::Error, ApiVer&gt;;
+<a href=#1035 id=1035 data-nosnippet>1035</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>merklized_state&lt;N, P, D, S, <span class="kw">const </span>ARITY: usize&gt;(
+<a href=#1036 id=1036 data-nosnippet>1036</a>    api_ver: semver::Version,
+<a href=#1037 id=1037 data-nosnippet>1037</a>) -&gt; <span class="prelude-ty">Result</span>&lt;MerklizedStateApi&lt;N, P, D, SequencerApiVersion&gt;&gt;
+<a href=#1038 id=1038 data-nosnippet>1038</a><span class="kw">where
+<a href=#1039 id=1039 data-nosnippet>1039</a>    </span>N: ConnectedNetwork&lt;PubKey&gt;,
+<a href=#1040 id=1040 data-nosnippet>1040</a>    D: MerklizedStateDataSource&lt;SeqTypes, S, ARITY&gt;
+<a href=#1041 id=1041 data-nosnippet>1041</a>        + Send
+<a href=#1042 id=1042 data-nosnippet>1042</a>        + Sync
+<a href=#1043 id=1043 data-nosnippet>1043</a>        + MerklizedStateHeightPersistence
+<a href=#1044 id=1044 data-nosnippet>1044</a>        + <span class="lifetime">'static</span>,
+<a href=#1045 id=1045 data-nosnippet>1045</a>    S: MerklizedState&lt;SeqTypes, ARITY&gt;,
+<a href=#1046 id=1046 data-nosnippet>1046</a>    P: SequencerPersistence,
+<a href=#1047 id=1047 data-nosnippet>1047</a>    <span class="kw">for</span>&lt;<span class="lifetime">'a</span>&gt; &lt;S::Commit <span class="kw">as </span>TryFrom&lt;<span class="kw-2">&amp;</span><span class="lifetime">'a </span>TaggedBase64&gt;&gt;::Error: std::fmt::Display,
 <a href=#1048 id=1048 data-nosnippet>1048</a>{
-<a href=#1049 id=1049 data-nosnippet>1049</a>    <span class="kw">let </span>toml = toml::from_str::&lt;toml::Value&gt;(<span class="macro">include_str!</span>(<span class="string">"../../api/config.toml"</span>))<span class="question-mark">?</span>;
-<a href=#1050 id=1050 data-nosnippet>1050</a>    <span class="kw">let </span><span class="kw-2">mut </span>api = Api::&lt;S, Error, ApiVer&gt;::new(toml)<span class="question-mark">?</span>;
-<a href=#1051 id=1051 data-nosnippet>1051</a>    api.with_version(api_ver);
-<a href=#1052 id=1052 data-nosnippet>1052</a>
-<a href=#1053 id=1053 data-nosnippet>1053</a>    <span class="kw">let </span>env_variables = get_public_env_vars()
-<a href=#1054 id=1054 data-nosnippet>1054</a>        .map_err(|err| Error::catch_all(StatusCode::INTERNAL_SERVER_ERROR, <span class="macro">format!</span>(<span class="string">"{err:#}"</span>)))<span class="question-mark">?</span>;
-<a href=#1055 id=1055 data-nosnippet>1055</a>
-<a href=#1056 id=1056 data-nosnippet>1056</a>    api.get(<span class="string">"hotshot"</span>, |<span class="kw">_</span>, state| {
-<a href=#1057 id=1057 data-nosnippet>1057</a>        <span class="kw">async move </span>{ <span class="prelude-val">Ok</span>(state.get_config().<span class="kw">await</span>) }.boxed()
-<a href=#1058 id=1058 data-nosnippet>1058</a>    })<span class="question-mark">?
-<a href=#1059 id=1059 data-nosnippet>1059</a>    </span>.get(<span class="string">"env"</span>, <span class="kw">move </span>|<span class="kw">_</span>, <span class="kw">_</span>| {
-<a href=#1060 id=1060 data-nosnippet>1060</a>        {
-<a href=#1061 id=1061 data-nosnippet>1061</a>            <span class="kw">let </span>env_variables = env_variables.clone();
-<a href=#1062 id=1062 data-nosnippet>1062</a>            <span class="kw">async move </span>{ <span class="prelude-val">Ok</span>(env_variables) }
-<a href=#1063 id=1063 data-nosnippet>1063</a>        }
-<a href=#1064 id=1064 data-nosnippet>1064</a>        .boxed()
-<a href=#1065 id=1065 data-nosnippet>1065</a>    })<span class="question-mark">?</span>;
-<a href=#1066 id=1066 data-nosnippet>1066</a>
-<a href=#1067 id=1067 data-nosnippet>1067</a>    <span class="prelude-val">Ok</span>(api)
-<a href=#1068 id=1068 data-nosnippet>1068</a>}
-<a href=#1069 id=1069 data-nosnippet>1069</a>
-<a href=#1070 id=1070 data-nosnippet>1070</a><span class="kw">fn </span>get_public_env_vars() -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;String&gt;&gt; {
-<a href=#1071 id=1071 data-nosnippet>1071</a>    <span class="kw">let </span>toml: toml::Value = toml::from_str(<span class="macro">include_str!</span>(<span class="string">"../../api/public-env-vars.toml"</span>))<span class="question-mark">?</span>;
-<a href=#1072 id=1072 data-nosnippet>1072</a>
-<a href=#1073 id=1073 data-nosnippet>1073</a>    <span class="kw">let </span>keys = toml
-<a href=#1074 id=1074 data-nosnippet>1074</a>        .get(<span class="string">"variables"</span>)
-<a href=#1075 id=1075 data-nosnippet>1075</a>        .ok_or_else(|| toml::de::Error::custom(<span class="string">"variables not found"</span>))<span class="question-mark">?
-<a href=#1076 id=1076 data-nosnippet>1076</a>        </span>.as_array()
-<a href=#1077 id=1077 data-nosnippet>1077</a>        .ok_or_else(|| toml::de::Error::custom(<span class="string">"variables is not an array"</span>))<span class="question-mark">?
-<a href=#1078 id=1078 data-nosnippet>1078</a>        </span>.clone()
-<a href=#1079 id=1079 data-nosnippet>1079</a>        .into_iter()
-<a href=#1080 id=1080 data-nosnippet>1080</a>        .map(|v| v.try_into())
-<a href=#1081 id=1081 data-nosnippet>1081</a>        .collect::&lt;<span class="prelude-ty">Result</span>&lt;BTreeSet&lt;String&gt;, toml::de::Error&gt;&gt;()<span class="question-mark">?</span>;
-<a href=#1082 id=1082 data-nosnippet>1082</a>
-<a href=#1083 id=1083 data-nosnippet>1083</a>    <span class="kw">let </span>hashmap: HashMap&lt;String, String&gt; = env::vars().collect();
-<a href=#1084 id=1084 data-nosnippet>1084</a>    <span class="kw">let </span><span class="kw-2">mut </span>public_env_vars: Vec&lt;String&gt; = Vec::new();
-<a href=#1085 id=1085 data-nosnippet>1085</a>    <span class="kw">for </span>key <span class="kw">in </span>keys {
-<a href=#1086 id=1086 data-nosnippet>1086</a>        <span class="kw">let </span>value = hashmap.get(<span class="kw-2">&amp;</span>key).cloned().unwrap_or_default();
-<a href=#1087 id=1087 data-nosnippet>1087</a>        public_env_vars.push(<span class="macro">format!</span>(<span class="string">"{key}={value}"</span>));
-<a href=#1088 id=1088 data-nosnippet>1088</a>    }
-<a href=#1089 id=1089 data-nosnippet>1089</a>
-<a href=#1090 id=1090 data-nosnippet>1090</a>    <span class="prelude-val">Ok</span>(public_env_vars)
-<a href=#1091 id=1091 data-nosnippet>1091</a>}
+<a href=#1049 id=1049 data-nosnippet>1049</a>    <span class="kw">let </span>api = merklized_state::define_api::&lt;
+<a href=#1050 id=1050 data-nosnippet>1050</a>        AvailState&lt;N, P, D&gt;,
+<a href=#1051 id=1051 data-nosnippet>1051</a>        SeqTypes,
+<a href=#1052 id=1052 data-nosnippet>1052</a>        S,
+<a href=#1053 id=1053 data-nosnippet>1053</a>        SequencerApiVersion,
+<a href=#1054 id=1054 data-nosnippet>1054</a>        ARITY,
+<a href=#1055 id=1055 data-nosnippet>1055</a>    &gt;(<span class="kw-2">&amp;</span>Default::default(), api_ver)<span class="question-mark">?</span>;
+<a href=#1056 id=1056 data-nosnippet>1056</a>    <span class="prelude-val">Ok</span>(api)
+<a href=#1057 id=1057 data-nosnippet>1057</a>}
+<a href=#1058 id=1058 data-nosnippet>1058</a>
+<a href=#1059 id=1059 data-nosnippet>1059</a><span class="kw">pub</span>(<span class="kw">super</span>) <span class="kw">fn </span>config&lt;S, ApiVer: StaticVersionType + <span class="lifetime">'static</span>&gt;(
+<a href=#1060 id=1060 data-nosnippet>1060</a>    <span class="kw">_</span>: ApiVer,
+<a href=#1061 id=1061 data-nosnippet>1061</a>    api_ver: semver::Version,
+<a href=#1062 id=1062 data-nosnippet>1062</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Api&lt;S, Error, ApiVer&gt;&gt;
+<a href=#1063 id=1063 data-nosnippet>1063</a><span class="kw">where
+<a href=#1064 id=1064 data-nosnippet>1064</a>    </span>S: <span class="lifetime">'static </span>+ Send + Sync + ReadState,
+<a href=#1065 id=1065 data-nosnippet>1065</a>    S::State: Send + Sync + HotShotConfigDataSource,
+<a href=#1066 id=1066 data-nosnippet>1066</a>{
+<a href=#1067 id=1067 data-nosnippet>1067</a>    <span class="kw">let </span>toml = toml::from_str::&lt;toml::Value&gt;(<span class="macro">include_str!</span>(<span class="string">"../../api/config.toml"</span>))<span class="question-mark">?</span>;
+<a href=#1068 id=1068 data-nosnippet>1068</a>    <span class="kw">let </span><span class="kw-2">mut </span>api = Api::&lt;S, Error, ApiVer&gt;::new(toml)<span class="question-mark">?</span>;
+<a href=#1069 id=1069 data-nosnippet>1069</a>    api.with_version(api_ver);
+<a href=#1070 id=1070 data-nosnippet>1070</a>
+<a href=#1071 id=1071 data-nosnippet>1071</a>    <span class="kw">let </span>env_variables = get_public_env_vars()
+<a href=#1072 id=1072 data-nosnippet>1072</a>        .map_err(|err| Error::catch_all(StatusCode::INTERNAL_SERVER_ERROR, <span class="macro">format!</span>(<span class="string">"{err:#}"</span>)))<span class="question-mark">?</span>;
+<a href=#1073 id=1073 data-nosnippet>1073</a>
+<a href=#1074 id=1074 data-nosnippet>1074</a>    api.get(<span class="string">"hotshot"</span>, |<span class="kw">_</span>, state| {
+<a href=#1075 id=1075 data-nosnippet>1075</a>        <span class="kw">async move </span>{ <span class="prelude-val">Ok</span>(state.get_config().<span class="kw">await</span>) }.boxed()
+<a href=#1076 id=1076 data-nosnippet>1076</a>    })<span class="question-mark">?
+<a href=#1077 id=1077 data-nosnippet>1077</a>    </span>.get(<span class="string">"env"</span>, <span class="kw">move </span>|<span class="kw">_</span>, <span class="kw">_</span>| {
+<a href=#1078 id=1078 data-nosnippet>1078</a>        {
+<a href=#1079 id=1079 data-nosnippet>1079</a>            <span class="kw">let </span>env_variables = env_variables.clone();
+<a href=#1080 id=1080 data-nosnippet>1080</a>            <span class="kw">async move </span>{ <span class="prelude-val">Ok</span>(env_variables) }
+<a href=#1081 id=1081 data-nosnippet>1081</a>        }
+<a href=#1082 id=1082 data-nosnippet>1082</a>        .boxed()
+<a href=#1083 id=1083 data-nosnippet>1083</a>    })<span class="question-mark">?</span>;
+<a href=#1084 id=1084 data-nosnippet>1084</a>
+<a href=#1085 id=1085 data-nosnippet>1085</a>    <span class="prelude-val">Ok</span>(api)
+<a href=#1086 id=1086 data-nosnippet>1086</a>}
+<a href=#1087 id=1087 data-nosnippet>1087</a>
+<a href=#1088 id=1088 data-nosnippet>1088</a><span class="kw">fn </span>get_public_env_vars() -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;String&gt;&gt; {
+<a href=#1089 id=1089 data-nosnippet>1089</a>    <span class="kw">let </span>toml: toml::Value = toml::from_str(<span class="macro">include_str!</span>(<span class="string">"../../api/public-env-vars.toml"</span>))<span class="question-mark">?</span>;
+<a href=#1090 id=1090 data-nosnippet>1090</a>
+<a href=#1091 id=1091 data-nosnippet>1091</a>    <span class="kw">let </span>keys = toml
+<a href=#1092 id=1092 data-nosnippet>1092</a>        .get(<span class="string">"variables"</span>)
+<a href=#1093 id=1093 data-nosnippet>1093</a>        .ok_or_else(|| toml::de::Error::custom(<span class="string">"variables not found"</span>))<span class="question-mark">?
+<a href=#1094 id=1094 data-nosnippet>1094</a>        </span>.as_array()
+<a href=#1095 id=1095 data-nosnippet>1095</a>        .ok_or_else(|| toml::de::Error::custom(<span class="string">"variables is not an array"</span>))<span class="question-mark">?
+<a href=#1096 id=1096 data-nosnippet>1096</a>        </span>.clone()
+<a href=#1097 id=1097 data-nosnippet>1097</a>        .into_iter()
+<a href=#1098 id=1098 data-nosnippet>1098</a>        .map(|v| v.try_into())
+<a href=#1099 id=1099 data-nosnippet>1099</a>        .collect::&lt;<span class="prelude-ty">Result</span>&lt;BTreeSet&lt;String&gt;, toml::de::Error&gt;&gt;()<span class="question-mark">?</span>;
+<a href=#1100 id=1100 data-nosnippet>1100</a>
+<a href=#1101 id=1101 data-nosnippet>1101</a>    <span class="kw">let </span>hashmap: HashMap&lt;String, String&gt; = env::vars().collect();
+<a href=#1102 id=1102 data-nosnippet>1102</a>    <span class="kw">let </span><span class="kw-2">mut </span>public_env_vars: Vec&lt;String&gt; = Vec::new();
+<a href=#1103 id=1103 data-nosnippet>1103</a>    <span class="kw">for </span>key <span class="kw">in </span>keys {
+<a href=#1104 id=1104 data-nosnippet>1104</a>        <span class="kw">let </span>value = hashmap.get(<span class="kw-2">&amp;</span>key).cloned().unwrap_or_default();
+<a href=#1105 id=1105 data-nosnippet>1105</a>        public_env_vars.push(<span class="macro">format!</span>(<span class="string">"{key}={value}"</span>));
+<a href=#1106 id=1106 data-nosnippet>1106</a>    }
+<a href=#1107 id=1107 data-nosnippet>1107</a>
+<a href=#1108 id=1108 data-nosnippet>1108</a>    <span class="prelude-val">Ok</span>(public_env_vars)
+<a href=#1109 id=1109 data-nosnippet>1109</a>}
 </code></pre></div></section></main></body></html>
