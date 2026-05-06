@@ -224,7 +224,7 @@ impl v2::RewardApi for TestApi {
 impl v2::DataApi for TestApi {
     async fn get_namespace_proof(
         &self,
-        namespace_id: u32,
+        namespace_id: u64,
         block_height: u64,
     ) -> Result<Self::NamespaceProof> {
         tracing::info!(
@@ -238,7 +238,7 @@ impl v2::DataApi for TestApi {
 
     async fn get_namespace_proof_range(
         &self,
-        namespace_id: u32,
+        namespace_id: u64,
         from: u64,
         until: u64,
     ) -> Result<Vec<Self::NamespaceProof>> {
@@ -256,7 +256,7 @@ impl v2::DataApi for TestApi {
 
     async fn get_incorrect_encoding_proof(
         &self,
-        namespace_id: u32,
+        namespace_id: u64,
         block_height: u64,
     ) -> Result<Self::IncorrectEncodingProof> {
         tracing::info!(
