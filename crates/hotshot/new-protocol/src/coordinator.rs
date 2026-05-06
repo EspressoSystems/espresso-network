@@ -183,32 +183,40 @@ where
             .build()
     }
 
-    /// Bootstrap the coordinator so the view-1 leader can propose.
+    /// Bootstrap the coordinator so the leader of `current_view + 1` can
+    /// propose.
     ///
-    /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
-    /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
-    /// `seed_genesis` on the inner `Consensus` instance.
+    /// Reads `current_view` and `current_epoch` from the inner `Consensus`
+    /// instance — these default to genesis after `seed_genesis`, but a
+    /// pre-cutover seed advances them to the highest seeded view. Emits
+    /// `ViewChanged(next_view)` and, if this node is the next-view leader,
+    /// a `RequestBlockAndHeader` whose parent is the proposal at
+    /// `current_view`.
     pub async fn start(&mut self) {
-        let view = ViewNumber::new(1);
-        let epoch = EpochNumber::genesis();
+        let cur_view = self.consensus.current_view();
+        let next_view = cur_view + 1;
+        let epoch = self
+            .consensus
+            .current_epoch()
+            .unwrap_or(EpochNumber::genesis());
 
         self.outbox
-            .push_back(ConsensusOutput::ViewChanged(view, epoch));
+            .push_back(ConsensusOutput::ViewChanged(next_view, epoch));
 
-        if let Some(leader) = self.leader(view, epoch).await
+        if let Some(leader) = self.leader(next_view, epoch).await
             && leader == self.public_key
         {
-            let genesis_proposal = self
+            let parent_proposal = self
                 .consensus
-                .proposal_at(ViewNumber::genesis())
-                .expect("genesis proposal must be seeded before start()")
+                .proposal_at(cur_view)
+                .expect("parent proposal must be seeded before start()")
                 .clone();
             self.outbox
                 .push_back(ConsensusOutput::RequestBlockAndHeader(
                     BlockAndHeaderRequest {
-                        view,
+                        view: next_view,
                         epoch,
-                        parent_proposal: genesis_proposal,
+                        parent_proposal,
                     },
                 ));
         }
@@ -246,7 +254,7 @@ where
                     }
                 }
                 Some(request) = self.client.next_request() => {
-                    if let Err(err) = self.on_client_request(request) {
+                    if let Err(err) = self.on_client_request(request).await {
                         error!(%err, "error while handling client request");
                     }
                 }
@@ -753,7 +761,10 @@ where
         membership.leader(view).await.ok()
     }
 
-    fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {
+    async fn on_client_request(
+        &mut self,
+        request: ClientRequest<T>,
+    ) -> Result<(), CoordinatorError> {
         match request {
             ClientRequest::CurrentView(tx) => {
                 let _ = tx.send(self.consensus.current_view());
@@ -843,6 +854,57 @@ where
                             .into()
                     });
                 let _ = respond.send(result);
+            },
+            ClientRequest::SeedPreCutover {
+                decided_anchor,
+                undecided,
+                high_qc,
+                validated_states,
+                respond,
+            } => {
+                tracing::info!(
+                    undecided = undecided.len(),
+                    anchor_view = *decided_anchor.view_number(),
+                    high_qc_view = high_qc.as_ref().map(|qc| *qc.view_number()),
+                    states = validated_states.len(),
+                    "coordinator: applying legacy → new-protocol seed",
+                );
+                // Seed StateManager BEFORE handing the leaves to consensus.
+                // The new protocol's header builder and state validator
+                // pipeline against the parent view's stored state — without
+                // these entries, the first post-cutover header request
+                // queues forever (no parent) and peers can't validate the
+                // first post-cutover proposal (state validation never
+                // completes).
+                let anchor_view = decided_anchor.view_number();
+                if let Some(state) = validated_states.get(&anchor_view).cloned() {
+                    self.state_manager
+                        .seed_state(anchor_view, state, decided_anchor.clone());
+                }
+                for leaf in &undecided {
+                    let view = leaf.view_number();
+                    if let Some(state) = validated_states.get(&view).cloned() {
+                        self.state_manager.seed_state(view, state, leaf.clone());
+                    }
+                }
+                self.consensus.set_pre_cutover_anchor(decided_anchor);
+                self.consensus.seed_pre_cutover_leaves(undecided);
+                if let Some(qc) = high_qc {
+                    // Register the topmost legacy QC so `maybe_propose` for the
+                    // first 0.8 view can find `certs[N-1]`.
+                    self.consensus.register_proposal_justify_qc(&qc);
+                }
+                let _ = respond.send(());
+            },
+            ClientRequest::SubmitTimeoutVote { vote, respond } => {
+                // Same dual-feed as the wire-message path
+                // (`ConsensusMessage::TimeoutVote`): aggregate into both the
+                // success-threshold and one-honest collectors.
+                self.timeout_collector.accumulate_vote(vote.clone()).await;
+                self.timeout_one_honest_collector
+                    .accumulate_vote(vote)
+                    .await;
+                let _ = respond.send(());
             },
         }
 

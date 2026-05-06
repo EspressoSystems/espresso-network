@@ -1,10 +1,12 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
+    simple_certificate::QuorumCertificate2,
+    simple_vote::TimeoutVote2,
     traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
     utils::StateAndDelta,
 };
@@ -112,6 +114,66 @@ impl<T: NodeType> ClientApi<T> {
         .await?
     }
 
+    /// Forward a `TimeoutVote2` produced by the legacy (pre-0.8) consensus
+    /// task into the new-protocol coordinator's timeout collectors. Used at
+    /// the legacy → new-protocol boundary: when a legacy view near the
+    /// cutover times out, the legacy task signs a `TimeoutVote2` (whose
+    /// commitment is version-tagged via the shared `UpgradeLock`) and
+    /// submits it here so the first 0.8 leader can collect a
+    /// `TimeoutCertificate2` for that pre-cutover view.
+    ///
+    /// `TimeoutVote2` is structurally identical between 0.4 and 0.8
+    /// (`SimpleVote<TYPES, TimeoutData2>`) so the same vote feeds both
+    /// systems' aggregators without re-signing.
+    pub async fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::SubmitTimeoutVote { vote, respond }, rx)
+            .await
+    }
+
+    /// Bridge legacy (pre-0.8) state into the running coordinator at the
+    /// legacy → new-protocol cutover.
+    ///
+    /// - `decided_anchor` is the highest leaf 0.4 had decided.
+    /// - `undecided` is the chain of undecided 0.4 leaves above the anchor
+    ///   (oldest-first).
+    /// - `high_qc` is the QC of the topmost undecided leaf, if 0.4 voting
+    ///   completed enough for that QC to form. Required for the first 0.8
+    ///   leader to find `certs[N-1]` when proposing at view N (= the
+    ///   topmost leaf's view + 1). May be `None` if the chain stalled
+    ///   before the topmost leaf got a QC; in that case the first 0.8
+    ///   leader will need view-change evidence.
+    /// - `validated_states` is the validated state of every seeded leaf
+    ///   (anchor + undecided), keyed by view number. The new protocol
+    ///   pipelines header creation and state validation against the
+    ///   parent's stored state — without seeding these, the first
+    ///   post-cutover leader cannot build a header (no parent state) and
+    ///   peers cannot validate the first post-cutover proposal.
+    ///
+    /// Idempotent at the consensus level: `set_pre_cutover_anchor` no-ops if
+    /// the supplied view is not above the current `last_decided_view`, and
+    /// `seed_pre_cutover_leaves` reinserts views that are already in the set.
+    pub async fn seed_pre_cutover(
+        &self,
+        decided_anchor: Leaf2<T>,
+        undecided: Vec<Leaf2<T>>,
+        high_qc: Option<QuorumCertificate2<T>>,
+        validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
+    ) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(
+            ClientRequest::SeedPreCutover {
+                decided_anchor,
+                undecided,
+                high_qc,
+                validated_states,
+                respond,
+            },
+            rx,
+        )
+        .await
+    }
+
     async fn call<A>(
         &self,
         request: ClientRequest<T>,
@@ -191,6 +253,19 @@ pub(crate) enum ClientRequest<T: NodeType> {
         payload: Vec<u8>,
         recipient: T::SignatureKey,
         respond: oneshot::Sender<Result<(), QueryError>>,
+    },
+    SeedPreCutover {
+        decided_anchor: Leaf2<T>,
+        undecided: Vec<Leaf2<T>>,
+        high_qc: Option<QuorumCertificate2<T>>,
+        /// Validated state for each seeded leaf, keyed by view. Empty if
+        /// the caller has no states to seed (e.g. legacy-only test paths).
+        validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
+        respond: oneshot::Sender<()>,
+    },
+    SubmitTimeoutVote {
+        vote: TimeoutVote2<T>,
+        respond: oneshot::Sender<()>,
     },
 }
 

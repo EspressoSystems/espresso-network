@@ -763,6 +763,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
         sender: &Sender<Arc<Self::Event>>,
         receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self
+            .upgrade_lock
+            .new_protocol_active(self.latest_proposed_view)
+        {
+            return Ok(());
+        }
         self.handle(event, receiver.clone(), sender.clone()).await
     }
 

@@ -6382,6 +6382,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "url",
+ "vec1",
  "versions",
 ]
 

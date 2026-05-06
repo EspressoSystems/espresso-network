@@ -81,6 +81,14 @@ pub struct PublicHotShotConfig {
     stop_proposing_time: u64,
     start_voting_time: u64,
     stop_voting_time: u64,
+    #[serde(default)]
+    upgrade_propose_offset: Option<u64>,
+    #[serde(default)]
+    upgrade_decide_by_offset: Option<u64>,
+    #[serde(default)]
+    upgrade_begin_offset: Option<u64>,
+    #[serde(default)]
+    upgrade_finish_offset: Option<u64>,
     epoch_height: u64,
     epoch_start_block: u64,
     #[serde(default = "default_stake_table_capacity")]
@@ -132,6 +140,10 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stop_proposing_time,
             start_voting_time,
             stop_voting_time,
+            upgrade_propose_offset,
+            upgrade_decide_by_offset,
+            upgrade_begin_offset,
+            upgrade_finish_offset,
             epoch_height,
             epoch_start_block,
             stake_table_capacity,
@@ -161,6 +173,10 @@ impl From<HotShotConfig<SeqTypes>> for PublicHotShotConfig {
             stop_proposing_time,
             start_voting_time,
             stop_voting_time,
+            upgrade_propose_offset,
+            upgrade_decide_by_offset,
+            upgrade_begin_offset,
+            upgrade_finish_offset,
             epoch_height,
             epoch_start_block,
             stake_table_capacity,
@@ -194,6 +210,10 @@ impl PublicHotShotConfig {
             stop_proposing_time: self.stop_proposing_time,
             start_voting_time: self.start_voting_time,
             stop_voting_time: self.stop_voting_time,
+            upgrade_propose_offset: self.upgrade_propose_offset,
+            upgrade_decide_by_offset: self.upgrade_decide_by_offset,
+            upgrade_begin_offset: self.upgrade_begin_offset,
+            upgrade_finish_offset: self.upgrade_finish_offset,
             epoch_height: self.epoch_height,
             epoch_start_block: self.epoch_start_block,
             stake_table_capacity: self.stake_table_capacity,

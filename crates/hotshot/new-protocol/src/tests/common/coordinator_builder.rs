@@ -39,6 +39,13 @@ use crate::{
 /// certificate and proposal so that the view-1 leader can propose without any
 /// external injection.  The initial `ViewChanged` and (for the leader)
 /// `RequestBlockAndHeader` outputs are already queued in the outbox.
+///
+/// If `pre_cutover_seed` is provided, it is applied **synchronously before**
+/// `coord.start()` runs. This prevents the startup race where `start()`
+/// emits `ViewChanged(1)` and the view-1 leader proposes before an
+/// async-dispatched seed can land. With a seed in place, `start()` reads the
+/// (now advanced) `current_view` and emits `ViewChanged(max_seeded_view + 1)`
+/// instead.
 pub async fn build_test_coordinator<N: Network<TestTypes>>(
     node_index: u64,
     network: N,
@@ -47,6 +54,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
+    pre_cutover_seed: Option<crate::tests::common::runner::PreCutoverSeed>,
 ) -> Coordinator<TestTypes, N, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
@@ -96,10 +104,40 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         genesis_leaf.clone(),
     );
 
+    // If a pre-cutover seed is provided, seed the StateManager for each
+    // pre-cutover leaf. The new protocol's proposal validator pipelines
+    // state validation against the parent's stored state — without this,
+    // the leader of `max_seeded_view + 1` cannot validate its own proposal
+    // (no parent state on file). For tests we use the default
+    // `TestValidatedState`; in production the espresso bridge would carry
+    // legacy state forward.
+    if let Some(seed) = pre_cutover_seed.as_ref() {
+        let default_state = Arc::new(TestValidatedState::default());
+        state_manager.seed_state(
+            seed.decided_anchor.view_number(),
+            default_state.clone(),
+            seed.decided_anchor.clone(),
+        );
+        for leaf in &seed.undecided {
+            state_manager.seed_state(leaf.view_number(), default_state.clone(), leaf.clone());
+        }
+    }
+
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
+
+    // Apply the legacy → new-protocol seed (if provided) BEFORE we hand
+    // consensus to the coordinator builder. After this, `current_view` is
+    // advanced past the seeded views and `coord.start()` will emit
+    // `ViewChanged(max_seeded_view + 1)` instead of the genesis-default
+    // `ViewChanged(1)`.
+    if let Some(seed) = pre_cutover_seed {
+        consensus.set_pre_cutover_anchor(seed.decided_anchor);
+        consensus.seed_pre_cutover_leaves(seed.undecided);
+        consensus.register_proposal_justify_qc(&seed.high_qc);
+    }
 
     // Seed the genesis proposal into the backing TestStorage so that
     // peers can serve the genesis block to late-joiners during

@@ -270,6 +270,19 @@ pub struct HotShotConfig<TYPES: NodeType> {
     pub start_voting_time: u64,
     /// Unix time in seconds at which we stop voting on an upgrade. To prevent voting on an upgrade, set stop_voting_time <= start_voting_time.
     pub stop_voting_time: u64,
+    /// Override for `UpgradeConstants::propose_offset`. Falls back to `TYPES::UPGRADE_CONSTANTS.propose_offset` when `None`.
+    #[serde(default)]
+    pub upgrade_propose_offset: Option<u64>,
+    /// Override for `UpgradeConstants::decide_by_offset`. Falls back to `TYPES::UPGRADE_CONSTANTS.decide_by_offset` when `None`.
+    #[serde(default)]
+    pub upgrade_decide_by_offset: Option<u64>,
+    /// Override for `UpgradeConstants::begin_offset`. Falls back to `TYPES::UPGRADE_CONSTANTS.begin_offset` when `None`.
+    #[serde(default)]
+    pub upgrade_begin_offset: Option<u64>,
+    /// Override for `UpgradeConstants::finish_offset`. Falls back to `TYPES::UPGRADE_CONSTANTS.finish_offset` when `None`.
+    /// For a zero-blackout upgrade, set `upgrade_finish_offset == upgrade_begin_offset`.
+    #[serde(default)]
+    pub upgrade_finish_offset: Option<u64>,
     /// Number of blocks in an epoch, zero means there are no epochs
     pub epoch_height: u64,
     /// Epoch start block

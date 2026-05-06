@@ -30,9 +30,10 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     light_client::{StakeTableState, StateKeyPair},
     message::Proposal as SignedProposal,
-    simple_certificate::TimeoutCertificate2,
+    simple_certificate::{TimeoutCertificate2, UpgradeCertificate},
     simple_vote::{
-        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, Vote2Data,
+        LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, UpgradeProposalData,
+        UpgradeVote, Vote2Data,
     },
     traits::{
         EncodeBytes,
@@ -260,16 +261,70 @@ impl TestData {
         epoch_height: u64,
         num_nodes: usize,
     ) -> Self {
+        Self::new_with_upgrade(num_views, epoch_height, num_nodes, None).await
+    }
+
+    /// Build a chain of `num_views` legacy-style views and, if
+    /// `upgrade_at_view` is set, attach a real, quorum-signed
+    /// `UpgradeCertificate` to that view's leaf.
+    ///
+    /// The returned upgrade certificate is properly signed by every
+    /// validator in the test stake table — it verifies under the same
+    /// `EpochMembership` that signs the `cert1` chain, exactly the way the
+    /// upgrade task forms one in production legacy hotshot. Subsequent
+    /// views in the chain re-sign their `cert1` because the upgraded
+    /// leaf's commit changes when the certificate is attached.
+    pub async fn new_with_upgrade(
+        num_views: usize,
+        epoch_height: u64,
+        num_nodes: usize,
+        upgrade_at_view: Option<(ViewNumber, UpgradeProposalData)>,
+    ) -> Self {
         crate::logging::init_test_logging();
         let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
         let (membership, _storage, _client) =
             mock_membership_with_num_nodes(num_nodes, epoch_height, public_key).await;
         let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
-        let upgrade = TEST_VERSIONS.vid2;
+        // Match `test_upgrade_lock()` (used by `ConsensusHarness` and
+        // `TestRunner`) so signature commitments computed during view
+        // generation are byte-identical to what those harnesses verify.
+        // Different versions in `Upgrade::trivial` would produce
+        // different `VersionedVoteData` commitments, breaking cert
+        // signature verification across the boundary.
+        let upgrade = versions::Upgrade::trivial(versions::CLIQUENET_VERSION);
 
         let mut generator =
             TestViewGenerator::generate(membership.clone(), node_key_map.clone(), upgrade);
+
+        // Pre-build the upgrade certificate so we can attach it to the
+        // matching view in the patching loop below.
+        let upgrade_cert: Option<(ViewNumber, UpgradeCertificate<TestTypes>)> =
+            if let Some((target_view, ref data)) = upgrade_at_view {
+                let epoch_membership = membership
+                    .membership_for_epoch(Some(EpochNumber::genesis()))
+                    .await
+                    .unwrap();
+                let (leader_pk, leader_priv_key) =
+                    BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+                let cert = build_cert::<
+                    TestTypes,
+                    UpgradeProposalData,
+                    UpgradeVote<TestTypes>,
+                    UpgradeCertificate<TestTypes>,
+                >(
+                    data.clone(),
+                    &epoch_membership,
+                    target_view,
+                    &leader_pk,
+                    &leader_priv_key,
+                    &test_upgrade_lock::<TestTypes>(),
+                )
+                .await;
+                Some((target_view, cert))
+            } else {
+                None
+            };
 
         let gen_views: Vec<_> = (&mut generator).take(num_views).collect::<Vec<_>>().await;
 
@@ -343,6 +398,19 @@ impl TestData {
                 proposal.next_epoch_justify_qc = prev_new_cert2.clone();
             }
 
+            // Attach the upgrade certificate at the requested view. The
+            // leaf's commitment will absorb the certificate; subsequent
+            // views must rebuild their justify_qc against the new commit
+            // (handled below via `prev_new_cert1`).
+            let upgrade_attached = upgrade_cert.as_ref().is_some_and(|(target_view, cert)| {
+                if *target_view == view_number {
+                    proposal.upgrade_certificate = Some(cert.clone());
+                    true
+                } else {
+                    false
+                }
+            });
+
             // Recompute leaf and commitment (may differ from generator output
             // when we touched justify_qc or next_drb_result).
             let leaf = Leaf2::from(proposal.clone());
@@ -404,7 +472,12 @@ impl TestData {
 
             // Propagate the rebuilt cert1 so the next view's justify_qc is
             // consistent with our updated commitment.
-            if needs_drb || needs_justify_update || needs_new_epoch || epoch_patched {
+            if needs_drb
+                || needs_justify_update
+                || needs_new_epoch
+                || epoch_patched
+                || upgrade_attached
+            {
                 prev_new_cert1 = Some(cert1.clone());
             }
             // Set prev_new_cert2 on the last block of each epoch so the
