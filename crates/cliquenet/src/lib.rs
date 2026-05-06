@@ -8,10 +8,11 @@ mod time;
 pub mod error;
 pub mod x25519;
 
-use std::{fmt, num::NonZeroUsize, time::Duration};
+use std::{fmt, num::NonZeroUsize, sync::Arc, time::Duration};
 
 pub use addr::NetAddr;
 use bon::Builder;
+pub use error::NetworkError;
 pub use msg::Slot;
 pub use net::{
     Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
@@ -23,7 +24,8 @@ use crate::x25519::{Keypair, PublicKey};
 #[derive(Debug, Builder)]
 pub struct Config {
     /// Network name.
-    name: &'static str,
+    #[builder(with = |s: impl Into<String>| Arc::new(s.into()))]
+    name: Arc<String>,
 
     /// DH keypair
     keypair: Keypair,
@@ -49,6 +51,10 @@ pub struct Config {
     #[builder(default = Duration::from_secs(30))]
     max_retry_delay: Duration,
 
+    /// Randomly delay the initial connect attempt between 0 and 1s.
+    #[builder(default = true)]
+    random_connect_delay: bool,
+
     #[builder(default = Duration::from_secs(30))]
     connect_timeout: Duration,
 
@@ -57,6 +63,15 @@ pub struct Config {
 
     #[builder(default = Duration::from_secs(30))]
     receive_timeout: Duration,
+
+    #[builder(default = Duration::from_secs(30))]
+    backoff_duration: Duration,
+}
+
+impl Config {
+    pub fn public_key(&self) -> PublicKey {
+        self.keypair.public_key()
+    }
 }
 
 /// Network peer role.

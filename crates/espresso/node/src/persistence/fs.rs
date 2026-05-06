@@ -14,8 +14,8 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use clap::Parser;
 use espresso_types::{
-    AuthenticatedValidatorMap, CoordinatorEvent, Leaf, Leaf2, NetworkConfig, Payload, PubKey,
-    RegisteredValidatorMap, SeqTypes, StakeTableHash,
+    AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
+    SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -36,6 +36,7 @@ use hotshot_types::{
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
+    new_protocol::CoordinatorEvent,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,

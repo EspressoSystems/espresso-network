@@ -46,7 +46,9 @@ use hotshot_types::{
     light_client::StateKeyPair,
     signature_key::BLSPubKey,
     storage_metrics::StorageMetricsValue,
-    traits::{election::Membership, network::Topic},
+    traits::{
+        election::Membership, leaf_fetcher_network::ConnectedNetworkLeafFetcher, network::Topic,
+    },
 };
 use test_utils::reserve_tcp_port;
 use tracing_subscriber::EnvFilter;
@@ -242,11 +244,13 @@ async fn init_consensus(
 
                 let storage: TestStorage<MockTypes> = TestStorage::default();
 
-                let membership = MockMembership::new::<MockNodeImpl>(
+                let membership = MockMembership::new(
                     known_nodes_with_stake_clone.clone(),
                     known_nodes_with_stake_clone,
                     storage.clone(),
-                    network.clone(),
+                    Arc::new(ConnectedNetworkLeafFetcher::<MockTypes, _>::new(
+                        network.clone(),
+                    )),
                     pub_keys[node_id],
                     config.epoch_height,
                 );
