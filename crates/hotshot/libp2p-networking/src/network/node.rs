@@ -267,7 +267,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 .set_publication_interval(Some(kademlia_record_republication_interval))
                 .set_record_ttl(Some(kademlia_ttl));
 
-            // allowing panic here because something is very wrong if this fales
+            // allowing panic here because something is very wrong if this fails
             #[allow(clippy::panic)]
             if let Some(factor) = config.replication_factor {
                 kconfig.set_replication_factor(factor);
@@ -687,14 +687,31 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                     peer,
                                     error,
                                 } => {
-                                    warn!(
-                                        "AutoNAT Probe failed to peer {peer:?} with error: \
-                                         {error:?}"
-                                    );
+                                    debug!("AutoNAT outbound probe to {peer:?} failed: {error:?}");
                                 },
                             },
-                            autonat::Event::StatusChanged { old, new } => {
-                                debug!("AutoNAT Status changed. Old: {old:?}, New: {new:?}");
+                            autonat::Event::StatusChanged { old, new } => match &new {
+                                autonat::NatStatus::Public(addr) => {
+                                    info!(
+                                        "AutoNAT: this node is publicly reachable at {addr} (was \
+                                         {old:?})"
+                                    );
+                                },
+                                autonat::NatStatus::Private => {
+                                    error!(
+                                        "AutoNAT: this node is NOT publicly reachable. Peers \
+                                         cannot direct-message us, so leader views will fail and \
+                                         we will accumulate missed slots. Fixes: set \
+                                         --libp2p-advertise-address (env \
+                                         ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS) to a publicly \
+                                         reachable host:port, and ensure inbound UDP at that port \
+                                         is open from the public internet (firewall/NAT/security \
+                                         group). Status transitioned {old:?} -> Private."
+                                    );
+                                },
+                                autonat::NatStatus::Unknown => {
+                                    debug!("AutoNAT status: {old:?} -> Unknown");
+                                },
                             },
                         };
                         None
