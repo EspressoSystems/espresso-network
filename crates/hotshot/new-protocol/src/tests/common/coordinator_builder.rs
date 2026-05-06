@@ -46,6 +46,7 @@ use crate::{
 /// async-dispatched seed can land. With a seed in place, `start()` reads the
 /// (now advanced) `current_view` and emits `ViewChanged(max_seeded_view + 1)`
 /// instead.
+#[allow(clippy::too_many_arguments)]
 pub async fn build_test_coordinator<N: Network<TestTypes>>(
     node_index: u64,
     network: N,

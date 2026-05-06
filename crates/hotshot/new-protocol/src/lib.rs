@@ -4,6 +4,7 @@ pub mod consensus;
 pub mod coordinator;
 pub mod epoch;
 pub mod epoch_root_vote_collector;
+pub mod harvest;
 pub mod helpers;
 pub mod logging;
 pub mod message;

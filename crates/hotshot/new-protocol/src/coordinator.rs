@@ -894,6 +894,23 @@ where
                     // first 0.8 view can find `certs[N-1]`.
                     self.consensus.register_proposal_justify_qc(&qc);
                 }
+                // Same boot kick as genesis: emit ViewChanged + (if leader)
+                // RequestBlockAndHeader for max_seeded_view + 1 so the
+                // post-cutover view proposes. Drain in place — the run loop
+                // only drains after `next_consensus_input` returns.
+                self.start().await;
+                let mut outputs = Vec::new();
+                while let Some(output) = self.outbox.pop_front() {
+                    outputs.push(output);
+                }
+                for output in outputs {
+                    if let Err(err) = self.process_consensus_output(output).await {
+                        tracing::warn!(
+                            %err,
+                            "error processing post-seed bootstrap output"
+                        );
+                    }
+                }
                 let _ = respond.send(());
             },
             ClientRequest::SubmitTimeoutVote { vote, respond } => {

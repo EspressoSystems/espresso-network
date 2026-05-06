@@ -1397,7 +1397,7 @@ impl<T: NodeType> Consensus<T> {
         // their dispersal happened under AvidM (V1) and was certified
         // available by 0.4's DA mechanism. Only fresh post-cutover proposals
         // require V2 reconstruction before we Vote2.
-        if !is_pre_cutover && self.blocks_reconstructed.get(&view).is_none() {
+        if !is_pre_cutover && !self.blocks_reconstructed.contains_key(&view) {
             debug!("reconstructed block commitment not available");
             return;
         }

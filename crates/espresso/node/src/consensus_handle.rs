@@ -8,13 +8,14 @@ use std::{
 
 use async_broadcast::{InactiveReceiver, Sender};
 use async_lock::RwLock;
-use committable::{Commitment, Committable};
+use committable::Commitment;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
     client::ClientApi,
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
+    harvest::{LegacyPreCutoverSeed, harvest_legacy_pre_cutover_seed, try_perform_handover},
     network::Network,
     state::UpdateLeaf,
     storage::NewProtocolStorage,
@@ -150,92 +151,9 @@ where
         }
     }
 
-    /// Harvest the legacy consensus state into a seed ready to hand to the
-    /// coordinator: the highest decided leaf as anchor, the chain of
-    /// undecided leaves above it walked from `high_qc` backward via
-    /// `justify_qc` until the decided anchor, and the legacy `high_qc`
-    /// itself (which the new protocol registers as `certs[topmost_view]`
-    /// so the first 0.8 leader can find a parent cert).
-    ///
-    /// Returns `None` if no undecided chain can be assembled (e.g. fork mid-walk).
-    /// The fourth element is the validated state for each seeded leaf
-    /// (anchor + undecided), keyed by view number — the new protocol's
-    /// header builder and state validator pipeline against the parent
-    /// view's stored state, so without these entries the first
-    /// post-cutover header request queues forever.
-    pub async fn harvest_legacy_pre_cutover_seed(
-        &self,
-    ) -> Option<(
-        Leaf2<T>,
-        Vec<Leaf2<T>>,
-        hotshot_types::simple_certificate::QuorumCertificate2<T>,
-        std::collections::BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
-    )> {
+    pub async fn harvest_legacy_pre_cutover_seed(&self) -> Option<LegacyPreCutoverSeed<T>> {
         let legacy = self.legacy_handle.read().await;
-        let consensus_arc = legacy.hotshot.consensus();
-        let consensus = consensus_arc.read().await;
-        let decided_anchor = consensus.decided_leaf();
-        let decided_view = decided_anchor.view_number();
-        let decided_commit = decided_anchor.commit();
-
-        let high_qc = consensus.high_qc().clone();
-        let saved = consensus.saved_leaves();
-
-        // Walk the chain backward from the high QC's leaf until we reach
-        // the decided anchor (or fail).
-        let mut chain: Vec<Leaf2<T>> = Vec::new();
-        let mut next_commit = high_qc.data.leaf_commit;
-        loop {
-            if next_commit == decided_commit {
-                break;
-            }
-            let Some(leaf) = saved.get(&next_commit) else {
-                tracing::warn!(
-                    %next_commit,
-                    "harvest_legacy_pre_cutover_seed: missing leaf in saved_leaves; aborting",
-                );
-                return None;
-            };
-            if leaf.view_number() <= decided_view {
-                tracing::warn!(
-                    leaf_view = *leaf.view_number(),
-                    %decided_view,
-                    "harvest_legacy_pre_cutover_seed: walked below decided view without matching commit; aborting",
-                );
-                return None;
-            }
-            chain.push(leaf.clone());
-            next_commit = leaf.justify_qc().data.leaf_commit;
-        }
-
-        // Reverse so the chain is oldest-first.
-        chain.reverse();
-
-        // Harvest validated states for the anchor and each undecided leaf.
-        // Skip leaves whose state isn't yet in the legacy validated_state_map
-        // (the coordinator handler tolerates partial maps and only seeds the
-        // state_manager for views it has).
-        let mut validated_states = std::collections::BTreeMap::new();
-        if let Some(state) = consensus.state(decided_view) {
-            validated_states.insert(decided_view, state.clone());
-        } else {
-            tracing::warn!(
-                %decided_view,
-                "harvest_legacy_pre_cutover_seed: no validated state for decided anchor",
-            );
-        }
-        for leaf in &chain {
-            let view = leaf.view_number();
-            if let Some(state) = consensus.state(view) {
-                validated_states.insert(view, state.clone());
-            } else {
-                tracing::warn!(
-                    %view,
-                    "harvest_legacy_pre_cutover_seed: no validated state for undecided leaf",
-                );
-            }
-        }
-        Some((decided_anchor, chain, high_qc, validated_states))
+        harvest_legacy_pre_cutover_seed(&legacy).await
     }
 
     pub fn legacy_consensus(&self) -> Arc<RwLock<SystemContextHandle<T, I>>> {
@@ -281,27 +199,9 @@ where
         if self.new_protocol_active.load(Ordering::Relaxed) {
             return true;
         }
-        let view = self.legacy_handle.read().await.cur_view().await;
-        let active = self.new_protocol_at(view).await;
+        let legacy = self.legacy_handle.read().await;
+        let active = try_perform_handover(&legacy, &self.client_api).await;
         if active {
-            // Hand the legacy → new-protocol seed to the coordinator on the
-            // first activation transition. The coordinator's client request
-            // dispatch handles re-seeding idempotently at the consensus layer.
-            if let Some((decided_anchor, undecided, high_qc, validated_states)) =
-                self.harvest_legacy_pre_cutover_seed().await
-            {
-                if let Err(err) = self
-                    .client_api
-                    .seed_pre_cutover(decided_anchor, undecided, Some(high_qc), validated_states)
-                    .await
-                {
-                    tracing::warn!(%err, "seed_pre_cutover client request failed at activation");
-                }
-            } else {
-                tracing::warn!(
-                    "harvest_legacy_pre_cutover_seed returned None; coordinator will not be seeded",
-                );
-            }
             self.new_protocol_active.store(true, Ordering::Relaxed);
         }
         active
@@ -587,13 +487,10 @@ async fn forward_legacy_timeout_votes<T: NodeType>(
     use hotshot_types::event::EventType;
     let mut rx = legacy_event_rx.activate_cloned();
     while let Some(event) = rx.next().await {
-        if let EventType::LegacyTimeoutVoteEmitted { vote } = event.event {
-            if let Err(err) = client_api.submit_timeout_vote(vote).await {
-                tracing::warn!(
-                    %err,
-                    "failed to forward legacy TimeoutVote2 to new-protocol coordinator",
-                );
-            }
+        if let EventType::LegacyTimeoutVoteEmitted { vote } = event.event
+            && let Err(err) = client_api.submit_timeout_vote(vote).await
+        {
+            tracing::warn!(%err, "failed to forward legacy TimeoutVote2 to new-protocol coordinator");
         }
     }
 }
