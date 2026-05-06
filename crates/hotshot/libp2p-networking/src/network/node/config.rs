@@ -26,6 +26,15 @@ pub struct NetworkNodeConfig {
     #[builder(default)]
     pub bind_address: Option<Multiaddr>,
 
+    /// Addresses to announce as external addresses to peers.
+    ///
+    /// Each is added via `Swarm::add_external_address` during node setup. Identify will publish
+    /// them, and Kademlia will record them in our self-routing-table entry. Required when the
+    /// node is behind NAT, K8s NodePort, Docker bridge, etc., where the bind address is not
+    /// reachable from peers.
+    #[builder(default)]
+    pub announce_addresses: Vec<Multiaddr>,
+
     /// Replication factor for entries in the DHT
     #[builder(setter(into, strip_option), default = "DEFAULT_REPLICATION_FACTOR")]
     pub replication_factor: Option<NonZeroUsize>,
@@ -68,6 +77,7 @@ impl Clone for NetworkNodeConfig {
         Self {
             keypair: self.keypair.clone(),
             bind_address: self.bind_address.clone(),
+            announce_addresses: self.announce_addresses.clone(),
             replication_factor: self.replication_factor,
             gossip_config: self.gossip_config.clone(),
             request_response_config: self.request_response_config.clone(),

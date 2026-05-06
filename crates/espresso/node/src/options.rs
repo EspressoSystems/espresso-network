@@ -213,12 +213,15 @@ pub struct Options {
 
     /// The address we advertise to other nodes as being a Libp2p endpoint.
     /// Should be supplied in `host:port` form.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS",
-        default_value = "localhost:1769"
-    )]
-    pub libp2p_advertise_address: String,
+    ///
+    /// Required when bootstrapping a fresh network from the orchestrator (it is registered into
+    /// the stake table so peers can dial us). Optional otherwise — if set when joining an
+    /// existing network, it is added as a libp2p `external_address` so that Identify and
+    /// Kademlia announce it to peers, which is necessary when the bind address is not reachable
+    /// (e.g. K8s NodePort, Docker bridge, or any NAT). Setting a loopback address is almost
+    /// certainly wrong; the operator is responsible for providing a publicly reachable value.
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS")]
+    pub libp2p_advertise_address: Option<String>,
 
     /// A comma-separated list of Libp2p multiaddresses to use as bootstrap
     /// nodes.
