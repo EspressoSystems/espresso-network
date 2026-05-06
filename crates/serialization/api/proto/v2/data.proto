@@ -8,7 +8,7 @@ package espresso.api.v2;
 
 // ADVZ (VID V0) namespace proof
 message ADVZNsProof {
-  uint32 namespace_id = 1;
+  uint64 namespace_id = 1;
   string ns_payload = 2;
   optional string ns_proof = 3;  // VID proof (serialized)
 }
@@ -50,7 +50,7 @@ message NsProof {
 // Either specify 'block' for a single block, or 'first' and 'last' for a range
 message GetNamespaceProofRequest {
   // Namespace ID
-  uint32 namespace_id = 1;
+  uint64 namespace_id = 1;
 
   // Single block query
   optional uint64 block = 2;
@@ -64,7 +64,7 @@ message GetNamespaceProofRequest {
 
 // Transaction
 message Transaction {
-  uint32 namespace = 1;
+  uint64 namespace = 1;
   string payload = 2;  // base64 encoded
 }
 
@@ -98,7 +98,7 @@ message GetNamespaceProofResponse {
 // Request to get incorrect encoding proof
 message GetIncorrectEncodingProofRequest {
   // Namespace ID
-  uint32 namespace_id = 1;
+  uint64 namespace_id = 1;
 
   // Block height
   uint64 block_height = 2;

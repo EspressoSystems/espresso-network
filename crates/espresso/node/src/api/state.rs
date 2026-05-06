@@ -282,7 +282,7 @@ where
                     .to_string();
 
                 Ok(v2::Transaction {
-                    namespace: u32::from(tx.namespace),
+                    namespace: tx.namespace.0,
                     payload: payload_str,
                 })
             })
@@ -851,14 +851,14 @@ where
 {
     async fn get_namespace_proof(
         &self,
-        namespace_id: u32,
+        namespace_id: u64,
         block_height: u64,
     ) -> anyhow::Result<Self::NamespaceProof> {
         use espresso_types::NamespaceId;
         use futures::join;
         use hotshot_query_service::availability::BlockId;
 
-        let ns_id = NamespaceId::from(namespace_id);
+        let ns_id = NamespaceId(namespace_id);
         let block_id = BlockId::Number(block_height as usize);
 
         // Fetch block and VID common data concurrently
@@ -903,13 +903,13 @@ where
 
     async fn get_namespace_proof_range(
         &self,
-        namespace_id: u32,
+        namespace_id: u64,
         from: u64,
         until: u64,
     ) -> anyhow::Result<Vec<Self::NamespaceProof>> {
         use espresso_types::NamespaceId;
 
-        let ns_id = NamespaceId::from(namespace_id);
+        let ns_id = NamespaceId(namespace_id);
 
         // Validate range
         if until <= from {
@@ -991,21 +991,19 @@ where
 
     async fn get_incorrect_encoding_proof(
         &self,
-        namespace_id: u32,
+        namespace_id: u64,
         block_height: u64,
     ) -> anyhow::Result<Self::IncorrectEncodingProof> {
         use std::time::Duration;
 
         use espresso_types::{NamespaceId, NsProof};
         use futures::join;
-        use hotshot_query_service::{
-            availability::BlockId, node::NodeDataSource as _, types::HeightIndexed as _,
-        };
+        use hotshot_query_service::{availability::BlockId, node::NodeDataSource as _};
         use hotshot_types::{data::VidShare, vid::avidm::AvidMShare};
 
         use super::data_source::RequestResponseDataSource as _;
 
-        let ns_id = NamespaceId::from(namespace_id);
+        let ns_id = NamespaceId(namespace_id);
         let block_id = BlockId::Number(block_height as usize);
 
         let ds = &*self.data_source;

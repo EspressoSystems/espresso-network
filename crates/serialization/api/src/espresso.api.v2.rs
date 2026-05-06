@@ -328,8 +328,8 @@ pub struct GetRewardMerkleTreeRequest {
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvzNsProof {
-    #[prost(uint32, tag = "1")]
-    pub namespace_id: u32,
+    #[prost(uint64, tag = "1")]
+    pub namespace_id: u64,
     #[prost(string, tag = "2")]
     pub ns_payload: ::prost::alloc::string::String,
     /// VID proof (serialized)
@@ -396,9 +396,9 @@ pub mod ns_proof {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetNamespaceProofRequest {
     /// Namespace ID
-    #[prost(uint32, tag = "1")]
+    #[prost(uint64, tag = "1")]
     #[schemars(example = "10001")]
-    pub namespace_id: u32,
+    pub namespace_id: u64,
     /// Single block query
     #[prost(uint64, optional, tag = "2")]
     #[schemars(example = "1000000")]
@@ -416,8 +416,8 @@ pub struct GetNamespaceProofRequest {
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Transaction {
-    #[prost(uint32, tag = "1")]
-    pub namespace: u32,
+    #[prost(uint64, tag = "1")]
+    pub namespace: u64,
     /// base64 encoded
     #[prost(string, tag = "2")]
     pub payload: ::prost::alloc::string::String,
@@ -466,9 +466,9 @@ pub mod get_namespace_proof_response {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetIncorrectEncodingProofRequest {
     /// Namespace ID
-    #[prost(uint32, tag = "1")]
+    #[prost(uint64, tag = "1")]
     #[schemars(example = "10001")]
-    pub namespace_id: u32,
+    pub namespace_id: u64,
     /// Block height
     #[prost(uint64, tag = "2")]
     #[schemars(example = "1000000")]
