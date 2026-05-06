@@ -71,6 +71,13 @@ pub struct Options {
     )]
     pub cliquenet_bind_address: NetAddr,
 
+    /// The address to advertise to other nodes for cliquenet (in `host:port` | `ip:port` form).
+    ///
+    /// Only used for orchestrator-based setup (test networks). On real networks the address
+    /// must be registered in the stake table contract instead.
+    #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS")]
+    pub cliquenet_advertise_address: Option<NetAddr>,
+
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
         long,

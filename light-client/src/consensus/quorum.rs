@@ -3,7 +3,7 @@ use std::{future::Future, sync::Arc};
 use alloy::primitives::U256;
 use anyhow::{Context, Result, bail, ensure};
 use committable::Committable;
-use espresso_types::{Leaf2, PubKey, SeqTypes};
+use espresso_types::{Certificate2, Leaf2, PubKey, SeqTypes};
 use hotshot_types::{
     epoch_membership::EpochMembership,
     message::UpgradeLock,
@@ -49,6 +49,39 @@ pub trait Quorum: Sync {
     fn verify_static<V: StaticVersionType + 'static>(
         &self,
         qc: &Certificate,
+    ) -> impl Send + Future<Output = Result<()>>;
+
+    /// Verify a new protocol Certificate2 threshold signature.
+    fn verify_cert2(
+        &self,
+        cert2: &Certificate2<SeqTypes>,
+        version: Version,
+    ) -> impl Send + Future<Output = Result<()>> {
+        async move {
+            match (version.major, version.minor) {
+                (0, 1) => self.verify_cert2_static::<StaticVersion<0, 1>>(cert2).await,
+                (0, 2) => self.verify_cert2_static::<StaticVersion<0, 2>>(cert2).await,
+                (0, 3) => self.verify_cert2_static::<StaticVersion<0, 3>>(cert2).await,
+                (0, 4) => self.verify_cert2_static::<StaticVersion<0, 4>>(cert2).await,
+                (0, 5) => self.verify_cert2_static::<StaticVersion<0, 5>>(cert2).await,
+                (0, 6) => self.verify_cert2_static::<StaticVersion<0, 6>>(cert2).await,
+                (0, 7) => self.verify_cert2_static::<StaticVersion<0, 7>>(cert2).await,
+                (0, 8) => self.verify_cert2_static::<StaticVersion<0, 8>>(cert2).await,
+                _ => {
+                    const {
+                        assert!(MAX_SUPPORTED_VERSION.major == 0);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
+                    }
+                    bail!("unsupported version {version}");
+                },
+            }
+        }
+    }
+
+    /// Same as [`verify_cert2`](Self::verify_cert2), but with the version as a type-level parameter.
+    fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        cert2: &Certificate2<SeqTypes>,
     ) -> impl Send + Future<Output = Result<()>>;
 
     /// Verify that QCs are signed, form a chain starting from `leaf`, with a particular protocol
@@ -267,6 +300,17 @@ where
         }
 
         Ok(())
+    }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        cert2: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        let stake_table = self.membership.stake_table().await?;
+        stake_table
+            .verify_cert::<V, _>(cert2)
+            .await
+            .context("verifying cert2")
     }
 }
 
