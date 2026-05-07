@@ -116,6 +116,7 @@ where
         stake_table_capacity: usize,
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
+        bootstrap_epoch_catchup_timeout: Duration,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -174,9 +175,13 @@ where
         // `first_epoch` is now seeded on the shared membership. Walk the
         // catchup chain forward to populate the stake-table window for the
         // current epoch.
-        let current_epoch = bootstrap_epoch_window(&membership_coordinator, epoch_height)
-            .await
-            .context("startup stake-table catchup failed")?;
+        let current_epoch = bootstrap_epoch_window(
+            &membership_coordinator,
+            epoch_height,
+            bootstrap_epoch_catchup_timeout,
+        )
+        .await
+        .context("startup stake-table catchup failed")?;
         tracing::info!(%current_epoch, "Startup catchup complete");
 
         // Push the resolved peer window into the coordinator network. For
