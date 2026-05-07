@@ -32,7 +32,6 @@ use espresso_node::{
         options,
         test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
     },
-    options::PublicNodeConfig,
     persistence,
     state_signature::relay_server::{StateRelayServerState, run_relay_server_with_state},
     testing::TestConfigBuilder,
@@ -654,7 +653,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
         tonic_port,
     })
     .submit(Default::default())
-    .config(Default::default(), PublicNodeConfig::for_test())
+    .config(Default::default())
     .explorer(Default::default())
     .query_sql(Default::default(), sql)
     .hotshot_events(Default::default());

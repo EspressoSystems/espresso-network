@@ -3243,7 +3243,6 @@ mod test {
             test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
         },
         catchup::{NullStateCatchup, StatePeers},
-        options::PublicNodeConfig,
         persistence,
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder, wait_for_decide_on_handle, wait_for_epochs},
@@ -4145,8 +4144,7 @@ mod test {
         let url: surf_disco::Url = format!("http://localhost:{port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url.clone());
 
-        let options =
-            Options::with_port(port).config(Default::default(), PublicNodeConfig::for_test());
+        let options = Options::with_port(port).config(Default::default());
         let network_config = TestConfigBuilder::default().build();
         let config = TestNetworkConfigBuilder::default()
             .api_config(options)

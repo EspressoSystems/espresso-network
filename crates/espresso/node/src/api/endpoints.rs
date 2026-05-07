@@ -1087,7 +1087,7 @@ where
 pub(super) fn config<S, ApiVer: StaticVersionType + 'static>(
     _: ApiVer,
     api_ver: semver::Version,
-    node_config: PublicNodeConfig,
+    public_node_config: Option<PublicNodeConfig>,
 ) -> Result<Api<S, Error, ApiVer>>
 where
     S: 'static + Send + Sync + ReadState,
@@ -1110,9 +1110,17 @@ where
         }
         .boxed()
     })?
-    .get("node", move |_, _| {
-        let node_config = node_config.clone();
-        async move { Ok(node_config) }.boxed()
+    .get("runtime", move |_, _| {
+        let public_node_config = public_node_config.clone();
+        async move {
+            public_node_config.ok_or_else(|| {
+                Error::catch_all(
+                    StatusCode::NOT_FOUND,
+                    "runtime config not available".to_string(),
+                )
+            })
+        }
+        .boxed()
     })?;
 
     Ok(api)

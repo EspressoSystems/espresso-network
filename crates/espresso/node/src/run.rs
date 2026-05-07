@@ -163,7 +163,7 @@ where
                 http_opt = http_opt.light_client(light_client);
             }
             if let Some(config) = modules.config {
-                http_opt = http_opt.config(config, public_node_config);
+                http_opt = http_opt.config(config).public_node_config(public_node_config);
             }
 
             http_opt
@@ -357,21 +357,21 @@ mod test {
             "expected testing in features: {lines:#?}"
         );
 
-        // The /config/node endpoint should be available and reflect CLI overrides. Use a raw
+        // The /config/runtime endpoint should be available and reflect CLI overrides. Use a raw
         // reqwest client to fetch JSON, since surf-disco defaults to bincode encoding which can't
         // round-trip arbitrary JSON via `serde_json::Value`.
         let res = reqwest::Client::new()
-            .get(url.join("/config/node").unwrap())
+            .get(url.join("/config/runtime").unwrap())
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await
             .unwrap();
         assert!(
             res.status().is_success(),
-            "config/node status: {}",
+            "config/runtime status: {}",
             res.status()
         );
-        let node_cfg: serde_json::Value = res.json().await.expect("config/node returns JSON");
+        let node_cfg: serde_json::Value = res.json().await.expect("config/runtime returns JSON");
         assert_eq!(
             node_cfg["cliquenet_bind_address"],
             serde_json::Value::String(format!("127.0.0.1:{port2}")),
@@ -384,7 +384,7 @@ mod test {
         );
         let top_level = node_cfg
             .as_object()
-            .expect("config/node returns a JSON object");
+            .expect("config/runtime returns a JSON object");
         for key in top_level.keys() {
             assert!(
                 !key.to_lowercase().contains("private"),

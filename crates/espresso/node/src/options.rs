@@ -1016,15 +1016,7 @@ impl PublicNodeConfig {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl PublicNodeConfig {
-    /// Build a minimal `PublicNodeConfig` for tests, using freshly generated keys.
-    pub fn for_test() -> Self {
-        Self::new(&tests::parse_options_with(&[]), &Modules::default())
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 mod tests {
     use espresso_types::PubKey;
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
