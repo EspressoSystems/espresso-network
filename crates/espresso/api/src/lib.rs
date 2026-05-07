@@ -26,6 +26,7 @@ pub async fn serve_axum<S>(port: u16, state: S) -> anyhow::Result<()>
 where
     S: v1::RewardApi
         + v1::AvailabilityApi
+        + v1::HotShotAvailabilityApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi

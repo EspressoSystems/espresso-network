@@ -181,6 +181,103 @@ impl v1::AvailabilityApi for TestApi {
     }
 }
 
+// Stub HotShotAvailabilityApi for the example — returns empty/unit data.
+#[async_trait]
+impl v1::HotShotAvailabilityApi for TestApi {
+    type Leaf = serde_json::Value;
+    type Block = serde_json::Value;
+    type Header = serde_json::Value;
+    type Payload = serde_json::Value;
+    type VidCommon = serde_json::Value;
+    type Transaction = serde_json::Value;
+    type TransactionWithProof = serde_json::Value;
+    type BlockSummary = serde_json::Value;
+    type Limits = serde_json::Value;
+    type Cert2 = serde_json::Value;
+
+    async fn get_leaf(&self, _id: v1::LeafId) -> Result<Self::Leaf> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_leaf_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Leaf>> {
+        Ok(vec![])
+    }
+    async fn get_header(&self, _id: v1::BlockId) -> Result<Self::Header> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_header_range(
+        &self,
+        _from: usize,
+        _until: usize,
+    ) -> Result<Vec<Self::Header>> {
+        Ok(vec![])
+    }
+    async fn get_block(&self, _id: v1::BlockId) -> Result<Self::Block> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_block_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Block>> {
+        Ok(vec![])
+    }
+    async fn get_payload(&self, _id: v1::PayloadId) -> Result<Self::Payload> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_payload_range(
+        &self,
+        _from: usize,
+        _until: usize,
+    ) -> Result<Vec<Self::Payload>> {
+        Ok(vec![])
+    }
+    async fn get_vid_common(&self, _id: v1::BlockId) -> Result<Self::VidCommon> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_vid_common_range(
+        &self,
+        _from: usize,
+        _until: usize,
+    ) -> Result<Vec<Self::VidCommon>> {
+        Ok(vec![])
+    }
+    async fn get_transaction_by_position(
+        &self,
+        _height: u64,
+        _index: u64,
+    ) -> Result<Self::Transaction> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_transaction_by_hash(&self, _hash: String) -> Result<Self::Transaction> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_transaction_proof_by_position(
+        &self,
+        _height: u64,
+        _index: u64,
+    ) -> Result<Self::TransactionWithProof> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_transaction_proof_by_hash(
+        &self,
+        _hash: String,
+    ) -> Result<Self::TransactionWithProof> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_block_summary(&self, _height: usize) -> Result<Self::BlockSummary> {
+        Ok(serde_json::json!({}))
+    }
+    async fn get_block_summary_range(
+        &self,
+        _from: usize,
+        _until: usize,
+    ) -> Result<Vec<Self::BlockSummary>> {
+        Ok(vec![])
+    }
+    async fn get_limits(&self) -> Result<Self::Limits> {
+        Ok(serde_json::json!({"small_object_range_limit": 500, "large_object_range_limit": 100}))
+    }
+    async fn get_cert2(&self, _height: u64) -> Result<Option<Self::Cert2>> {
+        Ok(None)
+    }
+}
+
 // Implement v2::RewardApi (simplified API - latest-only for claim/balance/proof)
 #[async_trait]
 impl v2::RewardApi for TestApi {

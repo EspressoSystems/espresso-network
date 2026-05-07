@@ -1459,3 +1459,473 @@ where
         Ok(espresso_types::StateCertQueryDataV2(cert))
     }
 }
+
+// ============================================================================
+// v1::HotShotAvailabilityApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v1::HotShotAvailabilityApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
+        + Send
+        + Sync,
+{
+    type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
+    type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
+    type Header = hotshot_query_service::Header<espresso_types::SeqTypes>;
+    type Payload =
+        hotshot_query_service::availability::PayloadQueryData<espresso_types::SeqTypes>;
+    type VidCommon =
+        hotshot_query_service::availability::VidCommonQueryData<espresso_types::SeqTypes>;
+    type Transaction =
+        hotshot_query_service::availability::TransactionQueryData<espresso_types::SeqTypes>;
+    type TransactionWithProof = hotshot_query_service::availability::TransactionWithProofQueryData<
+        espresso_types::SeqTypes,
+    >;
+    type BlockSummary =
+        hotshot_query_service::availability::BlockSummaryQueryData<espresso_types::SeqTypes>;
+    type Limits = hotshot_query_service::availability::Limits;
+    type Cert2 = hotshot_new_protocol::message::Certificate2<espresso_types::SeqTypes>;
+
+    async fn get_leaf(
+        &self,
+        id: espresso_api::v1::availability::LeafId,
+    ) -> anyhow::Result<Self::Leaf> {
+        use hotshot_query_service::availability::LeafId as HsLeafId;
+        use std::time::Duration;
+
+        let hs_id = match id {
+            espresso_api::v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
+            espresso_api::v1::availability::LeafId::Hash(h) => {
+                HsLeafId::Hash(h.parse().map_err(|_| anyhow::anyhow!("invalid leaf hash"))?)
+            },
+        };
+        let ds = &*self.data_source;
+        ds.get_leaf(hs_id)
+            .await
+            .with_timeout(Duration::from_millis(500))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("leaf not found"))
+    }
+
+    async fn get_leaf_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<Self::Leaf>> {
+        use futures::StreamExt as _;
+        use std::time::Duration;
+
+        let timeout = Duration::from_millis(500);
+        let ds = &*self.data_source;
+        let stream = ds.get_leaf_range(from..until).await;
+        let mut results = Vec::new();
+        futures::pin_mut!(stream);
+        let mut i = from;
+        while let Some(fetch) = stream.next().await {
+            let item = fetch
+                .with_timeout(timeout)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("leaf {} not found", i))?;
+            results.push(item);
+            i += 1;
+        }
+        Ok(results)
+    }
+
+    async fn get_header(
+        &self,
+        id: espresso_api::v1::availability::BlockId,
+    ) -> anyhow::Result<Self::Header> {
+        use std::time::Duration;
+
+        let hs_id = block_id_to_hs(id)?;
+        let ds = &*self.data_source;
+        ds.get_header(hs_id)
+            .await
+            .with_timeout(Duration::from_millis(500))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("header not found for {}", hs_id))
+    }
+
+    async fn get_header_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<Self::Header>> {
+        use futures::StreamExt as _;
+        use std::time::Duration;
+
+        let timeout = Duration::from_millis(500);
+        let ds = &*self.data_source;
+        let stream = ds.get_header_range(from..until).await;
+        let mut results = Vec::new();
+        futures::pin_mut!(stream);
+        let mut i = from;
+        while let Some(fetch) = stream.next().await {
+            let item = fetch
+                .with_timeout(timeout)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("header {} not found", i))?;
+            results.push(item);
+            i += 1;
+        }
+        Ok(results)
+    }
+
+    async fn get_block(
+        &self,
+        id: espresso_api::v1::availability::BlockId,
+    ) -> anyhow::Result<Self::Block> {
+        use std::time::Duration;
+
+        let hs_id = block_id_to_hs(id)?;
+        let ds = &*self.data_source;
+        ds.get_block(hs_id)
+            .await
+            .with_timeout(Duration::from_millis(500))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("block not found for {}", hs_id))
+    }
+
+    async fn get_block_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<Self::Block>> {
+        use futures::StreamExt as _;
+        use std::time::Duration;
+
+        let timeout = Duration::from_millis(500);
+        let ds = &*self.data_source;
+        let stream = ds.get_block_range(from..until).await;
+        let mut results = Vec::new();
+        futures::pin_mut!(stream);
+        let mut i = from;
+        while let Some(fetch) = stream.next().await {
+            let item = fetch
+                .with_timeout(timeout)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("block {} not found", i))?;
+            results.push(item);
+            i += 1;
+        }
+        Ok(results)
+    }
+
+    async fn get_payload(
+        &self,
+        id: espresso_api::v1::availability::PayloadId,
+    ) -> anyhow::Result<Self::Payload> {
+        use std::time::Duration;
+
+        let hs_id = payload_id_to_hs(id)?;
+        let ds = &*self.data_source;
+        ds.get_payload(hs_id)
+            .await
+            .with_timeout(Duration::from_millis(500))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("payload not found for {}", hs_id))
+    }
+
+    async fn get_payload_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<Self::Payload>> {
+        use futures::StreamExt as _;
+        use std::time::Duration;
+
+        let timeout = Duration::from_millis(500);
+        let ds = &*self.data_source;
+        let stream = ds.get_payload_range(from..until).await;
+        let mut results = Vec::new();
+        futures::pin_mut!(stream);
+        let mut i = from;
+        while let Some(fetch) = stream.next().await {
+            let item = fetch
+                .with_timeout(timeout)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("payload {} not found", i))?;
+            results.push(item);
+            i += 1;
+        }
+        Ok(results)
+    }
+
+    async fn get_vid_common(
+        &self,
+        id: espresso_api::v1::availability::BlockId,
+    ) -> anyhow::Result<Self::VidCommon> {
+        use std::time::Duration;
+
+        let hs_id = block_id_to_hs(id)?;
+        let ds = &*self.data_source;
+        ds.get_vid_common(hs_id)
+            .await
+            .with_timeout(Duration::from_millis(500))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("VID common not found for {}", hs_id))
+    }
+
+    async fn get_vid_common_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<Self::VidCommon>> {
+        use futures::StreamExt as _;
+        use std::time::Duration;
+
+        let timeout = Duration::from_millis(500);
+        let ds = &*self.data_source;
+        let stream = ds.get_vid_common_range(from..until).await;
+        let mut results = Vec::new();
+        futures::pin_mut!(stream);
+        let mut i = from;
+        while let Some(fetch) = stream.next().await {
+            let item = fetch
+                .with_timeout(timeout)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("VID common {} not found", i))?;
+            results.push(item);
+            i += 1;
+        }
+        Ok(results)
+    }
+
+    async fn get_transaction_by_position(
+        &self,
+        height: u64,
+        index: u64,
+    ) -> anyhow::Result<Self::Transaction> {
+        use hotshot_query_service::availability::{
+            BlockId as HsBlockId, QueryablePayload as _, TransactionQueryData,
+        };
+        use std::time::Duration;
+
+        let ds = &*self.data_source;
+        let block = ds
+            .get_block(HsBlockId::Number(height as usize))
+            .await
+            .with_timeout(Duration::from_millis(500))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("block {} not found", height))?;
+
+        let idx = block
+            .payload()
+            .nth(block.metadata(), index as usize)
+            .ok_or_else(|| {
+                anyhow::anyhow!("transaction index {} out of bounds in block {}", index, height)
+            })?;
+        let tx = block
+            .transaction(&idx)
+            .ok_or_else(|| anyhow::anyhow!("transaction not found at index {}", index))?;
+        TransactionQueryData::new(tx, &block, &idx, index)
+            .ok_or_else(|| anyhow::anyhow!("failed to build transaction query data"))
+    }
+
+    async fn get_transaction_by_hash(
+        &self,
+        hash: String,
+    ) -> anyhow::Result<Self::Transaction> {
+        use std::time::Duration;
+
+        let ds = &*self.data_source;
+        let tx_hash: hotshot_query_service::availability::TransactionHash<
+            espresso_types::SeqTypes,
+        > = hash
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid transaction hash: {}", hash))?;
+        let bwt = ds
+            .get_block_containing_transaction(tx_hash)
+            .await
+            .with_timeout(Duration::from_millis(500))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("transaction not found"))?;
+        Ok(bwt.transaction)
+    }
+
+    async fn get_transaction_proof_by_position(
+        &self,
+        height: u64,
+        index: u64,
+    ) -> anyhow::Result<Self::TransactionWithProof> {
+        use hotshot_query_service::availability::{
+            BlockId as HsBlockId, QueryablePayload as _, TransactionQueryData,
+            TransactionWithProofQueryData,
+        };
+        use std::time::Duration;
+
+        let ds = &*self.data_source;
+        let timeout = Duration::from_millis(500);
+
+        let (block_fetch, vid_fetch) = futures::join!(
+            ds.get_block(HsBlockId::Number(height as usize)),
+            ds.get_vid_common(HsBlockId::Number(height as usize))
+        );
+        let (block, vid) = futures::join!(
+            block_fetch.with_timeout(timeout),
+            vid_fetch.with_timeout(timeout)
+        );
+
+        let block =
+            block.ok_or_else(|| anyhow::anyhow!("block {} not found", height))?;
+        let vid = vid.ok_or_else(|| anyhow::anyhow!("VID common not found for block {}", height))?;
+
+        let idx = block
+            .payload()
+            .nth(block.metadata(), index as usize)
+            .ok_or_else(|| {
+                anyhow::anyhow!("transaction index {} out of bounds in block {}", index, height)
+            })?;
+        let tx = block
+            .transaction(&idx)
+            .ok_or_else(|| anyhow::anyhow!("transaction not found at index {}", index))?;
+        let tx_data = TransactionQueryData::new(tx, &block, &idx, index)
+            .ok_or_else(|| anyhow::anyhow!("failed to build transaction query data"))?;
+        let proof = block
+            .transaction_proof(&vid, &idx)
+            .ok_or_else(|| anyhow::anyhow!("failed to build transaction proof"))?;
+        Ok(TransactionWithProofQueryData::new(tx_data, proof))
+    }
+
+    async fn get_transaction_proof_by_hash(
+        &self,
+        hash: String,
+    ) -> anyhow::Result<Self::TransactionWithProof> {
+        use hotshot_query_service::availability::{BlockId as HsBlockId, TransactionWithProofQueryData};
+        use hotshot_query_service::types::HeightIndexed as _;
+        use std::time::Duration;
+
+        let ds = &*self.data_source;
+        let timeout = Duration::from_millis(500);
+
+        let tx_hash: hotshot_query_service::availability::TransactionHash<
+            espresso_types::SeqTypes,
+        > = hash
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid transaction hash: {}", hash))?;
+        let bwt = ds
+            .get_block_containing_transaction(tx_hash)
+            .await
+            .with_timeout(timeout)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("transaction not found"))?;
+
+        let vid = ds
+            .get_vid_common(HsBlockId::Number(bwt.block.height() as usize))
+            .await
+            .with_timeout(timeout)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "VID common not found for block {}",
+                    bwt.block.height()
+                )
+            })?;
+
+        let proof = bwt
+            .block
+            .transaction_proof(&vid, &bwt.index)
+            .ok_or_else(|| anyhow::anyhow!("failed to build transaction proof"))?;
+        Ok(TransactionWithProofQueryData::new(bwt.transaction, proof))
+    }
+
+    async fn get_block_summary(&self, height: usize) -> anyhow::Result<Self::BlockSummary> {
+        use hotshot_query_service::availability::{BlockId as HsBlockId, BlockSummaryQueryData};
+        use std::time::Duration;
+
+        let ds = &*self.data_source;
+        let block = ds
+            .get_block(HsBlockId::Number(height))
+            .await
+            .with_timeout(Duration::from_millis(500))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("block {} not found", height))?;
+        Ok(BlockSummaryQueryData::from(block))
+    }
+
+    async fn get_block_summary_range(
+        &self,
+        from: usize,
+        until: usize,
+    ) -> anyhow::Result<Vec<Self::BlockSummary>> {
+        use futures::StreamExt as _;
+        use hotshot_query_service::availability::BlockSummaryQueryData;
+        use std::time::Duration;
+
+        let timeout = Duration::from_millis(500);
+        let ds = &*self.data_source;
+        let stream = ds.get_block_range(from..until).await;
+        let mut results = Vec::new();
+        futures::pin_mut!(stream);
+        let mut i = from;
+        while let Some(fetch) = stream.next().await {
+            let block = fetch
+                .with_timeout(timeout)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("block {} not found", i))?;
+            results.push(BlockSummaryQueryData::from(block));
+            i += 1;
+        }
+        Ok(results)
+    }
+
+    async fn get_limits(&self) -> anyhow::Result<Self::Limits> {
+        Ok(hotshot_query_service::availability::Limits {
+            small_object_range_limit: 500,
+            large_object_range_limit: 100,
+        })
+    }
+
+    async fn get_cert2(&self, height: u64) -> anyhow::Result<Option<Self::Cert2>> {
+        self.data_source
+            .get_cert2(height)
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+}
+
+fn block_id_to_hs(
+    id: espresso_api::v1::availability::BlockId,
+) -> anyhow::Result<hotshot_query_service::availability::BlockId<espresso_types::SeqTypes>> {
+    use hotshot_query_service::availability::BlockId as HsBlockId;
+    match id {
+        espresso_api::v1::availability::BlockId::Height(h) => Ok(HsBlockId::Number(h as usize)),
+        espresso_api::v1::availability::BlockId::Hash(h) => {
+            let hash = h
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
+            Ok(HsBlockId::Hash(hash))
+        },
+        espresso_api::v1::availability::BlockId::PayloadHash(h) => {
+            let payload_hash = h
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
+            Ok(HsBlockId::PayloadHash(payload_hash))
+        },
+    }
+}
+
+fn payload_id_to_hs(
+    id: espresso_api::v1::availability::PayloadId,
+) -> anyhow::Result<hotshot_query_service::availability::BlockId<espresso_types::SeqTypes>> {
+    use hotshot_query_service::availability::BlockId as HsBlockId;
+    match id {
+        espresso_api::v1::availability::PayloadId::Height(h) => Ok(HsBlockId::Number(h as usize)),
+        espresso_api::v1::availability::PayloadId::Hash(h) => {
+            let payload_hash = h
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
+            Ok(HsBlockId::PayloadHash(payload_hash))
+        },
+        espresso_api::v1::availability::PayloadId::BlockHash(h) => {
+            let hash = h
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
+            Ok(HsBlockId::Hash(hash))
+        },
+    }
+}

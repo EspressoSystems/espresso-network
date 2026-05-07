@@ -7796,6 +7796,232 @@ mod test {
             // State certificate parity (epoch 1 is complete after 4 epochs)
             compare_endpoints(&http, api_port, axum_port, "availability/state-cert/1").await?;
             compare_endpoints(&http, api_port, axum_port, "availability/state-cert-v2/1").await?;
+
+            // HotShot availability parity: leaf, header, block, payload, vid/common, etc.
+            let avail_leaf: LeafQueryData<SeqTypes> = client
+                .get(&format!("availability/leaf/{avail_block}"))
+                .send()
+                .await
+                .unwrap();
+            let leaf_hash = avail_leaf.hash();
+            let block_hash = avail_header.commit();
+            let payload_hash = avail_header.payload_commitment();
+
+            // Leaf endpoints
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/leaf/{avail_block}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/leaf/hash/{leaf_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/leaf/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Header endpoints
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/header/{avail_block}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/header/hash/{block_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/header/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/header/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Block endpoints
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/{avail_block}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/hash/{block_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Payload endpoints
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/payload/{avail_block}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/payload/hash/{payload_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/payload/block-hash/{block_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/payload/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // VID common endpoints
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/vid/common/{avail_block}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/vid/common/hash/{block_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/vid/common/payload-hash/{payload_hash}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/vid/common/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Transaction endpoints
+            let tx_hash = avail_tx.commit();
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/transaction/{avail_block}/0/noproof"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/transaction/hash/{tx_hash}/noproof"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/transaction/{avail_block}/0/proof"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/transaction/hash/{tx_hash}/proof"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/transaction/{avail_block}/0"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/transaction/hash/{tx_hash}"),
+            )
+            .await?;
+
+            // Block summary endpoints
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/summary/{avail_block}"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/summaries/{avail_block}/{}", avail_block + 1),
+            )
+            .await?;
+
+            // Limits endpoint (static response)
+            compare_endpoints(&http, api_port, axum_port, "availability/limits").await?;
+
+            // Cert2 endpoint (returns null when no cert is available at this height)
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/cert2/{avail_block}"),
+            )
+            .await?;
         }
 
         Ok(())

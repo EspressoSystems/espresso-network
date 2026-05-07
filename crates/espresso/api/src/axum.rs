@@ -132,6 +132,7 @@ pub fn create_combined_router<S>(state: S) -> Router
 where
     S: v1::RewardApi
         + v1::AvailabilityApi
+        + v1::HotShotAvailabilityApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi
@@ -149,7 +150,7 @@ where
 /// Create v1 router without OpenAPI documentation (internal types)
 pub fn create_router_v1<S>(state: S) -> Router
 where
-    S: v1::RewardApi + v1::AvailabilityApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi + v1::AvailabilityApi + v1::HotShotAvailabilityApi + Clone + Send + Sync + 'static,
 {
     // Create handler closures that capture the generic state type
     let get_reward_claim_input =
@@ -284,6 +285,220 @@ where
             .map_err(ApiError::Internal)
     };
 
+    // HotShot availability API handlers
+
+    let get_leaf_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_leaf(v1::LeafId::Height(height))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_leaf_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_leaf(v1::LeafId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_leaf_range =
+        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_leaf_range(from, until)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_header_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_header(v1::BlockId::Height(height))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_header_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_header(v1::BlockId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_header_by_payload_hash =
+        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_header(v1::BlockId::PayloadHash(payload_hash))
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_header_range =
+        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_header_range(from, until)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_block_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_block(v1::BlockId::Height(height))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_block_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_block(v1::BlockId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_block_by_payload_hash =
+        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_block(v1::BlockId::PayloadHash(payload_hash))
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_block_range =
+        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_block_range(from, until)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_payload_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_payload(v1::PayloadId::Height(height))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_payload_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_payload(v1::PayloadId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_payload_by_block_hash =
+        |State(state): State<S>, Path(block_hash): Path<String>| async move {
+            state
+                .get_payload(v1::PayloadId::BlockHash(block_hash))
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_payload_range =
+        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_payload_range(from, until)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_vid_common_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_vid_common(v1::BlockId::Height(height))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_vid_common_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_vid_common(v1::BlockId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_vid_common_by_payload_hash =
+        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_vid_common(v1::BlockId::PayloadHash(payload_hash))
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_vid_common_range =
+        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_vid_common_range(from, until)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_transaction_by_position =
+        |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_by_position(height, index)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_transaction_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_transaction_by_hash(hash)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_transaction_proof_by_position =
+        |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_proof_by_position(height, index)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_transaction_proof_by_hash =
+        |State(state): State<S>, Path(hash): Path<String>| async move {
+            state
+                .get_transaction_proof_by_hash(hash)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_block_summary_by_height =
+        |State(state): State<S>, Path(height): Path<usize>| async move {
+            state
+                .get_block_summary(height)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_block_summary_range =
+        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_block_summary_range(from, until)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let get_limits = |State(state): State<S>| async move {
+        state
+            .get_limits()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let get_cert2 = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_cert2(height)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
         .route(
@@ -331,6 +546,90 @@ where
         )
         .route(routes::v1::STATE_CERT_V1_ROUTE, get(get_state_cert_v1))
         .route(routes::v1::STATE_CERT_V2_ROUTE, get(get_state_cert_v2))
+        // HotShot availability API routes
+        .route(routes::v1::LEAF_BY_HEIGHT_ROUTE, get(get_leaf_by_height))
+        .route(routes::v1::LEAF_BY_HASH_ROUTE, get(get_leaf_by_hash))
+        .route(routes::v1::LEAF_RANGE_ROUTE, get(get_leaf_range))
+        .route(
+            routes::v1::HEADER_BY_HEIGHT_ROUTE,
+            get(get_header_by_height),
+        )
+        .route(routes::v1::HEADER_BY_HASH_ROUTE, get(get_header_by_hash))
+        .route(
+            routes::v1::HEADER_BY_PAYLOAD_HASH_ROUTE,
+            get(get_header_by_payload_hash),
+        )
+        .route(routes::v1::HEADER_RANGE_ROUTE, get(get_header_range))
+        .route(routes::v1::BLOCK_BY_HEIGHT_ROUTE, get(get_block_by_height))
+        .route(routes::v1::BLOCK_BY_HASH_ROUTE, get(get_block_by_hash))
+        .route(
+            routes::v1::BLOCK_BY_PAYLOAD_HASH_ROUTE,
+            get(get_block_by_payload_hash),
+        )
+        .route(routes::v1::BLOCK_RANGE_ROUTE, get(get_block_range))
+        .route(
+            routes::v1::PAYLOAD_BY_HEIGHT_ROUTE,
+            get(get_payload_by_height),
+        )
+        .route(
+            routes::v1::PAYLOAD_BY_HASH_ROUTE,
+            get(get_payload_by_hash),
+        )
+        .route(
+            routes::v1::PAYLOAD_BY_BLOCK_HASH_ROUTE,
+            get(get_payload_by_block_hash),
+        )
+        .route(routes::v1::PAYLOAD_RANGE_ROUTE, get(get_payload_range))
+        .route(
+            routes::v1::VID_COMMON_BY_HEIGHT_ROUTE,
+            get(get_vid_common_by_height),
+        )
+        .route(
+            routes::v1::VID_COMMON_BY_HASH_ROUTE,
+            get(get_vid_common_by_hash),
+        )
+        .route(
+            routes::v1::VID_COMMON_BY_PAYLOAD_HASH_ROUTE,
+            get(get_vid_common_by_payload_hash),
+        )
+        .route(
+            routes::v1::VID_COMMON_RANGE_ROUTE,
+            get(get_vid_common_range),
+        )
+        .route(
+            routes::v1::TRANSACTION_BY_POSITION_NOPROOF_ROUTE,
+            get(get_transaction_by_position),
+        )
+        .route(
+            routes::v1::TRANSACTION_BY_HASH_NOPROOF_ROUTE,
+            get(get_transaction_by_hash),
+        )
+        .route(
+            routes::v1::TRANSACTION_PROOF_BY_POSITION_ROUTE,
+            get(get_transaction_proof_by_position),
+        )
+        .route(
+            routes::v1::TRANSACTION_PROOF_BY_HASH_ROUTE,
+            get(get_transaction_proof_by_hash),
+        )
+        .route(
+            routes::v1::TRANSACTION_BY_POSITION_ROUTE,
+            get(get_transaction_proof_by_position),
+        )
+        .route(
+            routes::v1::TRANSACTION_BY_HASH_ROUTE,
+            get(get_transaction_proof_by_hash),
+        )
+        .route(
+            routes::v1::BLOCK_SUMMARY_BY_HEIGHT_ROUTE,
+            get(get_block_summary_by_height),
+        )
+        .route(
+            routes::v1::BLOCK_SUMMARY_RANGE_ROUTE,
+            get(get_block_summary_range),
+        )
+        .route(routes::v1::LIMITS_ROUTE, get(get_limits))
+        .route(routes::v1::CERT2_BY_HEIGHT_ROUTE, get(get_cert2))
         .with_state(state)
 }
 
