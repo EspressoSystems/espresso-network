@@ -3,7 +3,7 @@ use std::path::Path;
 use async_trait::async_trait;
 use hotshot_query_service::data_source::FileSystemDataSource;
 
-use super::data_source::{Provider, SequencerDataSource};
+use super::data_source::{Provider, PruningDataSource, SequencerDataSource};
 use crate::{SeqTypes, catchup::CatchupStorage, persistence::fs::Options};
 
 pub type DataSource = FileSystemDataSource<SeqTypes, Provider>;
@@ -27,6 +27,20 @@ impl SequencerDataSource for DataSource {
 }
 
 impl CatchupStorage for DataSource {}
+
+impl PruningDataSource for DataSource {
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
+        Ok(None)
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<SeqTypes>>> {
+        Ok(None)
+    }
+}
 
 #[cfg(test)]
 mod impl_testable_data_source {
