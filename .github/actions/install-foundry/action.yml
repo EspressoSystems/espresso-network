@@ -11,8 +11,12 @@ runs:
   using: composite
   steps:
     - shell: bash
+      env:
+        FOUNDRY_DIR: ${{ github.workspace }}/.foundry
       run: |
         set -euo pipefail
+        mkdir -p "$FOUNDRY_DIR"
+
         attempts=0
         max_attempts=5
         until curl -sSfL https://foundry.paradigm.xyz | bash; do
@@ -24,8 +28,9 @@ runs:
           sleep $((attempts * 5))
         done
 
-        echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
-        export PATH="$HOME/.foundry/bin:$PATH"
+        echo "$FOUNDRY_DIR/bin" >> "$GITHUB_PATH"
+        echo "FOUNDRY_DIR=$FOUNDRY_DIR" >> "$GITHUB_ENV"
+        export PATH="$FOUNDRY_DIR/bin:$PATH"
 
         attempts=0
         until foundryup --install "${{ inputs.version }}"; do
