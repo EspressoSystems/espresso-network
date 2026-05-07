@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["gen_parties"],"struct":["Cliquenet","Sender"]};
