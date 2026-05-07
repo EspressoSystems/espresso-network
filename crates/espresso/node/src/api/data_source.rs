@@ -19,7 +19,7 @@ use espresso_types::{
 use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
-    availability::{AvailabilityDataSource, VidCommonQueryData},
+    availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
     fetching::provider::AnyProvider,
     node::NodeDataSource,
@@ -557,6 +557,22 @@ where
         let this = self.clone();
         async move { (*this).stake_table_events(from_l1_block, to_l1_block).await }
     }
+}
+
+/// Data source for pruning state: the oldest retained block and leaf.
+///
+/// SQL backends return the actual oldest entry; the filesystem backend always returns `None`
+/// since it does not prune.
+pub(crate) trait PruningDataSource {
+    /// Get the oldest block in storage, or `None` if empty or unsupported.
+    fn get_oldest_block(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<BlockQueryData<SeqTypes>>>>;
+
+    /// Get the oldest leaf in storage, or `None` if empty or unsupported.
+    fn get_oldest_leaf(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<LeafQueryData<SeqTypes>>>>;
 }
 
 #[cfg(any(test, feature = "testing"))]
