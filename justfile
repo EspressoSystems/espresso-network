@@ -67,7 +67,12 @@ fmt *files:
         files=$(git ls-files '*.rs')
     fi
     if [ -n "$files" ]; then
-        echo "$files" | xargs -P $(getconf _NPROCESSORS_ONLN) -n 10 rustfmt
+        if [ -n "${IN_NIX_SHELL:-}" ]; then
+            rustfmt_cmd="rustfmt"
+        else
+            rustfmt_cmd="rustfmt +nightly"
+        fi
+        echo "$files" | xargs -P $(getconf _NPROCESSORS_ONLN) -n 10 $rustfmt_cmd
     fi
 
 fix *args:

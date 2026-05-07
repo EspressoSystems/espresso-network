@@ -42,9 +42,10 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt
+      - uses: taiki-e/install-action@just
 
       - name: Check formatting
-        run: git ls-files '*.rs' | xargs rustfmt +nightly --check
+        run: just fmt
 
   clippy-postgres:
     name: clippy (postgres)
@@ -66,18 +67,18 @@ jobs:
           cargo clippy --workspace --exclude espresso-node-sqlite --exclude espresso-dev-node --features testing --all-targets --keep-going -- -D warnings
 
   clippy-embedded:
-      name: clippy (embedded-db)
-      runs-on: ubuntu-latest
-      steps:
-        - uses: actions/checkout@v6
+    name: clippy (embedded-db)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
-        - name: Install protoc
-          run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-        - uses: Swatinem/rust-cache@v2
-          with:
-            save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-') }}
 
-        - name: Run clippy
-          run: |
-            cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
+      - name: Run clippy
+        run: |
+          cargo clippy --workspace --features "embedded-db testing" --all-targets --keep-going -- -D warnings
