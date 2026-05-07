@@ -38,19 +38,23 @@ use url::Url;
 use crate::{
     Config, DEMO_VALIDATOR_START_INDEX,
     info::fetch_token_address,
-    parse::{Commission, ParseCommissionError, parse_bls_priv_key, parse_state_priv_key},
+    parse::{
+        Commission, ParseCommissionError, parse_bls_priv_key, parse_state_priv_key,
+        parse_x25519_priv_key,
+    },
     receipt::ReceiptExt as _,
     signature::NodeSignatures,
     transaction::Transaction,
     tx_log::{TxInput, TxLog, TxPhase, execute_signed_tx_log, sign_all_transactions},
 };
 
-/// A set of cryptographic keys for a validator node used in staking operations.
+/// A set of cryptographic keys and network info for a validator node used in staking operations.
 pub struct StakingKeySet {
     pub signer: PrivateKeySigner,
     pub bls: BLSKeyPair,
     pub state: StateKeyPair,
     pub x25519: x25519::Keypair,
+    pub p2p_addr: NetAddr,
 }
 
 #[derive(Debug, Error)]
@@ -306,6 +310,7 @@ struct ValidatorConfig {
     bls_key_pair: BLSKeyPair,
     state_key_pair: StateKeyPair,
     x25519: x25519::Keypair,
+    p2p_addr: NetAddr,
     index: usize,
 }
 
@@ -870,6 +875,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
                 bls_key_pair: key_set.bls,
                 state_key_pair: key_set.state,
                 x25519: key_set.x25519,
+                p2p_addr: key_set.p2p_addr,
                 index: val_index,
             });
         }
@@ -967,15 +973,12 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
             let payload =
                 NodeSignatures::create(address, &validator.bls_key_pair, &validator.state_key_pair);
-            let p2p_addr = format!("127.0.0.1:{}", 8080 + address.0[19] as u16)
-                .parse()
-                .expect("valid net addr");
             registration.push_back(StakeTableTx::RegisterValidator {
                 from: address,
                 commission: validator.commission,
                 payload: Box::new(payload),
                 x25519_key: validator.x25519.public_key(),
-                p2p_addr,
+                p2p_addr: validator.p2p_addr.clone(),
             });
         }
 
@@ -1114,11 +1117,19 @@ pub(crate) async fn stake_for_demo(
         let state_private_key = parse_state_priv_key(&dotenvy::var(format!(
             "ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"
         ))?)?;
+        let x25519_private_key = parse_x25519_priv_key(&dotenvy::var(format!(
+            "ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"
+        ))?)?;
+        let p2p_addr = dotenvy::var(format!(
+            "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{val_index}"
+        ))?
+        .parse()?;
         validator_keys.push(StakingKeySet {
             signer,
             bls: consensus_private_key,
             state: StateKeyPair::from_sign_key(state_private_key),
-            x25519: x25519::Keypair::generate().expect("failed to generate x25519 keypair"),
+            x25519: x25519::Keypair::from(x25519_private_key),
+            p2p_addr,
         });
     }
 

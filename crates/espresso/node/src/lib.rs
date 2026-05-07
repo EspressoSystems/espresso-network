@@ -1098,6 +1098,7 @@ pub mod testing {
                 bls: bls.clone().into(),
                 state: state.clone(),
                 x25519: x25519::Keypair::generate().expect("x25519 keypair"),
+                p2p_addr: "127.0.0.1:8080".parse().unwrap(),
             })
             .collect()
     }

@@ -227,6 +227,7 @@ impl TestSystem {
             bls: BLSKeyPair::generate(rng),
             state: StateKeyPair::generate_from_seed(rng.r#gen()),
             x25519: x25519::Keypair::generated_from_seed_indexed(rng.r#gen(), 0).unwrap(),
+            p2p_addr: "127.0.0.1:8080".parse().unwrap(),
         }
     }
 
