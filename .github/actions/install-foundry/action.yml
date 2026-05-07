@@ -13,6 +13,7 @@ runs:
     - shell: bash
       env:
         FOUNDRY_DIR: ${{ github.workspace }}/.foundry
+        FOUNDRY_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
         mkdir -p "$FOUNDRY_DIR"
@@ -33,10 +34,10 @@ runs:
         export PATH="$FOUNDRY_DIR/bin:$PATH"
 
         attempts=0
-        until foundryup --install "${{ inputs.version }}"; do
+        until foundryup --install "$FOUNDRY_VERSION"; do
           attempts=$((attempts + 1))
           if [ "$attempts" -ge "$max_attempts" ]; then
-            echo "foundryup --install ${{ inputs.version }} failed after $attempts attempts" >&2
+            echo "foundryup --install $FOUNDRY_VERSION failed after $attempts attempts" >&2
             exit 1
           fi
           sleep $((attempts * 5))
