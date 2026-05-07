@@ -170,20 +170,17 @@
 <a href=#170 id=170 data-nosnippet>170</a>    ) -&gt; QueryResult&lt;Header&lt;Types&gt;&gt; {
 <a href=#171 id=171 data-nosnippet>171</a>        <span class="kw">let </span><span class="kw-2">mut </span>query = QueryBuilder::default();
 <a href=#172 id=172 data-nosnippet>172</a>        <span class="kw">let </span>where_clause = query.header_where_clause(id.into())<span class="question-mark">?</span>;
-<a href=#173 id=173 data-nosnippet>173</a>        <span class="comment">// ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
-<a href=#174 id=174 data-nosnippet>174</a>        // selecting by payload ID, as payloads are not unique), we return the first one.
-<a href=#175 id=175 data-nosnippet>175</a>        </span><span class="kw">let </span>sql = <span class="macro">format!</span>(
-<a href=#176 id=176 data-nosnippet>176</a>            <span class="string">"SELECT {HEADER_COLUMNS}
-<a href=#177 id=177 data-nosnippet>177</a>               FROM header AS h
-<a href=#178 id=178 data-nosnippet>178</a>              WHERE {where_clause}
-<a href=#179 id=179 data-nosnippet>179</a>              ORDER BY h.height
-<a href=#180 id=180 data-nosnippet>180</a>              LIMIT 1"
-<a href=#181 id=181 data-nosnippet>181</a>        </span>);
+<a href=#173 id=173 data-nosnippet>173</a>        <span class="kw">let </span>sql = <span class="macro">format!</span>(
+<a href=#174 id=174 data-nosnippet>174</a>            <span class="string">"SELECT {HEADER_COLUMNS}
+<a href=#175 id=175 data-nosnippet>175</a>               FROM header AS h
+<a href=#176 id=176 data-nosnippet>176</a>              WHERE {where_clause}
+<a href=#177 id=177 data-nosnippet>177</a>              LIMIT 1"
+<a href=#178 id=178 data-nosnippet>178</a>        </span>);
+<a href=#179 id=179 data-nosnippet>179</a>
+<a href=#180 id=180 data-nosnippet>180</a>        <span class="kw">let </span>row = query.query(<span class="kw-2">&amp;</span>sql).fetch_one(<span class="self">self</span>.as_mut()).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#181 id=181 data-nosnippet>181</a>        <span class="kw">let </span>header = parse_header::&lt;Types, &lt;Db <span class="kw">as </span>Database&gt;::Row&gt;(row)<span class="question-mark">?</span>;
 <a href=#182 id=182 data-nosnippet>182</a>
-<a href=#183 id=183 data-nosnippet>183</a>        <span class="kw">let </span>row = query.query(<span class="kw-2">&amp;</span>sql).fetch_one(<span class="self">self</span>.as_mut()).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#184 id=184 data-nosnippet>184</a>        <span class="kw">let </span>header = parse_header::&lt;Types, &lt;Db <span class="kw">as </span>Database&gt;::Row&gt;(row)<span class="question-mark">?</span>;
-<a href=#185 id=185 data-nosnippet>185</a>
-<a href=#186 id=186 data-nosnippet>186</a>        <span class="prelude-val">Ok</span>(header)
-<a href=#187 id=187 data-nosnippet>187</a>    }
-<a href=#188 id=188 data-nosnippet>188</a>}
+<a href=#183 id=183 data-nosnippet>183</a>        <span class="prelude-val">Ok</span>(header)
+<a href=#184 id=184 data-nosnippet>184</a>    }
+<a href=#185 id=185 data-nosnippet>185</a>}
 </code></pre></div></section></main></body></html>
