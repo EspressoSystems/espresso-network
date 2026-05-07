@@ -164,7 +164,9 @@ where
                 http_opt = http_opt.light_client(light_client);
             }
             if let Some(config) = modules.config {
-                http_opt = http_opt.config(config).public_node_config(public_node_config);
+                http_opt = http_opt
+                    .config(config)
+                    .public_node_config(public_node_config);
             }
 
             http_opt
