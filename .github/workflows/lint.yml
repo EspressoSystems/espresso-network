@@ -45,7 +45,7 @@ jobs:
       - uses: taiki-e/install-action@just
 
       - name: Check formatting
-        run: just fmt --check
+        run: just fmt && git diff --exit-code
 
   clippy-postgres:
     name: clippy (postgres)
