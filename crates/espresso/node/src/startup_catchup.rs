@@ -20,8 +20,6 @@ use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::election::Membership,
 };
 
-const STAKE_TABLE_CATCHUP_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Walk forward from the highest already-known epoch until peers can no
 /// longer serve the next epoch root leaf, populating the membership with
 /// stake tables for every epoch up through `N+1` (where `N` is the current
@@ -33,6 +31,7 @@ const STAKE_TABLE_CATCHUP_TIMEOUT: Duration = Duration::from_secs(10);
 pub async fn bootstrap_epoch_window(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     epoch_height: u64,
+    step_timeout: Duration,
 ) -> anyhow::Result<EpochNumber> {
     if epoch_height == 0 {
         // Pre-epoch chain: epochs aren't enabled yet, the non-epoch
@@ -76,18 +75,13 @@ pub async fn bootstrap_epoch_window(
     );
 
     // Walk forward; each successful iteration drives `add_epoch_root` via
-    // the existing catchup machinery, persisting the new stake table.
-    //
-    // The underlying `fetch_leaf` retries forever, so each step is bounded
-    // by `STAKE_TABLE_CATCHUP_TIMEOUT`.  When it times out we treat this as the stake table
-    // not being available yet.
+    // the existing catchup machinery, persisting the new stake table. The
+    // walk terminates when the catchup chain returns an error
+    // (`Ok(Err(_))`) or a single step exceeds the hang bound (`Err(_)`).
     loop {
         let target = highest + 1;
-        let result = tokio::time::timeout(
-            STAKE_TABLE_CATCHUP_TIMEOUT,
-            coordinator.wait_for_stake_table(target),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(step_timeout, coordinator.wait_for_stake_table(target)).await;
         match result {
             Ok(Ok(_)) => {
                 tracing::info!(%target, "bootstrap_epoch_window: derived stake table");
@@ -104,7 +98,7 @@ pub async fn bootstrap_epoch_window(
             Err(_) => {
                 tracing::info!(
                     %target,
-                    timeout_secs = STAKE_TABLE_CATCHUP_TIMEOUT.as_secs(),
+                    timeout_secs = step_timeout.as_secs(),
                     "bootstrap_epoch_window: catchup timed out; treating as live tip",
                 );
                 break;
