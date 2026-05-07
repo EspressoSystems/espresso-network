@@ -24,7 +24,15 @@ pub use self::{
 /// This serves both APIs at /v1/* and /v2/* from a single state implementation.
 pub async fn serve_axum<S>(port: u16, state: S) -> anyhow::Result<()>
 where
-    S: v1::RewardApi + v2::RewardApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi
+        + v1::AvailabilityApi
+        + v2::RewardApi
+        + v2::DataApi
+        + v2::ConsensusApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     tracing::info!("Starting Axum server on port {} with v1 and v2 APIs", port);
 

@@ -4,3 +4,68 @@ package espresso.api.v2;
 
 // Common types for Espresso API v2
 // This file is intentionally minimal - domain-specific types live in their own proto files
+
+//=============================================================================
+// Cryptographic Key Types
+//=============================================================================
+
+// BLS public key (typically 48 bytes)
+message BLSPublicKey {
+  string key = 1;
+}
+
+// Schnorr public key (typically 32 bytes)
+message SchnorrPublicKey {
+  string key = 1;
+}
+
+//=============================================================================
+// Network Address Types
+//=============================================================================
+
+// Network address - either IP or domain name with port
+message NetAddr {
+  oneof addr_type {
+    InetAddr inet = 1;
+    NameAddr name = 2;
+  }
+}
+
+// IP address (v4 or v6) with port
+// `host` is a socket-address-ready host string: plain dotted-decimal for IPv4
+// (e.g. "192.0.2.1") and bracket-enclosed for IPv6 (e.g. "[::1]"), so that
+// consumers can form a valid address with a simple "{host}:{port}" without
+// inspecting the IP version.
+message InetAddr {
+  string host = 1;
+  uint32 port = 2;
+}
+
+// Domain name with port
+message NameAddr {
+  string name = 1;  // Domain name
+  uint32 port = 2;
+}
+
+//=============================================================================
+// Peer Configuration Types
+//=============================================================================
+
+// Stake table entry for a validator
+message StakeTableEntry {
+  BLSPublicKey stake_key = 1;  // BLS verification key
+  string stake_amount = 2;      // U256 as decimal string
+}
+
+// Peer connection information
+message PeerConnectInfo {
+  string x25519_key = 1;  // X25519 public key (32 bytes)
+  NetAddr p2p_addr = 2;  // P2P network address
+}
+
+// Complete peer configuration
+message PeerConfig {
+  StakeTableEntry stake_table_entry = 1;  // Stake information
+  SchnorrPublicKey state_ver_key = 2;     // State verification key
+  optional PeerConnectInfo connect_info = 3;  // Optional connection info
+}
