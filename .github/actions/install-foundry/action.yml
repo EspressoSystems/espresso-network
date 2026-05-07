@@ -1,0 +1,41 @@
+name: Install Foundry
+description: Install Foundry directly from paradigm.xyz with retries.
+
+inputs:
+  version:
+    description: foundryup release to install (e.g. stable, v1.4.0, nightly)
+    required: false
+    default: stable
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        attempts=0
+        max_attempts=5
+        until curl -sSfL https://foundry.paradigm.xyz | bash; do
+          attempts=$((attempts + 1))
+          if [ "$attempts" -ge "$max_attempts" ]; then
+            echo "foundryup install failed after $attempts attempts" >&2
+            exit 1
+          fi
+          sleep $((attempts * 5))
+        done
+
+        echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
+        export PATH="$HOME/.foundry/bin:$PATH"
+
+        attempts=0
+        until foundryup --install "${{ inputs.version }}"; do
+          attempts=$((attempts + 1))
+          if [ "$attempts" -ge "$max_attempts" ]; then
+            echo "foundryup --install ${{ inputs.version }} failed after $attempts attempts" >&2
+            exit 1
+          fi
+          sleep $((attempts * 5))
+        done
+
+        forge --version
+        anvil --version
