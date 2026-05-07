@@ -19,7 +19,7 @@ runs:
         mkdir -p "$FOUNDRY_DIR"
 
         run_with_retry() {
-          local -i max_attempts=5
+          local -i max_attempts=15
           local -i attempts=0
           until "$@"; do
             attempts=$((attempts + 1))
