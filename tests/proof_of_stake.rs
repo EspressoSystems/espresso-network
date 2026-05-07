@@ -104,7 +104,11 @@ async fn test_native_demo_ff_base() -> Result<()> {
         )]),
     );
 
-    assert_native_demo_works(Default::default()).await?;
+    let requirements = TestRequirements {
+        requires_builder: genesis.base_version < NEW_PROTOCOL_VERSION,
+        ..Default::default()
+    };
+    assert_native_demo_works(requirements).await?;
 
     Ok(())
 }

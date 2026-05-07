@@ -432,6 +432,8 @@ where
     N: Network<T>,
     S: NewProtocolStorage<T>,
 {
+    coord.start().await;
+
     loop {
         match coord.next_consensus_input().await {
             Ok(input) => coord.apply_consensus(input).await,

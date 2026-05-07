@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bon::{Builder, bon};
 use committable::Commitment;
-use hotshot::{HotShotInitializer, types::SignatureKey};
+use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -204,12 +204,29 @@ where
 
     /// Bootstrap the coordinator so the view-1 leader can propose.
     ///
-    /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
-    /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
-    /// `seed_genesis` on the inner `Consensus` instance.
+    /// Emits a synthetic `LeafDecided` for the genesis leaf so downstream
+    /// consumers (persistence, query service) record the genesis header,
+    /// then emits an initial `ViewChanged(1)` and, if this node is the
+    /// view-1 leader, a `RequestBlockAndHeader` for view 1.  Call this
+    /// after `seed_genesis` on the inner `Consensus` instance.
     pub async fn start(&mut self) {
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
+
+        if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
+            let genesis_leaf = self.consensus.last_decided_leaf().clone();
+            self.append_genesis_da(&genesis_leaf);
+            self.outbox.push_back(ConsensusOutput::LeafDecided {
+                leaves: vec![genesis_leaf],
+                cert1: self
+                    .consensus
+                    .cert1_at(ViewNumber::genesis())
+                    .cloned()
+                    .expect("genesis cert1 must be seeded"),
+                cert2: None,
+                vid_shares: vec![None],
+            });
+        }
 
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(view, epoch));
@@ -231,6 +248,25 @@ where
                     },
                 ));
         }
+    }
+
+    /// Append the genesis DA proposal to storage.
+    ///
+    /// The genesis block payload is always the empty payload, but it never
+    /// flows through the regular block-builder/VID-reconstructor path that
+    /// would otherwise call `storage.append_da`. Without this, the
+    /// `da_proposal2` table (or `da2/0.txt` on disk) is missing for view 0,
+    /// and downstream consumers (persistence, query service) cannot serve
+    /// the genesis block payload.
+    fn append_genesis_da(&mut self, genesis_leaf: &Leaf2<T>) {
+        let (payload, metadata) = T::BlockPayload::empty();
+        self.storage.append_da(
+            ViewNumber::genesis(),
+            EpochNumber::genesis(),
+            payload,
+            metadata,
+            genesis_leaf.payload_commitment(),
+        );
     }
 
     pub async fn stop(mut self) {
@@ -286,6 +322,10 @@ where
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
+                    self.storage.append_state_cert(
+                        ViewNumber::new(state_cert.light_client_state.view_number),
+                        state_cert.clone(),
+                    );
                     return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })
                 }
                 Some(item) = self.proposal_validator.next() => match item {
@@ -295,6 +335,22 @@ where
                         self.vid_reconstructor.handle_vid_share(s.clone(), m);
                         self.storage.append_vid(s);
                         self.storage.append_proposal(validated.message.proposal.data.clone());
+
+                        // Persist the state cert carried by epoch-root proposals.
+                        // The leader stores its own copy via `EpochRootCertificates`,
+                        // but followers only see the cert through the proposal.
+                        if let Some(state_cert) = validated
+                            .message
+                            .proposal
+                            .data
+                            .state_cert
+                            .clone()
+                        {
+                            self.storage.append_state_cert(
+                                ViewNumber::new(state_cert.light_client_state.view_number),
+                                state_cert,
+                            );
+                        }
 
                         // Refresh the network's peer set when a proposal is validated
                         // on_epoch_change should return immediately if the epoch is not new
@@ -870,21 +926,21 @@ where
     }
 
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        self.consensus.gc(view, epoch);
-        self.checkpoint_collector.gc(view, epoch);
-        let _ = self.network.gc(view); // TODO
-        self.state_manager.gc(view);
-        self.vid_disperser.gc(view);
-        self.vid_reconstructor.gc(view);
-        self.vote1_collector.gc(view, epoch);
-        self.vote2_collector.gc(view, epoch);
-        self.timeout_collector.gc(view, epoch);
-        self.timeout_one_honest_collector.gc(view, epoch);
-        self.epoch_root_collector.gc(view, epoch);
-        self.epoch_manager.gc(epoch);
-        self.block_builder.gc(view);
-        self.pending_proposal_fetches.gc(view);
-        self.storage.gc(view);
+        // self.consensus.gc(view, epoch);
+        // self.checkpoint_collector.gc(view, epoch);
+        // let _ = self.network.gc(view); // TODO
+        // self.state_manager.gc(view);
+        // self.vid_disperser.gc(view);
+        // self.vid_reconstructor.gc(view);
+        // self.vote1_collector.gc(view, epoch);
+        // self.vote2_collector.gc(view, epoch);
+        // self.timeout_collector.gc(view, epoch);
+        // self.timeout_one_honest_collector.gc(view, epoch);
+        // self.epoch_root_collector.gc(view, epoch);
+        // self.epoch_manager.gc(epoch);
+        // self.block_builder.gc(view);
+        // // self.pending_proposal_fetches.gc(view);
+        // self.storage.gc(view);
     }
 }
 
@@ -941,6 +997,7 @@ impl<T: NodeType> PendingProposalFetches<T> {
             .push(respond);
     }
 
+    #[allow(dead_code)]
     fn gc(&mut self, view: ViewNumber) {
         self.pending.retain(|key, responders| {
             responders.retain(|respond| !respond.is_closed());
