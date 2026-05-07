@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cliquenet::{NetAddr, NetworkError as CliquenetError, Role, Slot, x25519::PublicKey};
 use hotshot_types::{
     PeerConnectInfo,
-    data::ViewNumber,
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
     message::{EXTERNAL_MESSAGE_VERSION, MessageKind, UpgradeLock},
     traits::node_implementation::NodeType,
     x25519::Keypair,
@@ -18,7 +19,8 @@ use crate::{
 pub struct Cliquenet<T: NodeType> {
     my_keys: (T::SignatureKey, PublicKey),
     inner: cliquenet::Network,
-    peers: HashMap<T::SignatureKey, PublicKey>,
+    peers: HashMap<T::SignatureKey, PeerConnectInfo>,
+    epoch: EpochNumber,
     upgrade_lock: UpgradeLock<T>,
 }
 
@@ -65,10 +67,7 @@ impl<T: NodeType> Cliquenet<T> {
             .await
             .map_err(to_network_error)?;
 
-        let peers: HashMap<_, _> = parties
-            .into_iter()
-            .map(|(k, info)| (k, info.x25519_key.into()))
-            .collect();
+        let peers: HashMap<_, _> = parties.into_iter().collect();
 
         info!(peers = %peers.len(), "cliquenet created");
 
@@ -76,6 +75,7 @@ impl<T: NodeType> Cliquenet<T> {
             my_keys: (signing_key, public_key),
             inner: network,
             peers,
+            epoch: EpochNumber::genesis(),
             upgrade_lock,
         })
     }
@@ -92,8 +92,8 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     ) -> Result<(), NetworkError> {
         let target = if *to == self.my_keys.0 {
             self.my_keys.1
-        } else if let Some(target) = self.peers.get(to) {
-            *target
+        } else if let Some(info) = self.peers.get(to) {
+            info.x25519_key.into()
         } else {
             error!(peer = %to, "unicast target not found");
             return Ok(());
@@ -114,8 +114,8 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         let bytes = self.serialize(m)?;
         let mut targets = Vec::new();
         for t in to {
-            if let Some(target) = self.peers.get(t) {
-                targets.push(*target)
+            if let Some(info) = self.peers.get(t) {
+                targets.push(info.x25519_key.into())
             } else if *t == self.my_keys.0 {
                 targets.push(self.my_keys.1)
             } else {
@@ -163,7 +163,13 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     ) -> Result<(), NetworkError> {
         let mut targets = Vec::new();
         for (k, (x, a)) in ps {
-            self.peers.insert(k, x);
+            self.peers.insert(
+                k,
+                PeerConnectInfo {
+                    x25519_key: x.into(),
+                    p2p_addr: a.clone(),
+                },
+            );
             targets.push((x, a))
         }
         self.inner
@@ -175,8 +181,8 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     fn remove_peers(&mut self, ps: Vec<&T::SignatureKey>) -> Result<(), NetworkError> {
         let mut targets = Vec::new();
         for k in ps {
-            if let Some(x) = self.peers.remove(k) {
-                targets.push(x)
+            if let Some(info) = self.peers.remove(k) {
+                targets.push(info.x25519_key.into())
             }
         }
         self.inner.remove_peers(targets).map_err(to_network_error)?;
@@ -186,13 +192,124 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     fn assign_role(&mut self, r: PeerRole, ps: Vec<&T::SignatureKey>) -> Result<(), NetworkError> {
         let mut targets = Vec::new();
         for k in ps {
-            if let Some(x) = self.peers.get(k) {
-                targets.push(*x)
+            if let Some(info) = self.peers.get(k) {
+                targets.push(info.x25519_key.into())
             }
         }
         self.inner
             .assign_peers(map_peer_role(r), targets)
             .map_err(to_network_error)?;
+        Ok(())
+    }
+
+    /// Update peers on every epoch change.
+    ///
+    /// For any given epoch `e` we collect the validators of `e`, `e-1` and
+    /// `e+1` from the stake tables and merge their connection information.
+    ///
+    /// We keep validators that were in `e-1` but not in `e` for one additional
+    /// epoch and eagerly connect to new validators of `e+1`.
+    async fn on_epoch_change(
+        &mut self,
+        epoch: EpochNumber,
+        coord: &EpochMembershipCoordinator<T>,
+    ) -> Result<(), NetworkError> {
+        if epoch <= self.epoch {
+            info!(%epoch, ours = %self.epoch, "epoch already seen");
+            return Ok(());
+        }
+
+        // Validators of the new epoch.
+        let Some(curr_infos) = coord.epoch_peers(Some(epoch)).await else {
+            error!(%epoch, "no stake table available");
+            return Ok(());
+        };
+
+        // Validators leaving are retained as peers for one additional epoch.
+        let prev_infos = if *epoch > 0 {
+            coord.epoch_peers(Some(epoch - 1)).await.unwrap_or_else(|| {
+                info!(%epoch, "previous epoch's stake table unavailable");
+                HashMap::new()
+            })
+        } else {
+            HashMap::new()
+        };
+
+        // Validators joining in the next epoch are connected to early.
+        let next_infos = coord.epoch_peers(Some(epoch + 1)).await.unwrap_or_else(|| {
+            info!(%epoch, "next epoch's stake table not available");
+            HashMap::new()
+        });
+
+        // Since connection information may be updated, we need to merge them,
+        // preferring the newest epoch's data, i.e. `next(curr(prev))`.
+        let mut merged_infos = prev_infos.clone();
+        for (k, v) in curr_infos.iter().chain(&next_infos) {
+            merged_infos.insert(k.clone(), v.clone());
+        }
+
+        let wanted: HashSet<T::SignatureKey> = curr_infos
+            .keys()
+            .chain(next_infos.keys())
+            .cloned()
+            .collect();
+
+        let retained: HashSet<T::SignatureKey> = curr_infos
+            .keys()
+            .chain(prev_infos.keys())
+            .cloned()
+            .collect();
+
+        let mut to_add: Vec<(T::SignatureKey, PeerConnectInfo)> = Vec::new();
+        let mut to_del: Vec<(T::SignatureKey, PeerConnectInfo)> = Vec::new();
+
+        for k in &wanted {
+            if let Some(Some(new_info)) = merged_infos.get(k) {
+                if Some(new_info) != self.peers.get(k) {
+                    info!(%epoch, peer = %k, "adding/updating network peer");
+                    to_add.push((k.clone(), new_info.clone()));
+                } else {
+                    info!(%epoch, peer = %k, "peer unchanged");
+                }
+            } else {
+                info!(%epoch, peer = %k, "ignoring peer without connection info");
+            }
+        }
+
+        // Remove peers that have left both the current and previous epochs.
+        for (k, info) in &self.peers {
+            if !(retained.contains(k) || wanted.contains(k)) {
+                info!(%epoch, peer = %k, "removing network peer");
+                to_del.push((k.clone(), info.clone()));
+            }
+        }
+
+        for (k, _) in &to_del {
+            self.peers.remove(k);
+        }
+        for (k, info) in &to_add {
+            self.peers.insert(k.clone(), info.clone());
+        }
+
+        let add_targets: Vec<(PublicKey, NetAddr)> = to_add
+            .iter()
+            .map(|(_, i)| (i.x25519_key.into(), i.p2p_addr.clone()))
+            .collect();
+        let del_targets: Vec<PublicKey> = to_del.iter().map(|(_, i)| i.x25519_key.into()).collect();
+
+        if let Err(err) = self.inner.add_peers(Role::Active, add_targets) {
+            error!(%epoch, %err, "network down; could not add peers to network");
+            return Err(to_network_error(err));
+        }
+
+        if let Err(err) = self.inner.remove_peers(del_targets) {
+            error!(%epoch, %err, "network down; could not remove peers from network");
+            return Err(to_network_error(err));
+        }
+
+        info!(%epoch, peers = %self.peers.len());
+
+        self.epoch = epoch;
         Ok(())
     }
 }

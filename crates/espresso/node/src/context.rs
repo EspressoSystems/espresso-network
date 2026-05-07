@@ -51,6 +51,7 @@ use crate::{
         network::Sender as RequestResponseSender,
         recipient_source::RecipientSource,
     },
+    startup_catchup::bootstrap_epoch_window,
     state_signature::{self, StateSigner},
 };
 pub(crate) type ConsensusNode<N, P> = Node<N, P>;
@@ -146,23 +147,7 @@ where
 
         let epoch_height = initializer.epoch_height;
 
-        let coordinator = Coordinator::maker()
-            .membership_coordinator(membership_coordinator.clone())
-            .network(coordinator_network)
-            .initializer(&initializer)
-            .upgrade_lock({
-                // TODO: The Coordinator and HotShot each create their own UpgradeLock
-                // from the same inputs. They need to share a single lock so that upgrade
-                // certificate updates are visible to both.
-                UpgradeLock::from_certificate(upgrade, &initializer.decided_upgrade_certificate)
-            })
-            .public_key(validator_config.public_key)
-            .private_key(validator_config.private_key.clone())
-            .state_private_key(validator_config.state_private_key.clone())
-            .stake_table_capacity(stake_table_capacity)
-            .timeout_duration(Duration::from_secs(10))
-            .storage(Arc::clone(&persistence))
-            .make();
+        let initializer_for_coordinator = initializer.clone();
 
         let event_streamer = Arc::new(RwLock::new(EventsStreamer::<SeqTypes>::new(
             stake_table.0,
@@ -184,6 +169,47 @@ where
         )
         .await?
         .0;
+
+        // `load_start_epoch_info` ran inside `SystemContext::init`, so
+        // `first_epoch` is now seeded on the shared membership. Walk the
+        // catchup chain forward to populate the stake-table window for the
+        // current epoch.
+        let current_epoch = bootstrap_epoch_window(&membership_coordinator, epoch_height)
+            .await
+            .context("startup stake-table catchup failed")?;
+        tracing::info!(%current_epoch, "Startup catchup complete");
+
+        // Push the resolved peer window into the coordinator network. For
+        // cliquenet this dials the N-1/N/N+1 sliding window for the current
+        // epoch before consensus starts.
+        let mut coordinator_network = coordinator_network;
+        if let Err(err) = coordinator_network
+            .on_epoch_change(current_epoch, &membership_coordinator)
+            .await
+        {
+            tracing::warn!(%current_epoch, %err, "coordinator network on_epoch_change failed at startup");
+        }
+
+        let coordinator = Coordinator::maker()
+            .membership_coordinator(membership_coordinator.clone())
+            .network(coordinator_network)
+            .initializer(&initializer_for_coordinator)
+            .upgrade_lock({
+                // TODO: The Coordinator and HotShot each create their own UpgradeLock
+                // from the same inputs. They need to share a single lock so that upgrade
+                // certificate updates are visible to both.
+                UpgradeLock::from_certificate(
+                    upgrade,
+                    &initializer_for_coordinator.decided_upgrade_certificate,
+                )
+            })
+            .public_key(validator_config.public_key)
+            .private_key(validator_config.private_key.clone())
+            .state_private_key(validator_config.state_private_key.clone())
+            .stake_table_capacity(stake_table_capacity)
+            .timeout_duration(Duration::from_secs(10))
+            .storage(Arc::clone(&persistence))
+            .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
         let hotshot_handle = Arc::new(RwLock::new(handle));

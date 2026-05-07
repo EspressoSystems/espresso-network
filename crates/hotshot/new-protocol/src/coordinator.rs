@@ -276,6 +276,17 @@ where
                         self.vid_reconstructor.handle_vid_share(s.clone(), m);
                         self.storage.append_vid(s);
                         self.storage.append_proposal(validated.message.proposal.data.clone());
+
+                        // Refresh the network's peer set when a proposal is validated
+                        // on_epoch_change should return immediately if the epoch is not new
+                        let epoch = validated.message.proposal.data.epoch;
+                        if let Err(err) = self
+                            .network
+                            .on_epoch_change(epoch, &self.membership_coordinator)
+                            .await
+                        {
+                            error!(%epoch, %err, "network on_epoch_change failed");
+                        }
                         return Ok(ConsensusInput::Proposal(validated.sender, validated.message))
                     }
                     Err(e) => {

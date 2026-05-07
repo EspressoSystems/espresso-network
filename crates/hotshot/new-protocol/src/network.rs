@@ -1,6 +1,10 @@
 pub mod cliquenet;
 
-use hotshot_types::{data::ViewNumber, traits::node_implementation::NodeType};
+use hotshot_types::{
+    data::{EpochNumber, ViewNumber},
+    epoch_membership::EpochMembershipCoordinator,
+    traits::node_implementation::NodeType,
+};
 
 use crate::message::{Message, Unchecked, Validated};
 
@@ -34,6 +38,16 @@ pub trait Network<T: NodeType> {
     fn add_peers(&mut self, r: PeerRole, ps: Vec<(T::SignatureKey, Self::PeerData)>) -> Result<()>;
     fn remove_peers(&mut self, ps: Vec<&T::SignatureKey>) -> Result<()>;
     fn assign_role(&mut self, r: PeerRole, ps: Vec<&T::SignatureKey>) -> Result<()>;
+
+    /// Refresh the peer set for the given epoch using the membership coordinator.
+    ///
+    /// Implementations should reconcile their active peer set against the
+    /// stake tables of the surrounding epoch window (e-1, e, e+1).
+    fn on_epoch_change(
+        &mut self,
+        epoch: EpochNumber,
+        coord: &EpochMembershipCoordinator<T>,
+    ) -> impl Future<Output = Result<()>> + Send;
 }
 
 #[derive(Clone, Copy, Debug)]

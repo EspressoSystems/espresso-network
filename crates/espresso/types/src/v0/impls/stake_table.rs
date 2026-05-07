@@ -44,8 +44,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     stake_table::{HSStakeTable, StakeTableEntry},
     traits::{
-        block_contents::BlockHeader, election::Membership,
-        leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType,
+        block_contents::BlockHeader, election::Membership, node_implementation::NodeType,
         signature_key::StakeTableEntryType,
     },
     utils::{
@@ -2311,7 +2310,6 @@ pub struct LeaderLookupError;
 // #[async_trait]
 impl Membership<SeqTypes> for EpochCommittees {
     type Error = LeaderLookupError;
-    type Storage = ();
     type StakeTableHash = StakeTableState;
 
     // DO NOT USE. Dummy constructor to comply w/ trait.
@@ -2320,8 +2318,6 @@ impl Membership<SeqTypes> for EpochCommittees {
         // https://github.com/EspressoSystems/HotShot/commit/fcb7d54a4443e29d643b3bbc53761856aef4de8b
         _committee_members: Vec<PeerConfig<SeqTypes>>,
         _da_members: Vec<PeerConfig<SeqTypes>>,
-        _storage: Self::Storage,
-        _leaf_fetcher_network: Arc<dyn LeafFetcherNetwork<SeqTypes>>,
         _public_key: <SeqTypes as NodeType>::SignatureKey,
         _epoch_height: u64,
     ) -> Self {
@@ -2789,6 +2785,10 @@ impl Membership<SeqTypes> for EpochCommittees {
 
     fn first_epoch(&self) -> Option<EpochNumber> {
         self.first_epoch
+    }
+
+    fn highest_known_epoch(&self) -> Option<EpochNumber> {
+        self.state.keys().max().copied()
     }
 
     fn stake_table_hash(&self, epoch: Epoch) -> Option<StakeTableHash> {
