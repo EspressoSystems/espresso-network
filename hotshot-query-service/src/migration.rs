@@ -119,9 +119,9 @@ pub trait DualReadAdapter: Send + Sync + 'static {
     type Legacy;
     type New;
 
-    fn view_from_legacy(legacy: Self::Legacy) -> Self::View;
-    fn view_from_new(new: Self::New) -> Self::View;
-    fn legacy_to_new(legacy: Self::Legacy) -> Self::New;
+    fn view_from_legacy(legacy: Self::Legacy) -> anyhow::Result<Self::View>;
+    fn view_from_new(new: Self::New) -> anyhow::Result<Self::View>;
+    fn legacy_to_new(legacy: Self::Legacy) -> anyhow::Result<Self::New>;
 }
 
 /// Builder-style inventory of all migrations the application registers.
@@ -296,9 +296,15 @@ mod tests {
         type View = ();
         type Legacy = ();
         type New = ();
-        fn view_from_legacy(_: ()) {}
-        fn view_from_new(_: ()) {}
-        fn legacy_to_new(_: ()) {}
+        fn view_from_legacy(_: ()) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn view_from_new(_: ()) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn legacy_to_new(_: ()) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
     #[async_trait]
     impl DataBackfill for StubBackfill {

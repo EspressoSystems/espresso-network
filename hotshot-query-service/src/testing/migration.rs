@@ -46,32 +46,34 @@ where
     fn equivalent_pair() -> (Self::Legacy, Self::New);
 
     /// Law 1: both projections produce the same `View`.
-    fn assert_views_match() {
+    fn assert_views_match() -> anyhow::Result<()> {
         let (legacy, new) = Self::equivalent_pair();
-        let via_legacy = Self::view_from_legacy(legacy);
-        let via_new = Self::view_from_new(new);
-        assert_eq!(
-            via_legacy, via_new,
-            "view_from_legacy and view_from_new disagree"
+        let via_legacy = Self::view_from_legacy(legacy)?;
+        let via_new = Self::view_from_new(new)?;
+        anyhow::ensure!(
+            via_legacy == via_new,
+            "view_from_legacy and view_from_new disagree: {via_legacy:?} != {via_new:?}",
         );
+        Ok(())
     }
 
     /// Law 2: converting then reading equals reading directly.
-    fn assert_conversion_roundtrip() {
+    fn assert_conversion_roundtrip() -> anyhow::Result<()> {
         let (legacy, _) = Self::equivalent_pair();
-        let direct = Self::view_from_legacy(legacy.clone());
-        let converted = Self::view_from_new(Self::legacy_to_new(legacy));
-        assert_eq!(
-            direct, converted,
+        let direct = Self::view_from_legacy(legacy.clone())?;
+        let converted = Self::view_from_new(Self::legacy_to_new(legacy)?)?;
+        anyhow::ensure!(
+            direct == converted,
             "legacy_to_new is not view-preserving: view_from_legacy != \
-             view_from_new(legacy_to_new)",
+             view_from_new(legacy_to_new): {direct:?} != {converted:?}",
         );
+        Ok(())
     }
 
     /// Combined check; call this from a test.
-    fn assert_adapter_laws() {
-        Self::assert_views_match();
-        Self::assert_conversion_roundtrip();
+    fn assert_adapter_laws() -> anyhow::Result<()> {
+        Self::assert_views_match()?;
+        Self::assert_conversion_roundtrip()
     }
 }
 

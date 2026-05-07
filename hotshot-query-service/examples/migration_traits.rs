@@ -68,36 +68,38 @@ impl DualReadAdapter for ScoreAdapter {
     type Legacy = LegacyScoreRow;
     type New = NewScoreRow;
 
-    fn view_from_legacy(legacy: Self::Legacy) -> Self::View {
-        let payload: LegacyPayload =
-            bincode::deserialize(&legacy.payload).expect("legacy_scores.payload is valid bincode");
-        Score {
+    fn view_from_legacy(legacy: Self::Legacy) -> anyhow::Result<Self::View> {
+        let payload: LegacyPayload = bincode::deserialize(&legacy.payload)
+            .context("legacy_scores.payload is not valid bincode")?;
+        Ok(Score {
             height: legacy.height,
             value: payload.value,
             label: payload.label,
-        }
+        })
     }
 
-    fn view_from_new(new: Self::New) -> Self::View {
-        Score {
+    fn view_from_new(new: Self::New) -> anyhow::Result<Self::View> {
+        let value = new.value["value"]
+            .as_u64()
+            .context("scores.value.value missing or not u64")?;
+        let label = new.value["label"]
+            .as_str()
+            .context("scores.value.label missing or not string")?
+            .to_owned();
+        Ok(Score {
             height: new.height,
-            value: new.value["value"]
-                .as_u64()
-                .expect("scores.value.value is u64"),
-            label: new.value["label"]
-                .as_str()
-                .expect("scores.value.label is string")
-                .to_owned(),
-        }
+            value,
+            label,
+        })
     }
 
-    fn legacy_to_new(legacy: Self::Legacy) -> Self::New {
-        let payload: LegacyPayload =
-            bincode::deserialize(&legacy.payload).expect("legacy_scores.payload is valid bincode");
-        NewScoreRow {
+    fn legacy_to_new(legacy: Self::Legacy) -> anyhow::Result<Self::New> {
+        let payload: LegacyPayload = bincode::deserialize(&legacy.payload)
+            .context("legacy_scores.payload is not valid bincode")?;
+        Ok(NewScoreRow {
             height: legacy.height,
             value: serde_json::json!({ "value": payload.value, "label": payload.label }),
-        }
+        })
     }
 }
 
@@ -126,10 +128,10 @@ impl DataBackfill for BackfillScores {
         offset: u64,
     ) -> anyhow::Result<Option<u64>> {
         let rows = sqlx::query(
-            "SELECT height, payload FROM legacy_scores ORDER BY height LIMIT $1 OFFSET $2",
+            "SELECT height, payload FROM legacy_scores WHERE height >= $1 ORDER BY height LIMIT $2",
         )
-        .bind(self.batch_size() as i64)
         .bind(offset as i64)
+        .bind(self.batch_size() as i64)
         .fetch_all(tx.as_mut())
         .await?;
 
@@ -138,13 +140,14 @@ impl DataBackfill for BackfillScores {
         }
 
         let n = rows.len();
+        let mut last_height = offset;
         for row in rows {
             let height: i64 = row.try_get("height")?;
             let payload: Vec<u8> = row.try_get("payload")?;
             let new = ScoreAdapter::legacy_to_new(LegacyScoreRow {
                 height: height as u64,
                 payload,
-            });
+            })?;
             sqlx::query(
                 "INSERT INTO scores (height, value) VALUES ($1, $2) ON CONFLICT DO NOTHING",
             )
@@ -152,12 +155,13 @@ impl DataBackfill for BackfillScores {
             .bind(&new.value)
             .execute(tx.as_mut())
             .await?;
+            last_height = height as u64;
         }
 
         if n < self.batch_size() {
             Ok(None)
         } else {
-            Ok(Some(offset + n as u64))
+            Ok(Some(last_height + 1))
         }
     }
 }
@@ -271,7 +275,7 @@ impl BackfillTest for BackfillScores {
             let actual = ScoreAdapter::view_from_new(NewScoreRow {
                 height: height as u64,
                 value,
-            });
+            })?;
             let expected = Score {
                 height: height as u64,
                 value: height as u64,
@@ -363,7 +367,7 @@ async fn main() -> anyhow::Result<()> {
     println!("registry validated");
     let _ = registry; // registry consumed once the runner wires up
 
-    ScoreAdapter::assert_adapter_laws();
+    ScoreAdapter::assert_adapter_laws()?;
     println!("adapter laws hold");
 
     BackfillScores
