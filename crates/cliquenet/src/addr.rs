@@ -60,6 +60,30 @@ impl NetAddr {
     pub fn is_ip(&self) -> bool {
         matches!(self, Self::Inet(..))
     }
+
+    /// Log an error if this address is only reachable from the local host: a loopback IP
+    /// (`127.0.0.0/8`, `::1`), the unspecified address (`0.0.0.0`, `::`), or the `localhost`
+    /// DNS name. `label` is a short noun phrase identifying what this address represents in the
+    /// caller's context (e.g. `"Libp2p advertise address"`). Local-only addresses are typically
+    /// fine for local testing (`demo-native`, `docker-compose`) but indicate a misconfiguration
+    /// in any deployment where remote peers must dial us.
+    pub fn warn_if_local_only(&self, label: &str) {
+        let reason = match self {
+            Self::Inet(ip, _) if ip.is_loopback() => "a loopback IP address",
+            Self::Inet(ip, _) if ip.is_unspecified() => {
+                "the unspecified IP address (0.0.0.0 or ::)"
+            },
+            Self::Name(host, _) if host.eq_ignore_ascii_case("localhost") => {
+                "the `localhost` DNS name"
+            },
+            _ => return,
+        };
+        tracing::error!(
+            "{label} {self} contains {reason} and is not reachable from outside this host. This \
+             is fine for local testing (e.g. demo-native, docker-compose) but is wrong for any \
+             real deployment: remote peers will fail to dial us."
+        );
+    }
 }
 
 impl fmt::Display for NetAddr {

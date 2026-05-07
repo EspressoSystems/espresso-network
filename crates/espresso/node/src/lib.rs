@@ -355,13 +355,18 @@ where
                 &network_params.libp2p_bind_address
             )
         })?;
-    let libp2p_announce_addresses: Vec<Multiaddr> = match &network_params.libp2p_advertise_address {
-        Some(addr) => vec![
-            derive_libp2p_multiaddr(addr)
-                .with_context(|| format!("Failed to derive Libp2p advertise address of {addr}"))?,
-        ],
-        None => Vec::new(),
-    };
+    let libp2p_announce_addresses: Vec<Multiaddr> =
+        match &network_params.libp2p_advertise_address {
+            Some(addr) => {
+                if let Ok(parsed) = addr.parse::<NetAddr>() {
+                    parsed.warn_if_local_only("Libp2p advertise address");
+                }
+                vec![derive_libp2p_multiaddr(addr).with_context(|| {
+                    format!("Failed to derive Libp2p advertise address of {addr}")
+                })?]
+            },
+            None => Vec::new(),
+        };
 
     info!("Libp2p bind address: {}", libp2p_bind_address);
     info!("Libp2p announce addresses: {:?}", libp2p_announce_addresses);
