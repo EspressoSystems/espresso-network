@@ -840,6 +840,28 @@ where
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
+    data_source::PruningDataSource for StorageState<N, P, D>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+    D: data_source::PruningDataSource + Send + Sync,
+{
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<crate::SeqTypes>>>
+    {
+        self.inner().get_oldest_block().await
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<crate::SeqTypes>>>
+    {
+        self.inner().get_oldest_leaf().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
     CatchupDataSource for StorageState<N, P, D>
 {
     #[tracing::instrument(skip(self, instance))]
