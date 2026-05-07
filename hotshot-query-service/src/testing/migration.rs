@@ -2,9 +2,9 @@
 //!
 //! Each test trait encodes invariants the corresponding production trait
 //! cannot enforce on its own. Default-method assertions cover the
-//! orchestration (drive batches, repeat runs, verify two adapter laws);
-//! authors still write the bulk of the work — fixture seeding and the
-//! shape-specific final-state checks.
+//! orchestration (drive batches, repeat runs, verify two adapter laws,
+//! exercise the cleanup precondition); authors still write the bulk of the
+//! work — fixture seeding and the shape-specific final-state checks.
 //!
 //! - [`AdapterTest`]: pure, no DB. Author supplies [`AdapterTest::equivalent_pair`].
 //! - [`BackfillTest`]: needs a DB. Author supplies [`BackfillTest::seed_legacy`]
@@ -12,6 +12,11 @@
 //!   methods are default-implemented in terms of those two and `migrate_batch`.
 //! - [`DeferredSchemaTest`]: needs a DB. The single assertion is
 //!   default-implemented in terms of `self.run`.
+//! - [`CleanupTest`]: needs a DB. Author supplies
+//!   [`CleanupTest::seed_deferred_state`] and
+//!   [`CleanupTest::assert_legacy_gone`]; the two assertion methods exercise
+//!   the cleanup's precondition logic against a synthetic `deferred_migrations`
+//!   row set.
 //!
 //! The design intent is captured in `doc/storage-migrations.md`.
 
@@ -21,7 +26,7 @@ use async_trait::async_trait;
 
 use crate::{
     data_source::{Transaction as _, VersionedDataSource, storage::sql::SqlStorage},
-    migration::{DataBackfill, DeferredSchemaChange, DualReadAdapter},
+    migration::{CleanupMigration, DataBackfill, DeferredSchemaChange, DualReadAdapter},
 };
 
 /// Test extension for [`DualReadAdapter`].
@@ -141,6 +146,79 @@ async fn drive_to_completion<B: BackfillTest + ?Sized>(
             None => return Ok(()),
         }
     }
+}
+
+/// Test extension for [`CleanupMigration`].
+///
+/// Implementations supply [`CleanupTest::seed_deferred_state`] (populate the
+/// `deferred_migrations` table with rows marking the listed migration names
+/// as completed; rows for unlisted names are absent) and
+/// [`CleanupTest::assert_legacy_gone`] (verify the legacy state the cleanup
+/// removes is in fact gone). The two assertion methods exercise both branches
+/// of the precondition: the cleanup must refuse when its requirements are
+/// unmet and succeed when they are met.
+#[async_trait]
+pub trait CleanupTest: CleanupMigration {
+    /// Reset the `deferred_migrations` table (creating it if needed) and mark
+    /// each name in `completed` as done. Names not in `completed` are absent
+    /// from the table.
+    async fn seed_deferred_state(
+        &self,
+        storage: &SqlStorage,
+        completed: &[&'static str],
+    ) -> anyhow::Result<()>;
+
+    /// After the cleanup has run, verify the legacy state it targets is gone.
+    async fn assert_legacy_gone(&self, storage: &SqlStorage) -> anyhow::Result<()>;
+
+    /// With none of the requirements completed, attempting to run the cleanup
+    /// must fail. Operator upgrade safety depends on this.
+    async fn assert_refuses_when_requires_unmet(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        self.seed_deferred_state(storage, &[]).await?;
+        let result = run_cleanup_with_precondition(self, storage).await;
+        anyhow::ensure!(
+            result.is_err(),
+            "cleanup {} ran despite unmet requirements",
+            self.name(),
+        );
+        Ok(())
+    }
+
+    /// With every requirement marked completed, the cleanup must run
+    /// successfully and remove its target legacy state.
+    async fn assert_succeeds_when_requires_met(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        self.seed_deferred_state(storage, self.requires()).await?;
+        run_cleanup_with_precondition(self, storage).await?;
+        self.assert_legacy_gone(storage).await
+    }
+}
+
+/// Emulate the deferred runner's cleanup invocation: check every required
+/// name is marked completed in `deferred_migrations`, then run the cleanup
+/// inside a write transaction. Returns an error if any requirement is
+/// unmet or if the cleanup itself errors.
+async fn run_cleanup_with_precondition<C: CleanupMigration + ?Sized>(
+    cleanup: &C,
+    storage: &SqlStorage,
+) -> anyhow::Result<()> {
+    for required in cleanup.requires() {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM deferred_migrations WHERE name = $1 AND completed_at IS NOT NULL",
+        )
+        .bind(required)
+        .fetch_optional(&storage.pool())
+        .await?;
+        if row.is_none() {
+            anyhow::bail!(
+                "cleanup {} cannot run: requirement {} not complete",
+                cleanup.name(),
+                required,
+            );
+        }
+    }
+    let mut tx = storage.write().await?;
+    cleanup.run(&mut tx).await?;
+    tx.commit().await
 }
 
 /// Test extension for [`DeferredSchemaChange`].

@@ -31,7 +31,7 @@ use hotshot_query_service::{
         CleanupMigration, DataBackfill, DeferredSchemaChange, DualReadAdapter, MigrationMeta,
         MigrationRegistry,
     },
-    testing::migration::{AdapterTest, BackfillTest, DeferredSchemaTest},
+    testing::migration::{AdapterTest, BackfillTest, CleanupTest, DeferredSchemaTest},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -292,6 +292,47 @@ impl BackfillTest for BackfillScores {
 
 impl DeferredSchemaTest for IndexScores {}
 
+#[async_trait]
+impl CleanupTest for DropLegacyScores {
+    async fn seed_deferred_state(
+        &self,
+        storage: &SqlStorage,
+        completed: &[&'static str],
+    ) -> anyhow::Result<()> {
+        let mut tx = storage.write().await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS deferred_migrations (
+                name TEXT PRIMARY KEY,
+                completed_at TIMESTAMPTZ
+            )",
+        )
+        .execute(tx.as_mut())
+        .await?;
+        sqlx::query("DELETE FROM deferred_migrations")
+            .execute(tx.as_mut())
+            .await?;
+        for name in completed {
+            sqlx::query("INSERT INTO deferred_migrations (name, completed_at) VALUES ($1, NOW())")
+                .bind(*name)
+                .execute(tx.as_mut())
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn assert_legacy_gone(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        let mut tx = storage.read().await?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'legacy_scores'",
+        )
+        .fetch_one(tx.as_mut())
+        .await?;
+        anyhow::ensure!(count == 0, "legacy_scores still exists after cleanup");
+        Ok(())
+    }
+}
+
 async fn drop_index_if_exists(pool: &sqlx::Pool<Db>) -> anyhow::Result<()> {
     sqlx::query("DROP INDEX IF EXISTS scores_label_idx")
         .execute(pool)
@@ -353,10 +394,15 @@ async fn main() -> anyhow::Result<()> {
     IndexScores.assert_idempotent(&storage).await?;
     println!("deferred schema: rerun is idempotent");
 
-    let mut tx = storage.write().await?;
-    DropLegacyScores.run(&mut tx).await?;
-    tx.commit().await?;
-    println!("cleanup migration applied");
+    DropLegacyScores
+        .assert_refuses_when_requires_unmet(&storage)
+        .await?;
+    println!("cleanup: refuses when requires unmet");
+
+    DropLegacyScores
+        .assert_succeeds_when_requires_met(&storage)
+        .await?;
+    println!("cleanup: succeeds when requires met (legacy_scores dropped)");
 
     println!("\nall migrations and tests passed");
     Ok(())
