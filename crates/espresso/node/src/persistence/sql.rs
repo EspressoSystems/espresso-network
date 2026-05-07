@@ -249,7 +249,7 @@ pub struct Options {
     /// and is opt-in.
     #[clap(
         long,
-        env = "ESPRESSO_NODE_QUERY_SERVICE_NO_DEFERRABLE",
+        env = "ESPRESSO_NODE_DATABASE_NO_DEFERRABLE",
         default_value_t = false
     )]
     pub(crate) query_service_no_deferrable: bool,

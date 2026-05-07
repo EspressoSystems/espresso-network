@@ -204,7 +204,7 @@ impl TransactionMode for Read {
         // (SERIALIZABLE), and we want to wait until this is possible rather than failing
         // (DEFERRABLE).
         //
-        // Setting `ESPRESSO_NODE_QUERY_SERVICE_NO_DEFERRABLE=true` disables the DEFERRABLE
+        // Setting `ESPRESSO_NODE_DATABASE_NO_DEFERRABLE=true` disables the DEFERRABLE
         // option, so that read transactions start immediately and may instead fail with a
         // serialization error if they conflict with a concurrent write. This trades start-up
         // latency for the chance of a retry, and is opt-in.
