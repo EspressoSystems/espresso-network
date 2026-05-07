@@ -857,6 +857,28 @@ where
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
+    data_source::PruningDataSource for StorageState<N, P, D>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+    D: data_source::PruningDataSource + Send + Sync,
+{
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<crate::SeqTypes>>>
+    {
+        self.inner().get_oldest_block().await
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<crate::SeqTypes>>>
+    {
+        self.inner().get_oldest_leaf().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
     CatchupDataSource for StorageState<N, P, D>
 {
     #[tracing::instrument(skip(self, instance))]
@@ -7528,6 +7550,28 @@ mod test {
         Ok(())
     }
 
+    async fn compare_endpoints(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let tide: serde_json::Value = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .json()
+            .await?;
+        let axum: serde_json::Value = http
+            .get(format!("http://localhost:{axum_port}/v1/{path}"))
+            .send()
+            .await?
+            .json()
+            .await?;
+        assert_eq!(tide, axum, "v1/{path}: tide and axum v1 responses differ");
+        Ok(())
+    }
+
     #[rstest]
     #[case(POS_V3)]
     #[case(POS_V4)]
@@ -7541,7 +7585,9 @@ mod test {
             .build();
 
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
+        println!("AXUM PORT = {axum_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -7551,11 +7597,11 @@ mod test {
             .try_into()
             .unwrap();
 
+        let mut api_opts = Options::with_port(api_port).catchup(Default::default());
+        api_opts.http.axum_port = Some(axum_port);
+
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port).catchup(Default::default()),
-            ))
+            .api_config(SqlDataSource::options(&storage[0], api_opts))
             .network_config(network_config)
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
@@ -7590,7 +7636,7 @@ mod test {
 
         // validate proof returned from the api
         if upgrade.base == EPOCH_VERSION {
-            // V1 case
+            // V1 case — axum only implements the v2 reward tree, so no axum comparison here
             wait_until_block_height(&client, "reward-state/block-height", height).await;
 
             network.stop_consensus().await;
@@ -7628,6 +7674,8 @@ mod test {
 
             network.stop_consensus().await;
 
+            let http = reqwest::Client::new();
+
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
                 let (_, expected_proof) = validated_state
                     .reward_merkle_tree_v2
@@ -7664,7 +7712,60 @@ mod test {
                     .unwrap();
 
                 assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
+
+                // Both servers share the same underlying SQL data source; compare responses
+                // for each per-address endpoint under reward-state-v2.
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/proof/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-balance/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/proof/latest/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-balance/latest/{address}"),
+                )
+                .await?;
             }
+
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
+            )
+            .await?;
         }
 
         Ok(())
