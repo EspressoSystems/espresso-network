@@ -6023,7 +6023,6 @@ dependencies = [
  "cdn-client",
  "cdn-marshal",
  "chrono",
- "cliquenet",
  "committable",
  "dashmap",
  "derive_more 2.1.1",
