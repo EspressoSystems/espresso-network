@@ -4,7 +4,9 @@
 //! No OpenAPI documentation.
 
 pub mod availability;
+pub mod block_state;
 pub mod reward_state_v2;
 
 pub use availability::AvailabilityApi;
+pub use block_state::BlockStateApi;
 pub use reward_state_v2::RewardApi;

@@ -219,6 +219,35 @@ impl v2::RewardApi for TestApi {
     }
 }
 
+// Implement v1::BlockStateApi with test data
+#[async_trait]
+impl v1::BlockStateApi for TestApi {
+    type BlockMerklePath = Vec<u8>;
+
+    async fn get_block_merkle_path(&self, height: u64, key: u64) -> Result<Self::BlockMerklePath> {
+        tracing::info!("v1: get_block_merkle_path(height={}, key={})", height, key);
+        Ok(vec![0x01, 0x02, 0x03, 0x04])
+    }
+
+    async fn get_block_merkle_path_by_commit(
+        &self,
+        commit: String,
+        key: u64,
+    ) -> Result<Self::BlockMerklePath> {
+        tracing::info!(
+            "v1: get_block_merkle_path_by_commit(commit={}, key={})",
+            commit,
+            key
+        );
+        Ok(vec![0x05, 0x06, 0x07, 0x08])
+    }
+
+    async fn get_block_merkle_height(&self) -> Result<usize> {
+        tracing::info!("v1: get_block_merkle_height");
+        Ok(12345)
+    }
+}
+
 // Implement v2::DataApi with test data
 #[async_trait]
 impl v2::DataApi for TestApi {
@@ -266,6 +295,22 @@ impl v2::DataApi for TestApi {
         );
         Ok(vec![0xde, 0xad, 0xbe, 0xef])
     }
+
+    async fn get_block_merkle_path(
+        &self,
+        request: serialization_api::v2::GetBlockMerklePathRequest,
+    ) -> Result<Self::BlockMerklePath>
+    where
+        Self::BlockMerklePath: Sized,
+    {
+        tracing::info!("v2: get_block_merkle_path(block_height={})", request.block_height);
+        Ok(vec![0x09, 0x0a, 0x0b, 0x0c])
+    }
+
+    async fn get_block_merkle_height(&self) -> Result<u64> {
+        tracing::info!("v2: get_block_merkle_height");
+        Ok(12345)
+    }
 }
 
 // Implement v2::ConsensusApi with test data
@@ -298,6 +343,7 @@ impl ApiSerializations for TestApi {
     // Data API types
     type NamespaceProof = (Vec<Vec<u8>>, Option<Vec<u8>>); // (transactions, proof)
     type IncorrectEncodingProof = Vec<u8>;
+    type BlockMerklePath = Vec<u8>;
 
     // Consensus API types
     type StateCertificate = Vec<u8>;
@@ -510,6 +556,18 @@ impl ApiSerializations for TestApi {
     fn serialize_ns_proof(&self, _proof: &Self::NsProof) -> Result<serialization_api::v2::NsProof> {
         Ok(serialization_api::v2::NsProof {
             proof_version: None,
+        })
+    }
+
+    fn serialize_block_merkle_path(
+        &self,
+        value: &Self::BlockMerklePath,
+    ) -> Result<serialization_api::v2::BlockMerklePathResponse>
+    where
+        Self::BlockMerklePath: Sized,
+    {
+        Ok(serialization_api::v2::BlockMerklePathResponse {
+            proof: STANDARD.encode(value),
         })
     }
 }

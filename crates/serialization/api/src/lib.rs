@@ -19,6 +19,7 @@ pub trait ApiSerializations {
     type PeerConfig;
     type LightClientCert;
     type NsProof;
+    type BlockMerklePath;
 
     fn deserialize_address(&self, s: &str) -> anyhow::Result<Self::Address>;
 
@@ -80,4 +81,11 @@ pub trait ApiSerializations {
     fn serialize_ns_proof(&self, proof: &Self::NsProof) -> anyhow::Result<NsProof>
     where
         Self::NsProof: Sized;
+
+    fn serialize_block_merkle_path(
+        &self,
+        value: &Self::BlockMerklePath,
+    ) -> anyhow::Result<BlockMerklePathResponse>
+    where
+        Self::BlockMerklePath: Sized;
 }
