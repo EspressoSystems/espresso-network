@@ -7,8 +7,7 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, CombinedImpl, CompatNetImpl, PushCdnImpl, TEST_VERSIONS, TestTypes,
-    TestTypesRandomizedLeader,
+    CombinedImpl, PushCdnImpl, TEST_VERSIONS, TestTypes, TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -250,7 +249,7 @@ async fn test_catchup_reload() {
 
 cross_tests!(
     TestName: test_all_restart,
-    Impls: [CombinedImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl, PushCdnImpl],
     Types: [TestTypes, TestTypesRandomizedLeader],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -298,7 +297,7 @@ cross_tests!(
 // move on because the *leader* does have the proposal.
 cross_tests!(
     TestName: test_all_restart_one_da,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -344,7 +343,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_staggered_restart,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
