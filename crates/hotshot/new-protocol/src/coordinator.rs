@@ -926,21 +926,21 @@ where
     }
 
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        // self.consensus.gc(view, epoch);
-        // self.checkpoint_collector.gc(view, epoch);
-        // let _ = self.network.gc(view); // TODO
-        // self.state_manager.gc(view);
-        // self.vid_disperser.gc(view);
-        // self.vid_reconstructor.gc(view);
-        // self.vote1_collector.gc(view, epoch);
-        // self.vote2_collector.gc(view, epoch);
-        // self.timeout_collector.gc(view, epoch);
-        // self.timeout_one_honest_collector.gc(view, epoch);
-        // self.epoch_root_collector.gc(view, epoch);
-        // self.epoch_manager.gc(epoch);
-        // self.block_builder.gc(view);
-        // // self.pending_proposal_fetches.gc(view);
-        // self.storage.gc(view);
+        self.consensus.gc(view, epoch);
+        self.checkpoint_collector.gc(view, epoch);
+        let _ = self.network.gc(view); // TODO
+        self.state_manager.gc(view);
+        self.vid_disperser.gc(view);
+        self.vid_reconstructor.gc(view);
+        self.vote1_collector.gc(view, epoch);
+        self.vote2_collector.gc(view, epoch);
+        self.timeout_collector.gc(view, epoch);
+        self.timeout_one_honest_collector.gc(view, epoch);
+        self.epoch_root_collector.gc(view, epoch);
+        self.epoch_manager.gc(epoch);
+        self.block_builder.gc(view);
+        self.pending_proposal_fetches.gc(view);
+        self.storage.gc(view);
     }
 }
 
