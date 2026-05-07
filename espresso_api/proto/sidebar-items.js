@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["reward_service_client","reward_service_server"]};
+window.SIDEBAR_ITEMS = {"mod":["consensus_service_client","consensus_service_server","data_service_client","data_service_server","reward_service_client","reward_service_server"]};

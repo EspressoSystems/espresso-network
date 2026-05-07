@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["get_reward_account_proof","get_reward_balance","get_reward_balances","get_reward_claim_input","get_reward_merkle_tree_v2"]};
+window.SIDEBAR_ITEMS = {"fn":["get_incorrect_encoding_proof","get_namespace_proof","get_reward_account_proof","get_reward_balance","get_reward_balances","get_reward_claim_input","get_reward_merkle_tree_v2","get_stake_table","get_state_certificate"]};

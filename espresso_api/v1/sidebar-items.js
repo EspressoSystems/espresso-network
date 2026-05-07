@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["reward_state_v2"]};
+window.SIDEBAR_ITEMS = {"mod":["availability","reward_state_v2"]};
