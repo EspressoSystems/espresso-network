@@ -973,9 +973,10 @@ impl PublicNodeConfig {
                 sql: None,
             }
         } else {
+            let fs = persistence::fs::Options::try_parse_from(std::iter::empty::<String>()).ok();
             StorageConfig {
                 backend: StorageBackend::FsDefault,
-                fs: None,
+                fs: fs.as_ref().map(FsStorageConfig::from),
                 sql: None,
             }
         };
@@ -1015,7 +1016,7 @@ impl PublicNodeConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 impl PublicNodeConfig {
     /// Build a minimal `PublicNodeConfig` for tests, using freshly generated keys.
     pub fn for_test() -> Self {
@@ -1023,7 +1024,7 @@ impl PublicNodeConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 mod tests {
     use espresso_types::PubKey;
     use hotshot_types::{light_client::StateKeyPair, traits::signature_key::SignatureKey, x25519};
