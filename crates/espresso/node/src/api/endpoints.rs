@@ -48,7 +48,10 @@ use super::data_source::{
     CatchupDataSource, DatabaseMetadataSource, HotShotConfigDataSource, NodeStateDataSource,
     PruningDataSource, StakeTableDataSource, StateSignatureDataSource, SubmitDataSource,
 };
-use crate::{SeqTypes, SequencerApiVersion, SequencerPersistence, api::RewardMerkleTreeDataSource};
+use crate::{
+    SeqTypes, SequencerApiVersion, SequencerPersistence, api::RewardMerkleTreeDataSource,
+    options::PublicNodeConfig,
+};
 
 mod availability;
 pub(super) use availability::*;
@@ -1084,6 +1087,7 @@ where
 pub(super) fn config<S, ApiVer: StaticVersionType + 'static>(
     _: ApiVer,
     api_ver: semver::Version,
+    node_config: PublicNodeConfig,
 ) -> Result<Api<S, Error, ApiVer>>
 where
     S: 'static + Send + Sync + ReadState,
@@ -1105,6 +1109,10 @@ where
             async move { Ok(env_variables) }
         }
         .boxed()
+    })?
+    .get("node", move |_, _| {
+        let node_config = node_config.clone();
+        async move { Ok(node_config) }.boxed()
     })?;
 
     Ok(api)

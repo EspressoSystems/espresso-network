@@ -127,6 +127,7 @@ espresso-macros = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-testing = { workspace = true }
+insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }

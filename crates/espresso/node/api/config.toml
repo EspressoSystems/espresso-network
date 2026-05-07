@@ -7,3 +7,8 @@ DOC = "Get the Hotshot configuration for the current node."
 PATH = ["/env"]
 METHOD = "GET"
 DOC = "Get all ESPRESSO environment variables set for the current node."
+
+[route.node]
+PATH = ["/node"]
+METHOD = "GET"
+DOC = "Get the merged runtime configuration of the current node (CLI flags + env vars + defaults). Secrets and L1 RPC URLs are redacted; only counts (l1_provider_count, l1_ws_provider_count) are exposed."

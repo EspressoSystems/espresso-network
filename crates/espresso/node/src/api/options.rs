@@ -44,6 +44,7 @@ use crate::{
     api::{LightClientProvider, endpoints::RewardMerkleTreeVersion},
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
+    options::PublicNodeConfig,
     persistence,
     request_response::data_source::Storage as RequestResponseStorage,
     state::update_state_storage_loop,
@@ -62,6 +63,7 @@ pub struct Options {
     pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
+    pub node_config: Option<PublicNodeConfig>,
 }
 
 impl From<Http> for Options {
@@ -78,6 +80,7 @@ impl From<Http> for Options {
             light_client: None,
             storage_fs: None,
             storage_sql: None,
+            node_config: None,
         }
     }
 }
@@ -121,8 +124,13 @@ impl Options {
     }
 
     /// Add a config API module.
-    pub fn config(mut self, opt: Config) -> Self {
+    ///
+    /// `node_config` is the merged runtime configuration exposed via
+    /// `GET /config/node`. It is required when the config route is enabled
+    /// so the endpoint always has data to serve.
+    pub fn config(mut self, opt: Config, node_config: PublicNodeConfig) -> Self {
         self.config = Some(opt);
+        self.node_config = Some(node_config);
         self
     }
 
@@ -340,8 +348,13 @@ impl Options {
         })?;
 
         if self.config.is_some() {
+            let node_cfg = self
+                .node_config
+                .clone()
+                .expect("node_config must be set when config route is enabled");
             register_api("config", &mut app, move |ver| {
-                endpoints::config(bind_version, ver).context("failed to define config api")
+                endpoints::config(bind_version, ver, node_cfg.clone())
+                    .context("failed to define config api")
             })?;
         }
         Ok((metrics, ds, app))
@@ -592,8 +605,13 @@ impl Options {
         })?;
 
         if self.config.is_some() {
+            let node_cfg = self
+                .node_config
+                .clone()
+                .expect("node_config must be set when config route is enabled");
             register_api("config", app, move |ver| {
-                endpoints::config(bind_version, ver).context("failed to define config api")
+                endpoints::config(bind_version, ver, node_cfg.clone())
+                    .context("failed to define config api")
             })?;
         }
 
