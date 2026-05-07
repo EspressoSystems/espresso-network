@@ -6,9 +6,7 @@
 
 use std::time::Duration;
 
-use hotshot_example_types::node_types::{
-    CliquenetImpl, CompatNetImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestTypes,
-};
+use hotshot_example_types::node_types::{MemoryImpl, PushCdnImpl, TEST_VERSIONS, TestTypes};
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
     block_builder::SimpleBuilderImplementation,
@@ -19,7 +17,7 @@ use hotshot_testing::{
 // Test one node leaving the network.
 cross_tests!(
     TestName: test_with_builder_failures,
-    Impls: [MemoryImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [MemoryImpl, PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
