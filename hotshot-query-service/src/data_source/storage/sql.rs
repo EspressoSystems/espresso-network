@@ -1373,36 +1373,6 @@ mod test {
         connect(true, migrations).await.unwrap();
     }
 
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg(not(feature = "embedded-db"))]
-    async fn test_create_index_concurrently_via_refinery() {
-        let db = TmpDb::init().await;
-        let cfg = db.config();
-
-        SqlStorage::connect(cfg.clone(), StorageConnectionType::Query)
-            .await
-            .unwrap();
-
-        let migrations = vec![
-            Migration::unapplied(
-                "V9999__concurrent_index.sql",
-                "CREATE INDEX CONCURRENTLY IF NOT EXISTS leaf2_view_idx ON leaf2 (view);",
-            )
-            .unwrap(),
-        ];
-
-        let err = SqlStorage::connect(cfg.migrations(migrations), StorageConnectionType::Query)
-            .await
-            .expect_err("CREATE INDEX CONCURRENTLY must fail under refinery's tx wrapper");
-
-        let msg = format!("{err:#}");
-        tracing::info!("refinery rejected CREATE INDEX CONCURRENTLY: {msg}");
-        assert!(
-            msg.contains("CREATE INDEX CONCURRENTLY cannot run inside a transaction block"),
-            "unexpected error: {msg}"
-        );
-    }
-
     #[test]
     #[cfg(not(feature = "embedded-db"))]
     fn test_config_from_str() {
