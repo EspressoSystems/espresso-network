@@ -71,15 +71,6 @@ impl<Types: NodeType> Request<Types> for VidCommonRangeRequest {
 }
 
 /// A request for a leaf with a given height.
-///
-/// The expected leaf hash, the QC's view, and the certifying QC's `data` are provided
-/// so the request can be verified against a response from an untrusted provider.
-///
-/// We compare the QC's `(view, data)` instead of its full commit because under the new protocol
-/// we store leaves alongside a `cert1` taken from the decide event, and that `cert1` is
-/// not necessarily the same `cert1` that the next leaf's `justify_qc` will reference. Both
-/// certify the same `(view, leaf)` but can be assembled from different voting set
-/// so their aggregated signatures (and commits) differ.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
 pub struct LeafRequest {
     pub height: u64,

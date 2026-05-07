@@ -28,7 +28,7 @@
 //! This module defines an abstract interface [`Provider`], which allows data to be fetched from any
 //! data availability provider, as well as various implementations for different data sources,
 //! including:
-//! * [`QueryServiceProvider`]
+//! * [`TrustedQueryServiceProvider`]
 //!
 //! We also provide combinators for modularly adding functionality to existing fetchers:
 //! * [`AnyProvider`]

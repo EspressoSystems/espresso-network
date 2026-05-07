@@ -65,12 +65,12 @@ type Cert2Provider<Types> = Arc<dyn DebugProvider<Types, Certificate2Request>>;
 /// have the object, the request will eventually succeed.
 ///
 /// This can be used to combine multiple instances of the same kind of provider, like using
-/// [`QueryServiceProvider`](super::QueryServiceProvider) to request objects from a number of
-/// different query services. It can also be used to search different kinds of data providers for
-/// the same object, like searching for a block both in another instance of the query service and in
-/// the HotShot DA committee. Finally, [`AnyProvider`] can be used to combine a provider which only
-/// provides blocks and one which only provides leaves into a provider which provides both, and thus
-/// can be used as a provider for the availability API module.
+/// [`TrustedQueryServiceProvider`](super::TrustedQueryServiceProvider) to request objects from a
+/// number of different query services. It can also be used to search different kinds of data
+/// providers for the same object, like searching for a block both in another instance of the query
+/// service and in the HotShot DA committee. Finally, [`AnyProvider`] can be used to combine a
+/// provider which only provides blocks and one which only provides leaves into a provider which
+/// provides both, and thus can be used as a provider for the availability API module.
 ///
 /// # Examples
 ///
@@ -84,12 +84,12 @@ type Cert2Provider<Types> = Arc<dyn DebugProvider<Types, Certificate2Request>>;
 /// #   Types: NodeType,
 /// # {
 /// use hotshot_query_service::{
-///     fetching::provider::{AnyProvider, QueryServiceProvider},
+///     fetching::provider::{AnyProvider, TrustedQueryServiceProvider},
 ///     testing::mocks::MockBase,
 /// };
 ///
-/// let qs1 = QueryServiceProvider::new("https://backup.query-service.1".parse()?, MockBase::instance());
-/// let qs2 = QueryServiceProvider::new("https://backup.query-service.2".parse()?, MockBase::instance());
+/// let qs1 = TrustedQueryServiceProvider::new("https://backup.query-service.1".parse()?, MockBase::instance());
+/// let qs2 = TrustedQueryServiceProvider::new("https://backup.query-service.2".parse()?, MockBase::instance());
 /// let provider = AnyProvider::<Types>::default()
 ///     .with_provider(qs1)
 ///     .with_provider(qs2);
