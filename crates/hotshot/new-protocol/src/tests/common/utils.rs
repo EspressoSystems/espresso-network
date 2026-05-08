@@ -136,7 +136,7 @@ impl TestView {
     }
 
     /// Build an Event for a proposal.
-    pub fn proposal_input(&self, _recipient_key: &BLSPubKey) -> Message<TestTypes, Validated> {
+    pub fn proposal_input(&self) -> Message<TestTypes, Validated> {
         Message {
             sender: self.leader_public_key,
             message_type: MessageType::Consensus(ConsensusMessage::Proposal(
