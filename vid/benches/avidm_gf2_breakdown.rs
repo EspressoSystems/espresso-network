@@ -58,7 +58,7 @@ impl MerkleBackend for KeccakBackend {
     }
     fn collect_proofs(mt: &Self::Mt, total_weights: usize) -> Vec<Self::Proof> {
         let mut proofs = vec![Self::empty_proof(); total_weights];
-        for (i, _, proof) in mt.collect_leaves_with_proof() {
+        for (i, _, proof) in mt.collect_leaves_with_proofs() {
             proofs[*i as usize] = proof;
         }
         proofs
@@ -86,7 +86,7 @@ impl MerkleBackend for Blake3Backend {
     }
     fn collect_proofs(mt: &Self::Mt, total_weights: usize) -> Vec<Self::Proof> {
         let mut proofs = vec![Self::empty_proof(); total_weights];
-        for (i, _, proof) in mt.collect_leaves_with_proof() {
+        for (i, _, proof) in mt.collect_leaves_with_proofs() {
             proofs[*i as usize] = proof;
         }
         proofs

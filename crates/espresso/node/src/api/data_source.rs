@@ -5,7 +5,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
-    FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey, Transaction,
+    Certificate2, FeeAccount, FeeAccountProof, FeeMerkleTree, Leaf2, NodeState, PubKey,
+    Transaction,
     config::PublicNetworkConfig,
     v0::traits::{PersistenceOptions, SequencerPersistence},
     v0_3::{
@@ -18,9 +19,9 @@ use espresso_types::{
 use futures::future::{BoxFuture, Future};
 use hotshot::types::BLSPubKey;
 use hotshot_query_service::{
-    availability::{AvailabilityDataSource, VidCommonQueryData},
+    availability::{AvailabilityDataSource, BlockQueryData, LeafQueryData, VidCommonQueryData},
     data_source::{UpdateDataSource, VersionedDataSource},
-    fetching::provider::{AnyProvider, QueryServiceProvider},
+    fetching::provider::AnyProvider,
     node::NodeDataSource,
     status::StatusDataSource,
 };
@@ -32,6 +33,7 @@ use hotshot_types::{
     traits::{network::ConnectedNetwork, node_implementation::NodeType},
 };
 use indexmap::IndexMap;
+use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use serde::{Deserialize, Serialize};
 use tide_disco::Url;
 
@@ -40,7 +42,12 @@ use super::{
     options::{Options, Query},
     sql,
 };
-use crate::{SeqTypes, SequencerApiVersion, U256, persistence, state_cert::StateCertFetchError};
+use crate::{
+    SeqTypes, U256,
+    api::{ApiState, LightClientProvider},
+    persistence,
+    state_cert::StateCertFetchError,
+};
 
 pub trait DataSourceOptions: PersistenceOptions {
     type DataSource: SequencerDataSource<Options = Self>;
@@ -87,16 +94,18 @@ pub trait SequencerDataSource:
 pub type Provider = AnyProvider<SeqTypes>;
 
 /// Create a provider for fetching missing data from a list of peer query services.
-pub fn provider(
+pub(super) async fn provider<N, P>(
     peers: impl IntoIterator<Item = Url>,
-    bind_version: SequencerApiVersion,
-) -> Provider {
-    let mut provider = Provider::default();
-    for peer in peers {
-        tracing::info!("will fetch missing data from {peer}");
-        provider = provider.with_provider(QueryServiceProvider::new(peer, bind_version));
-    }
-    provider
+    state: &ApiState<N, P>,
+    opt: LightClientOptions,
+    db_opt: LightClientSqliteOptions,
+) -> anyhow::Result<Provider>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+{
+    Ok(Provider::default()
+        .with_provider(LightClientProvider::new(peers, state.clone(), opt, db_opt).await?))
 }
 
 pub(crate) trait SubmitDataSource<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> {
@@ -273,6 +282,16 @@ pub(crate) trait CatchupDataSource: Sync {
         height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
 
+    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    ///
+    /// Returns `None` when no cert2 height >= `height` is locally available
+    fn get_cert2(
+        &self,
+        _height: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<Certificate2<SeqTypes>>>> {
+        async { Ok(None) }
+    }
+
     /// Get the state of the requested `account`.
     ///
     /// The state is fetched from a snapshot at the given height and view, which _must_ correspond!
@@ -375,6 +394,185 @@ pub struct TableSize {
 pub(crate) trait DatabaseMetadataSource {
     /// Get the sizes of all tables in the database.
     fn get_table_sizes(&self) -> impl Send + Future<Output = anyhow::Result<Vec<TableSize>>>;
+}
+
+// ============================================================================
+// Arc delegation implementations
+// ============================================================================
+// These implementations allow Arc<T> to implement the data source traits
+// when T implements them, which is necessary for NodeApiStateImpl to work
+// with Arc-wrapped data sources.
+
+use std::sync::Arc;
+
+#[async_trait]
+impl<D> StateCertDataSource for Arc<D>
+where
+    D: StateCertDataSource + Sync + Send,
+{
+    async fn get_state_cert_by_epoch(
+        &self,
+        epoch: u64,
+    ) -> anyhow::Result<Option<LightClientStateUpdateCertificateV2<SeqTypes>>> {
+        (*self).get_state_cert_by_epoch(epoch).await
+    }
+
+    async fn insert_state_cert(
+        &self,
+        epoch: u64,
+        cert: LightClientStateUpdateCertificateV2<SeqTypes>,
+    ) -> anyhow::Result<()> {
+        (*self).insert_state_cert(epoch, cert).await
+    }
+}
+
+impl<Types, D> RequestResponseDataSource<Types> for Arc<D>
+where
+    Types: NodeType,
+    D: RequestResponseDataSource<Types> + Send + Sync,
+{
+    async fn request_vid_shares(
+        &self,
+        block_number: u64,
+        vid_common_data: VidCommonQueryData<Types>,
+        timeout_duration: Duration,
+    ) -> BoxFuture<'static, anyhow::Result<Vec<VidShare>>> {
+        self.as_ref()
+            .request_vid_shares(block_number, vid_common_data, timeout_duration)
+            .await
+    }
+}
+
+#[async_trait]
+impl<Types, D> StateCertFetchingDataSource<Types> for Arc<D>
+where
+    Types: NodeType,
+    D: StateCertFetchingDataSource<Types> + Sync + Send,
+{
+    async fn request_state_cert(
+        &self,
+        epoch: u64,
+        timeout: Duration,
+    ) -> Result<LightClientStateUpdateCertificateV2<Types>, StateCertFetchError> {
+        (*self).request_state_cert(epoch, timeout).await
+    }
+}
+
+#[async_trait]
+impl<T, D> StakeTableDataSource<T> for Arc<D>
+where
+    T: NodeType,
+    D: StakeTableDataSource<T> + Sync + Send,
+{
+    fn get_stake_table(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>> {
+        let this = self.clone();
+        async move { (*this).get_stake_table(epoch).await }
+    }
+
+    fn get_stake_table_current(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<StakeTableWithEpochNumber<T>>> {
+        let this = self.clone();
+        async move { (*this).get_stake_table_current().await }
+    }
+
+    fn get_da_stake_table(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<PeerConfig<T>>>> {
+        let this = self.clone();
+        async move { (*this).get_da_stake_table(epoch).await }
+    }
+
+    fn get_da_stake_table_current(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<StakeTableWithEpochNumber<T>>> {
+        let this = self.clone();
+        async move { (*this).get_da_stake_table_current().await }
+    }
+
+    fn get_validators(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = anyhow::Result<IndexMap<Address, AuthenticatedValidator<BLSPubKey>>>>
+    {
+        let this = self.clone();
+        async move { (*this).get_validators(epoch).await }
+    }
+
+    fn get_block_reward(
+        &self,
+        epoch: Option<EpochNumber>,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<RewardAmount>>> {
+        let this = self.clone();
+        async move { (*this).get_block_reward(epoch).await }
+    }
+
+    fn current_proposal_participation(
+        &self,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+        let this = self.clone();
+        async move { (*this).current_proposal_participation().await }
+    }
+
+    fn proposal_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+        let this = self.clone();
+        async move { (*this).proposal_participation(epoch).await }
+    }
+
+    fn current_vote_participation(&self) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+        let this = self.clone();
+        async move { (*this).current_vote_participation().await }
+    }
+
+    fn vote_participation(
+        &self,
+        epoch: EpochNumber,
+    ) -> impl Send + Future<Output = HashMap<BLSPubKey, f64>> {
+        let this = self.clone();
+        async move { (*this).vote_participation(epoch).await }
+    }
+
+    fn get_all_validators(
+        &self,
+        epoch: EpochNumber,
+        offset: u64,
+        limit: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<RegisteredValidator<PubKey>>>> {
+        let this = self.clone();
+        async move { (*this).get_all_validators(epoch, offset, limit).await }
+    }
+
+    fn stake_table_events(
+        &self,
+        from_l1_block: u64,
+        to_l1_block: u64,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<StakeTableEvent>>> {
+        let this = self.clone();
+        async move { (*this).stake_table_events(from_l1_block, to_l1_block).await }
+    }
+}
+
+/// Data source for pruning state: the oldest retained block and leaf.
+///
+/// SQL backends return the actual oldest entry; the filesystem backend always returns `None`
+/// since it does not prune.
+pub(crate) trait PruningDataSource {
+    /// Get the oldest block in storage, or `None` if empty or unsupported.
+    fn get_oldest_block(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<BlockQueryData<SeqTypes>>>>;
+
+    /// Get the oldest leaf in storage, or `None` if empty or unsupported.
+    fn get_oldest_leaf(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<Option<LeafQueryData<SeqTypes>>>>;
 }
 
 #[cfg(any(test, feature = "testing"))]

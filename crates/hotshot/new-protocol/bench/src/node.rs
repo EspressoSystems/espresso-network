@@ -1,10 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use hotshot::{
-    traits::{BlockPayload, implementations::Cliquenet},
-    types::BLSPubKey,
-};
+use hotshot::{traits::BlockPayload, types::BLSPubKey};
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
@@ -13,10 +10,12 @@ use hotshot_example_types::{
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
+    client::CoordinatorClient,
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
-    network::Network,
+    epoch_root_vote_collector::EpochRootVoteCollector,
+    network::cliquenet::Cliquenet,
     outbox::Outbox,
     proposal::ProposalValidator,
     state::StateManager,
@@ -29,7 +28,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
@@ -37,17 +36,18 @@ use versions::{CLIQUENET_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<BLSPubKey>, TestStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0u8; 32], cfg.node_id);
     info!(node_id = cfg.node_id, %public_key, "starting node");
 
-    let membership = make_membership(cfg.total_nodes).await;
+    let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    let coordinator = build_coordinator(public_key, private_key, membership, network, &cfg).await;
+    let coordinator =
+        build_coordinator(public_key, private_key, membership, network, client, &cfg).await;
 
     run_instrumented(coordinator, &cfg).await
 }
@@ -57,8 +57,8 @@ async fn create_network(
     public_key: &BLSPubKey,
     private_key: &<BLSPubKey as SignatureKey>::PrivateKey,
     cfg: &NodeConfig,
-) -> Result<Cliquenet<BLSPubKey>> {
-    let keypair = Keypair::derive_from::<BLSPubKey>(private_key);
+) -> Result<Cliquenet<TestTypes>> {
+    let keypair = Keypair::derive_from::<BLSPubKey>(private_key)?;
     let bind_addr: NetAddr = cfg
         .bind_addr
         .parse()
@@ -71,7 +71,7 @@ async fn create_network(
             continue; // skip self
         }
         let (peer_pk, peer_sk) = BLSPubKey::generated_from_seed_indexed([0u8; 32], i);
-        let peer_keypair = Keypair::derive_from::<BLSPubKey>(&peer_sk);
+        let peer_keypair = Keypair::derive_from::<BLSPubKey>(&peer_sk)?;
         let peer_addr: NetAddr = addr_str
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid peer address '{addr_str}': {e}"))?;
@@ -90,7 +90,7 @@ async fn create_network(
         keypair,
         bind_addr,
         parties,
-        Box::new(NoMetrics),
+        upgrade_lock(),
     )
     .await
     .map_err(|e| anyhow::anyhow!("failed to create cliquenet: {e}"))?;
@@ -102,7 +102,8 @@ async fn build_coordinator(
     public_key: BLSPubKey,
     private_key: <BLSPubKey as SignatureKey>::PrivateKey,
     membership: EpochMembershipCoordinator<TestTypes>,
-    network: Cliquenet<BLSPubKey>,
+    network: Cliquenet<TestTypes>,
+    client: CoordinatorClient<TestTypes>,
     cfg: &NodeConfig,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
@@ -113,10 +114,18 @@ async fn build_coordinator(
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
     let upgrade_lock = bench_upgrade_lock();
 
+    let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
+        [0u8; 32],
+        cfg.node_id,
+    );
+    let state_private_key = state_key_pair.sign_key_ref().clone();
+
     let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
         private_key.clone(),
+        state_private_key,
+        cfg.total_nodes,
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
@@ -127,6 +136,8 @@ async fn build_coordinator(
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+    let epoch_root_collector =
+        EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
@@ -154,9 +165,8 @@ async fn build_coordinator(
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-    let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
-
-    let net = Network::new(network, membership.clone(), upgrade_lock);
+    let proposal_validator =
+        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
     let timer = Timer::new(
         cfg.timeout_duration(),
@@ -166,13 +176,14 @@ async fn build_coordinator(
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
-        .network(net)
+        .network(network)
         .state_manager(state_manager)
         .vote1_collector(vote1_collector)
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
         .checkpoint_collector(checkpoint_collector)
+        .epoch_root_collector(epoch_root_collector)
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
         .epoch_manager(epoch_manager)
@@ -182,6 +193,7 @@ async fn build_coordinator(
             TestStorage::default(),
             private_key,
         ))
+        .client(client)
         .membership_coordinator(membership)
         .outbox(Outbox::new())
         .timer(timer)
@@ -383,4 +395,8 @@ fn build_genesis_proposal(
         next_drb_result: None,
         state_cert: None,
     }
+}
+
+pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
+    UpgradeLock::new(CLIQUENET_VERSION.into())
 }

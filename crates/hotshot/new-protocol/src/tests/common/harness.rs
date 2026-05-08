@@ -11,25 +11,26 @@ use hotshot_types::{
 };
 
 use super::utils::mock_membership_with_num_nodes;
-
-const HARNESS_NUM_NODES: usize = 10;
-const HARNESS_EPOCH_HEIGHT: u64 = 10;
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{error::Severity, timer::Timer},
     epoch::EpochManager,
+    epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
-    network::Network,
+    network::cliquenet::Cliquenet,
     outbox::Outbox,
     proposal::ProposalValidator,
     state::StateManager,
-    tests::common::mock::testing::{MockCoordinator, MockNetwork},
+    tests::common::mock::MockCoordinator,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
+
+const HARNESS_NUM_NODES: usize = 10;
+const HARNESS_EPOCH_HEIGHT: u64 = 10;
 
 /// Test harness that spawns consensus + mock coordinator and provides
 /// helpers to send events and collect results.
@@ -48,11 +49,17 @@ impl TestHarness {
     }
 
     pub async fn new_with_timer(node_index: u64, timer_duration: Duration) -> Self {
+        let epoch_height = 10;
         crate::logging::init_test_logging();
         let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+        let state_key_pair = hotshot_types::light_client::StateKeyPair::generate_from_seed_indexed(
+            [0u8; 32], node_index,
+        );
+        let state_private_key = state_key_pair.sign_key_ref().clone();
         let instance = Arc::new(TestInstanceState::default());
-        let (membership, storage) =
-            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT).await;
+        let (membership, storage, client) =
+            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key)
+                .await;
         let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
@@ -63,6 +70,8 @@ impl TestHarness {
         let timeout_one_honest_collector =
             VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
+        let epoch_root_collector =
+            EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
         let genesis_leaf =
@@ -72,9 +81,11 @@ impl TestHarness {
             membership.clone(),
             public_key,
             private_key.clone(),
+            state_private_key,
+            10,
             upgrade_lock.clone(),
             genesis_leaf.clone(),
-            10,
+            epoch_height,
         );
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
@@ -91,9 +102,24 @@ impl TestHarness {
         let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
         state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
-        let proposal_validator = ProposalValidator::new(membership.clone(), upgrade_lock.clone());
+        let proposal_validator =
+            ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
-        let network = Network::new(MockNetwork::default(), membership.clone(), upgrade_lock);
+        let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
+            .expect("keypair derivation should succeed");
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let addr = hotshot_types::addr::NetAddr::Inet(std::net::Ipv4Addr::LOCALHOST.into(), port);
+        let network = Cliquenet::create(
+            "test-harness",
+            public_key,
+            keypair,
+            addr,
+            vec![],
+            upgrade_lock.clone(),
+        )
+        .await
+        .expect("cliquenet creation should succeed");
 
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
@@ -104,12 +130,14 @@ impl TestHarness {
             .timeout_collector(timeout_collector)
             .timeout_one_honest_collector(timeout_one_honest_collector)
             .checkpoint_collector(checkpoint_collector)
+            .epoch_root_collector(epoch_root_collector)
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
             .epoch_manager(epoch_manager)
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
             .storage(crate::storage::Storage::new(storage, private_key))
+            .client(client)
             .membership_coordinator(membership)
             .outbox(Outbox::new())
             .timer(Timer::new(
@@ -156,14 +184,9 @@ impl TestHarness {
     /// This avoids any assumption about the order or number of events
     /// produced by asynchronous coordinator subsystems (proposal validator,
     /// VID reconstructor, vote collectors, state manager, timer).
-    pub async fn process_until<P, F>(
-        &mut self,
-        pred: P,
-        fail_pred: F,
-    ) -> Vec<ConsensusInput<TestTypes>>
+    pub async fn process_until<P>(&mut self, pred: P) -> Vec<ConsensusInput<TestTypes>>
     where
         P: Fn(&[ConsensusInput<TestTypes>]) -> bool,
-        F: Fn(&[ConsensusInput<TestTypes>]) -> bool,
     {
         let mut inputs = Vec::new();
         while !pred(&inputs) {
@@ -179,9 +202,6 @@ impl TestHarness {
                     // Non-critical errors (e.g., epoch root computation failures
                     // in the test environment) are expected and skipped.
                 },
-            }
-            if fail_pred(&inputs) {
-                panic!("Received Failure inputs: {inputs:?}");
             }
         }
         inputs

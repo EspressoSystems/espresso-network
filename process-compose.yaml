@@ -259,7 +259,7 @@ processes:
       failure_threshold: 100
 
   espresso-node-1:
-    command: espresso-node -- storage-sql -- http -- query -- submit -- explorer -- catchup
+    command: espresso-node -- storage-sql -- http -- config -- query -- submit -- explorer -- catchup
     environment:
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_1_AXUM_PORT}
@@ -317,7 +317,7 @@ processes:
     availability: *run-forever
 
   espresso-node-2:
-    command: espresso-node -- http
+    command: espresso-node -- http -- config
     environment:
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_2_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_2_AXUM_PORT}
@@ -328,6 +328,7 @@ processes:
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_3_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2
+      - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2-lc
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_2}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_2}
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_2}
@@ -368,7 +369,7 @@ processes:
     availability: *run-forever
 
   espresso-node-3:
-    command: espresso-node -- http -- query -- storage-fs
+    command: espresso-node -- http -- config -- query -- storage-fs
     environment:
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_3_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_3_AXUM_PORT}
@@ -379,6 +380,7 @@ processes:
       - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_4_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3
+      - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3-lc
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_3}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_3}
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_3}
@@ -419,7 +421,7 @@ processes:
     availability: *run-forever
 
   espresso-node-4:
-    command: espresso-node-sqlite -- storage-sql -- http -- query
+    command: espresso-node-sqlite -- storage-sql -- http -- config -- query
     environment:
       - ESPRESSO_NODE_LIGHTWEIGHT=true
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_4_API_PORT}
@@ -429,6 +431,7 @@ processes:
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_4}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq4
+      - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq4-lc
       - ESPRESSO_NODE_PRIVATE_STAKING_KEY=${ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_4}
       - ESPRESSO_NODE_PRIVATE_STATE_KEY=${ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_4}
       - ESPRESSO_NODE_PRIVATE_X25519_KEY=${ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_4}

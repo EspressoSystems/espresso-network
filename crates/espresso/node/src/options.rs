@@ -71,6 +71,13 @@ pub struct Options {
     )]
     pub cliquenet_bind_address: NetAddr,
 
+    /// The address to advertise to other nodes for cliquenet (in `host:port` | `ip:port` form).
+    ///
+    /// Only used for orchestrator-based setup (test networks). On real networks the address
+    /// must be registered in the stake table contract instead.
+    #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS")]
+    pub cliquenet_advertise_address: Option<NetAddr>,
+
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
         long,
@@ -316,6 +323,14 @@ pub struct Options {
     /// remote providers so it can still vote within the current view.
     #[clap(long, env = "ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT", default_value = "5s", value_parser = parse_duration)]
     pub local_catchup_timeout: Duration,
+
+    /// Per-step timeout for the startup stake-table catchup walk.
+    ///
+    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`
+    /// (the underlying `fetch_leaf` retries forever); a step that exceeds this
+    /// terminates the walk
+    #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
+    pub bootstrap_epoch_catchup_timeout: Duration,
 
     #[clap(flatten)]
     pub logging: logging::Config,

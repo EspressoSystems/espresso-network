@@ -1,5 +1,11 @@
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
+use ::light_client::{
+    LightClient,
+    client::{FallbackClient, QueryServiceClient},
+    state::{Genesis, LightClientOptions},
+    storage::{LightClientSqliteOptions, SqliteStorage},
+};
 use alloy::primitives::U256;
 use anyhow::{Context, bail, ensure};
 use async_lock::RwLock;
@@ -34,7 +40,11 @@ use hotshot_contract_adapter::sol_types::EspToken;
 use hotshot_events_service::events_source::{
     EventFilterSet, EventsSource, EventsStreamer, StartupInfo,
 };
-use hotshot_query_service::{availability::VidCommonQueryData, data_source::ExtensibleDataSource};
+use hotshot_query_service::{
+    availability::VidCommonQueryData,
+    data_source::ExtensibleDataSource,
+    fetching::{self, Provider},
+};
 use hotshot_types::{
     PeerConfig,
     data::{EpochNumber, VidCommitment, VidCommon, VidShare, ViewNumber},
@@ -54,6 +64,7 @@ use rand::Rng;
 use request_response::RequestType;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
+use url::Url;
 use vbs::version::Version;
 
 use self::data_source::{HotShotConfigDataSource, NodeStateDataSource, StateSignatureDataSource};
@@ -829,6 +840,28 @@ where
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
+    data_source::PruningDataSource for StorageState<N, P, D>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+    D: data_source::PruningDataSource + Send + Sync,
+{
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<crate::SeqTypes>>>
+    {
+        self.inner().get_oldest_block().await
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<crate::SeqTypes>>>
+    {
+        self.inner().get_oldest_leaf().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
     CatchupDataSource for StorageState<N, P, D>
 {
     #[tracing::instrument(skip(self, instance))]
@@ -914,6 +947,13 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
 
         // Try storage.
         self.inner().get_leaf_chain(height).await
+    }
+
+    async fn get_cert2(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        self.inner().load_earliest_cert2(height).await
     }
 
     #[tracing::instrument(skip(self, instance))]
@@ -1082,6 +1122,8 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
     }
 
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
+        // Builds a legacy 3-chain from undecided leaves in memory. New-protocol heights fall
+        // through to the storage path.
         let mut leaves = self.consensus_handle().await.undecided_leaves().await;
         leaves.sort_by_key(|l| l.view_number());
         let (position, mut last_leaf) = leaves
@@ -1711,6 +1753,74 @@ where
     }
 }
 
+/// [`Provider`] implementation wrapping a lazy [`LightClient`].
+///
+/// The [`LightClient`] requires a genesis to initialize itself, which we can get from the
+/// [`ApiState`]. However, the [`Provider`] instance must be provided to the API data source at
+/// initialization time, while the [`ApiState`] is only initialized lazily. This is a provider
+/// implementation which is itself initialized lazily: [`Provider::fetch`] calls will time out until
+/// the underlying [`ApiState`] is fully initialized, at which point this provider will start
+/// serving fetches using the [`LightClient`].
+#[derive(Debug)]
+struct LightClientProvider {
+    light_client: BoxLazy<LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>>,
+}
+
+impl LightClientProvider {
+    pub async fn new<N, P>(
+        peers: impl IntoIterator<Item = Url>,
+        state: ApiState<N, P>,
+        opt: LightClientOptions,
+        db_opt: LightClientSqliteOptions,
+    ) -> anyhow::Result<Self>
+    where
+        N: ConnectedNetwork<PubKey>,
+        P: SequencerPersistence,
+    {
+        let db = db_opt
+            .connect()
+            .await
+            .context("creating SQLite database for light client")?;
+        let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
+        let init_light_client = async move {
+            let config = state.network_config().await;
+            let epoch_height = config.config.epoch_height;
+            let first_epoch =
+                epoch_from_block_number(config.config.epoch_start_block, epoch_height);
+
+            let genesis = Genesis {
+                epoch_height,
+
+                // Dynamic state starts from the third epoch, since we need the prior epoch's root
+                // to have the upgraded header with the stake table hash.
+                first_epoch_with_dynamic_stake_table: EpochNumber::new(first_epoch + 2),
+
+                stake_table: config
+                    .config
+                    .known_nodes_with_stake
+                    .into_iter()
+                    .map(|peer| peer.stake_table_entry)
+                    .collect(),
+            };
+            LightClient::from_genesis_with_options(db, client, genesis, opt)
+        };
+        Ok(Self {
+            light_client: Arc::pin(Lazy::from_future(init_light_client.boxed())),
+        })
+    }
+}
+
+#[async_trait]
+impl<T> Provider<SeqTypes, T> for LightClientProvider
+where
+    T: fetching::Request<SeqTypes> + 'static,
+    LightClient<SqliteStorage, FallbackClient<QueryServiceClient>>: Provider<SeqTypes, T>,
+{
+    async fn fetch(&self, req: T) -> Option<T::Response> {
+        self.light_client.as_ref().get().await.fetch(req).await
+    }
+}
+
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers {
     use std::{cmp::max, time::Duration};
@@ -1736,7 +1846,8 @@ pub mod test_helpers {
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
     use hotshot_types::{
-        event::LeafInfo, light_client::LCV3StateSignatureRequestBody, traits::metrics::NoMetrics,
+        event::LeafInfo, light_client::LCV3StateSignatureRequestBody,
+        new_protocol::CoordinatorEvent, traits::metrics::NoMetrics,
     };
     use itertools::izip;
     use jf_merkle_tree_compat::{MerkleCommitment, MerkleTreeScheme};
@@ -1753,7 +1864,6 @@ pub mod test_helpers {
     use super::*;
     use crate::{
         catchup::NullStateCatchup,
-        consensus_handle::CoordinatorEvent,
         network,
         persistence::no_storage,
         testing::{TestConfig, TestConfigBuilder, run_legacy_builder, wait_for_decide_on_handle},
@@ -2115,6 +2225,7 @@ pub mod test_helpers {
                                 .await
                             }
                         }
+                        .boxed()
                     }),
             )
             .await;
@@ -2669,12 +2780,14 @@ mod api_tests {
     where
         D: TestableSequencerDataSource + Debug + 'static,
     {
+        use hotshot_types::new_protocol::CoordinatorEvent;
+
         #[derive(Clone, Copy, Debug)]
         struct FailConsumer;
 
         #[async_trait]
         impl EventConsumer for FailConsumer {
-            async fn handle_event(&self, _: &Event<SeqTypes>) -> anyhow::Result<()> {
+            async fn handle_event(&self, _: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
                 bail!("mock error injection");
             }
         }
@@ -3074,6 +3187,7 @@ mod test {
         ValidatorConfig,
         data::EpochNumber,
         event::LeafInfo,
+        new_protocol::CoordinatorEvent,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
     };
@@ -3103,7 +3217,6 @@ mod test {
         sql::DataSource as SqlDataSource,
     };
     use super::*;
-    use crate::consensus_handle::CoordinatorEvent;
 
     async fn wait_until_block_height(
         client: &Client<ServerError, StaticVersion<0, 1>>,
@@ -5689,7 +5802,9 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port).catchup(Default::default()),
+                Options::with_port(api_port)
+                    .catchup(Default::default())
+                    .light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -5726,6 +5841,11 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                light_client: LightClientOptions {
+                    decaf: true,
+                    ..Default::default()
+                },
+                ..Default::default()
             },
             tmp_options(node_0_storage),
         );
@@ -5932,7 +6052,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port),
+                Options::with_port(api_port).light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -5967,6 +6087,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                ..Query::test()
             },
             tmp_options(node_0_storage),
         );
@@ -7161,7 +7282,7 @@ mod test {
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
-                Options::with_port(api_port),
+                Options::with_port(api_port).light_client(Default::default()),
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
@@ -7204,6 +7325,7 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                ..Query::test()
             },
             tmp_options(&new_storage),
         );
@@ -7411,6 +7533,28 @@ mod test {
         Ok(())
     }
 
+    async fn compare_endpoints(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let tide: serde_json::Value = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .json()
+            .await?;
+        let axum: serde_json::Value = http
+            .get(format!("http://localhost:{axum_port}/v1/{path}"))
+            .send()
+            .await?
+            .json()
+            .await?;
+        assert_eq!(tide, axum, "v1/{path}: tide and axum v1 responses differ");
+        Ok(())
+    }
+
     #[rstest]
     #[case(POS_V3)]
     #[case(POS_V4)]
@@ -7424,7 +7568,9 @@ mod test {
             .build();
 
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
+        println!("AXUM PORT = {axum_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -7434,11 +7580,11 @@ mod test {
             .try_into()
             .unwrap();
 
+        let mut api_opts = Options::with_port(api_port).catchup(Default::default());
+        api_opts.http.axum_port = Some(axum_port);
+
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port).catchup(Default::default()),
-            ))
+            .api_config(SqlDataSource::options(&storage[0], api_opts))
             .network_config(network_config)
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
@@ -7473,7 +7619,7 @@ mod test {
 
         // validate proof returned from the api
         if upgrade.base == EPOCH_VERSION {
-            // V1 case
+            // V1 case — axum only implements the v2 reward tree, so no axum comparison here
             wait_until_block_height(&client, "reward-state/block-height", height).await;
 
             network.stop_consensus().await;
@@ -7507,9 +7653,26 @@ mod test {
             }
         } else {
             // V2 case
+
+            // Submit a transaction so we have a block with actual namespace data for
+            // availability parity tests. Both servers share the same SQL data source, so they
+            // must return identical responses.
+            let avail_ns = NamespaceId::from(42_u32);
+            let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
+            network
+                .server
+                .submit_transaction(avail_tx.clone())
+                .await
+                .unwrap();
+            let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
+
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+            // Wait for the availability query service to index avail_block.
+            wait_until_block_height(&client, "node/block-height", avail_block).await;
 
             network.stop_consensus().await;
+
+            let http = reqwest::Client::new();
 
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
                 let (_, expected_proof) = validated_state
@@ -7547,7 +7710,114 @@ mod test {
                     .unwrap();
 
                 assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
+
+                // Both servers share the same underlying SQL data source; compare responses
+                // for each per-address endpoint under reward-state-v2.
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/proof/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-balance/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/proof/latest/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-balance/latest/{address}"),
+                )
+                .await?;
             }
+
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
+            )
+            .await?;
+
+            // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
+
+            // Namespace proof by height
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+
+            // Namespace proof by block hash and payload hash
+            let avail_header: Header = client
+                .get(&format!("availability/header/{avail_block}"))
+                .send()
+                .await
+                .unwrap();
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/hash/{}/namespace/{avail_ns}",
+                    avail_header.commit()
+                ),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/payload-hash/{}/namespace/{avail_ns}",
+                    avail_header.payload_commitment()
+                ),
+            )
+            .await?;
+
+            // Namespace proof range
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                    avail_block + 1
+                ),
+            )
+            .await?;
+
+            // State certificate parity (epoch 1 is complete after 4 epochs)
+            compare_endpoints(&http, api_port, axum_port, "availability/state-cert/1").await?;
+            compare_endpoints(&http, api_port, axum_port, "availability/state-cert-v2/1").await?;
         }
 
         Ok(())

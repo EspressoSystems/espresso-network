@@ -75,6 +75,7 @@ where
     let network_params = NetworkParams {
         cdn_endpoint: opt.cdn_endpoint,
         cliquenet_bind_addr: opt.cliquenet_bind_address,
+        cliquenet_advertise_addr: opt.cliquenet_advertise_address,
         x25519_secret_key: x25519,
         libp2p_advertise_address: opt.libp2p_advertise_address,
         libp2p_bind_address: opt.libp2p_bind_address,
@@ -90,6 +91,7 @@ where
         catchup_backoff: opt.catchup_backoff,
         catchup_base_timeout: opt.catchup_base_timeout,
         local_catchup_timeout: opt.local_catchup_timeout,
+        bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
         libp2p_history_gossip: opt.libp2p_history_gossip,
         libp2p_history_length: opt.libp2p_history_length,
         libp2p_max_ihave_length: opt.libp2p_max_ihave_length,

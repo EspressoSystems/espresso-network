@@ -5,14 +5,15 @@ use std::collections::{HashMap, VecDeque};
 use alloy::primitives::FixedBytes;
 use async_lock::RwLock;
 use hotshot::types::{Event, EventType, SchnorrPubKey};
-use hotshot_task_impls::helpers::derive_signed_state_digest;
+use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
-    data::EpochNumber,
+    data::{EpochNumber, Leaf2},
     event::LeafInfo,
     light_client::{
         LCV2StateSignatureRequestBody, LCV3StateSignatureRequestBody, LightClientState,
         StakeTableState, StateSignKey, StateSignature, StateVerKey,
     },
+    new_protocol::CoordinatorEvent,
     stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
@@ -92,16 +93,24 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
 
     pub(super) async fn handle_event<I>(
         &mut self,
-        event: &Event<SeqTypes>,
+        event: &CoordinatorEvent<SeqTypes>,
         consensus_handle: &ConsensusHandle<SeqTypes, I>,
     ) where
         I: hotshot::traits::NodeImplementation<SeqTypes>,
     {
-        let EventType::Decide { leaf_chain, .. } = &event.event else {
-            return;
-        };
-        let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-            return;
+        let leaf: &Leaf2<SeqTypes> = match event {
+            CoordinatorEvent::LegacyEvent(Event {
+                event: EventType::Decide { leaf_chain, .. },
+                ..
+            }) => match leaf_chain.first() {
+                Some(LeafInfo { leaf, .. }) => leaf,
+                None => return,
+            },
+            CoordinatorEvent::NewDecide(decide) => match decide.leaves.first() {
+                Some(leaf) => leaf,
+                None => return,
+            },
+            _ => return,
         };
         match leaf
             .block_header()

@@ -65,7 +65,7 @@ pub async fn build_system_handle<
     Arc<TestNodeKeyMap>,
 )
 where
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
 {
     let builder: TestDescription<TYPES, I> = TestDescription::default_multiple_rounds();
 
@@ -91,7 +91,7 @@ pub async fn build_system_handle_from_launcher<
     Arc<TestNodeKeyMap>,
 )
 where
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
 {
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
     let storage = (launcher.resource_generators.storage)(node_id);
@@ -128,11 +128,9 @@ where
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();
 
-    let memberships = Arc::new(RwLock::new(TYPES::Membership::new::<I>(
+    let memberships = Arc::new(RwLock::new(TYPES::Membership::new(
         hotshot_config.known_nodes_with_stake.clone(),
         hotshot_config.known_da_nodes.clone(),
-        storage.clone(),
-        network.clone(),
         public_key.clone(),
         launcher.metadata.test_config.epoch_height,
     )));
