@@ -665,7 +665,7 @@ pub struct PublicNodeConfig {
     pub cliquenet_bind_address: NetAddr,
     pub cliquenet_advertise_address: Option<NetAddr>,
     pub libp2p_bind_address: String,
-    pub libp2p_advertise_address: String,
+    pub libp2p_advertise_address: Option<String>,
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
     pub public_api_url: Option<Url>,
     pub builder_urls: Vec<Url>,
@@ -677,6 +677,7 @@ pub struct PublicNodeConfig {
     pub identity: Identity,
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
+    pub bootstrap_epoch_catchup_timeout: Duration,
     pub catchup_backoff: BackoffParams,
     pub proposal_fetcher: ProposalFetcherConfig,
     pub libp2p: Libp2pTuning,
@@ -1013,6 +1014,7 @@ impl PublicNodeConfig {
             identity: opt.identity.clone(),
             catchup_base_timeout: opt.catchup_base_timeout,
             local_catchup_timeout: opt.local_catchup_timeout,
+            bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
             catchup_backoff: opt.catchup_backoff,
             proposal_fetcher: opt.proposal_fetcher_config,
             libp2p: Libp2pTuning::from(opt),
@@ -1199,6 +1201,10 @@ mod tests {
         assert_eq!(value["public_api_url"], serde_json::Value::Null);
     }
 
+    // Document the JSON shape of GET /config/runtime. Runs under Postgres builds only;
+    // the embedded-db variant produces a near-identical shape and the duplication isn't
+    // worth the test complexity.
+    #[cfg(not(feature = "embedded-db"))]
     #[test]
     fn config_node_response_snapshot() {
         let opt = parse_options_with(&[
@@ -1258,9 +1264,12 @@ mod tests {
 
         let cfg = PublicNodeConfig::new(&opt, &modules);
 
-        insta::assert_yaml_snapshot!("config_node_response", cfg);
+        insta::assert_yaml_snapshot!("config_node_response_postgres", cfg);
     }
 
+    // Postgres only: storage-sql under embedded-db requires a --path arg that's
+    // irrelevant to what this test asserts.
+    #[cfg(not(feature = "embedded-db"))]
     #[test]
     fn public_node_config_includes_pruning() {
         let opt = parse_options_with(&[
