@@ -129,6 +129,9 @@ pub struct NetworkParams {
     pub catchup_base_timeout: Duration,
     /// Timeout for local catchup provider requests.
     pub local_catchup_timeout: Duration,
+    /// Per-step timeout for the startup stake-table catchup walk
+    /// (`bootstrap_epoch_window`).
+    pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -783,6 +786,7 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
+        network_params.bootstrap_epoch_catchup_timeout,
     )
     .await?;
 
@@ -1543,6 +1547,7 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
+                Duration::from_secs(2),
             )
             .await
             .unwrap()
