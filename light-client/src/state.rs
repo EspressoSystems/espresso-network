@@ -18,12 +18,13 @@ use hotshot_query_service_types::{
 use hotshot_types::{data::EpochNumber, stake_table::StakeTableEntry, utils::root_block_in_epoch};
 use serde::{Deserialize, Serialize};
 use vbs::version::{StaticVersionType, Version};
+use versions::EPOCH_VERSION;
 
 use crate::{
     client::Client,
     consensus::{
         leaf::LeafProofHint,
-        quorum::{PrevOnly, Quorum, StakeTable, StakeTablePair, StakeTableQuorum},
+        quorum::{Quorum, StakeTable, StakeTablePair, StakeTableQuorum},
     },
     storage::{LeafRequest, Storage},
 };
@@ -576,7 +577,7 @@ where
 
         // If we didn't find the exact stake table we are looking for in cache, look for it in our
         // local database, or an earlier one we can catch up from.
-        let (lower_bound, mut stake_table, mut prev_quorum) =
+        let (lower_bound, mut stake_table, mut prev_quorum, mut prev_version) =
             if let Some((lower_bound, stake_table, protocol_version)) =
                 self.db.stake_table_lower_bound(epoch).await?
             {
@@ -589,7 +590,7 @@ where
                 }
 
                 let quorum = stake_table_state_to_quorum(&stake_table, protocol_version)?;
-                (lower_bound, stake_table, Arc::new(quorum))
+                (lower_bound, stake_table, Arc::new(quorum), protocol_version)
             } else {
                 // We don't have any stake table earlier than `epoch` as a starting point, so we must
                 // start from the genesis state.
@@ -597,6 +598,7 @@ where
                     self.first_epoch_with_dynamic_stake_table - 1,
                     StakeTableState::default(),
                     self.genesis_stake_table.clone(),
+                    EPOCH_VERSION,
                 )
             };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
@@ -615,14 +617,23 @@ where
                 }
             }
 
+            // Compute next_quorum at the previous epoch's protocol version so we can verify the
+            // root header's QC, which may carry an `next_epoch_qc` signed by the next epoch's
+            // validators. We refresh the version below using `root.version()` once known.
+            let next_quorum = Arc::new(stake_table_state_to_quorum(&stake_table, prev_version)?);
+
             let root_height = root_block_in_epoch(epoch - 1, self.epoch_height);
             let root = self
                 .fetch_header_with_quorum(BlockId::Number(root_height as usize), |_| {
-                    StakeTableQuorum::new(PrevOnly(prev_quorum.clone()), self.epoch_height)
+                    StakeTableQuorum::new(
+                        (prev_quorum.clone(), next_quorum.clone()),
+                        self.epoch_height,
+                    )
                 })
                 .await
                 .context(format!("fetching epoch root for {epoch}"))?;
             let next_quorum = Arc::new(stake_table_state_to_quorum(&stake_table, root.version())?);
+            prev_version = root.version();
             if let Some(hash) = root.next_stake_table_hash() {
                 ensure!(
                     hash == stake_table.commit(),
