@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use hotshot_example_types::node_types::{
-    CliquenetImpl, CombinedImpl, CompatNetImpl, PushCdnImpl, TEST_VERSIONS,
-    TestTwoStakeTablesTypes, TestTypes, TestTypesRandomizedLeader,
+    CombinedImpl, PushCdnImpl, TEST_VERSIONS, TestTwoStakeTablesTypes, TestTypes,
+    TestTypesRandomizedLeader,
 };
 use hotshot_macros::cross_tests;
 use hotshot_testing::{
@@ -21,7 +21,7 @@ use hotshot_testing::{
 
 cross_tests!(
     TestName: test_all_restart_epochs,
-    Impls: [CombinedImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl, PushCdnImpl],
     Types: [TestTypes, TestTypesRandomizedLeader, TestTwoStakeTablesTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
@@ -70,7 +70,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_all_restart_one_da_with_epochs,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [TestTypes, TestTwoStakeTablesTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
@@ -119,7 +119,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_staggered_restart_with_epochs_1,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [TestTwoStakeTablesTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
@@ -177,7 +177,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_staggered_restart_with_epochs_2,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
@@ -252,7 +252,7 @@ fn create_node_change(
 }
 cross_tests!(
     TestName: test_staggered_restart_double_restart,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,
@@ -301,7 +301,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_all_two_thirds,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

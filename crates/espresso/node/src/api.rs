@@ -840,6 +840,28 @@ where
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
+    data_source::PruningDataSource for StorageState<N, P, D>
+where
+    N: ConnectedNetwork<PubKey>,
+    P: SequencerPersistence,
+    D: data_source::PruningDataSource + Send + Sync,
+{
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<crate::SeqTypes>>>
+    {
+        self.inner().get_oldest_block().await
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<crate::SeqTypes>>>
+    {
+        self.inner().get_oldest_leaf().await
+    }
+}
+
+impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
     CatchupDataSource for StorageState<N, P, D>
 {
     #[tracing::instrument(skip(self, instance))]
@@ -2050,7 +2072,12 @@ pub mod test_helpers {
                 StakeTableContractVersion::V1 => {
                     args.deploy_to_stake_table_v1(&mut contracts).await
                 },
-                StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+                StakeTableContractVersion::V2 => {
+                    args.deploy_to_stake_table_v2(&mut contracts).await
+                },
+                StakeTableContractVersion::V3 => {
+                    args.deploy_to_stake_table_v3(&mut contracts).await
+                },
             }
             .context("failed to deploy contracts")?;
 
@@ -3125,6 +3152,7 @@ mod test {
     use espresso_contract_deployer::{
         Contract, Contracts, builder::DeployerArgsBuilder,
         network_config::light_client_genesis_from_stake_table, upgrade_stake_table_v2,
+        upgrade_stake_table_v3,
     };
     use espresso_types::{
         ADVZNamespaceProofQueryData, FeeAmount, Header, L1Client, L1ClientOptions,
@@ -3145,7 +3173,7 @@ mod test {
     use hotshot::types::{Event, EventType};
     use hotshot_contract_adapter::{
         reward::RewardClaimInput,
-        sol_types::{EspToken, StakeTableV2},
+        sol_types::{EspToken, StakeTableV3},
         stake_table::StakeTableContractVersion,
     };
     use hotshot_query_service::{
@@ -3163,11 +3191,13 @@ mod test {
     };
     use hotshot_types::{
         ValidatorConfig,
+        addr::NetAddr,
         data::EpochNumber,
         event::LeafInfo,
         new_protocol::CoordinatorEvent,
         traits::{block_contents::BlockHeader, election::Membership, metrics::NoMetrics},
         utils::epoch_from_block_number,
+        x25519,
     };
     use jf_merkle_tree_compat::{
         MerkleTreeScheme,
@@ -3176,7 +3206,9 @@ mod test {
     use pretty_assertions::assert_matches;
     use rand::seq::SliceRandom;
     use rstest::rstest;
-    use staking_cli::{demo::DelegationConfig, fetch_commission, update_commission};
+    use staking_cli::{
+        demo::DelegationConfig, fetch_commission, update_commission, update_network_config,
+    };
     use surf_disco::Client;
     use test_helpers::{
         TestNetwork, TestNetworkConfigBuilder, catchup_test_helper, state_signature_test_helper,
@@ -4367,7 +4399,7 @@ mod test {
             .unwrap();
 
         let staking_priv_keys = network_config.staking_priv_keys();
-        let account = staking_priv_keys[0].0.clone();
+        let account = staking_priv_keys[0].signer.clone();
         let address = account.address();
 
         let block_height = 60;
@@ -5796,7 +5828,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -6044,7 +6076,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -6556,7 +6588,7 @@ mod test {
             .build()
             .unwrap();
 
-        args.deploy_all(&mut contracts).await.unwrap();
+        args.deploy_to_stake_table_v3(&mut contracts).await.unwrap();
 
         let st_addr = contracts
             .address(Contract::StakeTableProxy)
@@ -6590,7 +6622,7 @@ mod test {
         );
 
         let provider = l1_client.provider;
-        let stake_table = StakeTableV2::new(st_addr, provider.clone());
+        let stake_table = StakeTableV3::new(st_addr, provider.clone());
 
         let stake_table_init_block = stake_table
             .initializedAtBlock()
@@ -7063,7 +7095,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -7140,7 +7172,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -7274,7 +7306,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -7511,6 +7543,117 @@ mod test {
         Ok(())
     }
 
+    /// Start on StakeTable V2, upgrade to V3, call `updateNetworkConfig` on one
+    /// validator, and verify the indexer surfaces the new x25519 key and p2p
+    /// address in the validator map.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_integration_update_fast_finality_network_config() -> anyhow::Result<()> {
+        const NUM_NODES: usize = 3;
+        const EPOCH_HEIGHT: u64 = 10;
+
+        let versions = POS_V4;
+        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .build();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config.clone())
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V2,
+                POS_V4,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let network = TestNetwork::new(config, versions).await;
+        let provider = network.cfg.anvil().unwrap();
+        let mut contracts = network.contracts.unwrap();
+        let st_addr = contracts.address(Contract::StakeTableProxy).unwrap();
+
+        upgrade_stake_table_v3(provider, &mut contracts).await?;
+
+        let (validator, validator_provider) = network_config
+            .validator_providers()
+            .into_iter()
+            .next()
+            .unwrap();
+        let x25519_key = x25519::Keypair::generate().unwrap().public_key();
+        let p2p_addr: NetAddr = "127.0.0.1:9000".parse().unwrap();
+        update_network_config(validator_provider, st_addr, x25519_key, p2p_addr.clone())
+            .await?
+            .get_receipt()
+            .await?;
+
+        let current_epoch = network.peers[0]
+            .decided_leaf()
+            .await
+            .epoch(EPOCH_HEIGHT)
+            .unwrap();
+        let target_epoch = current_epoch.u64() + 3;
+        let mut events = network.peers[0].event_stream();
+        wait_for_epochs(&mut events, EPOCH_HEIGHT, target_epoch).await;
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        let validators = client
+            .get::<AuthenticatedValidatorMap>(&format!("node/validators/{target_epoch}"))
+            .send()
+            .await
+            .expect("validators");
+        let v = validators.get(&validator).expect("validator present");
+        assert_eq!(v.x25519_key, Some(x25519_key));
+        assert_eq!(v.p2p_addr, Some(p2p_addr));
+
+        Ok(())
+    }
+
+    async fn compare_endpoints(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let tide: serde_json::Value = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .json()
+            .await?;
+        let axum: serde_json::Value = http
+            .get(format!("http://localhost:{axum_port}/v1/{path}"))
+            .send()
+            .await?
+            .json()
+            .await?;
+        assert_eq!(tide, axum, "v1/{path}: tide and axum v1 responses differ");
+        Ok(())
+    }
+
     #[rstest]
     #[case(POS_V3)]
     #[case(POS_V4)]
@@ -7524,7 +7667,9 @@ mod test {
             .build();
 
         let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
         println!("API PORT = {api_port}");
+        println!("AXUM PORT = {axum_port}");
 
         let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
         let persistence: [_; NUM_NODES] = storage
@@ -7534,11 +7679,11 @@ mod test {
             .try_into()
             .unwrap();
 
+        let mut api_opts = Options::with_port(api_port).catchup(Default::default());
+        api_opts.http.axum_port = Some(axum_port);
+
         let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(
-                &storage[0],
-                Options::with_port(api_port).catchup(Default::default()),
-            ))
+            .api_config(SqlDataSource::options(&storage[0], api_opts))
             .network_config(network_config)
             .persistences(persistence.clone())
             .catchups(std::array::from_fn(|_| {
@@ -7551,7 +7696,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 upgrade,
             )
             .await
@@ -7573,7 +7718,7 @@ mod test {
 
         // validate proof returned from the api
         if upgrade.base == EPOCH_VERSION {
-            // V1 case
+            // V1 case — axum only implements the v2 reward tree, so no axum comparison here
             wait_until_block_height(&client, "reward-state/block-height", height).await;
 
             network.stop_consensus().await;
@@ -7607,9 +7752,26 @@ mod test {
             }
         } else {
             // V2 case
+
+            // Submit a transaction so we have a block with actual namespace data for
+            // availability parity tests. Both servers share the same SQL data source, so they
+            // must return identical responses.
+            let avail_ns = NamespaceId::from(42_u32);
+            let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
+            network
+                .server
+                .submit_transaction(avail_tx.clone())
+                .await
+                .unwrap();
+            let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
+
             wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+            // Wait for the availability query service to index avail_block.
+            wait_until_block_height(&client, "node/block-height", avail_block).await;
 
             network.stop_consensus().await;
+
+            let http = reqwest::Client::new();
 
             for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
                 let (_, expected_proof) = validated_state
@@ -7647,7 +7809,114 @@ mod test {
                     .unwrap();
 
                 assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
+
+                // Both servers share the same underlying SQL data source; compare responses
+                // for each per-address endpoint under reward-state-v2.
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/proof/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-balance/{height}/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/proof/latest/{address}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-balance/latest/{address}"),
+                )
+                .await?;
             }
+
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
+            )
+            .await?;
+
+            // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
+
+            // Namespace proof by height
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
+
+            // Namespace proof by block hash and payload hash
+            let avail_header: Header = client
+                .get(&format!("availability/header/{avail_block}"))
+                .send()
+                .await
+                .unwrap();
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/hash/{}/namespace/{avail_ns}",
+                    avail_header.commit()
+                ),
+            )
+            .await?;
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/payload-hash/{}/namespace/{avail_ns}",
+                    avail_header.payload_commitment()
+                ),
+            )
+            .await?;
+
+            // Namespace proof range
+            compare_endpoints(
+                &http,
+                api_port,
+                axum_port,
+                &format!(
+                    "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                    avail_block + 1
+                ),
+            )
+            .await?;
+
+            // State certificate parity (epoch 1 is complete after 4 epochs)
+            compare_endpoints(&http, api_port, axum_port, "availability/state-cert/1").await?;
+            compare_endpoints(&http, api_port, axum_port, "availability/state-cert-v2/1").await?;
         }
 
         Ok(())
@@ -7783,7 +8052,7 @@ mod test {
             }))
             .pos_hook(
                 DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V2,
+                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
                 POS_V4,
             )
             .await

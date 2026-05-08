@@ -5,11 +5,8 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import "forge-std/StdInvariant.sol";
 import { console } from "forge-std/console.sol";
-import {
-    StakeTableV2PropTestBase,
-    MockStakeTableV2,
-    MockERC20
-} from "./StakeTableV2PropTestBase.sol";
+import { StakeTableV2PropTestBase, MockERC20 } from "./StakeTableV2PropTestBase.sol";
+import { MockStakeTableV3 } from "./MockStakeTableV3.sol";
 import { StakeTable } from "../src/StakeTable.sol";
 import { BN254 } from "bn254/BN254.sol";
 import { EdOnBN254 } from "../src/libraries/EdOnBn254.sol";

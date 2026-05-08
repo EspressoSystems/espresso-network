@@ -67,3 +67,23 @@ Returns a map from BLS key to the fraction of views properly voted, as a floatin
 PATH = ["block-reward", "block-reward/epoch/:epoch_number"]
 ":epoch_number" = "Integer"
 DOC = "get the block reward"
+
+[route.get_oldest_block]
+PATH = ["oldest-block"]
+METHOD = "GET"
+DOC = """
+Get the oldest (smallest height) block present in storage.
+
+Returns the full block, or null if no blocks are stored. SQL backends return the actual
+oldest retained block; the filesystem backend always returns null.
+"""
+
+[route.get_oldest_leaf]
+PATH = ["oldest-leaf"]
+METHOD = "GET"
+DOC = """
+Get the oldest (smallest height) leaf present in storage.
+
+Returns the full leaf, or null if no leaves are stored. SQL backends return the actual
+oldest retained leaf; the filesystem backend always returns null.
+"""

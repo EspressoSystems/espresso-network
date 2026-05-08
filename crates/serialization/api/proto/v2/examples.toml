@@ -1,0 +1,32 @@
+[GetRewardClaimInputRequest]
+address = "0x0000000000000000000000000000000000000000"
+
+[GetRewardBalanceRequest]
+address = "0x0000000000000000000000000000000000000000"
+
+[GetRewardAccountProofRequest]
+address = "0x0000000000000000000000000000000000000000"
+
+[GetRewardBalancesRequest]
+height = 1000000
+offset = 0
+limit = 100
+
+[GetRewardMerkleTreeRequest]
+height = 1000000
+
+[GetNamespaceProofRequest]
+namespace_id = 10001
+block = 1000000
+first = 1000000
+last = 1000100
+
+[GetIncorrectEncodingProofRequest]
+namespace_id = 10001
+block_height = 1000000
+
+[GetStateCertificateRequest]
+epoch = 100
+
+[GetStakeTableRequest]
+epoch = 100

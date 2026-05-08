@@ -59,15 +59,17 @@ demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
 # cargo fmt misses files whose `mod` declarations are produced by macro expansion
-fmt *files:
+fmt *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    files="{{files}}"
-    if [ -z "$files" ]; then
-        files=$(git ls-files '*.rs')
-    fi
+    files=$(git ls-files '*.rs')
     if [ -n "$files" ]; then
-        echo "$files" | xargs -P $(getconf _NPROCESSORS_ONLN) -n 10 rustfmt
+        if [ -n "${IN_NIX_SHELL:-}" ]; then
+            rustfmt_cmd="rustfmt"
+        else
+            rustfmt_cmd="rustfmt +nightly"
+        fi
+        echo "$files" | xargs -P $(getconf _NPROCESSORS_ONLN) -n 10 $rustfmt_cmd {{args}}
     fi
 
 fix *args:
@@ -297,7 +299,7 @@ gen-bindings:
 export-contract-abis:
     rm -rv contracts/artifacts/abi
     mkdir -p contracts/artifacts/abi
-    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2} EspToken{,V2} IRewardClaim; do \
+    for contract in LightClient{,Mock,V2{,Mock}} StakeTable{,V2,V3} EspToken{,V2} IRewardClaim; do \
         cat "contracts/out/${contract}.sol/${contract}.json" | jq .abi > "contracts/artifacts/abi/${contract}.json"; \
     done
 
