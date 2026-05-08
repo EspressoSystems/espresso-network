@@ -245,9 +245,9 @@ impl<Ver: StaticVersionType> QueryServiceProvider<Ver> {
             "received leaf with the wrong hash ({})",
             leaf.hash()
         );
-        // Authenticate the QC by `(view, data)` rather than full commit. See `LeafRequest` for
-        // the rationale and the TODO to revert this once writers store the qc (child's
-        // justify_qc) instead of the decide-event cert1.
+        // Compare QC by `(view, data)` rather than full commit: under the new protocol,
+        // the cert1 stored at decide may aggregate a different vote subset than the QC
+        // so commits diverge even though both certify the same leaf.
         ensure!(
             leaf.qc().view_number() == req.expected_qc_view,
             "received leaf with QC for wrong view ({}, expected {})",

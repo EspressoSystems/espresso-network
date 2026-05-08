@@ -204,11 +204,10 @@ where
 
     /// Bootstrap the coordinator so the view-1 leader can propose.
     ///
-    /// Emits a synthetic `LeafDecided` for the genesis leaf so downstream
-    /// consumers (persistence, query service) record the genesis header,
-    /// then emits an initial `ViewChanged(1)` and, if this node is the
-    /// view-1 leader, a `RequestBlockAndHeader` for view 1.  Call this
-    /// after `seed_genesis` on the inner `Consensus` instance.
+    /// Genesis is never decided through the normal consensus path, so
+    /// downstream consumers (persistence, query service) would never see
+    /// the genesis header. We emit a `LeafDecided` for it here so that application
+    /// layer sees this event
     pub async fn start(&mut self) {
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
@@ -252,12 +251,10 @@ where
 
     /// Append the genesis DA proposal to storage.
     ///
-    /// The genesis block payload is always the empty payload, but it never
-    /// flows through the regular block-builder/VID-reconstructor path that
-    /// would otherwise call `storage.append_da`. Without this, the
-    /// `da_proposal2` table (or `da2/0.txt` on disk) is missing for view 0,
-    /// and downstream consumers (persistence, query service) cannot serve
-    /// the genesis block payload.
+    /// The genesis payload is always empty, but it never flows through the
+    /// regular block-builder/VID path that would otherwise persist a DA
+    /// proposal for view 0. Storage consumers downstream still expect one,
+    /// so we synthesize and append it here.
     fn append_genesis_da(&mut self, genesis_leaf: &Leaf2<T>) {
         let (payload, metadata) = T::BlockPayload::empty();
         self.storage.append_da(

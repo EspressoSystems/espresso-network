@@ -137,6 +137,11 @@ impl<T: NodeType> BlockBuilder<T> {
         let membership = self.membership.clone();
 
         let handle = self.tasks.spawn(async move {
+            // Throttle block production: without this, block times are fast
+            // enough that the coordinator's event queue overflows downstream.
+            // TODO: not viable for production — replace with proper backpressure
+            // on the coordinator event queue (or a configurable target block time)
+            // before mainnet.
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {

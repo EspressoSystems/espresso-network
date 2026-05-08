@@ -137,9 +137,6 @@ impl VidCommonRangeRequest {
 /// not necessarily the same `cert1` that the next leaf's `justify_qc` will reference. Both
 /// certify the same `(view, leaf)` but can be assembled from different voting set
 /// so their aggregated signatures (and commits) differ.
-///
-/// TODO: the cleaner fix is to store the *qc* (`justify_qc`) alongside each leaf,
-/// instead of the cert1 attached to the decide event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
 pub struct LeafRequest<Types: NodeType> {
     pub height: u64,

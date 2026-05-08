@@ -766,10 +766,10 @@ where
         // TODO: This creates a separate UpgradeLock from the one HotShot will
         // use. They should share a single lock so upgrade certificate updates
         // are visible to both.
-        // Seed the cliquenet with peers from the genesis stake table so the
-        // first round of consensus has connected peers. (Otherwise the only
-        // path that adds peers — `on_epoch_change` — never fires before the
-        // first proposal, and proposals can't arrive without peers.)
+        // Seed cliquenet with the genesis stake table so view 1 has peers.
+        // `on_epoch_change` is the only other code path that adds peers, and it
+        // doesn't fire until after the first proposal — which can't arrive
+        // without peers. Without this seed, consensus deadlocks at startup.
         let parties: Vec<_> = network_config
             .config
             .known_nodes_with_stake
