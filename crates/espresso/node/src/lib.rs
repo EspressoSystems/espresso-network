@@ -131,8 +131,10 @@ pub struct NetworkParams {
     pub cliquenet_bind_addr: NetAddr,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
-    /// The address to send to other Libp2p nodes to contact us
-    pub libp2p_advertise_address: String,
+    /// The address to send to other Libp2p nodes to contact us. Required for orchestrator
+    /// bootstrap; optional otherwise. When set, it is added to the swarm as an external address
+    /// so peers can reach us behind NAT.
+    pub libp2p_advertise_address: Option<String>,
     /// The address to bind to for Libp2p
     pub libp2p_bind_address: String,
     /// The (optional) bootstrap node addresses for Libp2p. If supplied, these will
@@ -347,16 +349,47 @@ where
                 &network_params.libp2p_bind_address
             )
         })?;
-    let libp2p_advertise_address =
-        derive_libp2p_multiaddr(&network_params.libp2p_advertise_address).with_context(|| {
-            format!(
-                "Failed to derive Libp2p advertise address of {}",
-                &network_params.libp2p_advertise_address
-            )
-        })?;
+    let advertise_multiaddr = network_params
+        .libp2p_advertise_address
+        .as_ref()
+        .map(|addr| {
+            derive_libp2p_multiaddr(addr)
+                .with_context(|| format!("Failed to derive Libp2p advertise address of {addr}"))
+        })
+        .transpose()?;
+    let advertise_is_global = match network_params
+        .libp2p_advertise_address
+        .as_deref()
+        .and_then(|s| s.parse::<NetAddr>().ok())
+    {
+        Some(parsed) if !parsed.is_probably_global() => {
+            tracing::error!(
+                "Libp2p advertise address {parsed} is probably not publicly routable. This is \
+                 fine for local testing (demo-native, docker-compose) but is wrong for any real \
+                 deployment: remote peers will fail to dial us."
+            );
+            false
+        },
+        _ => true,
+    };
+
+    // Always pass the configured address to the orchestrator stake table; that path is
+    // testing-only and demo-native legitimately uses loopback.
+    let libp2p_announce_addresses: Vec<Multiaddr> = advertise_multiaddr.iter().cloned().collect();
+
+    // Only register the advertise address as a libp2p `external_address` when it looks
+    // publicly routable: announcing local/private values via Identify / Kademlia poisons peer
+    // routing tables in production. Local tests don't need it since peers find each other via
+    // `libp2p_bootstrap_nodes`.
+    let libp2p_external_addresses: Vec<Multiaddr> = if advertise_is_global {
+        advertise_multiaddr.iter().cloned().collect()
+    } else {
+        Vec::new()
+    };
 
     info!("Libp2p bind address: {}", libp2p_bind_address);
-    info!("Libp2p advertise address: {}", libp2p_advertise_address);
+    info!("Libp2p announce addresses: {:?}", libp2p_announce_addresses);
+    info!("Libp2p external addresses: {:?}", libp2p_external_addresses);
 
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
@@ -415,12 +448,17 @@ where
             tracing::warn!(
                 "waiting for other nodes to connect, DO NOT RESTART until fully connected"
             );
+            let bootstrap_advertise_addr = libp2p_announce_addresses.first().cloned().context(
+                "ESPRESSO_SEQUENCER_LIBP2P_ADVERTISE_ADDRESS must be set when bootstrapping a \
+                 libp2p network from the orchestrator",
+            )?;
+
             let config = get_complete_config(
                 &orchestrator_client,
                 validator_config.clone(),
                 // Register in our Libp2p advertise address and public key so other nodes
                 // can contact us on startup
-                Some(libp2p_advertise_address),
+                Some(bootstrap_advertise_addr),
                 Some(libp2p_public_key),
             )
             .await?
@@ -685,6 +723,7 @@ where
             gossip_config,
             request_response_config,
             libp2p_bind_address,
+            libp2p_external_addresses,
             &validator_config.public_key,
             // We need the private key so we can derive our Libp2p keypair
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
