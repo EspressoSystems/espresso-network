@@ -612,6 +612,7 @@ impl Transaction<Write> {
             [(Self::PRUNED_HEIGHT_ID, height as i64)],
         )
         .await
+        .context("updating pruned height")
     }
 
     /// Record the height of the latest pruned merklized state.
@@ -625,6 +626,7 @@ impl Transaction<Write> {
             [(Self::STATE_PRUNED_HEIGHT_ID, height as i64)],
         )
         .await
+        .context("updating state pruned height")
     }
 }
 
@@ -966,7 +968,8 @@ impl<Mode: TransactionMode> PrunedHeightStorage for Transaction<Mode> {
             query_as::<(i64,)>("SELECT last_height FROM pruned_height WHERE id = $1 LIMIT 1")
                 .bind(Self::PRUNED_HEIGHT_ID)
                 .fetch_optional(self.as_mut())
-                .await?
+                .await
+                .context("loading pruned height")?
         else {
             return Ok(None);
         };
@@ -978,7 +981,8 @@ impl<Mode: TransactionMode> PrunedHeightStorage for Transaction<Mode> {
             query_as::<(i64,)>("SELECT last_height FROM pruned_height WHERE id = $1 LIMIT 1")
                 .bind(Self::STATE_PRUNED_HEIGHT_ID)
                 .fetch_optional(self.as_mut())
-                .await?
+                .await
+                .context("loading state pruned height")?
         else {
             return Ok(None);
         };

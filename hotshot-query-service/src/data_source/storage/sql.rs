@@ -787,7 +787,10 @@ impl SqlStorage {
         let now = Utc::now().timestamp();
 
         let (min_height, state_min_height) = {
-            let mut tx = self.read().await?;
+            let mut tx = self
+                .read()
+                .await
+                .context("opening transaction to load pruned heights")?;
             (
                 tx.load_pruned_height()
                     .await?
@@ -802,24 +805,26 @@ impl SqlStorage {
                 min_height,
                 target_height: self
                     .get_height_by_timestamp(now - (cfg.target_retention().as_secs()) as i64)
-                    .await?
+                    .await
+                    .context("getting height for target retention")?
                     .map_or(min_height, |to_prune| to_prune + 1),
                 minimum_retention_height: self
                     .get_height_by_timestamp(now - (cfg.minimum_retention().as_secs()) as i64)
-                    .await?
+                    .await
+                    .context("getting height for minimum retention")?
                     .map_or(min_height, |to_prune| to_prune + 1),
             },
             state: PruneState {
                 min_height: state_min_height,
                 target_height: self
                     .get_height_by_timestamp(now - (cfg.state_target_retention().as_secs()) as i64)
-                    .await?
+                    .await
+                    .context("getting height for state target retention")?
                     .map_or(state_min_height, |to_prune| to_prune + 1),
                 minimum_retention_height: self
-                    .get_height_by_timestamp(
-                        Utc::now().timestamp() - (cfg.state_minimum_retention().as_secs()) as i64,
-                    )
-                    .await?
+                    .get_height_by_timestamp(now - (cfg.state_minimum_retention().as_secs()) as i64)
+                    .await
+                    .context("getting height for state minimum retention")?
                     .map_or(state_min_height, |to_prune| to_prune + 1),
             },
             cfg,
@@ -838,23 +843,25 @@ impl SqlStorage {
 
         // Update pruned height first so the fetcher does not try to fetch data that we are about to
         // delete.
-        let mut tx = self.write().await?;
+        let mut tx = self
+            .write()
+            .await
+            .context("opening transaction for pruned height")?;
         match category {
             PruneCategory::Data => tx.save_pruned_height(to).await?,
             PruneCategory::State => tx.save_state_pruned_height(to).await?,
         }
-        tx.commit().await.map_err(|e| QueryError::Error {
-            message: format!("failed to commit save_pruned_height {e}"),
-        })?;
+        tx.commit().await.context("committing pruned height")?;
 
-        let mut tx = self.prune_write().await?;
+        let mut tx = self
+            .prune_write()
+            .await
+            .context("opening pruning transaction")?;
         match category {
             PruneCategory::Data => tx.delete_batch(to).await?,
             PruneCategory::State => tx.delete_state_batch(pruner.cfg.state_tables(), to).await?,
         }
-        tx.commit().await.map_err(|e| QueryError::Error {
-            message: format!("failed to commit delete_batch {e}"),
-        })?;
+        tx.commit().await.context("committing deleted batch")?;
 
         pruner.set_pruned_height(category, to);
         Ok(())
@@ -871,7 +878,7 @@ impl SqlStorage {
             SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM pragma_page_size)) \
                      AS total_bytes";
 
-        let row = tx.fetch_one(query).await?;
+        let row = tx.fetch_one(query).await.context("getting disk usage")?;
         let size: i64 = row.get(0);
 
         Ok(size as u64)
@@ -891,7 +898,8 @@ impl SqlStorage {
                 config.incremental_vacuum_pages()
             ))
             .execute(conn.as_mut())
-            .await?;
+            .await
+            .context("triggering vacuum")?;
             conn.close().await?;
         }
         Ok(())
