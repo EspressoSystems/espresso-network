@@ -7736,7 +7736,7 @@ mod test {
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
                 .api_config(SqlDataSource::options(&storage[0], api_opts))
-                .network_config(network_config)
+                .network_config(network_config.clone())
                 .persistences(persistence.clone())
                 .catchups(std::array::from_fn(|_| {
                     StatePeers::<StaticVersion<0, 1>>::from_urls(
@@ -8358,9 +8358,9 @@ mod test {
                     )
                     .await?;
                 }
-
-                Ok(())
             }
+
+            Ok(())
         })
         .await
     }
