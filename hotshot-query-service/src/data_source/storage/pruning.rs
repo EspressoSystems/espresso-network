@@ -20,6 +20,8 @@ pub struct PrunerCfg {
     pruning_threshold: Option<u64>,
     minimum_retention: Duration,
     target_retention: Duration,
+    state_minimum_retention: Duration,
+    state_target_retention: Duration,
     batch_size: u64,
     max_usage: u16,
     interval: Duration,
@@ -29,18 +31,12 @@ pub struct PrunerCfg {
 
 #[async_trait]
 pub trait PruneStorage: PrunerConfig {
-    type Pruner: Default + Send;
+    type Pruner<'a>: Default + Send
+    where
+        Self: 'a;
 
-    async fn get_disk_usage(&self) -> anyhow::Result<u64> {
-        Ok(0)
-    }
-
-    async fn prune(&self, _pruner: &mut Self::Pruner) -> anyhow::Result<Option<u64>> {
+    async fn prune<'a>(&'a self, _pruner: &mut Self::Pruner<'a>) -> anyhow::Result<Option<u64>> {
         Ok(None)
-    }
-
-    async fn vacuum(&self) -> anyhow::Result<()> {
-        Ok(())
     }
 }
 
@@ -49,11 +45,19 @@ pub trait PrunedHeightStorage: Sized {
     async fn load_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
         Ok(None)
     }
+
+    async fn load_state_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
 pub trait PrunedHeightDataSource: Sized {
     async fn load_pruned_height(&self) -> anyhow::Result<Option<u64>> {
+        Ok(None)
+    }
+
+    async fn load_state_pruned_height(&self) -> anyhow::Result<Option<u64>> {
         Ok(None)
     }
 }
@@ -99,8 +103,18 @@ impl PrunerCfg {
         self
     }
 
+    pub fn with_state_minimum_retention(mut self, state_minimum_retention: Duration) -> Self {
+        self.state_minimum_retention = state_minimum_retention;
+        self
+    }
+
     pub fn with_target_retention(mut self, target_retention: Duration) -> Self {
         self.target_retention = target_retention;
+        self
+    }
+
+    pub fn with_state_target_retention(mut self, state_target_retention: Duration) -> Self {
+        self.state_target_retention = state_target_retention;
         self
     }
 
@@ -148,6 +162,21 @@ impl PrunerCfg {
         self.target_retention
     }
 
+    /// Minimum state retention period
+    ///
+    /// State younger than this is never pruned, regardless of disk usage.
+    pub fn state_minimum_retention(&self) -> Duration {
+        self.state_minimum_retention
+    }
+
+    /// Target state retention period
+    ///
+    /// This is the ideal period for which state should be retained
+    /// state younger than this and older than `STATE_MINIMUM_RETENTION` may be pruned if disk usage exceeds the `pruning_threshold`.
+    pub fn state_target_retention(&self) -> Duration {
+        self.state_target_retention
+    }
+
     /// Number of blocks to remove in a single pruning operation.
     pub fn batch_size(&self) -> u64 {
         self.batch_size
@@ -173,8 +202,8 @@ impl PrunerCfg {
     }
 
     /// State tables to prune
-    pub fn state_tables(&self) -> Vec<String> {
-        self.state_tables.clone()
+    pub fn state_tables(&self) -> &[String] {
+        &self.state_tables
     }
 }
 
@@ -187,6 +216,10 @@ impl Default for PrunerCfg {
             minimum_retention: Duration::from_secs(24 * 3600),
             // 7 days
             target_retention: Duration::from_secs(7 * 24 * 3600),
+            // 1 day
+            state_minimum_retention: Duration::from_secs(24 * 3600),
+            // 7 days
+            state_target_retention: Duration::from_secs(7 * 24 * 3600),
             batch_size: 1000,
             // 80%
             max_usage: 8000,

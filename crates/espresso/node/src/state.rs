@@ -418,7 +418,7 @@ where
     // get last saved merklized state
     let (last_height, parent_leaf, mut leaves) = {
         let last_height = storage.get_last_state_height().await?;
-        let pruned_height = storage.load_pruned_height().await?;
+        let pruned_height = storage.load_state_pruned_height().await?;
 
         let height = match pruned_height {
             // If `last_height > pruned_height`, start from `last_height`

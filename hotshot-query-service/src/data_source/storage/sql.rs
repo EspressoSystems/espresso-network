@@ -13,6 +13,7 @@
 #![cfg(feature = "sql-data-source")]
 use std::{cmp::min, fmt::Debug, str::FromStr, time::Duration};
 
+use anyhow::Context;
 use async_trait::async_trait;
 use chrono::Utc;
 #[cfg(not(feature = "embedded-db"))]
@@ -31,13 +32,14 @@ use sqlx::{
     ConnectOptions, Row,
     pool::{Pool, PoolOptions},
 };
+use tracing::instrument;
 
 use crate::{
     Header, QueryError, QueryResult,
     availability::{QueryableHeader, QueryablePayload, VidCommonMetadata, VidCommonQueryData},
     data_source::{
         VersionedDataSource,
-        storage::pruning::{PruneStorage, PrunerCfg, PrunerConfig},
+        storage::pruning::{PruneStorage, PrunedHeightStorage, PrunerCfg, PrunerConfig},
         update::Transaction as _,
     },
     metrics::PrometheusMetrics,
@@ -538,11 +540,81 @@ pub struct SqlStorage {
     pruner_cfg: Option<PrunerCfg>,
 }
 
-#[derive(Debug, Default)]
-pub struct Pruner {
-    pruned_height: Option<u64>,
-    target_height: Option<u64>,
-    minimum_retention_height: Option<u64>,
+#[derive(Debug)]
+struct PruneState {
+    min_height: u64,
+    target_height: u64,
+    minimum_retention_height: u64,
+}
+
+impl PruneState {
+    fn next_target_batch(&self, batch_size: u64) -> Option<u64> {
+        if self.min_height < self.target_height {
+            Some(min(self.min_height + batch_size, self.target_height) - 1)
+        } else {
+            None
+        }
+    }
+
+    fn next_extra_batch(&self, batch_size: u64) -> Option<u64> {
+        if self.min_height < self.minimum_retention_height {
+            Some(min(self.min_height + batch_size, self.minimum_retention_height) - 1)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Pruner<'a> {
+    data: PruneState,
+    state: PruneState,
+    cfg: &'a PrunerCfg,
+    extra_pruning: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PruneCategory {
+    Data,
+    State,
+}
+
+impl<'a> Pruner<'a> {
+    /// Get the next batch to delete of data older than its target retention.
+    ///
+    /// If such a batch is available, returns the type of data to delete (either consensus data or
+    /// derived state) and the block height to delete up to (inclusive).
+    fn next_target_batch(&self) -> Option<(PruneCategory, u64)> {
+        // Delete the oldest batch which is older than its target retention; whether state or
+        // consensus data. All else equal, we always delete state before the corresponding consensus
+        // data, to honor the dependency (state is derived from corresponding consensus data).
+        if let Some(batch) = self.state.next_target_batch(self.cfg.batch_size()) {
+            return Some((PruneCategory::State, batch));
+        }
+        self.data
+            .next_target_batch(self.cfg.batch_size())
+            .map(|batch| (PruneCategory::Data, batch))
+    }
+
+    /// Get the next available batch to delete past the target retention, to reclaim space.
+    ///
+    /// Returns a batch deleting up to the minimum retention for each type of data, if such a batch
+    /// is available.
+    fn next_extra_batch(&self) -> Option<(PruneCategory, u64)> {
+        if let Some(batch) = self.state.next_extra_batch(self.cfg.batch_size()) {
+            return Some((PruneCategory::State, batch));
+        }
+        self.data
+            .next_extra_batch(self.cfg.batch_size())
+            .map(|batch| (PruneCategory::Data, batch))
+    }
+
+    fn set_pruned_height(&mut self, category: PruneCategory, height: u64) {
+        match category {
+            PruneCategory::State => self.state.min_height = height + 1,
+            PruneCategory::Data => self.data.min_height = height + 1,
+        }
+    }
 }
 
 #[derive(PartialEq)]
@@ -707,18 +779,122 @@ impl SqlStorage {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
     }
 
-    async fn get_minimum_height(&self) -> QueryResult<Option<u64>> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        let (Some(height),) =
-            query_as::<(Option<i64>,)>("SELECT MIN(height) as height FROM header")
-                .fetch_one(tx.as_mut())
-                .await?
-        else {
-            return Ok(None);
+    async fn new_pruner<'a>(&'a self) -> anyhow::Result<Pruner<'a>> {
+        let cfg = self
+            .pruner_cfg
+            .as_ref()
+            .context("pruning config not found")?;
+        let now = Utc::now().timestamp();
+
+        let (min_height, state_min_height) = {
+            let mut tx = self.read().await?;
+            (
+                tx.load_pruned_height()
+                    .await?
+                    .map_or(0, |pruned| pruned + 1),
+                tx.load_state_pruned_height()
+                    .await?
+                    .map_or(0, |pruned| pruned + 1),
+            )
         };
-        Ok(Some(height as u64))
+        Ok(Pruner {
+            data: PruneState {
+                min_height,
+                target_height: self
+                    .get_height_by_timestamp(now - (cfg.target_retention().as_secs()) as i64)
+                    .await?
+                    .map_or(min_height, |to_prune| to_prune + 1),
+                minimum_retention_height: self
+                    .get_height_by_timestamp(now - (cfg.minimum_retention().as_secs()) as i64)
+                    .await?
+                    .map_or(min_height, |to_prune| to_prune + 1),
+            },
+            state: PruneState {
+                min_height: state_min_height,
+                target_height: self
+                    .get_height_by_timestamp(now - (cfg.state_target_retention().as_secs()) as i64)
+                    .await?
+                    .map_or(state_min_height, |to_prune| to_prune + 1),
+                minimum_retention_height: self
+                    .get_height_by_timestamp(
+                        Utc::now().timestamp() - (cfg.state_minimum_retention().as_secs()) as i64,
+                    )
+                    .await?
+                    .map_or(state_min_height, |to_prune| to_prune + 1),
+            },
+            cfg,
+            extra_pruning: false,
+        })
+    }
+
+    #[instrument(skip(self, pruner))]
+    async fn prune_batch(
+        &self,
+        pruner: &mut Pruner<'_>,
+        category: PruneCategory,
+        to: u64,
+    ) -> anyhow::Result<()> {
+        tracing::info!("pruning batch");
+
+        // Update pruned height first so the fetcher does not try to fetch data that we are about to
+        // delete.
+        let mut tx = self.write().await?;
+        match category {
+            PruneCategory::Data => tx.save_pruned_height(to).await?,
+            PruneCategory::State => tx.save_state_pruned_height(to).await?,
+        }
+        tx.commit().await.map_err(|e| QueryError::Error {
+            message: format!("failed to commit save_pruned_height {e}"),
+        })?;
+
+        let mut tx = self.prune_write().await?;
+        match category {
+            PruneCategory::Data => tx.delete_batch(to).await?,
+            PruneCategory::State => tx.delete_state_batch(pruner.cfg.state_tables(), to).await?,
+        }
+        tx.commit().await.map_err(|e| QueryError::Error {
+            message: format!("failed to commit delete_batch {e}"),
+        })?;
+
+        pruner.set_pruned_height(category, to);
+        Ok(())
+    }
+
+    async fn get_disk_usage(&self) -> anyhow::Result<u64> {
+        let mut tx = self.read().await?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        let query = "SELECT pg_database_size(current_database())";
+
+        #[cfg(feature = "embedded-db")]
+        let query = "
+            SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM pragma_page_size)) \
+                     AS total_bytes";
+
+        let row = tx.fetch_one(query).await?;
+        let size: i64 = row.get(0);
+
+        Ok(size as u64)
+    }
+
+    /// Trigger incremental vacuum to free up space in the SQLite database.
+    async fn vacuum(&self) -> anyhow::Result<()> {
+        // Note: We don't vacuum the Postgres database, as there is no manual trigger for
+        // incremental vacuum, and a full vacuum can take a lot of time.
+        if cfg!(feature = "embedded-db") {
+            let config = self.get_pruning_config().ok_or(QueryError::Error {
+                message: "Pruning config not found".to_string(),
+            })?;
+            let mut conn = self.pool().acquire().await?;
+            query(&format!(
+                "PRAGMA incremental_vacuum({})",
+                config.incremental_vacuum_pages()
+            ))
+            .execute(conn.as_mut())
+            .await?;
+            conn.close().await?;
+        }
+        Ok(())
     }
 
     async fn get_height_by_timestamp(&self, timestamp: i64) -> QueryResult<Option<u64>> {
@@ -795,181 +971,61 @@ impl SqlStorage {
 
 #[async_trait]
 impl PruneStorage for SqlStorage {
-    type Pruner = Pruner;
-
-    async fn get_disk_usage(&self) -> anyhow::Result<u64> {
-        let mut tx = self.read().await?;
-
-        #[cfg(not(feature = "embedded-db"))]
-        let query = "SELECT pg_database_size(current_database())";
-
-        #[cfg(feature = "embedded-db")]
-        let query = "
-            SELECT( (SELECT page_count FROM pragma_page_count) * (SELECT * FROM pragma_page_size)) \
-                     AS total_bytes";
-
-        let row = tx.fetch_one(query).await?;
-        let size: i64 = row.get(0);
-
-        Ok(size as u64)
-    }
-
-    /// Trigger incremental vacuum to free up space in the SQLite database.
-    /// Note: We don't vacuum the Postgres database,
-    /// as there is no manual trigger for incremental vacuum,
-    /// and a full vacuum can take a lot of time.
-    #[cfg(feature = "embedded-db")]
-    async fn vacuum(&self) -> anyhow::Result<()> {
-        let config = self.get_pruning_config().ok_or(QueryError::Error {
-            message: "Pruning config not found".to_string(),
-        })?;
-        let mut conn = self.pool().acquire().await?;
-        query(&format!(
-            "PRAGMA incremental_vacuum({})",
-            config.incremental_vacuum_pages()
-        ))
-        .execute(conn.as_mut())
-        .await?;
-        conn.close().await?;
-        Ok(())
-    }
+    type Pruner<'a> = Option<Pruner<'a>>;
 
     /// Note: The prune operation may not immediately free up space even after rows are deleted.
     /// This is because a vacuum operation may be necessary to reclaim more space.
     /// PostgreSQL already performs auto vacuuming, so we are not including it here
     /// as running a vacuum operation can be resource-intensive.
-    async fn prune(&self, pruner: &mut Pruner) -> anyhow::Result<Option<u64>> {
-        let cfg = self.get_pruning_config().ok_or(QueryError::Error {
-            message: "Pruning config not found".to_string(),
-        })?;
-        let batch_size = cfg.batch_size();
-        let max_usage = cfg.max_usage();
-        let state_tables = cfg.state_tables();
-
-        // If a pruner run was already in progress, some variables may already be set,
-        // depending on whether a batch was deleted and which batch it was (target or minimum retention).
-        // This enables us to resume the pruner run from the exact heights.
-        // If any of these values are not set, they can be loaded from the database if necessary.
-        let mut minimum_retention_height = pruner.minimum_retention_height;
-        let mut target_height = pruner.target_height;
-        let pruned_height = match pruner.pruned_height {
-            Some(h) => Some(h),
-            None => {
-                let Some(height) = self.get_minimum_height().await? else {
-                    tracing::info!("database is empty, nothing to prune");
-                    return Ok(None);
-                };
-
-                if height > 0 { Some(height - 1) } else { None }
-            },
+    async fn prune<'a>(&'a self, pruner: &mut Option<Pruner<'a>>) -> anyhow::Result<Option<u64>> {
+        let pruner = match pruner {
+            Some(pruner) => pruner,
+            None => pruner.get_or_insert(self.new_pruner().await?),
         };
 
         // Prune data exceeding target retention in batches
-        if pruner.target_height.is_none() {
-            let th = self
-                .get_height_by_timestamp(
-                    Utc::now().timestamp() - (cfg.target_retention().as_secs()) as i64,
-                )
-                .await?;
-            target_height = th;
-            pruner.target_height = target_height;
-        };
-
-        if let Some(th) = target_height
-            && pruned_height < Some(th)
-        {
-            let batch_end = match pruned_height {
-                None => batch_size - 1,
-                Some(h) => h + batch_size,
-            };
-            let to = min(batch_end, th);
-
-            // Update pruned height first so the fetcher does not
-            // try to fetch data that we are about to delete.
-            let mut tx = self.write().await?;
-            tx.save_pruned_height(to).await?;
-            tx.commit().await.map_err(|e| QueryError::Error {
-                message: format!("failed to commit save_pruned_height {e}"),
-            })?;
-
-            let mut tx = self.prune_write().await?;
-            tx.delete_batch(to).await?;
-            tx.commit().await.map_err(|e| QueryError::Error {
-                message: format!("failed to commit delete_batch {e}"),
-            })?;
-
-            // Prune state tables in a separate transaction.
-            let mut tx = self.prune_write().await?;
-            tx.delete_state_batch(state_tables, to).await?;
-            tx.commit().await.map_err(|e| QueryError::Error {
-                message: format!("failed to commit {e}"),
-            })?;
-
-            pruner.pruned_height = Some(to);
+        if let Some((category, to)) = pruner.next_target_batch() {
+            tracing::info!("pruning to target retention");
+            self.prune_batch(pruner, category, to).await?;
             return Ok(Some(to));
         }
 
-        // If threshold is set, prune data exceeding minimum retention in batches
-        // This parameter is needed for SQL storage as there is no direct way to get free space.
-        if let Some(threshold) = cfg.pruning_threshold() {
-            let usage = self.get_disk_usage().await?;
+        // If threshold is set, prune data exceeding minimum retention in batches. This parameter is
+        // needed for SQL storage as there is no direct way to get free space.
+        let Some(threshold) = pruner.cfg.pruning_threshold() else {
+            return Ok(None);
+        };
+        let usage = self.get_disk_usage().await?;
 
-            // Prune data exceeding minimum retention in batches starting from minimum height
-            // until usage is below threshold
-            if usage > threshold {
-                tracing::warn!(
-                    "Disk usage {usage} exceeds pruning threshold {:?}",
-                    cfg.pruning_threshold()
-                );
-
-                if minimum_retention_height.is_none() {
-                    minimum_retention_height = self
-                        .get_height_by_timestamp(
-                            Utc::now().timestamp() - (cfg.minimum_retention().as_secs()) as i64,
-                        )
-                        .await?;
-
-                    pruner.minimum_retention_height = minimum_retention_height;
-                }
-
-                if let Some(min_retention_height) = minimum_retention_height
-                    && (usage as f64 / threshold as f64) > (f64::from(max_usage) / 10000.0)
-                    && pruned_height < Some(min_retention_height)
-                {
-                    let batch_end = match pruned_height {
-                        None => batch_size - 1,
-                        Some(h) => h + batch_size,
-                    };
-                    let to = min(batch_end, min_retention_height);
-                    // Update pruned height first so the fetcher does not
-                    // try to fetch data that we are about to delete.
-                    let mut tx = self.write().await?;
-                    tx.save_pruned_height(to).await?;
-                    tx.commit().await.map_err(|e| QueryError::Error {
-                        message: format!("failed to commit save_pruned_height {e}"),
-                    })?;
-
-                    let mut tx = self.prune_write().await?;
-                    tx.delete_batch(to).await?;
-                    tx.commit().await.map_err(|e| QueryError::Error {
-                        message: format!("failed to commit delete_batch {e}"),
-                    })?;
-
-                    // Prune state tables in a separate transaction.
-                    let mut tx = self.prune_write().await?;
-                    tx.delete_state_batch(state_tables, to).await?;
-                    tx.commit().await.map_err(|e| QueryError::Error {
-                        message: format!("failed to commit {e}"),
-                    })?;
-
-                    self.vacuum().await?;
-                    pruner.pruned_height = Some(to);
-                    return Ok(Some(to));
-                }
-            }
+        // Pruning beyond the target retention is triggered when usage exceeds the threshold.
+        if usage > threshold {
+            tracing::warn!(usage, threshold, "Disk usage exceeds pruning threshold");
+            pruner.extra_pruning = true;
+        }
+        if !pruner.extra_pruning {
+            return Ok(None);
         }
 
-        Ok(None)
+        // Once extra pruning is triggered, we continue until the usage ratio drops below
+        // `max_usage`.
+        if (usage as f64 / threshold as f64) <= (f64::from(pruner.cfg.max_usage()) / 10000.0) {
+            tracing::info!(
+                usage,
+                threshold,
+                "space reclaimed makes usage less than threshold"
+            );
+            return Ok(None);
+        }
+
+        // Prune the next extra batch if possible.
+        let Some((category, to)) = pruner.next_extra_batch() else {
+            return Ok(None);
+        };
+
+        tracing::info!("pruning beyond target retention");
+        self.prune_batch(pruner, category, to).await?;
+        self.vacuum().await?;
+        Ok(Some(to))
     }
 }
 
@@ -1319,6 +1375,22 @@ mod test {
         merklized_state::{MerklizedState, Snapshot, UpdateStateData},
         testing::mocks::{MockMerkleTree, MockTypes},
     };
+
+    impl SqlStorage {
+        async fn get_minimum_height(&self) -> QueryResult<Option<u64>> {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            let (Some(height),) =
+                query_as::<(Option<i64>,)>("SELECT MIN(height) as height FROM header")
+                    .fetch_one(tx.as_mut())
+                    .await?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(height as u64))
+        }
+    }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_migrations() {
@@ -1743,14 +1815,21 @@ mod test {
         }
 
         // Prune the first leaf but not the second (and thus not the payload or VID).
-        let pruned_height = storage
-            .prune(&mut Pruner {
-                pruned_height: None,
-                target_height: Some(0),
-                minimum_retention_height: None,
-            })
-            .await
-            .unwrap();
+        let mut pruner = Some(Pruner {
+            data: PruneState {
+                min_height: 0,
+                target_height: 1,
+                minimum_retention_height: 1,
+            },
+            state: PruneState {
+                min_height: 0,
+                target_height: 0,
+                minimum_retention_height: 0,
+            },
+            cfg: &Default::default(),
+            extra_pruning: false,
+        });
+        let pruned_height = storage.prune(&mut pruner).await.unwrap();
         tracing::info!(?pruned_height, "first pruning run complete");
         {
             let mut tx = storage.read().await.unwrap();
@@ -1793,14 +1872,8 @@ mod test {
         }
 
         // Now prune the second leaf, ensuring the payload and VID get deleted as well.
-        let pruned_height = storage
-            .prune(&mut Pruner {
-                pruned_height,
-                target_height: Some(1),
-                minimum_retention_height: None,
-            })
-            .await
-            .unwrap();
+        pruner.as_mut().unwrap().data.target_height = 2;
+        let pruned_height = storage.prune(&mut pruner).await.unwrap();
         tracing::info!(?pruned_height, "second pruning run complete");
 
         let mut tx = storage.read().await.unwrap();

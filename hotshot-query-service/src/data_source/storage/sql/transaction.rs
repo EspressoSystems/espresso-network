@@ -18,7 +18,12 @@
 //! database connection, so that the updated state of the database can be queried midway through a
 //! transaction.
 
-use std::{collections::HashMap, marker::PhantomData, time::Instant};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    marker::PhantomData,
+    time::Instant,
+};
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
@@ -566,7 +571,7 @@ impl Transaction<Prune> {
     #[instrument(skip(self))]
     pub(super) async fn delete_state_batch(
         &mut self,
-        state_tables: Vec<String>,
+        state_tables: impl Debug + IntoIterator<Item: Display>,
         height: u64,
     ) -> anyhow::Result<()> {
         for state_table in state_tables {
@@ -591,17 +596,33 @@ impl Transaction<Prune> {
     }
 }
 
+impl<Mode> Transaction<Mode> {
+    const PRUNED_HEIGHT_ID: i32 = 1;
+    const STATE_PRUNED_HEIGHT_ID: i32 = 2;
+}
+
 /// Query service specific mutations.
 impl Transaction<Write> {
     /// Record the height of the latest pruned header.
     pub(crate) async fn save_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
+        self.upsert(
+            "pruned_height",
+            ["id", "last_height"],
+            ["id"],
+            [(Self::PRUNED_HEIGHT_ID, height as i64)],
+        )
+        .await
+    }
+
+    /// Record the height of the latest pruned merklized state.
+    pub(crate) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
         // id is set to 1 so that there is only one row in the table.
         // height is updated if the row already exists.
         self.upsert(
             "pruned_height",
             ["id", "last_height"],
             ["id"],
-            [(1i32, height as i64)],
+            [(Self::STATE_PRUNED_HEIGHT_ID, height as i64)],
         )
         .await
     }
@@ -942,7 +963,20 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
 impl<Mode: TransactionMode> PrunedHeightStorage for Transaction<Mode> {
     async fn load_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
         let Some((height,)) =
-            query_as::<(i64,)>("SELECT last_height FROM pruned_height ORDER BY id DESC LIMIT 1")
+            query_as::<(i64,)>("SELECT last_height FROM pruned_height WHERE id = $1 LIMIT 1")
+                .bind(Self::PRUNED_HEIGHT_ID)
+                .fetch_optional(self.as_mut())
+                .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(height as u64))
+    }
+
+    async fn load_state_pruned_height(&mut self) -> anyhow::Result<Option<u64>> {
+        let Some((height,)) =
+            query_as::<(i64,)>("SELECT last_height FROM pruned_height WHERE id = $1 LIMIT 1")
+                .bind(Self::STATE_PRUNED_HEIGHT_ID)
                 .fetch_optional(self.as_mut())
                 .await?
         else {

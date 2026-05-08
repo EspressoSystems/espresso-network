@@ -539,6 +539,15 @@ pub struct PruningOptions {
     )]
     minimum_retention: Option<Duration>,
 
+    /// Minimum retention period for Merklized state.
+    /// State is retained for at least this duration, even if there's no free disk space.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_PRUNER_STATE_MINIMUM_RETENTION",
+        value_parser = parse_duration,
+    )]
+    state_minimum_retention: Option<Duration>,
+
     /// Target retention period.
     /// Data older than this is pruned to free up space.
     #[clap(
@@ -547,6 +556,15 @@ pub struct PruningOptions {
         value_parser = parse_duration,
     )]
     target_retention: Option<Duration>,
+
+    /// Target retention period for Merklized state.
+    /// State older than this is pruned to free up space.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_PRUNER_STATE_TARGET_RETENTION",
+        value_parser = parse_duration,
+    )]
+    state_target_retention: Option<Duration>,
 
     /// Batch size for pruning.
     /// This is the number of blocks data to delete in a single transaction.
@@ -591,8 +609,14 @@ impl From<PruningOptions> for PrunerCfg {
         if let Some(min) = opt.minimum_retention {
             cfg = cfg.with_minimum_retention(min);
         }
+        if let Some(min) = opt.state_minimum_retention {
+            cfg = cfg.with_state_minimum_retention(min);
+        }
         if let Some(target) = opt.target_retention {
             cfg = cfg.with_target_retention(target);
+        }
+        if let Some(target) = opt.state_target_retention {
+            cfg = cfg.with_state_target_retention(target);
         }
         if let Some(batch) = opt.batch_size {
             cfg = cfg.with_batch_size(batch);

@@ -327,12 +327,12 @@ impl<Mode: TransactionMode> Transaction<Mode> {
             return Err(QueryError::NotFound);
         }
 
-        let pruned_height = self
-            .load_pruned_height()
-            .await
-            .map_err(|e| QueryError::Error {
-                message: format!("failed to load pruned height: {e}"),
-            })?;
+        let pruned_height =
+            self.load_state_pruned_height()
+                .await
+                .map_err(|e| QueryError::Error {
+                    message: format!("failed to load pruned height: {e}"),
+                })?;
 
         if pruned_height.is_some_and(|h| height <= h as usize) {
             return Err(QueryError::NotFound);
