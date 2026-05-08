@@ -74,5 +74,8 @@ vec1 = { workspace = true }
 versions = { workspace = true }
 vid = { workspace = true }
 
+[dev-dependencies]
+quickcheck.workspace = true
+
 [lints]
 workspace = true
