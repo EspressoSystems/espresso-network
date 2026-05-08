@@ -2002,10 +2002,10 @@ where
                     .enumerate()
                     .filter_map(|(i, (idx, _))| {
                         let tx = block.transaction(&idx)?;
-                        if let Some(ns) = ns_filter {
-                            if tx.namespace() != ns {
-                                return None;
-                            }
+                        if let Some(ns) = ns_filter
+                            && tx.namespace() != ns
+                        {
+                            return None;
                         }
                         TransactionQueryData::new(tx, &block, &idx, i as u64)
                     })
