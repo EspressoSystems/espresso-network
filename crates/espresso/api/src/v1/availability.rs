@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use serde::Serialize;
 
 #[derive(Debug, Clone)]
@@ -70,16 +71,16 @@ pub trait AvailabilityApi {
 /// verbatim to axum with no path or output changes.
 #[async_trait]
 pub trait HotShotAvailabilityApi {
-    type Leaf: Serialize + Send + Sync;
-    type Block: Serialize + Send + Sync;
-    type Header: Serialize + Send + Sync;
-    type Payload: Serialize + Send + Sync;
-    type VidCommon: Serialize + Send + Sync;
-    type Transaction: Serialize + Send + Sync;
-    type TransactionWithProof: Serialize + Send + Sync;
-    type BlockSummary: Serialize + Send + Sync;
-    type Limits: Serialize + Send + Sync;
-    type Cert2: Serialize + Send + Sync;
+    type Leaf: Serialize + Send + Sync + 'static;
+    type Block: Serialize + Send + Sync + 'static;
+    type Header: Serialize + Send + Sync + 'static;
+    type Payload: Serialize + Send + Sync + 'static;
+    type VidCommon: Serialize + Send + Sync + 'static;
+    type Transaction: Serialize + Send + Sync + 'static;
+    type TransactionWithProof: Serialize + Send + Sync + 'static;
+    type BlockSummary: Serialize + Send + Sync + 'static;
+    type Limits: Serialize + Send + Sync + 'static;
+    type Cert2: Serialize + Send + Sync + 'static;
 
     async fn get_leaf(&self, id: LeafId) -> anyhow::Result<Self::Leaf>;
     async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>>;
@@ -135,4 +136,27 @@ pub trait HotShotAvailabilityApi {
     async fn get_limits(&self) -> anyhow::Result<Self::Limits>;
 
     async fn get_cert2(&self, height: u64) -> anyhow::Result<Option<Self::Cert2>>;
+
+    async fn stream_leaves(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Leaf>>;
+
+    async fn stream_headers(&self, from: usize)
+    -> anyhow::Result<BoxStream<'static, Self::Header>>;
+
+    async fn stream_blocks(&self, from: usize) -> anyhow::Result<BoxStream<'static, Self::Block>>;
+
+    async fn stream_payloads(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<BoxStream<'static, Self::Payload>>;
+
+    async fn stream_vid_common(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<BoxStream<'static, Self::VidCommon>>;
+
+    async fn stream_transactions(
+        &self,
+        from: usize,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<BoxStream<'static, Self::Transaction>>;
 }

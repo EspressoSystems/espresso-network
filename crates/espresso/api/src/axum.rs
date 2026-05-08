@@ -11,12 +11,13 @@ use aide::{
 };
 use axum::{
     Extension, Json, Router,
-    extract::{Path, Request, State},
+    extract::{Path, Request, State, ws::WebSocketUpgrade},
     http::{StatusCode, Uri},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
+use futures::stream::BoxStream;
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
@@ -124,6 +125,26 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
             aide::operation::ParamLocation::Query,
         );
         aide::operation::add_parameters(ctx, operation, params);
+    }
+}
+
+async fn drive_ws_stream<T: Serialize>(
+    mut socket: axum::extract::ws::WebSocket,
+    stream: BoxStream<'static, T>,
+) {
+    use futures::StreamExt as _;
+    futures::pin_mut!(stream);
+    while let Some(item) = stream.next().await {
+        let Ok(json) = serde_json::to_string(&item) else {
+            break;
+        };
+        if socket
+            .send(axum::extract::ws::Message::Text(json.into()))
+            .await
+            .is_err()
+        {
+            break;
+        }
     }
 }
 
@@ -496,6 +517,73 @@ where
             .map_err(ApiError::Internal)
     };
 
+    // WebSocket streaming handlers
+    let stream_leaves =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_leaves(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_leaves: {e}"),
+                }
+            })
+        };
+    let stream_headers =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_headers(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_headers: {e}"),
+                }
+            })
+        };
+    let stream_blocks =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_blocks(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_blocks: {e}"),
+                }
+            })
+        };
+    let stream_payloads =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_payloads(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_payloads: {e}"),
+                }
+            })
+        };
+    let stream_vid_common =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_vid_common(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_vid_common: {e}"),
+                }
+            })
+        };
+    let stream_transactions =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_transactions(height, None).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_transactions: {e}"),
+                }
+            })
+        };
+    let stream_transactions_ns =
+        |ws: WebSocketUpgrade,
+         State(state): State<S>,
+         Path((height, namespace)): Path<(usize, u32)>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_transactions(height, Some(namespace)).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_transactions_ns: {e}"),
+                }
+            })
+        };
+
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
         .route(
@@ -627,6 +715,20 @@ where
         )
         .route(routes::v1::LIMITS_ROUTE, get(get_limits))
         .route(routes::v1::CERT2_BY_HEIGHT_ROUTE, get(get_cert2))
+        // WebSocket streaming routes
+        .route(routes::v1::STREAM_LEAVES_ROUTE, get(stream_leaves))
+        .route(routes::v1::STREAM_HEADERS_ROUTE, get(stream_headers))
+        .route(routes::v1::STREAM_BLOCKS_ROUTE, get(stream_blocks))
+        .route(routes::v1::STREAM_PAYLOADS_ROUTE, get(stream_payloads))
+        .route(routes::v1::STREAM_VID_COMMON_ROUTE, get(stream_vid_common))
+        .route(
+            routes::v1::STREAM_TRANSACTIONS_ROUTE,
+            get(stream_transactions),
+        )
+        .route(
+            routes::v1::STREAM_TRANSACTIONS_NS_ROUTE,
+            get(stream_transactions_ns),
+        )
         .with_state(state)
 }
 

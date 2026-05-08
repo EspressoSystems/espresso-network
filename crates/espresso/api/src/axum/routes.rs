@@ -151,6 +151,15 @@ pub mod v1 {
 
     pub const LIMITS_ROUTE: &str = "/v1/availability/limits";
     pub const CERT2_BY_HEIGHT_ROUTE: &str = "/v1/availability/cert2/{height}";
+
+    pub const STREAM_LEAVES_ROUTE: &str = "/v1/availability/stream/leaves/{height}";
+    pub const STREAM_HEADERS_ROUTE: &str = "/v1/availability/stream/headers/{height}";
+    pub const STREAM_BLOCKS_ROUTE: &str = "/v1/availability/stream/blocks/{height}";
+    pub const STREAM_PAYLOADS_ROUTE: &str = "/v1/availability/stream/payloads/{height}";
+    pub const STREAM_VID_COMMON_ROUTE: &str = "/v1/availability/stream/vid/common/{height}";
+    pub const STREAM_TRANSACTIONS_ROUTE: &str = "/v1/availability/stream/transactions/{height}";
+    pub const STREAM_TRANSACTIONS_NS_ROUTE: &str =
+        "/v1/availability/stream/transactions/{height}/namespace/{namespace}";
 }
 
 //=============================================================================

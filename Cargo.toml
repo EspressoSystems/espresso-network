@@ -141,7 +141,7 @@ async-trait = "0.1"
 atomic = "0.6"
 atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5" }
 automod = "1.0.14"
-axum = "0.8.8"
+axum = { version = "0.8.8", features = ["ws"] }
 backoff = "0.4"
 base64 = "0.22"
 base64-bytes = "0.1"

@@ -268,6 +268,43 @@ impl v1::HotShotAvailabilityApi for TestApi {
     async fn get_cert2(&self, _height: u64) -> Result<Option<Self::Cert2>> {
         Ok(None)
     }
+    async fn stream_leaves(
+        &self,
+        _from: usize,
+    ) -> Result<futures::stream::BoxStream<'static, Self::Leaf>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn stream_headers(
+        &self,
+        _from: usize,
+    ) -> Result<futures::stream::BoxStream<'static, Self::Header>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn stream_blocks(
+        &self,
+        _from: usize,
+    ) -> Result<futures::stream::BoxStream<'static, Self::Block>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn stream_payloads(
+        &self,
+        _from: usize,
+    ) -> Result<futures::stream::BoxStream<'static, Self::Payload>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn stream_vid_common(
+        &self,
+        _from: usize,
+    ) -> Result<futures::stream::BoxStream<'static, Self::VidCommon>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+    async fn stream_transactions(
+        &self,
+        _from: usize,
+        _namespace: Option<u32>,
+    ) -> Result<futures::stream::BoxStream<'static, Self::Transaction>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
 }
 
 // Implement v2::RewardApi (simplified API - latest-only for claim/balance/proof)

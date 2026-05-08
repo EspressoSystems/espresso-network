@@ -7555,6 +7555,55 @@ mod test {
         Ok(())
     }
 
+    /// Connect to both tide-disco and axum WebSocket endpoints, collect up to 10 messages each,
+    /// and assert that at least 2 messages appear in both streams.
+    async fn compare_ws_endpoints(api_port: u16, axum_port: u16, path: &str) -> anyhow::Result<()> {
+        use std::{collections::HashSet, time::Duration};
+
+        use futures::StreamExt as _;
+        use tokio::time::timeout;
+        use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+        async fn collect_messages(port: u16, path: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+            let url = format!("ws://localhost:{port}/v1/{path}");
+            let (mut ws, _) = connect_async(&url).await?;
+            let mut messages = Vec::new();
+            while messages.len() < 10 {
+                match timeout(Duration::from_millis(500), ws.next()).await {
+                    Ok(Some(Ok(Message::Text(text)))) => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                            messages.push(v);
+                        }
+                    },
+                    _ => break,
+                }
+            }
+            Ok(messages)
+        }
+
+        let (tide_msgs, axum_msgs) = tokio::join!(
+            collect_messages(api_port, path),
+            collect_messages(axum_port, path)
+        );
+        let tide_msgs = tide_msgs?;
+        let axum_msgs = axum_msgs?;
+
+        let tide_set: HashSet<String> = tide_msgs.iter().map(|v| v.to_string()).collect();
+        let common = axum_msgs
+            .iter()
+            .filter(|v| tide_set.contains(&v.to_string()))
+            .count();
+
+        assert!(
+            common >= 2,
+            "v1/{path}: expected ≥2 messages in common between tide ({} msgs) and axum ({} msgs), \
+             got {common}",
+            tide_msgs.len(),
+            axum_msgs.len(),
+        );
+        Ok(())
+    }
+
     #[rstest]
     #[case(POS_V3)]
     #[case(POS_V4)]
@@ -8045,6 +8094,52 @@ mod test {
                 api_port,
                 axum_port,
                 &format!("availability/cert2/{avail_block}"),
+            )
+            .await?;
+
+            // WebSocket streaming parity: both servers share the same data source, so their
+            // streams must produce the same items. We collect up to 10 messages from each and
+            // verify ≥2 appear in both.
+            compare_ws_endpoints(
+                api_port,
+                axum_port,
+                &format!("availability/stream/leaves/{avail_block}"),
+            )
+            .await?;
+            compare_ws_endpoints(
+                api_port,
+                axum_port,
+                &format!("availability/stream/headers/{avail_block}"),
+            )
+            .await?;
+            compare_ws_endpoints(
+                api_port,
+                axum_port,
+                &format!("availability/stream/blocks/{avail_block}"),
+            )
+            .await?;
+            compare_ws_endpoints(
+                api_port,
+                axum_port,
+                &format!("availability/stream/payloads/{avail_block}"),
+            )
+            .await?;
+            compare_ws_endpoints(
+                api_port,
+                axum_port,
+                &format!("availability/stream/vid/common/{avail_block}"),
+            )
+            .await?;
+            compare_ws_endpoints(
+                api_port,
+                axum_port,
+                &format!("availability/stream/transactions/{avail_block}"),
+            )
+            .await?;
+            compare_ws_endpoints(
+                api_port,
+                axum_port,
+                &format!("availability/stream/transactions/{avail_block}/namespace/{avail_ns}"),
             )
             .await?;
         }

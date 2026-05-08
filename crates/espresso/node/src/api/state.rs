@@ -1893,6 +1893,85 @@ where
             .await
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
+
+    async fn stream_leaves(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::Leaf>> {
+        use futures::StreamExt as _;
+        let ds = self.data_source.clone();
+        Ok((*ds).subscribe_leaves(from).await.boxed())
+    }
+
+    async fn stream_headers(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::Header>> {
+        use futures::StreamExt as _;
+        let ds = self.data_source.clone();
+        Ok((*ds).subscribe_headers(from).await.boxed())
+    }
+
+    async fn stream_blocks(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::Block>> {
+        use futures::StreamExt as _;
+        let ds = self.data_source.clone();
+        Ok((*ds).subscribe_blocks(from).await.boxed())
+    }
+
+    async fn stream_payloads(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::Payload>> {
+        use futures::StreamExt as _;
+        let ds = self.data_source.clone();
+        Ok((*ds).subscribe_payloads(from).await.boxed())
+    }
+
+    async fn stream_vid_common(
+        &self,
+        from: usize,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::VidCommon>> {
+        use futures::StreamExt as _;
+        let ds = self.data_source.clone();
+        Ok((*ds).subscribe_vid_common(from).await.boxed())
+    }
+
+    async fn stream_transactions(
+        &self,
+        from: usize,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::Transaction>> {
+        use espresso_types::NamespaceId;
+        use futures::StreamExt as _;
+        use hotshot_query_service::availability::TransactionQueryData;
+
+        let ds = self.data_source.clone();
+        let stream = (*ds)
+            .subscribe_blocks(from)
+            .await
+            .flat_map(move |block| {
+                let ns_filter = namespace.map(NamespaceId::from);
+                let txs: Vec<Self::Transaction> = block
+                    .enumerate()
+                    .enumerate()
+                    .filter_map(|(i, (idx, _))| {
+                        let tx = block.transaction(&idx)?;
+                        if let Some(ns) = ns_filter {
+                            if tx.namespace() != ns {
+                                return None;
+                            }
+                        }
+                        TransactionQueryData::new(tx, &block, &idx, i as u64)
+                    })
+                    .collect();
+                futures::stream::iter(txs)
+            })
+            .boxed();
+        Ok(stream)
+    }
 }
 
 fn block_id_to_hs(
