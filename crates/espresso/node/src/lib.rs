@@ -358,21 +358,47 @@ where
                 &network_params.libp2p_bind_address
             )
         })?;
-    let libp2p_announce_addresses: Vec<Multiaddr> =
-        match &network_params.libp2p_advertise_address {
-            Some(addr) => {
-                if let Ok(parsed) = addr.parse::<NetAddr>() {
-                    parsed.warn_if_local_only("Libp2p advertise address");
-                }
-                vec![derive_libp2p_multiaddr(addr).with_context(|| {
-                    format!("Failed to derive Libp2p advertise address of {addr}")
-                })?]
-            },
-            None => Vec::new(),
-        };
+    let advertise_multiaddr = network_params
+        .libp2p_advertise_address
+        .as_ref()
+        .map(|addr| {
+            derive_libp2p_multiaddr(addr)
+                .with_context(|| format!("Failed to derive Libp2p advertise address of {addr}"))
+        })
+        .transpose()?;
+    let advertise_is_global = match network_params
+        .libp2p_advertise_address
+        .as_deref()
+        .and_then(|s| s.parse::<NetAddr>().ok())
+    {
+        Some(parsed) if !parsed.is_probably_global() => {
+            tracing::error!(
+                "Libp2p advertise address {parsed} is probably not publicly routable. This is \
+                 fine for local testing (demo-native, docker-compose) but is wrong for any real \
+                 deployment: remote peers will fail to dial us."
+            );
+            false
+        },
+        _ => true,
+    };
+
+    // Always pass the configured address to the orchestrator stake table; that path is
+    // testing-only and demo-native legitimately uses loopback.
+    let libp2p_announce_addresses: Vec<Multiaddr> = advertise_multiaddr.iter().cloned().collect();
+
+    // Only register the advertise address as a libp2p `external_address` when it looks
+    // publicly routable: announcing local/private values via Identify / Kademlia poisons peer
+    // routing tables in production. Local tests don't need it since peers find each other via
+    // `libp2p_bootstrap_nodes`.
+    let libp2p_external_addresses: Vec<Multiaddr> = if advertise_is_global {
+        advertise_multiaddr.iter().cloned().collect()
+    } else {
+        Vec::new()
+    };
 
     info!("Libp2p bind address: {}", libp2p_bind_address);
     info!("Libp2p announce addresses: {:?}", libp2p_announce_addresses);
+    info!("Libp2p external addresses: {:?}", libp2p_external_addresses);
 
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
@@ -729,7 +755,7 @@ where
             gossip_config,
             request_response_config,
             libp2p_bind_address,
-            libp2p_announce_addresses,
+            libp2p_external_addresses,
             &validator_config.public_key,
             // We need the private key so we can derive our Libp2p keypair
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)

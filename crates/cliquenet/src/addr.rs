@@ -61,28 +61,27 @@ impl NetAddr {
         matches!(self, Self::Inet(..))
     }
 
-    /// Log an error if this address is only reachable from the local host: a loopback IP
-    /// (`127.0.0.0/8`, `::1`), the unspecified address (`0.0.0.0`, `::`), or the `localhost`
-    /// DNS name. `label` is a short noun phrase identifying what this address represents in the
-    /// caller's context (e.g. `"Libp2p advertise address"`). Local-only addresses are typically
-    /// fine for local testing (`demo-native`, `docker-compose`) but indicate a misconfiguration
-    /// in any deployment where remote peers must dial us.
-    pub fn warn_if_local_only(&self, label: &str) {
-        let reason = match self {
-            Self::Inet(ip, _) if ip.is_loopback() => "a loopback IP address",
-            Self::Inet(ip, _) if ip.is_unspecified() => {
-                "the unspecified IP address (0.0.0.0 or ::)"
+    /// Whether this address is plausibly publicly routable. Returns `false` for IP literals
+    /// in non-globally-routable ranges (loopback, unspecified, RFC 1918 private, link-local,
+    /// broadcast, documentation, IPv6 multicast) and the literal `localhost`. Other hostnames
+    /// are trusted and return `true`. Approximates the (still unstable) `IpAddr::is_global`
+    /// using stable predicates; the IPv6 surface is incomplete (`fe80::/10` link-local and
+    /// `fc00::/7` unique-local addresses are treated as global here).
+    pub fn is_probably_global(&self) -> bool {
+        match self {
+            Self::Inet(IpAddr::V4(v4), _) => {
+                !(v4.is_loopback()
+                    || v4.is_unspecified()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_documentation())
             },
-            Self::Name(host, _) if host.eq_ignore_ascii_case("localhost") => {
-                "the `localhost` DNS name"
+            Self::Inet(IpAddr::V6(v6), _) => {
+                !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast())
             },
-            _ => return,
-        };
-        tracing::error!(
-            "{label} {self} contains {reason} and is not reachable from outside this host. This \
-             is fine for local testing (e.g. demo-native, docker-compose) but is wrong for any \
-             real deployment: remote peers will fail to dial us."
-        );
+            Self::Name(host, _) => !host.eq_ignore_ascii_case("localhost"),
+        }
     }
 }
 
@@ -217,5 +216,33 @@ mod tests {
         };
         assert_eq!("sub.domain.com", &h);
         assert_eq!(1234, p);
+    }
+
+    #[test]
+    fn test_is_probably_global() {
+        let cases: &[(&str, bool)] = &[
+            ("127.0.0.1:1234", false),
+            ("0.0.0.0:1234", false),
+            ("10.0.0.1:1234", false),
+            ("172.16.5.4:1234", false),
+            ("192.168.1.1:1234", false),
+            ("169.254.0.1:1234", false),
+            ("255.255.255.255:1234", false),
+            ("192.0.2.1:1234", false),
+            ("::1:1234", false),
+            (":::1234", false),
+            ("ff00::1:1234", false),
+            ("localhost:1234", false),
+            ("LOCALHOST:1234", false),
+            ("8.8.8.8:1234", true),
+            ("1.1.1.1:1234", true),
+            ("2606:4700:4700::1111:1234", true),
+            ("example.com:1234", true),
+            ("node.internal:1234", true),
+        ];
+        for (s, expected) in cases {
+            let a: NetAddr = s.parse().unwrap_or_else(|_| panic!("parse {s}"));
+            assert_eq!(a.is_probably_global(), *expected, "for input {s}");
+        }
     }
 }
