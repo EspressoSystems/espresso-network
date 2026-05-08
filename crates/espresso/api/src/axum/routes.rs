@@ -160,6 +160,9 @@ pub mod v1 {
     pub const STREAM_TRANSACTIONS_ROUTE: &str = "/v1/availability/stream/transactions/{height}";
     pub const STREAM_TRANSACTIONS_NS_ROUTE: &str =
         "/v1/availability/stream/transactions/{height}/namespace/{namespace}";
+
+    pub const STREAM_NAMESPACE_PROOFS_ROUTE: &str =
+        "/v1/availability/stream/blocks/{height}/namespace/{namespace}";
 }
 
 //=============================================================================

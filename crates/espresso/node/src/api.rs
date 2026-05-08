@@ -8142,6 +8142,12 @@ mod test {
                 &format!("availability/stream/transactions/{avail_block}/namespace/{avail_ns}"),
             )
             .await?;
+            compare_ws_endpoints(
+                api_port,
+                axum_port,
+                &format!("availability/stream/blocks/{avail_block}/namespace/{avail_ns}"),
+            )
+            .await?;
         }
 
         Ok(())

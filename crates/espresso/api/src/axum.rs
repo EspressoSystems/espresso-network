@@ -583,6 +583,17 @@ where
                 }
             })
         };
+    let stream_namespace_proofs =
+        |ws: WebSocketUpgrade,
+         State(state): State<S>,
+         Path((height, namespace)): Path<(u64, u32)>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_namespace_proofs(height, namespace).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_namespace_proofs: {e}"),
+                }
+            })
+        };
 
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
@@ -728,6 +739,10 @@ where
         .route(
             routes::v1::STREAM_TRANSACTIONS_NS_ROUTE,
             get(stream_transactions_ns),
+        )
+        .route(
+            routes::v1::STREAM_NAMESPACE_PROOFS_ROUTE,
+            get(stream_namespace_proofs),
         )
         .with_state(state)
 }

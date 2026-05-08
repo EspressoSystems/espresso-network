@@ -170,6 +170,14 @@ impl v1::AvailabilityApi for TestApi {
         Ok(vec![0xde, 0xad, 0xbe, 0xef])
     }
 
+    async fn stream_namespace_proofs(
+        &self,
+        _start_height: u64,
+        _namespace: u32,
+    ) -> Result<futures::stream::BoxStream<'static, Self::NamespaceProofQueryData>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+
     async fn get_state_cert(&self, epoch: u64) -> Result<Self::StateCertQueryDataV1> {
         tracing::info!("v1: get_state_cert(epoch={})", epoch);
         Ok(vec![0x01, 0x02, 0x03])

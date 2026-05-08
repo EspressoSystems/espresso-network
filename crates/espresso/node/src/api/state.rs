@@ -1302,6 +1302,49 @@ where
         Ok(proofs)
     }
 
+    async fn stream_namespace_proofs(
+        &self,
+        start_height: u64,
+        namespace: u32,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::NamespaceProofQueryData>> {
+        use espresso_types::{NamespaceId, NamespaceProofQueryData, NsProof};
+        use futures::StreamExt as _;
+
+        let ns_id = NamespaceId::from(namespace);
+        let from = start_height as usize;
+        let ds = self.data_source.clone();
+        let blocks = (*ds).subscribe_blocks(from).await;
+        let vids = (*ds).subscribe_vid_common(from).await;
+
+        let stream = blocks
+            .zip(vids)
+            .map(move |(block, vid)| {
+                let ns_table = block.payload().ns_table();
+                if let Some(ns_index) = ns_table.find_ns_id(&ns_id) {
+                    if let Some(proof) = NsProof::new(block.payload(), &ns_index, vid.common()) {
+                        let transactions = proof.export_all_txs(&ns_id);
+                        NamespaceProofQueryData {
+                            transactions,
+                            proof: Some(proof),
+                        }
+                    } else {
+                        NamespaceProofQueryData {
+                            transactions: vec![],
+                            proof: None,
+                        }
+                    }
+                } else {
+                    NamespaceProofQueryData {
+                        transactions: vec![],
+                        proof: None,
+                    }
+                }
+            })
+            .boxed();
+
+        Ok(stream)
+    }
+
     async fn get_incorrect_encoding_proof(
         &self,
         block_id: espresso_api::v1::availability::BlockId,

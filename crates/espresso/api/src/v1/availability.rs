@@ -24,7 +24,7 @@ pub enum PayloadId {
 
 #[async_trait]
 pub trait AvailabilityApi {
-    type NamespaceProofQueryData: Serialize + Send + Sync;
+    type NamespaceProofQueryData: Serialize + Send + Sync + 'static;
 
     type IncorrectEncodingProof: Serialize + Send + Sync;
 
@@ -49,10 +49,7 @@ pub trait AvailabilityApi {
         &self,
         start_height: u64,
         namespace: u32,
-    ) -> anyhow::Result<()> {
-        let _ = (start_height, namespace);
-        anyhow::bail!("WebSocket streaming not yet implemented")
-    }
+    ) -> anyhow::Result<BoxStream<'static, Self::NamespaceProofQueryData>>;
 
     async fn get_incorrect_encoding_proof(
         &self,
