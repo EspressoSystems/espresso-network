@@ -7,7 +7,7 @@ use espresso_types::{
     L1Client,
     v0_3::{Fetcher, RegisteredValidator},
 };
-use hotshot_contract_adapter::sol_types::StakeTableV2;
+use hotshot_contract_adapter::sol_types::StakeTableV3;
 pub use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 use hotshot_types::signature_key::BLSPubKey;
 use url::Url;
@@ -72,7 +72,7 @@ pub fn display_stake_table(
 
 pub async fn fetch_token_address(rpc_url: Url, stake_table_address: Address) -> Result<Address> {
     let provider = ProviderBuilder::new().connect_http(rpc_url);
-    StakeTableV2::new(stake_table_address, provider)
+    StakeTableV3::new(stake_table_address, provider)
         .token()
         .call()
         .await
@@ -87,7 +87,7 @@ pub async fn fetch_stake_table_version(
     provider: impl Provider,
     stake_table_address: Address,
 ) -> Result<StakeTableContractVersion> {
-    let stake_table = StakeTableV2::new(stake_table_address, provider);
+    let stake_table = StakeTableV3::new(stake_table_address, provider);
     stake_table
         .getVersion()
         .call()

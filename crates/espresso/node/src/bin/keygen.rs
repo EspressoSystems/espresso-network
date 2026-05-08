@@ -60,7 +60,7 @@ impl Scheme {
             Self::X25519 => {
                 let kp = x25519::Keypair::from(keys.x25519.clone());
                 let sk = TaggedBase64::try_from(kp.secret_key())?;
-                let pk = kp.public_key();
+                let pk = TaggedBase64::try_from(kp.public_key())?;
                 writeln!(output, "ESPRESSO_NODE_PUBLIC_X25519_KEY={pk}")?;
                 writeln!(output, "ESPRESSO_NODE_PRIVATE_X25519_KEY={sk}")?;
                 tracing::info!(pub_key = %pk, "generated x25519 key");
