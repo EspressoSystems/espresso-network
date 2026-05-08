@@ -35,7 +35,7 @@ jobs:
           filter: blob:none
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+        uses: ./.github/actions/install-foundry
 
       - name: Install solc
         run: |
@@ -132,7 +132,7 @@ jobs:
           submodules: recursive
 
       - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+        uses: ./.github/actions/install-foundry
 
       - name: Install cargo-binstall
         uses: taiki-e/install-action@v2

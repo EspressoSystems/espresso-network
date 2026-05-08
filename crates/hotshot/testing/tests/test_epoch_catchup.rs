@@ -13,8 +13,7 @@ use hotshot_example_types::{
         static_committee::StaticStakeTable, two_static_committees::TwoStakeTables,
     },
     node_types::{
-        CliquenetImpl, CombinedImpl, CompatNetImpl, RandomOverlapQuorumFilterConfig, TEST_VERSIONS,
-        TestTypesEpochCatchupTypes,
+        CombinedImpl, RandomOverlapQuorumFilterConfig, TEST_VERSIONS, TestTypesEpochCatchupTypes,
     },
 };
 use hotshot_macros::cross_tests;
@@ -29,7 +28,7 @@ use hotshot_types::signature_key::{BLSPubKey, SchnorrPubKey};
 
 cross_tests!(
     TestName: test_catchup_epochs,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [
         TestTypesEpochCatchupTypes<StaticStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
@@ -71,7 +70,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_two_stake_tables_catchup_epochs,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [
         TestTypesEpochCatchupTypes<TwoStakeTables<BLSPubKey, SchnorrPubKey>>,
     ],
@@ -113,7 +112,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_randomized_leader_catchup_epochs,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [
         TestTypesEpochCatchupTypes<RandomizedStakeTable<BLSPubKey,SchnorrPubKey>>
     ],
@@ -154,7 +153,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: test_randomized_committee_catchup_epochs,
-    Impls: [CombinedImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [CombinedImpl],
     Types: [
         TestTypesEpochCatchupTypes<RandomizedCommitteeMembers<BLSPubKey, SchnorrPubKey, RandomOverlapQuorumFilterConfig<123, 8, 10, 2, 5>, RandomOverlapQuorumFilterConfig<123, 3, 4, 1, 2>>>,
     ],

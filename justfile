@@ -59,15 +59,17 @@ demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
 # cargo fmt misses files whose `mod` declarations are produced by macro expansion
-fmt *files:
+fmt *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    files="{{files}}"
-    if [ -z "$files" ]; then
-        files=$(git ls-files '*.rs')
-    fi
+    files=$(git ls-files '*.rs')
     if [ -n "$files" ]; then
-        echo "$files" | xargs -P $(getconf _NPROCESSORS_ONLN) -n 10 rustfmt
+        if [ -n "${IN_NIX_SHELL:-}" ]; then
+            rustfmt_cmd="rustfmt"
+        else
+            rustfmt_cmd="rustfmt +nightly"
+        fi
+        echo "$files" | xargs -P $(getconf _NPROCESSORS_ONLN) -n 10 $rustfmt_cmd {{args}}
     fi
 
 fix *args:
