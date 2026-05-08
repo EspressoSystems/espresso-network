@@ -6811,6 +6811,29 @@ mod test {
         println!("Time elapsed to submit transactions: {duration:?}");
 
         let last_tx_height = tx_heights.last().unwrap();
+
+        // Decide events fire when consensus decides a block, but the aggregator that backs these
+        // endpoints runs as a separate background task. Wait for it to have written rows up to
+        // last_tx_height before asserting; otherwise queries can hit a not-yet-aggregated height
+        // and 404.
+        let aggregator_deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let count = client
+                .get::<u64>(&format!("node/transactions/count/{last_tx_height}"))
+                .send()
+                .await
+                .ok();
+            if count == Some(total_transactions) {
+                break;
+            }
+            assert!(
+                Instant::now() < aggregator_deadline,
+                "aggregator did not catch up to height {last_tx_height} (got {count:?}, expected \
+                 {total_transactions})"
+            );
+            sleep(Duration::from_secs(1)).await;
+        }
+
         for namespace in 1..=4 {
             let count = client
                 .get::<u64>(&format!("node/transactions/count/namespace/{namespace}"))
