@@ -811,9 +811,13 @@ impl<T: NodeType> Consensus<T> {
         Protocol::Continue
     }
 
+    // The leader's own share is also unicast back to itself (cliquenet
+    // self-loopback): it is the only way the leader's `handle_proposal_and_vid_share`
+    // path runs for its own proposal, populating `proposals`, `leaves`,
+    // `states_verified`, and seeding the VID reconstructor's metadata.
     #[instrument(level = "debug", skip_all)]
     async fn send_vid_shares(
-        &mut self,
+        &self,
         view: &ViewNumber,
         vid_disperse: VidDisperse2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
@@ -822,10 +826,6 @@ impl<T: NodeType> Consensus<T> {
             .to_shares()
             .into_iter()
             .filter_map(|share| {
-                if share.recipient_key == self.public_key {
-                    self.vid_shares.insert(*view, share);
-                    return None;
-                }
                 let Some(proposal) = share.to_proposal(&self.private_key) else {
                     warn!(%view, "failed to sign VID share proposal");
                     return None;
