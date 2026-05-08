@@ -38,6 +38,12 @@ filter = 'test(slow_test_restart)'
 slow-timeout = { period = "1m", terminate-after = 3 }
 threads-required = 'num-cpus'
 
+# Spins up a 5-node network and runs through 6 epochs; contends heavily with
+# other tests in the same partition.
+[[profile.default.overrides]]
+filter = 'test(test_merklized_state_catchup_on_restart)'
+threads-required = 'num-cpus'
+
 [[profile.default.overrides]]
 filter = 'package(request-response)'
 threads-required = 'num-cpus'
