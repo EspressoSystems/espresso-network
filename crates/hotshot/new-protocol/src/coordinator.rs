@@ -291,13 +291,7 @@ where
                             self.cached_vid_shares.insert(view, vid_share);
                             continue;
                         };
-                        // Check for commitment correspondence
-                        let VidCommitment::V2(commit) = validated.message.proposal.data.block_header.payload_commitment() else {
-                            warn!("unexpected payload commitment type in view {}, proposal discarded", view);
-                            continue;
-                        };
-                        if commit != vid_share.payload_commitment {
-                            warn!("payload commitment mismatch in view {}, discard the proposal", view);
+                        if !check_payload_commitment(&validated.message.proposal, &vid_share) {
                             continue;
                         }
                         return self.handle_proposal_and_vid_share(validated, vid_share)
@@ -326,12 +320,7 @@ where
                             continue;
                         };
                         // Check for commitment correspondence
-                        let VidCommitment::V2(commit) = validated.message.proposal.data.block_header.payload_commitment() else {
-                            warn!("unexpected payload commitment type in view {}, proposal discarded", view);
-                            continue;
-                        };
-                        if commit != vid_share.payload_commitment {
-                            warn!("payload commitment mismatch in view {}, discard the proposal", view);
+                        if !check_payload_commitment(&validated.message.proposal, &vid_share) {
                             continue;
                         }
                         return self.handle_proposal_and_vid_share(validated, vid_share)
@@ -698,11 +687,11 @@ where
                     )),
                 };
                 if let Err(err) = self.network.broadcast(message.view_number(), &message) {
-                    let err = CoordinatorError::from(err).context("vid share unicast");
+                    let err = CoordinatorError::from(err).context("proposal broadcast");
                     if err.severity == Severity::Critical {
                         return Err(err);
                     } else {
-                        warn!(%err, "network error while sending vid share")
+                        warn!(%err, "network error while broadcasting proposal")
                     }
                 }
             },
@@ -964,7 +953,30 @@ where
         self.block_builder.gc(view);
         self.pending_proposal_fetches.gc(view);
         self.storage.gc(view);
+        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&view);
+        self.cached_vid_shares = self.cached_vid_shares.split_off(&view);
     }
+}
+
+fn check_payload_commitment<T: NodeType>(
+    proposal: &SignedProposal<T, Proposal<T>>,
+    vid_share: &VidDisperseShare2<T>,
+) -> bool {
+    let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() else {
+        warn!(
+            "unexpected payload commitment type in view {}, proposal discarded",
+            proposal.data.view_number
+        );
+        return false;
+    };
+    if commit != vid_share.payload_commitment {
+        warn!(
+            "payload commitment mismatch in view {}, discard the proposal",
+            proposal.data.view_number
+        );
+        return false;
+    }
+    true
 }
 
 type ProposalFetchResponseSender<T> =

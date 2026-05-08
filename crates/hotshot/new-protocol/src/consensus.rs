@@ -823,7 +823,7 @@ impl<T: NodeType> Consensus<T> {
             .into_iter()
             .filter_map(|share| {
                 if share.recipient_key == self.public_key {
-                    self.vid_shares.insert(*view, share.clone());
+                    self.vid_shares.insert(*view, share);
                     return None;
                 }
                 let Some(proposal) = share.to_proposal(&self.private_key) else {
