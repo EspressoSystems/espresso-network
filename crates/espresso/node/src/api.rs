@@ -7707,17 +7707,24 @@ mod test {
             } else {
                 // V2 case
 
-                // Submit a transaction so we have a block with actual namespace data for
-                // availability parity tests. Both servers share the same SQL data source, so they
-                // must return identical responses.
+                // Submit two transactions to the same namespace so the namespace-filtered
+                // WS stream produces ≥2 messages when both are included.
                 let avail_ns = NamespaceId::from(42_u32);
                 let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
+                let avail_tx2 = Transaction::new(avail_ns, vec![4, 5, 6]);
                 network
                     .server
                     .submit_transaction(avail_tx.clone())
                     .await
                     .unwrap();
+                network
+                    .server
+                    .submit_transaction(avail_tx2.clone())
+                    .await
+                    .unwrap();
                 let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
+                // Wait for the second transaction too so it's committed before we stop consensus.
+                wait_for_decide_on_handle(&mut events, &avail_tx2).await;
 
                 wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
                 // Wait for the availability query service to index avail_block.
@@ -8106,42 +8113,50 @@ mod test {
                 // WebSocket streaming parity: both servers share the same data source, so their
                 // streams must produce the same items. We collect up to 10 messages from each and
                 // verify ≥2 appear in both.
+                //
+                // For unfiltered streams, start 10 blocks before avail_block so there are at
+                // least 10 committed blocks ready to stream (consensus has already stopped).
+                // For namespace-filtered streams, start at avail_block where the two submitted
+                // transactions were included, giving ≥2 matching messages.
+                let ws_start = avail_block.saturating_sub(10);
                 compare_ws_endpoints(
                     api_port,
                     axum_port,
-                    &format!("availability/stream/leaves/{avail_block}"),
+                    &format!("availability/stream/leaves/{ws_start}"),
                 )
                 .await?;
                 compare_ws_endpoints(
                     api_port,
                     axum_port,
-                    &format!("availability/stream/headers/{avail_block}"),
+                    &format!("availability/stream/headers/{ws_start}"),
                 )
                 .await?;
                 compare_ws_endpoints(
                     api_port,
                     axum_port,
-                    &format!("availability/stream/blocks/{avail_block}"),
+                    &format!("availability/stream/blocks/{ws_start}"),
                 )
                 .await?;
                 compare_ws_endpoints(
                     api_port,
                     axum_port,
-                    &format!("availability/stream/payloads/{avail_block}"),
+                    &format!("availability/stream/payloads/{ws_start}"),
                 )
                 .await?;
                 compare_ws_endpoints(
                     api_port,
                     axum_port,
-                    &format!("availability/stream/vid/common/{avail_block}"),
+                    &format!("availability/stream/vid/common/{ws_start}"),
                 )
                 .await?;
                 compare_ws_endpoints(
                     api_port,
                     axum_port,
-                    &format!("availability/stream/transactions/{avail_block}"),
+                    &format!("availability/stream/transactions/{ws_start}"),
                 )
                 .await?;
+                // Namespace-filtered streams: start at avail_block; two transactions were
+                // submitted so the stream produces ≥2 messages.
                 compare_ws_endpoints(
                     api_port,
                     axum_port,
