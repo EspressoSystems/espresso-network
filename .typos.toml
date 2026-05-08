@@ -33,3 +33,5 @@ Forgetten = "Forgetten"
 typ = "typ"
 # Token Generation Event
 tge = "tge"
+# Rust crate name
+bimap = "bimap"

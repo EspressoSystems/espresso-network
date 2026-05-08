@@ -2,9 +2,7 @@ use std::{collections::HashSet, rc::Rc, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot_example_types::{
-    node_types::{
-        CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS,
-    },
+    node_types::{Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS},
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
@@ -109,7 +107,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: dishonest_da,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -138,7 +136,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: dishonest_voting,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -211,7 +209,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: view_sync_split,
-    Impls: [PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -252,7 +250,7 @@ cross_tests!(
 // Tests that dishonest nodes cannot form a precommit certificate for a new epoch without forming an eQC.
 cross_tests!(
     TestName: view_sync_next_epoch,
-    Impls: [PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

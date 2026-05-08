@@ -1,14 +1,14 @@
 //! Functionality for using the [`LightClient`] as a query service fetching [`Provider`].
 
 use async_trait::async_trait;
-use espresso_types::{Payload, SeqTypes};
+use espresso_types::{Certificate2, Payload, SeqTypes};
 use hotshot_query_service::{
     availability::{BlockQueryData, LeafId, LeafQueryData, VidCommonQueryData},
     fetching::{
         NonEmptyRange, Provider,
         request::{
-            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest, RangeRequest,
-            VidCommonRangeRequest, VidCommonRequest,
+            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
+            RangeRequest, VidCommonRangeRequest, VidCommonRequest,
         },
     },
     node::BlockId,
@@ -154,6 +154,23 @@ where
             Ok(vid_common) => Some(vid_common),
             Err(err) => {
                 tracing::warn!(?req, "received invalid VID common range: {err:#}");
+                None
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl<P, S> Provider<SeqTypes, Certificate2Request> for LightClient<P, S>
+where
+    P: Storage,
+    S: Client,
+{
+    async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<SeqTypes>>> {
+        match self.fetch_certificate2(req.height).await {
+            Ok(cert2) => Some(cert2),
+            Err(err) => {
+                tracing::warn!(?req, "failed to fetch cert2: {err:#}");
                 None
             },
         }

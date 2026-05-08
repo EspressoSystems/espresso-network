@@ -34,6 +34,7 @@ use versions::EPOCH_VERSION;
 use crate::{
     PeerConfig,
     data::{EpochNumber, Leaf2, VidCommitment, ViewNumber},
+    message::UpgradeLock,
     stake_table::StakeTableEntries,
     traits::{ValidatedState, node_implementation::NodeType},
     vote::{Certificate, HasViewNumber},
@@ -107,7 +108,7 @@ pub async fn verify_leaf_chain<T: NodeType>(
     stake_table: &[PeerConfig<T>],
     success_threshold: U256,
     expected_height: u64,
-    upgrade_lock: &crate::message::UpgradeLock<T>,
+    upgrade_lock: &UpgradeLock<T>,
 ) -> anyhow::Result<Leaf2<T>> {
     // Sort the leaf chain by view number
     leaf_chain.sort_by_key(|l| l.view_number());

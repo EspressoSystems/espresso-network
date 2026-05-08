@@ -42,7 +42,9 @@ use jf_merkle_tree_compat::{
 };
 use sqlx::{Encode, Row, Type};
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
+};
 
 use super::{
     BlocksFrontier,
@@ -780,11 +782,33 @@ impl CatchupStorage for SqlStorage {
             .read()
             .await
             .context(format!("opening transaction to fetch leaf at {height}"))?;
-        let leaf = tx
+        let leaf: Leaf2 = tx
             .get_leaf((height as usize).into())
             .await
-            .context(format!("leaf {height} not available"))?;
-        let mut last_leaf: Leaf2 = leaf.leaf().clone();
+            .context(format!("leaf {height} not available"))?
+            .leaf()
+            .clone();
+
+        // New protocol: cert2 alone proves finality. Return the leaf range up to the finalizing
+        // cert2's height
+        if leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
+            let cert2: espresso_types::Certificate2<SeqTypes> =
+                tx.load_earliest_cert2(height).await?.context(format!(
+                    "no cert2 available for new-protocol leaf at {height}"
+                ))?;
+            let cert2_height = cert2.data.block_number;
+            let mut leaves = vec![leaf];
+            if height < cert2_height {
+                let descendants = tx
+                    .get_leaf_range((height as usize + 1)..=cert2_height as usize)
+                    .await?;
+                leaves.extend(descendants.into_iter().flatten().map(|l| l.leaf().clone()));
+            }
+            return Ok(leaves);
+        }
+
+        // Legacy protocol: build a 3-chain that decides `height`.
+        let mut last_leaf = leaf;
         let mut chain = vec![last_leaf.clone()];
         let mut h = height + 1;
 
@@ -820,6 +844,29 @@ impl CatchupStorage for SqlStorage {
         }
 
         Ok(chain)
+    }
+
+    async fn load_earliest_cert2(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch cert2")?;
+        Ok(tx.load_earliest_cert2(height).await?)
+    }
+
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+        let mut tx = self
+            .read()
+            .await
+            .context(format!("opening transaction to fetch leaf at {height}"))?;
+        let lqd = tx
+            .get_leaf((height as usize).into())
+            .await
+            .context(format!("leaf {height} not available"))?;
+        Ok(lqd.leaf().clone())
     }
 }
 
@@ -958,6 +1005,17 @@ impl CatchupStorage for DataSource {
     async fn get_leaf_chain(&self, height: u64) -> anyhow::Result<Vec<Leaf2>> {
         self.as_ref().get_leaf_chain(height).await
     }
+
+    async fn load_earliest_cert2(
+        &self,
+        height: u64,
+    ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
+        self.as_ref().load_earliest_cert2(height).await
+    }
+
+    async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
+        self.as_ref().get_leaf(height).await
+    }
 }
 
 #[async_trait]
@@ -972,6 +1030,58 @@ impl ChainConfigPersistence for Transaction<Write> {
             [(commitment.to_string(), data)],
         )
         .await
+    }
+}
+
+impl super::data_source::PruningDataSource for SqlStorage {
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch oldest block")?;
+        let row = sqlx::query("SELECT MIN(height) AS height FROM header")
+            .fetch_one(tx.as_mut())
+            .await
+            .context("failed to query oldest block height")?;
+        let height: Option<i64> = row.try_get("height")?;
+        match height {
+            None => Ok(None),
+            Some(h) => {
+                let h = usize::try_from(h).context("block height out of range")?;
+                Ok(Some(
+                    tx.get_block(hotshot_query_service::availability::BlockId::<SeqTypes>::from(h))
+                        .await
+                        .context(format!("block {h} not available"))?,
+                ))
+            },
+        }
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<SeqTypes>>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch oldest leaf")?;
+        let row = sqlx::query("SELECT MIN(height) AS height FROM leaf2")
+            .fetch_one(tx.as_mut())
+            .await
+            .context("failed to query oldest leaf height")?;
+        let height: Option<i64> = row.try_get("height")?;
+        match height {
+            None => Ok(None),
+            Some(h) => {
+                let h = usize::try_from(h).context("leaf height out of range")?;
+                Ok(Some(
+                    tx.get_leaf(LeafId::<SeqTypes>::from(h))
+                        .await
+                        .context(format!("leaf {h} not available"))?,
+                ))
+            },
+        }
     }
 }
 
@@ -1064,6 +1174,20 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
 impl super::data_source::DatabaseMetadataSource for DataSource {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
         self.as_ref().get_table_sizes().await
+    }
+}
+
+impl super::data_source::PruningDataSource for DataSource {
+    async fn get_oldest_block(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::BlockQueryData<SeqTypes>>> {
+        self.as_ref().get_oldest_block().await
+    }
+
+    async fn get_oldest_leaf(
+        &self,
+    ) -> anyhow::Result<Option<hotshot_query_service::availability::LeafQueryData<SeqTypes>>> {
+        self.as_ref().get_oldest_leaf().await
     }
 }
 

@@ -213,12 +213,18 @@ pub struct Options {
 
     /// The address we advertise to other nodes as being a Libp2p endpoint.
     /// Should be supplied in `host:port` form.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS",
-        default_value = "localhost:1769"
-    )]
-    pub libp2p_advertise_address: String,
+    ///
+    /// Operators should set this to a publicly routable address whenever the bind address
+    /// is not directly reachable from peers (NAT, K8s NodePort, Docker bridge). It is added
+    /// to libp2p as an `external_address` so that Identify and Kademlia announce it to the
+    /// network. Non-globally-routable IP literals (loopback, RFC 1918 private, link-local,
+    /// etc.) only work for local testing (`demo-native`, `docker-compose`) and are dropped
+    /// from the libp2p announcement; hostnames are passed through unchanged.
+    ///
+    /// Also required when bootstrapping a fresh network from the orchestrator, where it is
+    /// registered into the stake table so peers can dial us.
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS")]
+    pub libp2p_advertise_address: Option<String>,
 
     /// A comma-separated list of Libp2p multiaddresses to use as bootstrap
     /// nodes.
@@ -323,6 +329,14 @@ pub struct Options {
     /// remote providers so it can still vote within the current view.
     #[clap(long, env = "ESPRESSO_NODE_LOCAL_CATCHUP_TIMEOUT", default_value = "5s", value_parser = parse_duration)]
     pub local_catchup_timeout: Duration,
+
+    /// Per-step timeout for the startup stake-table catchup walk.
+    ///
+    /// Bounds a single `wait_for_stake_table` call during `bootstrap_epoch_window`
+    /// (the underlying `fetch_leaf` retries forever); a step that exceeds this
+    /// terminates the walk
+    #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
+    pub bootstrap_epoch_catchup_timeout: Duration,
 
     #[clap(flatten)]
     pub logging: logging::Config,

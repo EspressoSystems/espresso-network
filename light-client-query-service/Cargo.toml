@@ -20,19 +20,19 @@ clap = { workspace = true }
 espresso-node = { workspace = true, default-features = false }
 espresso-types = { workspace = true }
 hotshot-query-service = { workspace = true }
+
+# Optional dependencies for genesis utility.
+hotshot-types = { workspace = true, optional = true }
 light-client = { workspace = true }
 log-panics = { workspace = true }
 semver = { workspace = true }
+surf-disco = { workspace = true, optional = true }
 tide-disco = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 vbs = { workspace = true }
-
-# Optional dependencies for genesis utility.
-hotshot-types = { workspace = true, optional = true }
-surf-disco = { workspace = true, optional = true }
 
 [lints]
 workspace = true

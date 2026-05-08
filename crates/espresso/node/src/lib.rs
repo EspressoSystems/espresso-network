@@ -129,6 +129,9 @@ pub struct NetworkParams {
     pub catchup_base_timeout: Duration,
     /// Timeout for local catchup provider requests.
     pub local_catchup_timeout: Duration,
+    /// Per-step timeout for the startup stake-table catchup walk
+    /// (`bootstrap_epoch_window`).
+    pub bootstrap_epoch_catchup_timeout: Duration,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -137,8 +140,10 @@ pub struct NetworkParams {
     pub cliquenet_advertise_addr: Option<NetAddr>,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
-    /// The address to send to other Libp2p nodes to contact us
-    pub libp2p_advertise_address: String,
+    /// The address to send to other Libp2p nodes to contact us. Required for orchestrator
+    /// bootstrap; optional otherwise. When set, it is added to the swarm as an external address
+    /// so peers can reach us behind NAT.
+    pub libp2p_advertise_address: Option<String>,
     /// The address to bind to for Libp2p
     pub libp2p_bind_address: String,
     /// The (optional) bootstrap node addresses for Libp2p. If supplied, these will
@@ -353,16 +358,47 @@ where
                 &network_params.libp2p_bind_address
             )
         })?;
-    let libp2p_advertise_address =
-        derive_libp2p_multiaddr(&network_params.libp2p_advertise_address).with_context(|| {
-            format!(
-                "Failed to derive Libp2p advertise address of {}",
-                &network_params.libp2p_advertise_address
-            )
-        })?;
+    let advertise_multiaddr = network_params
+        .libp2p_advertise_address
+        .as_ref()
+        .map(|addr| {
+            derive_libp2p_multiaddr(addr)
+                .with_context(|| format!("Failed to derive Libp2p advertise address of {addr}"))
+        })
+        .transpose()?;
+    let advertise_is_global = match network_params
+        .libp2p_advertise_address
+        .as_deref()
+        .and_then(|s| s.parse::<NetAddr>().ok())
+    {
+        Some(parsed) if !parsed.is_probably_global() => {
+            tracing::error!(
+                "Libp2p advertise address {parsed} is probably not publicly routable. This is \
+                 fine for local testing (demo-native, docker-compose) but is wrong for any real \
+                 deployment: remote peers will fail to dial us."
+            );
+            false
+        },
+        _ => true,
+    };
+
+    // Always pass the configured address to the orchestrator stake table; that path is
+    // testing-only and demo-native legitimately uses loopback.
+    let libp2p_announce_addresses: Vec<Multiaddr> = advertise_multiaddr.iter().cloned().collect();
+
+    // Only register the advertise address as a libp2p `external_address` when it looks
+    // publicly routable: announcing local/private values via Identify / Kademlia poisons peer
+    // routing tables in production. Local tests don't need it since peers find each other via
+    // `libp2p_bootstrap_nodes`.
+    let libp2p_external_addresses: Vec<Multiaddr> = if advertise_is_global {
+        advertise_multiaddr.iter().cloned().collect()
+    } else {
+        Vec::new()
+    };
 
     info!("Libp2p bind address: {}", libp2p_bind_address);
-    info!("Libp2p advertise address: {}", libp2p_advertise_address);
+    info!("Libp2p announce addresses: {:?}", libp2p_announce_addresses);
+    info!("Libp2p external addresses: {:?}", libp2p_external_addresses);
 
     // Orchestrator client
     let orchestrator_client = OrchestratorClient::new(network_params.orchestrator_url);
@@ -438,12 +474,17 @@ where
                 validator_config.p2p_addr = Some(advertise_addr);
             }
 
+            let bootstrap_advertise_addr = libp2p_announce_addresses.first().cloned().context(
+                "ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS must be set when bootstrapping a libp2p \
+                 network from the orchestrator",
+            )?;
+
             let config = get_complete_config(
                 &orchestrator_client,
                 validator_config.clone(),
                 // Register in our Libp2p advertise address and public key so other nodes
                 // can contact us on startup
-                Some(libp2p_advertise_address),
+                Some(bootstrap_advertise_addr),
                 Some(libp2p_public_key),
             )
             .await?
@@ -672,6 +713,15 @@ where
     membership.reload_stake(RECENT_STAKE_TABLES_LIMIT).await;
     info!("Stake reloaded");
 
+    check_cliquenet_info_registered(
+        &membership,
+        &validator_config.public_key,
+        genesis.base_version,
+        genesis.chain_config.stake_table_contract,
+        &l1_client,
+    )
+    .await;
+
     let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
@@ -714,6 +764,7 @@ where
             gossip_config,
             request_response_config,
             libp2p_bind_address,
+            libp2p_external_addresses,
             &validator_config.public_key,
             // We need the private key so we can derive our Libp2p keypair
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
@@ -783,6 +834,7 @@ where
         genesis.stake_table.capacity,
         event_consumer,
         proposal_fetcher_config,
+        network_params.bootstrap_epoch_catchup_timeout,
     )
     .await?;
 
@@ -795,6 +847,72 @@ where
 
 pub fn empty_builder_commitment() -> BuilderCommitment {
     BuilderCommitment::from_bytes([])
+}
+
+/// On the version immediately preceding CLIQUENET, log an error if this
+/// validator has a stake-table entry without an x25519 key or p2p address.
+/// Skipped unless StakeTableV3 is deployed (otherwise the operator has no
+/// actionable path), detected via `getVersion()` on the proxy.
+async fn check_cliquenet_info_registered(
+    membership: &EpochCommittees,
+    pub_key: &BLSPubKey,
+    current_version: vbs::version::Version,
+    stake_table_contract: Option<alloy::primitives::Address>,
+    l1_client: &espresso_types::v0::L1Client,
+) {
+    if current_version != versions::VID2_UPGRADE_VERSION {
+        return;
+    }
+    let Some(addr) = stake_table_contract else {
+        return;
+    };
+    let stake_table =
+        hotshot_contract_adapter::sol_types::StakeTableV3::new(addr, l1_client.provider.clone());
+    let mut major = None;
+    let mut last_err = None;
+    for attempt in 1..=3 {
+        match stake_table.getVersion().call().await {
+            Ok(v) => {
+                major = Some(v.majorVersion);
+                break;
+            },
+            Err(e) => {
+                tracing::warn!(attempt, %e, "failed to read StakeTable getVersion(), retrying");
+                last_err = Some(e);
+                if attempt < 3 {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            },
+        }
+    }
+    let Some(major) = major else {
+        tracing::warn!(
+            err = ?last_err,
+            "could not read StakeTable getVersion() after 3 attempts; skipping check"
+        );
+        return;
+    };
+    if major < 3 {
+        tracing::info!(
+            major,
+            "StakeTableV3 not deployed; skipping network-info registration check"
+        );
+        return;
+    }
+    let Some(cfg) = membership.latest_peer_config(pub_key) else {
+        return;
+    };
+    if cfg.connect_info.is_some() {
+        return;
+    }
+    tracing::error!(
+        bls_key = %pub_key,
+        "Validator has no x25519 key or p2p address registered on-chain. After the CLIQUENET \
+         upgrade activates, the validator will be excluded from the active set and stop earning \
+         rewards. To fix: (1) generate an x25519 keypair if needed (`keygen --scheme x25519 \
+         --out keys.env`), then (2) register it on-chain (`staking-cli update-network-config \
+         --x25519-key <ESPRESSO_NODE_PUBLIC_X25519_KEY> --p2p-addr <host:port>`)."
+    );
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -817,10 +935,7 @@ pub mod testing {
             },
             layers::AnvilProvider,
         },
-        signers::{
-            k256::ecdsa::SigningKey,
-            local::{LocalSigner, PrivateKeySigner},
-        },
+        signers::{k256::ecdsa::SigningKey, local::LocalSigner},
     };
     use async_lock::RwLock;
     use catchup::NullStateCatchup;
@@ -859,7 +974,6 @@ pub mod testing {
         light_client::StateKeyPair,
         message::UpgradeLock,
         new_protocol::CoordinatorEvent,
-        signature_key::BLSKeyPair,
         traits::{
             EncodeBytes, block_contents::BlockHeader, metrics::NoMetrics, network::Topic,
             signature_key::BuilderSignatureKey,
@@ -867,7 +981,7 @@ pub mod testing {
     };
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha20Rng;
-    use staking_cli::demo::{DelegationConfig, StakingTransactions};
+    use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
     use test_utils::reserve_tcp_port;
     use tokio::spawn;
     use vbs::version::{StaticVersionType, Version};
@@ -1007,14 +1121,20 @@ pub mod testing {
         priv_keys: &[BLSPrivKey],
         state_key_pairs: &[StateKeyPair],
         num_nodes: usize,
-    ) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+    ) -> Vec<StakingKeySet> {
         let seed = [42u8; 32];
         let mut rng = ChaCha20Rng::from_seed(seed); // Create a deterministic RNG
         let eth_key_pairs = (0..num_nodes).map(|_| SigningKey::random(&mut rng).into());
         eth_key_pairs
             .zip(priv_keys.iter())
             .zip(state_key_pairs.iter())
-            .map(|((eth, bls), state)| (eth, bls.clone().into(), state.clone()))
+            .map(|((eth, bls), state)| StakingKeySet {
+                signer: eth,
+                bls: bls.clone().into(),
+                state: state.clone(),
+                x25519: x25519::Keypair::generate().expect("x25519 keypair"),
+                p2p_addr: "127.0.0.1:8080".parse().unwrap(),
+            })
             .collect()
     }
 
@@ -1115,7 +1235,7 @@ pub mod testing {
                         .safe_exit_timelock_executors(vec![self.signer.address()])
                         .build()
                         .unwrap();
-                    args.deploy_all(&mut contracts)
+                    args.deploy_to_stake_table_v3(&mut contracts)
                         .await
                         .expect("failed to deploy all contracts");
 
@@ -1325,7 +1445,7 @@ pub mod testing {
             self.upgrades.clone()
         }
 
-        pub fn staking_priv_keys(&self) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+        pub fn staking_priv_keys(&self) -> Vec<StakingKeySet> {
             staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
         }
 
@@ -1334,11 +1454,11 @@ pub mod testing {
         ) -> Vec<(Address, impl Provider + Clone + use<NUM_NODES>)> {
             self.staking_priv_keys()
                 .into_iter()
-                .map(|(signer, ..)| {
+                .map(|key_set| {
                     (
-                        signer.address(),
+                        key_set.signer.address(),
                         ProviderBuilder::new()
-                            .wallet(EthereumWallet::from(signer))
+                            .wallet(EthereumWallet::from(key_set.signer))
                             .connect_http(self.l1_url.clone()),
                     )
                 })
@@ -1543,6 +1663,7 @@ pub mod testing {
                 stake_table_capacity,
                 event_consumer,
                 Default::default(),
+                Duration::from_secs(2),
             )
             .await
             .unwrap()

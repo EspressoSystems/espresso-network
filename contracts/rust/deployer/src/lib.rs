@@ -185,6 +185,10 @@ pub struct DeployedContracts {
     #[clap(long, env = Contract::StakeTableV2)]
     stake_table_v2: Option<Address>,
 
+    /// Use an already-deployed StakeTableV3.sol instead of deploying a new one.
+    #[clap(long, env = Contract::StakeTableV3)]
+    stake_table_v3: Option<Address>,
+
     /// Use an already-deployed StakeTable.sol proxy instead of deploying a new one.
     #[clap(long, env = Contract::StakeTableProxy)]
     stake_table_proxy: Option<Address>,
@@ -233,6 +237,8 @@ pub enum Contract {
     StakeTable,
     #[display("ESPRESSO_STAKE_TABLE_V2_ADDRESS")]
     StakeTableV2,
+    #[display("ESPRESSO_STAKE_TABLE_V3_ADDRESS")]
+    StakeTableV3,
     #[display("ESPRESSO_STAKE_TABLE_PROXY_ADDRESS")]
     StakeTableProxy,
     #[display("ESPRESSO_REWARD_CLAIM_ADDRESS")]
@@ -342,6 +348,9 @@ impl From<DeployedContracts> for Contracts {
         }
         if let Some(addr) = deployed.stake_table_v2 {
             m.insert(Contract::StakeTableV2, addr);
+        }
+        if let Some(addr) = deployed.stake_table_v3 {
+            m.insert(Contract::StakeTableV3, addr);
         }
         if let Some(addr) = deployed.stake_table_proxy {
             m.insert(Contract::StakeTableProxy, addr);
@@ -1366,6 +1375,71 @@ pub async fn upgrade_stake_table_v2(
     Ok(receipt)
 }
 
+/// Upgrade the stake table proxy from V2 to V3.
+///
+/// V3 adds x25519 key and p2p address registration. No data migration needed.
+pub async fn upgrade_stake_table_v3(
+    provider: impl Provider,
+    contracts: &mut Contracts,
+) -> Result<TransactionReceipt> {
+    tracing::info!("Upgrading StakeTableProxy to StakeTableV3");
+    let Some(proxy_addr) = contracts.address(Contract::StakeTableProxy) else {
+        anyhow::bail!("StakeTableProxy not found, can't upgrade")
+    };
+
+    let proxy = StakeTableV3::new(proxy_addr, &provider);
+
+    // V3 requires V2 as a prerequisite. V1 -> V2 -> V3 is the only supported path.
+    let version = proxy.getVersion().call().await?;
+    if version.majorVersion < 2 {
+        anyhow::bail!(
+            "StakeTableProxy must be at major version >= 2 to upgrade to V3, found {}",
+            version.majorVersion
+        );
+    }
+
+    let v3_addr = contracts
+        .deploy(
+            Contract::StakeTableV3,
+            StakeTableV3::deploy_builder(&provider),
+        )
+        .await?;
+
+    // If already initialized at V3, skip initializeV3() to avoid the "already
+    // initialized" revert. Mirrors upgrade_light_client_v3 behavior.
+    let init_data = if already_initialized(&provider, proxy_addr, 3).await? {
+        tracing::info!("StakeTableProxy already initialized at V3, skipping initializeV3()");
+        vec![].into()
+    } else {
+        StakeTableV3::new(Address::ZERO, &provider)
+            .initializeV3()
+            .calldata()
+            .to_owned()
+    };
+
+    let receipt = proxy
+        .upgradeToAndCall(v3_addr, init_data)
+        .send()
+        .await?
+        .get_receipt()
+        .await?;
+
+    if receipt.inner.is_success() {
+        let version_is_v3 = retry_until_true("StakeTableProxy V3 version check", || async {
+            Ok(proxy.getVersion().call().await?.majorVersion == 3)
+        })
+        .await?;
+        if !version_is_v3 {
+            anyhow::bail!("StakeTableProxy version check failed after retries: expected V3");
+        }
+        tracing::info!(%v3_addr, "StakeTable successfully upgraded to V3");
+    } else {
+        anyhow::bail!("StakeTable V3 upgrade failed: {:?}", receipt);
+    }
+
+    Ok(receipt)
+}
+
 /// Upgrade the fee contract from V1.x.x to V1.0.1
 /// This is for fee contracts owned by an EOA
 pub async fn upgrade_fee_v1(
@@ -1820,7 +1894,7 @@ mod tests {
         sol_types::SolValue,
     };
     use espresso_types::testing::TestValidator;
-    use hotshot_contract_adapter::sol_types::{FeeContract, StakeTableV2};
+    use hotshot_contract_adapter::sol_types::{FeeContract, StakeTableV2, StakeTableV3};
 
     use super::*;
     use crate::{
@@ -2159,8 +2233,8 @@ mod tests {
         )
         .await?;
 
-        // Use V2 interface even for V1 contract (V2 ABI is a superset of V1)
-        let stake_table = StakeTableV2::new(stake_table_proxy_addr, &provider);
+        // Use V3 interface even for older contracts (V3 ABI is a superset)
+        let stake_table = StakeTableV3::new(stake_table_proxy_addr, &provider);
 
         let accounts = provider.get_accounts().await?;
         let validators = [
