@@ -51,6 +51,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use parking_lot::Mutex;
 #[cfg(feature = "hotshot-testing")]
 use rand::{RngCore, SeedableRng, rngs::StdRng};
+#[cfg(feature = "hotshot-testing")]
 use test_utils::reserve_tcp_port;
 use tokio::sync::mpsc::error::TrySendError;
 #[cfg(feature = "hotshot-testing")]

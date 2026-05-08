@@ -338,6 +338,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             network.l1_provider,
             "--l1-polling-interval",
             "1s",
+            "--bootstrap-epoch-catchup-timeout",
+            "2s",
         ]);
         opt.is_da = node.is_da;
         Self {
