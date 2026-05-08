@@ -260,7 +260,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
 
             // Capture the view of a SendProposal so we can stamp `unicast_done`
             // after `process_consensus_output` finishes the per-recipient fan-out.
-            let sent_proposal_view = if let ConsensusOutput::SendProposal(p, _) = &output {
+            let sent_proposal_view = if let ConsensusOutput::SendProposal(p) = &output {
                 Some(*p.data.view_number)
             } else {
                 None
