@@ -12,7 +12,7 @@ use alloy::{
 use anyhow::Result;
 use common::{Signer, TestSystemExt};
 use espresso_contract_deployer::build_signer;
-use hotshot_contract_adapter::{sol_types::StakeTableV2, stake_table::StakeTableContractVersion};
+use hotshot_contract_adapter::{sol_types::StakeTableV3, stake_table::StakeTableContractVersion};
 use rand::{SeedableRng, rngs::StdRng};
 use rstest::rstest;
 use staking_cli::{
@@ -195,7 +195,7 @@ trait DemoTestExt {
 
 impl DemoTestExt for TestSystem {
     async fn get_delegation(&self, validator: Address, delegator: Address) -> Result<U256> {
-        let stake_table = StakeTableV2::new(self.stake_table, &self.provider);
+        let stake_table = StakeTableV3::new(self.stake_table, &self.provider);
         Ok(stake_table.delegations(validator, delegator).call().await?)
     }
 
@@ -209,7 +209,7 @@ impl DemoTestExt for TestSystem {
             let signer = build_signer(staking_cli::DEV_MNEMONIC, index);
             let validator_address = signer.address();
 
-            let (_, bls_key, state_key) = TestSystem::gen_keys(&mut rng);
+            let keys = TestSystem::gen_keys(&mut rng);
 
             let fund_amount = parse_ether("100")?;
             self.transfer_eth(validator_address, fund_amount).await?;
@@ -229,16 +229,25 @@ impl DemoTestExt for TestSystem {
             .get_receipt()
             .await?;
 
-            let payload = NodeSignatures::create(validator_address, &bls_key, &state_key);
+            let payload = NodeSignatures::create(validator_address, &keys.bls, &keys.state);
             let metadata_uri = "https://example.com/metadata".parse()?;
             let commission = Commission::try_from("10.0")?;
 
+            let (x25519_key, p2p_addr) = match self.version {
+                StakeTableContractVersion::V3 => (
+                    Some(keys.x25519.public_key()),
+                    Some(format!("127.0.0.1:{}", 8080 + i as u16).parse().unwrap()),
+                ),
+                _ => (None, None),
+            };
             Transaction::RegisterValidator {
                 stake_table: self.stake_table,
                 commission,
                 metadata_uri,
                 payload,
-                version: StakeTableContractVersion::V2,
+                version: self.version,
+                x25519_key,
+                p2p_addr,
             }
             .send(&provider)
             .await?
@@ -702,8 +711,9 @@ async fn test_churn_initial_funding() -> Result<()> {
 
     system.setup_validators(num_validators).await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("demo")
+    let mut cmd = system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
         .arg("churn")
         .arg("--validator-start-index")
         .arg("20")
@@ -718,7 +728,8 @@ async fn test_churn_initial_funding() -> Result<()> {
         .arg("--max-amount")
         .arg("500")
         .arg("--delay")
-        .arg("50ms");
+        .arg("50ms")
+        .into_inner();
 
     let handle = tokio::spawn(async move {
         let _ = cmd.assert();
@@ -743,8 +754,9 @@ async fn test_churn_delegate_then_undelegate() -> Result<()> {
     let num_delegators = 3u64;
     let validators = system.setup_validators(num_validators).await?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("demo")
+    let mut cmd = system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
         .arg("churn")
         .arg("--validator-start-index")
         .arg("20")
@@ -759,7 +771,8 @@ async fn test_churn_delegate_then_undelegate() -> Result<()> {
         .arg("--max-amount")
         .arg("500")
         .arg("--delay")
-        .arg("50ms");
+        .arg("50ms")
+        .into_inner();
 
     let handle = tokio::spawn(async move {
         let _ = cmd.assert();
@@ -797,8 +810,9 @@ async fn test_churn_respects_delay() -> Result<()> {
 
     let delay = Duration::from_millis(200);
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("demo")
+    let mut cmd = system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
         .arg("churn")
         .arg("--validator-start-index")
         .arg("20")
@@ -813,7 +827,8 @@ async fn test_churn_respects_delay() -> Result<()> {
         .arg("--max-amount")
         .arg("100")
         .arg("--delay")
-        .arg(format!("{}ms", delay.as_millis()));
+        .arg(format!("{}ms", delay.as_millis()))
+        .into_inner();
 
     let start = Instant::now();
     let handle = tokio::spawn(async move {
@@ -841,8 +856,9 @@ async fn test_churn_multiple_iterations() -> Result<()> {
     let validators = system.setup_validators(2).await?;
     let num_delegators = 3;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("demo")
+    let mut cmd = system
+        .cmd(Signer::Mnemonic)
+        .arg("demo")
         .arg("churn")
         .arg("--validator-start-index")
         .arg("20")
@@ -857,7 +873,8 @@ async fn test_churn_multiple_iterations() -> Result<()> {
         .arg("--max-amount")
         .arg("100")
         .arg("--delay")
-        .arg("50ms");
+        .arg("50ms")
+        .into_inner();
 
     let handle = tokio::spawn(async move {
         let _ = cmd.assert();
