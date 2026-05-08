@@ -307,7 +307,7 @@
 <a href=#307 id=307 data-nosnippet>307</a>            .build()
 <a href=#308 id=308 data-nosnippet>308</a>            .unwrap();
 <a href=#309 id=309 data-nosnippet>309</a>
-<a href=#310 id=310 data-nosnippet>310</a>        args.deploy_all(<span class="kw-2">&amp;mut </span>contracts).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#310 id=310 data-nosnippet>310</a>        args.deploy_to_stake_table_v3(<span class="kw-2">&amp;mut </span>contracts).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#311 id=311 data-nosnippet>311</a>
 <a href=#312 id=312 data-nosnippet>312</a>        <span class="kw">let </span>stake_table_addr = contracts
 <a href=#313 id=313 data-nosnippet>313</a>            .address(Contract::StakeTableProxy)
@@ -349,7 +349,7 @@
 <a href=#349 id=349 data-nosnippet>349</a>                address: stake_table_addr,
 <a href=#350 id=350 data-nosnippet>350</a>                default_admin_address: deployer_address,
 <a href=#351 id=351 data-nosnippet>351</a>                default_admin_name: <span class="string">"test_multisig"</span>.to_string(),
-<a href=#352 id=352 data-nosnippet>352</a>                version: <span class="string">"2.0.0"</span>.to_string(),
+<a href=#352 id=352 data-nosnippet>352</a>                version: <span class="string">"3.0.0"</span>.to_string(),
 <a href=#353 id=353 data-nosnippet>353</a>                pauser_address: deployer_address,
 <a href=#354 id=354 data-nosnippet>354</a>                pauser_name: <span class="string">"test_multisig"</span>.to_string(),
 <a href=#355 id=355 data-nosnippet>355</a>            }

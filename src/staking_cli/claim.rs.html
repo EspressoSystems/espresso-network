@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>anyhow::{Context <span class="kw">as _</span>, <span class="prelude-ty">Result</span>, bail};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>hotshot_contract_adapter::{
 <a href=#7 id=7 data-nosnippet>7</a>    reward::RewardClaimInput,
-<a href=#8 id=8 data-nosnippet>8</a>    sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2},
+<a href=#8 id=8 data-nosnippet>8</a>    sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV3},
 <a href=#9 id=9 data-nosnippet>9</a>};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>url::Url;
 <a href=#11 id=11 data-nosnippet>11</a>
@@ -22,7 +22,7 @@
 <a href=#22 id=22 data-nosnippet>22</a>    espresso_url: <span class="kw-2">&amp;</span>Url,
 <a href=#23 id=23 data-nosnippet>23</a>    claimer_address: Address,
 <a href=#24 id=24 data-nosnippet>24</a>) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;RewardClaimData&gt;&gt; {
-<a href=#25 id=25 data-nosnippet>25</a>    <span class="kw">let </span>stake_table = StakeTableV2::new(stake_table_address, <span class="kw-2">&amp;</span>provider);
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="kw">let </span>stake_table = StakeTableV3::new(stake_table_address, <span class="kw-2">&amp;</span>provider);
 <a href=#26 id=26 data-nosnippet>26</a>    <span class="kw">let </span>token_address = stake_table
 <a href=#27 id=27 data-nosnippet>27</a>        .token()
 <a href=#28 id=28 data-nosnippet>28</a>        .call()
@@ -153,7 +153,7 @@
 <a href=#153 id=153 data-nosnippet>153</a><span class="attr">#[cfg(test)]
 <a href=#154 id=154 data-nosnippet>154</a></span><span class="kw">mod </span>test {
 <a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">use </span>alloy::primitives::{U256, utils::parse_ether};
-<a href=#156 id=156 data-nosnippet>156</a>    <span class="kw">use </span>hotshot_contract_adapter::sol_types::{RewardClaim, StakeTableV2};
+<a href=#156 id=156 data-nosnippet>156</a>    <span class="kw">use </span>hotshot_contract_adapter::sol_types::{RewardClaim, StakeTableV3};
 <a href=#157 id=157 data-nosnippet>157</a>
 <a href=#158 id=158 data-nosnippet>158</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">use </span>crate::{deploy::TestSystem, receipt::ReceiptExt <span class="kw">as _</span>, transaction::Transaction};
@@ -175,7 +175,7 @@
 <a href=#175 id=175 data-nosnippet>175</a>        <span class="kw">let </span>receipt = tx.send(<span class="kw-2">&amp;</span>system.provider).<span class="kw">await</span><span class="question-mark">?</span>.assert_success().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#176 id=176 data-nosnippet>176</a>
 <a href=#177 id=177 data-nosnippet>177</a>        <span class="kw">let </span>event = receipt
-<a href=#178 id=178 data-nosnippet>178</a>            .decoded_log::&lt;StakeTableV2::WithdrawalClaimed&gt;()
+<a href=#178 id=178 data-nosnippet>178</a>            .decoded_log::&lt;StakeTableV3::WithdrawalClaimed&gt;()
 <a href=#179 id=179 data-nosnippet>179</a>            .unwrap();
 <a href=#180 id=180 data-nosnippet>180</a>        <span class="macro">assert_eq!</span>(event.amount, amount);
 <a href=#181 id=181 data-nosnippet>181</a>
@@ -199,7 +199,7 @@
 <a href=#199 id=199 data-nosnippet>199</a>        <span class="kw">let </span>receipt = tx.send(<span class="kw-2">&amp;</span>system.provider).<span class="kw">await</span><span class="question-mark">?</span>.assert_success().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#200 id=200 data-nosnippet>200</a>
 <a href=#201 id=201 data-nosnippet>201</a>        <span class="kw">let </span>event = receipt
-<a href=#202 id=202 data-nosnippet>202</a>            .decoded_log::&lt;StakeTableV2::ValidatorExitClaimed&gt;()
+<a href=#202 id=202 data-nosnippet>202</a>            .decoded_log::&lt;StakeTableV3::ValidatorExitClaimed&gt;()
 <a href=#203 id=203 data-nosnippet>203</a>            .unwrap();
 <a href=#204 id=204 data-nosnippet>204</a>        <span class="macro">assert_eq!</span>(event.amount, amount);
 <a href=#205 id=205 data-nosnippet>205</a>

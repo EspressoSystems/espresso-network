@@ -7,7 +7,7 @@
 <a href=#7 id=7 data-nosnippet>7</a>    L1Client,
 <a href=#8 id=8 data-nosnippet>8</a>    v0_3::{Fetcher, RegisteredValidator},
 <a href=#9 id=9 data-nosnippet>9</a>};
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot_contract_adapter::sol_types::StakeTableV2;
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot_contract_adapter::sol_types::StakeTableV3;
 <a href=#11 id=11 data-nosnippet>11</a><span class="kw">pub use </span>hotshot_contract_adapter::stake_table::StakeTableContractVersion;
 <a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>hotshot_types::signature_key::BLSPubKey;
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>url::Url;
@@ -72,7 +72,7 @@
 <a href=#72 id=72 data-nosnippet>72</a>
 <a href=#73 id=73 data-nosnippet>73</a><span class="kw">pub async fn </span>fetch_token_address(rpc_url: Url, stake_table_address: Address) -&gt; <span class="prelude-ty">Result</span>&lt;Address&gt; {
 <a href=#74 id=74 data-nosnippet>74</a>    <span class="kw">let </span>provider = ProviderBuilder::new().connect_http(rpc_url);
-<a href=#75 id=75 data-nosnippet>75</a>    StakeTableV2::new(stake_table_address, provider)
+<a href=#75 id=75 data-nosnippet>75</a>    StakeTableV3::new(stake_table_address, provider)
 <a href=#76 id=76 data-nosnippet>76</a>        .token()
 <a href=#77 id=77 data-nosnippet>77</a>        .call()
 <a href=#78 id=78 data-nosnippet>78</a>        .<span class="kw">await
@@ -87,7 +87,7 @@
 <a href=#87 id=87 data-nosnippet>87</a>    provider: <span class="kw">impl </span>Provider,
 <a href=#88 id=88 data-nosnippet>88</a>    stake_table_address: Address,
 <a href=#89 id=89 data-nosnippet>89</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StakeTableContractVersion&gt; {
-<a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">let </span>stake_table = StakeTableV2::new(stake_table_address, provider);
+<a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">let </span>stake_table = StakeTableV3::new(stake_table_address, provider);
 <a href=#91 id=91 data-nosnippet>91</a>    stake_table
 <a href=#92 id=92 data-nosnippet>92</a>        .getVersion()
 <a href=#93 id=93 data-nosnippet>93</a>        .call()

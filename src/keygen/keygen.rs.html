@@ -60,7 +60,7 @@
 <a href=#60 id=60 data-nosnippet>60</a>            <span class="self">Self</span>::X25519 =&gt; {
 <a href=#61 id=61 data-nosnippet>61</a>                <span class="kw">let </span>kp = x25519::Keypair::from(keys.x25519.clone());
 <a href=#62 id=62 data-nosnippet>62</a>                <span class="kw">let </span>sk = TaggedBase64::try_from(kp.secret_key())<span class="question-mark">?</span>;
-<a href=#63 id=63 data-nosnippet>63</a>                <span class="kw">let </span>pk = kp.public_key();
+<a href=#63 id=63 data-nosnippet>63</a>                <span class="kw">let </span>pk = TaggedBase64::try_from(kp.public_key())<span class="question-mark">?</span>;
 <a href=#64 id=64 data-nosnippet>64</a>                <span class="macro">writeln!</span>(output, <span class="string">"ESPRESSO_NODE_PUBLIC_X25519_KEY={pk}"</span>)<span class="question-mark">?</span>;
 <a href=#65 id=65 data-nosnippet>65</a>                <span class="macro">writeln!</span>(output, <span class="string">"ESPRESSO_NODE_PRIVATE_X25519_KEY={sk}"</span>)<span class="question-mark">?</span>;
 <a href=#66 id=66 data-nosnippet>66</a>                <span class="macro">tracing::info!</span>(pub_key = %pk, <span class="string">"generated x25519 key"</span>);

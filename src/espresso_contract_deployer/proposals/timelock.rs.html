@@ -3,506 +3,774 @@
 <a href=#3 id=3 data-nosnippet>3</a>    providers::Provider,
 <a href=#4 id=4 data-nosnippet>4</a>    rpc::types::TransactionReceipt,
 <a href=#5 id=5 data-nosnippet>5</a>};
-<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>anyhow::Result;
+<a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>anyhow::{<span class="prelude-ty">Result</span>, anyhow};
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>clap::ValueEnum;
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>hotshot_contract_adapter::sol_types::{
 <a href=#9 id=9 data-nosnippet>9</a>    EspToken, FeeContract, LightClient, OpsTimelock, RewardClaim, SafeExitTimelock, StakeTable,
-<a href=#10 id=10 data-nosnippet>10</a>};
-<a href=#11 id=11 data-nosnippet>11</a>
-<a href=#12 id=12 data-nosnippet>12</a><span class="kw">use </span>crate::{
-<a href=#13 id=13 data-nosnippet>13</a>    Contract, Contracts, OwnableContract, proposals::multisig::encode_generic_calldata,
-<a href=#14 id=14 data-nosnippet>14</a>    retry_until_true,
-<a href=#15 id=15 data-nosnippet>15</a>};
-<a href=#16 id=16 data-nosnippet>16</a>
-<a href=#17 id=17 data-nosnippet>17</a><span class="doccomment">/// Data structure for timelock operations payload
-<a href=#18 id=18 data-nosnippet>18</a></span><span class="attr">#[derive(Debug, Default, Clone)]
-<a href=#19 id=19 data-nosnippet>19</a></span><span class="kw">pub struct </span>TimelockOperationPayload {
-<a href=#20 id=20 data-nosnippet>20</a>    <span class="doccomment">/// The address of the contract to call
-<a href=#21 id=21 data-nosnippet>21</a>    </span><span class="kw">pub </span>target: Address,
-<a href=#22 id=22 data-nosnippet>22</a>    <span class="doccomment">/// The value to send with the call
-<a href=#23 id=23 data-nosnippet>23</a>    </span><span class="kw">pub </span>value: U256,
-<a href=#24 id=24 data-nosnippet>24</a>    <span class="doccomment">/// The data to send with the call e.g. the calldata of a function call
-<a href=#25 id=25 data-nosnippet>25</a>    </span><span class="kw">pub </span>data: Bytes,
-<a href=#26 id=26 data-nosnippet>26</a>    <span class="doccomment">/// The predecessor operation id if you need to chain operations
-<a href=#27 id=27 data-nosnippet>27</a>    </span><span class="kw">pub </span>predecessor: B256,
-<a href=#28 id=28 data-nosnippet>28</a>    <span class="doccomment">/// The salt for the operation
-<a href=#29 id=29 data-nosnippet>29</a>    </span><span class="kw">pub </span>salt: B256,
-<a href=#30 id=30 data-nosnippet>30</a>    <span class="doccomment">/// The delay for the operation, must be &gt;= the timelock's min delay
-<a href=#31 id=31 data-nosnippet>31</a>    </span><span class="kw">pub </span>delay: U256,
-<a href=#32 id=32 data-nosnippet>32</a>}
-<a href=#33 id=33 data-nosnippet>33</a>
-<a href=#34 id=34 data-nosnippet>34</a><span class="doccomment">/// Parameters for executing timelock operations (how to route/execute)
-<a href=#35 id=35 data-nosnippet>35</a></span><span class="attr">#[derive(Debug, Clone, Default)]
-<a href=#36 id=36 data-nosnippet>36</a></span><span class="kw">pub struct </span>TimelockOperationParams {
-<a href=#37 id=37 data-nosnippet>37</a>    <span class="doccomment">/// Optional multisig proposer address. If provided, operation will be routed through Safe proposal.
-<a href=#38 id=38 data-nosnippet>38</a>    </span><span class="kw">pub </span>multisig_proposer: <span class="prelude-ty">Option</span>&lt;Address&gt;,
-<a href=#39 id=39 data-nosnippet>39</a>    <span class="doccomment">/// Optional operation ID (for cancel operations when you already have the ID)
-<a href=#40 id=40 data-nosnippet>40</a>    </span><span class="kw">pub </span>operation_id: <span class="prelude-ty">Option</span>&lt;B256&gt;,
-<a href=#41 id=41 data-nosnippet>41</a>    <span class="doccomment">/// Whether to perform a dry run (for testing, no proposal is created)
-<a href=#42 id=42 data-nosnippet>42</a>    </span><span class="kw">pub </span>dry_run: bool,
-<a href=#43 id=43 data-nosnippet>43</a>}
-<a href=#44 id=44 data-nosnippet>44</a>
-<a href=#45 id=45 data-nosnippet>45</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-<a href=#46 id=46 data-nosnippet>46</a></span><span class="kw">pub enum </span>TimelockOperationType {
-<a href=#47 id=47 data-nosnippet>47</a>    Schedule,
-<a href=#48 id=48 data-nosnippet>48</a>    Execute,
-<a href=#49 id=49 data-nosnippet>49</a>    Cancel,
-<a href=#50 id=50 data-nosnippet>50</a>}
-<a href=#51 id=51 data-nosnippet>51</a>
-<a href=#52 id=52 data-nosnippet>52</a><span class="doccomment">/// Enum representing different types of timelock contracts
-<a href=#53 id=53 data-nosnippet>53</a></span><span class="attr">#[derive(Debug)]
-<a href=#54 id=54 data-nosnippet>54</a></span><span class="kw">pub enum </span>TimelockContract {
-<a href=#55 id=55 data-nosnippet>55</a>    OpsTimelock(Address),
-<a href=#56 id=56 data-nosnippet>56</a>    SafeExitTimelock(Address),
-<a href=#57 id=57 data-nosnippet>57</a>}
-<a href=#58 id=58 data-nosnippet>58</a>
-<a href=#59 id=59 data-nosnippet>59</a><span class="kw">impl </span>TimelockContract {
-<a href=#60 id=60 data-nosnippet>60</a>    <span class="kw">pub async fn </span>get_operation_id(
-<a href=#61 id=61 data-nosnippet>61</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#62 id=62 data-nosnippet>62</a>        operation: <span class="kw-2">&amp;</span>TimelockOperationPayload,
-<a href=#63 id=63 data-nosnippet>63</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#64 id=64 data-nosnippet>64</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;B256&gt; {
-<a href=#65 id=65 data-nosnippet>65</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#66 id=66 data-nosnippet>66</a>            TimelockContract::OpsTimelock(timelock_addr) =&gt; {
-<a href=#67 id=67 data-nosnippet>67</a>                <span class="prelude-val">Ok</span>(OpsTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#68 id=68 data-nosnippet>68</a>                    .hashOperation(
-<a href=#69 id=69 data-nosnippet>69</a>                        operation.target,
-<a href=#70 id=70 data-nosnippet>70</a>                        operation.value,
-<a href=#71 id=71 data-nosnippet>71</a>                        operation.data.clone(),
-<a href=#72 id=72 data-nosnippet>72</a>                        operation.predecessor,
-<a href=#73 id=73 data-nosnippet>73</a>                        operation.salt,
-<a href=#74 id=74 data-nosnippet>74</a>                    )
-<a href=#75 id=75 data-nosnippet>75</a>                    .call()
-<a href=#76 id=76 data-nosnippet>76</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#77 id=77 data-nosnippet>77</a>            },
-<a href=#78 id=78 data-nosnippet>78</a>            TimelockContract::SafeExitTimelock(timelock_addr) =&gt; {
-<a href=#79 id=79 data-nosnippet>79</a>                <span class="prelude-val">Ok</span>(SafeExitTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#80 id=80 data-nosnippet>80</a>                    .hashOperation(
-<a href=#81 id=81 data-nosnippet>81</a>                        operation.target,
-<a href=#82 id=82 data-nosnippet>82</a>                        operation.value,
-<a href=#83 id=83 data-nosnippet>83</a>                        operation.data.clone(),
-<a href=#84 id=84 data-nosnippet>84</a>                        operation.predecessor,
-<a href=#85 id=85 data-nosnippet>85</a>                        operation.salt,
-<a href=#86 id=86 data-nosnippet>86</a>                    )
-<a href=#87 id=87 data-nosnippet>87</a>                    .call()
-<a href=#88 id=88 data-nosnippet>88</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#89 id=89 data-nosnippet>89</a>            },
-<a href=#90 id=90 data-nosnippet>90</a>        }
-<a href=#91 id=91 data-nosnippet>91</a>    }
-<a href=#92 id=92 data-nosnippet>92</a>
-<a href=#93 id=93 data-nosnippet>93</a>    <span class="kw">pub async fn </span>schedule(
-<a href=#94 id=94 data-nosnippet>94</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#95 id=95 data-nosnippet>95</a>        operation: TimelockOperationPayload,
-<a href=#96 id=96 data-nosnippet>96</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#97 id=97 data-nosnippet>97</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
-<a href=#98 id=98 data-nosnippet>98</a>        <span class="self">self</span>.call_timelock_method(TimelockOperationType::Schedule, operation, <span class="prelude-val">None</span>, provider)
-<a href=#99 id=99 data-nosnippet>99</a>            .<span class="kw">await
-<a href=#100 id=100 data-nosnippet>100</a>    </span>}
-<a href=#101 id=101 data-nosnippet>101</a>
-<a href=#102 id=102 data-nosnippet>102</a>    <span class="kw">pub async fn </span>execute(
-<a href=#103 id=103 data-nosnippet>103</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#104 id=104 data-nosnippet>104</a>        operation: TimelockOperationPayload,
-<a href=#105 id=105 data-nosnippet>105</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#106 id=106 data-nosnippet>106</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
-<a href=#107 id=107 data-nosnippet>107</a>        <span class="self">self</span>.call_timelock_method(TimelockOperationType::Execute, operation, <span class="prelude-val">None</span>, provider)
-<a href=#108 id=108 data-nosnippet>108</a>            .<span class="kw">await
-<a href=#109 id=109 data-nosnippet>109</a>    </span>}
-<a href=#110 id=110 data-nosnippet>110</a>
-<a href=#111 id=111 data-nosnippet>111</a>    <span class="kw">pub async fn </span>cancel(
-<a href=#112 id=112 data-nosnippet>112</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#113 id=113 data-nosnippet>113</a>        operation_id: B256,
-<a href=#114 id=114 data-nosnippet>114</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#115 id=115 data-nosnippet>115</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
-<a href=#116 id=116 data-nosnippet>116</a>        <span class="comment">// the timelock contract only requires the operation_id to cancel an operation
-<a href=#117 id=117 data-nosnippet>117</a>        </span><span class="kw">let </span>placeholder_operation = TimelockOperationPayload::default();
-<a href=#118 id=118 data-nosnippet>118</a>        <span class="self">self</span>.call_timelock_method(
-<a href=#119 id=119 data-nosnippet>119</a>            TimelockOperationType::Cancel,
-<a href=#120 id=120 data-nosnippet>120</a>            placeholder_operation,
-<a href=#121 id=121 data-nosnippet>121</a>            <span class="prelude-val">Some</span>(operation_id),
-<a href=#122 id=122 data-nosnippet>122</a>            provider,
-<a href=#123 id=123 data-nosnippet>123</a>        )
-<a href=#124 id=124 data-nosnippet>124</a>        .<span class="kw">await
-<a href=#125 id=125 data-nosnippet>125</a>    </span>}
-<a href=#126 id=126 data-nosnippet>126</a>
-<a href=#127 id=127 data-nosnippet>127</a>    <span class="doccomment">/// Internal helper to reduce duplication in schedule/execute/cancel
-<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="kw">async fn </span>call_timelock_method(
-<a href=#129 id=129 data-nosnippet>129</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#130 id=130 data-nosnippet>130</a>        method: TimelockOperationType,
-<a href=#131 id=131 data-nosnippet>131</a>        operation: TimelockOperationPayload,
-<a href=#132 id=132 data-nosnippet>132</a>        operation_id: <span class="prelude-ty">Option</span>&lt;B256&gt;,
-<a href=#133 id=133 data-nosnippet>133</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#134 id=134 data-nosnippet>134</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
-<a href=#135 id=135 data-nosnippet>135</a>        <span class="kw">let </span>pending_tx = <span class="kw">match </span>(<span class="self">self</span>, method) {
-<a href=#136 id=136 data-nosnippet>136</a>            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Schedule) =&gt; {
-<a href=#137 id=137 data-nosnippet>137</a>                OpsTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
-<a href=#138 id=138 data-nosnippet>138</a>                    .schedule(
-<a href=#139 id=139 data-nosnippet>139</a>                        operation.target,
-<a href=#140 id=140 data-nosnippet>140</a>                        operation.value,
-<a href=#141 id=141 data-nosnippet>141</a>                        operation.data,
-<a href=#142 id=142 data-nosnippet>142</a>                        operation.predecessor,
-<a href=#143 id=143 data-nosnippet>143</a>                        operation.salt,
-<a href=#144 id=144 data-nosnippet>144</a>                        operation.delay,
-<a href=#145 id=145 data-nosnippet>145</a>                    )
-<a href=#146 id=146 data-nosnippet>146</a>                    .send()
-<a href=#147 id=147 data-nosnippet>147</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#148 id=148 data-nosnippet>148</a>            </span>},
-<a href=#149 id=149 data-nosnippet>149</a>            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Schedule) =&gt; {
-<a href=#150 id=150 data-nosnippet>150</a>                SafeExitTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
-<a href=#151 id=151 data-nosnippet>151</a>                    .schedule(
-<a href=#152 id=152 data-nosnippet>152</a>                        operation.target,
-<a href=#153 id=153 data-nosnippet>153</a>                        operation.value,
-<a href=#154 id=154 data-nosnippet>154</a>                        operation.data,
-<a href=#155 id=155 data-nosnippet>155</a>                        operation.predecessor,
-<a href=#156 id=156 data-nosnippet>156</a>                        operation.salt,
-<a href=#157 id=157 data-nosnippet>157</a>                        operation.delay,
-<a href=#158 id=158 data-nosnippet>158</a>                    )
-<a href=#159 id=159 data-nosnippet>159</a>                    .send()
-<a href=#160 id=160 data-nosnippet>160</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#161 id=161 data-nosnippet>161</a>            </span>},
-<a href=#162 id=162 data-nosnippet>162</a>            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Execute) =&gt; {
-<a href=#163 id=163 data-nosnippet>163</a>                OpsTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
-<a href=#164 id=164 data-nosnippet>164</a>                    .execute(
-<a href=#165 id=165 data-nosnippet>165</a>                        operation.target,
-<a href=#166 id=166 data-nosnippet>166</a>                        operation.value,
-<a href=#167 id=167 data-nosnippet>167</a>                        operation.data,
-<a href=#168 id=168 data-nosnippet>168</a>                        operation.predecessor,
-<a href=#169 id=169 data-nosnippet>169</a>                        operation.salt,
-<a href=#170 id=170 data-nosnippet>170</a>                    )
-<a href=#171 id=171 data-nosnippet>171</a>                    .send()
-<a href=#172 id=172 data-nosnippet>172</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#173 id=173 data-nosnippet>173</a>            </span>},
-<a href=#174 id=174 data-nosnippet>174</a>            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Execute) =&gt; {
-<a href=#175 id=175 data-nosnippet>175</a>                SafeExitTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
-<a href=#176 id=176 data-nosnippet>176</a>                    .execute(
-<a href=#177 id=177 data-nosnippet>177</a>                        operation.target,
-<a href=#178 id=178 data-nosnippet>178</a>                        operation.value,
-<a href=#179 id=179 data-nosnippet>179</a>                        operation.data,
-<a href=#180 id=180 data-nosnippet>180</a>                        operation.predecessor,
-<a href=#181 id=181 data-nosnippet>181</a>                        operation.salt,
-<a href=#182 id=182 data-nosnippet>182</a>                    )
-<a href=#183 id=183 data-nosnippet>183</a>                    .send()
-<a href=#184 id=184 data-nosnippet>184</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#185 id=185 data-nosnippet>185</a>            </span>},
-<a href=#186 id=186 data-nosnippet>186</a>            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Cancel) =&gt; {
-<a href=#187 id=187 data-nosnippet>187</a>                OpsTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
-<a href=#188 id=188 data-nosnippet>188</a>                    .cancel(
-<a href=#189 id=189 data-nosnippet>189</a>                        operation_id
-<a href=#190 id=190 data-nosnippet>190</a>                            .ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"operation_id required for cancel"</span>))<span class="question-mark">?</span>,
-<a href=#191 id=191 data-nosnippet>191</a>                    )
-<a href=#192 id=192 data-nosnippet>192</a>                    .send()
-<a href=#193 id=193 data-nosnippet>193</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#194 id=194 data-nosnippet>194</a>            </span>},
-<a href=#195 id=195 data-nosnippet>195</a>            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Cancel) =&gt; {
-<a href=#196 id=196 data-nosnippet>196</a>                SafeExitTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
-<a href=#197 id=197 data-nosnippet>197</a>                    .cancel(
-<a href=#198 id=198 data-nosnippet>198</a>                        operation_id
-<a href=#199 id=199 data-nosnippet>199</a>                            .ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"operation_id required for cancel"</span>))<span class="question-mark">?</span>,
-<a href=#200 id=200 data-nosnippet>200</a>                    )
-<a href=#201 id=201 data-nosnippet>201</a>                    .send()
-<a href=#202 id=202 data-nosnippet>202</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#203 id=203 data-nosnippet>203</a>            </span>},
-<a href=#204 id=204 data-nosnippet>204</a>        };
-<a href=#205 id=205 data-nosnippet>205</a>
-<a href=#206 id=206 data-nosnippet>206</a>        <span class="kw">let </span>tx_hash = <span class="kw-2">*</span>pending_tx.tx_hash();
-<a href=#207 id=207 data-nosnippet>207</a>        <span class="macro">tracing::info!</span>(%tx_hash, <span class="string">"waiting for tx to be mined"</span>);
-<a href=#208 id=208 data-nosnippet>208</a>        <span class="kw">let </span>receipt = pending_tx.get_receipt().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#209 id=209 data-nosnippet>209</a>        <span class="prelude-val">Ok</span>(receipt)
-<a href=#210 id=210 data-nosnippet>210</a>    }
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">pub async fn </span>is_operation_pending(
-<a href=#213 id=213 data-nosnippet>213</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#214 id=214 data-nosnippet>214</a>        operation_id: B256,
-<a href=#215 id=215 data-nosnippet>215</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#216 id=216 data-nosnippet>216</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-<a href=#217 id=217 data-nosnippet>217</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#218 id=218 data-nosnippet>218</a>            TimelockContract::OpsTimelock(timelock_addr) =&gt; {
-<a href=#219 id=219 data-nosnippet>219</a>                <span class="prelude-val">Ok</span>(OpsTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#220 id=220 data-nosnippet>220</a>                    .isOperationPending(operation_id)
-<a href=#221 id=221 data-nosnippet>221</a>                    .call()
-<a href=#222 id=222 data-nosnippet>222</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#223 id=223 data-nosnippet>223</a>            },
-<a href=#224 id=224 data-nosnippet>224</a>            TimelockContract::SafeExitTimelock(timelock_addr) =&gt; {
-<a href=#225 id=225 data-nosnippet>225</a>                <span class="prelude-val">Ok</span>(SafeExitTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#226 id=226 data-nosnippet>226</a>                    .isOperationPending(operation_id)
-<a href=#227 id=227 data-nosnippet>227</a>                    .call()
-<a href=#228 id=228 data-nosnippet>228</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#229 id=229 data-nosnippet>229</a>            },
-<a href=#230 id=230 data-nosnippet>230</a>        }
-<a href=#231 id=231 data-nosnippet>231</a>    }
-<a href=#232 id=232 data-nosnippet>232</a>
-<a href=#233 id=233 data-nosnippet>233</a>    <span class="kw">pub async fn </span>is_operation_ready(
-<a href=#234 id=234 data-nosnippet>234</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#235 id=235 data-nosnippet>235</a>        operation_id: B256,
-<a href=#236 id=236 data-nosnippet>236</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#237 id=237 data-nosnippet>237</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-<a href=#238 id=238 data-nosnippet>238</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#239 id=239 data-nosnippet>239</a>            TimelockContract::OpsTimelock(timelock_addr) =&gt; {
-<a href=#240 id=240 data-nosnippet>240</a>                <span class="prelude-val">Ok</span>(OpsTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#241 id=241 data-nosnippet>241</a>                    .isOperationReady(operation_id)
-<a href=#242 id=242 data-nosnippet>242</a>                    .call()
-<a href=#243 id=243 data-nosnippet>243</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#244 id=244 data-nosnippet>244</a>            },
-<a href=#245 id=245 data-nosnippet>245</a>            TimelockContract::SafeExitTimelock(timelock_addr) =&gt; {
-<a href=#246 id=246 data-nosnippet>246</a>                <span class="prelude-val">Ok</span>(SafeExitTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#247 id=247 data-nosnippet>247</a>                    .isOperationReady(operation_id)
-<a href=#248 id=248 data-nosnippet>248</a>                    .call()
-<a href=#249 id=249 data-nosnippet>249</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#250 id=250 data-nosnippet>250</a>            },
-<a href=#251 id=251 data-nosnippet>251</a>        }
-<a href=#252 id=252 data-nosnippet>252</a>    }
-<a href=#253 id=253 data-nosnippet>253</a>
-<a href=#254 id=254 data-nosnippet>254</a>    <span class="kw">pub async fn </span>is_operation_done(
-<a href=#255 id=255 data-nosnippet>255</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#256 id=256 data-nosnippet>256</a>        operation_id: B256,
-<a href=#257 id=257 data-nosnippet>257</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#258 id=258 data-nosnippet>258</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-<a href=#259 id=259 data-nosnippet>259</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#260 id=260 data-nosnippet>260</a>            TimelockContract::OpsTimelock(timelock_addr) =&gt; {
-<a href=#261 id=261 data-nosnippet>261</a>                <span class="prelude-val">Ok</span>(OpsTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#262 id=262 data-nosnippet>262</a>                    .isOperationDone(operation_id)
-<a href=#263 id=263 data-nosnippet>263</a>                    .call()
-<a href=#264 id=264 data-nosnippet>264</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#265 id=265 data-nosnippet>265</a>            },
-<a href=#266 id=266 data-nosnippet>266</a>            TimelockContract::SafeExitTimelock(timelock_addr) =&gt; {
-<a href=#267 id=267 data-nosnippet>267</a>                <span class="prelude-val">Ok</span>(SafeExitTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#268 id=268 data-nosnippet>268</a>                    .isOperationDone(operation_id)
-<a href=#269 id=269 data-nosnippet>269</a>                    .call()
-<a href=#270 id=270 data-nosnippet>270</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#271 id=271 data-nosnippet>271</a>            },
-<a href=#272 id=272 data-nosnippet>272</a>        }
-<a href=#273 id=273 data-nosnippet>273</a>    }
-<a href=#274 id=274 data-nosnippet>274</a>
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">pub async fn </span>is_operation_canceled(
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#277 id=277 data-nosnippet>277</a>        operation_id: B256,
-<a href=#278 id=278 data-nosnippet>278</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#279 id=279 data-nosnippet>279</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
-<a href=#280 id=280 data-nosnippet>280</a>        <span class="kw">let </span>pending = <span class="self">self</span>.is_operation_pending(operation_id, provider).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#281 id=281 data-nosnippet>281</a>        <span class="kw">let </span>done = <span class="self">self</span>.is_operation_done(operation_id, provider).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#282 id=282 data-nosnippet>282</a>        <span class="comment">// it's canceled if it's not pending and not done
-<a href=#283 id=283 data-nosnippet>283</a>        </span><span class="prelude-val">Ok</span>(!pending &amp;&amp; !done)
-<a href=#284 id=284 data-nosnippet>284</a>    }
-<a href=#285 id=285 data-nosnippet>285</a>}
-<a href=#286 id=286 data-nosnippet>286</a>
-<a href=#287 id=287 data-nosnippet>287</a><span class="comment">// Derive timelock address from contract type
-<a href=#288 id=288 data-nosnippet>288</a>// FeeContract, LightClient, StakeTable =&gt; OpsTimelock
-<a href=#289 id=289 data-nosnippet>289</a>// EspToken, RewardClaim =&gt; SafeExitTimelock
-<a href=#290 id=290 data-nosnippet>290</a></span><span class="kw">pub fn </span>derive_timelock_address_from_contract_type(
-<a href=#291 id=291 data-nosnippet>291</a>    contract_type: OwnableContract,
-<a href=#292 id=292 data-nosnippet>292</a>    contracts: <span class="kw-2">&amp;</span>Contracts,
-<a href=#293 id=293 data-nosnippet>293</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Address&gt; {
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="kw">let </span>timelock_type = <span class="kw">match </span>contract_type {
-<a href=#295 id=295 data-nosnippet>295</a>        OwnableContract::FeeContractProxy
-<a href=#296 id=296 data-nosnippet>296</a>        | OwnableContract::LightClientProxy
-<a href=#297 id=297 data-nosnippet>297</a>        | OwnableContract::StakeTableProxy =&gt; Contract::OpsTimelock,
-<a href=#298 id=298 data-nosnippet>298</a>        OwnableContract::EspTokenProxy | OwnableContract::RewardClaimProxy =&gt; {
-<a href=#299 id=299 data-nosnippet>299</a>            Contract::SafeExitTimelock
-<a href=#300 id=300 data-nosnippet>300</a>        },
-<a href=#301 id=301 data-nosnippet>301</a>    };
-<a href=#302 id=302 data-nosnippet>302</a>
-<a href=#303 id=303 data-nosnippet>303</a>    contracts.address(timelock_type).ok_or_else(|| {
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="macro">anyhow::anyhow!</span>(
-<a href=#305 id=305 data-nosnippet>305</a>            <span class="string">"{:?} not found in deployed contracts. Deploy it first or provide it via flag."</span>,
-<a href=#306 id=306 data-nosnippet>306</a>            timelock_type
-<a href=#307 id=307 data-nosnippet>307</a>        )
-<a href=#308 id=308 data-nosnippet>308</a>    })
-<a href=#309 id=309 data-nosnippet>309</a>}
-<a href=#310 id=310 data-nosnippet>310</a>
-<a href=#311 id=311 data-nosnippet>311</a><span class="comment">// Get the timelock for a contract by querying the contract owner or current admin
-<a href=#312 id=312 data-nosnippet>312</a></span><span class="kw">pub async fn </span>get_timelock_for_contract(
-<a href=#313 id=313 data-nosnippet>313</a>    provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#314 id=314 data-nosnippet>314</a>    contract_type: Contract,
-<a href=#315 id=315 data-nosnippet>315</a>    target_addr: Address,
-<a href=#316 id=316 data-nosnippet>316</a>) -&gt; <span class="prelude-ty">Result</span>&lt;TimelockContract&gt; {
-<a href=#317 id=317 data-nosnippet>317</a>    <span class="kw">match </span>contract_type {
-<a href=#318 id=318 data-nosnippet>318</a>        Contract::FeeContractProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::OpsTimelock(
-<a href=#319 id=319 data-nosnippet>319</a>            FeeContract::new(target_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#320 id=320 data-nosnippet>320</a>                .owner()
-<a href=#321 id=321 data-nosnippet>321</a>                .call()
-<a href=#322 id=322 data-nosnippet>322</a>                .<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#323 id=323 data-nosnippet>323</a>        )),
-<a href=#324 id=324 data-nosnippet>324</a>        Contract::EspTokenProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::SafeExitTimelock(
-<a href=#325 id=325 data-nosnippet>325</a>            EspToken::new(target_addr, <span class="kw-2">&amp;</span>provider).owner().call().<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#10 id=10 data-nosnippet>10</a>    StakeTableV3,
+<a href=#11 id=11 data-nosnippet>11</a>};
+<a href=#12 id=12 data-nosnippet>12</a>
+<a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>crate::{
+<a href=#14 id=14 data-nosnippet>14</a>    Contract, Contracts, OwnableContract,
+<a href=#15 id=15 data-nosnippet>15</a>    output::CalldataInfo,
+<a href=#16 id=16 data-nosnippet>16</a>    proposals::multisig::{encode_generic_calldata, encode_upgrade_calldata},
+<a href=#17 id=17 data-nosnippet>17</a>    retry_until_true,
+<a href=#18 id=18 data-nosnippet>18</a>};
+<a href=#19 id=19 data-nosnippet>19</a>
+<a href=#20 id=20 data-nosnippet>20</a><span class="doccomment">/// Data structure for timelock operations payload
+<a href=#21 id=21 data-nosnippet>21</a></span><span class="attr">#[derive(Debug, Default, Clone)]
+<a href=#22 id=22 data-nosnippet>22</a></span><span class="kw">pub struct </span>TimelockOperationPayload {
+<a href=#23 id=23 data-nosnippet>23</a>    <span class="doccomment">/// The address of the contract to call
+<a href=#24 id=24 data-nosnippet>24</a>    </span><span class="kw">pub </span>target: Address,
+<a href=#25 id=25 data-nosnippet>25</a>    <span class="doccomment">/// The value to send with the call
+<a href=#26 id=26 data-nosnippet>26</a>    </span><span class="kw">pub </span>value: U256,
+<a href=#27 id=27 data-nosnippet>27</a>    <span class="doccomment">/// The data to send with the call e.g. the calldata of a function call
+<a href=#28 id=28 data-nosnippet>28</a>    </span><span class="kw">pub </span>data: Bytes,
+<a href=#29 id=29 data-nosnippet>29</a>    <span class="doccomment">/// The predecessor operation id if you need to chain operations
+<a href=#30 id=30 data-nosnippet>30</a>    </span><span class="kw">pub </span>predecessor: B256,
+<a href=#31 id=31 data-nosnippet>31</a>    <span class="doccomment">/// The salt for the operation
+<a href=#32 id=32 data-nosnippet>32</a>    </span><span class="kw">pub </span>salt: B256,
+<a href=#33 id=33 data-nosnippet>33</a>    <span class="doccomment">/// The delay for the operation, must be &gt;= the timelock's min delay
+<a href=#34 id=34 data-nosnippet>34</a>    </span><span class="kw">pub </span>delay: U256,
+<a href=#35 id=35 data-nosnippet>35</a>}
+<a href=#36 id=36 data-nosnippet>36</a>
+<a href=#37 id=37 data-nosnippet>37</a><span class="doccomment">/// Parameters for executing timelock operations (how to route/execute)
+<a href=#38 id=38 data-nosnippet>38</a></span><span class="attr">#[derive(Debug, Clone, Default)]
+<a href=#39 id=39 data-nosnippet>39</a></span><span class="kw">pub struct </span>TimelockOperationParams {
+<a href=#40 id=40 data-nosnippet>40</a>    <span class="doccomment">/// Optional multisig proposer address. If provided, operation will be routed through Safe proposal.
+<a href=#41 id=41 data-nosnippet>41</a>    </span><span class="kw">pub </span>multisig_proposer: <span class="prelude-ty">Option</span>&lt;Address&gt;,
+<a href=#42 id=42 data-nosnippet>42</a>    <span class="doccomment">/// Optional operation ID (for cancel operations when you already have the ID)
+<a href=#43 id=43 data-nosnippet>43</a>    </span><span class="kw">pub </span>operation_id: <span class="prelude-ty">Option</span>&lt;B256&gt;,
+<a href=#44 id=44 data-nosnippet>44</a>    <span class="doccomment">/// Whether to perform a dry run (for testing, no proposal is created)
+<a href=#45 id=45 data-nosnippet>45</a>    </span><span class="kw">pub </span>dry_run: bool,
+<a href=#46 id=46 data-nosnippet>46</a>}
+<a href=#47 id=47 data-nosnippet>47</a>
+<a href=#48 id=48 data-nosnippet>48</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+<a href=#49 id=49 data-nosnippet>49</a></span><span class="kw">pub enum </span>TimelockOperationType {
+<a href=#50 id=50 data-nosnippet>50</a>    Schedule,
+<a href=#51 id=51 data-nosnippet>51</a>    Execute,
+<a href=#52 id=52 data-nosnippet>52</a>    Cancel,
+<a href=#53 id=53 data-nosnippet>53</a>}
+<a href=#54 id=54 data-nosnippet>54</a>
+<a href=#55 id=55 data-nosnippet>55</a><span class="doccomment">/// Enum representing different types of timelock contracts
+<a href=#56 id=56 data-nosnippet>56</a></span><span class="attr">#[derive(Debug)]
+<a href=#57 id=57 data-nosnippet>57</a></span><span class="kw">pub enum </span>TimelockContract {
+<a href=#58 id=58 data-nosnippet>58</a>    OpsTimelock(Address),
+<a href=#59 id=59 data-nosnippet>59</a>    SafeExitTimelock(Address),
+<a href=#60 id=60 data-nosnippet>60</a>}
+<a href=#61 id=61 data-nosnippet>61</a>
+<a href=#62 id=62 data-nosnippet>62</a><span class="kw">impl </span>TimelockContract {
+<a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">pub async fn </span>get_operation_id(
+<a href=#64 id=64 data-nosnippet>64</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#65 id=65 data-nosnippet>65</a>        operation: <span class="kw-2">&amp;</span>TimelockOperationPayload,
+<a href=#66 id=66 data-nosnippet>66</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#67 id=67 data-nosnippet>67</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;B256&gt; {
+<a href=#68 id=68 data-nosnippet>68</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#69 id=69 data-nosnippet>69</a>            TimelockContract::OpsTimelock(timelock_addr) =&gt; {
+<a href=#70 id=70 data-nosnippet>70</a>                <span class="prelude-val">Ok</span>(OpsTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#71 id=71 data-nosnippet>71</a>                    .hashOperation(
+<a href=#72 id=72 data-nosnippet>72</a>                        operation.target,
+<a href=#73 id=73 data-nosnippet>73</a>                        operation.value,
+<a href=#74 id=74 data-nosnippet>74</a>                        operation.data.clone(),
+<a href=#75 id=75 data-nosnippet>75</a>                        operation.predecessor,
+<a href=#76 id=76 data-nosnippet>76</a>                        operation.salt,
+<a href=#77 id=77 data-nosnippet>77</a>                    )
+<a href=#78 id=78 data-nosnippet>78</a>                    .call()
+<a href=#79 id=79 data-nosnippet>79</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#80 id=80 data-nosnippet>80</a>            },
+<a href=#81 id=81 data-nosnippet>81</a>            TimelockContract::SafeExitTimelock(timelock_addr) =&gt; {
+<a href=#82 id=82 data-nosnippet>82</a>                <span class="prelude-val">Ok</span>(SafeExitTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#83 id=83 data-nosnippet>83</a>                    .hashOperation(
+<a href=#84 id=84 data-nosnippet>84</a>                        operation.target,
+<a href=#85 id=85 data-nosnippet>85</a>                        operation.value,
+<a href=#86 id=86 data-nosnippet>86</a>                        operation.data.clone(),
+<a href=#87 id=87 data-nosnippet>87</a>                        operation.predecessor,
+<a href=#88 id=88 data-nosnippet>88</a>                        operation.salt,
+<a href=#89 id=89 data-nosnippet>89</a>                    )
+<a href=#90 id=90 data-nosnippet>90</a>                    .call()
+<a href=#91 id=91 data-nosnippet>91</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#92 id=92 data-nosnippet>92</a>            },
+<a href=#93 id=93 data-nosnippet>93</a>        }
+<a href=#94 id=94 data-nosnippet>94</a>    }
+<a href=#95 id=95 data-nosnippet>95</a>
+<a href=#96 id=96 data-nosnippet>96</a>    <span class="kw">pub async fn </span>schedule(
+<a href=#97 id=97 data-nosnippet>97</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#98 id=98 data-nosnippet>98</a>        operation: TimelockOperationPayload,
+<a href=#99 id=99 data-nosnippet>99</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#100 id=100 data-nosnippet>100</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
+<a href=#101 id=101 data-nosnippet>101</a>        <span class="self">self</span>.call_timelock_method(TimelockOperationType::Schedule, operation, <span class="prelude-val">None</span>, provider)
+<a href=#102 id=102 data-nosnippet>102</a>            .<span class="kw">await
+<a href=#103 id=103 data-nosnippet>103</a>    </span>}
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>    <span class="kw">pub async fn </span>execute(
+<a href=#106 id=106 data-nosnippet>106</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#107 id=107 data-nosnippet>107</a>        operation: TimelockOperationPayload,
+<a href=#108 id=108 data-nosnippet>108</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#109 id=109 data-nosnippet>109</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
+<a href=#110 id=110 data-nosnippet>110</a>        <span class="self">self</span>.call_timelock_method(TimelockOperationType::Execute, operation, <span class="prelude-val">None</span>, provider)
+<a href=#111 id=111 data-nosnippet>111</a>            .<span class="kw">await
+<a href=#112 id=112 data-nosnippet>112</a>    </span>}
+<a href=#113 id=113 data-nosnippet>113</a>
+<a href=#114 id=114 data-nosnippet>114</a>    <span class="kw">pub async fn </span>cancel(
+<a href=#115 id=115 data-nosnippet>115</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#116 id=116 data-nosnippet>116</a>        operation_id: B256,
+<a href=#117 id=117 data-nosnippet>117</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#118 id=118 data-nosnippet>118</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
+<a href=#119 id=119 data-nosnippet>119</a>        <span class="comment">// the timelock contract only requires the operation_id to cancel an operation
+<a href=#120 id=120 data-nosnippet>120</a>        </span><span class="kw">let </span>placeholder_operation = TimelockOperationPayload::default();
+<a href=#121 id=121 data-nosnippet>121</a>        <span class="self">self</span>.call_timelock_method(
+<a href=#122 id=122 data-nosnippet>122</a>            TimelockOperationType::Cancel,
+<a href=#123 id=123 data-nosnippet>123</a>            placeholder_operation,
+<a href=#124 id=124 data-nosnippet>124</a>            <span class="prelude-val">Some</span>(operation_id),
+<a href=#125 id=125 data-nosnippet>125</a>            provider,
+<a href=#126 id=126 data-nosnippet>126</a>        )
+<a href=#127 id=127 data-nosnippet>127</a>        .<span class="kw">await
+<a href=#128 id=128 data-nosnippet>128</a>    </span>}
+<a href=#129 id=129 data-nosnippet>129</a>
+<a href=#130 id=130 data-nosnippet>130</a>    <span class="doccomment">/// Internal helper to reduce duplication in schedule/execute/cancel
+<a href=#131 id=131 data-nosnippet>131</a>    </span><span class="kw">async fn </span>call_timelock_method(
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#133 id=133 data-nosnippet>133</a>        method: TimelockOperationType,
+<a href=#134 id=134 data-nosnippet>134</a>        operation: TimelockOperationPayload,
+<a href=#135 id=135 data-nosnippet>135</a>        operation_id: <span class="prelude-ty">Option</span>&lt;B256&gt;,
+<a href=#136 id=136 data-nosnippet>136</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#137 id=137 data-nosnippet>137</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;TransactionReceipt&gt; {
+<a href=#138 id=138 data-nosnippet>138</a>        <span class="kw">let </span>pending_tx = <span class="kw">match </span>(<span class="self">self</span>, method) {
+<a href=#139 id=139 data-nosnippet>139</a>            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Schedule) =&gt; {
+<a href=#140 id=140 data-nosnippet>140</a>                OpsTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
+<a href=#141 id=141 data-nosnippet>141</a>                    .schedule(
+<a href=#142 id=142 data-nosnippet>142</a>                        operation.target,
+<a href=#143 id=143 data-nosnippet>143</a>                        operation.value,
+<a href=#144 id=144 data-nosnippet>144</a>                        operation.data,
+<a href=#145 id=145 data-nosnippet>145</a>                        operation.predecessor,
+<a href=#146 id=146 data-nosnippet>146</a>                        operation.salt,
+<a href=#147 id=147 data-nosnippet>147</a>                        operation.delay,
+<a href=#148 id=148 data-nosnippet>148</a>                    )
+<a href=#149 id=149 data-nosnippet>149</a>                    .send()
+<a href=#150 id=150 data-nosnippet>150</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#151 id=151 data-nosnippet>151</a>            </span>},
+<a href=#152 id=152 data-nosnippet>152</a>            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Schedule) =&gt; {
+<a href=#153 id=153 data-nosnippet>153</a>                SafeExitTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
+<a href=#154 id=154 data-nosnippet>154</a>                    .schedule(
+<a href=#155 id=155 data-nosnippet>155</a>                        operation.target,
+<a href=#156 id=156 data-nosnippet>156</a>                        operation.value,
+<a href=#157 id=157 data-nosnippet>157</a>                        operation.data,
+<a href=#158 id=158 data-nosnippet>158</a>                        operation.predecessor,
+<a href=#159 id=159 data-nosnippet>159</a>                        operation.salt,
+<a href=#160 id=160 data-nosnippet>160</a>                        operation.delay,
+<a href=#161 id=161 data-nosnippet>161</a>                    )
+<a href=#162 id=162 data-nosnippet>162</a>                    .send()
+<a href=#163 id=163 data-nosnippet>163</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#164 id=164 data-nosnippet>164</a>            </span>},
+<a href=#165 id=165 data-nosnippet>165</a>            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Execute) =&gt; {
+<a href=#166 id=166 data-nosnippet>166</a>                OpsTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
+<a href=#167 id=167 data-nosnippet>167</a>                    .execute(
+<a href=#168 id=168 data-nosnippet>168</a>                        operation.target,
+<a href=#169 id=169 data-nosnippet>169</a>                        operation.value,
+<a href=#170 id=170 data-nosnippet>170</a>                        operation.data,
+<a href=#171 id=171 data-nosnippet>171</a>                        operation.predecessor,
+<a href=#172 id=172 data-nosnippet>172</a>                        operation.salt,
+<a href=#173 id=173 data-nosnippet>173</a>                    )
+<a href=#174 id=174 data-nosnippet>174</a>                    .send()
+<a href=#175 id=175 data-nosnippet>175</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#176 id=176 data-nosnippet>176</a>            </span>},
+<a href=#177 id=177 data-nosnippet>177</a>            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Execute) =&gt; {
+<a href=#178 id=178 data-nosnippet>178</a>                SafeExitTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
+<a href=#179 id=179 data-nosnippet>179</a>                    .execute(
+<a href=#180 id=180 data-nosnippet>180</a>                        operation.target,
+<a href=#181 id=181 data-nosnippet>181</a>                        operation.value,
+<a href=#182 id=182 data-nosnippet>182</a>                        operation.data,
+<a href=#183 id=183 data-nosnippet>183</a>                        operation.predecessor,
+<a href=#184 id=184 data-nosnippet>184</a>                        operation.salt,
+<a href=#185 id=185 data-nosnippet>185</a>                    )
+<a href=#186 id=186 data-nosnippet>186</a>                    .send()
+<a href=#187 id=187 data-nosnippet>187</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#188 id=188 data-nosnippet>188</a>            </span>},
+<a href=#189 id=189 data-nosnippet>189</a>            (TimelockContract::OpsTimelock(addr), TimelockOperationType::Cancel) =&gt; {
+<a href=#190 id=190 data-nosnippet>190</a>                OpsTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
+<a href=#191 id=191 data-nosnippet>191</a>                    .cancel(
+<a href=#192 id=192 data-nosnippet>192</a>                        operation_id
+<a href=#193 id=193 data-nosnippet>193</a>                            .ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"operation_id required for cancel"</span>))<span class="question-mark">?</span>,
+<a href=#194 id=194 data-nosnippet>194</a>                    )
+<a href=#195 id=195 data-nosnippet>195</a>                    .send()
+<a href=#196 id=196 data-nosnippet>196</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#197 id=197 data-nosnippet>197</a>            </span>},
+<a href=#198 id=198 data-nosnippet>198</a>            (TimelockContract::SafeExitTimelock(addr), TimelockOperationType::Cancel) =&gt; {
+<a href=#199 id=199 data-nosnippet>199</a>                SafeExitTimelock::new(<span class="kw-2">*</span>addr, <span class="kw-2">&amp;</span>provider)
+<a href=#200 id=200 data-nosnippet>200</a>                    .cancel(
+<a href=#201 id=201 data-nosnippet>201</a>                        operation_id
+<a href=#202 id=202 data-nosnippet>202</a>                            .ok_or_else(|| <span class="macro">anyhow::anyhow!</span>(<span class="string">"operation_id required for cancel"</span>))<span class="question-mark">?</span>,
+<a href=#203 id=203 data-nosnippet>203</a>                    )
+<a href=#204 id=204 data-nosnippet>204</a>                    .send()
+<a href=#205 id=205 data-nosnippet>205</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#206 id=206 data-nosnippet>206</a>            </span>},
+<a href=#207 id=207 data-nosnippet>207</a>        };
+<a href=#208 id=208 data-nosnippet>208</a>
+<a href=#209 id=209 data-nosnippet>209</a>        <span class="kw">let </span>tx_hash = <span class="kw-2">*</span>pending_tx.tx_hash();
+<a href=#210 id=210 data-nosnippet>210</a>        <span class="macro">tracing::info!</span>(%tx_hash, <span class="string">"waiting for tx to be mined"</span>);
+<a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">let </span>receipt = pending_tx.get_receipt().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#212 id=212 data-nosnippet>212</a>        <span class="prelude-val">Ok</span>(receipt)
+<a href=#213 id=213 data-nosnippet>213</a>    }
+<a href=#214 id=214 data-nosnippet>214</a>
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="kw">pub async fn </span>is_operation_pending(
+<a href=#216 id=216 data-nosnippet>216</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#217 id=217 data-nosnippet>217</a>        operation_id: B256,
+<a href=#218 id=218 data-nosnippet>218</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#219 id=219 data-nosnippet>219</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+<a href=#220 id=220 data-nosnippet>220</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#221 id=221 data-nosnippet>221</a>            TimelockContract::OpsTimelock(timelock_addr) =&gt; {
+<a href=#222 id=222 data-nosnippet>222</a>                <span class="prelude-val">Ok</span>(OpsTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#223 id=223 data-nosnippet>223</a>                    .isOperationPending(operation_id)
+<a href=#224 id=224 data-nosnippet>224</a>                    .call()
+<a href=#225 id=225 data-nosnippet>225</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#226 id=226 data-nosnippet>226</a>            },
+<a href=#227 id=227 data-nosnippet>227</a>            TimelockContract::SafeExitTimelock(timelock_addr) =&gt; {
+<a href=#228 id=228 data-nosnippet>228</a>                <span class="prelude-val">Ok</span>(SafeExitTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#229 id=229 data-nosnippet>229</a>                    .isOperationPending(operation_id)
+<a href=#230 id=230 data-nosnippet>230</a>                    .call()
+<a href=#231 id=231 data-nosnippet>231</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#232 id=232 data-nosnippet>232</a>            },
+<a href=#233 id=233 data-nosnippet>233</a>        }
+<a href=#234 id=234 data-nosnippet>234</a>    }
+<a href=#235 id=235 data-nosnippet>235</a>
+<a href=#236 id=236 data-nosnippet>236</a>    <span class="kw">pub async fn </span>is_operation_ready(
+<a href=#237 id=237 data-nosnippet>237</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#238 id=238 data-nosnippet>238</a>        operation_id: B256,
+<a href=#239 id=239 data-nosnippet>239</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#240 id=240 data-nosnippet>240</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+<a href=#241 id=241 data-nosnippet>241</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#242 id=242 data-nosnippet>242</a>            TimelockContract::OpsTimelock(timelock_addr) =&gt; {
+<a href=#243 id=243 data-nosnippet>243</a>                <span class="prelude-val">Ok</span>(OpsTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#244 id=244 data-nosnippet>244</a>                    .isOperationReady(operation_id)
+<a href=#245 id=245 data-nosnippet>245</a>                    .call()
+<a href=#246 id=246 data-nosnippet>246</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#247 id=247 data-nosnippet>247</a>            },
+<a href=#248 id=248 data-nosnippet>248</a>            TimelockContract::SafeExitTimelock(timelock_addr) =&gt; {
+<a href=#249 id=249 data-nosnippet>249</a>                <span class="prelude-val">Ok</span>(SafeExitTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#250 id=250 data-nosnippet>250</a>                    .isOperationReady(operation_id)
+<a href=#251 id=251 data-nosnippet>251</a>                    .call()
+<a href=#252 id=252 data-nosnippet>252</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#253 id=253 data-nosnippet>253</a>            },
+<a href=#254 id=254 data-nosnippet>254</a>        }
+<a href=#255 id=255 data-nosnippet>255</a>    }
+<a href=#256 id=256 data-nosnippet>256</a>
+<a href=#257 id=257 data-nosnippet>257</a>    <span class="kw">pub async fn </span>is_operation_done(
+<a href=#258 id=258 data-nosnippet>258</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#259 id=259 data-nosnippet>259</a>        operation_id: B256,
+<a href=#260 id=260 data-nosnippet>260</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#261 id=261 data-nosnippet>261</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+<a href=#262 id=262 data-nosnippet>262</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#263 id=263 data-nosnippet>263</a>            TimelockContract::OpsTimelock(timelock_addr) =&gt; {
+<a href=#264 id=264 data-nosnippet>264</a>                <span class="prelude-val">Ok</span>(OpsTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#265 id=265 data-nosnippet>265</a>                    .isOperationDone(operation_id)
+<a href=#266 id=266 data-nosnippet>266</a>                    .call()
+<a href=#267 id=267 data-nosnippet>267</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#268 id=268 data-nosnippet>268</a>            },
+<a href=#269 id=269 data-nosnippet>269</a>            TimelockContract::SafeExitTimelock(timelock_addr) =&gt; {
+<a href=#270 id=270 data-nosnippet>270</a>                <span class="prelude-val">Ok</span>(SafeExitTimelock::new(<span class="kw-2">*</span>timelock_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#271 id=271 data-nosnippet>271</a>                    .isOperationDone(operation_id)
+<a href=#272 id=272 data-nosnippet>272</a>                    .call()
+<a href=#273 id=273 data-nosnippet>273</a>                    .<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#274 id=274 data-nosnippet>274</a>            },
+<a href=#275 id=275 data-nosnippet>275</a>        }
+<a href=#276 id=276 data-nosnippet>276</a>    }
+<a href=#277 id=277 data-nosnippet>277</a>
+<a href=#278 id=278 data-nosnippet>278</a>    <span class="kw">pub async fn </span>is_operation_canceled(
+<a href=#279 id=279 data-nosnippet>279</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#280 id=280 data-nosnippet>280</a>        operation_id: B256,
+<a href=#281 id=281 data-nosnippet>281</a>        provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#282 id=282 data-nosnippet>282</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;bool&gt; {
+<a href=#283 id=283 data-nosnippet>283</a>        <span class="kw">let </span>pending = <span class="self">self</span>.is_operation_pending(operation_id, provider).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#284 id=284 data-nosnippet>284</a>        <span class="kw">let </span>done = <span class="self">self</span>.is_operation_done(operation_id, provider).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#285 id=285 data-nosnippet>285</a>        <span class="comment">// it's canceled if it's not pending and not done
+<a href=#286 id=286 data-nosnippet>286</a>        </span><span class="prelude-val">Ok</span>(!pending &amp;&amp; !done)
+<a href=#287 id=287 data-nosnippet>287</a>    }
+<a href=#288 id=288 data-nosnippet>288</a>}
+<a href=#289 id=289 data-nosnippet>289</a>
+<a href=#290 id=290 data-nosnippet>290</a><span class="comment">// Derive timelock address from contract type
+<a href=#291 id=291 data-nosnippet>291</a>// FeeContract, LightClient, StakeTable =&gt; OpsTimelock
+<a href=#292 id=292 data-nosnippet>292</a>// EspToken, RewardClaim =&gt; SafeExitTimelock
+<a href=#293 id=293 data-nosnippet>293</a></span><span class="kw">pub fn </span>derive_timelock_address_from_contract_type(
+<a href=#294 id=294 data-nosnippet>294</a>    contract_type: OwnableContract,
+<a href=#295 id=295 data-nosnippet>295</a>    contracts: <span class="kw-2">&amp;</span>Contracts,
+<a href=#296 id=296 data-nosnippet>296</a>) -&gt; <span class="prelude-ty">Result</span>&lt;Address&gt; {
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="kw">let </span>timelock_type = <span class="kw">match </span>contract_type {
+<a href=#298 id=298 data-nosnippet>298</a>        OwnableContract::FeeContractProxy
+<a href=#299 id=299 data-nosnippet>299</a>        | OwnableContract::LightClientProxy
+<a href=#300 id=300 data-nosnippet>300</a>        | OwnableContract::StakeTableProxy =&gt; Contract::OpsTimelock,
+<a href=#301 id=301 data-nosnippet>301</a>        OwnableContract::EspTokenProxy | OwnableContract::RewardClaimProxy =&gt; {
+<a href=#302 id=302 data-nosnippet>302</a>            Contract::SafeExitTimelock
+<a href=#303 id=303 data-nosnippet>303</a>        },
+<a href=#304 id=304 data-nosnippet>304</a>    };
+<a href=#305 id=305 data-nosnippet>305</a>
+<a href=#306 id=306 data-nosnippet>306</a>    contracts.address(timelock_type).ok_or_else(|| {
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="macro">anyhow::anyhow!</span>(
+<a href=#308 id=308 data-nosnippet>308</a>            <span class="string">"{:?} not found in deployed contracts. Deploy it first or provide it via flag."</span>,
+<a href=#309 id=309 data-nosnippet>309</a>            timelock_type
+<a href=#310 id=310 data-nosnippet>310</a>        )
+<a href=#311 id=311 data-nosnippet>311</a>    })
+<a href=#312 id=312 data-nosnippet>312</a>}
+<a href=#313 id=313 data-nosnippet>313</a>
+<a href=#314 id=314 data-nosnippet>314</a><span class="comment">// Get the timelock for a contract by querying the contract owner or current admin
+<a href=#315 id=315 data-nosnippet>315</a></span><span class="kw">pub async fn </span>get_timelock_for_contract(
+<a href=#316 id=316 data-nosnippet>316</a>    provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#317 id=317 data-nosnippet>317</a>    contract_type: Contract,
+<a href=#318 id=318 data-nosnippet>318</a>    target_addr: Address,
+<a href=#319 id=319 data-nosnippet>319</a>) -&gt; <span class="prelude-ty">Result</span>&lt;TimelockContract&gt; {
+<a href=#320 id=320 data-nosnippet>320</a>    <span class="kw">match </span>contract_type {
+<a href=#321 id=321 data-nosnippet>321</a>        Contract::FeeContractProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::OpsTimelock(
+<a href=#322 id=322 data-nosnippet>322</a>            FeeContract::new(target_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#323 id=323 data-nosnippet>323</a>                .owner()
+<a href=#324 id=324 data-nosnippet>324</a>                .call()
+<a href=#325 id=325 data-nosnippet>325</a>                .<span class="kw">await</span><span class="question-mark">?</span>,
 <a href=#326 id=326 data-nosnippet>326</a>        )),
-<a href=#327 id=327 data-nosnippet>327</a>        Contract::LightClientProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::OpsTimelock(
-<a href=#328 id=328 data-nosnippet>328</a>            LightClient::new(target_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#329 id=329 data-nosnippet>329</a>                .owner()
-<a href=#330 id=330 data-nosnippet>330</a>                .call()
-<a href=#331 id=331 data-nosnippet>331</a>                .<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#332 id=332 data-nosnippet>332</a>        )),
-<a href=#333 id=333 data-nosnippet>333</a>        Contract::StakeTableProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::OpsTimelock(
-<a href=#334 id=334 data-nosnippet>334</a>            StakeTable::new(target_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#335 id=335 data-nosnippet>335</a>                .owner()
-<a href=#336 id=336 data-nosnippet>336</a>                .call()
-<a href=#337 id=337 data-nosnippet>337</a>                .<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#338 id=338 data-nosnippet>338</a>        )),
-<a href=#339 id=339 data-nosnippet>339</a>        Contract::RewardClaimProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::SafeExitTimelock(
-<a href=#340 id=340 data-nosnippet>340</a>            RewardClaim::new(target_addr, <span class="kw-2">&amp;</span>provider)
-<a href=#341 id=341 data-nosnippet>341</a>                .currentAdmin()
-<a href=#342 id=342 data-nosnippet>342</a>                .call()
-<a href=#343 id=343 data-nosnippet>343</a>                .<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#344 id=344 data-nosnippet>344</a>        )),
-<a href=#345 id=345 data-nosnippet>345</a>        <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(
-<a href=#346 id=346 data-nosnippet>346</a>            <span class="string">"Invalid contract type for timelock get operation: {}"</span>,
-<a href=#347 id=347 data-nosnippet>347</a>            contract_type
-<a href=#348 id=348 data-nosnippet>348</a>        ),
-<a href=#349 id=349 data-nosnippet>349</a>    }
-<a href=#350 id=350 data-nosnippet>350</a>}
-<a href=#351 id=351 data-nosnippet>351</a>
-<a href=#352 id=352 data-nosnippet>352</a><span class="doccomment">/// Unified function to perform timelock operations (schedule, execute, cancel)
-<a href=#353 id=353 data-nosnippet>353</a>/// Routes to EOA or multisig based on params
-<a href=#354 id=354 data-nosnippet>354</a></span><span class="kw">pub async fn </span>perform_timelock_operation(
-<a href=#355 id=355 data-nosnippet>355</a>    provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#356 id=356 data-nosnippet>356</a>    contract_type: Contract,
-<a href=#357 id=357 data-nosnippet>357</a>    operation: TimelockOperationPayload,
-<a href=#358 id=358 data-nosnippet>358</a>    operation_type: TimelockOperationType,
-<a href=#359 id=359 data-nosnippet>359</a>    params: TimelockOperationParams,
-<a href=#360 id=360 data-nosnippet>360</a>) -&gt; <span class="prelude-ty">Result</span>&lt;B256&gt; {
-<a href=#361 id=361 data-nosnippet>361</a>    <span class="kw">let </span>timelock = get_timelock_for_contract(provider, contract_type, operation.target).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#362 id=362 data-nosnippet>362</a>    <span class="comment">// for cancel operations: if operation_id is provided, use it directly;
-<a href=#363 id=363 data-nosnippet>363</a>    // otherwise, compute it from the operation payload
-<a href=#364 id=364 data-nosnippet>364</a>    </span><span class="kw">let </span>operation_id =
-<a href=#365 id=365 data-nosnippet>365</a>        <span class="kw">if let </span>(TimelockOperationType::Cancel, <span class="prelude-val">Some</span>(id)) = (operation_type, params.operation_id) {
-<a href=#366 id=366 data-nosnippet>366</a>            id
-<a href=#367 id=367 data-nosnippet>367</a>        } <span class="kw">else </span>{
-<a href=#368 id=368 data-nosnippet>368</a>            timelock.get_operation_id(<span class="kw-2">&amp;</span>operation, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?
-<a href=#369 id=369 data-nosnippet>369</a>        </span>};
-<a href=#370 id=370 data-nosnippet>370</a>
-<a href=#371 id=371 data-nosnippet>371</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(multisig_proposer) = params.multisig_proposer {
-<a href=#372 id=372 data-nosnippet>372</a>        perform_timelock_operation_via_multisig(
-<a href=#373 id=373 data-nosnippet>373</a>            timelock,
-<a href=#374 id=374 data-nosnippet>374</a>            operation,
-<a href=#375 id=375 data-nosnippet>375</a>            operation_type,
-<a href=#376 id=376 data-nosnippet>376</a>            operation_id,
-<a href=#377 id=377 data-nosnippet>377</a>            multisig_proposer,
-<a href=#378 id=378 data-nosnippet>378</a>        )
-<a href=#379 id=379 data-nosnippet>379</a>        .<span class="kw">await
-<a href=#380 id=380 data-nosnippet>380</a>    </span>} <span class="kw">else </span>{
-<a href=#381 id=381 data-nosnippet>381</a>        perform_timelock_operation_via_eoa(
-<a href=#382 id=382 data-nosnippet>382</a>            timelock,
-<a href=#383 id=383 data-nosnippet>383</a>            operation,
-<a href=#384 id=384 data-nosnippet>384</a>            operation_type,
-<a href=#385 id=385 data-nosnippet>385</a>            operation_id,
-<a href=#386 id=386 data-nosnippet>386</a>            provider,
-<a href=#387 id=387 data-nosnippet>387</a>        )
-<a href=#388 id=388 data-nosnippet>388</a>        .<span class="kw">await
-<a href=#389 id=389 data-nosnippet>389</a>    </span>}
-<a href=#390 id=390 data-nosnippet>390</a>}
-<a href=#391 id=391 data-nosnippet>391</a>
-<a href=#392 id=392 data-nosnippet>392</a><span class="doccomment">/// Perform timelock operation via EOA (direct transaction)
-<a href=#393 id=393 data-nosnippet>393</a></span><span class="kw">async fn </span>perform_timelock_operation_via_eoa(
-<a href=#394 id=394 data-nosnippet>394</a>    timelock: TimelockContract,
-<a href=#395 id=395 data-nosnippet>395</a>    operation: TimelockOperationPayload,
-<a href=#396 id=396 data-nosnippet>396</a>    operation_type: TimelockOperationType,
-<a href=#397 id=397 data-nosnippet>397</a>    operation_id: B256,
-<a href=#398 id=398 data-nosnippet>398</a>    provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
-<a href=#399 id=399 data-nosnippet>399</a>) -&gt; <span class="prelude-ty">Result</span>&lt;B256&gt; {
-<a href=#400 id=400 data-nosnippet>400</a>    <span class="kw">let </span>receipt = <span class="kw">match </span>operation_type {
-<a href=#401 id=401 data-nosnippet>401</a>        TimelockOperationType::Schedule =&gt; timelock.schedule(operation, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#402 id=402 data-nosnippet>402</a>        TimelockOperationType::Execute =&gt; timelock.execute(operation, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#403 id=403 data-nosnippet>403</a>        TimelockOperationType::Cancel =&gt; timelock.cancel(operation_id, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>,
-<a href=#404 id=404 data-nosnippet>404</a>    };
-<a href=#405 id=405 data-nosnippet>405</a>
-<a href=#406 id=406 data-nosnippet>406</a>    <span class="macro">tracing::info!</span>(%receipt.gas_used, %receipt.transaction_hash, <span class="string">"tx mined"</span>);
-<a href=#407 id=407 data-nosnippet>407</a>    <span class="kw">if </span>!receipt.inner.is_success() {
-<a href=#408 id=408 data-nosnippet>408</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"tx failed: {:?}"</span>, receipt);
-<a href=#409 id=409 data-nosnippet>409</a>    }
-<a href=#410 id=410 data-nosnippet>410</a>
-<a href=#411 id=411 data-nosnippet>411</a>    <span class="comment">// Verify operation state based on type (with retry for RPC timing)
-<a href=#412 id=412 data-nosnippet>412</a>    </span><span class="kw">match </span>operation_type {
-<a href=#413 id=413 data-nosnippet>413</a>        TimelockOperationType::Schedule =&gt; {
-<a href=#414 id=414 data-nosnippet>414</a>            <span class="kw">let </span>check_name = <span class="macro">format!</span>(<span class="string">"Schedule operation {}"</span>, operation_id);
-<a href=#415 id=415 data-nosnippet>415</a>            <span class="kw">let </span>is_scheduled = retry_until_true(<span class="kw-2">&amp;</span>check_name, || <span class="kw">async </span>{
-<a href=#416 id=416 data-nosnippet>416</a>                <span class="prelude-val">Ok</span>(timelock
-<a href=#417 id=417 data-nosnippet>417</a>                    .is_operation_pending(operation_id, <span class="kw-2">&amp;</span>provider)
-<a href=#418 id=418 data-nosnippet>418</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#419 id=419 data-nosnippet>419</a>                    </span>|| timelock.is_operation_ready(operation_id, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>)
-<a href=#420 id=420 data-nosnippet>420</a>            })
-<a href=#421 id=421 data-nosnippet>421</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#422 id=422 data-nosnippet>422</a>            <span class="kw">if </span>!is_scheduled {
-<a href=#423 id=423 data-nosnippet>423</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"tx not correctly scheduled: {}"</span>, operation_id);
-<a href=#424 id=424 data-nosnippet>424</a>            }
-<a href=#425 id=425 data-nosnippet>425</a>            <span class="macro">tracing::info!</span>(<span class="string">"tx scheduled with id: {}"</span>, operation_id);
-<a href=#426 id=426 data-nosnippet>426</a>        },
-<a href=#427 id=427 data-nosnippet>427</a>        TimelockOperationType::Execute =&gt; {
-<a href=#428 id=428 data-nosnippet>428</a>            <span class="kw">let </span>check_name = <span class="macro">format!</span>(<span class="string">"Execute operation {}"</span>, operation_id);
-<a href=#429 id=429 data-nosnippet>429</a>            <span class="kw">let </span>is_done = retry_until_true(<span class="kw-2">&amp;</span>check_name, || <span class="kw">async </span>{
-<a href=#430 id=430 data-nosnippet>430</a>                timelock.is_operation_done(operation_id, <span class="kw-2">&amp;</span>provider).<span class="kw">await
-<a href=#431 id=431 data-nosnippet>431</a>            </span>})
-<a href=#432 id=432 data-nosnippet>432</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#433 id=433 data-nosnippet>433</a>            <span class="kw">if </span>!is_done {
-<a href=#434 id=434 data-nosnippet>434</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"tx not correctly executed: {}"</span>, operation_id);
-<a href=#435 id=435 data-nosnippet>435</a>            }
-<a href=#436 id=436 data-nosnippet>436</a>            <span class="macro">tracing::info!</span>(<span class="string">"tx executed with id: {}"</span>, operation_id);
-<a href=#437 id=437 data-nosnippet>437</a>        },
-<a href=#438 id=438 data-nosnippet>438</a>        TimelockOperationType::Cancel =&gt; {
-<a href=#439 id=439 data-nosnippet>439</a>            <span class="macro">tracing::info!</span>(<span class="string">"tx cancelled with id: {}"</span>, operation_id);
+<a href=#327 id=327 data-nosnippet>327</a>        Contract::EspTokenProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::SafeExitTimelock(
+<a href=#328 id=328 data-nosnippet>328</a>            EspToken::new(target_addr, <span class="kw-2">&amp;</span>provider).owner().call().<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#329 id=329 data-nosnippet>329</a>        )),
+<a href=#330 id=330 data-nosnippet>330</a>        Contract::LightClientProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::OpsTimelock(
+<a href=#331 id=331 data-nosnippet>331</a>            LightClient::new(target_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#332 id=332 data-nosnippet>332</a>                .owner()
+<a href=#333 id=333 data-nosnippet>333</a>                .call()
+<a href=#334 id=334 data-nosnippet>334</a>                .<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#335 id=335 data-nosnippet>335</a>        )),
+<a href=#336 id=336 data-nosnippet>336</a>        Contract::StakeTableProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::OpsTimelock(
+<a href=#337 id=337 data-nosnippet>337</a>            StakeTable::new(target_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#338 id=338 data-nosnippet>338</a>                .owner()
+<a href=#339 id=339 data-nosnippet>339</a>                .call()
+<a href=#340 id=340 data-nosnippet>340</a>                .<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#341 id=341 data-nosnippet>341</a>        )),
+<a href=#342 id=342 data-nosnippet>342</a>        Contract::RewardClaimProxy =&gt; <span class="prelude-val">Ok</span>(TimelockContract::SafeExitTimelock(
+<a href=#343 id=343 data-nosnippet>343</a>            RewardClaim::new(target_addr, <span class="kw-2">&amp;</span>provider)
+<a href=#344 id=344 data-nosnippet>344</a>                .currentAdmin()
+<a href=#345 id=345 data-nosnippet>345</a>                .call()
+<a href=#346 id=346 data-nosnippet>346</a>                .<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#347 id=347 data-nosnippet>347</a>        )),
+<a href=#348 id=348 data-nosnippet>348</a>        <span class="kw">_ </span>=&gt; <span class="macro">anyhow::bail!</span>(
+<a href=#349 id=349 data-nosnippet>349</a>            <span class="string">"Invalid contract type for timelock get operation: {}"</span>,
+<a href=#350 id=350 data-nosnippet>350</a>            contract_type
+<a href=#351 id=351 data-nosnippet>351</a>        ),
+<a href=#352 id=352 data-nosnippet>352</a>    }
+<a href=#353 id=353 data-nosnippet>353</a>}
+<a href=#354 id=354 data-nosnippet>354</a>
+<a href=#355 id=355 data-nosnippet>355</a><span class="doccomment">/// Unified function to perform timelock operations (schedule, execute, cancel)
+<a href=#356 id=356 data-nosnippet>356</a>/// Routes to EOA or multisig based on params
+<a href=#357 id=357 data-nosnippet>357</a></span><span class="kw">pub async fn </span>perform_timelock_operation(
+<a href=#358 id=358 data-nosnippet>358</a>    provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#359 id=359 data-nosnippet>359</a>    contract_type: Contract,
+<a href=#360 id=360 data-nosnippet>360</a>    operation: TimelockOperationPayload,
+<a href=#361 id=361 data-nosnippet>361</a>    operation_type: TimelockOperationType,
+<a href=#362 id=362 data-nosnippet>362</a>    params: TimelockOperationParams,
+<a href=#363 id=363 data-nosnippet>363</a>) -&gt; <span class="prelude-ty">Result</span>&lt;B256&gt; {
+<a href=#364 id=364 data-nosnippet>364</a>    <span class="kw">let </span>timelock = get_timelock_for_contract(provider, contract_type, operation.target).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#365 id=365 data-nosnippet>365</a>    <span class="comment">// for cancel operations: if operation_id is provided, use it directly;
+<a href=#366 id=366 data-nosnippet>366</a>    // otherwise, compute it from the operation payload
+<a href=#367 id=367 data-nosnippet>367</a>    </span><span class="kw">let </span>operation_id =
+<a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">if let </span>(TimelockOperationType::Cancel, <span class="prelude-val">Some</span>(id)) = (operation_type, params.operation_id) {
+<a href=#369 id=369 data-nosnippet>369</a>            id
+<a href=#370 id=370 data-nosnippet>370</a>        } <span class="kw">else </span>{
+<a href=#371 id=371 data-nosnippet>371</a>            timelock.get_operation_id(<span class="kw-2">&amp;</span>operation, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?
+<a href=#372 id=372 data-nosnippet>372</a>        </span>};
+<a href=#373 id=373 data-nosnippet>373</a>
+<a href=#374 id=374 data-nosnippet>374</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(multisig_proposer) = params.multisig_proposer {
+<a href=#375 id=375 data-nosnippet>375</a>        perform_timelock_operation_via_multisig(
+<a href=#376 id=376 data-nosnippet>376</a>            timelock,
+<a href=#377 id=377 data-nosnippet>377</a>            operation,
+<a href=#378 id=378 data-nosnippet>378</a>            operation_type,
+<a href=#379 id=379 data-nosnippet>379</a>            operation_id,
+<a href=#380 id=380 data-nosnippet>380</a>            multisig_proposer,
+<a href=#381 id=381 data-nosnippet>381</a>        )
+<a href=#382 id=382 data-nosnippet>382</a>        .<span class="kw">await
+<a href=#383 id=383 data-nosnippet>383</a>    </span>} <span class="kw">else </span>{
+<a href=#384 id=384 data-nosnippet>384</a>        perform_timelock_operation_via_eoa(
+<a href=#385 id=385 data-nosnippet>385</a>            timelock,
+<a href=#386 id=386 data-nosnippet>386</a>            operation,
+<a href=#387 id=387 data-nosnippet>387</a>            operation_type,
+<a href=#388 id=388 data-nosnippet>388</a>            operation_id,
+<a href=#389 id=389 data-nosnippet>389</a>            provider,
+<a href=#390 id=390 data-nosnippet>390</a>        )
+<a href=#391 id=391 data-nosnippet>391</a>        .<span class="kw">await
+<a href=#392 id=392 data-nosnippet>392</a>    </span>}
+<a href=#393 id=393 data-nosnippet>393</a>}
+<a href=#394 id=394 data-nosnippet>394</a>
+<a href=#395 id=395 data-nosnippet>395</a><span class="doccomment">/// Perform timelock operation via EOA (direct transaction)
+<a href=#396 id=396 data-nosnippet>396</a></span><span class="kw">async fn </span>perform_timelock_operation_via_eoa(
+<a href=#397 id=397 data-nosnippet>397</a>    timelock: TimelockContract,
+<a href=#398 id=398 data-nosnippet>398</a>    operation: TimelockOperationPayload,
+<a href=#399 id=399 data-nosnippet>399</a>    operation_type: TimelockOperationType,
+<a href=#400 id=400 data-nosnippet>400</a>    operation_id: B256,
+<a href=#401 id=401 data-nosnippet>401</a>    provider: <span class="kw-2">&amp;</span><span class="kw">impl </span>Provider,
+<a href=#402 id=402 data-nosnippet>402</a>) -&gt; <span class="prelude-ty">Result</span>&lt;B256&gt; {
+<a href=#403 id=403 data-nosnippet>403</a>    <span class="kw">let </span>receipt = <span class="kw">match </span>operation_type {
+<a href=#404 id=404 data-nosnippet>404</a>        TimelockOperationType::Schedule =&gt; timelock.schedule(operation, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#405 id=405 data-nosnippet>405</a>        TimelockOperationType::Execute =&gt; timelock.execute(operation, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#406 id=406 data-nosnippet>406</a>        TimelockOperationType::Cancel =&gt; timelock.cancel(operation_id, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>,
+<a href=#407 id=407 data-nosnippet>407</a>    };
+<a href=#408 id=408 data-nosnippet>408</a>
+<a href=#409 id=409 data-nosnippet>409</a>    <span class="macro">tracing::info!</span>(%receipt.gas_used, %receipt.transaction_hash, <span class="string">"tx mined"</span>);
+<a href=#410 id=410 data-nosnippet>410</a>    <span class="kw">if </span>!receipt.inner.is_success() {
+<a href=#411 id=411 data-nosnippet>411</a>        <span class="macro">anyhow::bail!</span>(<span class="string">"tx failed: {:?}"</span>, receipt);
+<a href=#412 id=412 data-nosnippet>412</a>    }
+<a href=#413 id=413 data-nosnippet>413</a>
+<a href=#414 id=414 data-nosnippet>414</a>    <span class="comment">// Verify operation state based on type (with retry for RPC timing)
+<a href=#415 id=415 data-nosnippet>415</a>    </span><span class="kw">match </span>operation_type {
+<a href=#416 id=416 data-nosnippet>416</a>        TimelockOperationType::Schedule =&gt; {
+<a href=#417 id=417 data-nosnippet>417</a>            <span class="kw">let </span>check_name = <span class="macro">format!</span>(<span class="string">"Schedule operation {}"</span>, operation_id);
+<a href=#418 id=418 data-nosnippet>418</a>            <span class="kw">let </span>is_scheduled = retry_until_true(<span class="kw-2">&amp;</span>check_name, || <span class="kw">async </span>{
+<a href=#419 id=419 data-nosnippet>419</a>                <span class="prelude-val">Ok</span>(timelock
+<a href=#420 id=420 data-nosnippet>420</a>                    .is_operation_pending(operation_id, <span class="kw-2">&amp;</span>provider)
+<a href=#421 id=421 data-nosnippet>421</a>                    .<span class="kw">await</span><span class="question-mark">?
+<a href=#422 id=422 data-nosnippet>422</a>                    </span>|| timelock.is_operation_ready(operation_id, <span class="kw-2">&amp;</span>provider).<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#423 id=423 data-nosnippet>423</a>            })
+<a href=#424 id=424 data-nosnippet>424</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#425 id=425 data-nosnippet>425</a>            <span class="kw">if </span>!is_scheduled {
+<a href=#426 id=426 data-nosnippet>426</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"tx not correctly scheduled: {}"</span>, operation_id);
+<a href=#427 id=427 data-nosnippet>427</a>            }
+<a href=#428 id=428 data-nosnippet>428</a>            <span class="macro">tracing::info!</span>(<span class="string">"tx scheduled with id: {}"</span>, operation_id);
+<a href=#429 id=429 data-nosnippet>429</a>        },
+<a href=#430 id=430 data-nosnippet>430</a>        TimelockOperationType::Execute =&gt; {
+<a href=#431 id=431 data-nosnippet>431</a>            <span class="kw">let </span>check_name = <span class="macro">format!</span>(<span class="string">"Execute operation {}"</span>, operation_id);
+<a href=#432 id=432 data-nosnippet>432</a>            <span class="kw">let </span>is_done = retry_until_true(<span class="kw-2">&amp;</span>check_name, || <span class="kw">async </span>{
+<a href=#433 id=433 data-nosnippet>433</a>                timelock.is_operation_done(operation_id, <span class="kw-2">&amp;</span>provider).<span class="kw">await
+<a href=#434 id=434 data-nosnippet>434</a>            </span>})
+<a href=#435 id=435 data-nosnippet>435</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#436 id=436 data-nosnippet>436</a>            <span class="kw">if </span>!is_done {
+<a href=#437 id=437 data-nosnippet>437</a>                <span class="macro">anyhow::bail!</span>(<span class="string">"tx not correctly executed: {}"</span>, operation_id);
+<a href=#438 id=438 data-nosnippet>438</a>            }
+<a href=#439 id=439 data-nosnippet>439</a>            <span class="macro">tracing::info!</span>(<span class="string">"tx executed with id: {}"</span>, operation_id);
 <a href=#440 id=440 data-nosnippet>440</a>        },
-<a href=#441 id=441 data-nosnippet>441</a>    }
-<a href=#442 id=442 data-nosnippet>442</a>
-<a href=#443 id=443 data-nosnippet>443</a>    <span class="prelude-val">Ok</span>(operation_id)
-<a href=#444 id=444 data-nosnippet>444</a>}
+<a href=#441 id=441 data-nosnippet>441</a>        TimelockOperationType::Cancel =&gt; {
+<a href=#442 id=442 data-nosnippet>442</a>            <span class="macro">tracing::info!</span>(<span class="string">"tx cancelled with id: {}"</span>, operation_id);
+<a href=#443 id=443 data-nosnippet>443</a>        },
+<a href=#444 id=444 data-nosnippet>444</a>    }
 <a href=#445 id=445 data-nosnippet>445</a>
-<a href=#446 id=446 data-nosnippet>446</a><span class="doccomment">/// Perform timelock operation via Safe multisig proposal
-<a href=#447 id=447 data-nosnippet>447</a></span><span class="kw">async fn </span>perform_timelock_operation_via_multisig(
-<a href=#448 id=448 data-nosnippet>448</a>    timelock: TimelockContract,
-<a href=#449 id=449 data-nosnippet>449</a>    operation: TimelockOperationPayload,
-<a href=#450 id=450 data-nosnippet>450</a>    operation_type: TimelockOperationType,
-<a href=#451 id=451 data-nosnippet>451</a>    operation_id: B256,
-<a href=#452 id=452 data-nosnippet>452</a>    multisig_proposer: Address,
-<a href=#453 id=453 data-nosnippet>453</a>) -&gt; <span class="prelude-ty">Result</span>&lt;B256&gt; {
-<a href=#454 id=454 data-nosnippet>454</a>    <span class="kw">let </span>timelock_addr = <span class="kw">match </span>timelock {
-<a href=#455 id=455 data-nosnippet>455</a>        TimelockContract::OpsTimelock(addr) =&gt; addr,
-<a href=#456 id=456 data-nosnippet>456</a>        TimelockContract::SafeExitTimelock(addr) =&gt; addr,
-<a href=#457 id=457 data-nosnippet>457</a>    };
-<a href=#458 id=458 data-nosnippet>458</a>
-<a href=#459 id=459 data-nosnippet>459</a>    <span class="comment">// Determine function signature and arguments based on operation type
-<a href=#460 id=460 data-nosnippet>460</a>    </span><span class="kw">let </span>(function_signature, function_args) = <span class="kw">match </span>operation_type {
-<a href=#461 id=461 data-nosnippet>461</a>        TimelockOperationType::Schedule =&gt; (
-<a href=#462 id=462 data-nosnippet>462</a>            <span class="string">"schedule(address,uint256,bytes,bytes32,bytes32,uint256)"</span>,
-<a href=#463 id=463 data-nosnippet>463</a>            <span class="macro">vec!</span>[
-<a href=#464 id=464 data-nosnippet>464</a>                operation.target.to_string(),
-<a href=#465 id=465 data-nosnippet>465</a>                operation.value.to_string(),
-<a href=#466 id=466 data-nosnippet>466</a>                operation.data.to_string(),
-<a href=#467 id=467 data-nosnippet>467</a>                operation.predecessor.to_string(),
-<a href=#468 id=468 data-nosnippet>468</a>                operation.salt.to_string(),
-<a href=#469 id=469 data-nosnippet>469</a>                operation.delay.to_string(),
-<a href=#470 id=470 data-nosnippet>470</a>            ],
-<a href=#471 id=471 data-nosnippet>471</a>        ),
-<a href=#472 id=472 data-nosnippet>472</a>        TimelockOperationType::Execute =&gt; (
-<a href=#473 id=473 data-nosnippet>473</a>            <span class="string">"execute(address,uint256,bytes,bytes32,bytes32)"</span>,
-<a href=#474 id=474 data-nosnippet>474</a>            <span class="macro">vec!</span>[
-<a href=#475 id=475 data-nosnippet>475</a>                operation.target.to_string(),
-<a href=#476 id=476 data-nosnippet>476</a>                operation.value.to_string(),
-<a href=#477 id=477 data-nosnippet>477</a>                operation.data.to_string(),
-<a href=#478 id=478 data-nosnippet>478</a>                operation.predecessor.to_string(),
-<a href=#479 id=479 data-nosnippet>479</a>                operation.salt.to_string(),
-<a href=#480 id=480 data-nosnippet>480</a>            ],
-<a href=#481 id=481 data-nosnippet>481</a>        ),
-<a href=#482 id=482 data-nosnippet>482</a>        TimelockOperationType::Cancel =&gt; (<span class="string">"cancel(bytes32)"</span>, <span class="macro">vec!</span>[operation_id.to_string()]),
-<a href=#483 id=483 data-nosnippet>483</a>    };
-<a href=#484 id=484 data-nosnippet>484</a>
-<a href=#485 id=485 data-nosnippet>485</a>    <span class="macro">tracing::info!</span>(
-<a href=#486 id=486 data-nosnippet>486</a>        <span class="string">"Encoding {:?} operation calldata for timelock {}"</span>,
-<a href=#487 id=487 data-nosnippet>487</a>        operation_type,
-<a href=#488 id=488 data-nosnippet>488</a>        timelock_addr
-<a href=#489 id=489 data-nosnippet>489</a>    );
-<a href=#490 id=490 data-nosnippet>490</a>
-<a href=#491 id=491 data-nosnippet>491</a>    <span class="kw">let </span>calldata =
-<a href=#492 id=492 data-nosnippet>492</a>        encode_generic_calldata(timelock_addr, function_signature, function_args, U256::ZERO)<span class="question-mark">?</span>;
-<a href=#493 id=493 data-nosnippet>493</a>
-<a href=#494 id=494 data-nosnippet>494</a>    <span class="macro">tracing::info!</span>(
-<a href=#495 id=495 data-nosnippet>495</a>        <span class="string">"Timelock {:?} operation calldata encoded. Operation ID: {}"</span>,
-<a href=#496 id=496 data-nosnippet>496</a>        operation_type,
-<a href=#497 id=497 data-nosnippet>497</a>        operation_id
-<a href=#498 id=498 data-nosnippet>498</a>    );
+<a href=#446 id=446 data-nosnippet>446</a>    <span class="prelude-val">Ok</span>(operation_id)
+<a href=#447 id=447 data-nosnippet>447</a>}
+<a href=#448 id=448 data-nosnippet>448</a>
+<a href=#449 id=449 data-nosnippet>449</a><span class="doccomment">/// Perform timelock operation via Safe multisig proposal
+<a href=#450 id=450 data-nosnippet>450</a></span><span class="kw">async fn </span>perform_timelock_operation_via_multisig(
+<a href=#451 id=451 data-nosnippet>451</a>    timelock: TimelockContract,
+<a href=#452 id=452 data-nosnippet>452</a>    operation: TimelockOperationPayload,
+<a href=#453 id=453 data-nosnippet>453</a>    operation_type: TimelockOperationType,
+<a href=#454 id=454 data-nosnippet>454</a>    operation_id: B256,
+<a href=#455 id=455 data-nosnippet>455</a>    multisig_proposer: Address,
+<a href=#456 id=456 data-nosnippet>456</a>) -&gt; <span class="prelude-ty">Result</span>&lt;B256&gt; {
+<a href=#457 id=457 data-nosnippet>457</a>    <span class="kw">let </span>timelock_addr = <span class="kw">match </span>timelock {
+<a href=#458 id=458 data-nosnippet>458</a>        TimelockContract::OpsTimelock(addr) =&gt; addr,
+<a href=#459 id=459 data-nosnippet>459</a>        TimelockContract::SafeExitTimelock(addr) =&gt; addr,
+<a href=#460 id=460 data-nosnippet>460</a>    };
+<a href=#461 id=461 data-nosnippet>461</a>
+<a href=#462 id=462 data-nosnippet>462</a>    <span class="comment">// Determine function signature and arguments based on operation type
+<a href=#463 id=463 data-nosnippet>463</a>    </span><span class="kw">let </span>(function_signature, function_args) = <span class="kw">match </span>operation_type {
+<a href=#464 id=464 data-nosnippet>464</a>        TimelockOperationType::Schedule =&gt; (
+<a href=#465 id=465 data-nosnippet>465</a>            <span class="string">"schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 \
+<a href=#466 id=466 data-nosnippet>466</a>             salt, uint256 delay)"</span>,
+<a href=#467 id=467 data-nosnippet>467</a>            <span class="macro">vec!</span>[
+<a href=#468 id=468 data-nosnippet>468</a>                operation.target.to_string(),
+<a href=#469 id=469 data-nosnippet>469</a>                operation.value.to_string(),
+<a href=#470 id=470 data-nosnippet>470</a>                operation.data.to_string(),
+<a href=#471 id=471 data-nosnippet>471</a>                operation.predecessor.to_string(),
+<a href=#472 id=472 data-nosnippet>472</a>                operation.salt.to_string(),
+<a href=#473 id=473 data-nosnippet>473</a>                operation.delay.to_string(),
+<a href=#474 id=474 data-nosnippet>474</a>            ],
+<a href=#475 id=475 data-nosnippet>475</a>        ),
+<a href=#476 id=476 data-nosnippet>476</a>        TimelockOperationType::Execute =&gt; (
+<a href=#477 id=477 data-nosnippet>477</a>            <span class="string">"execute(address target, uint256 value, bytes payload, bytes32 predecessor, bytes32 \
+<a href=#478 id=478 data-nosnippet>478</a>             salt)"</span>,
+<a href=#479 id=479 data-nosnippet>479</a>            <span class="macro">vec!</span>[
+<a href=#480 id=480 data-nosnippet>480</a>                operation.target.to_string(),
+<a href=#481 id=481 data-nosnippet>481</a>                operation.value.to_string(),
+<a href=#482 id=482 data-nosnippet>482</a>                operation.data.to_string(),
+<a href=#483 id=483 data-nosnippet>483</a>                operation.predecessor.to_string(),
+<a href=#484 id=484 data-nosnippet>484</a>                operation.salt.to_string(),
+<a href=#485 id=485 data-nosnippet>485</a>            ],
+<a href=#486 id=486 data-nosnippet>486</a>        ),
+<a href=#487 id=487 data-nosnippet>487</a>        TimelockOperationType::Cancel =&gt; (<span class="string">"cancel(bytes32 id)"</span>, <span class="macro">vec!</span>[operation_id.to_string()]),
+<a href=#488 id=488 data-nosnippet>488</a>    };
+<a href=#489 id=489 data-nosnippet>489</a>
+<a href=#490 id=490 data-nosnippet>490</a>    <span class="macro">tracing::info!</span>(
+<a href=#491 id=491 data-nosnippet>491</a>        <span class="string">"Encoding {:?} operation calldata for timelock {}"</span>,
+<a href=#492 id=492 data-nosnippet>492</a>        operation_type,
+<a href=#493 id=493 data-nosnippet>493</a>        timelock_addr
+<a href=#494 id=494 data-nosnippet>494</a>    );
+<a href=#495 id=495 data-nosnippet>495</a>
+<a href=#496 id=496 data-nosnippet>496</a>    <span class="kw">let </span>calldata =
+<a href=#497 id=497 data-nosnippet>497</a>        encode_generic_calldata(timelock_addr, function_signature, function_args, U256::ZERO)<span class="question-mark">?</span>;
+<a href=#498 id=498 data-nosnippet>498</a>
 <a href=#499 id=499 data-nosnippet>499</a>    <span class="macro">tracing::info!</span>(
-<a href=#500 id=500 data-nosnippet>500</a>        <span class="string">"Multisig proposer: {}. To: {}, Data: {}"</span>,
-<a href=#501 id=501 data-nosnippet>501</a>        multisig_proposer,
-<a href=#502 id=502 data-nosnippet>502</a>        calldata.to,
-<a href=#503 id=503 data-nosnippet>503</a>        calldata.data
-<a href=#504 id=504 data-nosnippet>504</a>    );
-<a href=#505 id=505 data-nosnippet>505</a>
-<a href=#506 id=506 data-nosnippet>506</a>    <span class="prelude-val">Ok</span>(operation_id)
-<a href=#507 id=507 data-nosnippet>507</a>}
+<a href=#500 id=500 data-nosnippet>500</a>        <span class="string">"Timelock {:?} operation calldata encoded. Operation ID: {}"</span>,
+<a href=#501 id=501 data-nosnippet>501</a>        operation_type,
+<a href=#502 id=502 data-nosnippet>502</a>        operation_id
+<a href=#503 id=503 data-nosnippet>503</a>    );
+<a href=#504 id=504 data-nosnippet>504</a>    <span class="macro">tracing::info!</span>(
+<a href=#505 id=505 data-nosnippet>505</a>        <span class="string">"Multisig proposer: {}. To: {}, Data: {}"</span>,
+<a href=#506 id=506 data-nosnippet>506</a>        multisig_proposer,
+<a href=#507 id=507 data-nosnippet>507</a>        calldata.to,
+<a href=#508 id=508 data-nosnippet>508</a>        calldata.data
+<a href=#509 id=509 data-nosnippet>509</a>    );
+<a href=#510 id=510 data-nosnippet>510</a>
+<a href=#511 id=511 data-nosnippet>511</a>    <span class="prelude-val">Ok</span>(operation_id)
+<a href=#512 id=512 data-nosnippet>512</a>}
+<a href=#513 id=513 data-nosnippet>513</a>
+<a href=#514 id=514 data-nosnippet>514</a><span class="doccomment">/// Parameters for proposing a StakeTable V3 upgrade through a timelock owner.
+<a href=#515 id=515 data-nosnippet>515</a></span><span class="attr">#[derive(Clone, Debug)]
+<a href=#516 id=516 data-nosnippet>516</a></span><span class="kw">pub struct </span>StakeTableV3TimelockProposalParams {
+<a href=#517 id=517 data-nosnippet>517</a>    <span class="doccomment">/// Salt for the timelock `schedule`/`execute` operation.
+<a href=#518 id=518 data-nosnippet>518</a>    </span><span class="kw">pub </span>salt: B256,
+<a href=#519 id=519 data-nosnippet>519</a>    <span class="doccomment">/// Delay for the timelock `schedule` operation (must be &gt;= the timelock min delay).
+<a href=#520 id=520 data-nosnippet>520</a>    </span><span class="kw">pub </span>delay: U256,
+<a href=#521 id=521 data-nosnippet>521</a>}
+<a href=#522 id=522 data-nosnippet>522</a>
+<a href=#523 id=523 data-nosnippet>523</a><span class="doccomment">/// Encoded timelock transactions for a StakeTable V3 upgrade.
+<a href=#524 id=524 data-nosnippet>524</a>///
+<a href=#525 id=525 data-nosnippet>525</a>/// `schedule` is submitted first (by a timelock proposer), then after the delay
+<a href=#526 id=526 data-nosnippet>526</a>/// elapses `execute` is submitted (by a timelock executor).
+<a href=#527 id=527 data-nosnippet>527</a></span><span class="kw">pub struct </span>StakeTableV3TimelockProposal {
+<a href=#528 id=528 data-nosnippet>528</a>    <span class="kw">pub </span>schedule: CalldataInfo,
+<a href=#529 id=529 data-nosnippet>529</a>    <span class="kw">pub </span>execute: CalldataInfo,
+<a href=#530 id=530 data-nosnippet>530</a>    <span class="doccomment">/// Address of the freshly deployed StakeTableV3 implementation.
+<a href=#531 id=531 data-nosnippet>531</a>    </span><span class="kw">pub </span>v3_impl_addr: Address,
+<a href=#532 id=532 data-nosnippet>532</a>    <span class="doccomment">/// Timelock address that must submit both txs.
+<a href=#533 id=533 data-nosnippet>533</a>    </span><span class="kw">pub </span>timelock_addr: Address,
+<a href=#534 id=534 data-nosnippet>534</a>}
+<a href=#535 id=535 data-nosnippet>535</a>
+<a href=#536 id=536 data-nosnippet>536</a><span class="doccomment">/// Encode timelock `schedule` + `execute` calldata wrapping a StakeTable V3 upgrade.
+<a href=#537 id=537 data-nosnippet>537</a>///
+<a href=#538 id=538 data-nosnippet>538</a>/// The inner payload is `proxy.upgradeToAndCall(v3_impl, init_data)` where
+<a href=#539 id=539 data-nosnippet>539</a>/// `init_data` is `initializeV3()` calldata (or empty if the proxy is already at V3).
+<a href=#540 id=540 data-nosnippet>540</a>///
+<a href=#541 id=541 data-nosnippet>541</a>/// This is a pure encoding helper: it does not deploy contracts or make RPC calls,
+<a href=#542 id=542 data-nosnippet>542</a>/// which keeps it unit-testable without an Anvil instance.
+<a href=#543 id=543 data-nosnippet>543</a></span><span class="kw">pub fn </span>encode_stake_table_v3_timelock_proposal(
+<a href=#544 id=544 data-nosnippet>544</a>    proxy_addr: Address,
+<a href=#545 id=545 data-nosnippet>545</a>    v3_impl_addr: Address,
+<a href=#546 id=546 data-nosnippet>546</a>    timelock_addr: Address,
+<a href=#547 id=547 data-nosnippet>547</a>    init_data: Bytes,
+<a href=#548 id=548 data-nosnippet>548</a>    params: <span class="kw-2">&amp;</span>StakeTableV3TimelockProposalParams,
+<a href=#549 id=549 data-nosnippet>549</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StakeTableV3TimelockProposal&gt; {
+<a href=#550 id=550 data-nosnippet>550</a>    <span class="comment">// Inner call: proxy.upgradeToAndCall(v3_impl, init_data).
+<a href=#551 id=551 data-nosnippet>551</a>    </span><span class="kw">let </span>upgrade_calldata = encode_upgrade_calldata(proxy_addr, v3_impl_addr, init_data)<span class="question-mark">?</span>;
+<a href=#552 id=552 data-nosnippet>552</a>
+<a href=#553 id=553 data-nosnippet>553</a>    <span class="kw">let </span>schedule = encode_generic_calldata(
+<a href=#554 id=554 data-nosnippet>554</a>        timelock_addr,
+<a href=#555 id=555 data-nosnippet>555</a>        <span class="string">"schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, \
+<a href=#556 id=556 data-nosnippet>556</a>         uint256 delay)"</span>,
+<a href=#557 id=557 data-nosnippet>557</a>        <span class="macro">vec!</span>[
+<a href=#558 id=558 data-nosnippet>558</a>            proxy_addr.to_string(),
+<a href=#559 id=559 data-nosnippet>559</a>            U256::ZERO.to_string(),
+<a href=#560 id=560 data-nosnippet>560</a>            upgrade_calldata.data.to_string(),
+<a href=#561 id=561 data-nosnippet>561</a>            B256::ZERO.to_string(),
+<a href=#562 id=562 data-nosnippet>562</a>            params.salt.to_string(),
+<a href=#563 id=563 data-nosnippet>563</a>            params.delay.to_string(),
+<a href=#564 id=564 data-nosnippet>564</a>        ],
+<a href=#565 id=565 data-nosnippet>565</a>        U256::ZERO,
+<a href=#566 id=566 data-nosnippet>566</a>    )<span class="question-mark">?
+<a href=#567 id=567 data-nosnippet>567</a>    </span>.with_description(<span class="macro">format!</span>(
+<a href=#568 id=568 data-nosnippet>568</a>        <span class="string">"Schedule StakeTable V2 -&gt; V3 upgrade via timelock {timelock_addr:#x} (proxy \
+<a href=#569 id=569 data-nosnippet>569</a>         {proxy_addr:#x}, impl {v3_impl_addr:#x})"
+<a href=#570 id=570 data-nosnippet>570</a>    </span>));
+<a href=#571 id=571 data-nosnippet>571</a>
+<a href=#572 id=572 data-nosnippet>572</a>    <span class="kw">let </span>execute = encode_generic_calldata(
+<a href=#573 id=573 data-nosnippet>573</a>        timelock_addr,
+<a href=#574 id=574 data-nosnippet>574</a>        <span class="string">"execute(address target, uint256 value, bytes payload, bytes32 predecessor, bytes32 salt)"</span>,
+<a href=#575 id=575 data-nosnippet>575</a>        <span class="macro">vec!</span>[
+<a href=#576 id=576 data-nosnippet>576</a>            proxy_addr.to_string(),
+<a href=#577 id=577 data-nosnippet>577</a>            U256::ZERO.to_string(),
+<a href=#578 id=578 data-nosnippet>578</a>            upgrade_calldata.data.to_string(),
+<a href=#579 id=579 data-nosnippet>579</a>            B256::ZERO.to_string(),
+<a href=#580 id=580 data-nosnippet>580</a>            params.salt.to_string(),
+<a href=#581 id=581 data-nosnippet>581</a>        ],
+<a href=#582 id=582 data-nosnippet>582</a>        U256::ZERO,
+<a href=#583 id=583 data-nosnippet>583</a>    )<span class="question-mark">?
+<a href=#584 id=584 data-nosnippet>584</a>    </span>.with_description(<span class="macro">format!</span>(
+<a href=#585 id=585 data-nosnippet>585</a>        <span class="string">"Execute StakeTable V2 -&gt; V3 upgrade via timelock {timelock_addr:#x} (proxy \
+<a href=#586 id=586 data-nosnippet>586</a>         {proxy_addr:#x}, impl {v3_impl_addr:#x})"
+<a href=#587 id=587 data-nosnippet>587</a>    </span>));
+<a href=#588 id=588 data-nosnippet>588</a>
+<a href=#589 id=589 data-nosnippet>589</a>    <span class="prelude-val">Ok</span>(StakeTableV3TimelockProposal {
+<a href=#590 id=590 data-nosnippet>590</a>        schedule,
+<a href=#591 id=591 data-nosnippet>591</a>        execute,
+<a href=#592 id=592 data-nosnippet>592</a>        v3_impl_addr,
+<a href=#593 id=593 data-nosnippet>593</a>        timelock_addr,
+<a href=#594 id=594 data-nosnippet>594</a>    })
+<a href=#595 id=595 data-nosnippet>595</a>}
+<a href=#596 id=596 data-nosnippet>596</a>
+<a href=#597 id=597 data-nosnippet>597</a><span class="doccomment">/// Upgrade the stake table proxy to StakeTableV3 through a timelock owner.
+<a href=#598 id=598 data-nosnippet>598</a>///
+<a href=#599 id=599 data-nosnippet>599</a>/// Deploys the V3 implementation, then encodes `schedule(...)` and `execute(...)`
+<a href=#600 id=600 data-nosnippet>600</a>/// timelock calldata. The inner payload is `upgradeToAndCall(v3_impl, initializeV3())`
+<a href=#601 id=601 data-nosnippet>601</a>/// targeting the stake table proxy. Mirrors `upgrade_stake_table_v3_multisig_owner`
+<a href=#602 id=602 data-nosnippet>602</a>/// but routes through the timelock instead of a multisig.
+<a href=#603 id=603 data-nosnippet>603</a></span><span class="kw">pub async fn </span>upgrade_stake_table_v3_timelock_proposal(
+<a href=#604 id=604 data-nosnippet>604</a>    provider: <span class="kw">impl </span>Provider,
+<a href=#605 id=605 data-nosnippet>605</a>    contracts: <span class="kw-2">&amp;mut </span>Contracts,
+<a href=#606 id=606 data-nosnippet>606</a>    params: StakeTableV3TimelockProposalParams,
+<a href=#607 id=607 data-nosnippet>607</a>) -&gt; <span class="prelude-ty">Result</span>&lt;StakeTableV3TimelockProposal&gt; {
+<a href=#608 id=608 data-nosnippet>608</a>    <span class="kw">let </span>expected_major_version: u8 = <span class="number">3</span>;
+<a href=#609 id=609 data-nosnippet>609</a>
+<a href=#610 id=610 data-nosnippet>610</a>    <span class="macro">tracing::info!</span>(<span class="string">"Encoding StakeTableProxy -&gt; StakeTableV3 upgrade via timelock owner"</span>);
+<a href=#611 id=611 data-nosnippet>611</a>    <span class="kw">let </span>proxy_addr = contracts
+<a href=#612 id=612 data-nosnippet>612</a>        .address(Contract::StakeTableProxy)
+<a href=#613 id=613 data-nosnippet>613</a>        .ok_or_else(|| <span class="macro">anyhow!</span>(<span class="string">"StakeTableProxy not found, can't upgrade"</span>))<span class="question-mark">?</span>;
+<a href=#614 id=614 data-nosnippet>614</a>
+<a href=#615 id=615 data-nosnippet>615</a>    <span class="kw">let </span>proxy = StakeTableV3::new(proxy_addr, <span class="kw-2">&amp;</span>provider);
+<a href=#616 id=616 data-nosnippet>616</a>
+<a href=#617 id=617 data-nosnippet>617</a>    <span class="comment">// The proxy owner must be the OpsTimelock for this flow.
+<a href=#618 id=618 data-nosnippet>618</a>    </span><span class="kw">let </span>owner_addr = proxy.owner().call().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#619 id=619 data-nosnippet>619</a>    <span class="kw">let </span>timelock_addr =
+<a href=#620 id=620 data-nosnippet>620</a>        derive_timelock_address_from_contract_type(OwnableContract::StakeTableProxy, contracts)<span class="question-mark">?</span>;
+<a href=#621 id=621 data-nosnippet>621</a>    <span class="kw">if </span>owner_addr != timelock_addr {
+<a href=#622 id=622 data-nosnippet>622</a>        <span class="macro">anyhow::bail!</span>(
+<a href=#623 id=623 data-nosnippet>623</a>            <span class="string">"StakeTableProxy owner {owner_addr:#x} is not the OpsTimelock {timelock_addr:#x}"
+<a href=#624 id=624 data-nosnippet>624</a>        </span>);
+<a href=#625 id=625 data-nosnippet>625</a>    }
+<a href=#626 id=626 data-nosnippet>626</a>
+<a href=#627 id=627 data-nosnippet>627</a>    <span class="comment">// V3 requires V2 as a prerequisite.
+<a href=#628 id=628 data-nosnippet>628</a>    </span><span class="kw">let </span>version = proxy.getVersion().call().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#629 id=629 data-nosnippet>629</a>    <span class="kw">if </span>version.majorVersion &lt; <span class="number">2 </span>{
+<a href=#630 id=630 data-nosnippet>630</a>        <span class="macro">anyhow::bail!</span>(
+<a href=#631 id=631 data-nosnippet>631</a>            <span class="string">"StakeTableProxy must be at major version &gt;= 2 to upgrade to V3, found {}"</span>,
+<a href=#632 id=632 data-nosnippet>632</a>            version.majorVersion
+<a href=#633 id=633 data-nosnippet>633</a>        );
+<a href=#634 id=634 data-nosnippet>634</a>    }
+<a href=#635 id=635 data-nosnippet>635</a>
+<a href=#636 id=636 data-nosnippet>636</a>    <span class="kw">let </span>v3_impl_addr = contracts
+<a href=#637 id=637 data-nosnippet>637</a>        .deploy(
+<a href=#638 id=638 data-nosnippet>638</a>            Contract::StakeTableV3,
+<a href=#639 id=639 data-nosnippet>639</a>            StakeTableV3::deploy_builder(<span class="kw-2">&amp;</span>provider),
+<a href=#640 id=640 data-nosnippet>640</a>        )
+<a href=#641 id=641 data-nosnippet>641</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#642 id=642 data-nosnippet>642</a>
+<a href=#643 id=643 data-nosnippet>643</a>    <span class="comment">// If already at V3, skip initializeV3() to avoid the "already initialized" revert.
+<a href=#644 id=644 data-nosnippet>644</a>    </span><span class="kw">let </span>init_data =
+<a href=#645 id=645 data-nosnippet>645</a>        <span class="kw">if </span><span class="kw">crate</span>::already_initialized(<span class="kw-2">&amp;</span>provider, proxy_addr, expected_major_version).<span class="kw">await</span><span class="question-mark">? </span>{
+<a href=#646 id=646 data-nosnippet>646</a>            <span class="macro">tracing::info!</span>(
+<a href=#647 id=647 data-nosnippet>647</a>                <span class="string">"StakeTableProxy already initialized at V{expected_major_version}, skipping \
+<a href=#648 id=648 data-nosnippet>648</a>                 initializeV3()"
+<a href=#649 id=649 data-nosnippet>649</a>            </span>);
+<a href=#650 id=650 data-nosnippet>650</a>            Bytes::new()
+<a href=#651 id=651 data-nosnippet>651</a>        } <span class="kw">else </span>{
+<a href=#652 id=652 data-nosnippet>652</a>            StakeTableV3::new(Address::ZERO, <span class="kw-2">&amp;</span>provider)
+<a href=#653 id=653 data-nosnippet>653</a>                .initializeV3()
+<a href=#654 id=654 data-nosnippet>654</a>                .calldata()
+<a href=#655 id=655 data-nosnippet>655</a>                .to_owned()
+<a href=#656 id=656 data-nosnippet>656</a>        };
+<a href=#657 id=657 data-nosnippet>657</a>
+<a href=#658 id=658 data-nosnippet>658</a>    encode_stake_table_v3_timelock_proposal(
+<a href=#659 id=659 data-nosnippet>659</a>        proxy_addr,
+<a href=#660 id=660 data-nosnippet>660</a>        v3_impl_addr,
+<a href=#661 id=661 data-nosnippet>661</a>        timelock_addr,
+<a href=#662 id=662 data-nosnippet>662</a>        init_data,
+<a href=#663 id=663 data-nosnippet>663</a>        <span class="kw-2">&amp;</span>params,
+<a href=#664 id=664 data-nosnippet>664</a>    )
+<a href=#665 id=665 data-nosnippet>665</a>}
+<a href=#666 id=666 data-nosnippet>666</a>
+<a href=#667 id=667 data-nosnippet>667</a><span class="attr">#[cfg(test)]
+<a href=#668 id=668 data-nosnippet>668</a></span><span class="kw">mod </span>tests {
+<a href=#669 id=669 data-nosnippet>669</a>    <span class="kw">use </span>alloy::{
+<a href=#670 id=670 data-nosnippet>670</a>        primitives::{Address, U256},
+<a href=#671 id=671 data-nosnippet>671</a>        sol_types::SolCall,
+<a href=#672 id=672 data-nosnippet>672</a>    };
+<a href=#673 id=673 data-nosnippet>673</a>    <span class="kw">use </span>hotshot_contract_adapter::sol_types::OpsTimelock;
+<a href=#674 id=674 data-nosnippet>674</a>
+<a href=#675 id=675 data-nosnippet>675</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
+<a href=#676 id=676 data-nosnippet>676</a>
+<a href=#677 id=677 data-nosnippet>677</a>    <span class="doccomment">/// Verify that `encode_stake_table_v3_timelock_proposal` produces non-empty
+<a href=#678 id=678 data-nosnippet>678</a>    /// `schedule` + `execute` calldata targeting the timelock, with the inner
+<a href=#679 id=679 data-nosnippet>679</a>    /// payload matching `proxy.upgradeToAndCall(v3_impl, initializeV3())`.
+<a href=#680 id=680 data-nosnippet>680</a>    </span><span class="attr">#[test]
+<a href=#681 id=681 data-nosnippet>681</a>    </span><span class="kw">fn </span>test_encode_stake_table_v3_timelock_proposal() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#682 id=682 data-nosnippet>682</a>        <span class="kw">let </span>proxy_addr = Address::random();
+<a href=#683 id=683 data-nosnippet>683</a>        <span class="kw">let </span>v3_impl_addr = Address::random();
+<a href=#684 id=684 data-nosnippet>684</a>        <span class="kw">let </span>timelock_addr = Address::random();
+<a href=#685 id=685 data-nosnippet>685</a>        <span class="kw">let </span>salt = B256::repeat_byte(<span class="number">0x42</span>);
+<a href=#686 id=686 data-nosnippet>686</a>        <span class="kw">let </span>delay = U256::from(<span class="number">3600</span>);
+<a href=#687 id=687 data-nosnippet>687</a>        <span class="kw">let </span>init_data: Bytes = StakeTableV3::initializeV3Call {}.abi_encode().into();
+<a href=#688 id=688 data-nosnippet>688</a>
+<a href=#689 id=689 data-nosnippet>689</a>        <span class="kw">let </span>proposal = encode_stake_table_v3_timelock_proposal(
+<a href=#690 id=690 data-nosnippet>690</a>            proxy_addr,
+<a href=#691 id=691 data-nosnippet>691</a>            v3_impl_addr,
+<a href=#692 id=692 data-nosnippet>692</a>            timelock_addr,
+<a href=#693 id=693 data-nosnippet>693</a>            init_data.clone(),
+<a href=#694 id=694 data-nosnippet>694</a>            <span class="kw-2">&amp;</span>StakeTableV3TimelockProposalParams { salt, delay },
+<a href=#695 id=695 data-nosnippet>695</a>        )<span class="question-mark">?</span>;
+<a href=#696 id=696 data-nosnippet>696</a>
+<a href=#697 id=697 data-nosnippet>697</a>        <span class="macro">assert_eq!</span>(proposal.timelock_addr, timelock_addr);
+<a href=#698 id=698 data-nosnippet>698</a>        <span class="macro">assert_eq!</span>(proposal.v3_impl_addr, v3_impl_addr);
+<a href=#699 id=699 data-nosnippet>699</a>        <span class="macro">assert_eq!</span>(proposal.schedule.to, timelock_addr);
+<a href=#700 id=700 data-nosnippet>700</a>        <span class="macro">assert_eq!</span>(proposal.execute.to, timelock_addr);
+<a href=#701 id=701 data-nosnippet>701</a>        <span class="macro">assert!</span>(proposal.schedule.data.len() &gt; <span class="number">4</span>);
+<a href=#702 id=702 data-nosnippet>702</a>        <span class="macro">assert!</span>(proposal.execute.data.len() &gt; <span class="number">4</span>);
+<a href=#703 id=703 data-nosnippet>703</a>
+<a href=#704 id=704 data-nosnippet>704</a>        <span class="comment">// The inner payload the timelock will run is
+<a href=#705 id=705 data-nosnippet>705</a>        // `proxy.upgradeToAndCall(v3_impl, initializeV3())`.
+<a href=#706 id=706 data-nosnippet>706</a>        </span><span class="kw">let </span>expected_inner: Bytes = StakeTableV3::upgradeToAndCallCall {
+<a href=#707 id=707 data-nosnippet>707</a>            newImplementation: v3_impl_addr,
+<a href=#708 id=708 data-nosnippet>708</a>            data: init_data,
+<a href=#709 id=709 data-nosnippet>709</a>        }
+<a href=#710 id=710 data-nosnippet>710</a>        .abi_encode()
+<a href=#711 id=711 data-nosnippet>711</a>        .into();
+<a href=#712 id=712 data-nosnippet>712</a>
+<a href=#713 id=713 data-nosnippet>713</a>        <span class="kw">let </span>expected_schedule = OpsTimelock::scheduleCall {
+<a href=#714 id=714 data-nosnippet>714</a>            target: proxy_addr,
+<a href=#715 id=715 data-nosnippet>715</a>            value: U256::ZERO,
+<a href=#716 id=716 data-nosnippet>716</a>            data: expected_inner.clone(),
+<a href=#717 id=717 data-nosnippet>717</a>            predecessor: B256::ZERO,
+<a href=#718 id=718 data-nosnippet>718</a>            salt,
+<a href=#719 id=719 data-nosnippet>719</a>            delay,
+<a href=#720 id=720 data-nosnippet>720</a>        }
+<a href=#721 id=721 data-nosnippet>721</a>        .abi_encode();
+<a href=#722 id=722 data-nosnippet>722</a>        <span class="macro">assert_eq!</span>(proposal.schedule.data.to_vec(), expected_schedule);
+<a href=#723 id=723 data-nosnippet>723</a>
+<a href=#724 id=724 data-nosnippet>724</a>        <span class="kw">let </span>expected_execute = OpsTimelock::executeCall {
+<a href=#725 id=725 data-nosnippet>725</a>            target: proxy_addr,
+<a href=#726 id=726 data-nosnippet>726</a>            value: U256::ZERO,
+<a href=#727 id=727 data-nosnippet>727</a>            payload: expected_inner,
+<a href=#728 id=728 data-nosnippet>728</a>            predecessor: B256::ZERO,
+<a href=#729 id=729 data-nosnippet>729</a>            salt,
+<a href=#730 id=730 data-nosnippet>730</a>        }
+<a href=#731 id=731 data-nosnippet>731</a>        .abi_encode();
+<a href=#732 id=732 data-nosnippet>732</a>        <span class="macro">assert_eq!</span>(proposal.execute.data.to_vec(), expected_execute);
+<a href=#733 id=733 data-nosnippet>733</a>
+<a href=#734 id=734 data-nosnippet>734</a>        <span class="prelude-val">Ok</span>(())
+<a href=#735 id=735 data-nosnippet>735</a>    }
+<a href=#736 id=736 data-nosnippet>736</a>
+<a href=#737 id=737 data-nosnippet>737</a>    <span class="doccomment">/// When the proxy is already at V3, the inner `upgradeToAndCall` carries
+<a href=#738 id=738 data-nosnippet>738</a>    /// empty init data so we don't re-run `initializeV3()`.
+<a href=#739 id=739 data-nosnippet>739</a>    </span><span class="attr">#[test]
+<a href=#740 id=740 data-nosnippet>740</a>    </span><span class="kw">fn </span>test_encode_stake_table_v3_timelock_proposal_already_initialized() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#741 id=741 data-nosnippet>741</a>        <span class="kw">let </span>proxy_addr = Address::random();
+<a href=#742 id=742 data-nosnippet>742</a>        <span class="kw">let </span>v3_impl_addr = Address::random();
+<a href=#743 id=743 data-nosnippet>743</a>        <span class="kw">let </span>timelock_addr = Address::random();
+<a href=#744 id=744 data-nosnippet>744</a>        <span class="kw">let </span>salt = B256::ZERO;
+<a href=#745 id=745 data-nosnippet>745</a>        <span class="kw">let </span>delay = U256::ZERO;
+<a href=#746 id=746 data-nosnippet>746</a>
+<a href=#747 id=747 data-nosnippet>747</a>        <span class="kw">let </span>proposal = encode_stake_table_v3_timelock_proposal(
+<a href=#748 id=748 data-nosnippet>748</a>            proxy_addr,
+<a href=#749 id=749 data-nosnippet>749</a>            v3_impl_addr,
+<a href=#750 id=750 data-nosnippet>750</a>            timelock_addr,
+<a href=#751 id=751 data-nosnippet>751</a>            Bytes::new(),
+<a href=#752 id=752 data-nosnippet>752</a>            <span class="kw-2">&amp;</span>StakeTableV3TimelockProposalParams { salt, delay },
+<a href=#753 id=753 data-nosnippet>753</a>        )<span class="question-mark">?</span>;
+<a href=#754 id=754 data-nosnippet>754</a>
+<a href=#755 id=755 data-nosnippet>755</a>        <span class="kw">let </span>expected_inner: Bytes = StakeTableV3::upgradeToAndCallCall {
+<a href=#756 id=756 data-nosnippet>756</a>            newImplementation: v3_impl_addr,
+<a href=#757 id=757 data-nosnippet>757</a>            data: Bytes::new(),
+<a href=#758 id=758 data-nosnippet>758</a>        }
+<a href=#759 id=759 data-nosnippet>759</a>        .abi_encode()
+<a href=#760 id=760 data-nosnippet>760</a>        .into();
+<a href=#761 id=761 data-nosnippet>761</a>
+<a href=#762 id=762 data-nosnippet>762</a>        <span class="kw">let </span>expected_schedule = OpsTimelock::scheduleCall {
+<a href=#763 id=763 data-nosnippet>763</a>            target: proxy_addr,
+<a href=#764 id=764 data-nosnippet>764</a>            value: U256::ZERO,
+<a href=#765 id=765 data-nosnippet>765</a>            data: expected_inner,
+<a href=#766 id=766 data-nosnippet>766</a>            predecessor: B256::ZERO,
+<a href=#767 id=767 data-nosnippet>767</a>            salt,
+<a href=#768 id=768 data-nosnippet>768</a>            delay,
+<a href=#769 id=769 data-nosnippet>769</a>        }
+<a href=#770 id=770 data-nosnippet>770</a>        .abi_encode();
+<a href=#771 id=771 data-nosnippet>771</a>        <span class="macro">assert_eq!</span>(proposal.schedule.data.to_vec(), expected_schedule);
+<a href=#772 id=772 data-nosnippet>772</a>
+<a href=#773 id=773 data-nosnippet>773</a>        <span class="prelude-val">Ok</span>(())
+<a href=#774 id=774 data-nosnippet>774</a>    }
+<a href=#775 id=775 data-nosnippet>775</a>}
 </code></pre></div></section></main></body></html>

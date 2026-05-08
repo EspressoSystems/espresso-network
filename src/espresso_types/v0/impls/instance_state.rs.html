@@ -6,7 +6,7 @@
 <a href=#6 id=6 data-nosnippet>6</a><span class="attr">#[cfg(any(test, feature = <span class="string">"testing"</span>))]
 <a href=#7 id=7 data-nosnippet>7</a></span><span class="kw">use </span>async_lock::RwLock;
 <a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>async_trait::async_trait;
-<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV2};
+<a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
 <a href=#10 id=10 data-nosnippet>10</a><span class="kw">use </span>hotshot_types::{
 <a href=#11 id=11 data-nosnippet>11</a>    HotShotConfig, data::EpochNumber, epoch_membership::EpochMembershipCoordinator,
 <a href=#12 id=12 data-nosnippet>12</a>    traits::states::InstanceState,
@@ -101,7 +101,7 @@
 <a href=#101 id=101 data-nosnippet>101</a>                    .context(<span class="string">"No stake table contract in chain config"</span>)<span class="question-mark">?</span>;
 <a href=#102 id=102 data-nosnippet>102</a>
 <a href=#103 id=103 data-nosnippet>103</a>                <span class="kw">let </span>stake_table =
-<a href=#104 id=104 data-nosnippet>104</a>                    StakeTableV2::new(stake_table_address, <span class="self">self</span>.l1_client.provider.clone());
+<a href=#104 id=104 data-nosnippet>104</a>                    StakeTableV3::new(stake_table_address, <span class="self">self</span>.l1_client.provider.clone());
 <a href=#105 id=105 data-nosnippet>105</a>                <span class="kw">let </span>light_client_contract_address = stake_table.lightClient().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#106 id=106 data-nosnippet>106</a>
 <a href=#107 id=107 data-nosnippet>107</a>                <span class="self">self</span>.light_client_contract_address
@@ -123,7 +123,7 @@
 <a href=#123 id=123 data-nosnippet>123</a>                    .context(<span class="string">"No stake table contract in chain config"</span>)<span class="question-mark">?</span>;
 <a href=#124 id=124 data-nosnippet>124</a>
 <a href=#125 id=125 data-nosnippet>125</a>                <span class="kw">let </span>stake_table =
-<a href=#126 id=126 data-nosnippet>126</a>                    StakeTableV2::new(stake_table_address, <span class="self">self</span>.l1_client.provider.clone());
+<a href=#126 id=126 data-nosnippet>126</a>                    StakeTableV3::new(stake_table_address, <span class="self">self</span>.l1_client.provider.clone());
 <a href=#127 id=127 data-nosnippet>127</a>                <span class="kw">let </span>token_contract_address = stake_table.token().call().<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#128 id=128 data-nosnippet>128</a>
 <a href=#129 id=129 data-nosnippet>129</a>                <span class="self">self</span>.token_contract_address

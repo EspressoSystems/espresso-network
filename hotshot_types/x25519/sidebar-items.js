@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["X25519_SECRET_KEY"],"struct":["Keypair","PublicKey","SecretKey"]};
+window.SIDEBAR_ITEMS = {"constant":["X25519_PUBLIC_KEY","X25519_SECRET_KEY"],"struct":["Keypair","PublicKey","SecretKey"]};

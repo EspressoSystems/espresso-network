@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["fetch_commission","update_commission"]};
+window.SIDEBAR_ITEMS = {"fn":["fetch_commission","update_commission","update_network_config"]};
