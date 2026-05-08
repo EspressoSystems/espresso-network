@@ -204,11 +204,7 @@ impl v1::HotShotAvailabilityApi for TestApi {
     async fn get_header(&self, _id: v1::BlockId) -> Result<Self::Header> {
         Ok(serde_json::json!({}))
     }
-    async fn get_header_range(
-        &self,
-        _from: usize,
-        _until: usize,
-    ) -> Result<Vec<Self::Header>> {
+    async fn get_header_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Header>> {
         Ok(vec![])
     }
     async fn get_block(&self, _id: v1::BlockId) -> Result<Self::Block> {
@@ -220,11 +216,7 @@ impl v1::HotShotAvailabilityApi for TestApi {
     async fn get_payload(&self, _id: v1::PayloadId) -> Result<Self::Payload> {
         Ok(serde_json::json!({}))
     }
-    async fn get_payload_range(
-        &self,
-        _from: usize,
-        _until: usize,
-    ) -> Result<Vec<Self::Payload>> {
+    async fn get_payload_range(&self, _from: usize, _until: usize) -> Result<Vec<Self::Payload>> {
         Ok(vec![])
     }
     async fn get_vid_common(&self, _id: v1::BlockId) -> Result<Self::VidCommon> {

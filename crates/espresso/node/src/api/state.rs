@@ -1475,8 +1475,7 @@ where
     type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
     type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
     type Header = hotshot_query_service::Header<espresso_types::SeqTypes>;
-    type Payload =
-        hotshot_query_service::availability::PayloadQueryData<espresso_types::SeqTypes>;
+    type Payload = hotshot_query_service::availability::PayloadQueryData<espresso_types::SeqTypes>;
     type VidCommon =
         hotshot_query_service::availability::VidCommonQueryData<espresso_types::SeqTypes>;
     type Transaction =
@@ -1493,14 +1492,16 @@ where
         &self,
         id: espresso_api::v1::availability::LeafId,
     ) -> anyhow::Result<Self::Leaf> {
-        use hotshot_query_service::availability::LeafId as HsLeafId;
         use std::time::Duration;
+
+        use hotshot_query_service::availability::LeafId as HsLeafId;
 
         let hs_id = match id {
             espresso_api::v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::availability::LeafId::Hash(h) => {
-                HsLeafId::Hash(h.parse().map_err(|_| anyhow::anyhow!("invalid leaf hash"))?)
-            },
+            espresso_api::v1::availability::LeafId::Hash(h) => HsLeafId::Hash(
+                h.parse()
+                    .map_err(|_| anyhow::anyhow!("invalid leaf hash"))?,
+            ),
         };
         let ds = &*self.data_source;
         ds.get_leaf(hs_id)
@@ -1510,13 +1511,10 @@ where
             .ok_or_else(|| anyhow::anyhow!("leaf not found"))
     }
 
-    async fn get_leaf_range(
-        &self,
-        from: usize,
-        until: usize,
-    ) -> anyhow::Result<Vec<Self::Leaf>> {
-        use futures::StreamExt as _;
+    async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>> {
         use std::time::Duration;
+
+        use futures::StreamExt as _;
 
         let timeout = Duration::from_millis(500);
         let ds = &*self.data_source;
@@ -1555,8 +1553,9 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::Header>> {
-        use futures::StreamExt as _;
         use std::time::Duration;
+
+        use futures::StreamExt as _;
 
         let timeout = Duration::from_millis(500);
         let ds = &*self.data_source;
@@ -1590,13 +1589,10 @@ where
             .ok_or_else(|| anyhow::anyhow!("block not found for {}", hs_id))
     }
 
-    async fn get_block_range(
-        &self,
-        from: usize,
-        until: usize,
-    ) -> anyhow::Result<Vec<Self::Block>> {
-        use futures::StreamExt as _;
+    async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>> {
         use std::time::Duration;
+
+        use futures::StreamExt as _;
 
         let timeout = Duration::from_millis(500);
         let ds = &*self.data_source;
@@ -1635,8 +1631,9 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::Payload>> {
-        use futures::StreamExt as _;
         use std::time::Duration;
+
+        use futures::StreamExt as _;
 
         let timeout = Duration::from_millis(500);
         let ds = &*self.data_source;
@@ -1675,8 +1672,9 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
-        use futures::StreamExt as _;
         use std::time::Duration;
+
+        use futures::StreamExt as _;
 
         let timeout = Duration::from_millis(500);
         let ds = &*self.data_source;
@@ -1700,10 +1698,11 @@ where
         height: u64,
         index: u64,
     ) -> anyhow::Result<Self::Transaction> {
+        use std::time::Duration;
+
         use hotshot_query_service::availability::{
             BlockId as HsBlockId, QueryablePayload as _, TransactionQueryData,
         };
-        use std::time::Duration;
 
         let ds = &*self.data_source;
         let block = ds
@@ -1717,7 +1716,11 @@ where
             .payload()
             .nth(block.metadata(), index as usize)
             .ok_or_else(|| {
-                anyhow::anyhow!("transaction index {} out of bounds in block {}", index, height)
+                anyhow::anyhow!(
+                    "transaction index {} out of bounds in block {}",
+                    index,
+                    height
+                )
             })?;
         let tx = block
             .transaction(&idx)
@@ -1726,10 +1729,7 @@ where
             .ok_or_else(|| anyhow::anyhow!("failed to build transaction query data"))
     }
 
-    async fn get_transaction_by_hash(
-        &self,
-        hash: String,
-    ) -> anyhow::Result<Self::Transaction> {
+    async fn get_transaction_by_hash(&self, hash: String) -> anyhow::Result<Self::Transaction> {
         use std::time::Duration;
 
         let ds = &*self.data_source;
@@ -1752,11 +1752,12 @@ where
         height: u64,
         index: u64,
     ) -> anyhow::Result<Self::TransactionWithProof> {
+        use std::time::Duration;
+
         use hotshot_query_service::availability::{
             BlockId as HsBlockId, QueryablePayload as _, TransactionQueryData,
             TransactionWithProofQueryData,
         };
-        use std::time::Duration;
 
         let ds = &*self.data_source;
         let timeout = Duration::from_millis(500);
@@ -1770,15 +1771,19 @@ where
             vid_fetch.with_timeout(timeout)
         );
 
-        let block =
-            block.ok_or_else(|| anyhow::anyhow!("block {} not found", height))?;
-        let vid = vid.ok_or_else(|| anyhow::anyhow!("VID common not found for block {}", height))?;
+        let block = block.ok_or_else(|| anyhow::anyhow!("block {} not found", height))?;
+        let vid =
+            vid.ok_or_else(|| anyhow::anyhow!("VID common not found for block {}", height))?;
 
         let idx = block
             .payload()
             .nth(block.metadata(), index as usize)
             .ok_or_else(|| {
-                anyhow::anyhow!("transaction index {} out of bounds in block {}", index, height)
+                anyhow::anyhow!(
+                    "transaction index {} out of bounds in block {}",
+                    index,
+                    height
+                )
             })?;
         let tx = block
             .transaction(&idx)
@@ -1795,9 +1800,12 @@ where
         &self,
         hash: String,
     ) -> anyhow::Result<Self::TransactionWithProof> {
-        use hotshot_query_service::availability::{BlockId as HsBlockId, TransactionWithProofQueryData};
-        use hotshot_query_service::types::HeightIndexed as _;
         use std::time::Duration;
+
+        use hotshot_query_service::{
+            availability::{BlockId as HsBlockId, TransactionWithProofQueryData},
+            types::HeightIndexed as _,
+        };
 
         let ds = &*self.data_source;
         let timeout = Duration::from_millis(500);
@@ -1820,10 +1828,7 @@ where
             .with_timeout(timeout)
             .await
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "VID common not found for block {}",
-                    bwt.block.height()
-                )
+                anyhow::anyhow!("VID common not found for block {}", bwt.block.height())
             })?;
 
         let proof = bwt
@@ -1834,8 +1839,9 @@ where
     }
 
     async fn get_block_summary(&self, height: usize) -> anyhow::Result<Self::BlockSummary> {
-        use hotshot_query_service::availability::{BlockId as HsBlockId, BlockSummaryQueryData};
         use std::time::Duration;
+
+        use hotshot_query_service::availability::{BlockId as HsBlockId, BlockSummaryQueryData};
 
         let ds = &*self.data_source;
         let block = ds
@@ -1852,9 +1858,10 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::BlockSummary>> {
+        use std::time::Duration;
+
         use futures::StreamExt as _;
         use hotshot_query_service::availability::BlockSummaryQueryData;
-        use std::time::Duration;
 
         let timeout = Duration::from_millis(500);
         let ds = &*self.data_source;

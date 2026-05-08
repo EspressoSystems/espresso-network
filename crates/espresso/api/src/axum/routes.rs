@@ -143,13 +143,11 @@ pub mod v1 {
         "/v1/availability/transaction/{height}/{index}/proof";
     pub const TRANSACTION_PROOF_BY_HASH_ROUTE: &str =
         "/v1/availability/transaction/hash/{hash}/proof";
-    pub const TRANSACTION_BY_POSITION_ROUTE: &str =
-        "/v1/availability/transaction/{height}/{index}";
+    pub const TRANSACTION_BY_POSITION_ROUTE: &str = "/v1/availability/transaction/{height}/{index}";
     pub const TRANSACTION_BY_HASH_ROUTE: &str = "/v1/availability/transaction/hash/{hash}";
 
     pub const BLOCK_SUMMARY_BY_HEIGHT_ROUTE: &str = "/v1/availability/block/summary/{height}";
-    pub const BLOCK_SUMMARY_RANGE_ROUTE: &str =
-        "/v1/availability/block/summaries/{from}/{until}";
+    pub const BLOCK_SUMMARY_RANGE_ROUTE: &str = "/v1/availability/block/summaries/{from}/{until}";
 
     pub const LIMITS_ROUTE: &str = "/v1/availability/limits";
     pub const CERT2_BY_HEIGHT_ROUTE: &str = "/v1/availability/cert2/{height}";

@@ -82,8 +82,7 @@ pub trait HotShotAvailabilityApi {
     type Cert2: Serialize + Send + Sync;
 
     async fn get_leaf(&self, id: LeafId) -> anyhow::Result<Self::Leaf>;
-    async fn get_leaf_range(&self, from: usize, until: usize)
-        -> anyhow::Result<Vec<Self::Leaf>>;
+    async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>>;
 
     async fn get_header(&self, id: BlockId) -> anyhow::Result<Self::Header>;
     async fn get_header_range(
@@ -93,11 +92,7 @@ pub trait HotShotAvailabilityApi {
     ) -> anyhow::Result<Vec<Self::Header>>;
 
     async fn get_block(&self, id: BlockId) -> anyhow::Result<Self::Block>;
-    async fn get_block_range(
-        &self,
-        from: usize,
-        until: usize,
-    ) -> anyhow::Result<Vec<Self::Block>>;
+    async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>>;
 
     async fn get_payload(&self, id: PayloadId) -> anyhow::Result<Self::Payload>;
     async fn get_payload_range(

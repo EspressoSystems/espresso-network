@@ -8029,7 +8029,10 @@ mod test {
                 &http,
                 api_port,
                 axum_port,
-                &format!("availability/block/summaries/{avail_block}/{}", avail_block + 1),
+                &format!(
+                    "availability/block/summaries/{avail_block}/{}",
+                    avail_block + 1
+                ),
             )
             .await?;
 
