@@ -32,7 +32,8 @@ async fn send_proposal_and_vote1s(
     node_key: &BLSPubKey,
 ) {
     let test_view = &test_data.views[view_idx];
-    harness.message(test_view.proposal_input(node_key)).await;
+    harness.message(test_view.vid_share_input(node_key)).await;
+    harness.message(test_view.proposal_input()).await;
 
     for i in 0..THRESHOLD {
         harness.message(test_view.vote1_input(i)).await;
@@ -100,15 +101,17 @@ async fn test_sequential_vote1() {
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
     harness
-        .message(test_data.views[0].proposal_input(&node_key))
+        .message(test_data.views[0].vid_share_input(&node_key))
         .await;
+    harness.message(test_data.views[0].proposal_input()).await;
     harness
         .apply_and_process(test_data.views[0].block_reconstructed_input())
         .await;
 
     harness
-        .message(test_data.views[1].proposal_input(&node_key))
+        .message(test_data.views[1].vid_share_input(&node_key))
         .await;
+    harness.message(test_data.views[1].proposal_input()).await;
 
     harness
         .process_until(|inputs| {
@@ -200,8 +203,9 @@ async fn test_leader_proposal() {
     let test_view = &test_data.views[0];
 
     harness
-        .message(test_view.proposal_input(&leader_for_view_2))
+        .message(test_view.vid_share_input(&leader_for_view_2))
         .await;
+    harness.message(test_view.proposal_input()).await;
 
     for i in 0..THRESHOLD {
         harness.message(test_view.vote1_input(i)).await;
