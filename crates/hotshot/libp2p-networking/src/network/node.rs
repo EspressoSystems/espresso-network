@@ -728,11 +728,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             error!(
                                 "AutoNAT: this node is NOT publicly reachable (confirmed by \
                                  repeated probes). Peers cannot direct-message us, so leader \
-                                 views will fail and we will accumulate missed slots. Fixes: set \
+                                 views may fail and we may accumulate missed slots. Verify \
                                  --libp2p-advertise-address (env \
-                                 ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS) to a publicly reachable \
-                                 host:port, and ensure inbound UDP at that port is open from the \
-                                 public internet (firewall/NAT/security group)."
+                                 ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS) is set a publicly \
+                                 reachable host:port, and ensure inbound UDP at that port is open \
+                                 from the public internet (firewall/NAT/security group)."
                             );
                             self.autonat_private_logged = true;
                         }
