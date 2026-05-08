@@ -2818,7 +2818,7 @@ name = "cdn-broker"
 version = "0.6.2-compat"
 source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#0be970e7eca8d66b2cbf6b36a82e7fba84991a7d"
 dependencies = [
- "cdn-proto 0.6.2-compat (git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs)",
+ "cdn-proto",
  "clap 4.6.1",
  "console-subscriber",
  "derivative",
@@ -2838,9 +2838,9 @@ dependencies = [
 [[package]]
 name = "cdn-client"
 version = "0.6.2"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#0be970e7eca8d66b2cbf6b36a82e7fba84991a7d"
 dependencies = [
- "cdn-proto 0.6.2-compat (git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2)",
+ "cdn-proto",
  "clap 4.6.1",
  "derive_more 1.0.0",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
@@ -2854,48 +2854,14 @@ dependencies = [
 [[package]]
 name = "cdn-marshal"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#0be970e7eca8d66b2cbf6b36a82e7fba84991a7d"
 dependencies = [
- "cdn-proto 0.6.2-compat (git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2)",
+ "cdn-proto",
  "clap 4.6.1",
  "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
-]
-
-[[package]]
-name = "cdn-proto"
-version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
-dependencies = [
- "anyhow",
- "ark-serialize 0.5.0",
- "async-channel 2.5.0",
- "async-trait",
- "capnp",
- "derivative",
- "derive_more 1.0.0",
- "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
- "lazy_static",
- "mnemonic",
- "num_enum",
- "pem",
- "prometheus",
- "quinn",
- "rand 0.8.6",
- "rcgen",
- "redis",
- "rkyv",
- "rustls 0.23.39",
- "rustls-pki-types",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
- "tokio-rustls",
- "tracing",
- "url",
- "warp 0.3.7",
 ]
 
 [[package]]
