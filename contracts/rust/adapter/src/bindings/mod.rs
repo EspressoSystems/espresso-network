@@ -28,3 +28,4 @@ pub mod r#reward_claim;
 pub mod r#safe_exit_timelock;
 pub mod r#stake_table;
 pub mod r#stake_table_v2;
+pub mod r#stake_table_v3;
