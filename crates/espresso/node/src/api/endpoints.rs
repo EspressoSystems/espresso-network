@@ -53,7 +53,7 @@ use crate::{
     options::PublicNodeConfig,
 };
 
-mod availability;
+pub(crate) mod availability;
 pub(super) use availability::*;
 
 pub(super) fn fee<State, Ver>(

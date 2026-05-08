@@ -9,6 +9,7 @@ The `axum` (HTTP/JSON) and `tonic` (gRPC) APIs are defined in `crates/espresso/a
 To add a new endpoint to the API, you must:
 
 - Define new protobuf serialization types in the `serialization-api` crate at `crates/serialization/api`, and ensure that the `prost`-generated rust types are built by `cargo build -p serialization-api`.
+- Optionally, add example values for any fields in the `examples.toml` file.
 - Extend the `ApiSerialization` trait in the `serialization-api` crate to allow the implementation to declare the corresponding internal types, as well as any necessary conversions to or from these types.
 - Declare any desired gRPC endpoints in the protobuf files.
 - Define a trait interface (or extend one of the current API traits) in `espresso-api` for the application to implement, which performs the desired logic with our internal types (e.g. queries the database, reads consensus state).
