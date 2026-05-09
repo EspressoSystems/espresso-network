@@ -112,6 +112,11 @@ bulk_upgrade_remaining "${UPGRADE_TAG}"
 log "Settling for ${SETTLE_SECONDS} seconds"
 sleep "${SETTLE_SECONDS}"
 
+log "Asserting all espresso-node-N containers run image tag ${UPGRADE_TAG}"
+for N in 0 1 2 3 4; do
+  assert_service_image "espresso-node-${N}" "${UPGRADE_TAG}"
+done
+
 log "Final smoke test"
 DOCKER_TAG="${UPGRADE_TAG}" timeout 600 scripts/smoke-test-demo
 

@@ -100,6 +100,26 @@ node_api_port() {
   printf '%s' "${!var:-}"
 }
 
+# assert_service_image <service> <expected_tag>
+# Asserts the given compose service's running container is on
+# `<image>:<expected_tag>` (matched as a suffix on .Config.Image).
+assert_service_image() {
+  local service="$1"
+  local expected_tag="$2"
+  local cid actual
+  cid="$(compose ps -q "${service}")"
+  if [[ -z "${cid}" ]]; then
+    err "service ${service} has no running container"
+    return 1
+  fi
+  actual="$(docker inspect "${cid}" --format='{{.Config.Image}}')"
+  if [[ "${actual}" != *":${expected_tag}" ]]; then
+    err "service ${service} image is ${actual}, expected tag ${expected_tag}"
+    return 1
+  fi
+  log "service ${service} image: ${actual}"
+}
+
 # Pick a stable monitor node to poll for liveness during a roll.
 # Nodes 0, 1, 3, 4 have the `query` module; node 2 does not. Use node-1 by
 # default; when rolling node-1, use node-0 instead.
