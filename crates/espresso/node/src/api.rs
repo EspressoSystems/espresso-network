@@ -7912,24 +7912,30 @@ mod test {
                             } else {
                                 // V2 case
 
-                                // Submit two transactions to the same namespace so the namespace-filtered
-                                // WS stream produces ≥2 messages when both are included.
+                                // Submit two transactions to the same namespace in separate blocks
+                                // so the namespace-filtered WS stream produces ≥2 messages.
+                                // Submitting both at once risks the builder batching them into a
+                                // single block; submitting sequentially (wait between) guarantees
+                                // different blocks so the second wait_for_decide_on_handle doesn't
+                                // hang looking for an event that was already consumed by the first.
                                 let avail_ns = NamespaceId::from(42_u32);
                                 let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
-                                let avail_tx2 = Transaction::new(avail_ns, vec![4, 5, 6]);
                                 network
                                     .server
                                     .submit_transaction(avail_tx.clone())
                                     .await
                                     .unwrap();
+                                let (avail_block, _) =
+                                    wait_for_decide_on_handle(&mut events, &avail_tx).await;
+
+                                // Submit the second transaction only after the first is decided,
+                                // ensuring it lands in a strictly later block.
+                                let avail_tx2 = Transaction::new(avail_ns, vec![4, 5, 6]);
                                 network
                                     .server
                                     .submit_transaction(avail_tx2.clone())
                                     .await
                                     .unwrap();
-                                let (avail_block, _) =
-                                    wait_for_decide_on_handle(&mut events, &avail_tx).await;
-                                // Wait for the second transaction too so it's committed before we stop consensus.
                                 wait_for_decide_on_handle(&mut events, &avail_tx2).await;
 
                                 wait_until_block_height(
