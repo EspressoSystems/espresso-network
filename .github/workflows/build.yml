@@ -548,6 +548,8 @@ jobs:
     needs: [build-dockers-amd]
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
       - uses: taiki-e/install-action@just
 
       - name: Download artifacts
@@ -578,6 +580,8 @@ jobs:
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
       - uses: taiki-e/install-action@just
 
       - name: Set upgrade tag

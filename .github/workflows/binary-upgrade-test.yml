@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
       - uses: taiki-e/install-action@just
 
       - name: Run binary upgrade test
