@@ -1,0 +1,29 @@
+name: Binary Upgrade Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_tag:
+        description: "Base docker tag to start from (must exist in ghcr.io)"
+        required: false
+        default: "20260505"
+      upgrade_tag:
+        description: "Upgrade docker tag to roll to (must exist in ghcr.io)"
+        required: false
+        default: "main"
+
+jobs:
+  binary-upgrade-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@just
+
+      - name: Run binary upgrade test
+        env:
+          BASE_TAG: ${{ inputs.base_tag }}
+          UPGRADE_TAG: ${{ inputs.upgrade_tag }}
+          UPGRADE_PULL: "1"
+        run: |
+          set -o pipefail
+          timeout -v 1800 ./binary-upgrade-tests/run.sh | sed -e 's/^/binary-upgrade: /;'
