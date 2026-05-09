@@ -63,7 +63,7 @@ pub struct Options {
     pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
-    pub public_node_config: Option<PublicNodeConfig>,
+    pub public_node_config: Option<Box<PublicNodeConfig>>,
 }
 
 impl From<Http> for Options {
@@ -133,7 +133,7 @@ impl Options {
     ///
     /// If unset, the `/config/runtime` route returns 404.
     pub fn public_node_config(mut self, c: PublicNodeConfig) -> Self {
-        self.public_node_config = Some(c);
+        self.public_node_config = Some(Box::new(c));
         self
     }
 
@@ -351,7 +351,7 @@ impl Options {
         })?;
 
         if self.config.is_some() {
-            let node_cfg = self.public_node_config.clone();
+            let node_cfg = self.public_node_config.as_deref().cloned();
             register_api("config", &mut app, move |ver| {
                 endpoints::config(bind_version, ver, node_cfg.clone())
                     .context("failed to define config api")
@@ -605,7 +605,7 @@ impl Options {
         })?;
 
         if self.config.is_some() {
-            let node_cfg = self.public_node_config.clone();
+            let node_cfg = self.public_node_config.as_deref().cloned();
             register_api("config", app, move |ver| {
                 endpoints::config(bind_version, ver, node_cfg.clone())
                     .context("failed to define config api")
