@@ -12,6 +12,7 @@ use std::{
 
 use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
+use espresso_telemetry::TelemetryOptions;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
 use espresso_utils::logging;
 use hotshot_types::addr::NetAddr;
@@ -343,6 +344,9 @@ pub struct Options {
 
     #[clap(flatten)]
     pub identity: Identity,
+
+    #[clap(flatten)]
+    pub telemetry: TelemetryOptions,
 
     #[clap(flatten)]
     pub proposal_fetcher_config: ProposalFetcherConfig,

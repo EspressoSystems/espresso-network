@@ -4823,6 +4823,7 @@ dependencies = [
  "espresso-keyset",
  "espresso-macros",
  "espresso-node",
+ "espresso-telemetry",
  "espresso-types",
  "espresso-utils",
  "futures",
@@ -4855,6 +4856,7 @@ dependencies = [
  "parking_lot",
  "pretty_assertions",
  "priority-queue",
+ "prometheus",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rand_distr",
@@ -4920,6 +4922,39 @@ dependencies = [
 name = "espresso-systems-common"
 version = "0.4.0"
 source = "git+https://github.com/espressosystems/espresso-systems-common?tag=0.4.0#5abd890f79014a86db31286e1f3a529f161e69de"
+
+[[package]]
+name = "espresso-telemetry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ark-serialize 0.5.0",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "clap 4.6.1",
+ "derivative",
+ "flate2",
+ "jf-signature 0.4.0 (git+https://github.com/EspressoSystems/jellyfish?tag=jf-signature-v0.4.0)",
+ "opentelemetry",
+ "opentelemetry-appender-tracing",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "prometheus",
+ "prost 0.14.3",
+ "prost-build",
+ "rand 0.8.6",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "snap",
+ "tagged-base64",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.23",
+ "url",
+]
 
 [[package]]
 name = "espresso-types"
@@ -5021,6 +5056,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-subscriber 0.3.23",
  "url",
  "vergen",
  "vergen-gitcl",
@@ -9460,6 +9496,90 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite 0.2.17",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "opentelemetry-appender-tracing"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef6a1ac5ca3accf562b8c306fa8483c85f4390f768185ab775f242f7fe8fdcc2"
+dependencies = [
+ "opentelemetry",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber 0.3.23",
+]
+
+[[package]]
+name = "opentelemetry-http"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7a6d09a73194e6b66df7c8f1b680f156d916a1a942abf2de06823dd02b7855d"
+dependencies = [
+ "async-trait",
+ "bytes 1.11.1",
+ "http 1.4.0",
+ "opentelemetry",
+ "reqwest 0.12.28",
+]
+
+[[package]]
+name = "opentelemetry-otlp"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f69cd6acbb9af919df949cd1ec9e5e7fdc2ef15d234b6b795aaa525cc02f71f"
+dependencies = [
+ "flate2",
+ "http 1.4.0",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "prost 0.14.3",
+ "reqwest 0.12.28",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7175df06de5eaee9909d4805a3d07e28bb752c34cab57fa9cff549da596b30f"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prost 0.14.3",
+ "tonic 0.14.5",
+ "tonic-prost",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e14ae4f5991976fd48df6d843de219ca6d31b01daaab2dad5af2badeded372bd"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry",
+ "percent-encoding",
+ "rand 0.9.4",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10857,7 +10977,9 @@ dependencies = [
  "base64 0.22.1",
  "bytes 1.11.1",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "h2 0.4.13",
  "http 1.4.0",
  "http-body 1.0.1",
@@ -12186,6 +12308,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "snap"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b6b67fb9a61334225b5b790716f609cd58395f895b3fe8b328786812a40bc3b"
 
 [[package]]
 name = "snow"

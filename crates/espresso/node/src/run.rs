@@ -1,5 +1,6 @@
 use anyhow::Context;
 use clap::Parser;
+use espresso_telemetry as telemetry;
 use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
@@ -16,7 +17,44 @@ use crate::keyset::KeySet;
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let opt = Options::parse();
-    opt.logging.init();
+
+    // Build the telemetry pipeline before logging so its layer can be attached
+    // to the global subscriber. We need the staking key, so eagerly load the
+    // keyset; the run path below consumes it via `opt.key_set.try_into()` again
+    // (cheap clone).
+    //
+    // Note: at this point the API setup hasn't run yet, so the prometheus
+    // `Registry` deposited into `telemetry::REGISTRY` is `None`. The OTel logs
+    // path starts here; the metrics push task is attached later via
+    // `TelemetryHandle::attach_metrics_push` once the API setup has run.
+    let mut telemetry_handle = match opt.key_set.clone().try_into() {
+        Ok(KeySet { staking, .. }) => match telemetry::init(
+            &opt.telemetry,
+            &staking,
+            opt.identity.node_name.as_deref(),
+            opt.identity.company_name.as_deref(),
+            telemetry::registry(),
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("telemetry init failed: {e:#}; continuing without telemetry");
+                None
+            },
+        },
+        Err(e) => {
+            // The keyset will fail again below with a proper error path. Skip
+            // telemetry for now and let the main flow surface the error.
+            if opt.telemetry.enable {
+                eprintln!(
+                    "telemetry init skipped: cannot load staking key: {e:#}; node startup will \
+                     fail next"
+                );
+            }
+            None
+        },
+    };
+    let otel_layer = telemetry_handle.as_ref().map(|h| h.tracing_layer());
+    opt.logging.init_with_otel(otel_layer);
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut modules = opt.modules();
@@ -25,14 +63,26 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let genesis = Genesis::from_file(&opt.genesis_file)?;
     tracing::warn!(?genesis, "genesis");
 
-    if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage).await
+    let result = if let Some(storage) = modules.storage_fs.take() {
+        run_with_storage(genesis, modules, opt, storage, telemetry_handle.as_mut()).await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(genesis, modules, opt, storage).await
+        run_with_storage(genesis, modules, opt, storage, telemetry_handle.as_mut()).await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
-        run_with_storage(genesis, modules, opt, persistence::fs::Options::default()).await
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            persistence::fs::Options::default(),
+            telemetry_handle.as_mut(),
+        )
+        .await
+    };
+
+    if let Some(h) = telemetry_handle {
+        h.shutdown();
     }
+    result
 }
 
 async fn run_with_storage<S>(
@@ -40,11 +90,19 @@ async fn run_with_storage<S>(
     modules: Modules,
     opt: Options,
     storage_opt: S,
+    telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
 ) -> anyhow::Result<()>
 where
     S: DataSourceOptions,
 {
     let ctx = init_with_storage(genesis, modules, opt, storage_opt).await?;
+
+    // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
+    // (if the HTTP module was configured). Attach the metrics push task now,
+    // before consensus starts churning.
+    if let (Some(handle), Some(registry)) = (telemetry_handle, telemetry::registry()) {
+        handle.attach_metrics_push(registry);
+    }
 
     // Start doing consensus.
     ctx.start_consensus().await;
