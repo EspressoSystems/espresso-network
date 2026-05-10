@@ -56,37 +56,21 @@ get_block_height() {
   fi
 }
 
-# wait_for_height_advance <api_url> <delta> <timeout_seconds>
-wait_for_height_advance() {
+# wait_for_height_at_or_above <api_url> <target_height> <timeout_seconds>
+wait_for_height_at_or_above() {
   local api_url="$1"
-  local delta="$2"
+  local target="$2"
   local timeout_seconds="$3"
+  local current start=$SECONDS
 
-  local initial=""
-  local current
-  local start elapsed
-  start="${SECONDS}"
-
-  while [[ -z "${initial}" ]]; do
-    initial="$(get_block_height "${api_url}")"
-    elapsed=$((SECONDS - start))
-    if ((elapsed > timeout_seconds)); then
-      err "Could not read initial height from ${api_url} within ${timeout_seconds}s"
-      return 1
-    fi
-    [[ -z "${initial}" ]] && sleep 2
-  done
-
-  log "Initial height at ${api_url}: ${initial}; waiting for advance by ${delta}"
   while true; do
     current="$(get_block_height "${api_url}")"
-    if [[ -n "${current}" ]] && ((current >= initial + delta)); then
-      log "Height advanced from ${initial} to ${current} at ${api_url}"
+    if [[ -n "${current}" ]] && ((current >= target)); then
+      log "Height ${current} >= ${target} at ${api_url}"
       return 0
     fi
-    elapsed=$((SECONDS - start))
-    if ((elapsed > timeout_seconds)); then
-      err "Timed out after ${timeout_seconds}s waiting for height to advance from ${initial} (last: ${current:-unknown}) at ${api_url}"
+    if ((SECONDS - start > timeout_seconds)); then
+      err "Timed out after ${timeout_seconds}s waiting for height >= ${target} at ${api_url} (last: ${current:-unknown})"
       return 1
     fi
     sleep 2
@@ -100,8 +84,22 @@ node_api_port() {
   printf '%s' "${!var:-}"
 }
 
+# upgraded_services
+# Lists every compose service that should be on UPGRADE_TAG after the test:
+# the 5 nodes plus everything bulk_upgrade_remaining recreates. Excludes
+# infrastructure / databases and one-shots that are intentionally left on
+# BASE_TAG (deploy-*, claim-rewards, fund-builder, stake-for-demo,
+# wait-for-v4). Some of those one-shots retry forever and remain in the
+# "running" state, so we cannot rely on container state to distinguish them.
+upgraded_services() {
+  compose config --services |
+    grep -Ev '^espresso-node-db-' |
+    grep -Ev '^(keydb|demo-l1-network|block-explorer|wait-for-v4)$' |
+    grep -Ev '^(deploy-|claim-rewards|fund-builder|stake-for-demo)$'
+}
+
 # assert_all_espresso_images <expected_tag>
-# Asserts every running service whose image is published under
+# Asserts every upgraded service whose image is published under
 # ghcr.io/espressosystems/espresso-network/ is on the expected tag.
 assert_all_espresso_images() {
   local expected_tag="$1"
@@ -119,25 +117,39 @@ assert_all_espresso_images() {
     else
       log "service ${service} image: ${image}"
     fi
-  done < <(compose ps --services --status running)
+  done < <(upgraded_services)
 
   return "${rc}"
 }
 
 # roll_node <n> <upgrade_tag>
 # Recreate just espresso-node-N at the upgrade tag, leaving other services
-# untouched. Wait for each query-enabled node (0, 1, 3, 4) to advance, which
-# verifies the rolled node rejoined consensus and the rest didn't stall. Node
-# 2 has no `query` module so it can't be polled.
+# untouched. Sample a reference height before the recreate, then wait for
+# every query-enabled node (0, 1, 3, 4) to reach reference + 2. This verifies
+# the rolled node rejoined consensus and the rest didn't stall. Node 2 has no
+# `query` module so it can't be polled.
 roll_node() {
   local n="$1"
   local upgrade_tag="$2"
 
-  log "Recreating espresso-node-${n} with tag=${upgrade_tag}"
+  # Pick a non-rolled node to sample reference height from.
+  local ref_n=0
+  [[ "${n}" == "0" ]] && ref_n=1
+  local ref_port
+  ref_port="$(node_api_port "${ref_n}")"
+  local initial
+  initial="$(get_block_height "http://localhost:${ref_port}")"
+  if [[ -z "${initial}" ]]; then
+    err "Could not read reference height from espresso-node-${ref_n}"
+    return 1
+  fi
+  local target=$((initial + 2))
+
+  log "Recreating espresso-node-${n} with tag=${upgrade_tag}; waiting for all query-enabled nodes to reach height ${target}"
   # No --wait: the new image's baked-in healthcheck reads ESPRESSO_NODE_API_PORT
   # but the old compose only sets ESPRESSO_SEQUENCER_API_PORT (the binary maps
-  # via env_compat.rs but the healthcheck shell can't). wait_for_height_advance
-  # against the API verifies consensus liveness directly.
+  # via env_compat.rs but the healthcheck shell can't). The height polling
+  # below verifies consensus liveness directly.
   DOCKER_TAG="${upgrade_tag}" compose up -d --no-deps --force-recreate "espresso-node-${n}"
 
   local monitor_n port
@@ -147,28 +159,18 @@ roll_node() {
       err "Could not resolve API port for espresso-node-${monitor_n}"
       return 1
     fi
-    wait_for_height_advance "http://localhost:${port}" 2 120 || return 1
+    wait_for_height_at_or_above "http://localhost:${port}" "${target}" 120 || return 1
   done
 }
 
 # bulk_upgrade_remaining <upgrade_tag>
-# Recreate the remaining long-running services pinned to DOCKER_TAG at the
-# upgrade tag. Excludes:
-#   - the 5 espresso-nodes (already rolled)
-#   - postgres dbs, keydb, demo-l1-network, block-explorer, wait-for-v4
-#   - one-shot deploy / staking services (deploy-*, stake-for-demo,
-#     fund-builder, claim-rewards). They already ran in phase 1; re-running
-#     them is redundant and some (e.g. deploy-lcv3-upgrade in 20260505) retry
-#     forever and would block the bulk up.
+# Recreate every service in upgraded_services except the 5 espresso-nodes
+# (already rolled individually) at the upgrade tag.
 bulk_upgrade_remaining() {
   local upgrade_tag="$1"
   local -a service_list
 
-  mapfile -t service_list < <(compose config --services |
-    grep -Ev '^espresso-node-[0-4]$' |
-    grep -Ev '^espresso-node-db-' |
-    grep -Ev '^(keydb|demo-l1-network|block-explorer|wait-for-v4)$' |
-    grep -Ev '^(deploy-|claim-rewards|fund-builder|stake-for-demo)')
+  mapfile -t service_list < <(upgraded_services | grep -Ev '^espresso-node-[0-4]$')
 
   if [[ ${#service_list[@]} -eq 0 ]]; then
     err "No remaining services found to upgrade"
