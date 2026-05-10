@@ -86,16 +86,17 @@ node_api_port() {
 
 # upgraded_services
 # Lists every compose service that should be on UPGRADE_TAG after the test:
-# the 5 nodes plus everything bulk_upgrade_remaining recreates. Excludes
-# infrastructure / databases and one-shots that are intentionally left on
-# BASE_TAG (deploy-*, claim-rewards, fund-builder, stake-for-demo,
-# wait-for-v4). Some of those one-shots retry forever and remain in the
-# "running" state, so we cannot rely on container state to distinguish them.
+# the 5 espresso-nodes plus everything bulk_upgrade_remaining recreates.
+# Excludes:
+#   - databases and infrastructure that aren't espresso images
+#     (espresso-node-db-*, keydb, demo-l1-network, block-explorer)
+#   - one-shots that already ran in phase 1 and shouldn't be re-run on the
+#     new tag (deploy-*, claim-rewards, fund-builder, stake-for-demo,
+#     cdn-whitelist, wait-for-v4). Some of these stay in "running" state
+#     while retrying, so we can't rely on container state to filter them.
 upgraded_services() {
-  compose config --services |
-    grep -Ev '^espresso-node-db-' |
-    grep -Ev '^(keydb|demo-l1-network|block-explorer|wait-for-v4)$' |
-    grep -Ev '^(deploy-|claim-rewards|fund-builder|stake-for-demo)$'
+  local exclude='^(espresso-node-db-.*|keydb|demo-l1-network|block-explorer|wait-for-v4|cdn-whitelist|claim-rewards|fund-builder|stake-for-demo|deploy-.*)$'
+  compose config --services | grep -Ev "${exclude}"
 }
 
 # assert_all_espresso_images <expected_tag>
