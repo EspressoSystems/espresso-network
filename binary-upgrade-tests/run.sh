@@ -61,8 +61,7 @@ export BASE_TAG UPGRADE_TAG KEEP_RUNNING UPGRADE_PULL
 export ESPRESSO_SEQUENCER_GENESIS_FILE="${ESPRESSO_SEQUENCER_GENESIS_FILE:-genesis/demo-drb-header.toml}"
 export ESPRESSO_NODE_GENESIS_FILE="${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo-drb-header.toml}"
 
-mkdir -p tmp
-BASE_DIR="$(mktemp -d tmp/binary-upgrade.XXXXXX)"
+BASE_DIR="$(mktemp -d -t espresso-binary-upgrade-test.XXXXXX)"
 export BASE_DIR
 
 trap cleanup EXIT
@@ -94,7 +93,7 @@ log "Starting network on ${BASE_TAG}"
 # retries forever (its hotshot-config fetch defaults to localhost:24000).
 # Run in background so the script can proceed; the smoke test polls for actual
 # readiness, and the trap handles cleanup.
-DOCKER_TAG="${BASE_TAG}" compose up -d >>tmp/compose-up.log 2>&1 &
+DOCKER_TAG="${BASE_TAG}" compose up -d >>"${BASE_DIR}/compose-up.log" 2>&1 &
 
 log "Initial smoke test"
 DOCKER_TAG="${BASE_TAG}" timeout 600 scripts/smoke-test-demo

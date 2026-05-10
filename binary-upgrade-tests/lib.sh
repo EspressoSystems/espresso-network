@@ -84,19 +84,33 @@ node_api_port() {
   printf '%s' "${!var:-}"
 }
 
+# Services NOT touched by the binary upgrade test:
+#   - one-shots that already ran in phase 1 against BASE_TAG and shouldn't be
+#     re-run on UPGRADE_TAG (deploy-*, fund-builder, stake-for-demo,
+#     cdn-whitelist, wait-for-v4)
+#   - infra services that don't use an espresso-network image (postgres dbs,
+#     keydb, demo-l1-network, block-explorer)
+# Compose profiles can't express this cleanly because non-profiled services
+# (e.g. espresso-node-2) `depends_on:` profiled ones (e.g. stake-for-demo),
+# which compose rejects when the profile is inactive.
+NOUPGRADE_SERVICES='block-explorer
+cdn-whitelist
+demo-l1-network
+deploy-espresso-contracts
+deploy-lcv3-upgrade
+deploy-pos-contracts-upgrades
+deploy-prover-contracts
+espresso-node-db-0
+espresso-node-db-1
+fund-builder
+keydb
+stake-for-demo
+wait-for-v4'
+
 # upgraded_services
-# Lists every compose service that should be on UPGRADE_TAG after the test:
-# the 5 espresso-nodes plus everything bulk_upgrade_remaining recreates.
-# Excludes:
-#   - databases and infrastructure that aren't espresso images
-#     (espresso-node-db-*, keydb, demo-l1-network, block-explorer)
-#   - one-shots that already ran in phase 1 and shouldn't be re-run on the
-#     new tag (deploy-*, claim-rewards, fund-builder, stake-for-demo,
-#     cdn-whitelist, wait-for-v4). Some of these stay in "running" state
-#     while retrying, so we can't rely on container state to filter them.
+# Lists every compose service that should be on UPGRADE_TAG after the test.
 upgraded_services() {
-  local exclude='^(espresso-node-db-.*|keydb|demo-l1-network|block-explorer|wait-for-v4|cdn-whitelist|claim-rewards|fund-builder|stake-for-demo|deploy-.*)$'
-  compose config --services | grep -Ev "${exclude}"
+  compose config --services | grep -vxF "${NOUPGRADE_SERVICES}"
 }
 
 # assert_all_espresso_images <expected_tag>
