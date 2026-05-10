@@ -22,7 +22,6 @@ Environment:
   UPGRADE_TAG      Target docker tag                              (default: main)
   KEEP_RUNNING     If 1, do not docker compose down on exit       (default: 0)
   UPGRADE_PULL     If 1, docker compose pull for upgrade tag      (default: 0)
-  SETTLE_SECONDS   Sleep after bulk upgrade before final smoke    (default: 30)
 EOF
 }
 
@@ -53,10 +52,9 @@ fi
 BASE_TAG="${BASE_TAG:-20260505}"
 UPGRADE_TAG="${UPGRADE_TAG:-main}"
 KEEP_RUNNING="${KEEP_RUNNING:-0}"
-SETTLE_SECONDS="${SETTLE_SECONDS:-30}"
 UPGRADE_PULL="${UPGRADE_PULL:-0}"
 
-export BASE_TAG UPGRADE_TAG KEEP_RUNNING SETTLE_SECONDS UPGRADE_PULL
+export BASE_TAG UPGRADE_TAG KEEP_RUNNING UPGRADE_PULL
 
 # Genesis ships inside the base image at /genesis; demo-drb-header.toml is
 # already there at 20260505 (V0.4, no protocol upgrade configured).
@@ -109,13 +107,8 @@ done
 log "Bulk-upgrading remaining services to ${UPGRADE_TAG}"
 bulk_upgrade_remaining "${UPGRADE_TAG}"
 
-log "Settling for ${SETTLE_SECONDS} seconds"
-sleep "${SETTLE_SECONDS}"
-
-log "Asserting all espresso-node-N containers run image tag ${UPGRADE_TAG}"
-for N in 0 1 2 3 4; do
-  assert_service_image "espresso-node-${N}" "${UPGRADE_TAG}"
-done
+log "Asserting all espresso-network images run tag ${UPGRADE_TAG}"
+assert_all_espresso_images "${UPGRADE_TAG}"
 
 log "Final smoke test"
 DOCKER_TAG="${UPGRADE_TAG}" timeout 600 scripts/smoke-test-demo

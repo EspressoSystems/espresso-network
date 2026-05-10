@@ -100,24 +100,28 @@ node_api_port() {
   printf '%s' "${!var:-}"
 }
 
-# assert_service_image <service> <expected_tag>
-# Asserts the given compose service's running container is on
-# `<image>:<expected_tag>` (matched as a suffix on .Config.Image).
-assert_service_image() {
-  local service="$1"
-  local expected_tag="$2"
-  local cid actual
-  cid="$(compose ps -q "${service}")"
-  if [[ -z "${cid}" ]]; then
-    err "service ${service} has no running container"
-    return 1
-  fi
-  actual="$(docker inspect "${cid}" --format='{{.Config.Image}}')"
-  if [[ "${actual}" != *":${expected_tag}" ]]; then
-    err "service ${service} image is ${actual}, expected tag ${expected_tag}"
-    return 1
-  fi
-  log "service ${service} image: ${actual}"
+# assert_all_espresso_images <expected_tag>
+# Asserts every running service whose image is published under
+# ghcr.io/espressosystems/espresso-network/ is on the expected tag.
+assert_all_espresso_images() {
+  local expected_tag="$1"
+  local prefix="ghcr.io/espressosystems/espresso-network/"
+  local service cid image rc=0
+
+  while read -r service; do
+    cid="$(compose ps -q "${service}")"
+    [[ -z "${cid}" ]] && continue
+    image="$(docker inspect "${cid}" --format='{{.Config.Image}}')"
+    [[ "${image}" != "${prefix}"* ]] && continue
+    if [[ "${image}" != *":${expected_tag}" ]]; then
+      err "service ${service} image is ${image}, expected tag ${expected_tag}"
+      rc=1
+    else
+      log "service ${service} image: ${image}"
+    fi
+  done < <(compose ps --services --status running)
+
+  return "${rc}"
 }
 
 # roll_node <n> <upgrade_tag>
