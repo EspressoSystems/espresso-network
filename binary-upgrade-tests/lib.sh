@@ -46,36 +46,47 @@ compose() {
     "$@"
 }
 
-# get_block_height <api_url> -> integer on stdout (empty on non-numeric/failure)
-get_block_height() {
-  local api_url="$1"
+# Two distinct height signals:
+# - storage_height   <- /node/block-height   (query module)
+#                       proves consensus advanced AND the indexer DB kept up
+# - consensus_height <- /status/block-height (status module)
+#                       proves only that consensus advanced
+storage_height() {
   local out
-  out="$(curl -sL --max-time 5 "${api_url}/node/block-height" 2>/dev/null || true)"
-  if [[ "${out}" =~ ^[0-9]+$ ]]; then
-    printf '%s' "${out}"
-  fi
+  out="$(curl -sL --max-time 5 "$1/node/block-height" 2>/dev/null || true)"
+  [[ "${out}" =~ ^[0-9]+$ ]] && printf '%s' "${out}"
 }
 
-# wait_for_height_at_or_above <api_url> <target_height> <timeout_seconds>
-wait_for_height_at_or_above() {
-  local api_url="$1"
-  local target="$2"
-  local timeout_seconds="$3"
+consensus_height() {
+  local out
+  out="$(curl -sL --max-time 5 "$1/status/block-height" 2>/dev/null || true)"
+  [[ "${out}" =~ ^[0-9]+$ ]] && printf '%s' "${out}"
+}
+
+_wait_for_height() {
+  local height_fn="$1"
+  local api_url="$2"
+  local target="$3"
+  local timeout_seconds="$4"
   local current start=$SECONDS
 
   while true; do
-    current="$(get_block_height "${api_url}")"
+    current="$("${height_fn}" "${api_url}")"
     if [[ -n "${current}" ]] && ((current >= target)); then
-      log "Height ${current} >= ${target} at ${api_url}"
+      log "${height_fn} ${current} >= ${target} at ${api_url}"
       return 0
     fi
     if ((SECONDS - start > timeout_seconds)); then
-      err "Timed out after ${timeout_seconds}s waiting for height >= ${target} at ${api_url} (last: ${current:-unknown})"
+      err "Timed out after ${timeout_seconds}s waiting for ${height_fn} >= ${target} at ${api_url} (last: ${current:-unknown})"
       return 1
     fi
     sleep 2
   done
 }
+
+# <api_url> <target> <timeout_seconds>
+wait_for_storage_height()   { _wait_for_height storage_height   "$@"; }
+wait_for_consensus_height() { _wait_for_height consensus_height "$@"; }
 
 # Look up host API port for espresso-node-N from the project .env (current names).
 node_api_port() {
@@ -140,9 +151,8 @@ assert_all_espresso_images() {
 # roll_node <n> <upgrade_tag>
 # Recreate just espresso-node-N at the upgrade tag, leaving other services
 # untouched. Sample a reference height before the recreate, then wait for
-# every query-enabled node (0, 1, 3, 4) to reach reference + 2. This verifies
-# the rolled node rejoined consensus and the rest didn't stall. Node 2 has no
-# `query` module so it can't be polled.
+# every node (0, 1, 2, 3, 4) to reach reference + 2. Verifies the rolled
+# node rejoined consensus and the rest didn't stall.
 roll_node() {
   local n="$1"
   local upgrade_tag="$2"
@@ -153,14 +163,14 @@ roll_node() {
   local ref_port
   ref_port="$(node_api_port "${ref_n}")"
   local initial
-  initial="$(get_block_height "http://localhost:${ref_port}")"
+  initial="$(storage_height "http://localhost:${ref_port}")"
   if [[ -z "${initial}" ]]; then
     err "Could not read reference height from espresso-node-${ref_n}"
     return 1
   fi
   local target=$((initial + 2))
 
-  log "Recreating espresso-node-${n} with tag=${upgrade_tag}; waiting for all query-enabled nodes to reach height ${target}"
+  log "Recreating espresso-node-${n} with tag=${upgrade_tag}; waiting for all nodes to reach height ${target}"
   # No --wait: the new image's baked-in healthcheck reads ESPRESSO_NODE_API_PORT
   # but the old compose only sets ESPRESSO_SEQUENCER_API_PORT (the binary maps
   # via env_compat.rs but the healthcheck shell can't). The height polling
@@ -168,13 +178,17 @@ roll_node() {
   DOCKER_TAG="${upgrade_tag}" compose up -d --no-deps --force-recreate "espresso-node-${n}"
 
   local monitor_n port
-  for monitor_n in 0 1 3 4; do
+  for monitor_n in 0 1 2 3 4; do
     port="$(node_api_port "${monitor_n}")"
     if [[ -z "${port}" ]]; then
       err "Could not resolve API port for espresso-node-${monitor_n}"
       return 1
     fi
-    wait_for_height_at_or_above "http://localhost:${port}" "${target}" 120 || return 1
+    if [[ "${monitor_n}" == "2" ]]; then
+      wait_for_consensus_height "http://localhost:${port}" "${target}" 120 || return 1
+    else
+      wait_for_storage_height "http://localhost:${port}" "${target}" 120 || return 1
+    fi
   done
 }
 

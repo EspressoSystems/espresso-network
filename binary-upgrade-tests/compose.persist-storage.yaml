@@ -14,8 +14,10 @@
 # Nodes 0, 1 already have postgres-backed storage and are not modified here.
 
 services:
+  # Add `status` (only requires `http`) so roll_node can poll node 2's block
+  # height; it has no `query` module to expose /node/block-height.
   espresso-node-2:
-    command: espresso-node -- http -- storage-fs
+    command: espresso-node -- http -- storage-fs -- status
     environment:
       ESPRESSO_SEQUENCER_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
