@@ -120,29 +120,14 @@ assert_service_image() {
   log "service ${service} image: ${actual}"
 }
 
-# Pick a stable monitor node to poll for liveness during a roll.
-# Nodes 0, 1, 3, 4 have the `query` module; node 2 does not. Use node-1 by
-# default; when rolling node-1, use node-0 instead.
-monitor_port_for_roll() {
-  local rolling_n="$1"
-  local monitor_n=1
-  if [[ "${rolling_n}" == "1" ]]; then monitor_n=0; fi
-  node_api_port "${monitor_n}"
-}
-
 # roll_node <n> <upgrade_tag>
 # Recreate just espresso-node-N at the upgrade tag, leaving other services
-# untouched. Wait for liveness via block-height advance from a stable monitor
-# node (not the one being rolled).
+# untouched. Wait for each query-enabled node (0, 1, 3, 4) to advance, which
+# verifies the rolled node rejoined consensus and the rest didn't stall. Node
+# 2 has no `query` module so it can't be polled.
 roll_node() {
   local n="$1"
   local upgrade_tag="$2"
-  local port
-  port="$(monitor_port_for_roll "${n}")"
-  if [[ -z "${port}" ]]; then
-    err "Could not resolve monitor API port while rolling espresso-node-${n}"
-    return 1
-  fi
 
   log "Recreating espresso-node-${n} with tag=${upgrade_tag}"
   # No --wait: the new image's baked-in healthcheck reads ESPRESSO_NODE_API_PORT
@@ -151,7 +136,15 @@ roll_node() {
   # against the API verifies consensus liveness directly.
   DOCKER_TAG="${upgrade_tag}" compose up -d --no-deps --force-recreate "espresso-node-${n}"
 
-  wait_for_height_advance "http://localhost:${port}" 2 120
+  local monitor_n port
+  for monitor_n in 0 1 3 4; do
+    port="$(node_api_port "${monitor_n}")"
+    if [[ -z "${port}" ]]; then
+      err "Could not resolve API port for espresso-node-${monitor_n}"
+      return 1
+    fi
+    wait_for_height_advance "http://localhost:${port}" 2 120 || return 1
+  done
 }
 
 # bulk_upgrade_remaining <upgrade_tag>
