@@ -154,6 +154,9 @@ where
     S: v1::RewardApi
         + v1::AvailabilityApi
         + v1::HotShotAvailabilityApi
+        + v1::BlockStateApi
+        + v1::FeeStateApi
+        + v1::RewardStateApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi
@@ -174,6 +177,9 @@ where
     S: v1::RewardApi
         + v1::AvailabilityApi
         + v1::HotShotAvailabilityApi
+        + v1::BlockStateApi
+        + v1::FeeStateApi
+        + v1::RewardStateApi
         + Clone
         + Send
         + Sync
@@ -595,6 +601,95 @@ where
             })
         };
 
+    // Block-State API handlers
+    let get_block_state_height = |State(state): State<S>| async move {
+        state
+            .get_block_state_height()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_block_state_path = |State(state): State<S>, Path((height, key)): Path<(u64, u64)>| async move {
+        state
+            .get_block_state_path(height, key)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_block_state_path_by_commit =
+        |State(state): State<S>, Path((commit, key)): Path<(String, u64)>| async move {
+            state
+                .get_block_state_path_by_commit(commit, key)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    // Fee-State API handlers
+    let get_fee_state_height = |State(state): State<S>| async move {
+        state
+            .get_fee_state_height()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_fee_state_path =
+        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
+            state
+                .get_fee_state_path(height, address)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_fee_state_path_by_commit =
+        |State(state): State<S>, Path((commit, address)): Path<(String, String)>| async move {
+            state
+                .get_fee_state_path_by_commit(commit, address)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_fee_balance = |State(state): State<S>, Path(address): Path<String>| async move {
+        state
+            .get_fee_balance(address)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    // Reward-State (V1) API handlers
+    let get_reward_state_height = |State(state): State<S>| async move {
+        state
+            .get_reward_state_height()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let get_reward_state_path =
+        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
+            state
+                .get_reward_state_path(height, address)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_reward_state_path_by_commit =
+        |State(state): State<S>, Path((commit, address)): Path<(String, String)>| async move {
+            state
+                .get_reward_state_path_by_commit(commit, address)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let get_reward_state_proof =
+        |State(state): State<S>, Path((height, address)): Path<(u64, String)>| async move {
+            state
+                .get_reward_state_proof(height, address)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
         .route(
@@ -743,6 +838,75 @@ where
         .route(
             routes::v1::STREAM_NAMESPACE_PROOFS_ROUTE,
             get(stream_namespace_proofs),
+        )
+        // Block-State API routes
+        .route(
+            routes::v1::BLOCK_STATE_HEIGHT_ROUTE,
+            get(get_block_state_height),
+        )
+        .route(
+            routes::v1::BLOCK_STATE_PATH_BY_HEIGHT_ROUTE,
+            get(get_block_state_path),
+        )
+        .route(
+            routes::v1::BLOCK_STATE_PATH_BY_COMMIT_ROUTE,
+            get(get_block_state_path_by_commit),
+        )
+        // Fee-State API routes
+        .route(
+            routes::v1::FEE_STATE_HEIGHT_ROUTE,
+            get(get_fee_state_height),
+        )
+        .route(
+            routes::v1::FEE_STATE_PATH_BY_HEIGHT_ROUTE,
+            get(get_fee_state_path),
+        )
+        .route(
+            routes::v1::FEE_STATE_PATH_BY_COMMIT_ROUTE,
+            get(get_fee_state_path_by_commit),
+        )
+        .route(routes::v1::FEE_BALANCE_LATEST_ROUTE, get(get_fee_balance))
+        // Reward-State (V1) API routes
+        .route(
+            routes::v1::REWARD_STATE_HEIGHT_ROUTE,
+            get(get_reward_state_height),
+        )
+        .route(
+            routes::v1::REWARD_STATE_PATH_BY_HEIGHT_ROUTE,
+            get(get_reward_state_path),
+        )
+        .route(
+            routes::v1::REWARD_STATE_PATH_BY_COMMIT_ROUTE,
+            get(get_reward_state_path_by_commit),
+        )
+        .route(
+            routes::v1::REWARD_STATE_PROOF_ROUTE,
+            get(get_reward_state_proof),
+        )
+        // Shared reward-state routes (same handlers as reward-state-v2)
+        .route(
+            routes::v1::REWARD_STATE_PROOF_LATEST_ROUTE,
+            get(get_latest_reward_account_proof),
+        )
+        .route(
+            routes::v1::REWARD_STATE_BALANCE_ROUTE,
+            get(get_reward_balance),
+        )
+        .route(
+            routes::v1::REWARD_STATE_LATEST_BALANCE_ROUTE,
+            get(get_latest_reward_balance),
+        )
+        .route(
+            routes::v1::REWARD_STATE_CLAIM_INPUT_ROUTE,
+            get(get_reward_claim_input),
+        )
+        .route(
+            routes::v1::REWARD_STATE_AMOUNTS_ROUTE,
+            get(get_reward_amounts),
+        )
+        .route(
+            routes::v1::REWARD_STATE_MERKLE_TREE_V2_ROUTE,
+            get(get_reward_merkle_tree_v2),
         )
         .with_state(state)
 }

@@ -2058,3 +2058,292 @@ fn payload_id_to_hs(
         },
     }
 }
+
+// ============================================================================
+// v1::BlockStateApi implementation
+// ============================================================================
+
+/// Arity of the BlockMerkleTree (LightWeightSHA3MerkleTree has arity 3)
+const BLOCK_MERKLE_TREE_ARITY: usize = 3;
+/// Arity of the FeeMerkleTree and RewardMerkleTreeV1 (UniversalMerkleTree with arity 256)
+const FEE_AND_REWARD_V1_MERKLE_TREE_ARITY: usize = 256;
+
+#[async_trait]
+impl<D> espresso_api::v1::BlockStateApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            espresso_types::SeqTypes,
+            espresso_types::BlockMerkleTree,
+            BLOCK_MERKLE_TREE_ARITY,
+        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + Send
+        + Sync,
+{
+    type BlockMerklePath = jf_merkle_tree_compat::prelude::MerkleProof<
+        committable::Commitment<espresso_types::Header>,
+        u64,
+        jf_merkle_tree_compat::prelude::Sha3Node,
+        BLOCK_MERKLE_TREE_ARITY,
+    >;
+
+    async fn get_block_state_height(&self) -> anyhow::Result<u64> {
+        use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence as _;
+        (*self.data_source)
+            .get_last_state_height()
+            .await
+            .map(|h| h as u64)
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_block_state_path(
+        &self,
+        height: u64,
+        key: u64,
+    ) -> anyhow::Result<Self::BlockMerklePath> {
+        use hotshot_query_service::merklized_state::{MerklizedStateDataSource as _, Snapshot};
+        (*self.data_source)
+            .get_path(
+                Snapshot::<
+                    espresso_types::SeqTypes,
+                    espresso_types::BlockMerkleTree,
+                    BLOCK_MERKLE_TREE_ARITY,
+                >::Index(height),
+                key,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_block_state_path_by_commit(
+        &self,
+        commit: String,
+        key: u64,
+    ) -> anyhow::Result<Self::BlockMerklePath> {
+        use espresso_types::BlockMerkleCommitment;
+        use hotshot_query_service::merklized_state::{MerklizedStateDataSource as _, Snapshot};
+        use tagged_base64::TaggedBase64;
+        let tb = TaggedBase64::parse(&commit)
+            .map_err(|e| anyhow::anyhow!("invalid commit TaggedBase64: {e}"))?;
+        let c = BlockMerkleCommitment::try_from(&tb)
+            .map_err(|e| anyhow::anyhow!("invalid block commit: {e}"))?;
+        (*self.data_source)
+            .get_path(
+                Snapshot::<
+                    espresso_types::SeqTypes,
+                    espresso_types::BlockMerkleTree,
+                    BLOCK_MERKLE_TREE_ARITY,
+                >::Commit(c),
+                key,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+}
+
+// ============================================================================
+// v1::FeeStateApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v1::FeeStateApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            espresso_types::SeqTypes,
+            espresso_types::FeeMerkleTree,
+            FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + Send
+        + Sync,
+{
+    type FeeMerklePath = jf_merkle_tree_compat::prelude::MerkleProof<
+        espresso_types::FeeAmount,
+        espresso_types::FeeAccount,
+        jf_merkle_tree_compat::prelude::Sha3Node,
+        FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+    >;
+    type FeeBalance = espresso_types::FeeAmount;
+
+    async fn get_fee_state_height(&self) -> anyhow::Result<u64> {
+        use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence as _;
+        (*self.data_source)
+            .get_last_state_height()
+            .await
+            .map(|h| h as u64)
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_fee_state_path(
+        &self,
+        height: u64,
+        address: String,
+    ) -> anyhow::Result<Self::FeeMerklePath> {
+        use hotshot_query_service::merklized_state::{MerklizedStateDataSource as _, Snapshot};
+        let key: espresso_types::FeeAccount = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid fee account: {}", address))?;
+        (*self.data_source)
+            .get_path(
+                Snapshot::<
+                    espresso_types::SeqTypes,
+                    espresso_types::FeeMerkleTree,
+                    FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+                >::Index(height),
+                key,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_fee_state_path_by_commit(
+        &self,
+        commit: String,
+        address: String,
+    ) -> anyhow::Result<Self::FeeMerklePath> {
+        use espresso_types::FeeMerkleCommitment;
+        use hotshot_query_service::merklized_state::{MerklizedStateDataSource as _, Snapshot};
+        use tagged_base64::TaggedBase64;
+        let tb = TaggedBase64::parse(&commit)
+            .map_err(|e| anyhow::anyhow!("invalid commit TaggedBase64: {e}"))?;
+        let c = FeeMerkleCommitment::try_from(&tb)
+            .map_err(|e| anyhow::anyhow!("invalid fee commit: {e}"))?;
+        let key: espresso_types::FeeAccount = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid fee account: {}", address))?;
+        (*self.data_source)
+            .get_path(
+                Snapshot::<
+                    espresso_types::SeqTypes,
+                    espresso_types::FeeMerkleTree,
+                    FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+                >::Commit(c),
+                key,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_fee_balance(&self, address: String) -> anyhow::Result<Option<Self::FeeBalance>> {
+        use hotshot_query_service::merklized_state::{
+            MerklizedStateDataSource as _, MerklizedStateHeightPersistence as _, Snapshot,
+        };
+        let height = (*self.data_source)
+            .get_last_state_height()
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let key: espresso_types::FeeAccount = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid fee account: {}", address))?;
+        let path = (*self.data_source)
+            .get_path(
+                Snapshot::<
+                    espresso_types::SeqTypes,
+                    espresso_types::FeeMerkleTree,
+                    FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+                >::Index(height as u64),
+                key,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(path.elem().copied())
+    }
+}
+
+// ============================================================================
+// v1::RewardStateApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v1::RewardStateApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::merklized_state::MerklizedStateDataSource<
+            espresso_types::SeqTypes,
+            espresso_types::v0_3::RewardMerkleTreeV1,
+            FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+        > + hotshot_query_service::merklized_state::MerklizedStateHeightPersistence
+        + super::RewardMerkleTreeDataSource
+        + Send
+        + Sync,
+{
+    type RewardMerklePath = jf_merkle_tree_compat::prelude::MerkleProof<
+        espresso_types::v0_3::RewardAmount,
+        espresso_types::v0_3::RewardAccountV1,
+        jf_merkle_tree_compat::prelude::Sha3Node,
+        FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+    >;
+    type RewardAccountQueryData = espresso_types::v0_3::RewardAccountQueryDataV1;
+
+    async fn get_reward_state_height(&self) -> anyhow::Result<u64> {
+        use hotshot_query_service::merklized_state::MerklizedStateHeightPersistence as _;
+        (*self.data_source)
+            .get_last_state_height()
+            .await
+            .map(|h| h as u64)
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_reward_state_path(
+        &self,
+        height: u64,
+        address: String,
+    ) -> anyhow::Result<Self::RewardMerklePath> {
+        use hotshot_query_service::merklized_state::{MerklizedStateDataSource as _, Snapshot};
+        let key: espresso_types::v0_3::RewardAccountV1 = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid reward account v1: {}", address))?;
+        (*self.data_source)
+            .get_path(
+                Snapshot::<
+                    espresso_types::SeqTypes,
+                    espresso_types::v0_3::RewardMerkleTreeV1,
+                    FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+                >::Index(height),
+                key,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_reward_state_path_by_commit(
+        &self,
+        commit: String,
+        address: String,
+    ) -> anyhow::Result<Self::RewardMerklePath> {
+        use espresso_types::v0_3::RewardMerkleCommitmentV1;
+        use hotshot_query_service::merklized_state::{MerklizedStateDataSource as _, Snapshot};
+        use tagged_base64::TaggedBase64;
+        let tb = TaggedBase64::parse(&commit)
+            .map_err(|e| anyhow::anyhow!("invalid commit TaggedBase64: {e}"))?;
+        let c = RewardMerkleCommitmentV1::try_from(&tb)
+            .map_err(|e| anyhow::anyhow!("invalid reward v1 commit: {e}"))?;
+        let key: espresso_types::v0_3::RewardAccountV1 = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid reward account v1: {}", address))?;
+        (*self.data_source)
+            .get_path(
+                Snapshot::<
+                    espresso_types::SeqTypes,
+                    espresso_types::v0_3::RewardMerkleTreeV1,
+                    FEE_AND_REWARD_V1_MERKLE_TREE_ARITY,
+                >::Commit(c),
+                key,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
+    async fn get_reward_state_proof(
+        &self,
+        height: u64,
+        address: String,
+    ) -> anyhow::Result<Self::RewardAccountQueryData> {
+        let account: espresso_types::v0_3::RewardAccountV1 = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid reward account v1: {}", address))?;
+        self.data_source
+            .load_v1_reward_account_proof(height, account)
+            .await
+    }
+}

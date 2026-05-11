@@ -163,6 +163,92 @@ pub mod v1 {
 
     pub const STREAM_NAMESPACE_PROOFS_ROUTE: &str =
         "/v1/availability/stream/blocks/{height}/namespace/{namespace}";
+
+    //=========================================================================
+    // Block-State API Routes
+    //=========================================================================
+
+    /// Get block-state height
+    /// Path: GET /v1/block-state/block-height
+    pub const BLOCK_STATE_HEIGHT_ROUTE: &str = "/v1/block-state/block-height";
+
+    /// Get block merkle path by snapshot height and key
+    /// Path: GET /v1/block-state/{height}/{key}
+    pub const BLOCK_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/block-state/{height}/{key}";
+
+    /// Get block merkle path by commitment and key
+    /// Path: GET /v1/block-state/commit/{commit}/{key}
+    pub const BLOCK_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/block-state/commit/{commit}/{key}";
+
+    //=========================================================================
+    // Fee-State API Routes
+    //=========================================================================
+
+    /// Get fee-state height
+    /// Path: GET /v1/fee-state/block-height
+    pub const FEE_STATE_HEIGHT_ROUTE: &str = "/v1/fee-state/block-height";
+
+    /// Get fee merkle path by snapshot height and address
+    /// Path: GET /v1/fee-state/{height}/{address}
+    pub const FEE_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/fee-state/{height}/{address}";
+
+    /// Get fee merkle path by commitment and address
+    /// Path: GET /v1/fee-state/commit/{commit}/{address}
+    pub const FEE_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/fee-state/commit/{commit}/{address}";
+
+    /// Get latest fee balance for an address
+    /// Path: GET /v1/fee-state/fee-balance/latest/{address}
+    pub const FEE_BALANCE_LATEST_ROUTE: &str = "/v1/fee-state/fee-balance/latest/{address}";
+
+    //=========================================================================
+    // Reward-State (V1) API Routes
+    //=========================================================================
+
+    /// Get reward-state height
+    /// Path: GET /v1/reward-state/block-height
+    pub const REWARD_STATE_HEIGHT_ROUTE: &str = "/v1/reward-state/block-height";
+
+    /// Get reward V1 merkle path by snapshot height and address
+    /// Path: GET /v1/reward-state/{height}/{address}
+    pub const REWARD_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/reward-state/{height}/{address}";
+
+    /// Get reward V1 merkle path by commitment and address
+    /// Path: GET /v1/reward-state/commit/{commit}/{address}
+    pub const REWARD_STATE_PATH_BY_COMMIT_ROUTE: &str =
+        "/v1/reward-state/commit/{commit}/{address}";
+
+    /// Get V1 reward account proof at a specific height
+    /// Path: GET /v1/reward-state/proof/{height}/{address}
+    pub const REWARD_STATE_PROOF_ROUTE: &str = "/v1/reward-state/proof/{height}/{address}";
+
+    /// Get latest V1 reward account proof (shared handler with reward-state-v2)
+    /// Path: GET /v1/reward-state/proof/latest/{address}
+    pub const REWARD_STATE_PROOF_LATEST_ROUTE: &str = "/v1/reward-state/proof/latest/{address}";
+
+    /// Get reward balance at a specific height (shared handler with reward-state-v2)
+    /// Path: GET /v1/reward-state/reward-balance/{height}/{address}
+    pub const REWARD_STATE_BALANCE_ROUTE: &str =
+        "/v1/reward-state/reward-balance/{height}/{address}";
+
+    /// Get latest reward balance (shared handler with reward-state-v2)
+    /// Path: GET /v1/reward-state/reward-balance/latest/{address}
+    pub const REWARD_STATE_LATEST_BALANCE_ROUTE: &str =
+        "/v1/reward-state/reward-balance/latest/{address}";
+
+    /// Get reward claim input (shared handler with reward-state-v2)
+    /// Path: GET /v1/reward-state/reward-claim-input/{height}/{address}
+    pub const REWARD_STATE_CLAIM_INPUT_ROUTE: &str =
+        "/v1/reward-state/reward-claim-input/{height}/{address}";
+
+    /// Get paginated reward amounts (shared handler with reward-state-v2)
+    /// Path: GET /v1/reward-state/reward-amounts/{height}/{offset}/{limit}
+    pub const REWARD_STATE_AMOUNTS_ROUTE: &str =
+        "/v1/reward-state/reward-amounts/{height}/{offset}/{limit}";
+
+    /// Get raw RewardMerkleTreeV2 snapshot (shared handler with reward-state-v2)
+    /// Path: GET /v1/reward-state/reward-merkle-tree-v2/{height}
+    pub const REWARD_STATE_MERKLE_TREE_V2_ROUTE: &str =
+        "/v1/reward-state/reward-merkle-tree-v2/{height}";
 }
 
 //=============================================================================
