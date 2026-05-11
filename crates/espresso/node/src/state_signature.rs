@@ -106,8 +106,8 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 Some(LeafInfo { leaf, .. }) => leaf,
                 None => return,
             },
-            CoordinatorEvent::NewDecide(decide) => match decide.leaves.first() {
-                Some(leaf) => leaf,
+            CoordinatorEvent::NewDecide { leaf_infos, .. } => match leaf_infos.first() {
+                Some(info) => &info.leaf,
                 None => return,
             },
             _ => return,

@@ -59,7 +59,7 @@ use hotshot_types::{
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
-    new_protocol::{CoordinatorEvent, NewDecideEvent},
+    new_protocol::CoordinatorEvent,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
@@ -720,7 +720,6 @@ const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
 struct DecidedLeaf {
     info: LeafInfo<SeqTypes>,
     cert: CertificatePair<SeqTypes>,
-    vid_proposal: Option<Proposal<SeqTypes, VidDisperseShare<SeqTypes>>>,
 }
 
 fn decide_events_from_chain(
@@ -768,28 +767,19 @@ fn decide_events_from_chain(
     }
 
     if !new_leaves.is_empty() {
+        // cert1 is the QC for the newest leaf
+        // ancestors are certified by
+        // their successor's justify_qc. cert2 finalizes the newest leaf.
+        // update() uses cert1 to build LeafQueryData for
+        // the newest leaf and only attaches cert2 to it.
         let cert1 = new_leaves[0].cert.qc().clone();
-        let mut leaves = Vec::with_capacity(new_leaves.len());
-        let mut vid_shares = Vec::with_capacity(new_leaves.len());
+        let leaf_infos = new_leaves.into_iter().map(|leaf| leaf.info).collect();
 
-        for leaf in new_leaves {
-            leaves.push(leaf.info.leaf);
-            vid_shares.push(leaf.vid_proposal.and_then(|proposal| match proposal.data {
-                VidDisperseShare::V2(share) => Some(Proposal {
-                    data: share,
-                    signature: proposal.signature,
-                    _pd: Default::default(),
-                }),
-                _ => None,
-            }));
-        }
-
-        events.push(CoordinatorEvent::NewDecide(NewDecideEvent {
-            leaves,
+        events.push(CoordinatorEvent::NewDecide {
+            leaf_infos,
             cert1,
             cert2,
-            vid_shares,
-        }));
+        });
     }
 
     events
@@ -1060,11 +1050,7 @@ impl Persistence {
                         state: Default::default(),
                         delta: Default::default(),
                     };
-                    DecidedLeaf {
-                        info,
-                        cert,
-                        vid_proposal,
-                    }
+                    DecidedLeaf { info, cert }
                 })
                 .collect();
 

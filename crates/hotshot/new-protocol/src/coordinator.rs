@@ -140,7 +140,7 @@ where
             upgrade_lock.clone(),
         );
         state_manager.seed_state(
-            ViewNumber::genesis(),
+            initializer.anchor_leaf.view_number(),
             initializer.anchor_state.clone(),
             initializer.anchor_leaf.clone(),
         );
@@ -470,6 +470,10 @@ where
 
     pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<CoordinatorOutput<T>> {
         &mut self.coordinator_outbox
+    }
+
+    pub fn state_manager(&self) -> &StateManager<T> {
+        &self.state_manager
     }
 
     pub fn current_view(&self) -> ViewNumber {

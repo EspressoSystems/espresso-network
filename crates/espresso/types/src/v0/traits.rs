@@ -830,49 +830,24 @@ pub trait SequencerPersistence:
                     }
                 }
             },
-            CoordinatorEvent::NewDecide(decide) => {
-                let Some(leaf) = decide.leaves.first() else {
+            CoordinatorEvent::NewDecide {
+                leaf_infos, cert1, ..
+            } => {
+                let Some(first) = leaf_infos.first() else {
                     return;
                 };
-
-                if decide.vid_shares.len() != decide.leaves.len() {
-                    tracing::error!(
-                        leaf_count = decide.leaves.len(),
-                        vid_share_count = decide.vid_shares.len(),
-                        "new protocol decide event has mismatched leaves and VID shares"
-                    );
-                    return;
-                }
-
-                for signed in decide.vid_shares.iter().flatten() {
-                    if let Err(err) = self.append_vid(&convert_proposal(signed.clone())).await {
-                        tracing::error!("failed to append VID share from new protocol: {err:#}");
-                    }
-                }
-
-                let leaf_infos = decide
-                    .leaves
-                    .iter()
-                    .zip(&decide.vid_shares)
-                    .map(|(leaf, vid_share)| {
-                        let state = Arc::new(ValidatedState::from_header(leaf.block_header()));
-                        let vid_share = vid_share
-                            .as_ref()
-                            .map(|share| VidDisperseShare::V2(share.data.clone()));
-                        LeafInfo::new(leaf.clone(), state, None, vid_share, None)
-                    })
-                    .collect::<Vec<_>>();
+                let view_number = first.leaf.view_number();
 
                 // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
                 // next older leaf.
-                let certifying_qcs = std::iter::once(decide.cert1.clone())
-                    .chain(decide.leaves.iter().map(|leaf| leaf.justify_qc()))
-                    .take(decide.leaves.len())
+                let certifying_qcs = std::iter::once(cert1.clone())
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+                    .take(leaf_infos.len())
                     .map(CertificatePair::non_epoch_change);
 
                 if let Err(err) = self
                     .append_decided_leaves(
-                        leaf.view_number(),
+                        view_number,
                         leaf_infos.iter().zip(certifying_qcs),
                         None,
                         consumer,

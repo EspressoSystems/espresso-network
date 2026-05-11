@@ -805,27 +805,12 @@ where
         // TODO: This creates a separate UpgradeLock from the one HotShot will
         // use. They should share a single lock so upgrade certificate updates
         // are visible to both.
-        // Seed cliquenet with the genesis stake table so view 1 has peers.
-        // `on_epoch_change` is the only other code path that adds peers, and it
-        // doesn't fire until after the first proposal — which can't arrive
-        // without peers. Without this seed, consensus deadlocks at startup.
-        let parties: Vec<_> = network_config
-            .config
-            .known_nodes_with_stake
-            .iter()
-            .filter(|p| p.stake_table_entry.stake_key != pub_key)
-            .filter_map(|p| {
-                p.connect_info
-                    .clone()
-                    .map(|info| (p.stake_table_entry.stake_key, info))
-            })
-            .collect();
         Cliquenet::create(
             "espresso",
             pub_key,
             network_params.x25519_secret_key.into(),
             network_params.cliquenet_bind_addr.clone(),
-            parties,
+            vec![],
             UpgradeLock::new(version_upgrade),
         )
         .await?

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::Arc,
+    time::Duration,
 };
 
 use committable::{Commitment, Committable};
@@ -20,7 +21,10 @@ use hotshot_types::{
     },
     utils::BuilderCommitment,
 };
-use tokio::task::{AbortHandle, JoinSet};
+use tokio::{
+    task::{AbortHandle, JoinSet},
+    time::sleep,
+};
 use tracing::{error, warn};
 
 use crate::{
@@ -137,12 +141,12 @@ impl<T: NodeType> BlockBuilder<T> {
         let membership = self.membership.clone();
 
         let handle = self.tasks.spawn(async move {
-            // Throttle block production: without this, block times are fast
-            // enough that the coordinator's event queue overflows downstream.
-            // TODO: not viable for production — replace with proper backpressure
-            // on the coordinator event queue (or a configurable target block time)
-            // before mainnet.
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // Throttle empty block production: when no transactions are pending,
+            // sleep so the coordinator's event queue doesnot overflow
+            // because if there are no transactions then the block production is way too fast
+            if buffer.is_empty() {
+                sleep(Duration::from_millis(100)).await;
+            }
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {
                 view,

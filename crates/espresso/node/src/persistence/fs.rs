@@ -36,7 +36,7 @@ use hotshot_types::{
     drb::{DrbInput, DrbResult},
     event::{Event, EventType, HotShotAction, LeafInfo},
     message::{Proposal, convert_proposal},
-    new_protocol::{CoordinatorEvent, NewDecideEvent},
+    new_protocol::CoordinatorEvent,
     simple_certificate::{
         CertificatePair, LightClientStateUpdateCertificateV1, LightClientStateUpdateCertificateV2,
         NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
@@ -283,6 +283,10 @@ impl Inner {
         self.path.join("decided_cert2")
     }
 
+    /// cert2 is only persisted for the view that is directly finalized
+    /// (the newest leaf in a decided chain). Ancestor views finalized
+    /// indirectly have no cert2 file on disk
+    /// for those, this returns `Ok(None)`
     fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
         let file_path = self
             .decided_cert2_dir_path()
@@ -493,7 +497,7 @@ impl Inner {
                 delta: Default::default(),
             };
 
-            leaves.insert(v, (info, cert, vid_proposal));
+            leaves.insert(v, (info, cert));
         }
 
         // The invariant is that the oldest existing leaf in the `anchor_leaf` table -- if there is
@@ -509,24 +513,20 @@ impl Inner {
 
         let mut intervals = vec![];
         let mut current_interval = None;
-        for (view, (leaf, cert, vid_proposal)) in leaves {
+        for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
             let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
-                let vid_share = vid_proposal.and_then(|proposal| match proposal.data {
-                    VidDisperseShare::V2(share) => Some(Proposal {
-                        data: share,
-                        signature: proposal.signature,
-                        _pd: Default::default(),
-                    }),
-                    _ => None,
-                });
-                CoordinatorEvent::NewDecide(NewDecideEvent {
-                    leaves: vec![leaf.leaf],
+                let cert2 = self.load_cert2(view)?;
+                // One event per view. cert2 is only stored for the
+                // directly finalized view
+                // ancestors get `cert2: None`,
+                // which is what update() expects for indirectly decided leaves.
+                CoordinatorEvent::NewDecide {
+                    leaf_infos: vec![leaf],
                     cert1: cert.qc().clone(),
-                    cert2: self.load_cert2(view)?,
-                    vid_shares: vec![vid_share],
-                })
+                    cert2,
+                }
             } else {
                 let deciding_qc = deciding_qc
                     .as_ref()
