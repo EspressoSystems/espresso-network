@@ -34,16 +34,16 @@ impl DualReadAdapter for HashIdAdapter {
     type Legacy = i32;
     type New = i64;
 
-    fn view_from_legacy(legacy: i32) -> i64 {
-        legacy as i64
+    fn view_from_legacy(legacy: i32) -> anyhow::Result<i64> {
+        Ok(legacy as i64)
     }
 
-    fn view_from_new(new: i64) -> i64 {
-        new
+    fn view_from_new(new: i64) -> anyhow::Result<i64> {
+        Ok(new)
     }
 
-    fn legacy_to_new(legacy: i32) -> i64 {
-        legacy as i64
+    fn legacy_to_new(legacy: i32) -> anyhow::Result<i64> {
+        Ok(legacy as i64)
     }
 }
 

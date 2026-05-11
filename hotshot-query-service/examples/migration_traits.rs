@@ -68,36 +68,38 @@ impl DualReadAdapter for ScoreAdapter {
     type Legacy = LegacyScoreRow;
     type New = NewScoreRow;
 
-    fn view_from_legacy(legacy: Self::Legacy) -> Self::View {
-        let payload: LegacyPayload =
-            bincode::deserialize(&legacy.payload).expect("legacy_scores.payload is valid bincode");
-        Score {
+    fn view_from_legacy(legacy: Self::Legacy) -> anyhow::Result<Self::View> {
+        let payload: LegacyPayload = bincode::deserialize(&legacy.payload)
+            .context("legacy_scores.payload is not valid bincode")?;
+        Ok(Score {
             height: legacy.height,
             value: payload.value,
             label: payload.label,
-        }
+        })
     }
 
-    fn view_from_new(new: Self::New) -> Self::View {
-        Score {
+    fn view_from_new(new: Self::New) -> anyhow::Result<Self::View> {
+        let value = new.value["value"]
+            .as_u64()
+            .context("scores.value.value is not u64")?;
+        let label = new.value["label"]
+            .as_str()
+            .context("scores.value.label is not a string")?
+            .to_owned();
+        Ok(Score {
             height: new.height,
-            value: new.value["value"]
-                .as_u64()
-                .expect("scores.value.value is u64"),
-            label: new.value["label"]
-                .as_str()
-                .expect("scores.value.label is string")
-                .to_owned(),
-        }
+            value,
+            label,
+        })
     }
 
-    fn legacy_to_new(legacy: Self::Legacy) -> Self::New {
-        let payload: LegacyPayload =
-            bincode::deserialize(&legacy.payload).expect("legacy_scores.payload is valid bincode");
-        NewScoreRow {
+    fn legacy_to_new(legacy: Self::Legacy) -> anyhow::Result<Self::New> {
+        let payload: LegacyPayload = bincode::deserialize(&legacy.payload)
+            .context("legacy_scores.payload is not valid bincode")?;
+        Ok(NewScoreRow {
             height: legacy.height,
             value: serde_json::json!({ "value": payload.value, "label": payload.label }),
-        }
+        })
     }
 }
 
