@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -293,7 +294,7 @@ def load_project_env() -> None:
         keys.add(line.split("=", 1)[0].strip())
 
     result = subprocess.run(
-        ["bash", "-c", f"set -a; . {path}; env -0"],
+        ["bash", "-c", f"set -a; . {shlex.quote(str(path))}; env -0"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
@@ -368,10 +369,13 @@ def main() -> int:
             compose.run("pull", "--policy", "missing", docker_tag=config.upgrade_tag)
 
         log.info(f"Starting network on {config.base_tag}")
-        # Background up; smoke test polls for actual readiness, and the
-        # context manager handles teardown on exit.
-        log_path = compose.base_dir / "compose-up.log"
-        with log_path.open("wb") as f:
+        # `compose up -d` blocks on `depends_on: service_completed_successfully`,
+        # but `deploy-lcv3-upgrade` retries forever and `prover-one-shot` has a
+        # broken healthcheck, so a synchronous call would never return. Run in
+        # the background and let the smoke test below verify readiness end to
+        # end. The compose stack is torn down on context exit regardless.
+        compose_up_log = compose.base_dir / "compose-up.log"
+        with compose_up_log.open("wb") as f:
             subprocess.Popen(
                 compose.base_args + ["up", "-d"],
                 cwd=REPO_ROOT,
@@ -379,6 +383,7 @@ def main() -> int:
                 stdout=f,
                 stderr=subprocess.STDOUT,
             )
+        log.info(f"compose up -d running in background; log at {compose_up_log}")
 
         log.info("Initial smoke test")
         smoke_test(config.base_tag)
