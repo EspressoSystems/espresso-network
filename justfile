@@ -396,3 +396,6 @@ contracts-test-network *args='-vv':
     fi
     forge test --match-test test_Network_ --jobs 1 {{args}}
 
+release-status *args:
+    scripts/release-status {{args}}
+
