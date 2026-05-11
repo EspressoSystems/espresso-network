@@ -67,6 +67,24 @@ use crate::{
     types::HeightIndexed,
 };
 
+/// When set to `true`, read transactions begin with
+/// `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY` (no `DEFERRABLE`),
+/// so they start immediately instead of waiting for a safe serializable snapshot.
+#[cfg(not(feature = "embedded-db"))]
+static NO_DEFERRABLE_ON_READ: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Configure whether read transactions on Postgres should omit `DEFERRABLE`.
+///
+/// When `true`, `Read::begin` issues `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY`
+/// (no `DEFERRABLE`) so the transaction starts immediately rather than waiting for a safe
+/// serializable snapshot. Default: `false`. Call this once at startup based on the operator's
+/// chosen configuration.
+#[cfg(not(feature = "embedded-db"))]
+pub fn set_no_deferrable_on_read(value: bool) {
+    NO_DEFERRABLE_ON_READ.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub type Query<'q> = sqlx::query::Query<'q, Db, <Db as Database>::Arguments<'q>>;
 pub type QueryAs<'q, T> = sqlx::query::QueryAs<'q, Db, T, <Db as Database>::Arguments<'q>>;
 
@@ -185,12 +203,23 @@ impl TransactionMode for Read {
         // (SERIALIZABLE), and we want to wait until this is possible rather than failing
         // (DEFERRABLE).
         //
+        // Setting `ESPRESSO_NODE_POSTGRES_NO_DEFERRABLE=true` disables the DEFERRABLE
+        // option, so that read transactions start immediately and may instead fail with a
+        // serialization error if they conflict with a concurrent write. This trades start-up
+        // latency for the chance of a retry, and is opt-in.
+        //
         // With SQLite, there is nothing to be done here, as SQLite automatically starts
         // transactions in read-only mode, and always has serializable concurrency unless we
         // explicitly opt in to dirty reads with a pragma.
         #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
-            .await?;
+        {
+            let sql = if NO_DEFERRABLE_ON_READ.load(std::sync::atomic::Ordering::Relaxed) {
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY"
+            } else {
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE"
+            };
+            conn.execute(sql).await?;
+        }
 
         Ok(())
     }
