@@ -191,6 +191,7 @@ modules:
   submit: false
   status: false
   catchup: false
+  config: true
   hotshot_events: false
   explorer: false
   light_client: false
