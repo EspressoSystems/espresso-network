@@ -349,6 +349,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             }
         }
 
+        for addr in &config.announce_addresses {
+            info!("Adding announce address {addr}");
+            swarm.add_external_address(addr.clone());
+        }
+
         Ok(Self {
             peer_id,
             swarm,
