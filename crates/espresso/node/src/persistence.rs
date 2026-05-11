@@ -163,7 +163,7 @@ mod tests {
         types::{BLSPubKey, SignatureKey},
     };
     use hotshot_contract_adapter::{
-        sol_types::StakeTableV2::Delegated, stake_table::StakeTableContractVersion,
+        sol_types::StakeTableV3::Delegated, stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MOCK_UPGRADE};
@@ -175,6 +175,7 @@ mod tests {
         event::{EventType, HotShotAction, LeafInfo},
         light_client::StateKeyPair,
         message::{Proposal, UpgradeLock, convert_proposal},
+        new_protocol::CoordinatorEvent,
         simple_certificate::{
             CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
             UpgradeCertificate,
@@ -246,8 +247,10 @@ mod tests {
 
     #[async_trait]
     impl EventConsumer for EventCollector {
-        async fn handle_event(&self, event: &Event) -> anyhow::Result<()> {
-            self.events.write().await.push(event.clone());
+        async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+            if let CoordinatorEvent::LegacyEvent(event) = event {
+                self.events.write().await.push(event.clone());
+            }
             Ok(())
         }
     }
@@ -257,7 +260,7 @@ mod tests {
 
     #[async_trait]
     impl EventConsumer for FailConsumer {
-        async fn handle_event(&self, _: &Event) -> anyhow::Result<()> {
+        async fn handle_event(&self, _: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
             bail!("mock error injection");
         }
     }
@@ -1451,6 +1454,7 @@ mod tests {
         #[values(
             StakeTableContractVersion::V1,
             StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3
         )]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
@@ -1584,6 +1588,7 @@ mod tests {
         #[values(
             StakeTableContractVersion::V1,
             StakeTableContractVersion::V2,
+            StakeTableContractVersion::V3
         )]
         stake_table_version: StakeTableContractVersion,
         _p: PhantomData<P>,
@@ -1648,7 +1653,8 @@ mod tests {
 
         match stake_table_version {
             StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await,
-            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+            StakeTableContractVersion::V2 => args.deploy_to_stake_table_v2(&mut contracts).await,
+            StakeTableContractVersion::V3 => args.deploy_to_stake_table_v3(&mut contracts).await,
         }
         .expect("contracts deployed");
 

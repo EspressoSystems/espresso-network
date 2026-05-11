@@ -1,13 +1,16 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
+use async_trait::async_trait;
+use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
-    traits::node_implementation::NodeType,
+    message::Proposal as SignedProposal,
+    traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
     utils::StateAndDelta,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::state::UpdateLeaf;
+use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -65,6 +68,48 @@ impl<T: NodeType> ClientApi<T> {
             rx,
         )
         .await
+    }
+
+    pub async fn submit_transaction(&self, tx: T::Transaction) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::SubmitTransaction { tx, respond }, rx)
+            .await
+    }
+
+    pub async fn request_proposal(
+        &self,
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+    ) -> Result<SignedProposal<T, Proposal<T>>, QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(
+            ClientRequest::RequestProposal {
+                view,
+                leaf_commitment,
+                respond,
+            },
+            rx,
+        )
+        .await?
+    }
+
+    pub async fn send_external_message(
+        &self,
+        view: ViewNumber,
+        payload: Vec<u8>,
+        recipient: T::SignatureKey,
+    ) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(
+            ClientRequest::SendExternalMessage {
+                view,
+                payload,
+                recipient,
+                respond,
+            },
+            rx,
+        )
+        .await?
     }
 
     async fn call<A>(
@@ -132,6 +177,21 @@ pub(crate) enum ClientRequest<T: NodeType> {
         update: UpdateLeaf<T>,
         respond: oneshot::Sender<()>,
     },
+    SubmitTransaction {
+        tx: T::Transaction,
+        respond: oneshot::Sender<()>,
+    },
+    RequestProposal {
+        view: ViewNumber,
+        leaf_commitment: Commitment<Leaf2<T>>,
+        respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
+    },
+    SendExternalMessage {
+        view: ViewNumber,
+        payload: Vec<u8>,
+        recipient: T::SignatureKey,
+        respond: oneshot::Sender<Result<(), QueryError>>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -142,4 +202,50 @@ pub enum QueryError {
 
     #[error("coordinator dropped the response")]
     ResponseDropped,
+
+    #[error("coordinator error: {0}")]
+    Coordinator(#[from] CoordinatorError),
+}
+
+/// `LeafFetcherNetwork` impl that routes catchup direct-messages through
+/// the `Coordinator`'s single owned network via [`ClientApi`].
+///
+/// The membership layer gets a clone of this so it does not need its own
+/// network handle — the `Coordinator` is the only owner of the underlying
+/// `ConnectedNetwork`.
+pub struct ClientLeafFetcherNetwork<T: NodeType> {
+    client: ClientApi<T>,
+}
+
+impl<T: NodeType> ClientLeafFetcherNetwork<T> {
+    pub fn new(client: ClientApi<T>) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait]
+impl<T: NodeType> LeafFetcherNetwork<T> for ClientLeafFetcherNetwork<T> {
+    async fn send_leaf_request(
+        &self,
+        view: ViewNumber,
+        payload: Vec<u8>,
+        recipient: T::SignatureKey,
+    ) -> anyhow::Result<()> {
+        self.client
+            .send_external_message(view, payload, recipient)
+            .await?;
+        Ok(())
+    }
+
+    async fn send_leaf_response(
+        &self,
+        view: ViewNumber,
+        payload: Vec<u8>,
+        recipient: T::SignatureKey,
+    ) -> anyhow::Result<()> {
+        self.client
+            .send_external_message(view, payload, recipient)
+            .await?;
+        Ok(())
+    }
 }

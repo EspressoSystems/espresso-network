@@ -1,10 +1,10 @@
 [package]
-authors = { workspace = true }
-description = "Implementation of Fast Finality Protocol"
-edition = { workspace = true }
 name = "hotshot-new-protocol"
-version = { workspace = true }
+description = "Implementation of Fast Finality Protocol"
 license = "MIT"
+authors = { workspace = true }
+edition = { workspace = true }
+version = { workspace = true }
 
 [features]
 example-upgrade = []
@@ -12,6 +12,7 @@ rewind = []
 stats = []
 
 [dependencies]
+alloy = { workspace = true }
 anyhow = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
@@ -21,6 +22,7 @@ cliquenet = { workspace = true }
 committable = { workspace = true }
 futures = { workspace = true }
 hotshot = { workspace = true }
+hotshot-contract-adapter = { workspace = true }
 hotshot-example-types = { workspace = true }
 hotshot-testing = { workspace = true }
 hotshot-types = { workspace = true }

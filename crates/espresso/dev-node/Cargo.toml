@@ -9,13 +9,13 @@ name = "espresso-dev-node"
 path = "src/main.rs"
 
 [dependencies]
-espresso-node = { path = "../node", features = ["testing", "embedded-db"] }
 
 alloy = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true }
 espresso-contract-deployer = { workspace = true }
+espresso-node = { path = "../node", features = ["testing", "embedded-db"] }
 espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
 futures = { workspace = true }

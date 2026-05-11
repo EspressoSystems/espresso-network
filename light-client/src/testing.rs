@@ -13,12 +13,12 @@ use bitvec::vec::BitVec;
 use committable::{Commitment, Committable};
 use derivative::Derivative;
 use espresso_types::{
-    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, EpochVersion, Leaf2, NamespaceId, NodeState,
-    NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
+    BLOCK_MERKLE_TREE_HEIGHT, BlockMerkleTree, Certificate2, EpochVersion, Leaf2, NamespaceId,
+    NodeState, NsProof, Payload, PrivKey, PubKey, RegisteredValidatorMap, SeqTypes, StakeTableHash,
     StakeTableState, Transaction,
     v0_3::{AuthenticatedValidator, RegisteredValidator, StakeTableEvent},
 };
-use hotshot_contract_adapter::sol_types::StakeTableV2::{Delegated, ValidatorRegistered};
+use hotshot_contract_adapter::sol_types::StakeTableV3::{Delegated, ValidatorRegistered};
 use hotshot_query_service_types::{
     availability::{LeafHash, LeafId, LeafQueryData},
     node::{BlockHash, BlockId},
@@ -243,6 +243,13 @@ impl Quorum for AlwaysTrueQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
         Ok(())
     }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -250,6 +257,13 @@ pub struct AlwaysFalseQuorum;
 
 impl Quorum for AlwaysFalseQuorum {
     async fn verify_static<V: StaticVersionType + 'static>(&self, _: &Certificate) -> Result<()> {
+        bail!("always false quorum");
+    }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
         bail!("always false quorum");
     }
 }
@@ -289,6 +303,13 @@ impl Quorum for VersionCheckQuorum {
         );
         Ok(())
     }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A quorum which verifies that epoch change QCs are provided, but does not check signatures.
@@ -311,6 +332,13 @@ impl Quorum for EpochChangeQuorum {
         if V::version() >= EpochVersion::version() {
             cert.verify_next_epoch_qc(self.epoch_height)?;
         }
+        Ok(())
+    }
+
+    async fn verify_cert2_static<V: StaticVersionType + 'static>(
+        &self,
+        _: &Certificate2<SeqTypes>,
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -799,6 +827,14 @@ impl Client for TestClient {
         Ok(PayloadProof::new(payload, vid_common))
     }
 
+    async fn payload_proofs_in_range(&self, start: u64, end: u64) -> Result<Vec<PayloadProof>> {
+        let mut proofs = vec![];
+        for i in start..end {
+            proofs.push(self.payload_proof(i).await?);
+        }
+        Ok(proofs)
+    }
+
     async fn namespace_proof(
         &self,
         height: u64,
@@ -851,6 +887,10 @@ impl Client for TestClient {
             proofs.push(self.namespace_proof(i, namespace).await?);
         }
         Ok(proofs)
+    }
+
+    async fn cert2(&self, _height: u64) -> Result<Option<Certificate2<SeqTypes>>> {
+        Ok(None)
     }
 }
 

@@ -55,12 +55,12 @@ use vbs::{
     BinarySerializer,
     version::{StaticVersion, Version},
 };
-use versions::version;
+use versions::{EPOCH_VERSION, version};
 
 use crate::{
     ADVZNamespaceProofQueryData, FeeAccount, FeeInfo, Header, L1BlockInfo, NamespaceId,
     NamespaceProofQueryData, NodeState, NsProof, NsTable, Payload, SeqTypes, StakeTableHash,
-    Transaction, ValidatedState,
+    Transaction, ValidatedState, ValidatorSet,
     v0_1::{self, ADVZNsProof},
     v0_2,
     v0_3::{EventKey, RewardAmount, StakeTableEvent},
@@ -68,7 +68,6 @@ use crate::{
         REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountProofV2, RewardAccountQueryDataV2,
         RewardAccountV2, RewardMerkleTreeV2,
     },
-    validator_set_from_l1_events,
 };
 
 type V1Serializer = vbs::Serializer<StaticVersion<0, 1>>;
@@ -221,7 +220,8 @@ fn reference_stake_table_hash() -> StakeTableHash {
     let events: Vec<(EventKey, StakeTableEvent)> = serde_json::from_str(&events_json).unwrap();
 
     // Reconstruct stake table from events
-    validator_set_from_l1_events(events.into_iter().map(|(_, e)| e))
+    // TODO: once V3 fixtures include x25519/p2p data, exercise CLIQUENET_VERSION here too.
+    ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
         .unwrap()
         .stake_table_hash
         .unwrap()

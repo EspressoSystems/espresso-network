@@ -1,22 +1,19 @@
 use std::marker::PhantomData;
 
-use committable::Commitment;
+use committable::{Commitment, Committable};
+pub use hotshot_types::new_protocol::Proposal;
 use hotshot_types::{
-    data::{
-        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidDisperseShare2,
-        ViewChangeEvidence2, ViewNumber,
-    },
-    drb::DrbResult,
+    data::{EpochNumber, VidDisperseShare2, ViewNumber},
     message::Proposal as SignedProposal,
+    request_response::ProposalRequestPayload,
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, OneHonestThreshold, QuorumCertificate2,
-        SimpleCertificate, SuccessThreshold, TimeoutCertificate2, UpgradeCertificate,
+        OneHonestThreshold, SimpleCertificate, SuccessThreshold, TimeoutCertificate2,
     },
     simple_vote::{
-        CheckpointData, HasEpoch, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2, TimeoutVote2,
-        Vote2Data,
+        CheckpointData, LightClientStateUpdateVote2, QuorumData2, QuorumVote2, SimpleVote,
+        TimeoutData2, TimeoutVote2, Vote2Data,
     },
-    traits::node_implementation::NodeType,
+    traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
@@ -28,97 +25,6 @@ pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold
 pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
 pub type TimeoutOneHonest<T> = SimpleCertificate<T, TimeoutData2, OneHonestThreshold>;
-
-/// Proposal to append a block.
-#[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
-#[serde(bound(deserialize = ""))]
-pub struct Proposal<T: NodeType> {
-    /// The block header to append
-    pub block_header: T::BlockHeader,
-
-    /// view number for the proposal
-    pub view_number: ViewNumber,
-
-    /// The epoch number corresponding to the block number.
-    ///
-    /// Can be `None` for pre-epoch version.
-    pub epoch: EpochNumber,
-
-    /// certificate that the proposal is chaining from
-    pub justify_qc: QuorumCertificate2<T>,
-
-    /// certificate proving the last block of the epoch is decided
-    pub next_epoch_justify_qc: Option<Certificate2<T>>,
-
-    /// Possible upgrade certificate, which the leader may optionally attach.
-    pub upgrade_certificate: Option<UpgradeCertificate<T>>,
-
-    /// Possible timeout certificate.
-    ///
-    /// If the `justify_qc` is not for a proposal in the immediately preceding
-    /// view, then a timeout certificate must be attached.
-    pub view_change_evidence: Option<TimeoutCertificate<T>>,
-
-    /// The DRB result for the next epoch.
-    ///
-    /// This is required only for the last block of the epoch. Nodes will verify
-    /// that it's consistent with the result from their computations.
-    #[serde(with = "serde_bytes")]
-    pub next_drb_result: Option<DrbResult>,
-
-    /// The light client state update certificate for the next epoch.
-    /// This is required for the epoch root.
-    pub state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
-}
-
-impl<T: NodeType> HasViewNumber for Proposal<T> {
-    fn view_number(&self) -> ViewNumber {
-        self.view_number
-    }
-}
-
-impl<T: NodeType> HasEpoch for Proposal<T> {
-    fn epoch(&self) -> Option<EpochNumber> {
-        Some(self.epoch)
-    }
-}
-
-impl<T: NodeType> From<QuorumProposalWrapper<T>> for Proposal<T> {
-    fn from(wrapper: QuorumProposalWrapper<T>) -> Self {
-        let qp = wrapper.proposal;
-        Self {
-            block_header: qp.block_header,
-            view_number: qp.view_number,
-            epoch: qp.epoch.unwrap_or(EpochNumber::new(0)),
-            justify_qc: qp.justify_qc,
-            next_epoch_justify_qc: None,
-            upgrade_certificate: qp.upgrade_certificate,
-            view_change_evidence: qp.view_change_evidence.and_then(|e| match e {
-                ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                ViewChangeEvidence2::ViewSync(_) => None,
-            }),
-            next_drb_result: qp.next_drb_result,
-            state_cert: qp.state_cert,
-        }
-    }
-}
-
-impl<T: NodeType> From<Proposal<T>> for Leaf2<T> {
-    fn from(p: Proposal<T>) -> Self {
-        let qp = QuorumProposal2 {
-            block_header: p.block_header,
-            view_number: p.view_number,
-            epoch: Some(p.epoch),
-            justify_qc: p.justify_qc,
-            next_epoch_justify_qc: None,
-            upgrade_certificate: p.upgrade_certificate,
-            view_change_evidence: p.view_change_evidence.map(ViewChangeEvidence2::Timeout),
-            next_drb_result: p.next_drb_result,
-            state_cert: p.state_cert,
-        };
-        Self::from_quorum_proposal(&QuorumProposalWrapper::from(qp))
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Deserialize)]
 pub enum Unchecked {}
@@ -167,6 +73,8 @@ impl<T: NodeType, S> HasViewNumber for ProposalMessage<T, S> {
 pub struct Vote1<T: NodeType> {
     pub vote: QuorumVote2<T>,
     pub vid_share: VidDisperseShare2<T>,
+    /// Populated only when voting on an epoch-root leaf. Required there; absent otherwise.
+    pub state_vote: Option<LightClientStateUpdateVote2<T>>,
 }
 
 impl<T: NodeType> HasViewNumber for Vote1<T> {
@@ -204,6 +112,39 @@ pub struct EpochChangeMessage<T: NodeType> {
     pub cert1: Certificate1<T>,
     pub cert2: Certificate2<T>,
     pub proposal: Proposal<T>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
+pub struct ProposalFetchRequest<T: NodeType> {
+    pub payload: ProposalRequestPayload<T>,
+    pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+}
+
+impl<T: NodeType> ProposalFetchRequest<T> {
+    pub fn new(
+        view_number: ViewNumber,
+        key: T::SignatureKey,
+        private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    ) -> Result<Self, <T::SignatureKey as SignatureKey>::SignError> {
+        let payload = ProposalRequestPayload { view_number, key };
+        let signature = T::SignatureKey::sign(private_key, payload.commit().as_ref())?;
+        Ok(Self { payload, signature })
+    }
+
+    pub fn validate_sender(&self, sender: &T::SignatureKey) -> bool {
+        &self.payload.key == sender
+            && self
+                .payload
+                .key
+                .validate(&self.signature, self.payload.commit().as_ref())
+    }
+}
+
+impl<T: NodeType> HasViewNumber for ProposalFetchRequest<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.payload.view_number
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
@@ -256,6 +197,22 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
+pub enum ProposalFetchMessage<T: NodeType> {
+    Request(ProposalFetchRequest<T>),
+    Response(Box<SignedProposal<T, Proposal<T>>>),
+}
+
+impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        match self {
+            Self::Request(request) => request.view_number(),
+            Self::Response(proposal) => proposal.data.view_number(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
+#[serde(bound(deserialize = ""))]
 pub struct DedupManifest<T: NodeType> {
     pub(crate) view: ViewNumber,
     pub(crate) epoch: EpochNumber,
@@ -291,6 +248,7 @@ impl<T: NodeType> HasViewNumber for BlockMessage<T> {
 pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
     Block(BlockMessage<T>),
+    ProposalFetch(ProposalFetchMessage<T>),
     External(Vec<u8>),
 }
 
@@ -300,6 +258,7 @@ impl<T: NodeType, S> MessageType<T, S> {
         match self {
             Self::Consensus(c) => MessageType::Consensus(c.into_unchecked()),
             Self::Block(b) => MessageType::Block(b),
+            Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
             Self::External(v) => MessageType::External(v),
         }
     }
@@ -331,6 +290,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
         match &self.message_type {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
             MessageType::Block(block_message) => block_message.view_number(),
+            MessageType::ProposalFetch(message) => message.view_number(),
             MessageType::External(_) => ViewNumber::new(0), // TODO: This can become a problem
         }
     }

@@ -11,7 +11,7 @@ use chrono::Utc;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     event::{Event, EventType},
-    simple_certificate::EpochRootQuorumCertificateV2,
+    simple_certificate::{EpochRootQuorumCertificateV2, check_qc_state_cert_correspondence},
     simple_vote::{EpochRootQuorumVote2, HasEpoch, QuorumVote2, TimeoutData2, TimeoutVote2},
     traits::node_implementation::{NodeImplementation, NodeType},
     utils::{EpochTransitionIndicator, is_epoch_root, is_epoch_transition, is_last_block},
@@ -25,7 +25,7 @@ use versions::EPOCH_VERSION;
 use super::ConsensusTaskState;
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_event, check_qc_state_cert_correspondence},
+    helpers::broadcast_event,
     vote_collection::{handle_epoch_root_vote, handle_vote},
 };
 

@@ -121,7 +121,7 @@ async fn test_tree_helper(num_keys: usize) -> Result<u64> {
         .build()
         .unwrap();
 
-    args.deploy_all(&mut contracts).await?;
+    args.deploy_to_stake_table_v3(&mut contracts).await?;
 
     let light_client_address = contracts
         .address(Contract::LightClientProxy)

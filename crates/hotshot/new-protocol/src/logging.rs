@@ -21,6 +21,21 @@ pub fn init_logging() {
     });
 }
 
+/// Install a tracing subscriber that routes through `print!` so `cargo test`
+/// captures per-test output.  Logs only appear with `--nocapture` or for
+/// failing tests via `--show-output`.  Honors `RUST_LOG` (defaulting to
+/// `error` when unset).  Safe to call repeatedly.
+pub fn init_test_logging() {
+    LOG_INIT.call_once(|| {
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("error"));
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(use_color())
+            .with_test_writer()
+            .init();
+    });
+}
+
 fn use_color() -> bool {
     env::var_os("NO_COLOR").is_none()
 }

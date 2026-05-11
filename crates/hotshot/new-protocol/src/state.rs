@@ -163,6 +163,7 @@ impl<T: NodeType> StateManager<T> {
 
         let Some(parent_entry) = self.validated_states.get(&request.parent_view).cloned() else {
             self.insert_empty_state(request.proposal);
+            self.start_pending(commitment);
             return;
         };
 
@@ -234,7 +235,13 @@ impl<T: NodeType> StateManager<T> {
 
         let parent_view = request.parent_proposal.view_number();
         let Some(parent_entry) = self.validated_states.get(&parent_view).cloned() else {
-            error!(view = %request.view, "parent state not found for header request");
+            // Parent state not available yet (e.g. its proposal is still
+            // being validated).  Queue the request so it is retried once
+            // the state for the parent view is inserted.
+            self.pending_requests
+                .entry(parent_commitment)
+                .or_default()
+                .push(Pending::Header(request));
             return;
         };
 

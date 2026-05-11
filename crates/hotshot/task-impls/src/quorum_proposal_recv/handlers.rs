@@ -11,12 +11,15 @@ use std::sync::Arc;
 use async_broadcast::{Receiver, Sender, broadcast};
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use committable::Committable;
+use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
 use hotshot_types::{
     consensus::OuterConsensus,
     data::{Leaf2, QuorumProposal, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::Proposal,
-    simple_certificate::{QuorumCertificate, QuorumCertificate2},
+    simple_certificate::{
+        QuorumCertificate, QuorumCertificate2, check_qc_state_cert_correspondence,
+    },
     simple_vote::HasEpoch,
     traits::{
         ValidatedState,
@@ -41,9 +44,8 @@ use super::{QuorumProposalRecvTaskState, ValidationInfo};
 use crate::{
     events::HotShotEvent,
     helpers::{
-        broadcast_event, broadcast_view_change, check_qc_state_cert_correspondence, fetch_proposal,
-        update_high_qc, validate_epoch_transition_qc,
-        validate_light_client_state_update_certificate, validate_proposal_safety_and_liveness,
+        broadcast_event, broadcast_view_change, fetch_proposal, update_high_qc,
+        validate_epoch_transition_qc, validate_proposal_safety_and_liveness,
         validate_proposal_view_and_certs, validate_qc_and_next_epoch_qc, verify_drb_result,
     },
     quorum_proposal_recv::UpgradeLock,

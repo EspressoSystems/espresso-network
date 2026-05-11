@@ -247,7 +247,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         nonce: u64,
         config: HotShotConfig<TYPES>,
         upgrade: versions::Upgrade,
-        mut membership_coordinator: EpochMembershipCoordinator<TYPES>,
+        membership_coordinator: EpochMembershipCoordinator<TYPES>,
         network: Arc<I::Network>,
         initializer: HotShotInitializer<TYPES>,
         consensus_metrics: ConsensusMetricsValue,
@@ -280,10 +280,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         internal_rx.set_overflow(true);
         // Allow overflow on the external channel, otherwise sending to it may block.
         external_rx.set_overflow(true);
-
-        membership_coordinator
-            .set_external_channel(external_rx.clone())
-            .await;
 
         tracing::warn!(
             "Starting consensus with versions:\n\n Base: {:?}\nUpgrade: {:?}.",
@@ -1115,8 +1111,8 @@ pub struct InitializerEpochInfo<TYPES: NodeType> {
     pub block_header: Option<TYPES::BlockHeader>,
 }
 
-#[derive(Clone, Debug)]
 /// initializer struct for creating starting block
+#[derive(Clone, Debug)]
 pub struct HotShotInitializer<TYPES: NodeType> {
     /// Instance-level state.
     pub instance_state: TYPES::InstanceState,

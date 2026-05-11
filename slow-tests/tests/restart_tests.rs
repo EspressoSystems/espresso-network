@@ -32,7 +32,6 @@ use espresso_node::{
         self, data_source::testing::TestableSequencerDataSource, options::Query,
         test_helpers::STAKE_TABLE_CAPACITY_FOR_TEST,
     },
-    consensus_handle::CoordinatorEvent,
     context::SequencerContext,
     genesis::{Genesis, L1Finalized, StakeTableConfig},
     keyset::KeySet,
@@ -65,6 +64,7 @@ use hotshot_types::{
     event::{Event, EventType},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
+    new_protocol::CoordinatorEvent,
     signature_key::{BLSPrivKey, BLSPubKey},
     traits::signature_key::SignatureKey,
     x25519,
@@ -293,6 +293,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     .iter()
                     .map(|port| format!("http://127.0.0.1:{port}").parse().unwrap())
                     .collect(),
+                ..Default::default()
             });
         }
 
@@ -337,6 +338,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             network.l1_provider,
             "--l1-polling-interval",
             "1s",
+            "--bootstrap-epoch-catchup-timeout",
+            "2s",
         ]);
         opt.is_da = node.is_da;
         Self {
@@ -814,7 +817,7 @@ impl TestNetwork {
 
     /// Deploy stake contracts and delegate.
     async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
-        let stake_table_version = StakeTableContractVersion::V2;
+        let stake_table_version = StakeTableContractVersion::V3;
         let delegation_config = DelegationConfig::EqualAmounts;
 
         let anvil_instance = &self.anvil.anvil();
@@ -885,7 +888,8 @@ impl TestNetwork {
 
         match stake_table_version {
             StakeTableContractVersion::V1 => args.deploy_to_stake_table_v1(&mut contracts).await,
-            StakeTableContractVersion::V2 => args.deploy_all(&mut contracts).await,
+            StakeTableContractVersion::V2 => args.deploy_to_stake_table_v2(&mut contracts).await,
+            StakeTableContractVersion::V3 => args.deploy_to_stake_table_v3(&mut contracts).await,
         }
         .context("failed to deploy contracts")?;
 

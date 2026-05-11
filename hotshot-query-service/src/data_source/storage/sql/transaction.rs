@@ -57,7 +57,8 @@ use super::{
 use crate::{
     Header, Payload, QueryError, QueryResult,
     availability::{
-        BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload, VidCommonQueryData,
+        BlockQueryData, Certificate2, LeafQueryData, QueryableHeader, QueryablePayload,
+        VidCommonQueryData,
     },
     data_source::{
         storage::{NodeStorage, UpdateAvailabilityStorage, pruning::PrunedHeightStorage},
@@ -66,6 +67,24 @@ use crate::{
     merklized_state::{MerklizedState, UpdateStateData},
     types::HeightIndexed,
 };
+
+/// When set to `true`, read transactions begin with
+/// `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY` (no `DEFERRABLE`),
+/// so they start immediately instead of waiting for a safe serializable snapshot.
+#[cfg(not(feature = "embedded-db"))]
+static NO_DEFERRABLE_ON_READ: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Configure whether read transactions on Postgres should omit `DEFERRABLE`.
+///
+/// When `true`, `Read::begin` issues `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY`
+/// (no `DEFERRABLE`) so the transaction starts immediately rather than waiting for a safe
+/// serializable snapshot. Default: `false`. Call this once at startup based on the operator's
+/// chosen configuration.
+#[cfg(not(feature = "embedded-db"))]
+pub fn set_no_deferrable_on_read(value: bool) {
+    NO_DEFERRABLE_ON_READ.store(value, std::sync::atomic::Ordering::Relaxed);
+}
 
 pub type Query<'q> = sqlx::query::Query<'q, Db, <Db as Database>::Arguments<'q>>;
 pub type QueryAs<'q, T> = sqlx::query::QueryAs<'q, Db, T, <Db as Database>::Arguments<'q>>;
@@ -185,12 +204,23 @@ impl TransactionMode for Read {
         // (SERIALIZABLE), and we want to wait until this is possible rather than failing
         // (DEFERRABLE).
         //
+        // Setting `ESPRESSO_NODE_POSTGRES_NO_DEFERRABLE=true` disables the DEFERRABLE
+        // option, so that read transactions start immediately and may instead fail with a
+        // serialization error if they conflict with a concurrent write. This trades start-up
+        // latency for the chance of a retry, and is opt-in.
+        //
         // With SQLite, there is nothing to be done here, as SQLite automatically starts
         // transactions in read-only mode, and always has serializable concurrency unless we
         // explicitly opt in to dirty reads with a pragma.
         #[cfg(not(feature = "embedded-db"))]
-        conn.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE")
-            .await?;
+        {
+            let sql = if NO_DEFERRABLE_ON_READ.load(std::sync::atomic::Ordering::Relaxed) {
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY"
+            } else {
+                "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE"
+            };
+            conn.execute(sql).await?;
+        }
 
         Ok(())
     }
@@ -392,6 +422,12 @@ where
 
 /// Low-level, general database queries and mutation.
 impl Transaction<Write> {
+    /// Maximum number of parameters allowed in a single query.
+    ///
+    /// This should be safely under the hard limit imposed by the Postgres client, which is either
+    /// 32,767 or 65,535.
+    const STATEMENT_MAX_PARAMETERS: usize = 30_000;
+
     pub async fn upsert<'p, const N: usize, R>(
         &mut self,
         table: &str,
@@ -420,27 +456,40 @@ impl Transaction<Write> {
             return Ok(());
         }
 
-        let mut query_builder =
-            QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
-        query_builder.push_values(rows, |mut b, row| {
-            row.bind(&mut b);
-        });
-        query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
+        // For very large upserts, we might need to proceed in chunks to avoid exceeding the maximum
+        // number of parameters in a single statement.
+        let rows_per_chunk = Self::STATEMENT_MAX_PARAMETERS / N;
+        let mut rows = rows.into_iter();
+        loop {
+            let chunk = rows.by_ref().take(rows_per_chunk).collect::<Vec<_>>();
+            if chunk.is_empty() {
+                break;
+            }
+            let num_rows = chunk.len();
+            tracing::debug!(num_rows, "upsert chunk");
 
-        let query = query_builder.build();
-        let statement = query.sql();
+            let mut query_builder =
+                QueryBuilder::new(format!("INSERT INTO \"{table}\" ({columns_str}) "));
+            query_builder.push_values(chunk, |mut b, row| {
+                row.bind(&mut b);
+            });
+            query_builder.push(format!(" ON CONFLICT ({pk}) DO UPDATE SET {set_columns}"));
 
-        let res = self.execute(query).await.inspect_err(|err| {
-            tracing::error!(statement, "error in statement execution: {err:#}");
-        })?;
-        let rows_modified = res.rows_affected() as usize;
-        if rows_modified != num_rows {
-            let error = format!(
-                "unexpected number of rows modified: expected {num_rows}, got {rows_modified}. \
-                 query: {statement}"
-            );
-            tracing::error!(error);
-            bail!(error);
+            let query = query_builder.build();
+            let statement = query.sql();
+
+            let res = self.execute(query).await.inspect_err(|err| {
+                tracing::error!(statement, "error in statement execution: {err:#}");
+            })?;
+            let rows_modified = res.rows_affected() as usize;
+            if rows_modified != num_rows {
+                let error = format!(
+                    "unexpected number of rows modified: expected {num_rows}, got \
+                     {rows_modified}. query: {statement}"
+                );
+                tracing::error!(error);
+                bail!(error);
+            }
         }
         Ok(())
     }
@@ -581,6 +630,23 @@ where
                 .context("inserting QC chain")?;
         }
 
+        Ok(())
+    }
+
+    async fn insert_cert2(
+        &mut self,
+        height: u64,
+        cert2: Certificate2<Types>,
+    ) -> anyhow::Result<()> {
+        let cert2_json = serde_json::to_value(&cert2)?;
+        self.upsert(
+            "cert2",
+            ["height", "data"],
+            ["height"],
+            [(height as i64, cert2_json)],
+        )
+        .await
+        .context("inserting cert2")?;
         Ok(())
     }
 
@@ -905,5 +971,57 @@ impl PoolMetrics {
             reverts: metrics.create_counter("reverted_transactions".into(), None),
             drops: metrics.create_counter("dropped_transactions".into(), None),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::data_source::{
+        Transaction as _, VersionedDataSource,
+        sql::testing::TmpDb,
+        storage::{SqlStorage, StorageConnectionType},
+    };
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_upsert_many_rows() {
+        let db = TmpDb::init().await;
+        let storage = SqlStorage::connect(db.config(), StorageConnectionType::Sequencer)
+            .await
+            .unwrap();
+
+        let mut tx = storage.write().await.unwrap();
+        query(
+            "CREATE TABLE test (
+                a INT PRIMARY KEY,
+                b INT,
+                c INT
+            )",
+        )
+        .execute(tx.as_mut())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // use a non-integer number of chunks.
+        let n = (2 * Transaction::STATEMENT_MAX_PARAMETERS
+            + (Transaction::STATEMENT_MAX_PARAMETERS / 2)) as i32;
+        let rows = (0..n).map(|i| (i, i, i)).collect::<Vec<_>>();
+
+        let mut tx = storage.write().await.unwrap();
+        tx.upsert("test", ["a", "b", "c"], ["a"], rows.clone())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let mut tx = storage.read().await.unwrap();
+        assert_eq!(
+            rows,
+            query_as("SELECT * FROM test ORDER BY a")
+                .fetch_all(tx.as_mut())
+                .await
+                .unwrap()
+        );
     }
 }

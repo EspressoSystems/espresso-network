@@ -1,189 +1,75 @@
 use std::{collections::BTreeSet, time::Duration};
 
-use crate::tests::common::{
-    network::{CliquenetTestNetwork, MemoryTestNetwork},
-    runner::TestRunner,
-};
+use crate::tests::common::runner::TestRunner;
 
-// ---------------------------------------------------------------------------
-// MemoryNetwork
-// ---------------------------------------------------------------------------
-
-/// 10 nodes, 1 down over MemoryNetwork.
+/// 10 nodes, 1 down.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_one_down_memory() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
-        down_nodes: BTreeSet::from([9]),
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
+async fn ten_nodes_one_down() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(30)
+        .view_timeout(Duration::from_secs(5))
+        .down_nodes(BTreeSet::from([9]))
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
-/// 10 nodes, 2 down over MemoryNetwork.
+/// 10 nodes, 2 down.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_two_down_memory() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
-        down_nodes: BTreeSet::from([8, 9]),
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
+async fn ten_nodes_two_down() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(30)
+        .view_timeout(Duration::from_secs(5))
+        .down_nodes(BTreeSet::from([8, 9]))
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
-/// 10 nodes, f=3 down over MemoryNetwork.
+/// 10 nodes, f=3 down.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_f_down_memory() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
-        down_nodes: BTreeSet::from([7, 8, 9]),
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
+async fn ten_nodes_f_down() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(30)
+        .view_timeout(Duration::from_secs(5))
+        .down_nodes(BTreeSet::from([7, 8, 9]))
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
-/// 10 nodes, 1 down, with epochs over MemoryNetwork.
+/// 10 nodes, 1 down, with epochs.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_one_down_with_epochs_memory() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
-        epoch_height: 10,
-        down_nodes: BTreeSet::from([9]),
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
+async fn ten_nodes_one_down_with_epochs() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(30)
+        .view_timeout(Duration::from_secs(5))
+        .epoch_height(10)
+        .down_nodes(BTreeSet::from([9]))
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
 
-/// 10 nodes, f=3 down, with epochs over MemoryNetwork.
+/// 10 nodes, f=3 down, with epochs.
 #[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_f_down_with_epochs_memory() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
-        epoch_height: 10,
-        down_nodes: BTreeSet::from([7, 8, 9]),
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
-}
-
-/// 20 nodes, f=6 down over MemoryNetwork.
-#[tokio::test(flavor = "multi_thread")]
-async fn twenty_nodes_f_down_memory() {
-    TestRunner {
-        num_nodes: 20,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
-        view_timeout: Duration::from_secs(5),
-        down_nodes: BTreeSet::from([14, 15, 16, 17, 18, 19]),
-        ..Default::default()
-    }
-    .run::<MemoryTestNetwork>()
-    .await
-    .unwrap();
-}
-
-// ---------------------------------------------------------------------------
-// Cliquenet
-// ---------------------------------------------------------------------------
-
-/// 10 nodes, 1 down over Cliquenet.
-#[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_one_down_cliquenet() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
-        view_timeout: Duration::from_secs(5),
-        down_nodes: BTreeSet::from([9]),
-        ..Default::default()
-    }
-    .run::<CliquenetTestNetwork>()
-    .await
-    .unwrap();
-}
-
-/// 10 nodes, 2 down over Cliquenet.
-#[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_two_down_cliquenet() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
-        view_timeout: Duration::from_secs(5),
-        down_nodes: BTreeSet::from([8, 9]),
-        ..Default::default()
-    }
-    .run::<CliquenetTestNetwork>()
-    .await
-    .unwrap();
-}
-
-/// 10 nodes, f=3 down over Cliquenet.
-#[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_f_down_cliquenet() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
-        view_timeout: Duration::from_secs(5),
-        down_nodes: BTreeSet::from([7, 8, 9]),
-        ..Default::default()
-    }
-    .run::<CliquenetTestNetwork>()
-    .await
-    .unwrap();
-}
-
-/// 10 nodes, 1 down, with epochs over Cliquenet.
-#[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_one_down_with_epochs_cliquenet() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(120),
-        view_timeout: Duration::from_secs(5),
-        epoch_height: 10,
-        down_nodes: BTreeSet::from([9]),
-        ..Default::default()
-    }
-    .run::<CliquenetTestNetwork>()
-    .await
-    .unwrap();
-}
-
-/// 10 nodes, f=3 down, with epochs over Cliquenet.
-#[tokio::test(flavor = "multi_thread")]
-async fn ten_nodes_f_down_with_epochs_cliquenet() {
-    TestRunner {
-        num_nodes: 10,
-        target_decisions: 30,
-        max_runtime: Duration::from_secs(180),
-        view_timeout: Duration::from_secs(5),
-        epoch_height: 10,
-        down_nodes: BTreeSet::from([7, 8, 9]),
-        ..Default::default()
-    }
-    .run::<CliquenetTestNetwork>()
-    .await
-    .unwrap();
+async fn ten_nodes_f_down_with_epochs() {
+    TestRunner::builder()
+        .num_nodes(10)
+        .target_decisions(30)
+        .view_timeout(Duration::from_secs(5))
+        .epoch_height(10)
+        .down_nodes(BTreeSet::from([7, 8, 9]))
+        .build()
+        .run()
+        .await
+        .unwrap();
 }
