@@ -298,9 +298,15 @@ mod tests {
         type View = ();
         type Legacy = ();
         type New = ();
-        fn view_from_legacy(_: ()) -> anyhow::Result<()> { Ok(()) }
-        fn view_from_new(_: ()) -> anyhow::Result<()> { Ok(()) }
-        fn legacy_to_new(_: ()) -> anyhow::Result<()> { Ok(()) }
+        fn view_from_legacy(_: ()) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn view_from_new(_: ()) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn legacy_to_new(_: ()) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
     #[async_trait]
     impl DataBackfill for StubBackfill {
