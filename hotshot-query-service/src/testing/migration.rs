@@ -43,8 +43,8 @@ where
     /// Law 1: both projections produce the same `View`.
     fn assert_views_match() {
         let (legacy, new) = Self::equivalent_pair();
-        let via_legacy = Self::view_from_legacy(legacy);
-        let via_new = Self::view_from_new(new);
+        let via_legacy = Self::view_from_legacy(legacy).expect("view_from_legacy failed");
+        let via_new = Self::view_from_new(new).expect("view_from_new failed");
         assert_eq!(
             via_legacy, via_new,
             "view_from_legacy and view_from_new disagree"
@@ -54,8 +54,11 @@ where
     /// Law 2: converting then reading equals reading directly.
     fn assert_conversion_roundtrip() {
         let (legacy, _) = Self::equivalent_pair();
-        let direct = Self::view_from_legacy(legacy.clone());
-        let converted = Self::view_from_new(Self::legacy_to_new(legacy));
+        let direct = Self::view_from_legacy(legacy.clone()).expect("view_from_legacy failed");
+        let converted = Self::view_from_new(
+            Self::legacy_to_new(legacy).expect("legacy_to_new failed"),
+        )
+        .expect("view_from_new failed");
         assert_eq!(
             direct, converted,
             "legacy_to_new is not view-preserving: view_from_legacy != \
