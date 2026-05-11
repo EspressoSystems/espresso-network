@@ -146,7 +146,7 @@ contract NetworkStorageLayoutSanityTest is UpgradeTestHelper {
 
 contract NetworkStorageLayoutTest is UpgradeTestHelper {
     function test_Network_StorageLayout_StakeTable_Sepolia() public {
-        uint8 maxVersion = 2;
+        uint8 maxVersion = 3;
         ensureStorageLayoutCompatible("sepolia", sepoliaStakeTableProxy, "StakeTable", maxVersion);
     }
 

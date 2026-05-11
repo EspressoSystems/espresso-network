@@ -54,19 +54,27 @@ async fn test_export_format_combinations(
 ) -> Result<()> {
     let system = TestSystem::deploy().await?;
 
-    let mut cmd = system.export_node_signatures_cmd()?;
-
     let content = match output {
         Output::Stdout => {
-            cmd.arg("--format").arg(format.to_string());
-            let output = cmd.assert().success().get_output().to_owned();
+            let output = system
+                .export_node_signatures_cmd()?
+                .arg("--format")
+                .arg(format.to_string())
+                .assert()
+                .success()
+                .get_output()
+                .to_owned();
             String::from_utf8(output.stdout)?
         },
         Output::File => {
             let tmpdir = tempfile::tempdir()?;
             let output_file = tmpdir.path().join(format!("payload.{format}"));
-            cmd.arg("--output").arg(&output_file);
-            cmd.assert().success();
+            system
+                .export_node_signatures_cmd()?
+                .arg("--output")
+                .arg(&output_file)
+                .assert()
+                .success();
             std::fs::read_to_string(&output_file)?
         },
     };
@@ -92,13 +100,14 @@ async fn test_explicit_format_override(
     let tmpdir = tempfile::tempdir()?;
     let output_file = tmpdir.path().join(format!("payload.{extension}"));
 
-    let mut cmd = system.export_node_signatures_cmd()?;
-    cmd.arg("--output")
+    system
+        .export_node_signatures_cmd()?
+        .arg("--output")
         .arg(&output_file)
         .arg("--format")
-        .arg(format.to_string());
-
-    cmd.assert().success();
+        .arg(format.to_string())
+        .assert()
+        .success();
 
     let content = std::fs::read_to_string(&output_file)?;
     let parsed = format.parse_node_signatures(&content)?;
@@ -117,10 +126,12 @@ async fn test_file_extension_inference(
     let tmpdir = tempfile::tempdir()?;
     let payload_file = tmpdir.path().join(format!("payload.{extension}"));
 
-    let mut cmd = system.export_node_signatures_cmd()?;
-    cmd.arg("--output").arg(&payload_file);
-
-    cmd.assert().success();
+    system
+        .export_node_signatures_cmd()?
+        .arg("--output")
+        .arg(&payload_file)
+        .assert()
+        .success();
 
     let content = std::fs::read_to_string(&payload_file)?;
     let parsed = extension.parse_node_signatures(&content)?;
@@ -154,10 +165,11 @@ async fn test_unsupported_file_extensions(
     let tmpdir = tempfile::tempdir()?;
     let payload_file = tmpdir.path().join(extension.as_filename());
 
-    let mut cmd = system.export_node_signatures_cmd()?;
-    cmd.arg("--output").arg(&payload_file);
-
-    cmd.assert()
+    system
+        .export_node_signatures_cmd()?
+        .arg("--output")
+        .arg(&payload_file)
+        .assert()
         .failure()
         .stderr(str::contains("Unsupported extension"));
 
@@ -172,12 +184,13 @@ async fn test_export_node_signatures_command(
 ) -> Result<()> {
     let system = TestSystem::deploy().await?;
 
-    let mut cmd = system.export_node_signatures_cmd()?;
-
     match output {
         Output::Stdout => {
-            cmd.arg("--format").arg(format.to_string());
-            let output = cmd.output()?;
+            let output = system
+                .export_node_signatures_cmd()?
+                .arg("--format")
+                .arg(format.to_string())
+                .output()?;
 
             assert!(output.status.success(), "Command failed");
             let result = String::from_utf8(output.stdout)?;
@@ -188,8 +201,12 @@ async fn test_export_node_signatures_command(
         Output::File => {
             let tmpdir = tempfile::tempdir()?;
             let output_file = tmpdir.path().join(format!("payload.{format}"));
-            cmd.arg("--output").arg(&output_file);
-            cmd.assert().success();
+            system
+                .export_node_signatures_cmd()?
+                .arg("--output")
+                .arg(&output_file)
+                .assert()
+                .success();
 
             assert!(output_file.exists());
             let content = std::fs::read_to_string(&output_file)?;
@@ -214,13 +231,15 @@ async fn test_register_validator_with_pre_signed_payload(
     let tmpdir = tempfile::tempdir()?;
     let payload_path = tmpdir.path().join(format!("payload.{format}"));
 
-    let mut sign_cmd = system.export_node_signatures_cmd()?;
-    sign_cmd.arg("--output").arg(&payload_path);
+    system
+        .export_node_signatures_cmd()?
+        .arg("--output")
+        .arg(&payload_path)
+        .assert()
+        .success();
 
-    sign_cmd.assert().success();
-
-    let mut reg_cmd = system.cmd(Signer::Mnemonic);
-    reg_cmd
+    let reg_cmd = system
+        .cmd(Signer::Mnemonic)
         .arg("register-validator")
         .arg("--commission")
         .arg("12.34")
@@ -230,9 +249,11 @@ async fn test_register_validator_with_pre_signed_payload(
         .arg("--node-signatures")
         .arg(&payload_path);
 
-    if let Extension::Toml = format {
-        reg_cmd.arg("--format").arg("toml");
-    }
+    let reg_cmd = if let Extension::Toml = format {
+        reg_cmd.arg("--format").arg("toml")
+    } else {
+        reg_cmd
+    };
 
     let output = reg_cmd.output()?;
     output.assert().success();
@@ -252,7 +273,7 @@ async fn test_update_consensus_keys_with_pre_signed_payload(
     system.register_validator().await?;
 
     let mut rng = rand::rngs::StdRng::from_seed([43u8; 32]);
-    let (_, new_bls, new_state) = TestSystem::gen_keys(&mut rng);
+    let new_keys = TestSystem::gen_keys(&mut rng);
 
     let tmpdir = tempfile::tempdir()?;
     let payload_path = tmpdir.path().join(format!("payload.{format}"));
@@ -263,22 +284,25 @@ async fn test_update_consensus_keys_with_pre_signed_payload(
         .arg("--address")
         .arg(system.deployer_address.to_string())
         .arg("--consensus-private-key")
-        .arg(new_bls.sign_key_ref().to_tagged_base64()?.to_string())
+        .arg(new_keys.bls.sign_key_ref().to_tagged_base64()?.to_string())
         .arg("--state-private-key")
-        .arg(new_state.sign_key().to_tagged_base64()?.to_string());
+        .arg(new_keys.state.sign_key().to_tagged_base64()?.to_string());
 
     sign_cmd.arg("--output").arg(&payload_path);
 
     sign_cmd.assert().success();
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-    cmd.arg("update-consensus-keys")
+    let cmd = system
+        .cmd(Signer::Mnemonic)
+        .arg("update-consensus-keys")
         .arg("--node-signatures")
         .arg(&payload_path);
 
-    if let Extension::Toml = format {
-        cmd.arg("--format").arg("toml");
-    }
+    let cmd = if let Extension::Toml = format {
+        cmd.arg("--format").arg("toml")
+    } else {
+        cmd
+    };
 
     let output = cmd.output()?;
     output.assert().success();
@@ -293,10 +317,12 @@ async fn test_address_validation_mismatch_error() -> Result<()> {
     let tmpdir = tempfile::tempdir()?;
     let payload_file = tmpdir.path().join("payload.json");
 
-    let mut sign_cmd = system.export_node_signatures_cmd()?;
-    sign_cmd.arg("--output").arg(&payload_file);
-
-    sign_cmd.assert().success();
+    system
+        .export_node_signatures_cmd()?
+        .arg("--output")
+        .arg(&payload_file)
+        .assert()
+        .success();
 
     let payload_content = std::fs::read_to_string(&payload_file)?;
     let mut payload: serde_json::Value = serde_json::from_str(&payload_content)?;
@@ -306,9 +332,9 @@ async fn test_address_validation_mismatch_error() -> Result<()> {
 
     std::fs::write(&payload_file, serde_json::to_string_pretty(&payload)?)?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-
-    cmd.arg("register-validator")
+    system
+        .cmd(Signer::Mnemonic)
+        .arg("register-validator")
         .arg("--commission")
         .arg("12.34")
         .arg("--metadata-uri")
@@ -316,6 +342,10 @@ async fn test_address_validation_mismatch_error() -> Result<()> {
         .arg("--skip-metadata-validation")
         .arg("--node-signatures")
         .arg(&payload_file)
+        .arg("--x25519-key")
+        .arg(system.x25519_public_key_str())
+        .arg("--p2p-addr")
+        .arg("127.0.0.1:8080")
         .assert()
         .failure()
         .stderr(str::contains("Address mismatch"));
@@ -342,15 +372,16 @@ async fn test_signature_verification_failure(
     let system = TestSystem::deploy().await?;
 
     let mut rng = rand::rngs::StdRng::from_seed([99u8; 32]);
-    let (_, bad_bls, bad_schnorr) = TestSystem::gen_keys(&mut rng);
+    let bad_keys = TestSystem::gen_keys(&mut rng);
 
     let tmpdir = tempfile::tempdir()?;
     let payload_file = tmpdir.path().join("payload.json");
 
-    let mut sign_cmd = system.export_node_signatures_cmd()?;
-    sign_cmd.arg("--output").arg(&payload_file);
-
-    let result = sign_cmd.output()?;
+    let result = system
+        .export_node_signatures_cmd()?
+        .arg("--output")
+        .arg(&payload_file)
+        .output()?;
     result.assert().success();
 
     let mut payload: NodeSignatures = {
@@ -363,20 +394,19 @@ async fn test_signature_verification_failure(
             payload.address = "0x1111111111111111111111111111111111111111".parse()?;
         },
         BadPayloadScenario::Bls => {
-            payload.bls_signature = stake_table::sign_address_bls(&bad_bls, payload.address);
+            payload.bls_signature = stake_table::sign_address_bls(&bad_keys.bls, payload.address);
         },
         BadPayloadScenario::Schnorr => {
             payload.schnorr_signature =
-                stake_table::sign_address_schnorr(&bad_schnorr, payload.address);
+                stake_table::sign_address_schnorr(&bad_keys.state, payload.address);
         },
     };
 
     let tampered_content = serde_json::to_string_pretty(&payload)?;
     std::fs::write(&payload_file, tampered_content)?;
 
-    let mut cmd = system.cmd(Signer::Mnemonic);
-
-    let cmd_result = cmd
+    let cmd_result = system
+        .cmd(Signer::Mnemonic)
         .arg("register-validator")
         .arg("--commission")
         .arg("12.34")
@@ -384,7 +414,11 @@ async fn test_signature_verification_failure(
         .arg("https://example.com/metadata")
         .arg("--skip-metadata-validation")
         .arg("--node-signatures")
-        .arg(&payload_file);
+        .arg(&payload_file)
+        .arg("--x25519-key")
+        .arg(system.x25519_public_key_str())
+        .arg("--p2p-addr")
+        .arg("127.0.0.1:8080");
 
     let out = cmd_result.assert().failure();
     match scenario {

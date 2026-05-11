@@ -60,6 +60,29 @@ impl NetAddr {
     pub fn is_ip(&self) -> bool {
         matches!(self, Self::Inet(..))
     }
+
+    /// Whether this address is plausibly publicly routable. Returns `false` for IP literals
+    /// in non-globally-routable ranges (loopback, unspecified, RFC 1918 private, link-local,
+    /// broadcast, documentation, IPv6 multicast) and the literal `localhost`. Other hostnames
+    /// are trusted and return `true`. Approximates the (still unstable) `IpAddr::is_global`
+    /// using stable predicates; the IPv6 surface is incomplete (`fe80::/10` link-local and
+    /// `fc00::/7` unique-local addresses are treated as global here).
+    pub fn is_probably_global(&self) -> bool {
+        match self {
+            Self::Inet(IpAddr::V4(v4), _) => {
+                !(v4.is_loopback()
+                    || v4.is_unspecified()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_documentation())
+            },
+            Self::Inet(IpAddr::V6(v6), _) => {
+                !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast())
+            },
+            Self::Name(host, _) => !host.eq_ignore_ascii_case("localhost"),
+        }
+    }
 }
 
 impl fmt::Display for NetAddr {
@@ -111,16 +134,35 @@ impl std::str::FromStr for NetAddr {
     type Err = InvalidNetAddr;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(InvalidNetAddr(()));
+        }
+
         let parse = |a: &str, p: Option<&str>| {
             let p: u16 = if let Some(p) = p {
                 p.parse().map_err(|_| InvalidNetAddr(()))?
             } else {
                 0
             };
+            // Strip brackets from IPv6 addresses like `[::1]`.
+            let a = if a.starts_with('[') && a.ends_with(']') {
+                &a[1..a.len() - 1]
+            } else {
+                a
+            };
             IpAddr::from_str(a)
                 .map(|a| Self::Inet(a, p))
                 .or_else(|_| Ok(Self::Name(a.to_string().into(), p)))
         };
+
+        // Handle bracketed IPv6 like `[::1]:8080` or `[::1]` (no port).
+        if s.starts_with('[') {
+            return match s.rfind("]:") {
+                Some(i) => parse(&s[..i + 1], Some(&s[i + 2..])),
+                None => parse(s, None),
+            };
+        }
+
         match s.rsplit_once(':') {
             None => parse(s, None),
             Some((a, p)) => parse(a, Some(p)),
@@ -160,38 +202,65 @@ impl<'de> Deserialize<'de> for NetAddr {
 
 #[cfg(test)]
 mod tests {
-    use std::net::IpAddr;
+    use std::{iter::repeat_with, net::IpAddr};
+
+    use quickcheck::{Arbitrary, Gen, quickcheck};
 
     use super::NetAddr;
 
+    impl Arbitrary for NetAddr {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let port = u16::arbitrary(g);
+            if bool::arbitrary(g) {
+                let len = u8::arbitrary(g);
+                let host: String = repeat_with(|| char::arbitrary(g))
+                    .filter(|c| !"[]".contains(*c))
+                    .take(len.into())
+                    .collect();
+                NetAddr::Name(host.into(), port)
+            } else {
+                let ip = IpAddr::arbitrary(g);
+                NetAddr::Inet(ip, port)
+            }
+        }
+    }
+
+    quickcheck! {
+        fn prop_to_string_parse_identity(a: NetAddr) -> bool {
+            a.to_string().parse().ok() == Some(a)
+        }
+    }
+
     #[test]
-    fn test_parse() {
-        let a: NetAddr = "127.0.0.1:1234".parse().unwrap();
-        let NetAddr::Inet(a, p) = a else {
-            unreachable!()
-        };
-        assert_eq!(IpAddr::from([127, 0, 0, 1]), a);
-        assert_eq!(1234, p);
+    fn empty_is_invalid() {
+        assert!("".parse::<NetAddr>().is_err())
+    }
 
-        let a: NetAddr = "::1:1234".parse().unwrap();
-        let NetAddr::Inet(a, p) = a else {
-            unreachable!()
-        };
-        assert_eq!("::1".parse::<IpAddr>().unwrap(), a);
-        assert_eq!(1234, p);
-
-        let a: NetAddr = "localhost:1234".parse().unwrap();
-        let NetAddr::Name(h, p) = a else {
-            unreachable!()
-        };
-        assert_eq!("localhost", &h);
-        assert_eq!(1234, p);
-
-        let a: NetAddr = "sub.domain.com:1234".parse().unwrap();
-        let NetAddr::Name(h, p) = a else {
-            unreachable!()
-        };
-        assert_eq!("sub.domain.com", &h);
-        assert_eq!(1234, p);
+    #[test]
+    fn test_is_probably_global() {
+        let cases: &[(&str, bool)] = &[
+            ("127.0.0.1:1234", false),
+            ("0.0.0.0:1234", false),
+            ("10.0.0.1:1234", false),
+            ("172.16.5.4:1234", false),
+            ("192.168.1.1:1234", false),
+            ("169.254.0.1:1234", false),
+            ("255.255.255.255:1234", false),
+            ("192.0.2.1:1234", false),
+            ("::1:1234", false),
+            (":::1234", false),
+            ("ff00::1:1234", false),
+            ("localhost:1234", false),
+            ("LOCALHOST:1234", false),
+            ("8.8.8.8:1234", true),
+            ("1.1.1.1:1234", true),
+            ("2606:4700:4700::1111:1234", true),
+            ("example.com:1234", true),
+            ("node.internal:1234", true),
+        ];
+        for (s, expected) in cases {
+            let a: NetAddr = s.parse().unwrap_or_else(|_| panic!("parse {s}"));
+            assert_eq!(a.is_probably_global(), *expected, "for input {s}");
+        }
     }
 }
