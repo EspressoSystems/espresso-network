@@ -36,16 +36,14 @@ pub enum Validated {}
 #[serde(bound(deserialize = "S: Deserialize<'de>"))]
 pub struct ProposalMessage<T: NodeType, S> {
     pub proposal: SignedProposal<T, Proposal<T>>,
-    pub vid_share: VidDisperseShare2<T>,
     #[serde(skip)]
     _marker: PhantomData<fn() -> S>,
 }
 
 impl<T: NodeType> ProposalMessage<T, Validated> {
-    pub fn validated(p: SignedProposal<T, Proposal<T>>, s: VidDisperseShare2<T>) -> Self {
+    pub fn validated(p: SignedProposal<T, Proposal<T>>) -> Self {
         Self {
             proposal: p,
-            vid_share: s,
             _marker: PhantomData,
         }
     }
@@ -56,7 +54,6 @@ impl<T: NodeType, S> ProposalMessage<T, S> {
     pub fn into_unchecked(self) -> ProposalMessage<T, Unchecked> {
         ProposalMessage {
             proposal: self.proposal,
-            vid_share: self.vid_share,
             _marker: PhantomData,
         }
     }
@@ -67,6 +64,9 @@ impl<T: NodeType, S> HasViewNumber for ProposalMessage<T, S> {
         self.proposal.data.view_number
     }
 }
+
+/// A signed VidShare to be sent to the replicas.
+pub type VidShareMessage<T> = SignedProposal<T, VidDisperseShare2<T>>;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
@@ -160,6 +160,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     TimeoutCertificate(TimeoutCertificate2<T>),
     EpochChange(EpochChangeMessage<T>),
     Checkpoint(CheckpointVote<T>),
+    VidShare(VidShareMessage<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -175,6 +176,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
             Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
+            Self::VidShare(v) => ConsensusMessage::VidShare(v),
         }
     }
 }
@@ -191,6 +193,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::TimeoutCertificate(certificate) => certificate.view_number(),
             Self::Checkpoint(vote) => vote.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
+            Self::VidShare(vid_share) => vid_share.data.view_number(),
         }
     }
 }
