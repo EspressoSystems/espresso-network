@@ -55,10 +55,9 @@ where
     fn assert_conversion_roundtrip() {
         let (legacy, _) = Self::equivalent_pair();
         let direct = Self::view_from_legacy(legacy.clone()).expect("view_from_legacy failed");
-        let converted = Self::view_from_new(
-            Self::legacy_to_new(legacy).expect("legacy_to_new failed"),
-        )
-        .expect("view_from_new failed");
+        let converted =
+            Self::view_from_new(Self::legacy_to_new(legacy).expect("legacy_to_new failed"))
+                .expect("view_from_new failed");
         assert_eq!(
             direct, converted,
             "legacy_to_new is not view-preserving: view_from_legacy != \
