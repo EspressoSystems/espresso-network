@@ -742,7 +742,7 @@ impl SqlStorage {
         if config.archive {
             // If running in archive mode, ensure the pruned height is set to 0, so the fetcher will
             // reconstruct previously pruned data.
-            query("DELETE FROM pruned_height WHERE id = 1")
+            query("DELETE FROM pruned_height")
                 .execute(conn.as_mut())
                 .await?;
         }

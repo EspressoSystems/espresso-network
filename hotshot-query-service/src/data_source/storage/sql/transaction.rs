@@ -617,8 +617,6 @@ impl Transaction<Write> {
 
     /// Record the height of the latest pruned merklized state.
     pub(crate) async fn save_state_pruned_height(&mut self, height: u64) -> anyhow::Result<()> {
-        // id is set to 1 so that there is only one row in the table.
-        // height is updated if the row already exists.
         self.upsert(
             "pruned_height",
             ["id", "last_height"],
