@@ -830,14 +830,14 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         let hashes: Vec<Vec<u8>> = all_hashes.into_iter().collect();
 
         #[cfg(not(feature = "embedded-db"))]
-        let nodes_hash_ids: HashMap<Vec<u8>, i32> = batch_insert_hashes(hashes, self).await?;
+        let nodes_hash_ids: HashMap<Vec<u8>, i64> = batch_insert_hashes(hashes, self).await?;
 
         #[cfg(feature = "embedded-db")]
-        let nodes_hash_ids: HashMap<Vec<u8>, i32> = {
-            let mut hash_ids: HashMap<Vec<u8>, i32> = HashMap::with_capacity(hashes.len());
+        let nodes_hash_ids: HashMap<Vec<u8>, i64> = {
+            let mut hash_ids: HashMap<Vec<u8>, i64> = HashMap::with_capacity(hashes.len());
             for hash_chunk in hashes.chunks(20) {
                 let (query, sql) = build_hash_batch_insert(hash_chunk)?;
-                let chunk_ids: HashMap<Vec<u8>, i32> = query
+                let chunk_ids: HashMap<Vec<u8>, i64> = query
                     .query_as(&sql)
                     .fetch(self.as_mut())
                     .try_collect()
@@ -857,7 +857,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
                 let children_hashes = children
                     .iter()
                     .map(|c| nodes_hash_ids.get(c).copied())
-                    .collect::<Option<Vec<i32>>>()
+                    .collect::<Option<Vec<i64>>>()
                     .ok_or(QueryError::Error {
                         message: "Missing child hash".to_string(),
                     })?;

@@ -150,11 +150,9 @@ pub struct MigrationRegistry {
 /// Trait objects cannot carry an associated type, so the registry stores
 /// backfills behind this erased trait. Reader code never sees this trait;
 /// it references the concrete migration type and its `Adapter` directly.
-/// The methods below are dead code until the deferred runner lands; the
-/// runner invokes them when driving registered backfills.
+/// The runner invokes these methods when driving registered backfills.
 #[async_trait]
-#[allow(dead_code)]
-trait DataBackfillErased: MigrationMeta {
+pub trait DataBackfillErased: MigrationMeta {
     fn batch_size(&self) -> usize;
     async fn migrate_batch(
         &self,
@@ -251,6 +249,10 @@ impl MigrationRegistry {
 
     pub fn deferred_schema_migrations(&self) -> &[Box<dyn DeferredSchemaChange>] {
         &self.deferred_schema
+    }
+
+    pub fn backfill_migrations(&self) -> &[Box<dyn DataBackfillErased>] {
+        &self.backfills
     }
 
     pub fn cleanup_migrations(&self) -> &[Box<dyn CleanupMigration>] {

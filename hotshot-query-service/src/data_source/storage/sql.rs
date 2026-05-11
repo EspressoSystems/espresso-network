@@ -11,7 +11,7 @@
 // see <https://www.gnu.org/licenses/>.
 
 #![cfg(feature = "sql-data-source")]
-use std::{cmp::min, fmt::Debug, str::FromStr, time::Duration};
+use std::{cmp::min, fmt::Debug, str::FromStr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -41,6 +41,7 @@ use crate::{
         update::Transaction as _,
     },
     metrics::PrometheusMetrics,
+    migration::MigrationRegistry,
     node::BlockId,
     status::HasMetrics,
 };
@@ -230,6 +231,7 @@ pub struct Config {
     pruner_cfg: Option<PrunerCfg>,
     archive: bool,
     pool: Option<Pool<Db>>,
+    registry: Option<Arc<MigrationRegistry>>,
 }
 
 #[cfg(not(feature = "embedded-db"))]
@@ -268,6 +270,7 @@ impl From<SqliteConnectOptions> for Config {
             pruner_cfg: None,
             archive: false,
             pool: None,
+            registry: None,
         }
     }
 }
@@ -286,6 +289,7 @@ impl From<PgConnectOptions> for Config {
             pruner_cfg: None,
             archive: false,
             pool: None,
+            registry: None,
         }
     }
 }
@@ -527,6 +531,16 @@ impl Config {
     pub fn statement_timeout(self, _timeout: Duration) -> Self {
         self
     }
+
+    /// Register a [`MigrationRegistry`] with this storage instance.
+    ///
+    /// When set, [`SqlStorage::connect`] will run any cleanup migrations whose
+    /// requirements are already satisfied, and [`SqlStorage::run_deferred_migrations`]
+    /// will drive the registered backfills and deferred schema changes.
+    pub fn registry(mut self, r: MigrationRegistry) -> Self {
+        self.registry = Some(Arc::new(r));
+        self
+    }
 }
 
 /// Storage for the APIs provided in this crate, backed by a remote PostgreSQL database.
@@ -677,12 +691,174 @@ impl SqlStorage {
 
         conn.close().await?;
 
-        Ok(Self {
+        let storage = Self {
             pool,
             pool_metrics,
             metrics,
             pruner_cfg,
-        })
+        };
+
+        if let Some(registry) = config.registry {
+            registry.validate()?;
+            storage.run_pending_cleanups(&*registry).await?;
+        }
+
+        Ok(storage)
+    }
+
+    /// Run any cleanup migrations whose requirements are satisfied.
+    ///
+    /// Called at the end of [`connect`] when a registry is configured, and again
+    /// at the end of each deferred-runner pass so cleanups that just became eligible
+    /// are picked up without waiting for the next restart.
+    pub async fn run_pending_cleanups(&self, registry: &MigrationRegistry) -> Result<(), Error> {
+        for cleanup in registry.cleanup_migrations() {
+            if self.cleanup_requirements_met(cleanup.requires()).await? {
+                tracing::info!("running cleanup migration {}", cleanup.name());
+                let mut tx = self.write().await?;
+                cleanup.run(&mut tx).await?;
+                sqlx::query(
+                    "INSERT INTO deferred_migrations (name, done_at) VALUES ($1, $2)
+                     ON CONFLICT (name) DO UPDATE SET done_at = EXCLUDED.done_at",
+                )
+                .bind(cleanup.name())
+                .bind(Utc::now().to_rfc3339())
+                .execute(tx.as_mut())
+                .await?;
+                tx.commit().await?;
+                tracing::info!("cleanup migration {} complete", cleanup.name());
+            }
+        }
+        Ok(())
+    }
+
+    async fn cleanup_requirements_met(&self, requires: &[&'static str]) -> Result<bool, Error> {
+        if requires.is_empty() {
+            return Ok(true);
+        }
+        let mut tx = self.read().await?;
+        for name in requires {
+            let done: Option<(bool,)> = sqlx::query_as(
+                "SELECT done_at IS NOT NULL FROM deferred_migrations WHERE name = $1",
+            )
+            .bind(name)
+            .fetch_optional(tx.as_mut())
+            .await?;
+            if done.map(|(b,)| b) != Some(true) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Drive all registered deferred migrations (backfills and deferred schema changes).
+    ///
+    /// This is intended to be spawned as a background task after consensus has started.
+    /// Backfills run in order of their `order()` value; a higher-order backfill does not
+    /// start until all lower-order backfills are marked complete. Deferred schema changes
+    /// run after all backfills of the same or lower `order()` are done. After each full
+    /// pass, pending cleanup migrations are checked and run if their requirements are met.
+    pub async fn run_deferred_migrations(&self, registry: &MigrationRegistry) -> Result<(), Error> {
+        // Run backfills in order.
+        let mut backfills: Vec<_> = registry.backfill_migrations().iter().collect();
+        backfills.sort_by_key(|m| m.order());
+
+        for backfill in &backfills {
+            if self.migration_done(backfill.name()).await? {
+                continue;
+            }
+            tracing::info!(
+                "starting backfill migration {} (batch_size={})",
+                backfill.name(),
+                backfill.batch_size()
+            );
+            let mut offset = self.migration_progress(backfill.name()).await?;
+            loop {
+                let mut tx = self.write().await?;
+                let next = backfill.migrate_batch(&mut tx, offset).await?;
+                // Persist progress before committing so a crash after commit but before the
+                // next progress update doesn't re-process rows.
+                match next {
+                    Some(new_offset) => {
+                        sqlx::query(
+                            "INSERT INTO deferred_migrations (name, progress) VALUES ($1, $2)
+                             ON CONFLICT (name) DO UPDATE SET progress = EXCLUDED.progress",
+                        )
+                        .bind(backfill.name())
+                        .bind(new_offset as i64)
+                        .execute(tx.as_mut())
+                        .await?;
+                        tx.commit().await?;
+                        offset = new_offset;
+                    },
+                    None => {
+                        sqlx::query(
+                            "INSERT INTO deferred_migrations (name, progress, done_at)
+                                  VALUES ($1, $2, $3)
+                             ON CONFLICT (name) DO UPDATE
+                                  SET progress = EXCLUDED.progress,
+                                      done_at  = EXCLUDED.done_at",
+                        )
+                        .bind(backfill.name())
+                        .bind(offset as i64)
+                        .bind(Utc::now().to_rfc3339())
+                        .execute(tx.as_mut())
+                        .await?;
+                        tx.commit().await?;
+                        tracing::info!("backfill migration {} complete", backfill.name());
+                        break;
+                    },
+                }
+            }
+        }
+
+        // Run deferred schema changes in order.
+        let mut deferred: Vec<_> = registry.deferred_schema_migrations().iter().collect();
+        deferred.sort_by_key(|m| m.order());
+
+        for schema_change in &deferred {
+            if self.migration_done(schema_change.name()).await? {
+                continue;
+            }
+            tracing::info!("running deferred schema change {}", schema_change.name());
+            schema_change.run(self).await?;
+            let mut tx = self.write().await?;
+            sqlx::query(
+                "INSERT INTO deferred_migrations (name, done_at) VALUES ($1, $2)
+                 ON CONFLICT (name) DO UPDATE SET done_at = EXCLUDED.done_at",
+            )
+            .bind(schema_change.name())
+            .bind(Utc::now().to_rfc3339())
+            .execute(tx.as_mut())
+            .await?;
+            tx.commit().await?;
+            tracing::info!("deferred schema change {} complete", schema_change.name());
+        }
+
+        // Pick up any cleanup migrations that just became eligible.
+        self.run_pending_cleanups(registry).await?;
+
+        Ok(())
+    }
+
+    async fn migration_done(&self, name: &str) -> Result<bool, Error> {
+        let mut tx = self.read().await?;
+        let row: Option<(bool,)> =
+            sqlx::query_as("SELECT done_at IS NOT NULL FROM deferred_migrations WHERE name = $1")
+                .bind(name)
+                .fetch_optional(tx.as_mut())
+                .await?;
+        Ok(row.map(|(b,)| b) == Some(true))
+    }
+
+    async fn migration_progress(&self, name: &str) -> Result<u64, Error> {
+        let mut tx = self.read().await?;
+        let row: Option<(i64,)> =
+            sqlx::query_as("SELECT progress FROM deferred_migrations WHERE name = $1")
+                .bind(name)
+                .fetch_optional(tx.as_mut())
+                .await?;
+        Ok(row.map(|(p,)| p as u64).unwrap_or(0))
     }
 }
 

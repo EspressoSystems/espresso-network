@@ -77,7 +77,10 @@ use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     api::RewardMerkleTreeV2Data,
     catchup::SqlStateCatchup,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    persistence::{
+        migrate_network_config, migrations::build_registry,
+        persistence_metrics::PersistenceMetricsValue,
+    },
 };
 
 /// Options for Postgres-backed persistence.
@@ -667,7 +670,7 @@ impl PersistenceOptions for Options {
     }
 
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
-        let config = (&*self).try_into()?;
+        let config = Config::try_from(&*self)?.registry(build_registry());
         let persistence = Persistence {
             db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
             gc_opt: self.consensus_pruning,
