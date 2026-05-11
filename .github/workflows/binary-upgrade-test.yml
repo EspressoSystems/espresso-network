@@ -28,4 +28,4 @@ jobs:
           UPGRADE_PULL: "1"
         run: |
           set -o pipefail
-          timeout -v 1800 ./binary-upgrade-tests/run.sh | sed -e 's/^/binary-upgrade: /;'
+          timeout -v 1800 ./binary-upgrade-tests/run.py | sed -e 's/^/binary-upgrade: /;'

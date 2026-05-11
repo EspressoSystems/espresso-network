@@ -1,5 +1,6 @@
 mod hotshot
 mod py "scripts/py.just"
+mod binary-upgrade-tests "binary-upgrade-tests/justfile"
 
 default:
     just --list
@@ -130,9 +131,6 @@ down *args:
 
 pull:
     docker compose pull
-
-binary-upgrade-test base_tag="20260505" upgrade_tag="main":
-    BASE_TAG={{base_tag}} UPGRADE_TAG={{upgrade_tag}} ./binary-upgrade-tests/run.sh
 
 docker-stop-rm:
     docker stop $(docker ps -aq); docker rm $(docker ps -aq)

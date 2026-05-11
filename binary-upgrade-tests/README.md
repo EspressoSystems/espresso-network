@@ -1,58 +1,58 @@
 # Binary Upgrade Test
 
-Boots docker-compose on the pinned mainnet release `20260505`, then rolls each `espresso-node-N` and the rest of the
-services to a target tag (e.g. `main` or `pr-1234`), running `scripts/smoke-test-demo` before and after.
+Swaps docker images on a running demo network at a single protocol version, from a pinned base release to a target
+tag, asserting the network keeps producing and serving blocks.
 
-The `docker-compose.yaml` and `.env` for the base phase are extracted from the `BASE_TAG` git revision into `./tmp/`.
-That file uses the legacy `ESPRESSO_SEQUENCER_*` env names natively read by the old binary; the new binary maps them to
-current names via `crates/espresso/utils/src/env_compat.rs`, so the same compose file works for both images during the
-rolling upgrade.
+## What it does
 
-## Local
+- Extracts `docker-compose.yaml` + `.env` from the `BASE_TAG` git revision into a temp dir.
+- Brings the stack up on `BASE_TAG`. Runs the demo smoke test.
+- Recreates each `espresso-node-N` one at a time on `UPGRADE_TAG`. After each roll, every node must catch up to a
+  height sampled just before that roll.
+- Bulk-recreates the remaining long-running espresso services on `UPGRADE_TAG`.
+- Asserts every running service whose image is published under `ghcr.io/espressosystems/espresso-network/` is on
+  `UPGRADE_TAG`.
+- Runs the demo smoke test again.
 
-The repo's `.env` must exist (the dev shell or `cp .env.docker.example .env` populates it). The script bails with a
-clear error otherwise.
+## Run
 
-    just binary-upgrade-test                                # uses defaults
-    BASE_TAG=20260505 UPGRADE_TAG=main ./binary-upgrade-tests/run.sh
-    UPGRADE_PULL=1 UPGRADE_TAG=20260601 ./binary-upgrade-tests/run.sh
-    KEEP_RUNNING=1 ./binary-upgrade-tests/run.sh           # leave compose up
+The repo's `.env` must exist (`cp .env.docker.example .env` or use the dev shell).
 
-The script runs `docker compose down -v` on exit (unless `KEEP_RUNNING=1`), which destroys local demo state.
+    just binary-upgrade-tests::run
+    BASE_TAG=20260505 UPGRADE_TAG=main just binary-upgrade-tests::run
+    KEEP_RUNNING=1 just binary-upgrade-tests::run            # leave compose stack up
+
+`docker compose down -v` runs on exit unless `KEEP_RUNNING=1`, destroying local demo state.
 
 ## Inputs
 
-| env            | default  |
-| -------------- | -------- |
-| BASE_TAG       | 20260505 |
-| UPGRADE_TAG    | main     |
-| KEEP_RUNNING   | 0        |
-| UPGRADE_PULL   | 0        |
-| SETTLE_SECONDS | 30       |
+| env          | default  |
+| ------------ | -------- |
+| BASE_TAG     | 20260505 |
+| UPGRADE_TAG  | main     |
+| KEEP_RUNNING | 0        |
+| UPGRADE_PULL | 0        |
 
 ## CI
 
-- PRs: `binary-upgrade-test-pr` job in `.github/workflows/build.yml` loads the PR-built tar artifacts and runs this
-  script with `UPGRADE_TAG=pr-<num>`.
-- Manual: Actions tab -> "Binary Upgrade Test" -> Run with custom tags.
+- PRs: `binary-upgrade-test-pr` in `.github/workflows/build.yml` loads PR-built tar artifacts and runs with `UPGRADE_TAG=pr-<num>`.
+- Manual: Actions -> "Binary Upgrade Test" -> Run with custom tags.
 
 ## Scope
 
-This is a **binary upgrade** test: it swaps docker images on a running network at the same protocol version. It is not a
-**protocol upgrade** test (which exercises HotShot's `UpgradeProposal` / `UpgradeCertificate` flow to transition the
-network from one protocol version to the next). Protocol upgrades are covered by `tests/upgrades.rs`.
+- A **binary upgrade** test: same protocol version on both sides, only images swap. Protocol upgrade (HotShot
+  `UpgradeProposal` / `UpgradeCertificate`) is covered by `tests/upgrades.rs`.
+- Genesis is `data/genesis/demo-drb-header.toml` (V0.4, no upgrade configured), so headers stay at V0.4 throughout.
 
-The genesis is `data/genesis/demo-drb-header.toml` (V0.4, no upgrade configured), so headers stay at V0.4 throughout.
+## What's checked
 
-## Asserts
-
-- `scripts/smoke-test-demo` passes before any roll and after the full upgrade: block height, transaction count, and
-  light client updates all increase; builder balance decreases; recipient balance increases; balance is conserved;
-  builder healthcheck reachable.
-- After each rolled `espresso-node-N`, a stable monitor node's `/node/block-height` advances by at least 2 within 120s.
-- All five `espresso-node-N` containers run the upgrade image after the roll; the remaining long-running services pinned
-  to `${DOCKER_TAG}` (orchestrator, builder, prover, CDN, state-relay, submit-transactions, nasty-client,
-  node-validator) run the upgrade image after the bulk recreate.
+- Demo smoke test passes before any roll and after the full upgrade: block height, transaction count, light client
+  updates, and fee recipient balance all advance; builder balance decreases; total balance is conserved; builder
+  healthcheck is reachable.
+- After each node roll, all five nodes catch up past a pre-roll reference height. Query-enabled nodes are also
+  required to make the new block fully retrievable via the availability API (catches "header indexed but
+  payload/VID missing" regressions).
+- After the bulk upgrade, every running espresso-network service is on `UPGRADE_TAG`.
 
 ## Not yet asserted (TODO)
 
