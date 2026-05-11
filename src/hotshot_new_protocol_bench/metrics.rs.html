@@ -70,7 +70,7 @@
 <a href=#70 id=70 data-nosnippet>70</a>                <span class="self">self</span>.view_mut(v).vid_disperse_ns = <span class="prelude-val">Some</span>(ts);
 <a href=#71 id=71 data-nosnippet>71</a>            },
 <a href=#72 id=72 data-nosnippet>72</a>            <span class="comment">// Replica: proposal processing
-<a href=#73 id=73 data-nosnippet>73</a>            </span>ConsensusInput::Proposal(_sender, p) =&gt; {
+<a href=#73 id=73 data-nosnippet>73</a>            </span>ConsensusInput::ProposalWithVidShare(_sender, p, <span class="kw">_</span>) =&gt; {
 <a href=#74 id=74 data-nosnippet>74</a>                <span class="kw">let </span>v = <span class="kw-2">*</span>p.view_number();
 <a href=#75 id=75 data-nosnippet>75</a>                <span class="self">self</span>.view_mut(v).proposal_recv_ns = <span class="prelude-val">Some</span>(ts);
 <a href=#76 id=76 data-nosnippet>76</a>            },
@@ -107,7 +107,7 @@
 <a href=#107 id=107 data-nosnippet>107</a>        <span class="kw">let </span>ts = <span class="self">Self</span>::now_ns();
 <a href=#108 id=108 data-nosnippet>108</a>        <span class="kw">match </span>output {
 <a href=#109 id=109 data-nosnippet>109</a>            <span class="comment">// Leader: proposal ready to send (before network I/O)
-<a href=#110 id=110 data-nosnippet>110</a>            </span>ConsensusOutput::SendProposal(proposal, <span class="kw">_</span>) =&gt; {
+<a href=#110 id=110 data-nosnippet>110</a>            </span>ConsensusOutput::SendProposal(proposal) =&gt; {
 <a href=#111 id=111 data-nosnippet>111</a>                <span class="kw">let </span>v = <span class="kw-2">*</span>proposal.data.view_number;
 <a href=#112 id=112 data-nosnippet>112</a>                <span class="kw">let </span>m = <span class="self">self</span>.view_mut(v);
 <a href=#113 id=113 data-nosnippet>113</a>                m.proposal_sent_ns = <span class="prelude-val">Some</span>(ts);
