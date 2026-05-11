@@ -33,12 +33,13 @@ use super::{
     super::transaction::{Transaction, TransactionMode, Write, query_as},
     DecodeError, QueryBuilder,
 };
+#[cfg(feature = "embedded-db")]
+use crate::data_source::storage::sql::build_where_in;
 use crate::{
     QueryError, QueryResult,
     data_source::storage::{
-        MerklizedStateHeightStorage, MerklizedStateStorage,
-        pruning::PrunedHeightStorage,
-        sql::{build_where_in, sqlx::Row},
+        MerklizedStateHeightStorage, MerklizedStateStorage, pruning::PrunedHeightStorage,
+        sql::sqlx::Row,
     },
     merklized_state::{MerklizedState, Snapshot},
 };
@@ -73,27 +74,55 @@ where
 
         // insert all the hash ids to a hashset which is used to query later
         // HashSet is used to avoid duplicates
-        let mut hash_ids = HashSet::new();
+        let mut hash_ids: HashSet<i64> = HashSet::new();
         for node in nodes.iter() {
             hash_ids.insert(node.hash_id);
             if let Some(children) = &node.children {
-                let children: Vec<i32> =
+                let children: Vec<i64> =
                     serde_json::from_value(children.clone()).map_err(|e| QueryError::Error {
-                        message: format!("Error deserializing 'children' into Vec<i32>: {e}"),
+                        message: format!("Error deserializing 'children' into Vec<i64>: {e}"),
                     })?;
                 hash_ids.extend(children);
             }
         }
 
-        // Find all the hash values and create a hashmap
-        // Hashmap will be used to get the hash value of the nodes children and the node itself.
-        let hashes = if !hash_ids.is_empty() {
-            let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
-            query
-                .query_as(&sql)
-                .fetch(self.as_mut())
-                .try_collect::<HashMap<i32, Vec<u8>>>()
-                .await?
+        // Find all the hash values and create a hashmap.
+        // During the migration window some rows have id_big (new) and some have only id (legacy).
+        // We look up by id_big for all IDs, and additionally by positive id for IDs that fit in
+        // i32 (which covers legacy rows whose id_big has not been backfilled yet).
+        let hashes: HashMap<i64, Vec<u8>> = if !hash_ids.is_empty() {
+            #[cfg(not(feature = "embedded-db"))]
+            {
+                let big_ids: Vec<i64> = hash_ids.iter().copied().collect();
+                let small_ids: Vec<i32> = hash_ids
+                    .iter()
+                    .filter(|&&id| id > 0 && id <= i32::MAX as i64)
+                    .map(|&id| id as i32)
+                    .collect();
+                let sql = "SELECT COALESCE(id_big, id::bigint) AS hash_id, value FROM hash WHERE \
+                           id_big = ANY($1::bigint[]) OR (id > 0 AND id = ANY($2::int4[]))";
+                sqlx::query_as(sql)
+                    .bind(&big_ids)
+                    .bind(&small_ids)
+                    .fetch(self.as_mut())
+                    .try_collect()
+                    .await
+                    .map_err(|e| QueryError::Error {
+                        message: format!("hash lookup failed: {e}"),
+                    })?
+            }
+            #[cfg(feature = "embedded-db")]
+            {
+                let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
+                query
+                    .query_as(&sql)
+                    .fetch(self.as_mut())
+                    .try_collect()
+                    .await
+                    .map_err(|e| QueryError::Error {
+                        message: format!("hash lookup failed: {e}"),
+                    })?
+            }
         } else {
             HashMap::new()
         };
@@ -116,11 +145,11 @@ where
                 match (children, children_bitvec, idx, entry) {
                     // If the row has children then its a branch
                     (Some(children), Some(children_bitvec), None, None) => {
-                        let children: Vec<i32> =
+                        let children: Vec<i64> =
                             serde_json::from_value(children.clone()).map_err(|e| {
                                 QueryError::Error {
                                     message: format!(
-                                        "Error deserializing 'children' into Vec<i32>: {e}"
+                                        "Error deserializing 'children' into Vec<i64>: {e}"
                                     ),
                                 }
                             })?;
@@ -352,6 +381,7 @@ pub(crate) fn build_hash_batch_insert(
         .iter()
         .map(|hash| Ok(format!("({})", query.bind(hash)?)))
         .collect::<QueryResult<Vec<String>>>()?;
+    // SQLite INTEGER PRIMARY KEY AUTOINCREMENT is always 64-bit; read as i64.
     let sql = format!(
         "INSERT INTO hash(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
          EXCLUDED.value returning value, id",
@@ -361,21 +391,23 @@ pub(crate) fn build_hash_batch_insert(
 }
 
 /// Batch insert hashes using UNNEST for large batches (postgres only).
-/// Returns a map from hash bytes to their database IDs.
+/// Returns a map from hash bytes to their new BIGINT IDs (id_big column).
 #[cfg(not(feature = "embedded-db"))]
 pub(crate) async fn batch_insert_hashes(
     hashes: Vec<Vec<u8>>,
     tx: &mut Transaction<Write>,
-) -> QueryResult<HashMap<Vec<u8>, i32>> {
+) -> QueryResult<HashMap<Vec<u8>, i64>> {
     if hashes.is_empty() {
         return Ok(HashMap::new());
     }
 
-    // Use UNNEST-based batch insert (more efficient and avoids parameter limits)
+    // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
+    // id_big receives a value from hash_id_big_seq; the legacy id column gets a
+    // sentinel negative value from hash_id_sentinel_seq automatically.
     let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
-               UPDATE SET value = EXCLUDED.value RETURNING value, id";
+               UPDATE SET value = EXCLUDED.value RETURNING value, id_big";
 
-    let result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
+    let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
         .bind(&hashes)
         .fetch(tx.as_mut())
         .try_collect()
@@ -524,7 +556,7 @@ where
 pub(crate) struct Node {
     pub(crate) path: JsonValue,
     pub(crate) created: i64,
-    pub(crate) hash_id: i32,
+    pub(crate) hash_id: i64,
     pub(crate) children: Option<JsonValue>,
     pub(crate) children_bitvec: Option<BitVec>,
     pub(crate) idx: Option<JsonValue>,
@@ -545,6 +577,7 @@ impl From<sqlx::sqlite::SqliteRow> for Node {
         Self {
             path: row.get_unchecked("path"),
             created: row.get_unchecked("created"),
+            // SQLite INTEGER is always 64-bit; read directly as i64.
             hash_id: row.get_unchecked("hash_id"),
             children: row.get_unchecked("children"),
             children_bitvec,
@@ -557,10 +590,15 @@ impl From<sqlx::sqlite::SqliteRow> for Node {
 #[cfg(not(feature = "embedded-db"))]
 impl From<sqlx::postgres::PgRow> for Node {
     fn from(row: sqlx::postgres::PgRow) -> Self {
+        // During the migration window some rows have hash_id_big (new rows) and some have
+        // only hash_id (legacy rows). Prefer hash_id_big if present; fall back to hash_id.
+        let hash_id: i64 = row
+            .try_get("hash_id_big")
+            .unwrap_or_else(|_| row.get::<i32, _>("hash_id") as i64);
         Self {
             path: row.get_unchecked("path"),
             created: row.get_unchecked("created"),
-            hash_id: row.get_unchecked("hash_id"),
+            hash_id,
             children: row.get_unchecked("children"),
             children_bitvec: row.get_unchecked("children_bitvec"),
             idx: row.get_unchecked("idx"),
@@ -659,12 +697,14 @@ impl Node {
             entries.push(node.entry);
         }
 
+        // Write into hash_id_big (the new BIGINT column added by the expand migration).
+        // The legacy hash_id column is left NULL for new rows and filled in by the backfill.
         let sql = format!(
             r#"
-            INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+            INSERT INTO "{name}" (path, created, hash_id_big, children, children_bitvec, idx, entry)
+            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bigint[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
             ON CONFLICT (path, created) DO UPDATE SET
-                hash_id = EXCLUDED.hash_id,
+                hash_id_big = EXCLUDED.hash_id_big,
                 children = EXCLUDED.children,
                 children_bitvec = EXCLUDED.children_bitvec,
                 idx = EXCLUDED.idx,
