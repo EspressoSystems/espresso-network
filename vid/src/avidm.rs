@@ -11,7 +11,7 @@
 //! vectors. And for dispersal, each storage node gets some vectors and their
 //! Merkle proofs according to its weight.
 
-use std::{collections::HashMap, iter, ops::Range};
+use std::{collections::HashMap, fmt, iter, ops::Range};
 
 use ark_ff::PrimeField;
 use ark_poly::{EvaluationDomain, Radix2EvaluationDomain};
@@ -90,7 +90,7 @@ impl AsRef<[u8; 32]> for AvidMCommit {
 }
 
 /// Share type to be distributed among the parties.
-#[derive(Clone, Debug, Hash, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Hash, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RawAvidMShare {
     /// Range of this share in the encoded payload.
     range: Range<usize>,
@@ -100,6 +100,16 @@ pub struct RawAvidMShare {
     /// Merkle proof of the content.
     #[serde(with = "canonical")]
     mt_proofs: Vec<MerkleProof>,
+}
+
+impl fmt::Debug for RawAvidMShare {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawAvidMShare")
+            .field("range", &self.range)
+            .field("payload", &format_args!("..."))
+            .field("mt_proofs", &format_args!("..."))
+            .finish()
+    }
 }
 
 /// Share type to be distributed among the parties.
