@@ -1948,6 +1948,138 @@ mod test {
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_separate_state_data_pruning() {
+        let db = TmpDb::init().await;
+        let mut storage = SqlStorage::connect(db.config(), StorageConnectionType::Query)
+            .await
+            .unwrap();
+
+        let num_blocks = 10u64;
+        let mut test_tree: UniversalMerkleTree<_, _, _, 8, _> =
+            MockMerkleTree::new(MockMerkleTree::tree_height());
+
+        // Insert headers (consensus data) and merkle nodes (state) for each block height.
+        let mut tx = storage.write().await.unwrap();
+        for height in 0..num_blocks {
+            test_tree.update(height as usize, height as usize).unwrap();
+
+            let test_data = serde_json::json!({
+                MockMerkleTree::header_state_commitment_field():
+                    serde_json::to_value(test_tree.commitment()).unwrap()
+            });
+            tx.upsert(
+                "header",
+                [
+                    "height",
+                    "hash",
+                    "payload_hash",
+                    "timestamp",
+                    "data",
+                    "ns_table",
+                ],
+                ["height"],
+                [(
+                    height as i64,
+                    format!("hash{height}"),
+                    "ph".to_string(),
+                    0,
+                    test_data,
+                    "ns".to_string(),
+                )],
+            )
+            .await
+            .unwrap();
+
+            let (_, proof) = test_tree.lookup(height as usize).expect_ok().unwrap();
+            let traversal_path = <usize as ToTraversalPath<8>>::to_traversal_path(
+                &(height as usize),
+                test_tree.height(),
+            );
+            UpdateStateData::<_, MockMerkleTree, 8>::insert_merkle_nodes(
+                &mut tx,
+                proof.clone(),
+                traversal_path,
+                height,
+            )
+            .await
+            .unwrap();
+        }
+        UpdateStateData::<_, MockMerkleTree, 8>::set_last_state_height(
+            &mut tx,
+            num_blocks as usize,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // Verify all the data exists
+        {
+            let mut tx = storage.read().await.unwrap();
+            assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+            assert_eq!(tx.load_state_pruned_height().await.unwrap(), None);
+
+            for height in 0..num_blocks {
+                assert_eq!(
+                    query_as::<(i64,)>("SELECT count(*) FROM header WHERE height = $1")
+                        .bind(height as i64)
+                        .fetch_one(tx.as_mut())
+                        .await
+                        .unwrap(),
+                    (1,)
+                );
+                for i in 0..=height {
+                    tx.get_path(
+                        Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(height),
+                        i as usize,
+                    )
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+
+        // Configure the pruner to prune state data aggressively, but not consensus data.
+        storage.set_pruning_config(
+            PrunerCfg::default()
+                .with_state_target_retention(Duration::ZERO)
+                .with_state_tables(vec![MockMerkleTree::state_type().into()]),
+        );
+        storage.prune(&mut Default::default()).await.unwrap();
+
+        // The headers still exist, but the Merkle state is pruned.
+        {
+            let mut tx = storage.read().await.unwrap();
+            assert_eq!(tx.load_pruned_height().await.unwrap(), None);
+            assert_eq!(
+                tx.load_state_pruned_height().await.unwrap(),
+                Some(num_blocks - 1)
+            );
+
+            for height in 0..num_blocks {
+                assert_eq!(
+                    query_as::<(i64,)>("SELECT count(*) FROM header WHERE height = $1")
+                        .bind(height as i64)
+                        .fetch_one(tx.as_mut())
+                        .await
+                        .unwrap(),
+                    (1,)
+                );
+
+                for i in 0..=height {
+                    let err = tx
+                        .get_path(
+                            Snapshot::<_, MockMerkleTree, { MockMerkleTree::ARITY }>::Index(height),
+                            i as usize,
+                        )
+                        .await
+                        .unwrap_err();
+                    assert!(matches!(err, QueryError::NotFound), "{err:?}");
+                }
+            }
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_transaction_upsert_retries() {
         let db = TmpDb::init().await;
         let config = db.config();
