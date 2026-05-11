@@ -60,7 +60,6 @@ use hotshot_types::{
     traits::{
         block_contents::{BlockHeader, TestableBlock},
         election::Membership,
-        leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::ConnectedNetwork,
         node_implementation::NodeType,
         states::TestableState,
@@ -347,7 +346,7 @@ pub trait RunDa<
 > where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     TYPES: NodeType<Transaction = TestTransaction>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
@@ -392,10 +391,6 @@ pub trait RunDa<
         let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
             config.config.known_nodes_with_stake.clone(),
             config.config.known_da_nodes.clone(),
-            storage.clone(),
-            Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
-                network.clone(),
-            )),
             pk.clone(),
             config.config.epoch_height,
         )));
@@ -642,7 +637,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -723,7 +718,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -770,6 +765,7 @@ where
             GossipConfig::default(),
             RequestResponseConfig::default(),
             bind_address,
+            Vec::new(),
             public_key,
             private_key,
             Libp2pMetricsValue::default(),
@@ -825,7 +821,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -907,7 +903,7 @@ pub async fn main_entry_point<
 ) where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
 {
     // Initialize logging

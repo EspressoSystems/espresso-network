@@ -12,11 +12,17 @@ testing = ["hotshot-example-types"]
 [dependencies]
 anyhow.workspace = true
 ark-serialize.workspace = true
+
+# SQL dependencies.
+bincode = { workspace = true, optional = true }
 committable.workspace = true
 derivative.workspace = true
 derive_more.workspace = true
 either.workspace = true
 hotshot-events-service.workspace = true
+
+# Testing dependencies.
+hotshot-example-types = { workspace = true, optional = true }
 hotshot-types.workspace = true
 itertools.workspace = true
 jf-advz.workspace = true
@@ -24,19 +30,13 @@ jf-merkle-tree-compat.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
+sqlx = { workspace = true, optional = true }
 surf-disco.workspace = true
 tagged-base64.workspace = true
 tide-disco.workspace = true
 time = { workspace = true, features = ["formatting", "parsing"] }
 vbs.workspace = true
 versions.workspace = true
-
-# Testing dependencies.
-hotshot-example-types = { workspace = true, optional = true }
-
-# SQL dependencies.
-bincode = { workspace = true, optional = true }
-sqlx = { workspace = true, optional = true }
 
 [lints]
 workspace = true

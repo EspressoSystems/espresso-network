@@ -36,10 +36,7 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
-    traits::{
-        EncodeBytes, election::Membership, leaf_fetcher_network::ConnectedNetworkLeafFetcher,
-        node_implementation::NodeType,
-    },
+    traits::{EncodeBytes, election::Membership, node_implementation::NodeType},
     utils::{View, ViewInner, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber, Vote},
 };
@@ -68,7 +65,7 @@ pub async fn build_system_handle<
     Arc<TestNodeKeyMap>,
 )
 where
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
 {
     let builder: TestDescription<TYPES, I> = TestDescription::default_multiple_rounds();
 
@@ -94,7 +91,7 @@ pub async fn build_system_handle_from_launcher<
     Arc<TestNodeKeyMap>,
 )
 where
-    <TYPES as NodeType>::Membership: Membership<TYPES, Storage = TestStorage<TYPES>>,
+    <TYPES as NodeType>::Membership: Membership<TYPES>,
 {
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
     let storage = (launcher.resource_generators.storage)(node_id);
@@ -134,10 +131,6 @@ where
     let memberships = Arc::new(RwLock::new(TYPES::Membership::new(
         hotshot_config.known_nodes_with_stake.clone(),
         hotshot_config.known_da_nodes.clone(),
-        storage.clone(),
-        Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
-            network.clone(),
-        )),
         public_key.clone(),
         launcher.metadata.test_config.epoch_height,
     )));

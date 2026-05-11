@@ -267,7 +267,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 .set_publication_interval(Some(kademlia_record_republication_interval))
                 .set_record_ttl(Some(kademlia_ttl));
 
-            // allowing panic here because something is very wrong if this fales
+            // allowing panic here because something is very wrong if this fails
             #[allow(clippy::panic)]
             if let Some(factor) = config.replication_factor {
                 kconfig.set_replication_factor(factor);
@@ -339,6 +339,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 swarm.behaviour_mut().add_address(peer, addr.clone());
                 swarm.add_peer_address(*peer, addr.clone());
             }
+        }
+
+        for addr in &config.announce_addresses {
+            info!("Adding announce address {addr}");
+            swarm.add_external_address(addr.clone());
         }
 
         Ok(Self {

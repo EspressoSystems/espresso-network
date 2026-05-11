@@ -31,11 +31,8 @@ where
     D: SequencerDataSource + Debug + Send + Sync + 'static,
 {
     async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
-        let CoordinatorEvent::LegacyEvent(hotshot_event) = event else {
-            return Ok(());
-        };
-        if let Err(height) = self.inner.update(hotshot_event).await {
-            bail!("failed to update API state after {height}: {hotshot_event:?}",);
+        if let Err(height) = self.inner.update(event).await {
+            bail!("failed to update API state after {height}: {event:?}",);
         }
         Ok(())
     }
