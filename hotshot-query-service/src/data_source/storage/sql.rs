@@ -985,6 +985,7 @@ impl PruneStorage for SqlStorage {
     /// This is because a vacuum operation may be necessary to reclaim more space.
     /// PostgreSQL already performs auto vacuuming, so we are not including it here
     /// as running a vacuum operation can be resource-intensive.
+    #[instrument(skip(self))]
     async fn prune<'a>(&'a self, pruner: &mut Option<Pruner<'a>>) -> anyhow::Result<Option<u64>> {
         let pruner = match pruner {
             Some(pruner) => pruner,
