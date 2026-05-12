@@ -110,6 +110,7 @@ contract InvariantStats {
         _logStat("delegateOk", callStats.ok.delegate);
         _logStat("deregisterValidatorOk", callStats.ok.deregisterValidator);
         _logStat("undelegateOk", callStats.ok.undelegate);
+        _logStat("updateX25519KeyOk", callStats.ok.updateX25519Key);
 
         console.log("-----------------------------------------------");
 
@@ -118,6 +119,7 @@ contract InvariantStats {
         _logStat("deregisterValidatorAny", callStats.any.deregisterValidator);
         _logStat("registerValidatorAny", callStats.any.registerValidator);
         _logStat("undelegateAny", callStats.any.undelegate);
+        _logStat("updateX25519KeyAny", callStats.any.updateX25519Key);
 
         console.log("-----------------------------------------------");
         console.log(

@@ -132,6 +132,13 @@ impl<T: NodeType> StateManager<T> {
             .map(|entry| entry.state.clone())
     }
 
+    /// Get the leaf for a given view
+    pub fn get_leaf(&self, view: &ViewNumber) -> Option<Leaf2<T>> {
+        self.validated_states
+            .get(view)
+            .map(|entry| entry.leaf.clone())
+    }
+
     /// Get the validated state and delta for a given view
     pub fn get_state_and_delta(
         &self,

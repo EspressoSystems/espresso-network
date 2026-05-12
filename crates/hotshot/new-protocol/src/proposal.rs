@@ -4,16 +4,13 @@ use committable::Committable;
 use hotshot::types::SignatureKey;
 use hotshot_contract_adapter::light_client::validate_light_client_state_update_certificate;
 use hotshot_types::{
-    data::{
-        EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber,
-        vid_disperse::vid_total_weight,
-    },
+    data::{EpochNumber, Leaf2, VidDisperseShare2, ViewNumber, vid_disperse::vid_total_weight},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::check_qc_state_cert_correspondence,
     simple_vote::HasEpoch,
     stake_table::StakeTableEntries,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    traits::node_implementation::NodeType,
     utils::is_epoch_root,
     vote::{Certificate, HasViewNumber},
 };
@@ -21,7 +18,7 @@ use hotshot_utils::anytrace;
 use tokio::task::JoinSet;
 use tracing::error;
 
-use crate::message::{Proposal, ProposalMessage, Unchecked, Validated};
+use crate::message::{Proposal, ProposalMessage, Unchecked, Validated, VidShareMessage};
 
 type Result<T> = std::result::Result<T, ValidationError>;
 
@@ -37,6 +34,19 @@ pub struct ProposalValidator<T: NodeType> {
     tasks: JoinSet<Result<ValidatedProposal<T>>>,
 
     /// The actual validation logic.
+    validator: Arc<Validator<T>>,
+}
+
+/// A validator dedicated to VID share messages.
+///
+/// Lives as a separate field on `Coordinator` so that its `next()` and
+/// `ProposalValidator::next()` can be polled in the same `tokio::select!`
+/// without conflicting `&mut self` borrows on a single field.
+pub struct VidShareValidator<T: NodeType> {
+    /// VID share validation tasks.
+    tasks: JoinSet<Result<VidDisperseShare2<T>>>,
+
+    /// Shared validation logic (same shape as `ProposalValidator`'s).
     validator: Arc<Validator<T>>,
 }
 
@@ -65,15 +75,14 @@ impl<T: NodeType> ProposalValidator<T> {
     pub fn validate(&mut self, p: ProposalMessage<T, Unchecked>) {
         let v = self.validator.clone();
         self.tasks.spawn(async move {
-            v.commitments(&p.vid_share, &p.proposal.data)?;
-            v.vid_share(&p.vid_share, p.proposal.data.epoch).await?;
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
             v.state_cert(&p.proposal.data).await?;
-            Ok(ValidatedProposal {
+            let validated_proposal = ValidatedProposal {
                 sender,
-                message: ProposalMessage::validated(p.proposal, p.vid_share),
-            })
+                message: ProposalMessage::validated(p.proposal),
+            };
+            Ok(validated_proposal)
         });
     }
 
@@ -90,30 +99,44 @@ impl<T: NodeType> ProposalValidator<T> {
     }
 }
 
-impl<T: NodeType> Validator<T> {
-    /// Check that the VID commitment matches the proposal's.
-    fn commitments(&self, vid: &VidDisperseShare2<T>, prop: &Proposal<T>) -> Result<()> {
-        if let VidCommitment::V2(commitment) = prop.block_header.payload_commitment() {
-            if commitment == vid.payload_commitment {
-                Ok(())
-            } else {
-                Err(ValidationError::VidCommitmentDoesNotMatchProposal)
+impl<T: NodeType> VidShareValidator<T> {
+    pub fn new(
+        c: EpochMembershipCoordinator<T>,
+        epoch_height: u64,
+        upgrade_lock: UpgradeLock<T>,
+    ) -> Self {
+        Self {
+            tasks: JoinSet::new(),
+            validator: Arc::new(Validator {
+                membership_coordinator: c,
+                epoch_height,
+                upgrade_lock,
+            }),
+        }
+    }
+
+    pub fn validate(&mut self, share: VidShareMessage<T>) {
+        let v = self.validator.clone();
+        self.tasks.spawn(async move {
+            v.vid_share_proposal(&share).await?;
+            Ok(share.data)
+        });
+    }
+
+    pub async fn next(&mut self) -> Option<Result<VidDisperseShare2<T>>> {
+        loop {
+            match self.tasks.join_next().await {
+                Some(Ok(share)) => return Some(share),
+                Some(Err(err)) => {
+                    error!(%err, "vid share validation task panic");
+                },
+                None => return None,
             }
-        } else {
-            Err(ValidationError::InvalidVidCommitmentVersion)
         }
     }
+}
 
-    /// Verify the VID share.
-    async fn vid_share(&self, share: &VidDisperseShare2<T>, epoch: EpochNumber) -> Result<()> {
-        let stake_table = self.membership(epoch).await?.stake_table().await;
-        if share.verify(vid_total_weight(&stake_table, Some(epoch))) {
-            Ok(())
-        } else {
-            Err(ValidationError::VidShareNotVerified)
-        }
-    }
-
+impl<T: NodeType> Validator<T> {
     /// Verify the proposal signature and return the leader
     async fn signature(
         &self,
@@ -131,6 +154,36 @@ impl<T: NodeType> Validator<T> {
             Ok(leader)
         } else {
             Err(ValidationError::InvalidProposalSignature)
+        }
+    }
+
+    async fn vid_share_proposal(
+        &self,
+        vid_proposal: &SignedProposal<T, VidDisperseShare2<T>>,
+    ) -> Result<()> {
+        let view = vid_proposal.data.view_number();
+        let epoch = vid_proposal
+            .data
+            .epoch
+            .ok_or(ValidationError::MissingEpoch(view, "vid share"))?;
+        let membership = self.membership(epoch).await?;
+        let stake_table = membership.stake_table().await;
+        let leader = match membership.leader(view).await {
+            Ok(leader) => leader,
+            Err(err) => return Err(ValidationError::NoLeader(view, epoch, err)),
+        };
+        // TODO(Chengyu): this also check the consistency of vid common and vid commitment.
+        let total_weight = vid_total_weight(&stake_table, Some(epoch));
+        if !leader.validate(
+            &vid_proposal.signature,
+            vid_proposal.data.payload_commitment.as_ref(),
+        ) {
+            return Err(ValidationError::InvalidVidShareProposalSignature);
+        }
+        if vid_proposal.data.verify(total_weight) {
+            Ok(())
+        } else {
+            Err(ValidationError::VidShareNotVerified)
         }
     }
 
@@ -232,4 +285,7 @@ pub enum ValidationError {
 
     #[error("state_cert signature validation failed: {0}")]
     InvalidStateCert(#[source] anytrace::Error),
+
+    #[error("invalid vid share proposal signature")]
+    InvalidVidShareProposalSignature,
 }

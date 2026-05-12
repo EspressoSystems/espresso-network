@@ -17,7 +17,7 @@ use hotshot_new_protocol::{
     epoch_root_vote_collector::EpochRootVoteCollector,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
-    proposal::ProposalValidator,
+    proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -167,6 +167,8 @@ async fn build_coordinator(
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let share_validator =
+        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
     let timer = Timer::new(
         cfg.timeout_duration(),
@@ -189,6 +191,7 @@ async fn build_coordinator(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .share_validator(share_validator)
         .storage(hotshot_new_protocol::storage::Storage::new(
             TestStorage::default(),
             private_key,
@@ -351,7 +354,7 @@ fn build_genesis_cert1(
         block_number: Some(0),
     };
     hotshot_new_protocol::message::Certificate1::new(
-        data.clone(),
+        data,
         data.commit(),
         ViewNumber::genesis(),
         None,

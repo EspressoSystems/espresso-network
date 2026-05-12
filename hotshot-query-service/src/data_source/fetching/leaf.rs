@@ -23,11 +23,10 @@ use std::{
 
 use anyhow::bail;
 use async_trait::async_trait;
-use committable::Committable;
 use derivative::Derivative;
 use derive_more::From;
 use futures::future::{BoxFuture, FutureExt, join_all};
-use hotshot_types::traits::node_implementation::NodeType;
+use hotshot_types::{traits::node_implementation::NodeType, vote::HasViewNumber};
 use tokio::spawn;
 use tracing::Instrument;
 
@@ -176,11 +175,13 @@ where
                         );
                     }
 
+                    let parent_qc = leaf.leaf().justify_qc();
                     fetcher.leaf_fetcher.clone().spawn_fetch(
                         request::LeafRequest::new(
                             leaf.height() - 1,
                             leaf.leaf().parent_commitment(),
-                            leaf.leaf().justify_qc().commit(),
+                            parent_qc.view_number(),
+                            parent_qc.data,
                         ),
                         fetcher.provider.clone(),
                         // After getting the leaf, grab the other data as well; that will be missing
@@ -204,11 +205,13 @@ where
             };
 
             let fetcher = fetcher.clone();
+            let parent_qc = next.leaf().justify_qc();
             fetcher.leaf_fetcher.clone().spawn_fetch(
                 request::LeafRequest::new(
                     n as u64,
                     next.leaf().parent_commitment(),
-                    next.leaf().justify_qc().commit(),
+                    parent_qc.view_number(),
+                    parent_qc.data,
                 ),
                 fetcher.provider.clone(),
                 once(LeafCallback::Leaf { fetcher }).chain(callbacks),
@@ -248,7 +251,9 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
 {
     let height = leaf.height();
     let parent = leaf.leaf().parent_commitment();
-    let parent_qc = leaf.leaf().justify_qc().commit();
+    let parent_qc = leaf.leaf().justify_qc();
+    let parent_qc_view = parent_qc.view_number();
+    let parent_qc_data = parent_qc.data;
 
     // Check that there is a parent to fetch.
     if height == 0 {
@@ -258,7 +263,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
     // Spawn an async task; we're triggering a fire-and-forget fetch of a leaf that might now be
     // available; we don't need to block the caller on this.
     let fetcher = fetcher.clone();
-    let span = tracing::info_span!("fetch parent leaf", height, %parent, %parent_qc);
+    let span = tracing::info_span!("fetch parent leaf", height, %parent, %parent_qc_view);
     spawn(
         async move {
             // Check if we already have the parent.
@@ -289,7 +294,7 @@ pub(super) fn trigger_fetch_for_parent<Types, S, P>(
 
             tracing::info!(height, %parent, "received new leaf; fetching missing parent");
             fetcher.leaf_fetcher.clone().spawn_fetch(
-                request::LeafRequest::new(height - 1, parent, parent_qc),
+                request::LeafRequest::new(height - 1, parent, parent_qc_view, parent_qc_data),
                 fetcher.provider.clone(),
                 // After getting the leaf, grab the other data as well; that will be missing
                 // whenever the leaf was.
@@ -618,11 +623,13 @@ where
                 );
             }
 
+            let parent_qc = leaf.leaf().justify_qc();
             fetcher.leaf_fetcher.clone().spawn_fetch(
                 request::LeafRequest::new(
                     leaf.height() - 1,
                     leaf.leaf().parent_commitment(),
-                    leaf.leaf().justify_qc().commit(),
+                    parent_qc.view_number(),
+                    parent_qc.data,
                 ),
                 fetcher.provider.clone(),
                 // After getting the leaf, grab the other data as well; that will be missing
@@ -653,7 +660,8 @@ where
             start: req.start,
             end: req.end,
             last_leaf: next.leaf().parent_commitment(),
-            last_qc: next.leaf().justify_qc().commit(),
+            last_qc_view: next.leaf().justify_qc().view_number(),
+            last_qc_data: next.leaf().justify_qc().data,
         },
         fetcher.provider.clone(),
         once(LeafCallback::Leaf { fetcher }).chain(callbacks),

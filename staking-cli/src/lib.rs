@@ -10,8 +10,10 @@ use clap_serde_derive::ClapSerde;
 use espresso_contract_deployer::provider::connect_ledger;
 use espresso_utils::logging;
 pub(crate) use hotshot_types::{
+    addr::NetAddr,
     light_client::StateSignKey,
     signature_key::{BLSPrivKey, BLSPubKey},
+    x25519,
 };
 pub(crate) use jf_signature::bls_over_bn254::KeyPair as BLSKeyPair;
 use metadata::MetadataUriArgs;
@@ -51,7 +53,7 @@ pub use metadata::fetch_metadata;
 // Used by staking-cli integration tests.
 pub use parse::Commission;
 // Used by sequencer tests.
-pub use registration::{fetch_commission, update_commission};
+pub use registration::{fetch_commission, update_commission, update_network_config};
 // Used by staking-cli integration tests.
 pub use signature::NodeSignatures;
 // Used by staking-cli integration tests.
@@ -354,6 +356,14 @@ pub(crate) enum Commands {
 
         #[clap(flatten)]
         metadata_uri_args: MetadataUriArgs,
+
+        /// x25519 public key (tagged base64, output by keygen). Required for V3 stake tables.
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: Option<x25519::PublicKey>,
+
+        /// p2p address in host:port format. Required for V3 stake tables.
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: Option<NetAddr>,
     },
     /// Update a validators Espresso consensus signing keys.
     UpdateConsensusKeys {
@@ -378,6 +388,31 @@ pub(crate) enum Commands {
         /// Required for metadata validation unless --skip-metadata-validation is set.
         #[clap(long, value_parser = parse::parse_bls_pub_key, env = "CONSENSUS_PUBLIC_KEY")]
         consensus_public_key: Option<BLSPubKey>,
+    },
+    /// Set x25519 key and p2p address for a validator.
+    ///
+    /// Primary use: initial configuration for validators registered before V3.
+    /// Also usable to rotate the x25519 key.
+    UpdateNetworkConfig {
+        /// The x25519 public key (tagged base64, output by keygen)
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: x25519::PublicKey,
+
+        /// The p2p address in host:port format
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: NetAddr,
+    },
+    /// Set x25519 encryption key for a validator.
+    UpdateX25519Key {
+        /// The x25519 public key (tagged base64, output by keygen)
+        #[clap(long, value_parser = parse::parse_x25519_key, env = "X25519_KEY")]
+        x25519_key: x25519::PublicKey,
+    },
+    /// Update p2p address for a validator.
+    UpdateP2pAddr {
+        /// The p2p address in host:port format
+        #[clap(long, value_parser = parse::parse_net_addr, env = "P2P_ADDR")]
+        p2p_addr: NetAddr,
     },
     /// Approve stake table contract to move tokens
     Approve {

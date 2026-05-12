@@ -66,6 +66,7 @@ pub struct TestView {
     pub view_number: ViewNumber,
     pub epoch_number: EpochNumber,
     pub leader_public_key: BLSPubKey,
+    pub leader_private_key: <BLSPubKey as SignatureKey>::PrivateKey,
     pub proposal: SignedProposal<TestTypes, Proposal<TestTypes>>,
     pub leaf: Leaf2<TestTypes>,
     pub vid_disperse: VidDisperse2<TestTypes>,
@@ -79,23 +80,54 @@ pub struct TestView {
 
 impl TestView {
     /// Build a ProposalMessage suitable for sending as a CoordinatorEvent::Proposal.
-    /// `recipient_key` is the public key of the node that will receive the VID share.
-    pub fn proposal_message(
-        &self,
-        recipient_key: &BLSPubKey,
-    ) -> ProposalMessage<TestTypes, Validated> {
+    pub fn proposal_message(&self) -> ProposalMessage<TestTypes, Validated> {
         let inner_proposal = SignedProposal {
             data: self.proposal.data.clone(),
             signature: self.proposal.signature.clone(),
             _pd: std::marker::PhantomData,
         };
-        let vid_share = self
-            .vid_shares
+        ProposalMessage::validated(inner_proposal)
+    }
+
+    /// Look up the VID share whose recipient is `recipient_key`.
+    pub fn vid_share_for(&self, recipient_key: &BLSPubKey) -> VidDisperseShare2<TestTypes> {
+        self.vid_shares
             .iter()
             .find(|s| s.recipient_key == *recipient_key)
             .expect("VID share not found for recipient key")
-            .clone();
-        ProposalMessage::validated(inner_proposal, vid_share)
+            .clone()
+    }
+
+    /// Build a leader-signed VID share envelope (the wire form). The leader's
+    /// signature is over the share's `payload_commitment`, matching what
+    /// `Coordinator::SendVidShares` produces in production.
+    pub fn vid_share_message(
+        &self,
+        recipient_key: &BLSPubKey,
+    ) -> SignedProposal<TestTypes, VidDisperseShare2<TestTypes>> {
+        let share = self.vid_share_for(recipient_key);
+        let signature = <BLSPubKey as SignatureKey>::sign(
+            &self.leader_private_key,
+            share.payload_commitment.as_ref(),
+        )
+        .expect("sign vid share commitment");
+        SignedProposal {
+            data: share,
+            signature,
+            _pd: std::marker::PhantomData,
+        }
+    }
+
+    /// Build a `ConsensusMessage::VidShare` wire message for `recipient_key`.
+    /// Pair this with `proposal_input` when simulating a leader's send to a
+    /// replica — the wire format now carries proposal and share separately.
+    pub fn vid_share_input(&self, recipient_key: &BLSPubKey) -> Message<TestTypes, Validated> {
+        Message {
+            sender: self.leader_public_key,
+            message_type: MessageType::Consensus(ConsensusMessage::VidShare(
+                self.vid_share_message(recipient_key),
+            )),
+        }
     }
 
     /// Get the VidCommitment2 for this view (for BlockReconstructed events).
@@ -104,16 +136,20 @@ impl TestView {
     }
 
     /// Build an Event for a proposal.
-    pub fn proposal_input(&self, recipient_key: &BLSPubKey) -> Message<TestTypes, Validated> {
+    pub fn proposal_input(&self) -> Message<TestTypes, Validated> {
         Message {
             sender: self.leader_public_key,
             message_type: MessageType::Consensus(ConsensusMessage::Proposal(
-                self.proposal_message(recipient_key),
+                self.proposal_message(),
             )),
         }
     }
     pub fn proposal_input_consensus(&self, recipient_key: &BLSPubKey) -> ConsensusInput<TestTypes> {
-        ConsensusInput::Proposal(self.leader_public_key, self.proposal_message(recipient_key))
+        ConsensusInput::ProposalWithVidShare(
+            self.leader_public_key,
+            self.proposal_message(),
+            self.vid_share_for(recipient_key),
+        )
     }
 
     /// Build an Event for block reconstructed.
@@ -463,6 +499,7 @@ impl TestData {
                 view_number,
                 epoch_number: epoch,
                 leader_public_key,
+                leader_private_key: leader_private_key.clone(),
                 proposal: signed_proposal,
                 leaf,
                 vid_disperse,
