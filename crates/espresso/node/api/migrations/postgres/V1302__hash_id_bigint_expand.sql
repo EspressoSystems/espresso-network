@@ -33,11 +33,17 @@ CREATE SEQUENCE hash_id_placeholder_seq AS INT
 ALTER TABLE hash ALTER COLUMN id DROP DEFAULT;
 ALTER TABLE hash ALTER COLUMN id SET DEFAULT nextval('hash_id_placeholder_seq');
 
--- 3. Drop FK constraints (new merkle rows reference hash via hash_id_big, not hash.id).
+-- 3. Drop FK constraints and NOT NULL on hash_id so new rows can omit it.
+--    New merkle rows will store only hash_id_big; hash_id is left NULL until the backfill.
 ALTER TABLE fee_merkle_tree       DROP CONSTRAINT fee_merkle_tree_hash_id_fkey;
 ALTER TABLE block_merkle_tree     DROP CONSTRAINT block_merkle_tree_hash_id_fkey;
 ALTER TABLE reward_merkle_tree    DROP CONSTRAINT reward_merkle_tree_hash_id_fkey;
 ALTER TABLE reward_merkle_tree_v2 DROP CONSTRAINT reward_merkle_tree_v2_hash_id_fkey;
+
+ALTER TABLE fee_merkle_tree       ALTER COLUMN hash_id DROP NOT NULL;
+ALTER TABLE block_merkle_tree     ALTER COLUMN hash_id DROP NOT NULL;
+ALTER TABLE reward_merkle_tree    ALTER COLUMN hash_id DROP NOT NULL;
+ALTER TABLE reward_merkle_tree_v2 ALTER COLUMN hash_id DROP NOT NULL;
 
 -- 4. Add new nullable BIGINT columns to all four merkle tree tables.
 ALTER TABLE fee_merkle_tree       ADD COLUMN hash_id_big BIGINT;
