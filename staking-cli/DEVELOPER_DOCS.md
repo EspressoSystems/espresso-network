@@ -41,6 +41,18 @@ Example:
 
     staking-cli demo stake --num-validators 10 --num-delegators-per-validator 50
 
+Validator consensus keys (BLS, Schnorr state, x25519) are loaded as follows:
+
+- If `ESPRESSO_NODE_KEY_MNEMONIC` is set, all three keys are derived from that mnemonic using the validator index
+  (0..num-validators) as the derivation index. This matches the derivation `espresso-node` performs at startup, so a
+  single mnemonic configures both the nodes and this registration step.
+- Otherwise, keys are read per validator from `ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{N}`,
+  `ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{N}`, and `ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{N}`.
+
+The mnemonic takes precedence: when it is set, the per-validator env vars are ignored.
+`ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{N}` is always read from the environment (not derivable from a
+mnemonic).
+
 ### `demo delegate`
 
 Mass delegate to existing validators with deterministic delegator generation.

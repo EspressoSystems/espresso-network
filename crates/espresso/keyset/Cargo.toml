@@ -1,0 +1,25 @@
+[package]
+name = "espresso-keyset"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+description = "Key set loading for Espresso nodes (mnemonic, key file, or individual env vars)"
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+blake3 = { workspace = true }
+clap = { workspace = true }
+derivative = { workspace = true }
+dotenvy = { workspace = true }
+hotshot = { workspace = true }
+hotshot-types = { workspace = true }
+tagged-base64 = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
