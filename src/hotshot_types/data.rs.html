@@ -1552,7 +1552,7 @@
 <a href=#1552 id=1552 data-nosnippet>1552</a>        };
 <a href=#1553 id=1553 data-nosnippet>1553</a>
 <a href=#1554 id=1554 data-nosnippet>1554</a>        <span class="kw">let </span>justify_qc = QuorumCertificate2::new(
-<a href=#1555 id=1555 data-nosnippet>1555</a>            null_quorum_data.clone(),
+<a href=#1555 id=1555 data-nosnippet>1555</a>            null_quorum_data,
 <a href=#1556 id=1556 data-nosnippet>1556</a>            null_quorum_data.commit(),
 <a href=#1557 id=1557 data-nosnippet>1557</a>            genesis_view,
 <a href=#1558 id=1558 data-nosnippet>1558</a>            <span class="prelude-val">None</span>,
@@ -1908,7 +1908,7 @@
 <a href=#1908 id=1908 data-nosnippet>1908</a>        };
 <a href=#1909 id=1909 data-nosnippet>1909</a>
 <a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="kw">let </span>versioned_data =
-<a href=#1911 id=1911 data-nosnippet>1911</a>            VersionedVoteData::&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;::new_infallible(data.clone(), genesis_view, <span class="kw-2">&amp;</span>upgrade_lock);
+<a href=#1911 id=1911 data-nosnippet>1911</a>            VersionedVoteData::&lt;<span class="kw">_</span>, <span class="kw">_</span>&gt;::new_infallible(data, genesis_view, <span class="kw-2">&amp;</span>upgrade_lock);
 <a href=#1912 id=1912 data-nosnippet>1912</a>
 <a href=#1913 id=1913 data-nosnippet>1913</a>        <span class="kw">let </span>bytes: [u8; <span class="number">32</span>] = versioned_data.commit().into();
 <a href=#1914 id=1914 data-nosnippet>1914</a>

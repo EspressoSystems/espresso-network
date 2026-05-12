@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["CoordinatorEvent"],"struct":["NewDecideEvent"]};
+window.SIDEBAR_ITEMS = {"enum":["CoordinatorEvent"]};

@@ -221,7 +221,7 @@
 <a href=#221 id=221 data-nosnippet>221</a>) -&gt; Vec&lt;LeafQueryData&lt;SeqTypes&gt;&gt; {
 <a href=#222 id=222 data-nosnippet>222</a>    custom_leaf_chain(Upgrade::trivial(version), range, |proposal| {
 <a href=#223 id=223 data-nosnippet>223</a>        <span class="kw">if </span>is_epoch_transition(proposal.block_header.height(), epoch_height) {
-<a href=#224 id=224 data-nosnippet>224</a>            <span class="kw">let </span>data: NextEpochQuorumData2&lt;SeqTypes&gt; = proposal.justify_qc.data.clone().into();
+<a href=#224 id=224 data-nosnippet>224</a>            <span class="kw">let </span>data: NextEpochQuorumData2&lt;SeqTypes&gt; = proposal.justify_qc.data.into();
 <a href=#225 id=225 data-nosnippet>225</a>            <span class="kw">let </span>commit = data.commit();
 <a href=#226 id=226 data-nosnippet>226</a>            proposal.next_epoch_justify_qc = <span class="prelude-val">Some</span>(NextEpochQuorumCertificate2::new(
 <a href=#227 id=227 data-nosnippet>227</a>                data,
@@ -512,7 +512,7 @@
 <a href=#512 id=512 data-nosnippet>512</a>                block_number: <span class="prelude-val">Some</span>(i <span class="kw">as </span>u64),
 <a href=#513 id=513 data-nosnippet>513</a>            };
 <a href=#514 id=514 data-nosnippet>514</a>            <span class="kw">let </span>quorum_data_comm = VersionedVoteData::new_infallible(
-<a href=#515 id=515 data-nosnippet>515</a>                quorum_data.clone(),
+<a href=#515 id=515 data-nosnippet>515</a>                quorum_data,
 <a href=#516 id=516 data-nosnippet>516</a>                view_number,
 <a href=#517 id=517 data-nosnippet>517</a>                <span class="kw-2">&amp;</span>UpgradeLock::&lt;SeqTypes&gt;::new(upgrade),
 <a href=#518 id=518 data-nosnippet>518</a>            )

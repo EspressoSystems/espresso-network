@@ -342,7 +342,7 @@
 <a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">if let </span>HotShotEvent::QuorumVoteSend(vote) = event {
 <a href=#343 id=343 data-nosnippet>343</a>            <span class="kw">let </span>new_view = vote.view_number + <span class="self">self</span>.view_increment;
 <a href=#344 id=344 data-nosnippet>344</a>            <span class="kw">let </span>spoofed_vote = QuorumVote2::&lt;TYPES&gt;::create_signed_vote(
-<a href=#345 id=345 data-nosnippet>345</a>                vote.data.clone(),
+<a href=#345 id=345 data-nosnippet>345</a>                vote.data,
 <a href=#346 id=346 data-nosnippet>346</a>                new_view,
 <a href=#347 id=347 data-nosnippet>347</a>                public_key,
 <a href=#348 id=348 data-nosnippet>348</a>                private_key,
@@ -426,7 +426,7 @@
 <a href=#426 id=426 data-nosnippet>426</a>                    // We wont update internal consensus state for this Byzantine replica but we are at least
 <a href=#427 id=427 data-nosnippet>427</a>                    // Going to send a vote to the next honest leader
 <a href=#428 id=428 data-nosnippet>428</a>                    </span><span class="kw">let </span>vote = QuorumVote2::&lt;TYPES&gt;::create_signed_vote(
-<a href=#429 id=429 data-nosnippet>429</a>                        <span class="self">self</span>.votes_sent.last().unwrap().data.clone(),
+<a href=#429 id=429 data-nosnippet>429</a>                        <span class="self">self</span>.votes_sent.last().unwrap().data,
 <a href=#430 id=430 data-nosnippet>430</a>                        event.view_number().unwrap(),
 <a href=#431 id=431 data-nosnippet>431</a>                        public_key,
 <a href=#432 id=432 data-nosnippet>432</a>                        private_key,
