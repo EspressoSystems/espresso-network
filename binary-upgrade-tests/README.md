@@ -16,7 +16,7 @@ tag, asserting the network keeps producing and serving blocks.
 
 ## Run
 
-The repo's `.env` must exist (`cp .env.docker.example .env` or use the dev shell).
+The repo's `.env` must exist (`cp .env.docker.example .env` or use the dev shell). Ensure docker is running.
 
     just binary-upgrade-tests::run
     BASE_TAG=20260505 UPGRADE_TAG=main just binary-upgrade-tests::run
