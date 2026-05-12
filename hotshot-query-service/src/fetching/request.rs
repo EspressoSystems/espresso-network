@@ -17,15 +17,15 @@ use std::{fmt::Debug, hash::Hash};
 use alloy::primitives::{FixedBytes, Keccak256};
 use derive_more::{From, Into};
 use hotshot_types::{
-    data::{VidCommitment, VidCommon},
+    data::{VidCommitment, VidCommon, ViewNumber},
+    simple_vote::QuorumData2,
     traits::node_implementation::NodeType,
 };
 
 use crate::{
     Payload,
     availability::{
-        BlockQueryData, Certificate2, LeafHash, LeafQueryData, QcHash, QueryableHeader,
-        VidCommonQueryData,
+        BlockQueryData, Certificate2, LeafHash, LeafQueryData, QueryableHeader, VidCommonQueryData,
     },
     fetching::NonEmptyRange,
 };
@@ -129,21 +129,34 @@ impl VidCommonRangeRequest {
 
 /// A request for a leaf with a given height.
 ///
-/// The expected hash and QC hash are also provided, so that the request can be verified against a
-/// response from an untrusted provider.
+/// The expected leaf hash, the QC's view, and the certifying QC's `data` are provided
+/// so the request can be verified against a response from an untrusted provider.
+///
+/// We compare the QC's `(view, data)` instead of its full commit because under the new protocol
+/// we store leaves alongside a `cert1` taken from the decide event, and that `cert1` is
+/// not necessarily the same `cert1` that the next leaf's `justify_qc` will reference. Both
+/// certify the same `(view, leaf)` but can be assembled from different voting set
+/// so their aggregated signatures (and commits) differ.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
 pub struct LeafRequest<Types: NodeType> {
     pub height: u64,
     pub expected_leaf: LeafHash<Types>,
-    pub expected_qc: QcHash<Types>,
+    pub expected_qc_view: ViewNumber,
+    pub expected_qc_data: QuorumData2<Types>,
 }
 
 impl<Types: NodeType> LeafRequest<Types> {
-    pub fn new(height: u64, expected_leaf: LeafHash<Types>, expected_qc: QcHash<Types>) -> Self {
+    pub fn new(
+        height: u64,
+        expected_leaf: LeafHash<Types>,
+        expected_qc_view: ViewNumber,
+        expected_qc_data: QuorumData2<Types>,
+    ) -> Self {
         Self {
             height,
             expected_leaf,
-            expected_qc,
+            expected_qc_view,
+            expected_qc_data,
         }
     }
 }
@@ -152,7 +165,7 @@ impl<Types: NodeType> Request<Types> for LeafRequest<Types> {
     type Response = LeafQueryData<Types>;
 }
 
-/// A request for a consecutive range of VID common.
+/// A request for a consecutive range of leaves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LeafRangeRequest<Types: NodeType> {
     /// The first block in the requested range.
@@ -166,10 +179,13 @@ pub struct LeafRangeRequest<Types: NodeType> {
     /// Earlier leaves can be verified based on the subsequent leaf.
     pub last_leaf: LeafHash<Types>,
 
-    /// The expected hash of the last QC in the chain.
+    /// The expected view of the QC certifying the last leaf in the chain.
     ///
-    /// Earlier QCs can be verified based on the subsequent leaf.
-    pub last_qc: QcHash<Types>,
+    /// See [`LeafRequest`] for why we compare `(view, data)` rather than full commit.
+    pub last_qc_view: ViewNumber,
+
+    /// The expected `data` of the QC certifying the last leaf in the chain.
+    pub last_qc_data: QuorumData2<Types>,
 }
 
 impl<Types: NodeType> Request<Types> for LeafRangeRequest<Types> {

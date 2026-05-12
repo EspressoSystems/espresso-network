@@ -368,6 +368,21 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
         let handle = self.consensus_handle().await;
+        if let Some(requested) = epoch {
+            let first_epoch = handle
+                .membership_coordinator()
+                .await
+                .membership()
+                .first_epoch();
+            if let Some(first_epoch) = first_epoch
+                && requested < first_epoch
+            {
+                return Err(anyhow::anyhow!(
+                    "requested stake table for epoch {requested:?} is below the first epoch \
+                     {first_epoch:?}"
+                ));
+            }
+        }
         let highest_epoch = handle.current_epoch().await.map(|e| e + 1);
         if epoch > highest_epoch {
             return Err(anyhow::anyhow!(

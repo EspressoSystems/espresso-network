@@ -183,7 +183,7 @@ fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestType
         block_number: Some(0),
     };
     Certificate1::new(
-        data.clone(),
+        data,
         data.commit(),
         ViewNumber::genesis(),
         None,

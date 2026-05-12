@@ -1,6 +1,6 @@
 use crate::{
-    data::{Leaf2, VidDisperseShare2, ViewNumber},
-    event::Event,
+    data::ViewNumber,
+    event::{Event, LeafInfo},
     message::Proposal as SignedProposal,
     new_protocol::Proposal,
     simple_certificate::{SimpleCertificate, SuccessThreshold},
@@ -8,24 +8,19 @@ use crate::{
     traits::node_implementation::NodeType,
 };
 
-/// Decided leaves plus the certificates and VID shares needed by the node adapter
-/// to persist and broadcast them. Emitted by the coordinator.
-#[derive(Clone, Debug)]
-pub struct NewDecideEvent<TYPES: NodeType> {
-    pub leaves: Vec<Leaf2<TYPES>>,
-    /// Certificate1 (QC) that certifies the most recent (first) leaf in the chain.
-    /// Each older leaf's cert1 is the next leaf's `justify_qc`.
-    pub cert1: SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>,
-    pub cert2: Option<SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>>,
-    pub vid_shares: Vec<Option<SignedProposal<TYPES, VidDisperseShare2<TYPES>>>>,
-}
-
 /// High-level event emitted by the coordinator adapter. Covers both legacy HotShot
 /// events and new-protocol coordinator events.
 #[derive(Clone, Debug)]
 pub enum CoordinatorEvent<TYPES: NodeType> {
     LegacyEvent(Event<TYPES>),
-    NewDecide(NewDecideEvent<TYPES>),
+    NewDecide {
+        leaf_infos: Vec<LeafInfo<TYPES>>,
+        /// Certificate1 that certifies the most recent (first) leaf in the chain.
+        /// Each older leaf's cert1 is the next leaf's `justify_qc`.
+        cert1: SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>,
+        /// Cert2 which finalizes the most recent leaf in the chain
+        cert2: Option<SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>>,
+    },
     ViewChanged {
         view_number: ViewNumber,
     },
@@ -45,11 +40,10 @@ impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
             Self::LegacyEvent(event) => {
                 write!(f, "Legacy: {} view={}", event.event, event.view_number)
             },
-            Self::NewDecide(event) => {
-                let view = event
-                    .leaves
+            Self::NewDecide { leaf_infos, .. } => {
+                let view = leaf_infos
                     .first()
-                    .map(|leaf| *leaf.view_number())
+                    .map(|info| *info.leaf.view_number())
                     .unwrap_or_default();
                 write!(f, "NewDecide: view={view}")
             },

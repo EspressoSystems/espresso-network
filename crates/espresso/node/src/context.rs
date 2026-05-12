@@ -189,10 +189,10 @@ where
         // epoch before consensus starts.
         let mut coordinator_network = coordinator_network;
         if let Err(err) = coordinator_network
-            .on_epoch_change(current_epoch, &membership_coordinator)
+            .apply_epoch(current_epoch, &membership_coordinator)
             .await
         {
-            tracing::warn!(%current_epoch, %err, "coordinator network on_epoch_change failed at startup");
+            tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }
 
         let coordinator = Coordinator::maker()
