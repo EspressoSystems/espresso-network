@@ -59,4 +59,8 @@ impl<T> Queue<T> {
         let mut map = self.0.map.lock();
         *map = map.split_off(&(s, MsgId(0)))
     }
+
+    pub fn len(&self) -> usize {
+        self.0.map.lock().len()
+    }
 }
