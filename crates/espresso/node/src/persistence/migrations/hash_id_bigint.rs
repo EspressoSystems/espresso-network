@@ -3,7 +3,7 @@
 //!
 //! The expand SQL migration (`V1302__hash_id_bigint_expand.sql`) adds the new
 //! `id_big` / `hash_id_big` columns and replaces the exhausted `hash_id_seq` with
-//! a sentinel sequence. This module provides the four trait implementations that
+//! a placeholder sequence. This module provides the four trait implementations that
 //! complete the migration in the background:
 //!
 //! 1. [`BackfillIds`] — fills `hash.id_big = hash.id` for every existing row.
@@ -22,11 +22,6 @@ use hotshot_query_service::{
     },
 };
 
-// ---------------------------------------------------------------------------
-// DualReadAdapter
-// ---------------------------------------------------------------------------
-
-/// Converts between the old INT hash ID (i32) and the new BIGINT hash ID (i64).
 pub struct HashIdAdapter;
 
 impl DualReadAdapter for HashIdAdapter {
@@ -47,11 +42,6 @@ impl DualReadAdapter for HashIdAdapter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Backfill 1: hash table
-// ---------------------------------------------------------------------------
-
-/// Fills `hash.id_big = hash.id` for all existing rows.
 pub struct BackfillIds;
 
 impl MigrationMeta for BackfillIds {
@@ -75,38 +65,35 @@ impl DataBackfill for BackfillIds {
     async fn migrate_batch(
         &self,
         tx: &mut Transaction<Write>,
-        _offset: u64,
+        offset: u64,
     ) -> anyhow::Result<Option<u64>> {
-        // Update rows where id_big is still NULL (i.e. old rows that haven't been
-        // backfilled yet). Positive id values are the real legacy IDs; negative values
-        // are sentinel placeholders written by new inserts during the migration window
-        // and do not need to be copied into id_big.
-        let n: u64 = sqlx::query_scalar(
+        // offset is the last id processed (exclusive lower bound for the next batch).
+        // Positive ids are real legacy IDs; negative ids are placeholder values written
+        // by new inserts during the migration window and do not need to be backfilled.
+        let next: Option<i64> = sqlx::query_scalar(
             "WITH batch AS (
                 SELECT id FROM hash
-                WHERE id_big IS NULL AND id > 0
+                WHERE id > $1 AND id > 0 AND id_big IS NULL
                 ORDER BY id
-                LIMIT $1
+                LIMIT $2
+            ),
+            updated AS (
+                UPDATE hash SET id_big = id
+                FROM batch
+                WHERE hash.id = batch.id
+                RETURNING hash.id
             )
-            UPDATE hash SET id_big = hash.id
-            FROM batch
-            WHERE hash.id = batch.id",
+            SELECT MAX(id) FROM updated",
         )
+        .bind(offset as i64)
         .bind(self.batch_size() as i64)
         .fetch_one(tx.as_mut())
-        .await
-        .map(|n: i64| n as u64)?;
+        .await?;
 
-        if n == 0 { Ok(None) } else { Ok(Some(n)) }
+        Ok(next.map(|id| id as u64))
     }
 }
 
-// ---------------------------------------------------------------------------
-// Backfill 2: merkle tree tables
-// ---------------------------------------------------------------------------
-
-/// Fills `hash_id_big = hash_id::bigint` for all existing rows in the four merkle
-/// tree tables. Must run after [`BackfillIds`] completes.
 pub struct BackfillRefs;
 
 impl MigrationMeta for BackfillRefs {
@@ -130,9 +117,9 @@ impl DataBackfill for BackfillRefs {
     async fn migrate_batch(
         &self,
         tx: &mut Transaction<Write>,
-        _offset: u64,
+        offset: u64,
     ) -> anyhow::Result<Option<u64>> {
-        let mut total: i64 = 0;
+        let mut max_created: Option<i64> = None;
 
         for table in &[
             "fee_merkle_tree",
@@ -140,38 +127,36 @@ impl DataBackfill for BackfillRefs {
             "reward_merkle_tree",
             "reward_merkle_tree_v2",
         ] {
-            let n: i64 = sqlx::query_scalar(&format!(
+            let next: Option<i64> = sqlx::query_scalar(&format!(
                 "WITH batch AS (
                     SELECT path, created FROM \"{table}\"
-                    WHERE hash_id_big IS NULL
-                    LIMIT $1
+                    WHERE hash_id_big IS NULL AND created > $1
+                    ORDER BY created
+                    LIMIT $2
+                ),
+                updated AS (
+                    UPDATE \"{table}\" t
+                    SET hash_id_big = t.hash_id::bigint
+                    FROM batch
+                    WHERE t.path = batch.path AND t.created = batch.created
+                    RETURNING t.created
                 )
-                UPDATE \"{table}\" t
-                SET hash_id_big = t.hash_id::bigint
-                FROM batch
-                WHERE t.path = batch.path AND t.created = batch.created",
+                SELECT MAX(created) FROM updated",
             ))
+            .bind(offset as i64)
             .bind(self.batch_size() as i64)
             .fetch_one(tx.as_mut())
             .await?;
 
-            total += n;
+            if let Some(c) = next {
+                max_created = Some(max_created.unwrap_or(i64::MIN).max(c));
+            }
         }
 
-        if total == 0 {
-            Ok(None)
-        } else {
-            Ok(Some(total as u64))
-        }
+        Ok(max_created.map(|c| c as u64))
     }
 }
 
-// ---------------------------------------------------------------------------
-// Deferred schema change: concurrent unique index
-// ---------------------------------------------------------------------------
-
-/// Creates `UNIQUE INDEX CONCURRENTLY` on `hash.id_big` so the cleanup can
-/// promote it to a primary key with a zero-downtime `ADD PRIMARY KEY USING INDEX`.
 pub struct CreateIndex;
 
 impl MigrationMeta for CreateIndex {
@@ -265,11 +250,11 @@ impl CleanupMigration for Cleanup {
             .await?;
         }
 
-        // Drop sentinel sequence and the old id default.
+        // Drop placeholder sequence and the old id default.
         sqlx::query("ALTER TABLE hash ALTER COLUMN id DROP DEFAULT")
             .execute(tx.as_mut())
             .await?;
-        sqlx::query("DROP SEQUENCE IF EXISTS hash_id_sentinel_seq")
+        sqlx::query("DROP SEQUENCE IF EXISTS hash_id_placeholder_seq")
             .execute(tx.as_mut())
             .await?;
 
