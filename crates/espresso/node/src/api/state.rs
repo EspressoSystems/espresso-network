@@ -1304,14 +1304,13 @@ where
 
     async fn stream_namespace_proofs(
         &self,
-        start_height: u64,
+        from: usize,
         namespace: u32,
     ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::NamespaceProofQueryData>> {
         use espresso_types::{NamespaceId, NamespaceProofQueryData, NsProof};
         use futures::StreamExt as _;
 
         let ns_id = NamespaceId::from(namespace);
-        let from = start_height as usize;
         let ds = self.data_source.clone();
         let blocks = (*ds).subscribe_blocks(from).await;
         let vids = (*ds).subscribe_vid_common(from).await;
@@ -1507,6 +1506,13 @@ where
 // v1::HotShotAvailabilityApi implementation
 // ============================================================================
 
+fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> {
+    if until.saturating_sub(from) > limit {
+        anyhow::bail!("range {from}..{until} exceeds limit {limit}");
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl<D> espresso_api::v1::HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
@@ -1555,6 +1561,7 @@ where
     }
 
     async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>> {
+        enforce_range(from, until, 500)?;
         use std::time::Duration;
 
         use futures::StreamExt as _;
@@ -1596,6 +1603,7 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::Header>> {
+        enforce_range(from, until, 100)?;
         use std::time::Duration;
 
         use futures::StreamExt as _;
@@ -1633,6 +1641,7 @@ where
     }
 
     async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>> {
+        enforce_range(from, until, 100)?;
         use std::time::Duration;
 
         use futures::StreamExt as _;
@@ -1674,6 +1683,7 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::Payload>> {
+        enforce_range(from, until, 100)?;
         use std::time::Duration;
 
         use futures::StreamExt as _;
@@ -1715,6 +1725,7 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::VidCommon>> {
+        enforce_range(from, until, 500)?;
         use std::time::Duration;
 
         use futures::StreamExt as _;
@@ -1901,6 +1912,7 @@ where
         from: usize,
         until: usize,
     ) -> anyhow::Result<Vec<Self::BlockSummary>> {
+        enforce_range(from, until, 100)?;
         use std::time::Duration;
 
         use futures::StreamExt as _;

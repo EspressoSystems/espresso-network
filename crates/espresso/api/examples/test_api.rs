@@ -172,7 +172,7 @@ impl v1::AvailabilityApi for TestApi {
 
     async fn stream_namespace_proofs(
         &self,
-        _start_height: u64,
+        _from: usize,
         _namespace: u32,
     ) -> Result<futures::stream::BoxStream<'static, Self::NamespaceProofQueryData>> {
         Ok(Box::pin(futures::stream::empty()))

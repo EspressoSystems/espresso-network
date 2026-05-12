@@ -47,7 +47,7 @@ pub trait AvailabilityApi {
 
     async fn stream_namespace_proofs(
         &self,
-        start_height: u64,
+        from: usize,
         namespace: u32,
     ) -> anyhow::Result<BoxStream<'static, Self::NamespaceProofQueryData>>;
 
