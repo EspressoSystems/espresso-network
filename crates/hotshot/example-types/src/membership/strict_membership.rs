@@ -1,11 +1,16 @@
-use std::{collections::HashSet, fmt, fmt::Debug, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashSet},
+    fmt::{self, Debug},
+    sync::Arc,
+};
 
 use alloy::primitives::U256;
+use anyhow::anyhow;
 use async_broadcast::Receiver;
-use async_lock::RwLock;
+use async_lock::RwLock as AsyncRwLock;
 use hotshot_types::{
     PeerConfig,
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
     event::Event,
     stake_table::HSStakeTable,
@@ -18,6 +23,7 @@ use hotshot_types::{
     },
     utils::{epoch_from_block_number, root_block_in_epoch, transition_block_for_epoch},
 };
+use parking_lot::RwLock;
 
 use crate::{
     membership::{TestableMembership, fetcher::Leaf2Fetcher, stake_table::TestStakeTable},
@@ -25,50 +31,76 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct StrictMembership<
-    TYPES: NodeType,
-    StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>,
-> {
-    inner: StakeTable,
-    epochs: HashSet<EpochNumber>,
-    drbs: HashSet<EpochNumber>,
-    fetcher: Option<Arc<RwLock<Leaf2Fetcher<TYPES>>>>,
-    epoch_height: u64,
+pub struct StrictMembership<T, S>
+where
+    T: NodeType,
+    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
+{
+    inner: Arc<RwLock<Inner<T, S>>>,
+    epoch_height: BlockNumber,
 }
 
-impl<TYPES, StakeTable> Debug for StrictMembership<TYPES, StakeTable>
+struct Inner<T: NodeType, S> {
+    table: S,
+    epochs: HashSet<EpochNumber>,
+    drbs: HashSet<EpochNumber>,
+    fetcher: Option<Arc<AsyncRwLock<Leaf2Fetcher<T>>>>,
+}
+
+impl<T, S> Debug for StrictMembership<T, S>
 where
-    TYPES: NodeType,
-    StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>,
+    T: NodeType,
+    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        let inner = self.inner.read();
         f.debug_struct("StrictMembership")
-            .field("inner", &self.inner)
-            .field("epochs", &self.epochs)
-            .field("drbs", &self.drbs)
+            .field("table", &inner.table)
+            .field("epochs", &inner.epochs)
+            .field("drbs", &inner.drbs)
             .finish()
     }
 }
 
-impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
-    TestableMembership<TYPES> for StrictMembership<TYPES, StakeTable>
+impl<T, S> TestableMembership<T> for StrictMembership<T, S>
+where
+    T: NodeType,
+    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
+    fn new(
+        quorum_members: Vec<PeerConfig<T>>,
+        da_members: Vec<PeerConfig<T>>,
+        _public_key: T::SignatureKey,
+        epoch_height: u64,
+    ) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(Inner {
+                table: TestStakeTable::new(
+                    quorum_members.into_iter().map(Into::into).collect(),
+                    da_members.into_iter().map(Into::into).collect(),
+                ),
+                epochs: HashSet::new(),
+                drbs: HashSet::new(),
+                fetcher: None,
+            })),
+            epoch_height: epoch_height.into(),
+        }
+    }
+
     fn set_leaf_fetcher(
-        &mut self,
-        network: Arc<dyn LeafFetcherNetwork<TYPES>>,
-        storage: TestStorage<TYPES>,
-        public_key: TYPES::SignatureKey,
-        channel: Receiver<Event<TYPES>>,
+        &self,
+        network: Arc<dyn LeafFetcherNetwork<T>>,
+        storage: TestStorage<T>,
+        public_key: T::SignatureKey,
+        channel: Receiver<Event<T>>,
     ) {
         let mut fetcher = Leaf2Fetcher::new(network, storage, public_key);
         fetcher.set_external_channel(channel);
-        self.fetcher = Some(Arc::new(RwLock::new(fetcher)));
+        self.inner.write().fetcher = Some(Arc::new(AsyncRwLock::new(fetcher)));
     }
 }
 
-impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
-    StrictMembership<TYPES, StakeTable>
-{
+impl<T: NodeType, S> Inner<T, S> {
     fn assert_has_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {
             return;
@@ -78,6 +110,7 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
             "Failed stake table check for epoch {epoch}"
         );
     }
+
     fn assert_has_randomized_stake_table(&self, epoch: Option<EpochNumber>) {
         let Some(epoch) = epoch else {
             return;
@@ -89,34 +122,19 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
     }
 }
 
-impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::StateSignatureKey>>
-    Membership<TYPES> for StrictMembership<TYPES, StakeTable>
+impl<T, S> Membership<T> for StrictMembership<T, S>
+where
+    T: NodeType,
+    S: TestStakeTable<T::SignatureKey, T::StateSignatureKey>,
 {
-    type Error = anyhow::Error;
     type StakeTableHash = NoStakeTableHash;
+    type Error = StrictMembershipError;
 
-    fn new(
-        quorum_members: Vec<hotshot_types::PeerConfig<TYPES>>,
-        da_members: Vec<hotshot_types::PeerConfig<TYPES>>,
-        _public_key: TYPES::SignatureKey,
-        epoch_height: u64,
-    ) -> Self {
-        Self {
-            inner: TestStakeTable::new(
-                quorum_members.into_iter().map(Into::into).collect(),
-                da_members.into_iter().map(Into::into).collect(),
-            ),
-            epochs: HashSet::new(),
-            drbs: HashSet::new(),
-            fetcher: None,
-            epoch_height,
-        }
-    }
-
-    fn stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<TYPES> {
-        self.assert_has_stake_table(epoch);
-        let peer_configs = self
-            .inner
+    fn stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<T> {
+        let inner = self.inner.read();
+        inner.assert_has_stake_table(epoch);
+        let peer_configs = inner
+            .table
             .stake_table(epoch.map(|e| *e))
             .into_iter()
             .map(Into::into)
@@ -124,10 +142,11 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
         HSStakeTable(peer_configs)
     }
 
-    fn da_stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<TYPES> {
-        self.assert_has_stake_table(epoch);
-        let peer_configs = self
-            .inner
+    fn da_stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<T> {
+        let inner = self.inner.read();
+        inner.assert_has_stake_table(epoch);
+        let peer_configs = inner
+            .table
             .da_stake_table(epoch.map(|e| *e))
             .into_iter()
             .map(Into::into)
@@ -137,12 +156,14 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
 
     fn committee_members(
         &self,
-        _view_number: ViewNumber,
-        epoch: Option<EpochNumber>,
-    ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
-        self.assert_has_stake_table(epoch);
-        self.inner
-            .stake_table(epoch.map(|e| *e))
+        _: ViewNumber,
+        e: Option<EpochNumber>,
+    ) -> BTreeSet<T::SignatureKey> {
+        let inner = self.inner.read();
+        inner.assert_has_stake_table(e);
+        inner
+            .table
+            .stake_table(e.map(|e| *e))
             .into_iter()
             .map(|entry| entry.signature_key)
             .collect()
@@ -150,158 +171,131 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
 
     fn da_committee_members(
         &self,
-        _view_number: ViewNumber,
-        epoch: Option<EpochNumber>,
-    ) -> std::collections::BTreeSet<TYPES::SignatureKey> {
-        self.assert_has_stake_table(epoch);
-        self.inner
-            .da_stake_table(epoch.map(|e| *e))
+        _: ViewNumber,
+        e: Option<EpochNumber>,
+    ) -> BTreeSet<T::SignatureKey> {
+        let inner = self.inner.read();
+        inner.assert_has_stake_table(e);
+        inner
+            .table
+            .da_stake_table(e.map(|e| *e))
             .into_iter()
             .map(|entry| entry.signature_key)
             .collect()
     }
 
-    fn stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-        epoch: Option<EpochNumber>,
-    ) -> Option<hotshot_types::PeerConfig<TYPES>> {
-        self.assert_has_stake_table(epoch);
-        self.inner
-            .stake(pub_key.clone(), epoch.map(|e| *e))
+    fn stake(&self, k: &T::SignatureKey, e: Option<EpochNumber>) -> Option<PeerConfig<T>> {
+        let inner = self.inner.read();
+        inner.assert_has_stake_table(e);
+        inner.table.stake(k.clone(), e.map(|e| *e)).map(Into::into)
+    }
+
+    fn da_stake(&self, k: &T::SignatureKey, e: Option<EpochNumber>) -> Option<PeerConfig<T>> {
+        let inner = self.inner.read();
+        inner.assert_has_stake_table(e);
+        inner
+            .table
+            .da_stake(k.clone(), e.map(|e| *e))
             .map(Into::into)
     }
 
-    fn da_stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-        epoch: Option<EpochNumber>,
-    ) -> Option<hotshot_types::PeerConfig<TYPES>> {
-        self.assert_has_stake_table(epoch);
-        self.inner
-            .da_stake(pub_key.clone(), epoch.map(|e| *e))
-            .map(Into::into)
-    }
-
-    /// Check if a node has stake in the committee
-    fn has_stake(
-        &self,
-        pub_key: &<TYPES as NodeType>::SignatureKey,
-        epoch: Option<EpochNumber>,
-    ) -> bool {
-        self.assert_has_stake_table(epoch);
-
-        self.stake(pub_key, epoch)
+    fn has_stake(&self, k: &T::SignatureKey, e: Option<EpochNumber>) -> bool {
+        self.stake(k, e)
             .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
 
-    /// Check if a node has stake in the da committee
-    fn has_da_stake(
-        &self,
-        pub_key: &<TYPES as NodeType>::SignatureKey,
-        epoch: Option<EpochNumber>,
-    ) -> bool {
-        self.assert_has_stake_table(epoch);
-
-        self.da_stake(pub_key, epoch)
+    fn has_da_stake(&self, k: &T::SignatureKey, e: Option<EpochNumber>) -> bool {
+        self.da_stake(k, e)
             .is_some_and(|x| x.stake_table_entry.stake() > U256::ZERO)
     }
 
     fn lookup_leader(
         &self,
-        view: ViewNumber,
-        epoch: Option<EpochNumber>,
-    ) -> anyhow::Result<TYPES::SignatureKey> {
-        self.assert_has_randomized_stake_table(epoch);
-        self.inner.lookup_leader(*view, epoch.map(|e| *e))
+        v: ViewNumber,
+        e: Option<EpochNumber>,
+    ) -> Result<T::SignatureKey, Self::Error> {
+        let inner = self.inner.read();
+        inner.assert_has_randomized_stake_table(e);
+        Ok(inner.table.lookup_leader(*v, e.map(|e| *e))?)
     }
 
-    fn total_nodes(&self, epoch: Option<EpochNumber>) -> usize {
-        self.assert_has_stake_table(epoch);
-        self.inner.stake_table(epoch.map(|e| *e)).len()
+    fn total_nodes(&self, e: Option<EpochNumber>) -> usize {
+        let inner = self.inner.read();
+        inner.assert_has_stake_table(e);
+        inner.table.stake_table(e.map(|e| *e)).len()
     }
 
-    fn da_total_nodes(&self, epoch: Option<EpochNumber>) -> usize {
-        self.assert_has_stake_table(epoch);
-        self.inner.da_stake_table(epoch.map(|e| *e)).len()
+    fn da_total_nodes(&self, e: Option<EpochNumber>) -> usize {
+        let inner = self.inner.read();
+        inner.assert_has_stake_table(e);
+        inner.table.da_stake_table(e.map(|e| *e)).len()
     }
 
-    fn has_stake_table(&self, epoch: EpochNumber) -> bool {
-        let has_stake_table = self.inner.has_stake_table(*epoch);
-
-        assert_eq!(has_stake_table, self.epochs.contains(&epoch));
-
+    fn has_stake_table(&self, e: EpochNumber) -> bool {
+        let inner = self.inner.read();
+        let has_stake_table = inner.table.has_stake_table(*e);
+        assert_eq!(has_stake_table, inner.epochs.contains(&e));
         has_stake_table
     }
 
-    fn has_randomized_stake_table(&self, epoch: EpochNumber) -> anyhow::Result<bool> {
-        if !self.has_stake_table(epoch) {
+    fn has_randomized_stake_table(&self, e: EpochNumber) -> Result<bool, Self::Error> {
+        if !self.has_stake_table(e) {
             return Ok(false);
         }
-        let has_randomized_stake_table = self.inner.has_randomized_stake_table(*epoch);
-
+        let inner = self.inner.read();
+        let has_randomized_stake_table = inner.table.has_randomized_stake_table(*e);
         if let Ok(result) = has_randomized_stake_table {
-            assert_eq!(result, self.drbs.contains(&epoch));
+            assert_eq!(result, inner.drbs.contains(&e));
         } else {
-            assert!(!self.drbs.contains(&epoch));
+            assert!(!inner.drbs.contains(&e));
         }
-
-        has_randomized_stake_table
+        Ok(has_randomized_stake_table?)
     }
 
-    fn add_drb_result(&mut self, epoch: EpochNumber, drb_result: hotshot_types::drb::DrbResult) {
-        self.assert_has_stake_table(Some(epoch));
-
-        self.drbs.insert(epoch);
-        self.inner.add_drb_result(*epoch, drb_result);
+    fn add_drb_result(&self, e: EpochNumber, drb: DrbResult) {
+        let mut inner = self.inner.write();
+        inner.assert_has_stake_table(Some(e));
+        inner.drbs.insert(e);
+        inner.table.add_drb_result(*e, drb);
     }
 
     fn first_epoch(&self) -> Option<EpochNumber> {
-        self.inner.first_epoch().map(EpochNumber::new)
+        self.inner.read().table.first_epoch().map(EpochNumber::new)
     }
 
-    fn set_first_epoch(&mut self, epoch: EpochNumber, initial_drb_result: DrbResult) {
-        self.epochs.insert(epoch);
-        self.epochs.insert(epoch + 1);
+    fn set_first_epoch(&self, e: EpochNumber, initial_drb_result: DrbResult) {
+        let mut inner = self.inner.write();
+        inner.epochs.insert(e);
+        inner.epochs.insert(e + 1);
 
-        self.drbs.insert(epoch);
-        self.drbs.insert(epoch + 1);
+        inner.drbs.insert(e);
+        inner.drbs.insert(e + 1);
 
-        self.inner.set_first_epoch(*epoch, initial_drb_result);
+        inner.table.set_first_epoch(*e, initial_drb_result);
     }
 
-    async fn add_epoch_root(
-        membership: Arc<RwLock<Self>>,
-        block_header: TYPES::BlockHeader,
-    ) -> anyhow::Result<()> {
-        let mut membership_writer = membership.write().await;
+    async fn add_epoch_root(&self, hdr: T::BlockHeader) -> Result<(), Self::Error> {
+        let epoch = epoch_from_block_number(hdr.block_number(), *self.epoch_height) + 2;
 
-        let epoch =
-            epoch_from_block_number(block_header.block_number(), membership_writer.epoch_height)
-                + 2;
-
-        membership_writer.epochs.insert(EpochNumber::new(epoch));
-
-        membership_writer.inner.add_epoch_root(epoch);
+        let mut inner = self.inner.write();
+        inner.epochs.insert(EpochNumber::new(epoch));
+        inner.table.add_epoch_root(epoch);
 
         Ok(())
     }
 
-    async fn get_epoch_root(
-        membership: Arc<RwLock<Self>>,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<Leaf2<TYPES>> {
-        let membership_reader = membership.read().await;
+    async fn get_epoch_root(&self, e: EpochNumber) -> Result<Leaf2<T>, Self::Error> {
+        let block_height = root_block_in_epoch(*e, *self.epoch_height);
 
-        let block_height = root_block_in_epoch(*epoch, membership_reader.epoch_height);
-
-        let stake_table = membership_reader.inner.stake_table(Some(*epoch));
-        let fetcher = membership_reader
-            .fetcher
-            .clone()
-            .expect("get_epoch_root called before set_leaf_fetcher_network");
-
-        drop(membership_reader);
+        let (stake_table, fetcher) = {
+            let inner = self.inner.read();
+            let table = inner.table.stake_table(Some(*e));
+            let fetcher = inner
+                .fetcher
+                .clone()
+                .expect("get_epoch_root called before set_leaf_fetcher_network");
+            (table, fetcher)
+        };
 
         for node in stake_table {
             if let Ok(leaf) = fetcher
@@ -314,37 +308,31 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
             }
         }
 
-        anyhow::bail!("Failed to fetch epoch root from any peer");
+        Err(anyhow!("Failed to fetch epoch root from any peer").into())
     }
 
-    async fn get_epoch_drb(
-        membership: Arc<RwLock<Self>>,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<DrbResult> {
-        let membership_reader = membership.read().await;
+    async fn get_epoch_drb(&self, e: EpochNumber) -> Result<DrbResult, Self::Error> {
+        let epoch_height = self.epoch_height;
 
-        let epoch_height = membership_reader.epoch_height;
-        let epoch_drb = membership_reader.inner.get_epoch_drb(*epoch);
-        let fetcher = membership_reader.fetcher.clone();
-
-        drop(membership_reader);
+        let (epoch_drb, fetcher) = {
+            let state = self.inner.read();
+            let drb = state.table.get_epoch_drb(*e);
+            let fetcher = state.fetcher.clone();
+            (drb, fetcher)
+        };
 
         if let Ok(drb_result) = epoch_drb {
             Ok(drb_result)
         } else {
-            let previous_epoch = match epoch.checked_sub(1) {
+            let previous_epoch = match e.checked_sub(1) {
                 Some(epoch) => epoch,
                 None => {
-                    anyhow::bail!("Missing initial DRB result for epoch {epoch:?}");
+                    return Err(anyhow!("Missing initial DRB result for epoch {e:?}").into());
                 },
             };
 
-            let drb_block_height = transition_block_for_epoch(previous_epoch, epoch_height);
-
-            let membership_reader = membership.read().await;
-            let stake_table = membership_reader.inner.stake_table(Some(previous_epoch));
-            drop(membership_reader);
-
+            let drb_block_height = transition_block_for_epoch(previous_epoch, *epoch_height);
+            let stake_table = self.inner.read().table.stake_table(Some(previous_epoch));
             let fetcher = fetcher.expect("get_epoch_drb called before set_leaf_fetcher_network");
 
             let mut drb_leaf = None;
@@ -365,17 +353,22 @@ impl<TYPES: NodeType, StakeTable: TestStakeTable<TYPES::SignatureKey, TYPES::Sta
                 Some(leaf) => Ok(leaf.next_drb_result.expect(
                     "We fetched a leaf that is missing a DRB result. This should be impossible.",
                 )),
-                None => {
-                    anyhow::bail!(
-                        "Failed to fetch leaf from all nodes. Height: {drb_block_height}"
-                    );
-                },
+                None => Err(anyhow!(
+                    "Failed to fetch leaf from all nodes. Height: {drb_block_height}"
+                )
+                .into()),
             }
         }
     }
 
-    fn add_da_committee(&mut self, first_epoch: u64, committee: Vec<PeerConfig<TYPES>>) {
-        self.inner
-            .add_da_committee(first_epoch, committee.into_iter().map(Into::into).collect());
+    fn add_da_committee(&self, first_epoch: EpochNumber, committee: Vec<PeerConfig<T>>) {
+        self.inner.write().table.add_da_committee(
+            *first_epoch,
+            committee.into_iter().map(Into::into).collect(),
+        );
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("strict membership error: {0}")]
+pub struct StrictMembershipError(#[from] anyhow::Error);

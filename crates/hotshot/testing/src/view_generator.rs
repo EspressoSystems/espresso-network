@@ -81,7 +81,6 @@ impl TestView {
     ) {
         let leader = membership
             .leader(view_number)
-            .await
             .expect("expected Membership::leader to succeed");
 
         let sk = node_key_map
@@ -115,10 +114,7 @@ impl TestView {
             &block_payload,
             &metadata,
         );
-        let epoch_membership = membership
-            .membership_for_epoch(genesis_epoch)
-            .await
-            .unwrap();
+        let epoch_membership = membership.membership_for_epoch(genesis_epoch).unwrap();
         //let (private_key, public_key) = key_pair_for_id::<TestTypes>(*genesis_view);
         let (private_key, public_key) =
             Self::find_leader_key_pair(&epoch_membership, &node_key_map, genesis_view).await;
@@ -270,11 +266,7 @@ impl TestView {
 
         //let (old_private_key, old_public_key) = key_pair_for_id::<TestTypes>(*old_view);
         let (old_private_key, old_public_key) = Self::find_leader_key_pair(
-            &self
-                .membership
-                .membership_for_epoch(old_epoch)
-                .await
-                .unwrap(),
+            &self.membership.membership_for_epoch(old_epoch).unwrap(),
             &self.node_key_map,
             old_view,
         )
@@ -285,7 +277,6 @@ impl TestView {
             &self
                 .membership
                 .membership_for_epoch(self.epoch_number)
-                .await
                 .unwrap(),
             &self.node_key_map,
             next_view,
@@ -311,7 +302,6 @@ impl TestView {
         let membership = self
             .membership
             .membership_for_epoch(self.epoch_number)
-            .await
             .unwrap();
         let payload_commitment = da_payload_commitment::<TestTypes>(
             &membership,

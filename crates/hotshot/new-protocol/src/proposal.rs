@@ -145,7 +145,7 @@ impl<T: NodeType> Validator<T> {
         let view = proposal.data.view_number();
         let epoch = proposal.data.epoch;
         let membership = self.membership(epoch).await?;
-        let leader = match membership.leader(view).await {
+        let leader = match membership.leader(view) {
             Ok(leader) => leader,
             Err(err) => return Err(ValidationError::NoLeader(view, epoch, err)),
         };
@@ -167,8 +167,8 @@ impl<T: NodeType> Validator<T> {
             .epoch
             .ok_or(ValidationError::MissingEpoch(view, "vid share"))?;
         let membership = self.membership(epoch).await?;
-        let stake_table = membership.stake_table().await;
-        let leader = match membership.leader(view).await {
+        let stake_table = membership.stake_table();
+        let leader = match membership.leader(view) {
             Ok(leader) => leader,
             Err(err) => return Err(ValidationError::NoLeader(view, epoch, err)),
         };
@@ -196,8 +196,8 @@ impl<T: NodeType> Validator<T> {
             ));
         };
         let membership = self.membership(epoch).await?;
-        let entries = StakeTableEntries::<T>::from(membership.stake_table().await).0;
-        let threshold = membership.success_threshold().await;
+        let entries = StakeTableEntries::<T>::from(membership.stake_table()).0;
+        let threshold = membership.success_threshold();
         match proposal
             .justify_qc
             .is_valid_cert(&entries, threshold, &self.upgrade_lock)
@@ -239,7 +239,6 @@ impl<T: NodeType> Validator<T> {
         match self
             .membership_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
         {
             Ok(m) => Ok(m),
             Err(_) => self

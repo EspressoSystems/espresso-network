@@ -533,8 +533,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                     let dummy_view = ViewNumber::new(*node_id);
                     let Ok(node) = membership_coordinator
                         .membership()
-                        .read()
-                        .await
                         .leader(dummy_view, proposal.data.epoch())
                     else {
                         panic!(
@@ -615,8 +613,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                     let dummy_view = ViewNumber::new(*node_id);
                     let Ok(node) = membership_coordinator
                         .membership()
-                        .read()
-                        .await
                         .leader(dummy_view, certificate.epoch())
                     else {
                         panic!(
@@ -676,8 +672,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> EventTransformerState<TYPES,
                     let dummy_view = ViewNumber::new(*node_id);
                     let Ok(node) = membership_coordinator
                         .membership()
-                        .read()
-                        .await
                         .leader(dummy_view, certificate.epoch())
                     else {
                         panic!(

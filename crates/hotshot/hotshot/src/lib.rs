@@ -305,17 +305,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         debug!("Setting DRB difficulty selector in membership");
         let drb_difficulty_selector = drb_difficulty_selector(&config);
 
-        membership_coordinator
-            .set_drb_difficulty_selector(drb_difficulty_selector)
-            .await;
+        membership_coordinator.set_drb_difficulty_selector(drb_difficulty_selector);
 
         for da_committee in &config.da_committees {
             if current_version >= da_committee.start_version {
-                membership_coordinator
-                    .membership()
-                    .write()
-                    .await
-                    .add_da_committee(da_committee.start_epoch, da_committee.committee.clone());
+                membership_coordinator.membership().add_da_committee(
+                    da_committee.start_epoch.into(),
+                    da_committee.committee.clone(),
+                );
             }
         }
 
@@ -371,20 +368,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             );
         }
         let high_qc_block_number = initializer.high_qc.data.block_number;
-        let (stake_table, success_threshold) = if let Ok(epoch_membership) =
-            membership_coordinator.stake_table_for_epoch(epoch).await
-        {
-            (
-                epoch_membership.stake_table().await,
-                epoch_membership.success_threshold().await,
-            )
-        } else {
-            tracing::warn!(
-                "Failed to get stake table for epoch {:?} while creating vote participation",
-                epoch
-            );
-            (HSStakeTable::default(), U256::MAX)
-        };
+        let (stake_table, success_threshold) =
+            if let Ok(epoch_membership) = membership_coordinator.stake_table_for_epoch(epoch) {
+                (
+                    epoch_membership.stake_table(),
+                    epoch_membership.success_threshold(),
+                )
+            } else {
+                tracing::warn!(
+                    "Failed to get stake table for epoch {:?} while creating vote participation",
+                    epoch
+                );
+                (HSStakeTable::default(), U256::MAX)
+            };
 
         let consensus = Consensus::new(
             validated_state_map,
@@ -417,29 +413,20 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 epoch + 1
             );
             // trigger catchup for the current and next epoch if needed
-            let _ = membership_coordinator
-                .membership_for_epoch(Some(epoch))
-                .await;
-            let _ = membership_coordinator
-                .membership_for_epoch(Some(epoch + 1))
-                .await;
+            let _ = membership_coordinator.membership_for_epoch(Some(epoch));
+            let _ = membership_coordinator.membership_for_epoch(Some(epoch + 1));
             // If we already have an epoch root, we can trigger catchup for the epoch
             // which that root applies to.
             if let Some(high_qc_block_number) = high_qc_block_number
                 && is_ge_epoch_root(high_qc_block_number, config.epoch_height)
             {
-                let _ = membership_coordinator
-                    .stake_table_for_epoch(Some(epoch + 2))
-                    .await;
+                let _ = membership_coordinator.stake_table_for_epoch(Some(epoch + 2));
             }
 
             if let Ok(drb_result) = storage.load_drb_result(epoch + 1).await {
                 tracing::error!("Writing DRB result for epoch {}", epoch + 1);
-                if let Ok(mem) = membership_coordinator
-                    .stake_table_for_epoch(Some(epoch + 1))
-                    .await
-                {
-                    mem.add_drb_result(drb_result).await;
+                if let Ok(mem) = membership_coordinator.stake_table_for_epoch(Some(epoch + 1)) {
+                    mem.add_drb_result(drb_result);
                 }
             }
         }
@@ -615,7 +602,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
             HotShotError::FailedToSerialize(format!("failed to serialize transaction: {err}"))
         })?;
 
-        let membership = match api.membership_coordinator.membership_for_epoch(epoch).await {
+        let membership = match api.membership_coordinator.membership_for_epoch(epoch) {
             Ok(m) => m,
             Err(e) => return Err(HotShotError::InvalidState(e.message)),
         };
@@ -623,7 +610,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         spawn(async move {
             let memberships_da_committee_members = membership
                 .da_committee_members(view_number)
-                .await
                 .iter()
                 .cloned()
                 .collect();
@@ -1302,7 +1288,7 @@ impl<TYPES: NodeType> HotShotInitializer<TYPES> {
 }
 
 async fn load_start_epoch_info<TYPES: NodeType>(
-    membership: &Arc<RwLock<TYPES::Membership>>,
+    membership: &TYPES::Membership,
     start_epoch_info: &Vec<InitializerEpochInfo<TYPES>>,
     epoch_height: u64,
     epoch_start_block: u64,
@@ -1311,10 +1297,7 @@ async fn load_start_epoch_info<TYPES: NodeType>(
         EpochNumber::new(epoch_from_block_number(epoch_start_block, epoch_height));
 
     tracing::warn!("Calling set_first_epoch for epoch {first_epoch_number}");
-    membership
-        .write()
-        .await
-        .set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
+    membership.set_first_epoch(first_epoch_number, INITIAL_DRB_RESULT);
 
     let mut sorted_epoch_info = start_epoch_info.clone();
     sorted_epoch_info.sort_by_key(|info| info.epoch);
@@ -1322,7 +1305,8 @@ async fn load_start_epoch_info<TYPES: NodeType>(
         if let Some(block_header) = &epoch_info.block_header {
             tracing::warn!("Calling add_epoch_root for epoch {}", epoch_info.epoch);
 
-            Membership::add_epoch_root(Arc::clone(membership), block_header.clone())
+            membership
+                .add_epoch_root(block_header.clone())
                 .await
                 .unwrap_or_else(|err| {
                     // REVIEW NOTE: Should we panic here? a failure here seems like it should be fatal
@@ -1336,9 +1320,6 @@ async fn load_start_epoch_info<TYPES: NodeType>(
 
     for epoch_info in start_epoch_info {
         tracing::warn!("Calling add_drb_result for epoch {}", epoch_info.epoch);
-        membership
-            .write()
-            .await
-            .add_drb_result(epoch_info.epoch, epoch_info.drb_result);
+        membership.add_drb_result(epoch_info.epoch, epoch_info.drb_result);
     }
 }

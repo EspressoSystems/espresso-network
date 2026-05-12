@@ -2,6 +2,7 @@ pub use super::*;
 
 mod block;
 mod chain_config;
+mod committee;
 mod fee_info;
 mod header;
 mod instance_state;
@@ -11,6 +12,7 @@ mod stake_table;
 mod state;
 mod transaction;
 
+pub use committee::{EpochCommittees, EpochCommitteesError, fetch_and_calculate_block_reward};
 pub use fee_info::{FeeError, retain_accounts};
 #[cfg(any(test, feature = "testing"))]
 pub use instance_state::mock;

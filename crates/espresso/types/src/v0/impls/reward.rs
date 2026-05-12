@@ -851,8 +851,6 @@ pub async fn distribute_block_reward(
     let first_epoch = {
         coordinator
             .membership()
-            .read()
-            .await
             .first_epoch()
             .context("The first epoch was not set.")?
     };
@@ -962,8 +960,8 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
     let coordinator = instance_state.coordinator.clone();
 
-    let epoch_membership = coordinator.membership_for_epoch(Some(epoch)).await?;
-    let membership = epoch_membership.coordinator.membership().read().await;
+    let epoch_membership = coordinator.membership_for_epoch(Some(epoch))?;
+    let membership = epoch_membership.coordinator.membership();
 
     let leader: BLSPubKey = membership
         .leader(view, Some(epoch))
@@ -974,7 +972,6 @@ pub async fn get_leader_and_fetch_missing_rewards(
     let validator = membership
         .get_validator_config(&epoch, leader)
         .context("validator not found")?;
-    drop(membership);
 
     let parent_header = parent_leaf.block_header();
 
@@ -1182,7 +1179,7 @@ impl EpochRewardsCalculator {
         );
 
         // Ensure stake table is available for this epoch
-        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)).await {
+        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)) {
             tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
             coordinator
                 .wait_for_catchup(epoch)
@@ -1196,10 +1193,9 @@ impl EpochRewardsCalculator {
         } else {
             // Fetch the leaf at the last block of the epoch so we can verify
             // the header via QC against the stake table
-            let membership = coordinator.membership().read().await;
+            let membership = coordinator.membership();
             let stake_table = membership.stake_table(Some(epoch));
             let success_threshold = membership.success_threshold(Some(epoch));
-            drop(membership);
 
             let leaf = instance_state
                 .state_catchup
@@ -1250,13 +1246,12 @@ impl EpochRewardsCalculator {
                 .expect("V6+ header must have leader_counts")
         };
 
-        let membership = coordinator.membership().read().await;
+        let membership = coordinator.membership();
         let validator_leader_counts =
-            ValidatorLeaderCounts::new(&membership, &epoch, leader_counts)?;
+            ValidatorLeaderCounts::new(membership, &epoch, leader_counts)?;
         let block_reward = membership
             .epoch_block_reward(epoch)
             .context("block reward not found for epoch")?;
-        drop(membership);
 
         tracing::info!(
             %epoch,

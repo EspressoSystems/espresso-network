@@ -39,9 +39,6 @@ use vbs::{
 
 #[cfg(feature = "testing")]
 async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
-    use std::sync::Arc;
-
-    use async_lock::RwLock;
     use espresso_types::{EpochCommittees, Leaf, Payload, SeqTypes, Transaction, v0_3::Fetcher};
     use hotshot_example_types::{node_types::TEST_VERSIONS, storage_types::TestStorage};
     use hotshot_types::{
@@ -65,13 +62,13 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
     let epoch_height = 10;
 
     let membership = EpochMembershipCoordinator::new(
-        Arc::new(RwLock::new(EpochCommittees::new_stake(
+        EpochCommittees::new_stake(
             committee.clone(),
             committee,
             None,
             Fetcher::mock(),
             epoch_height,
-        ))),
+        ),
         epoch_height,
         &storage,
     );

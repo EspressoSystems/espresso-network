@@ -358,10 +358,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
     ) -> Result<()> {
         let epoch_membership = self
             .membership_coordinator
-            .membership_for_epoch(epoch_number)
-            .await?;
-        let leader_in_current_epoch =
-            epoch_membership.leader(view_number).await? == self.public_key;
+            .membership_for_epoch(epoch_number)?;
+        let leader_in_current_epoch = epoch_membership.leader(view_number)? == self.public_key;
         // If we are in the epoch transition and we are the leader in the next epoch,
         // we might want to start collecting dependencies for our next epoch proposal.
 
@@ -373,13 +371,11 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
             )
             && epoch_membership
                 .next_epoch()
-                .await
                 .context(warn!(
                     "Missing the randomized stake table for epoch {}",
                     epoch_number.unwrap() + 1
                 ))?
-                .leader(view_number)
-                .await?
+                .leader(view_number)?
                 == self.public_key;
 
         // Don't even bother making the task if we are not entitled to propose anyway.
@@ -614,11 +610,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
                 let epoch_membership = self
                     .membership_coordinator
                     .stake_table_for_epoch(epoch_number)
-                    .await
                     .context(warn!("No Stake Table for Epoch = {epoch_number:?}"))?;
 
-                let membership_stake_table = epoch_membership.stake_table().await;
-                let membership_success_threshold = epoch_membership.success_threshold().await;
+                let membership_stake_table = epoch_membership.stake_table();
+                let membership_success_threshold = epoch_membership.success_threshold();
 
                 certificate
                     .is_valid_cert(

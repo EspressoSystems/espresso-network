@@ -317,13 +317,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> TokenDataSource<SeqTy
 {
     async fn get_initial_supply_l1(&self) -> anyhow::Result<U256> {
         let node_state = self.sequencer_context.as_ref().get().await.node_state();
-        let fetcher = node_state
-            .coordinator
-            .membership()
-            .read()
-            .await
-            .fetcher()
-            .clone();
+        let fetcher = node_state.coordinator.membership().fetcher().clone();
         let cached = *fetcher.initial_supply.read().await;
         match cached {
             Some(supply) => Ok(supply),
@@ -384,10 +378,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         let mem = handle
             .membership_coordinator()
             .await
-            .stake_table_for_epoch(epoch)
-            .await?;
+            .stake_table_for_epoch(epoch)?;
 
-        Ok(mem.stake_table().await.0)
+        Ok(mem.stake_table().0)
     }
 
     /// Get the stake table for the current epoch and return it along with the epoch number
@@ -411,8 +404,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .membership_coordinator()
             .await
             .membership()
-            .read()
-            .await
             .da_stake_table(epoch)
             .0)
     }
@@ -435,7 +426,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     ) -> anyhow::Result<Option<RewardAmount>> {
         let coordinator = self.consensus_handle().await.membership_coordinator().await;
 
-        let membership = coordinator.membership().read().await;
+        let membership = coordinator.membership();
         let block_reward = match epoch {
             None => membership.fixed_block_reward(),
             Some(e) => membership.epoch_block_reward(e),
@@ -455,10 +446,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .membership_coordinator()
             .await
             .membership_for_epoch(Some(epoch))
-            .await
             .context("membership not found")?;
 
-        let membership = mem.coordinator.membership().read().await;
+        let membership = mem.coordinator.membership();
         membership.active_validators(&epoch)
     }
 
@@ -679,10 +669,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
 
         // Get the stake table for validation
         let coordinator = handle.membership_coordinator().await;
-        if let Err(err) = coordinator
-            .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
-            .await
-        {
+        if let Err(err) = coordinator.stake_table_for_epoch(Some(EpochNumber::new(epoch))) {
             tracing::warn!(
                 "Failed to get membership for epoch {epoch}: {err:#}. Waiting for catchup"
             );
@@ -700,7 +687,6 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
 
         let membership = coordinator
             .stake_table_for_epoch(Some(EpochNumber::new(epoch)))
-            .await
             .map_err(|e| {
                 StateCertFetchError::Other(
                     anyhow::Error::new(e)
@@ -708,7 +694,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
                 )
             })?;
 
-        let stake_table = membership.stake_table().await;
+        let stake_table = membership.stake_table();
 
         let state_catchup = self
             .sequencer_context
@@ -4405,13 +4391,12 @@ mod test {
         let block_height = 60;
 
         let node_state = network.server.node_state();
-        let membership = node_state.coordinator.membership().read().await;
+        let membership = node_state.coordinator.membership();
         let expected_amount = U256::from(20)
             * (membership
                 .epoch_block_reward(3.into())
                 .expect("block reward is not None"))
             .0;
-        drop(membership);
 
         // get the validator address balance at block height 60
         let amount = client
@@ -4526,11 +4511,10 @@ mod test {
         let mut prev_cumulative_amount = U256::ZERO;
         // Check Cumulative rewards for epochs 3 (= block height 41 to 59) & 4 (= block height 60 to 67)
         for block in 41..=67 {
-            let membership = node_state.coordinator.membership().read().await;
+            let membership = node_state.coordinator.membership();
             let block_reward = membership
                 .epoch_block_reward(epoch_from_block_number(block, epoch_height).into())
                 .expect("block reward is not None");
-            drop(membership);
 
             let mut cumulative_amount = U256::ZERO;
             for address in addresses.clone() {
@@ -4786,7 +4770,7 @@ mod test {
         let node_state = network.server.node_state();
         let coordinator = node_state.coordinator;
 
-        let membership = coordinator.membership().read().await;
+        let membership = coordinator.membership();
 
         // Ensure rewards remain zero up for the first two epochs
         while let Some(leaf) = leaves.next().await {
@@ -4817,8 +4801,6 @@ mod test {
             }
         }
 
-        drop(membership);
-
         let mut rewards_map = HashMap::new();
         let mut total_distributed = U256::ZERO;
         let mut epoch_rewards = HashMap::<EpochNumber, U256>::new();
@@ -4833,7 +4815,7 @@ mod test {
 
             let block = leaf.height();
             tracing::info!("verify rewards for block={block:?}");
-            let membership = coordinator.membership().read().await;
+            let membership = coordinator.membership();
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
 
@@ -4842,8 +4824,6 @@ mod test {
                 .leader(leaf.leaf().view_number(), Some(epoch_number))
                 .expect("leader");
             let leader_eth_address = membership.address(&epoch_number, leader).expect("address");
-
-            drop(membership);
 
             let validators = client
                 .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch_number}"))
@@ -5245,11 +5225,10 @@ mod test {
             if is_epoch_last_block {
                 let prev_epoch = epoch - 1;
                 let prev_epoch_number = EpochNumber::new(prev_epoch);
-                let membership = coordinator.membership().read().await;
+                let membership = coordinator.membership();
                 let prev_block_reward = membership
                     .epoch_block_reward(prev_epoch_number)
                     .expect("epoch block reward should exist");
-                drop(membership);
 
                 let epoch_total = prev_block_reward.0 * U256::from(EPOCH_HEIGHT);
                 expected_total_distributed += epoch_total;
@@ -5349,7 +5328,7 @@ mod test {
 
             // Determine the leader for this block and track by address
             let view_number = leaf.leaf().view_number();
-            let membership = coordinator.membership().read().await;
+            let membership = coordinator.membership();
             let leader = membership
                 .leader(view_number, Some(epoch_number))
                 .expect("leader should exist");
@@ -5358,9 +5337,8 @@ mod test {
                 .expect("leader should have an address");
 
             let validator_leader_counts =
-                ValidatorLeaderCounts::new(&membership, &epoch_number, *header_leader_counts)
+                ValidatorLeaderCounts::new(membership, &epoch_number, *header_leader_counts)
                     .expect("ValidatorLeaderCounts should build from header leader_counts");
-            drop(membership);
 
             *expected_counts.entry(leader_address).or_insert(0) += 1;
 
@@ -5588,23 +5566,15 @@ mod test {
         // Verify that the restarted node catches up for each epoch
         for epoch_num in 1..=7 {
             let epoch = EpochNumber::new(epoch_num);
-            let membership_for_epoch = coordinator.membership_for_epoch(Some(epoch)).await;
+            let membership_for_epoch = coordinator.membership_for_epoch(Some(epoch));
             if membership_for_epoch.is_err() {
                 coordinator.wait_for_catchup(epoch).await.unwrap();
             }
 
             println!("have stake table for epoch = {epoch_num}");
 
-            let node_stake_table = coordinator
-                .membership()
-                .read()
-                .await
-                .stake_table(Some(epoch));
-            let stake_table = server_coordinator
-                .membership()
-                .read()
-                .await
-                .stake_table(Some(epoch));
+            let node_stake_table = coordinator.membership().stake_table(Some(epoch));
+            let stake_table = server_coordinator.membership().stake_table(Some(epoch));
             println!("asserting stake table for epoch = {epoch_num}");
 
             assert_eq!(
@@ -5741,7 +5711,7 @@ mod test {
         println!("trigger catchup in this order: {rand_epochs:?}");
         for epoch_num in rand_epochs {
             let epoch = EpochNumber::new(epoch_num);
-            let _ = coordinator.membership_for_epoch(Some(epoch)).await;
+            let _ = coordinator.membership_for_epoch(Some(epoch));
         }
 
         // Verify that the restarted node catches up for each epoch
@@ -5752,16 +5722,8 @@ mod test {
 
             println!("have stake table for epoch = {epoch_num}");
 
-            let node_stake_table = coordinator
-                .membership()
-                .read()
-                .await
-                .stake_table(Some(epoch));
-            let stake_table = server_coordinator
-                .membership()
-                .read()
-                .await
-                .stake_table(Some(epoch));
+            let node_stake_table = coordinator.membership().stake_table(Some(epoch));
+            let stake_table = server_coordinator.membership().stake_table(Some(epoch));
 
             println!("asserting stake table for epoch = {epoch_num}");
 
@@ -8650,10 +8612,9 @@ mod test {
         // Get the stake table and threshold for the epoch containing TARGET_HEIGHT
         let coordinator = network.server.node_state().coordinator;
         let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
-        let membership = coordinator.membership().read().await;
+        let membership = coordinator.membership();
         let stake_table = membership.stake_table(Some(epoch));
         let success_threshold = membership.success_threshold(Some(epoch));
-        drop(membership);
 
         // Use StatePeers to fetch the leaf at the exact target height
         let catchup = StatePeers::<StaticVersion<0, 1>>::from_urls(

@@ -354,7 +354,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
             let row = sqlx::query(
                 r#"
-                SELECT proof 
+                SELECT proof
                 FROM reward_merkle_tree_v2_proofs
                 WHERE account = $1
                 ORDER BY height DESC
@@ -1647,9 +1647,7 @@ async fn reward_header_dependencies(
     };
 
     let coordinator = instance.coordinator.clone();
-    let membership_lock = coordinator.membership().read().await;
-    let first_epoch = membership_lock.first_epoch();
-    drop(membership_lock);
+    let first_epoch = coordinator.membership().first_epoch();
     // add all the chain configs needed to apply STF to headers to the catchup
     for proposal in leaves {
         let header = proposal.block_header();
@@ -1673,7 +1671,7 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)).await {
+        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)) {
             Ok(e) => e,
             Err(err) => {
                 tracing::info!(
@@ -1687,10 +1685,10 @@ async fn reward_header_dependencies(
             },
         };
 
-        let leader = epoch_membership.leader(proposal.view_number()).await?;
-        let membership_lock = coordinator.membership().read().await;
-        let validator = membership_lock.get_validator_config(&proposal_epoch, leader)?;
-        drop(membership_lock);
+        let leader = epoch_membership.leader(proposal.view_number())?;
+        let validator = coordinator
+            .membership()
+            .get_validator_config(&proposal_epoch, leader)?;
 
         reward_accounts.insert(RewardAccountV2(validator.account));
 

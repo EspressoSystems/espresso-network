@@ -606,7 +606,7 @@ where
     /// Returns an error when the proposal signature is invalid.
     pub async fn validate_signature(&self, membership: &EpochMembership<TYPES>) -> Result<()> {
         let view_number = self.data.proposal.view_number();
-        let view_leader_key = membership.leader(view_number).await?;
+        let view_leader_key = membership.leader(view_number)?;
         let proposed_leaf = Leaf2::from_quorum_proposal(&self.data);
 
         ensure!(
@@ -628,10 +628,8 @@ where
     ) -> Result<()> {
         let view_number = self.data.view_number();
         let epoch = self.data.epoch().ok_or(error!("Epoch is not set"))?;
-        let membership = membership_coordinator
-            .membership_for_epoch(Some(epoch))
-            .await?;
-        let view_leader_key = membership.leader(view_number).await?;
+        let membership = membership_coordinator.membership_for_epoch(Some(epoch))?;
+        let view_leader_key = membership.leader(view_number)?;
         let proposed_leaf =
             Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(self.data.clone()));
 

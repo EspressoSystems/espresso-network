@@ -202,14 +202,14 @@ where
     /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
     /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
     /// `seed_genesis` on the inner `Consensus` instance.
-    pub async fn start(&mut self) {
+    pub fn start(&mut self) {
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
 
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(view, epoch));
 
-        if let Some(leader) = self.leader(view, epoch).await
+        if let Some(leader) = self.leader(view, epoch)
             && leader == self.public_key
         {
             let genesis_proposal = self
@@ -353,8 +353,7 @@ where
                             next_view,
                             epoch,
                             BlockMessage::DedupManifest(manifest),
-                        )
-                        .await?;
+                        )?;
                         return Ok(block.into())
                     }
                     Err(err) => {
@@ -411,39 +410,8 @@ where
         }
     }
 
-    pub fn handle_proposal_and_vid_share(
-        &mut self,
-        validated: ValidatedProposal<T>,
-        vid_share: VidDisperseShare2<T>,
-    ) -> Result<ConsensusInput<T>, CoordinatorError> {
-        self.storage.append_vid(vid_share.clone());
-        self.storage
-            .append_proposal(validated.message.proposal.data.clone());
-
-        let m = validated
-            .message
-            .proposal
-            .data
-            .block_header
-            .metadata()
-            .clone();
-        self.vid_reconstructor
-            .handle_vid_share(vid_share.clone(), m);
-
-        // GC for the cache
-        let view = validated.message.proposal.data.view_number();
-        self.cached_vid_shares = self.cached_vid_shares.split_off(&(view + 1));
-        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(view + 1));
-
-        Ok(ConsensusInput::ProposalWithVidShare(
-            validated.sender,
-            validated.message,
-            vid_share,
-        ))
-    }
-
-    pub async fn apply_consensus(&mut self, input: ConsensusInput<T>) {
-        self.consensus.apply(input, &mut self.outbox).await;
+    pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
+        self.consensus.apply(input, &mut self.outbox)
     }
 
     pub fn node_id(&self) -> &KeyPrefix {
@@ -573,7 +541,7 @@ where
                 match msg {
                     BlockMessage::Transactions(msg) => self.block_builder.on_transactions(msg),
                     BlockMessage::DedupManifest(manifest) => {
-                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch).await
+                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
                             && view_leader == message.sender
                         {
                             self.block_builder.on_dedup_manifest(manifest)
@@ -628,7 +596,38 @@ where
         }
     }
 
-    pub async fn process_consensus_output(
+    pub fn handle_proposal_and_vid_share(
+        &mut self,
+        validated: ValidatedProposal<T>,
+        vid_share: VidDisperseShare2<T>,
+    ) -> Result<ConsensusInput<T>, CoordinatorError> {
+        self.storage.append_vid(vid_share.clone());
+        self.storage
+            .append_proposal(validated.message.proposal.data.clone());
+
+        let m = validated
+            .message
+            .proposal
+            .data
+            .block_header
+            .metadata()
+            .clone();
+        self.vid_reconstructor
+            .handle_vid_share(vid_share.clone(), m);
+
+        // GC for the cache
+        let view = validated.message.proposal.data.view_number();
+        self.cached_vid_shares = self.cached_vid_shares.split_off(&(view + 1));
+        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(view + 1));
+
+        Ok(ConsensusInput::ProposalWithVidShare(
+            validated.sender,
+            validated.message,
+            vid_share,
+        ))
+    }
+
+    pub fn process_consensus_output(
         &mut self,
         output: ConsensusOutput<T>,
     ) -> Result<(), CoordinatorError> {
@@ -727,7 +726,7 @@ where
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
-                if let Some(leader) = self.leader(view, epoch).await {
+                if let Some(leader) = self.leader(view, epoch) {
                     let message = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate(
@@ -795,7 +794,6 @@ where
                             transactions: txns,
                         }),
                     )
-                    .await
                     .map_err(|e| e.context("unicast transactions"))?;
                 }
 
@@ -813,13 +811,13 @@ where
         Ok(())
     }
 
-    async fn unicast_to_leader(
+    fn unicast_to_leader(
         &mut self,
         view: ViewNumber,
         epoch: EpochNumber,
         msg: BlockMessage<T>,
     ) -> Result<(), CoordinatorError> {
-        let Some(leader) = self.leader(view, epoch).await else {
+        let Some(leader) = self.leader(view, epoch) else {
             warn!(%view, %epoch, "failed to resolve leader for unicast");
             return Ok(());
         };
@@ -832,13 +830,12 @@ where
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
-    async fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+    fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let membership = self
             .membership_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
             .ok()?;
-        membership.leader(view).await.ok()
+        membership.leader(view).ok()
     }
 
     fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {

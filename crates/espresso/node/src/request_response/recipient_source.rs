@@ -34,11 +34,7 @@ impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for 
             .unwrap_or(EpochNumber::genesis());
 
         // Attempt to get the membership for the current epoch
-        let membership = match self
-            .memberships
-            .stake_table_for_epoch(Some(epoch_number))
-            .await
-        {
+        let membership = match self.memberships.stake_table_for_epoch(Some(epoch_number)) {
             Ok(membership) => membership,
             Err(e) => {
                 warn!(
@@ -48,7 +44,6 @@ impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for 
                 let prev_epoch = epoch_number.saturating_sub(1);
                 self.memberships
                     .stake_table_for_epoch(Some(EpochNumber::new(prev_epoch)))
-                    .await
                     .with_context(|| "failed to get stake table for epoch")?
             },
         };
@@ -56,7 +51,6 @@ impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for 
         // Sum all participants in the membership
         Ok(membership
             .stake_table()
-            .await
             .iter()
             .map(|entry| entry.stake_table_entry.stake_key)
             .filter(|key| *key != self.public_key)

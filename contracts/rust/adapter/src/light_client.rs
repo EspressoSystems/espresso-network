@@ -170,12 +170,10 @@ pub async fn validate_light_client_state_update_certificate<TYPES: NodeType>(
 ) -> Result<()> {
     tracing::debug!("Validating light client state update certificate");
 
-    let epoch_membership = membership_coordinator
-        .membership_for_epoch(state_cert.epoch())
-        .await?;
+    let epoch_membership = membership_coordinator.membership_for_epoch(state_cert.epoch())?;
 
-    let membership_stake_table = epoch_membership.stake_table().await;
-    let membership_success_threshold = epoch_membership.success_threshold().await;
+    let membership_stake_table = epoch_membership.stake_table();
+    let membership_success_threshold = epoch_membership.success_threshold();
 
     let mut state_key_map = HashMap::new();
     membership_stake_table.into_iter().for_each(|config| {

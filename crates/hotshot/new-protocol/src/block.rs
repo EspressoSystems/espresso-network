@@ -158,9 +158,8 @@ impl<T: NodeType> BlockBuilder<T> {
             let total_weight = {
                 let target_mem = membership
                     .stake_table_for_epoch(Some(epoch))
-                    .await
                     .map_err(|_| BlockError::StakeTableUnavailable)?;
-                vid_total_weight::<T>(&target_mem.stake_table().await, Some(epoch))
+                vid_total_weight::<T>(&target_mem.stake_table(), Some(epoch))
             };
             let payload_commitment = {
                 vid_commitment(

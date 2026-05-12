@@ -672,7 +672,7 @@ pub trait SequencerPersistence:
             .context("loading anchor leaf")?
         {
             Some((leaf, high_qc)) => {
-                tracing::info!(?leaf, ?high_qc, "starting from saved leaf");
+                //tracing::info!(?leaf, ?high_qc, "starting from saved leaf");
                 ensure!(
                     leaf.view_number() == high_qc.view_number,
                     format!(
@@ -757,7 +757,7 @@ pub trait SequencerPersistence:
             ?leaf,
             ?restart_view,
             ?epoch,
-            ?high_qc,
+            //?high_qc,
             ?validated_state,
             ?state_cert,
             "loaded consensus state"

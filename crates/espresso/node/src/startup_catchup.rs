@@ -41,8 +41,6 @@ pub async fn bootstrap_epoch_window(
 
     let membership = coordinator.membership();
     let first_epoch = membership
-        .read()
-        .await
         .first_epoch()
         .context("first_epoch not seeded; genesis stake table missing")?;
 
@@ -59,10 +57,11 @@ pub async fn bootstrap_epoch_window(
     // `set_first_epoch` always seeds `first_epoch` and `first_epoch + 1`,
     // so the scan terminates at worst at `first_epoch + 1`.
     let mut highest = {
-        let m = membership.read().await;
-        let initial = m.highest_known_epoch().unwrap_or(first_epoch + 1);
+        let initial = membership.highest_known_epoch().unwrap_or(first_epoch + 1);
         let mut h = initial;
-        while h > first_epoch + 1 && !(m.has_stake_table(h) && m.has_stake_table(h - 1)) {
+        while h > first_epoch + 1
+            && !(membership.has_stake_table(h) && membership.has_stake_table(h - 1))
+        {
             h = h - 1;
         }
         h
@@ -110,13 +109,12 @@ pub async fn bootstrap_epoch_window(
     // the last finalized one peers can serve). So current epoch N = highest - 1.
     let current = EpochNumber::new(highest.saturating_sub(1));
 
-    let m = membership.read().await;
     ensure!(
-        m.has_stake_table(current),
+        membership.has_stake_table(current),
         "missing stake table for current epoch {current} after bootstrap"
     );
     ensure!(
-        m.has_stake_table(highest),
+        membership.has_stake_table(highest),
         "missing stake table for next epoch {highest} after bootstrap"
     );
 
