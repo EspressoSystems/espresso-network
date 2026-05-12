@@ -514,7 +514,7 @@ impl InnerTestClient {
             }
             let next_epoch_justify_qc = if i > 0 && is_epoch_transition(i as u64, epoch_height) {
                 let parent_qc = self.leaves[i - 1].qc().clone();
-                let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.clone().into();
+                let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
                 let versioned_commit = VersionedVoteData::new_infallible(
                     data.clone(),
                     parent_qc.view_number,
