@@ -9,7 +9,7 @@ use std::{
 
 use bon::{Builder, bon};
 use committable::Commitment;
-use hotshot::{HotShotInitializer, types::SignatureKey};
+use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
@@ -119,7 +119,7 @@ where
         timeout_duration: Duration,
         storage: S,
     ) -> Self {
-        let consensus = Consensus::new(
+        let mut consensus = Consensus::new(
             membership_coordinator.clone(),
             public_key.clone(),
             private_key.clone(),
@@ -130,9 +130,28 @@ where
             initializer.epoch_height,
         );
 
-        let state_manager = StateManager::new(
+        let genesis_cert1 = initializer.high_qc.clone();
+        let genesis_proposal = message::Proposal {
+            block_header: initializer.anchor_leaf.block_header().clone(),
+            view_number: ViewNumber::genesis(),
+            epoch: EpochNumber::genesis(),
+            justify_qc: genesis_cert1.clone(),
+            next_epoch_justify_qc: None,
+            upgrade_certificate: None,
+            view_change_evidence: None,
+            next_drb_result: None,
+            state_cert: None,
+        };
+        consensus.seed_genesis(genesis_cert1, genesis_proposal);
+
+        let mut state_manager = StateManager::new(
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
+        );
+        state_manager.seed_state(
+            initializer.anchor_leaf.view_number(),
+            initializer.anchor_state.clone(),
+            initializer.anchor_leaf.clone(),
         );
 
         let lock = upgrade_lock.clone();
@@ -199,12 +218,28 @@ where
 
     /// Bootstrap the coordinator so the view-1 leader can propose.
     ///
-    /// Emits an initial `ViewChanged(1)` and, if this node is the view-1
-    /// leader, a `RequestBlockAndHeader` for view 1.  Call this after
-    /// `seed_genesis` on the inner `Consensus` instance.
+    /// Genesis is never decided through the normal consensus path, so
+    /// downstream consumers (persistence, query service) would never see
+    /// the genesis header. We emit a `LeafDecided` for it here so that application
+    /// layer sees this event
     pub async fn start(&mut self) {
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
+
+        if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
+            let genesis_leaf = self.consensus.last_decided_leaf().clone();
+            self.append_genesis_da(&genesis_leaf);
+            self.outbox.push_back(ConsensusOutput::LeafDecided {
+                leaves: vec![genesis_leaf],
+                cert1: self
+                    .consensus
+                    .cert1_at(ViewNumber::genesis())
+                    .cloned()
+                    .expect("genesis cert1 must be seeded"),
+                cert2: None,
+                vid_shares: vec![None],
+            });
+        }
 
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(view, epoch));
@@ -226,6 +261,23 @@ where
                     },
                 ));
         }
+    }
+
+    /// Append the genesis DA proposal to storage.
+    ///
+    /// The genesis payload is always empty, but it never flows through the
+    /// regular block-builder/VID path that would otherwise persist a DA
+    /// proposal for view 0. Storage consumers downstream still expect one,
+    /// so we synthesize and append it here.
+    fn append_genesis_da(&mut self, genesis_leaf: &Leaf2<T>) {
+        let (payload, metadata) = T::BlockPayload::empty();
+        self.storage.append_da(
+            ViewNumber::genesis(),
+            EpochNumber::genesis(),
+            payload,
+            metadata,
+            genesis_leaf.payload_commitment(),
+        );
     }
 
     pub async fn stop(mut self) {
@@ -281,6 +333,10 @@ where
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
+                    self.storage.append_state_cert(
+                        ViewNumber::new(state_cert.light_client_state.view_number),
+                        state_cert.clone(),
+                    );
                     return Ok(ConsensusInput::EpochRootCertificates { cert1, state_cert })
                 }
                 Some(item) = self.share_validator.next() => match item {
@@ -335,7 +391,8 @@ where
                         return Err(CoordinatorError::critical(msg).context("gc certificate"))
                     };
                     self.gc(cert.view_number(), epoch);
-                }
+                } //blocks in storage
+                    //
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
@@ -420,6 +477,14 @@ where
         self.storage
             .append_proposal(validated.message.proposal.data.clone());
 
+        // Persist the state cert carried by epoch root proposals.
+        if let Some(state_cert) = validated.message.proposal.data.state_cert.clone() {
+            self.storage.append_state_cert(
+                ViewNumber::new(state_cert.light_client_state.view_number),
+                state_cert,
+            );
+        }
+
         let m = validated
             .message
             .proposal
@@ -464,6 +529,10 @@ where
 
     pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<CoordinatorOutput<T>> {
         &mut self.coordinator_outbox
+    }
+
+    pub fn state_manager(&self) -> &StateManager<T> {
+        &self.state_manager
     }
 
     pub fn current_view(&self) -> ViewNumber {
@@ -1032,6 +1101,7 @@ impl<T: NodeType> PendingProposalFetches<T> {
             .push(respond);
     }
 
+    #[allow(dead_code)]
     fn gc(&mut self, view: ViewNumber) {
         self.pending.retain(|key, responders| {
             responders.retain(|respond| !respond.is_closed());
