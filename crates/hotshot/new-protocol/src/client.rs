@@ -131,6 +131,23 @@ impl<T: NodeType> ClientApi<T> {
             .await
     }
 
+    /// Refresh the coordinator network's peer set for `epoch`.
+    ///
+    /// Used during the legacy → new-protocol phase to keep the coordinator's
+    /// `Cliquenet` connected to the live stake-table window even though no
+    /// new-protocol proposals are flowing yet (the only other call site for
+    /// `Network::on_epoch_change` is on a validated proposal). Without this,
+    /// a node that stayed up across many legacy epoch transitions would
+    /// arrive at the cutover with peers from the boot epoch's window.
+    ///
+    /// Idempotent at the network layer: `Cliquenet::on_epoch_change`
+    /// short-circuits when `epoch <= self.epoch`.
+    pub async fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::BumpNetworkEpoch { epoch, respond }, rx)
+            .await
+    }
+
     /// Bridge legacy (pre-0.8) state into the running coordinator at the
     /// legacy → new-protocol cutover.
     ///
@@ -149,6 +166,10 @@ impl<T: NodeType> ClientApi<T> {
     ///   parent's stored state — without seeding these, the first
     ///   post-cutover leader cannot build a header (no parent state) and
     ///   peers cannot validate the first post-cutover proposal.
+    /// - `cutover_view` is the upgrade certificate's
+    ///   `new_version_first_view`. The new protocol must never propose,
+    ///   vote on, or decide any view strictly below this — those views
+    ///   belong to legacy, even when legacy left some without QCs.
     ///
     /// Idempotent at the consensus level: `set_pre_cutover_anchor` no-ops if
     /// the supplied view is not above the current `last_decided_view`, and
@@ -159,6 +180,7 @@ impl<T: NodeType> ClientApi<T> {
         undecided: Vec<Leaf2<T>>,
         high_qc: Option<QuorumCertificate2<T>>,
         validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
+        cutover_view: ViewNumber,
     ) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(
@@ -167,6 +189,7 @@ impl<T: NodeType> ClientApi<T> {
                 undecided,
                 high_qc,
                 validated_states,
+                cutover_view,
                 respond,
             },
             rx,
@@ -257,6 +280,7 @@ pub(crate) enum ClientRequest<T: NodeType> {
     SeedPreCutover {
         decided_anchor: Leaf2<T>,
         undecided: Vec<Leaf2<T>>,
+        cutover_view: ViewNumber,
         high_qc: Option<QuorumCertificate2<T>>,
         /// Validated state for each seeded leaf, keyed by view. Empty if
         /// the caller has no states to seed (e.g. legacy-only test paths).
@@ -265,6 +289,10 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTimeoutVote {
         vote: TimeoutVote2<T>,
+        respond: oneshot::Sender<()>,
+    },
+    BumpNetworkEpoch {
+        epoch: EpochNumber,
         respond: oneshot::Sender<()>,
     },
 }

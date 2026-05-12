@@ -112,6 +112,9 @@ pub struct PreCutoverSeed {
     pub decided_anchor: hotshot_types::data::Leaf2<TestTypes>,
     pub undecided: Vec<hotshot_types::data::Leaf2<TestTypes>>,
     pub high_qc: crate::message::Certificate1<TestTypes>,
+    /// First view the new protocol is responsible for. Anything strictly
+    /// below is owned by legacy.
+    pub cutover_view: ViewNumber,
 }
 
 #[derive(Debug)]

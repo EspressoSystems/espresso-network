@@ -16,8 +16,8 @@ use hotshot_new_protocol::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     harvest::{
-        LegacyPreCutoverSeed, forward_legacy_timeout_votes, harvest_legacy_pre_cutover_seed,
-        try_perform_handover,
+        LegacyPreCutoverSeed, forward_legacy_epoch_changes, forward_legacy_timeout_votes,
+        harvest_legacy_pre_cutover_seed, try_perform_handover,
     },
     network::Network,
     state::UpdateLeaf,
@@ -141,6 +141,17 @@ where
         spawn(forward_legacy_timeout_votes(
             legacy_event_rx.clone(),
             client_api.clone(),
+        ));
+
+        // Forward legacy decides to the coordinator as `bump_network_epoch`
+        // calls so cliquenet's peer window keeps up with the live network
+        // during the legacy phase. Without this, a node running through
+        // many legacy epoch transitions reaches the cutover with the peer
+        // set from boot.
+        spawn(forward_legacy_epoch_changes(
+            legacy_event_rx.clone(),
+            client_api.clone(),
+            epoch_height,
         ));
 
         Self {

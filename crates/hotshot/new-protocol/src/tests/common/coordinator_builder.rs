@@ -130,14 +130,15 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
 
     // Apply the legacy → new-protocol seed (if provided) BEFORE we hand
-    // consensus to the coordinator builder. After this, `current_view` is
-    // advanced past the seeded views and `coord.start()` will emit
-    // `ViewChanged(max_seeded_view + 1)` instead of the genesis-default
-    // `ViewChanged(1)`.
+    // consensus to the coordinator builder. `jump_to_cutover` then skips
+    // `current_view` to `cutover_view - 1` so `coord.start()` emits
+    // `ViewChanged(cutover_view)` — the new protocol must never propose
+    // any view below `cutover_view`.
     if let Some(seed) = pre_cutover_seed {
         consensus.set_pre_cutover_anchor(seed.decided_anchor);
         consensus.seed_pre_cutover_leaves(seed.undecided);
         consensus.register_proposal_justify_qc(&seed.high_qc);
+        consensus.jump_to_cutover(seed.cutover_view);
     }
 
     // Seed the genesis proposal into the backing TestStorage so that

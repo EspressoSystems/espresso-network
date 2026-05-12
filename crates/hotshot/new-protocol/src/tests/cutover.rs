@@ -170,6 +170,9 @@ async fn five_nodes_decide_after_pre_cutover_seed() {
         decided_anchor: anchor,
         undecided,
         high_qc,
+        // Seeded undecided runs through view 2; the new protocol takes
+        // over at view 3.
+        cutover_view: ViewNumber::new(3),
     };
 
     TestRunner::builder()
@@ -297,6 +300,7 @@ async fn upgrade_certificate_handover() {
         decided_anchor: anchor,
         undecided,
         high_qc,
+        cutover_view: upgrade_data.new_version_first_view,
     };
 
     TestRunner::builder()

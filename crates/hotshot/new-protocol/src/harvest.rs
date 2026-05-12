@@ -9,10 +9,11 @@ use committable::Committable;
 use futures::StreamExt;
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
-    data::{Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     event::{Event, EventType},
     simple_certificate::QuorumCertificate2,
-    traits::node_implementation::NodeType,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    utils::epoch_from_block_number,
 };
 use versions::CLIQUENET_VERSION;
 
@@ -29,6 +30,13 @@ pub struct LegacyPreCutoverSeed<T: NodeType> {
     /// The first post-cutover header request needs the parent view's
     /// state to build against.
     pub validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
+    /// First view the new protocol is responsible for (= the upgrade
+    /// certificate's `new_version_first_view`). Anything strictly below
+    /// is owned by legacy; the new protocol must never propose, vote on,
+    /// or decide views below this — even if legacy left some of them
+    /// without QCs (e.g. because the leader of view N+1 was silent and
+    /// couldn't aggregate view N's votes).
+    pub cutover_view: ViewNumber,
 }
 
 /// Walk the legacy `Consensus` to produce a [`LegacyPreCutoverSeed`].
@@ -41,6 +49,19 @@ where
     T: NodeType,
     I: NodeImplementation<T>,
 {
+    // The cutover view comes from the decided upgrade certificate; without
+    // it we don't know where legacy's responsibility ends and where the
+    // new protocol takes over, so abort.
+    let cutover_view = match handle.hotshot.upgrade_lock.decided_upgrade_cert() {
+        Some(cert) => cert.data.new_version_first_view,
+        None => {
+            tracing::warn!(
+                "harvest_legacy_pre_cutover_seed: no decided upgrade certificate; aborting",
+            );
+            return None;
+        },
+    };
+
     let consensus_arc = handle.hotshot.consensus();
     let consensus = consensus_arc.read().await;
     let decided_anchor = consensus.decided_leaf();
@@ -103,6 +124,7 @@ where
         undecided: chain,
         high_qc,
         validated_states,
+        cutover_view,
     })
 }
 
@@ -134,6 +156,7 @@ where
                 seed.undecided,
                 Some(seed.high_qc),
                 seed.validated_states,
+                seed.cutover_view,
             )
             .await
         {
@@ -167,5 +190,49 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
         {
             tracing::warn!(%err, "failed to forward legacy TimeoutVote2 to new-protocol coordinator");
         }
+    }
+}
+
+/// Forward legacy `Decide` events to the coordinator as `bump_network_epoch`
+/// requests so cliquenet's peer window tracks the live network's epoch.
+///
+/// The new-protocol coordinator's only post-startup `on_epoch_change` call
+/// site is `proposal_validator.next()` — but no new-protocol proposals are
+/// validated during the legacy phase, so without this bridge a node that
+/// stayed up across many legacy epoch transitions arrives at the cutover
+/// with peers from the boot epoch's window. `bump_network_epoch` is
+/// idempotent at the cliquenet layer.
+///
+/// `epoch_height == 0` disables the bridge (the pre-epoch chain has no
+/// epoch transitions to track).
+pub async fn forward_legacy_epoch_changes<T: NodeType>(
+    legacy_event_rx: InactiveReceiver<Event<T>>,
+    client_api: ClientApi<T>,
+    epoch_height: u64,
+) {
+    if epoch_height == 0 {
+        return;
+    }
+    let mut rx = legacy_event_rx.activate_cloned();
+    let mut last_forwarded: Option<EpochNumber> = None;
+    while let Some(event) = rx.next().await {
+        let EventType::Decide { leaf_chain, .. } = &event.event else {
+            continue;
+        };
+        // `leaf_chain` is sorted newest-first; the first entry's block
+        // number gives the highest decided view's epoch.
+        let Some(newest) = leaf_chain.first() else {
+            continue;
+        };
+        let block_number = newest.leaf.block_header().block_number();
+        let epoch = EpochNumber::new(epoch_from_block_number(block_number, epoch_height));
+        if last_forwarded.is_some_and(|prev| epoch <= prev) {
+            continue;
+        }
+        if let Err(err) = client_api.bump_network_epoch(epoch).await {
+            tracing::warn!(%epoch, %err, "failed to forward legacy epoch change to new-protocol coordinator");
+            continue;
+        }
+        last_forwarded = Some(epoch);
     }
 }

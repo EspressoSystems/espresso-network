@@ -273,9 +273,13 @@ impl<T: NodeType> Consensus<T> {
     ///
     /// Seeded views are added to `pre_cutover_views`, which causes
     /// `maybe_vote_2_and_update_lock` to skip them (V1 AvidM dispersal).
+    ///
+    /// Does NOT advance `current_view`; the caller is responsible for
+    /// jumping to `cutover_view - 1` so the leader of `cutover_view` is
+    /// the first new-protocol view we ever propose. Re-running the
+    /// seeded views (or any pre-cutover view that legacy could not QC)
+    /// is a correctness violation: those views belong to legacy.
     pub fn seed_pre_cutover_leaves(&mut self, leaves: Vec<Leaf2<T>>) {
-        let mut max_seeded_view = self.current_view;
-        let mut max_seeded_epoch = self.current_epoch.unwrap_or(EpochNumber::genesis());
         for leaf in leaves {
             let view = leaf.view_number();
             let justify_qc = leaf.justify_qc().clone();
@@ -320,19 +324,52 @@ impl<T: NodeType> Consensus<T> {
             self.proposed_views.insert(view);
             self.voted_1_views.insert(view);
             self.voted_2_views.insert(view);
-
-            if view > max_seeded_view {
-                max_seeded_view = view;
-                max_seeded_epoch = epoch;
-            }
         }
+    }
 
-        // Advance current_view past the highest seeded view so the local
-        // node's leader logic targets the first POST-cutover view rather
-        // than re-running the seeded ones.
-        if max_seeded_view > self.current_view {
-            self.current_view = max_seeded_view;
-            self.current_epoch = Some(max_seeded_epoch);
+    /// Jump `current_view`, `last_decided_view`, and `timeout_view` to
+    /// `cutover_view - 1` after applying the legacy → new-protocol seed.
+    /// The caller passes the upgrade certificate's
+    /// `new_version_first_view`.
+    ///
+    /// These three markers — together with the protocol's monotonic
+    /// forward progress — are sufficient to guarantee the new protocol
+    /// never proposes, votes on, or decides any view below
+    /// `cutover_view`:
+    ///
+    /// - `current_view = cutover_view - 1`: the next `ViewChanged` (from
+    ///   `start()` or `handle_timeout_certificate`) targets `cutover_view`
+    ///   exactly. There is no path that decreases `current_view`.
+    /// - `timeout_view = cutover_view - 1`: `maybe_vote_1` refuses any
+    ///   `view <= timeout_view`, so a stale pre-cutover proposal sneaking
+    ///   in over the network gets stored but never voted on.
+    /// - `last_decided_view = cutover_view - 1`: `maybe_decide`'s chain
+    ///   walk stops at the boundary; the new protocol cannot extend its
+    ///   decided chain backwards into legacy's range.
+    ///
+    /// We deliberately do NOT bulk-populate `proposed_views`,
+    /// `voted_1_views`, or `voted_2_views` with pre-cutover entries. In
+    /// production `cutover_view` will be in the millions and that loop
+    /// would burn memory and time for no benefit: the markers above
+    /// already gate every relevant code path, and the `maybe_*` helpers
+    /// short-circuit on missing data (no header, no reconstructed block,
+    /// no DRB) for pre-cutover views.
+    ///
+    /// No-op if the markers are already past `cutover_view - 1` (e.g.
+    /// forwarded TC2s have already advanced us).
+    pub fn jump_to_cutover(&mut self, cutover_view: ViewNumber) {
+        if cutover_view == ViewNumber::genesis() {
+            return;
+        }
+        let last_pre_cutover = cutover_view - 1;
+        if last_pre_cutover > self.timeout_view {
+            self.timeout_view = last_pre_cutover;
+        }
+        if last_pre_cutover > self.current_view {
+            self.current_view = last_pre_cutover;
+        }
+        if last_pre_cutover > self.last_decided_view {
+            self.last_decided_view = last_pre_cutover;
         }
     }
 
@@ -408,6 +445,18 @@ impl<T: NodeType> Consensus<T> {
     /// Return the Certificate2 stored at the given view, if any.
     pub fn cert2_at(&self, view: ViewNumber) -> Option<&Certificate2<T>> {
         self.certs2.get(&view)
+    }
+
+    /// Return the TimeoutCertificate2 that advanced consensus to `view`, if
+    /// any. Keyed by the view it advanced *into* (i.e. one greater than the
+    /// view it certified as timed out).
+    pub fn timeout_cert_at(&self, view: ViewNumber) -> Option<&TimeoutCertificate2<T>> {
+        self.timeout_certs.get(&view)
+    }
+
+    /// Return the view of the locked certificate, if set.
+    pub fn locked_view(&self) -> Option<ViewNumber> {
+        self.locked_cert.as_ref().map(|c| c.view_number())
     }
 
     /// Apply consensus to the given input and collect protocol outputs.
