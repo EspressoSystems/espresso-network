@@ -73,8 +73,8 @@ pub trait Storage: Sized + Send + Sync + 'static {
     /// Get the stake table for the latest epoch which is not later than `epoch`.
     ///
     /// If such a stake table is available in the database, returns the ordered entries, the
-    /// epoch number of the stake table that was loaded, and the protocol version in effect when
-    /// that stake table was cached.
+    /// epoch number of the stake table that was loaded, and the protocol version of the epoch
+    /// root header under whose rules that stake table's active set was selected.
     fn stake_table_lower_bound(
         &self,
         epoch: EpochNumber,
@@ -82,16 +82,16 @@ pub trait Storage: Sized + Send + Sync + 'static {
 
     /// Add a stake table to the cache.
     ///
-    /// `protocol_version` is the protocol version in effect at the epoch root header, used so
-    /// that future cache hits can apply the correct active-set selection rules without
-    /// re-fetching the root.
+    /// `epoch_root_protocol_version` is the protocol version of the epoch root header in epoch
+    /// `e-2` (the snapshot point), used so that future cache hits can apply the same active-set
+    /// selection rules without re-fetching the root.
     ///
     /// This may result in an older stake table being removed.
     fn insert_stake_table(
         &self,
         epoch: EpochNumber,
         stake_table: &StakeTableState,
-        protocol_version: Version,
+        epoch_root_protocol_version: Version,
     ) -> impl Send + Future<Output = Result<()>>;
 }
 
@@ -328,9 +328,9 @@ impl Storage for SqliteStorage {
     ) -> Result<Option<(EpochNumber, StakeTableState, Version)>> {
         let mut tx = self.pool.begin().await?;
 
-        let Some((epoch, protocol_version)) = query_as::<_, (i64, String)>(
-            "SELECT epoch, protocol_version FROM stake_table_epoch WHERE epoch <= $1 ORDER BY \
-             epoch DESC LIMIT 1",
+        let Some((epoch, epoch_root_protocol_version)) = query_as::<_, (i64, String)>(
+            "SELECT epoch, epoch_root_protocol_version FROM stake_table_epoch WHERE epoch <= $1 \
+             ORDER BY epoch DESC LIMIT 1",
         )
         .bind(*epoch as i64)
         .fetch_optional(tx.as_mut())
@@ -339,9 +339,13 @@ impl Storage for SqliteStorage {
         else {
             return Ok(None);
         };
-        let protocol_version = versions::parse_version(&protocol_version).with_context(|| {
-            format!("parsing stored protocol version {protocol_version:?} for epoch {epoch}")
-        })?;
+        let epoch_root_protocol_version = versions::parse_version(&epoch_root_protocol_version)
+            .with_context(|| {
+                format!(
+                    "parsing stored epoch root protocol version {epoch_root_protocol_version:?} \
+                     for epoch {epoch}"
+                )
+            })?;
 
         let validators = query_as::<_, (Value,)>(
             "SELECT data FROM stake_table_validator WHERE epoch = $1 ORDER BY idx",
@@ -395,7 +399,7 @@ impl Storage for SqliteStorage {
                 used_bls_keys,
                 used_schnorr_keys,
             ),
-            protocol_version,
+            epoch_root_protocol_version,
         )))
     }
 
@@ -403,17 +407,17 @@ impl Storage for SqliteStorage {
         &self,
         epoch: EpochNumber,
         stake_table: &StakeTableState,
-        protocol_version: Version,
+        epoch_root_protocol_version: Version,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        // Record that the stake table for this epoch is available, along with the protocol
-        // version in effect when it was selected.
+        // Record that the stake table for this epoch is available, along with the version of the
+        // epoch root header (in epoch `e-2`) under whose rules its active set was selected.
         let epoch = i64::try_from(*epoch).context("epoch overflow")?;
-        let protocol_version_str = protocol_version.to_string();
-        query("INSERT INTO stake_table_epoch (epoch, protocol_version) VALUES ($1, $2)")
+        let epoch_root_protocol_version_str = epoch_root_protocol_version.to_string();
+        query("INSERT INTO stake_table_epoch (epoch, epoch_root_protocol_version) VALUES ($1, $2)")
             .bind(epoch)
-            .bind(&protocol_version_str)
+            .bind(&epoch_root_protocol_version_str)
             .execute(tx.as_mut())
             .await
             .context(format!(
@@ -899,7 +903,7 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_stake_table_protocol_version_roundtrip() {
+    async fn test_stake_table_epoch_root_protocol_version_roundtrip() {
         let db = SqliteStorage::default().await.unwrap();
 
         let epoch = EpochNumber::new(1);
@@ -907,11 +911,11 @@ mod test {
         db.insert_stake_table(epoch, &state, CLIQUENET_VERSION)
             .await
             .unwrap();
-        let (loaded_epoch, loaded_state, loaded_protocol_version) =
+        let (loaded_epoch, loaded_state, loaded_version) =
             db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
         assert_eq!(loaded_epoch, epoch);
         assert_eq!(loaded_state, state);
-        assert_eq!(loaded_protocol_version, CLIQUENET_VERSION);
+        assert_eq!(loaded_version, CLIQUENET_VERSION);
     }
 
     /// Make a stake table state with all fields populated.

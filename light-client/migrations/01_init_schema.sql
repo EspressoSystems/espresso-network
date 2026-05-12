@@ -9,12 +9,12 @@ CREATE TABLE leaf (
 CREATE INDEX leaf_payload_hash_height ON leaf (payload_hash, height);
 
 -- This table just keeps track of which epochs we have a stake table for, and the protocol
--- version in effect when that stake table was cached. Storing the version with each snapshot
--- lets cache hits apply the correct active-set selection rules without re-fetching the epoch
--- root header.
+-- version of the epoch root header (in epoch `e-2`) under whose rules this epoch's active
+-- validator set was selected. Storing this version with each snapshot lets cache hits apply
+-- the correct active-set selection rules without re-fetching the epoch root header.
 CREATE TABLE stake_table_epoch (
-    epoch            BIGINT PRIMARY KEY,
-    protocol_version TEXT   NOT NULL
+    epoch                       BIGINT PRIMARY KEY,
+    epoch_root_protocol_version TEXT   NOT NULL
 );
 
 -- This table holds the actual entries for each stake table.

@@ -23,7 +23,7 @@ use crate::{
     client::Client,
     consensus::{
         leaf::LeafProofHint,
-        quorum::{PrevOnly, Quorum, StakeTable, StakeTablePair, StakeTableQuorum},
+        quorum::{Quorum, StakeTable, StakeTablePair, StakeTableQuorum},
     },
     storage::{LeafRequest, Storage},
 };
@@ -574,29 +574,51 @@ where
             }
         }
 
-        // If we didn't find the exact stake table we are looking for in cache, look for it in our
-        // local database, or an earlier one we can catch up from.
-        let (lower_bound, mut stake_table, mut prev_quorum) =
-            if let Some((lower_bound, stake_table, protocol_version)) =
+        // Look up an earlier stake table we can catch up from, in cache or DB.
+        //
+        // `epoch_root_protocol_version` is the version of the root in epoch `k-2`, which is the
+        // version the espresso node uses to select epoch `k`'s active set (see `Fetcher::fetch`).
+        // Each loop iteration updates it from the root it just fetched, so the next iteration
+        // filters at the correct version.
+        //
+        // Seeding: from a DB entry, use its stored version (off by one root on the first
+        // iteration after a load; the loop self-corrects); from genesis, fetch the root at
+        // `first_dynamic - 2` (signed by the genesis stake table) and use its version.
+        let (lower_bound, mut stake_table, mut prev_quorum, mut epoch_root_protocol_version) =
+            if let Some((lower_bound, stake_table, stored_version)) =
                 self.db.stake_table_lower_bound(epoch).await?
             {
                 if lower_bound == epoch {
-                    // We have the exact quorum we requested already in our database. Add it to cache
-                    // and return it.
                     tracing::debug!(%epoch, "found stake table in database");
-                    let quorum = stake_table_state_to_quorum(&stake_table, protocol_version)?;
+                    let quorum = stake_table_state_to_quorum(&stake_table, stored_version)?;
                     return Ok(self.cache_stake_table(epoch, Arc::new(quorum)).await);
                 }
 
-                let quorum = stake_table_state_to_quorum(&stake_table, protocol_version)?;
-                (lower_bound, stake_table, Arc::new(quorum))
+                let quorum = stake_table_state_to_quorum(&stake_table, stored_version)?;
+                (lower_bound, stake_table, Arc::new(quorum), stored_version)
             } else {
                 // We don't have any stake table earlier than `epoch` as a starting point, so we must
                 // start from the genesis state.
+                let bootstrap_height = root_block_in_epoch(
+                    *self.first_epoch_with_dynamic_stake_table - 2,
+                    self.epoch_height,
+                );
+                let bootstrap_quorum = (
+                    self.genesis_stake_table.clone(),
+                    self.genesis_stake_table.clone(),
+                );
+                let bootstrap_root = self
+                    .fetch_header_with_quorum(
+                        BlockId::Number(bootstrap_height as usize),
+                        move |_epoch| StakeTableQuorum::new(bootstrap_quorum, self.epoch_height),
+                    )
+                    .await
+                    .context("fetching snapshot root header for genesis catchup")?;
                 (
                     self.first_epoch_with_dynamic_stake_table - 1,
                     StakeTableState::default(),
                     self.genesis_stake_table.clone(),
+                    bootstrap_root.version(),
                 )
             };
         tracing::info!(from = %lower_bound, to = %epoch, "performing stake table catchup");
@@ -615,14 +637,24 @@ where
                 }
             }
 
+            let next_quorum = Arc::new(stake_table_state_to_quorum(
+                &stake_table,
+                epoch_root_protocol_version,
+            )?);
+
             let root_height = root_block_in_epoch(epoch - 1, self.epoch_height);
-            let root = self
-                .fetch_header_with_quorum(BlockId::Number(root_height as usize), |_| {
-                    StakeTableQuorum::new(PrevOnly(prev_quorum.clone()), self.epoch_height)
-                })
+            let root = {
+                let prev_quorum = prev_quorum.clone();
+                let next_quorum = next_quorum.clone();
+                self.fetch_header_with_quorum(
+                    BlockId::Number(root_height as usize),
+                    move |_epoch| {
+                        StakeTableQuorum::new((prev_quorum, next_quorum), self.epoch_height)
+                    },
+                )
                 .await
-                .context(format!("fetching epoch root for {epoch}"))?;
-            let next_quorum = Arc::new(stake_table_state_to_quorum(&stake_table, root.version())?);
+                .context(format!("fetching epoch root for {epoch}"))?
+            };
             if let Some(hash) = root.next_stake_table_hash() {
                 ensure!(
                     hash == stake_table.commit(),
@@ -648,7 +680,11 @@ where
             // Cache the reconstructed stake table in the database.
             if let Err(err) = self
                 .db
-                .insert_stake_table(EpochNumber::new(epoch), &stake_table, root.version())
+                .insert_stake_table(
+                    EpochNumber::new(epoch),
+                    &stake_table,
+                    epoch_root_protocol_version,
+                )
                 .await
             {
                 // If this fails, we can continue with the stake table that we have in memory right
@@ -657,6 +693,7 @@ where
             }
 
             prev_quorum = next_quorum;
+            epoch_root_protocol_version = root.version();
         }
 
         Ok(self.cache_stake_table(epoch, prev_quorum).await)
