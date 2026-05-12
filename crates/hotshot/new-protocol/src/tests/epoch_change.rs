@@ -394,9 +394,10 @@ async fn test_epoch_change_votes() {
         .clone();
 
     harness
-        .apply(ConsensusInput::Proposal(
+        .apply(ConsensusInput::ProposalWithVidShare(
             first_view.leader_public_key,
-            ProposalMessage::validated(signed_proposal, vid_share),
+            ProposalMessage::validated(signed_proposal),
+            vid_share,
         ))
         .await;
 
@@ -492,9 +493,10 @@ async fn test_second_epoch_leader_proposes_without_drb() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::Proposal(
+        .apply(ConsensusInput::ProposalWithVidShare(
             first_e2_view.leader_public_key,
-            ProposalMessage::validated(signed, vid_share),
+            ProposalMessage::validated(signed),
+            vid_share,
         ))
         .await;
     harness
@@ -579,9 +581,10 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::Proposal(
+        .apply(ConsensusInput::ProposalWithVidShare(
             first_e2_view.leader_public_key,
-            ProposalMessage::validated(signed, vid_share),
+            ProposalMessage::validated(signed),
+            vid_share,
         ))
         .await;
     harness
@@ -623,9 +626,10 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::Proposal(
+        .apply(ConsensusInput::ProposalWithVidShare(
             v17.leader_public_key,
-            ProposalMessage::validated(signed, vid_share),
+            ProposalMessage::validated(signed),
+            vid_share,
         ))
         .await;
 

@@ -195,7 +195,7 @@ pub enum ProposalValidationError {
 
 impl StateDelta for Delta {}
 
-#[derive(Hash, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Hash, Clone, Deserialize, Serialize, PartialEq, Eq)]
 /// State to be validated by replicas.
 pub struct ValidatedState {
     /// Frontier of [`BlockMerkleTree`]
@@ -206,6 +206,24 @@ pub struct ValidatedState {
     pub reward_merkle_tree_v2: RewardMerkleTreeV2,
     /// Configuration [`Header`] proposals will be validated against.
     pub chain_config: ResolvableChainConfig,
+}
+
+impl std::fmt::Debug for ValidatedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ValidatedState")
+            .field("block_merkle_tree", &self.block_merkle_tree.commitment())
+            .field("fee_merkle_tree", &self.fee_merkle_tree.commitment())
+            .field(
+                "reward_merkle_tree_v1",
+                &self.reward_merkle_tree_v1.commitment(),
+            )
+            .field(
+                "reward_merkle_tree_v2",
+                &self.reward_merkle_tree_v2.commitment(),
+            )
+            .field("chain_config", &self.chain_config)
+            .finish()
+    }
 }
 
 impl Default for ValidatedState {

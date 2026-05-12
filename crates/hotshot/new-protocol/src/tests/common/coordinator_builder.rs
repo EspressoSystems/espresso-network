@@ -27,7 +27,7 @@ use crate::{
     message::{Certificate1, Proposal},
     network::Network,
     outbox::Outbox,
-    proposal::ProposalValidator,
+    proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -129,6 +129,8 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let share_validator =
+        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
@@ -145,6 +147,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .share_validator(share_validator)
         .storage(crate::storage::Storage::new(storage, private_key))
         .client(client)
         .membership_coordinator(membership)
