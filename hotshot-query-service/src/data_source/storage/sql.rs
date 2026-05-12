@@ -700,7 +700,7 @@ impl SqlStorage {
 
         if let Some(registry) = config.registry {
             registry.validate()?;
-            storage.run_pending_cleanups(&*registry).await?;
+            storage.run_pending_cleanups(&registry).await?;
         }
 
         Ok(storage)
