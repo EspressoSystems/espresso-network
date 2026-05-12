@@ -212,7 +212,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
 
     /// Proxy's to `Membership.da_stake_table`
     async fn stake_table(membership: &EpochMembership<TYPES>) -> HSStakeTable<TYPES> {
-        membership.da_stake_table()
+        membership.da_stake_table().collect()
     }
     /// Proxy's to `Membership.da_total_nodes`
     async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
@@ -292,7 +292,7 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
 
     /// Proxy's to `Membership.da_stake_table`
     async fn stake_table(membership: &EpochMembership<TYPES>) -> HSStakeTable<TYPES> {
-        membership.da_stake_table()
+        membership.da_stake_table().collect()
     }
     /// Proxy's to `Membership.da_total_nodes`
     async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
@@ -377,7 +377,7 @@ impl<
     }
 
     async fn stake_table(membership: &EpochMembership<TYPES>) -> HSStakeTable<TYPES> {
-        membership.stake_table()
+        membership.stake_table().collect()
     }
 
     /// Proxy's to `Membership.total_nodes`
@@ -448,7 +448,7 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
             let membership_upgrade_threshold = membership.upgrade_threshold();
 
             cert.is_valid_cert(
-                &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                &StakeTableEntries::from_iter(membership_stake_table).0,
                 membership_upgrade_threshold,
                 upgrade_lock,
             )

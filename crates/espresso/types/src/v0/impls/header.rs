@@ -12,10 +12,11 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
+    stake_table::HSStakeTable,
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
-        election::Membership,
+        election::{Membership, MembershipSnapshot},
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },
@@ -876,21 +877,23 @@ impl Header {
         let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
 
         let coordinator = instance_state.coordinator.clone();
-        let epoch_membership = coordinator
+        coordinator
             .membership_for_epoch(Some(epoch))
             .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
-        let membership = epoch_membership.coordinator.membership();
 
         // Resolve the leader for this view and find their index in the stake table.
-        let leader = membership
-            .leader(ViewNumber::new(view_number), Some(epoch))
-            .context(format!("leader for epoch {epoch:?} not found"))?;
+        let snapshot = coordinator
+            .membership()
+            .snapshot(epoch)
+            .with_context(|| format!("no committee for epoch {epoch:?}"))?;
 
-        let index = membership
-            .get_validator_index(&epoch, &leader)
-            .context(format!(
-                "Leader {leader} not found in stake table for epoch {epoch}"
-            ))?;
+        let leader = snapshot
+            .leader(ViewNumber::new(view_number))
+            .with_context(|| format!("leader for epoch {epoch:?} not found"))?;
+
+        let index = snapshot.validator_index(&leader).with_context(|| {
+            format!("Leader {leader} not found in stake table for epoch {epoch}")
+        })?;
 
         Ok(Some(index))
     }
@@ -992,8 +995,13 @@ impl Header {
                     .context(format!("failed to catch up for prev_epoch={prev_epoch}"))?;
             }
 
-            let stake_table = coordinator.membership().stake_table(Some(prev_epoch));
-            let success_threshold = coordinator.membership().success_threshold(Some(prev_epoch));
+            let prev_snapshot = coordinator
+                .membership()
+                .snapshot(prev_epoch)
+                .with_context(|| format!("no committee for prev_epoch={prev_epoch}"))?;
+
+            let stake_table = HSStakeTable::from_iter(prev_snapshot.stake_table());
+            let success_threshold = prev_snapshot.success_threshold();
 
             let prev_epoch_leaf = instance_state
                 .state_catchup

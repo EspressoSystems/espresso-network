@@ -103,7 +103,7 @@ async fn test_certificate2_validity() {
     let qc = qc2.clone().to_qc();
 
     let epoch_mem = membership.membership_for_epoch(None).unwrap();
-    let membership_stake_table = StakeTableEntries::from(epoch_mem.stake_table()).0;
+    let membership_stake_table = StakeTableEntries::from_iter(epoch_mem.stake_table()).0;
     let membership_success_threshold = epoch_mem.success_threshold();
 
     assert!(

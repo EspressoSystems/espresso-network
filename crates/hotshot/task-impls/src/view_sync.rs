@@ -655,12 +655,13 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 }
 
                 let membership = self.membership_for_epoch(certificate.epoch()).await?;
-                let membership_stake_table = membership.stake_table();
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(membership.stake_table()).0;
                 let membership_failure_threshold = membership.failure_threshold();
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    &membership_stake_table,
                     membership_failure_threshold,
                     &self.upgrade_lock,
                 ) {
@@ -745,12 +746,13 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 }
 
                 let membership = self.membership_for_epoch(certificate.epoch()).await?;
-                let membership_stake_table = membership.stake_table();
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(membership.stake_table()).0;
                 let membership_success_threshold = membership.success_threshold();
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    &membership_stake_table,
                     membership_success_threshold,
                     &self.upgrade_lock,
                 ) {
@@ -844,12 +846,13 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 }
 
                 let membership = self.membership_for_epoch(certificate.epoch()).await?;
-                let membership_stake_table = membership.stake_table();
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(membership.stake_table()).0;
                 let membership_success_threshold = membership.success_threshold();
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    &membership_stake_table,
                     membership_success_threshold,
                     &self.upgrade_lock,
                 ) {

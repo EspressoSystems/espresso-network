@@ -35,6 +35,7 @@ use hotshot_types::{
     simple_vote::{
         LightClientStateUpdateVote2, QuorumVote2, TimeoutData2, TimeoutVote2, Vote2Data,
     },
+    stake_table::HSStakeTable,
     traits::{
         EncodeBytes,
         block_contents::{BlockHeader, BuilderFee},
@@ -454,12 +455,13 @@ impl TestData {
             // match cert1.view, and the current cert1 already reflects that).
             if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
                 // Compute next-epoch stake commitment (same committee in tests).
-                let next_stake_table_state = epoch_membership
+                let next_epoch_membership = epoch_membership
                     .next_epoch_stake_table()
-                    .expect("next epoch stake table")
-                    .stake_table()
-                    .commitment(num_nodes)
-                    .expect("stake table commitment");
+                    .expect("next epoch stake table");
+                let next_stake_table_state =
+                    HSStakeTable::from_iter(next_epoch_membership.stake_table())
+                        .commitment(num_nodes)
+                        .expect("stake table commitment");
                 let state_cert = build_state_cert_for_test(
                     &proposal.block_header,
                     view_number,
@@ -482,10 +484,10 @@ impl TestData {
             )
             .await;
 
-            let stake_table_state = epoch_membership
+            let next_epoch_membership = epoch_membership
                 .next_epoch_stake_table()
-                .expect("next epoch stake table")
-                .stake_table()
+                .expect("next epoch stake table");
+            let stake_table_state = HSStakeTable::from_iter(next_epoch_membership.stake_table())
                 .commitment(num_nodes)
                 .expect("stake table commitment");
 

@@ -1660,7 +1660,7 @@ pub fn calculate_proportion_staked_and_reward_rate(
 }
 
 pub(crate) fn compute_block_reward(
-    epoch: &EpochNumber,
+    epoch: EpochNumber,
     total_supply: U256,
     total_stake: U256,
     avg_block_time_ms: u64,
@@ -3024,7 +3024,7 @@ mod tests {
 
             let epoch = EpochNumber::new(0);
             let actual_reward =
-                compute_block_reward(&epoch, total_supply, total_stake, avg_block_time_ms)
+                compute_block_reward(epoch, total_supply, total_stake, avg_block_time_ms)
                     .unwrap()
                     .0;
 

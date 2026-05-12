@@ -51,7 +51,6 @@ impl<I: NodeImplementation<SeqTypes>> RecipientSourceTrait<Request, PubKey> for 
         // Sum all participants in the membership
         Ok(membership
             .stake_table()
-            .iter()
             .map(|entry| entry.stake_table_entry.stake_key)
             .filter(|key| *key != self.public_key)
             .collect())

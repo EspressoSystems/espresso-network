@@ -1009,7 +1009,7 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         let stake_table = membership.membership_for_epoch(self.epoch)?;
-        let entries = StakeTableEntries::<TYPES>::from(stake_table.stake_table()).0;
+        let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
         let threshold = stake_table.success_threshold();
         self.justify_qc
             .is_valid_cert(&entries, threshold, upgrade_lock)?;

@@ -52,7 +52,11 @@ use hotshot_types::{
     light_client::LCV3StateSignatureRequestBody,
     network::NetworkConfig,
     simple_certificate::LightClientStateUpdateCertificateV2,
-    traits::{election::Membership, network::ConnectedNetwork},
+    stake_table::HSStakeTable,
+    traits::{
+        election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
+        network::ConnectedNetwork,
+    },
     utils::epoch_from_block_number,
     vid::avidm::{AvidMScheme, init_avidm_param},
     vote::HasViewNumber,
@@ -395,7 +399,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
             .await
             .stake_table_for_epoch(epoch)?;
 
-        Ok(mem.stake_table().0)
+        Ok(mem.stake_table().cloned().collect())
     }
 
     /// Get the stake table for the current epoch and return it along with the epoch number
@@ -413,14 +417,20 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
         &self,
         epoch: Option<EpochNumber>,
     ) -> anyhow::Result<Vec<PeerConfig<SeqTypes>>> {
-        Ok(self
-            .consensus_handle()
-            .await
-            .membership_coordinator()
-            .await
-            .membership()
-            .da_stake_table(epoch)
-            .0)
+        let coordinator = self.consensus_handle().await.membership_coordinator().await;
+        Ok(match epoch {
+            Some(e) => coordinator
+                .membership()
+                .snapshot(e)
+                .map(|s| s.da_stake_table().cloned().collect())
+                .unwrap_or_default(),
+            None => coordinator
+                .membership()
+                .non_epoch_snapshot()
+                .da_stake_table()
+                .cloned()
+                .collect(),
+        })
     }
 
     /// Get the DA stake table for the current epoch and return it along with the epoch number
@@ -451,20 +461,18 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StakeTableDataSource<
     }
 
     /// Get the whole validators map
-    async fn get_validators(
-        &self,
-        epoch: EpochNumber,
-    ) -> anyhow::Result<AuthenticatedValidatorMap> {
-        let mem = self
+    async fn get_validators(&self, e: EpochNumber) -> anyhow::Result<AuthenticatedValidatorMap> {
+        Ok(self
             .consensus_handle()
             .await
             .membership_coordinator()
             .await
-            .membership_for_epoch(Some(epoch))
-            .context("membership not found")?;
-
-        let membership = mem.coordinator.membership();
-        membership.active_validators(&epoch)
+            .membership_for_epoch(Some(e))
+            .context("membership not found")?
+            .snapshot()
+            .with_context(|| format!("no committee for epoch={e}"))?
+            .validators()
+            .clone())
     }
 
     /// Get the current proposal participation.
@@ -709,7 +717,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> StateCertFetchingData
                 )
             })?;
 
-        let stake_table = membership.stake_table();
+        let stake_table = HSStakeTable::from_iter(membership.stake_table());
 
         let state_catchup = self
             .sequencer_context
@@ -4834,11 +4842,13 @@ mod test {
             let epoch_number =
                 EpochNumber::new(epoch_from_block_number(leaf.height(), EPOCH_HEIGHT));
 
-            let block_reward = membership.epoch_block_reward(epoch_number).unwrap();
-            let leader = membership
-                .leader(leaf.leaf().view_number(), Some(epoch_number))
-                .expect("leader");
-            let leader_eth_address = membership.address(&epoch_number, leader).expect("address");
+            let snapshot = membership.snapshot(epoch_number).expect("snapshot");
+            let block_reward = snapshot.epoch_block_reward().unwrap();
+            let leader = snapshot.leader(leaf.leaf().view_number()).expect("leader");
+            let leader_eth_address = snapshot
+                .validator_config(&leader)
+                .expect("validator config")
+                .account;
 
             let validators = client
                 .get::<AuthenticatedValidatorMap>(&format!("node/validators/{epoch_number}"))
@@ -5341,18 +5351,20 @@ mod test {
                 expected_counts.clear();
             }
 
-            // Determine the leader for this block and track by address
+            // Determine the leader for this block and track by address.
             let view_number = leaf.leaf().view_number();
-            let membership = coordinator.membership();
-            let leader = membership
-                .leader(view_number, Some(epoch_number))
-                .expect("leader should exist");
-            let leader_address = membership
-                .address(&epoch_number, leader)
-                .expect("leader should have an address");
+            let snapshot = coordinator
+                .membership()
+                .snapshot(epoch_number)
+                .expect("committee for epoch_number");
+            let leader = snapshot.leader(view_number).expect("leader should exist");
+            let leader_address = snapshot
+                .validator_config(&leader)
+                .expect("leader should have an address")
+                .account;
 
             let validator_leader_counts =
-                ValidatorLeaderCounts::new(membership, &epoch_number, *header_leader_counts)
+                ValidatorLeaderCounts::new(&snapshot, *header_leader_counts)
                     .expect("ValidatorLeaderCounts should build from header leader_counts");
 
             *expected_counts.entry(leader_address).or_insert(0) += 1;
@@ -5581,15 +5593,19 @@ mod test {
         // Verify that the restarted node catches up for each epoch
         for epoch_num in 1..=7 {
             let epoch = EpochNumber::new(epoch_num);
-            let membership_for_epoch = coordinator.membership_for_epoch(Some(epoch));
-            if membership_for_epoch.is_err() {
-                coordinator.wait_for_catchup(epoch).await.unwrap();
-            }
+            let node_em = match coordinator.membership_for_epoch(Some(epoch)) {
+                Ok(em) => em,
+                Err(_) => coordinator.wait_for_catchup(epoch).await.unwrap(),
+            };
+            let server_em = match server_coordinator.membership_for_epoch(Some(epoch)) {
+                Ok(em) => em,
+                Err(_) => server_coordinator.wait_for_catchup(epoch).await.unwrap(),
+            };
 
             println!("have stake table for epoch = {epoch_num}");
 
-            let node_stake_table = coordinator.membership().stake_table(Some(epoch));
-            let stake_table = server_coordinator.membership().stake_table(Some(epoch));
+            let node_stake_table = HSStakeTable::from_iter(node_em.stake_table());
+            let stake_table = HSStakeTable::from_iter(server_em.stake_table());
             println!("asserting stake table for epoch = {epoch_num}");
 
             assert_eq!(
@@ -5733,12 +5749,16 @@ mod test {
         for epoch_num in 1..=7 {
             println!("getting stake table for epoch = {epoch_num}");
             let epoch = EpochNumber::new(epoch_num);
-            let _ = coordinator.wait_for_catchup(epoch).await.unwrap();
+            let node_em = coordinator.wait_for_catchup(epoch).await.unwrap();
+            let server_em = match server_coordinator.membership_for_epoch(Some(epoch)) {
+                Ok(em) => em,
+                Err(_) => server_coordinator.wait_for_catchup(epoch).await.unwrap(),
+            };
 
             println!("have stake table for epoch = {epoch_num}");
 
-            let node_stake_table = coordinator.membership().stake_table(Some(epoch));
-            let stake_table = server_coordinator.membership().stake_table(Some(epoch));
+            let node_stake_table = HSStakeTable::from_iter(node_em.stake_table());
+            let stake_table = HSStakeTable::from_iter(server_em.stake_table());
 
             println!("asserting stake table for epoch = {epoch_num}");
 
@@ -8627,9 +8647,9 @@ mod test {
         // Get the stake table and threshold for the epoch containing TARGET_HEIGHT
         let coordinator = network.server.node_state().coordinator;
         let epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
-        let membership = coordinator.membership();
-        let stake_table = membership.stake_table(Some(epoch));
-        let success_threshold = membership.success_threshold(Some(epoch));
+        let snapshot = coordinator.membership().snapshot(epoch).expect("snapshot");
+        let stake_table = HSStakeTable::from_iter(snapshot.stake_table());
+        let success_threshold = snapshot.success_threshold();
 
         // Use StatePeers to fetch the leaf at the exact target height
         let catchup = StatePeers::<StaticVersion<0, 1>>::from_urls(

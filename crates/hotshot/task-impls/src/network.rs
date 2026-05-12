@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     hash::{DefaultHasher, Hash},
     sync::Arc,
 };
@@ -1473,7 +1473,7 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
         else {
             return;
         };
-        let da_committee = mem.da_committee_members(view_number);
+        let da_committee: BTreeSet<_> = mem.da_committee_members(view_number).cloned().collect();
         let network = Arc::clone(&self.network);
         let storage = self.storage.clone();
         let storage_metrics = Arc::clone(&self.storage_metrics);

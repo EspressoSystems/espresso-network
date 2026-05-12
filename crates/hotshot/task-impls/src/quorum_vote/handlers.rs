@@ -227,7 +227,7 @@ pub(crate) async fn handle_quorum_proposal_validated<
                     task_state.membership.stake_table_for_epoch(qc_epoch)
                 {
                     (
-                        epoch_membership.stake_table(),
+                        HSStakeTable::from_iter(epoch_membership.stake_table()),
                         epoch_membership.success_threshold(),
                     )
                 } else {
@@ -511,7 +511,8 @@ pub(crate) async fn submit_vote<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             .get_light_client_state(view_number)
             .wrap()
             .context(error!("Failed to generate light client state"))?;
-        let next_stake_table = membership.next_epoch_stake_table()?.stake_table();
+        let next_stake_table =
+            HSStakeTable::from_iter(membership.next_epoch_stake_table()?.stake_table());
         let next_stake_table_state = next_stake_table
             .commitment(stake_table_capacity)
             .wrap()

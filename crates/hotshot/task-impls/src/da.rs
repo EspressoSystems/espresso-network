@@ -190,8 +190,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                          epoch {epoch_number:?}"
                     )
                 );
-                let total_weight =
-                    vid_total_weight::<TYPES>(&membership.stake_table(), epoch_number);
+                let total_weight = vid_total_weight(membership.stake_table(), epoch_number);
 
                 let version = self.upgrade_lock.version_infallible(view_number);
 
@@ -211,8 +210,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                     .epochs_enabled(proposal.data.view_number())
                     && epoch_number.is_some()
                 {
-                    let next_epoch_total_weight = vid_total_weight::<TYPES>(
-                        &membership.next_epoch_stake_table()?.stake_table(),
+                    let next_stake_table = membership.next_epoch_stake_table()?;
+                    let next_epoch_total_weight = vid_total_weight(
+                        next_stake_table.stake_table(),
                         epoch_number.map(|epoch| epoch + 1),
                     );
 
