@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["bytes_to_field"]};
+window.SIDEBAR_ITEMS = {"mod":["blake3","bytes_to_field"]};
