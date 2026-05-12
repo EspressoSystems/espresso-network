@@ -1150,7 +1150,7 @@ pub(crate) async fn stake_for_demo(
     let stake_table_address = config.stake_table_address;
     tracing::info!("stake table address: {}", stake_table_address);
 
-    let mnemonic_env = std::env::var("ESPRESSO_NODE_KEY_MNEMONIC").ok();
+    let mnemonic_env = dotenvy::var("ESPRESSO_NODE_KEY_MNEMONIC").ok();
 
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
