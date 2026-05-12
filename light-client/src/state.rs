@@ -576,14 +576,10 @@ where
 
         // Look up an earlier stake table we can catch up from, in cache or DB.
         //
-        // `epoch_root_protocol_version` is the version of the root in epoch `k-2`, which is the
-        // version the espresso node uses to select epoch `k`'s active set (see `Fetcher::fetch`).
-        // Each loop iteration updates it from the root it just fetched, so the next iteration
-        // filters at the correct version.
-        //
-        // Seeding: from a DB entry, use its stored version (off by one root on the first
-        // iteration after a load; the loop self-corrects); from genesis, fetch the root at
-        // `first_dynamic - 2` (signed by the genesis stake table) and use its version.
+        // `epoch_root_protocol_version` is the version of the snapshot root header (root in epoch
+        // `k-2` for the epoch `k` we are computing).On DB load we seed it from the stored version;
+        // on genesis we fetch the root at `first_dynamic - 2` (signed by the genesis stake table)
+        // and use its version.
         let (lower_bound, mut stake_table, mut prev_quorum, mut epoch_root_protocol_version) =
             if let Some((lower_bound, stake_table, stored_version)) =
                 self.db.stake_table_lower_bound(epoch).await?
@@ -599,10 +595,12 @@ where
             } else {
                 // We don't have any stake table earlier than `epoch` as a starting point, so we must
                 // start from the genesis state.
-                let bootstrap_height = root_block_in_epoch(
-                    *self.first_epoch_with_dynamic_stake_table - 2,
-                    self.epoch_height,
-                );
+                let bootstrap_epoch = (*self.first_epoch_with_dynamic_stake_table)
+                    .checked_sub(2)
+                    .context(
+                        "first_epoch_with_dynamic_stake_table must be >= 2 for genesis catchup",
+                    )?;
+                let bootstrap_height = root_block_in_epoch(bootstrap_epoch, self.epoch_height);
                 let bootstrap_quorum = (
                     self.genesis_stake_table.clone(),
                     self.genesis_stake_table.clone(),
