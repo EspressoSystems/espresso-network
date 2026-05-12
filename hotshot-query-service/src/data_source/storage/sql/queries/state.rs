@@ -590,11 +590,14 @@ impl From<sqlx::sqlite::SqliteRow> for Node {
 #[cfg(not(feature = "embedded-db"))]
 impl From<sqlx::postgres::PgRow> for Node {
     fn from(row: sqlx::postgres::PgRow) -> Self {
-        // During the migration window some rows have hash_id_big (new rows) and some have
-        // only hash_id (legacy rows). Prefer hash_id_big if present; fall back to hash_id.
+        // Three schema states to handle:
+        //   1. Pre-expand:      hash_id (INT), no hash_id_big column
+        //   2. Migration window: hash_id (INT, nullable), hash_id_big (BIGINT)
+        //   3. Post-cleanup:    hash_id (BIGINT, renamed from hash_id_big), no hash_id_big
         let hash_id: i64 = row
-            .try_get("hash_id_big")
-            .unwrap_or_else(|_| row.get::<i32, _>("hash_id") as i64);
+            .try_get::<i64, _>("hash_id_big") // state 2: new rows with hash_id_big populated
+            .or_else(|_| row.try_get::<i64, _>("hash_id")) // state 3: hash_id is now BIGINT
+            .unwrap_or_else(|_| row.get::<i32, _>("hash_id") as i64); // state 1 or 2 legacy rows: INT
         Self {
             path: row.get_unchecked("path"),
             created: row.get_unchecked("created"),
