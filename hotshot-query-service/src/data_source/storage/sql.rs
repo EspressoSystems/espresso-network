@@ -1428,26 +1428,31 @@ pub mod testing {
 
     impl TestMerkleTreeMigration {
         fn create(name: &str) -> String {
-            let (bit_vec, binary, hash_pk, root_stored_column) = if cfg!(feature = "embedded-db") {
-                (
-                    "TEXT",
-                    "BLOB",
-                    "INTEGER PRIMARY KEY AUTOINCREMENT",
-                    " (json_extract(data, '$.test_merkle_tree_root'))",
-                )
-            } else {
-                (
-                    "BIT(8)",
-                    "BYTEA",
-                    "SERIAL PRIMARY KEY",
-                    "(data->>'test_merkle_tree_root')",
-                )
-            };
+            let (bit_vec, binary, hash_pk, id_big_col, root_stored_column) =
+                if cfg!(feature = "embedded-db") {
+                    (
+                        "TEXT",
+                        "BLOB",
+                        "INTEGER PRIMARY KEY AUTOINCREMENT",
+                        // SQLite INTEGER PRIMARY KEY is already 64-bit; no id_big needed.
+                        "",
+                        " (json_extract(data, '$.test_merkle_tree_root'))",
+                    )
+                } else {
+                    (
+                        "BIT(8)",
+                        "BYTEA",
+                        "SERIAL PRIMARY KEY",
+                        // Mirror id as a bigint so RETURNING id_big always yields a non-NULL value.
+                        ",\n                id_big BIGINT GENERATED ALWAYS AS (id::bigint) STORED",
+                        "(data->>'test_merkle_tree_root')",
+                    )
+                };
 
             format!(
                 "CREATE TABLE IF NOT EXISTS hash
             (
-                id {hash_pk},
+                id {hash_pk}{id_big_col},
                 value {binary}  NOT NULL UNIQUE
             );
 
@@ -1459,7 +1464,8 @@ pub mod testing {
             (
                 path JSONB NOT NULL,
                 created BIGINT NOT NULL,
-                hash_id INT NOT NULL,
+                hash_id INT,
+                hash_id_big BIGINT,
                 children JSONB,
                 children_bitvec {bit_vec},
                 idx JSONB,
