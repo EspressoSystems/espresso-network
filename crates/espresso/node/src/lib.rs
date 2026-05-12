@@ -810,7 +810,7 @@ where
             pub_key,
             network_params.x25519_secret_key.into(),
             network_params.cliquenet_bind_addr.clone(),
-            vec![], // Initialize with no peers, they are set during init.
+            vec![],
             UpgradeLock::new(version_upgrade),
         )
         .await?

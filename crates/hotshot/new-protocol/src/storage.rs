@@ -9,6 +9,7 @@ use hotshot_types::{
         VidDisperseShare, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
     },
     message::Proposal as SignedProposal,
+    simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
     utils::EpochTransitionIndicator,
 };
@@ -111,6 +112,26 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                     Ok(()) => return,
                     Err(err) => {
                         warn!(%err, %view, "failed to append cert2, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
+    }
+
+    pub fn append_state_cert(
+        &mut self,
+        view: ViewNumber,
+        state_cert: LightClientStateUpdateCertificateV2<T>,
+    ) {
+        let storage = self.storage.clone();
+        let handle = spawn(async move {
+            loop {
+                match storage.update_state_cert(state_cert.clone()).await {
+                    Ok(()) => return,
+                    Err(err) => {
+                        warn!(%err, epoch = %state_cert.epoch, "failed to append state cert, retrying");
                         sleep(RETRY_DELAY).await;
                     },
                 }

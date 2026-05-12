@@ -218,7 +218,14 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
             info!(%epoch, ours = %self.epoch, "epoch already seen");
             return Ok(());
         }
+        self.apply_epoch(epoch, coord).await
+    }
 
+    async fn apply_epoch(
+        &mut self,
+        epoch: EpochNumber,
+        coord: &EpochMembershipCoordinator<T>,
+    ) -> Result<(), NetworkError> {
         // Validators of the new epoch.
         let Some(curr_infos) = coord.epoch_peers(Some(epoch)).await else {
             error!(%epoch, "no stake table available");

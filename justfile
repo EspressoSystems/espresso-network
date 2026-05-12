@@ -122,6 +122,9 @@ demo-native-epoch-reward *args: (build "test" "--no-default-features")
 demo-native-epoch-reward-upgrade *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-epoch-reward-upgrade.toml scripts/demo-native -f process-compose.yaml {{args}}
 
+demo-native-ff *args: (build "test" "--no-default-features")
+    ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose.yaml {{args}}
+
 demo-native-benchmark:
     cargo build --release --features benchmarking
     scripts/demo-native
@@ -219,14 +222,18 @@ test-demo test_name:
 			features="--no-default-features"
 			test="test_native_demo_epoch_reward_upgrade"
 			;;
+		ff-base)
+			features="--no-default-features"
+			test="test_native_demo_ff_base"
+			;;
 		*)
 			echo "Unknown test: {{test_name}}"
-			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade"
+			echo "Available tests: base, pos-base, drb-header-base, epoch-reward-base, ff-base, pos-upgrade, drb-header-upgrade, fee-to-drb-header-upgrade, da-committees, epoch-reward-upgrade"
 			exit 1
 			;;
 	esac
 	just build test "$features"
-	cargo nextest run -p tests $features --nocapture --profile integration -E "test(/$test\$/)"
+	cargo nextest run -p tests $features --nocapture --profile integration --retries 0 -E "test(/$test\$/)"
 
 check-features *args:
     cargo hack check --each-feature {{args}}
@@ -396,4 +403,3 @@ contracts-test-network *args='-vv':
         exit 1
     fi
     forge test --match-test test_Network_ --jobs 1 {{args}}
-

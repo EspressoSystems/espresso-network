@@ -16,15 +16,15 @@ use hotshot_new_protocol::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     network::Network,
-    state::UpdateLeaf,
+    state::{StateManager, UpdateLeaf},
     storage::NewProtocolStorage,
 };
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::Event,
+    event::{Event, LeafInfo},
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
-    new_protocol::{CoordinatorEvent, NewDecideEvent},
+    new_protocol::CoordinatorEvent,
     traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
@@ -32,7 +32,13 @@ use tokio::spawn;
 use tokio_util::task::AbortOnDropHandle;
 use versions::version;
 
-fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<CoordinatorEvent<T>> {
+// TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
+// vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
+// state and delta only become available one level up, in `Coordinator`.
+fn consensus_event<T: NodeType>(
+    state_manager: &StateManager<T>,
+    output: &ConsensusOutput<T>,
+) -> Option<CoordinatorEvent<T>> {
     match output {
         ConsensusOutput::LeafDecided {
             leaves,
@@ -44,12 +50,25 @@ fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Coordinat
                 tracing::error!("coordinator emitted LeafDecided with empty leaves");
                 return None;
             }
-            Some(CoordinatorEvent::NewDecide(NewDecideEvent {
-                leaves: leaves.clone(),
+            let leaf_infos = leaves
+                .iter()
+                .zip(vid_shares.iter())
+                .map(|(leaf, vid_share)| {
+                    let (state, delta) = state_manager.get_state_and_delta(&leaf.view_number());
+                    let state = state.unwrap_or_else(|| {
+                        Arc::new(T::ValidatedState::from_header(leaf.block_header()))
+                    });
+                    let vid_share = vid_share
+                        .as_ref()
+                        .map(|share| VidDisperseShare::V2(share.data.clone()));
+                    LeafInfo::new(leaf.clone(), state, delta, vid_share, None)
+                })
+                .collect();
+            Some(CoordinatorEvent::NewDecide {
+                leaf_infos,
                 cert1: cert1.clone(),
                 cert2: cert2.clone(),
-                vid_shares: vid_shares.clone(),
-            }))
+            })
         },
         ConsensusOutput::ViewChanged(view, _epoch) => {
             Some(CoordinatorEvent::ViewChanged { view_number: *view })
@@ -64,9 +83,12 @@ fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Coordinat
     }
 }
 
-fn coordinator_event<T: NodeType>(output: &CoordinatorOutput<T>) -> Option<CoordinatorEvent<T>> {
+fn coordinator_event<T: NodeType>(
+    state_manager: &StateManager<T>,
+    output: &CoordinatorOutput<T>,
+) -> Option<CoordinatorEvent<T>> {
     match output {
-        CoordinatorOutput::Consensus(inner) => consensus_event(inner),
+        CoordinatorOutput::Consensus(inner) => consensus_event(state_manager, inner),
         CoordinatorOutput::ExternalMessageReceived { sender, data } => {
             Some(CoordinatorEvent::ExternalMessageReceived {
                 sender: sender.clone(),
@@ -432,6 +454,8 @@ where
     N: Network<T>,
     S: NewProtocolStorage<T>,
 {
+    coord.start().await;
+
     loop {
         match coord.next_consensus_input().await {
             Ok(input) => coord.apply_consensus(input).await,
@@ -444,7 +468,7 @@ where
             },
         }
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let Some(event) = consensus_event(&output) {
+            if let Some(event) = consensus_event(coord.state_manager(), &output) {
                 broadcast_event(&tx, event).await;
             }
             if let Err(err) = coord.process_consensus_output(output).await {
@@ -457,7 +481,7 @@ where
             }
         }
         while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-            if let Some(event) = coordinator_event(&output) {
+            if let Some(event) = coordinator_event(coord.state_manager(), &output) {
                 broadcast_event(&tx, event).await;
             }
         }
