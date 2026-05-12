@@ -6,7 +6,7 @@
 -- rows are left unchanged until the DataBackfill fills in the new columns.
 --
 -- We intentionally keep hash.id as the primary key (and its index) so that old-row
--- lookups during the migration window remain fast. New inserts use a sentinel
+-- lookups during the migration window remain fast. New inserts use a placeholder
 -- sequence (negative INT values) for id, which never conflict with the positive
 -- legacy IDs (1..2147483647).
 
@@ -21,17 +21,17 @@ CREATE SEQUENCE hash_id_big_seq AS BIGINT;
 SELECT setval('hash_id_big_seq', GREATEST(COALESCE((SELECT MAX(id) FROM hash), 0), 1));
 ALTER TABLE hash ALTER COLUMN id_big SET DEFAULT nextval('hash_id_big_seq');
 
--- 2. Replace the exhausted INT sequence for id with a sentinel sequence.
---    Sentinel values are always negative; new inserts that omit id receive a unique
+-- 2. Replace the exhausted INT sequence for id with a placeholder sequence.
+--    Placeholder values are always negative; new inserts that omit id receive a unique
 --    negative value. The PK constraint and its index are preserved.
-CREATE SEQUENCE hash_id_sentinel_seq AS INT
+CREATE SEQUENCE hash_id_placeholder_seq AS INT
     INCREMENT -1
     MINVALUE -2147483648
     MAXVALUE -1
     START WITH -1
     NO CYCLE;
 ALTER TABLE hash ALTER COLUMN id DROP DEFAULT;
-ALTER TABLE hash ALTER COLUMN id SET DEFAULT nextval('hash_id_sentinel_seq');
+ALTER TABLE hash ALTER COLUMN id SET DEFAULT nextval('hash_id_placeholder_seq');
 
 -- 3. Drop FK constraints (new merkle rows reference hash via hash_id_big, not hash.id).
 ALTER TABLE fee_merkle_tree       DROP CONSTRAINT fee_merkle_tree_hash_id_fkey;

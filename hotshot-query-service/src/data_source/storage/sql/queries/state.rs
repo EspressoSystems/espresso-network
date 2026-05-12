@@ -403,7 +403,7 @@ pub(crate) async fn batch_insert_hashes(
 
     // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
     // id_big receives a value from hash_id_big_seq; the legacy id column gets a
-    // sentinel negative value from hash_id_sentinel_seq automatically.
+    // placeholder negative value from hash_id_placeholder_seq automatically.
     let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
                UPDATE SET value = EXCLUDED.value RETURNING value, id_big";
 
