@@ -14,7 +14,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod avidm;
 pub mod avidm_gf2;
-mod utils;
+/// Internal helpers (Merkle hashing primitives, byte-to-field conversion).
+/// Re-exported as `pub` so benches and external tooling can reuse the
+/// `Blake3DigestAlgorithm` plumbing.
+pub mod utils;
 
 /// A glorified [`bool`] that leverages compile lints to encourage the caller to
 /// use the result.
