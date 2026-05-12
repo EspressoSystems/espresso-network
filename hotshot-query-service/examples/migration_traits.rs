@@ -146,7 +146,7 @@ impl DataBackfill for BackfillScores {
             let new = ScoreAdapter::legacy_to_new(LegacyScoreRow {
                 height: height as u64,
                 payload,
-            });
+            })?;
             sqlx::query(
                 "INSERT INTO scores (height, value) VALUES ($1, $2) ON CONFLICT DO NOTHING",
             )
@@ -273,7 +273,7 @@ impl BackfillTest for BackfillScores {
             let actual = ScoreAdapter::view_from_new(NewScoreRow {
                 height: height as u64,
                 value,
-            });
+            })?;
             let expected = Score {
                 height: height as u64,
                 value: height as u64,
