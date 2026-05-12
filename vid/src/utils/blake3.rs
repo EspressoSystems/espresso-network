@@ -7,10 +7,7 @@
 //! cadence and forces the rest of the workspace onto an old `blake3` line.
 //!
 //! These helpers let us drive `MerkleTree` directly with `blake3`'s native
-//! API. Wire format (32-byte node values, leaf/internal domain separators
-//! `b"1"`/`b"0"`) is intentionally byte-identical to
-//! `HasherDigestAlgorithm + HasherNode<blake3::Hasher>`, so commitments and
-//! proofs do not change.
+//! API.
 use ark_serialize::{
     CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError, Valid, Validate,
 };
@@ -19,15 +16,11 @@ use jf_merkle_tree::{DigestAlgorithm, errors::MerkleTreeError};
 use tagged_base64::tagged;
 
 /// Domain separators copied from `jf_merkle_tree::prelude` (which keeps them
-/// `pub(crate)`). Must match exactly so commitments stay compatible with
-/// trees built by `HasherDigestAlgorithm`.
+/// `pub(crate)`).
 const LEAF_HASH_DOM_SEP: &[u8; 1] = b"1";
 const INTERNAL_HASH_DOM_SEP: &[u8; 1] = b"0";
 
 /// 32-byte BLAKE3 hash, suitable as a `jf_merkle_tree` `NodeValue`.
-///
-/// Layout and serialization match `jf_merkle_tree::hasher::HasherNode<H>`
-/// for any 32-byte hash: 32 raw bytes, no length prefix.
 #[derive(Clone, Copy, Debug, Default, Hash, Eq, PartialEq, Ord, PartialOrd)]
 #[tagged("HASH")]
 #[repr(transparent)]
@@ -92,9 +85,6 @@ impl Valid for Blake3Node {
 }
 
 /// `DigestAlgorithm` for [`Blake3Node`] using `blake3`'s native API.
-///
-/// Equivalent to `jf_merkle_tree::hasher::HasherDigestAlgorithm` parameterized
-/// on `blake3::Hasher`, but does not go through the `digest::Digest` trait.
 pub struct Blake3DigestAlgorithm;
 
 impl<E, I> DigestAlgorithm<E, I, Blake3Node> for Blake3DigestAlgorithm
