@@ -3,16 +3,16 @@
 //!
 //! The expand SQL migration (`V1302__hash_id_bigint_expand.sql`) adds the new
 //! `id_big` / `hash_id_big` columns and replaces the exhausted `hash_id_seq` with
-//! a sentinel sequence. This module provides the three trait implementations that
+//! a sentinel sequence. This module provides the four trait implementations that
 //! complete the migration in the background:
 //!
-//! 1. [`HashTableBackfill`] — fills `hash.id_big = hash.id` for every existing row.
-//! 2. [`MerkleHashIdBackfill`] — fills `*.hash_id_big = *.hash_id::bigint` across
-//!    all four merkle tree tables; starts only after `HashTableBackfill` is done.
-//! 3. [`IndexHashIdBig`] — creates `UNIQUE INDEX CONCURRENTLY` on `hash.id_big` so
+//! 1. [`BackfillIds`] — fills `hash.id_big = hash.id` for every existing row.
+//! 2. [`BackfillRefs`] — fills `*.hash_id_big = *.hash_id::bigint` across
+//!    all four merkle tree tables; starts only after [`BackfillIds`] is done.
+//! 3. [`CreateIndex`] — creates `UNIQUE INDEX CONCURRENTLY` on `hash.id_big` so
 //!    the cleanup can promote it to a primary key.
-//! 4. [`RestoreHashConstraints`] — cleanup migration that drops the old columns,
-//!    renames the new columns, and restores the primary key and FK constraints.
+//! 4. [`Cleanup`] — drops the old columns, renames the new columns, and restores
+//!    the primary key and FK constraints.
 
 use async_trait::async_trait;
 use hotshot_query_service::{
@@ -52,11 +52,11 @@ impl DualReadAdapter for HashIdAdapter {
 // ---------------------------------------------------------------------------
 
 /// Fills `hash.id_big = hash.id` for all existing rows.
-pub struct HashTableBackfill;
+pub struct BackfillIds;
 
-impl MigrationMeta for HashTableBackfill {
+impl MigrationMeta for BackfillIds {
     fn name(&self) -> &'static str {
-        "hash_id_bigint_hash_table"
+        "hash_id_bigint_backfill_ids"
     }
 
     fn order(&self) -> u32 {
@@ -65,7 +65,7 @@ impl MigrationMeta for HashTableBackfill {
 }
 
 #[async_trait]
-impl DataBackfill for HashTableBackfill {
+impl DataBackfill for BackfillIds {
     type Adapter = HashIdAdapter;
 
     fn batch_size(&self) -> usize {
@@ -106,12 +106,12 @@ impl DataBackfill for HashTableBackfill {
 // ---------------------------------------------------------------------------
 
 /// Fills `hash_id_big = hash_id::bigint` for all existing rows in the four merkle
-/// tree tables. Must run after [`HashTableBackfill`] completes.
-pub struct MerkleHashIdBackfill;
+/// tree tables. Must run after [`BackfillIds`] completes.
+pub struct BackfillRefs;
 
-impl MigrationMeta for MerkleHashIdBackfill {
+impl MigrationMeta for BackfillRefs {
     fn name(&self) -> &'static str {
-        "hash_id_bigint_merkle_tables"
+        "hash_id_bigint_backfill_refs"
     }
 
     fn order(&self) -> u32 {
@@ -120,7 +120,7 @@ impl MigrationMeta for MerkleHashIdBackfill {
 }
 
 #[async_trait]
-impl DataBackfill for MerkleHashIdBackfill {
+impl DataBackfill for BackfillRefs {
     type Adapter = HashIdAdapter;
 
     fn batch_size(&self) -> usize {
@@ -140,7 +140,6 @@ impl DataBackfill for MerkleHashIdBackfill {
             "reward_merkle_tree",
             "reward_merkle_tree_v2",
         ] {
-            // Use a CTE to limit each table to batch_size rows per call.
             let n: i64 = sqlx::query_scalar(&format!(
                 "WITH batch AS (
                     SELECT path, created FROM \"{table}\"
@@ -173,11 +172,11 @@ impl DataBackfill for MerkleHashIdBackfill {
 
 /// Creates `UNIQUE INDEX CONCURRENTLY` on `hash.id_big` so the cleanup can
 /// promote it to a primary key with a zero-downtime `ADD PRIMARY KEY USING INDEX`.
-pub struct IndexHashIdBig;
+pub struct CreateIndex;
 
-impl MigrationMeta for IndexHashIdBig {
+impl MigrationMeta for CreateIndex {
     fn name(&self) -> &'static str {
-        "hash_id_bigint_index"
+        "hash_id_bigint_create_index"
     }
 
     fn order(&self) -> u32 {
@@ -186,7 +185,7 @@ impl MigrationMeta for IndexHashIdBig {
 }
 
 #[async_trait]
-impl DeferredSchemaChange for IndexHashIdBig {
+impl DeferredSchemaChange for CreateIndex {
     async fn run(&self, storage: &SqlStorage) -> anyhow::Result<()> {
         sqlx::query(
             "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS hash_id_big_unique ON hash(id_big)",
@@ -204,9 +203,9 @@ impl DeferredSchemaChange for IndexHashIdBig {
 /// Drops the old INT columns, promotes `id_big` / `hash_id_big` to primary key
 /// and FK columns, and renames them back to `id` / `hash_id`. After this migration
 /// the schema is identical to the original — just with BIGINT.
-pub struct RestoreHashConstraints;
+pub struct Cleanup;
 
-impl MigrationMeta for RestoreHashConstraints {
+impl MigrationMeta for Cleanup {
     fn name(&self) -> &'static str {
         "hash_id_bigint_cleanup"
     }
@@ -217,12 +216,12 @@ impl MigrationMeta for RestoreHashConstraints {
 }
 
 #[async_trait]
-impl CleanupMigration for RestoreHashConstraints {
+impl CleanupMigration for Cleanup {
     fn requires(&self) -> &'static [&'static str] {
         &[
-            "hash_id_bigint_hash_table",
-            "hash_id_bigint_merkle_tables",
-            "hash_id_bigint_index",
+            "hash_id_bigint_backfill_ids",
+            "hash_id_bigint_backfill_refs",
+            "hash_id_bigint_create_index",
         ]
     }
 
@@ -330,7 +329,7 @@ impl AdapterTest for HashIdAdapter {
 }
 
 #[cfg(any(test, feature = "testing"))]
-impl DeferredSchemaTest for IndexHashIdBig {}
+impl DeferredSchemaTest for CreateIndex {}
 
 #[cfg(test)]
 mod tests {

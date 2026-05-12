@@ -16,7 +16,9 @@ CREATE SEQUENCE hash_id_big_seq AS BIGINT;
 -- setval(seq, N) sets the last-returned value to N, so the next nextval() returns N+1.
 -- MAX(id) = 2147483647 (i32::MAX) on an exhausted table, so new IDs start at 2147483648.
 -- The backfill sets id_big = id (1..2147483647), so the two ranges never overlap.
-SELECT setval('hash_id_big_seq', COALESCE((SELECT MAX(id) FROM hash), 0));
+-- GREATEST(..., 1) guards against an empty table where MAX(id) is NULL and COALESCE
+-- would return 0, which is below the sequence's MINVALUE of 1.
+SELECT setval('hash_id_big_seq', GREATEST(COALESCE((SELECT MAX(id) FROM hash), 0), 1));
 ALTER TABLE hash ALTER COLUMN id_big SET DEFAULT nextval('hash_id_big_seq');
 
 -- 2. Replace the exhausted INT sequence for id with a sentinel sequence.
