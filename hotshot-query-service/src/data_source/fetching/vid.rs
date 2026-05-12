@@ -437,9 +437,10 @@ where
     }
 }
 
-pub(super) fn fetch_vid_common_range_with_headers<Types, S, P>(
+pub(super) fn fetch_vid_common_range<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
-    headers: NonEmptyRange<Header<Types>>,
+    start: u64,
+    end: u64,
 ) where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -453,14 +454,9 @@ pub(super) fn fetch_vid_common_range_with_headers<Types, S, P>(
         return;
     };
 
-    // Now that we have the header, we only need to retrieve the VID common.
-    tracing::info!(
-        "spawned active fetch for VID common range {}..{}",
-        headers.start(),
-        headers.end()
-    );
+    tracing::info!("spawned active fetch for VID common range {start}..{end}");
     vid_common_range_fetcher.spawn_fetch(
-        VidCommonRangeRequest::from_headers(&headers),
+        VidCommonRangeRequest { start, end },
         fetcher.provider.clone(),
         once(VidCommonRangeCallback {
             fetcher: fetcher.clone(),
