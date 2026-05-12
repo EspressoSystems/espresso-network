@@ -4,11 +4,9 @@ use alloy::signers::local::coins_bip39::{English, Mnemonic};
 use anyhow::{Context, bail};
 use clap::Parser;
 use derivative::Derivative;
-use hotshot::types::{BLSPrivKey, BLSPubKey, SignatureKey};
-use hotshot_types::{
-    light_client::{StateKeyPair, StateSignKey},
-    x25519,
-};
+use espresso_utils::keyset_derive::derive_keys_from_mnemonic;
+use hotshot::types::BLSPrivKey;
+use hotshot_types::{light_client::StateSignKey, x25519};
 use tagged_base64::TaggedBase64;
 
 /// Keys can be specified in one of three ways:
@@ -119,27 +117,15 @@ impl TryFrom<KeySetOptions> for KeySet {
 
         // If provided, a mnemonic or key file can be used to fill in missing keys.
         if let Some(mnemonic) = opt.mnemonic {
-            let entropy = mnemonic.to_seed(None).context("invalid mnemonic")?;
-            let index = opt.index.unwrap_or_default();
+            let derived = derive_keys_from_mnemonic(&mnemonic, opt.index.unwrap_or_default())?;
             if staking.is_none() {
-                let seed = blake3::derive_key("espresso staking key", &entropy);
-                staking = Some(BLSPubKey::generated_from_seed_indexed(seed, index).1);
+                staking = Some(derived.staking);
             }
             if state.is_none() {
-                let seed = blake3::derive_key("espresso state key", &entropy);
-                state = Some(
-                    StateKeyPair::generate_from_seed_indexed(seed, index)
-                        .0
-                        .sign_key(),
-                );
+                state = Some(derived.state);
             }
             if x25519.is_none() {
-                let seed = blake3::derive_key("espresso x25519 key", &entropy);
-                x25519 = Some(
-                    x25519::Keypair::generated_from_seed_indexed(seed, index)
-                        .context("generating x25519 key from mnemonic")?
-                        .secret_key(),
-                );
+                x25519 = Some(derived.x25519);
             }
         } else if let Some(path) = &opt.key_file {
             let vars = dotenvy::from_path_iter(path)
@@ -227,6 +213,8 @@ fn lookup_key_file_var<'a>(vars: &'a HashMap<String, String>, key: &str) -> Opti
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+
+    use hotshot_types::light_client::StateKeyPair;
 
     use super::*;
 

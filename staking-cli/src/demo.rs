@@ -17,13 +17,17 @@ use alloy::{
         client::RpcClient,
         types::{TransactionReceipt, TransactionRequest},
     },
-    signers::local::PrivateKeySigner,
+    signers::local::{
+        PrivateKeySigner,
+        coins_bip39::{English, Mnemonic},
+    },
     transports::{TransportError, http::Http},
 };
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use espresso_contract_deployer::{HttpProviderWithWallet, build_provider, build_signer};
 use espresso_types::parse_duration;
+use espresso_utils::keyset_derive::{DerivedKeys, derive_keys_from_mnemonic};
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use hotshot_contract_adapter::{
     sol_types::{EspToken, StakeTableV3},
@@ -38,10 +42,7 @@ use url::Url;
 use crate::{
     Config, DEMO_VALIDATOR_START_INDEX,
     info::fetch_token_address,
-    parse::{
-        Commission, ParseCommissionError, parse_bls_priv_key, parse_state_priv_key,
-        parse_x25519_priv_key,
-    },
+    parse::{Commission, ParseCommissionError},
     receipt::ReceiptExt as _,
     signature::NodeSignatures,
     transaction::Transaction,
@@ -1103,32 +1104,29 @@ pub(crate) async fn stake_for_demo(
     let stake_table_address = config.stake_table_address;
     tracing::info!("stake table address: {}", stake_table_address);
 
+    let mnemonic_phrase = config.signer.mnemonic.clone().unwrap();
+    let parsed_mnemonic = Mnemonic::<English>::new_from_phrase(&mnemonic_phrase)?;
+
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
-        let signer = build_signer(
-            config.signer.mnemonic.clone().unwrap(),
-            DEMO_VALIDATOR_START_INDEX + val_index as u32,
-        );
+        let derive_index = DEMO_VALIDATOR_START_INDEX + val_index as u32;
+        let signer = build_signer(mnemonic_phrase.clone(), derive_index);
 
-        let consensus_private_key = parse_bls_priv_key(&dotenvy::var(format!(
-            "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
-        ))?)?
-        .into();
-        let state_private_key = parse_state_priv_key(&dotenvy::var(format!(
-            "ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"
-        ))?)?;
-        let x25519_private_key = parse_x25519_priv_key(&dotenvy::var(format!(
-            "ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"
-        ))?)?;
+        let DerivedKeys {
+            staking,
+            state,
+            x25519,
+        } = derive_keys_from_mnemonic(&parsed_mnemonic, derive_index as u64)?;
+
         let p2p_addr = dotenvy::var(format!(
             "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{val_index}"
         ))?
         .parse()?;
         validator_keys.push(StakingKeySet {
             signer,
-            bls: consensus_private_key,
-            state: StateKeyPair::from_sign_key(state_private_key),
-            x25519: x25519::Keypair::from(x25519_private_key),
+            bls: BLSKeyPair::from(staking),
+            state: StateKeyPair::from_sign_key(state),
+            x25519: x25519::Keypair::from(x25519),
             p2p_addr,
         });
     }

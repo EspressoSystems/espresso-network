@@ -29,10 +29,6 @@ pub fn parse_x25519_key(s: &str) -> Result<x25519::PublicKey, String> {
         .and_then(|tb| x25519::PublicKey::try_from(tb).map_err(|e| e.to_string()))
 }
 
-pub fn parse_x25519_priv_key(s: &str) -> Result<x25519::SecretKey, Tb64Error> {
-    TaggedBase64::parse(s)?.try_into()
-}
-
 pub fn parse_net_addr(s: &str) -> Result<NetAddr, String> {
     s.parse()
         .map_err(|e| format!("Invalid network address (expected host:port): {e}"))

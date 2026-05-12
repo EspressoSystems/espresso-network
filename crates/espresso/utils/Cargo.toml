@@ -12,10 +12,12 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 ark-serialize = { workspace = true }
 async-trait = { workspace = true }
+blake3 = { workspace = true }
 clap = { workspace = true }
 committable = { workspace = true }
 hotshot = { workspace = true }
 hotshot-example-types = { workspace = true }
+hotshot-types = { workspace = true }
 log-panics = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
