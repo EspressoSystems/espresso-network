@@ -565,14 +565,10 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             self.epoch_height,
         );
 
-        let epoch_membership = self
-            .membership
-            .coordinator
-            .membership_for_epoch(epoch)
-            .await?;
+        let epoch_membership = self.membership.coordinator.membership_for_epoch(epoch)?;
         // Make sure we are the leader for the view and epoch.
         // We might have ended up here because we were in the epoch transition.
-        if epoch_membership.leader(self.view_number).await? != self.public_key {
+        if epoch_membership.leader(self.view_number)? != self.public_key {
             tracing::warn!(
                 "We are not the leader in the epoch for which we are about to propose. Do not \
                  send the quorum proposal."
@@ -602,7 +598,6 @@ impl<TYPES: NodeType> ProposalDependencyHandle<TYPES> {
             if let Some(epoch_val) = &epoch {
                 let drb_result = epoch_membership
                     .next_epoch()
-                    .await
                     .context(warn!("No stake table for epoch {}", *epoch_val + 1))?
                     .get_epoch_drb()
                     .await

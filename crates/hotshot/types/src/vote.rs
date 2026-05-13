@@ -292,12 +292,12 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
         membership: &EpochMembership<TYPES>,
     ) -> Option<LightClientStateUpdateCertificateV2<TYPES>> {
         let epoch = membership.epoch()?;
-        let threshold = membership.success_threshold().await;
+        let threshold = membership.success_threshold();
         let PeerConfig {
             stake_table_entry,
             state_ver_key,
             ..
-        } = membership.stake(key).await?;
+        } = membership.stake(key)?;
 
         if !<TYPES::StateSignatureKey as LCV2StateSignatureKey>::verify_state_sig(
             &state_ver_key,
