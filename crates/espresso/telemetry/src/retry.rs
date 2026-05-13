@@ -16,6 +16,10 @@
 //! - 4xx detection is a string-match. The HTTP exporter formats failures as
 //!   `OpenTelemetry logs export failed. Url: ..., Status Code: NNN, ...`; the
 //!   match is best-effort and degrades to "retry" if the format ever changes.
+//! - HTTP 429 specifically is recognized by string match (`Status Code: 429`)
+//!   and surfaces a single shared ERROR via
+//!   [`crate::rate_limit::log_rate_limit_once`]. Retry decision is unchanged
+//!   (4xx remains non-retryable).
 //!
 //! Sleep semantics: the SDK's batch processor calls `export()` from a dedicated
 //! `std::thread` driven by `futures_executor::block_on` — there's no async
@@ -23,7 +27,11 @@
 //! exactly the right primitive: it pauses the dedicated export thread (which
 //! has no other work) until the next attempt.
 
-use std::{fmt::Debug, time::Duration};
+use std::{
+    fmt::Debug,
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
 
 use opentelemetry::InstrumentationScope;
 use opentelemetry_sdk::{
@@ -31,6 +39,8 @@ use opentelemetry_sdk::{
     error::{OTelSdkError, OTelSdkResult},
     logs::{LogBatch, LogExporter, SdkLogRecord},
 };
+
+use crate::rate_limit::log_rate_limit_once;
 
 const MAX_ATTEMPTS: u32 = 4;
 const BASE_BACKOFF: Duration = Duration::from_millis(250);
@@ -40,11 +50,21 @@ const MAX_BACKOFF: Duration = Duration::from_secs(4);
 #[derive(Debug)]
 pub(crate) struct RetryingLogExporter<E> {
     inner: E,
+    rate_limit_warned: Arc<AtomicBool>,
+    telemetry_log_filter: Arc<String>,
 }
 
 impl<E> RetryingLogExporter<E> {
-    pub(crate) fn new(inner: E) -> Self {
-        Self { inner }
+    pub(crate) fn new(
+        inner: E,
+        rate_limit_warned: Arc<AtomicBool>,
+        telemetry_log_filter: Arc<String>,
+    ) -> Self {
+        Self {
+            inner,
+            rate_limit_warned,
+            telemetry_log_filter,
+        }
     }
 }
 
@@ -60,7 +80,16 @@ impl<E: LogExporter> LogExporter for RetryingLogExporter<E> {
             let result = self.inner.export(LogBatch::new(&pairs)).await;
             match &result {
                 Ok(_) => return result,
-                Err(e) if !is_retryable(e) => return result,
+                Err(e) if !is_retryable(e) => {
+                    if is_rate_limited(e) {
+                        log_rate_limit_once(
+                            &self.rate_limit_warned,
+                            &self.telemetry_log_filter,
+                            None,
+                        );
+                    }
+                    return result;
+                },
                 Err(_) => {},
             }
             if attempt >= MAX_ATTEMPTS {
@@ -86,6 +115,13 @@ fn is_retryable(err: &OTelSdkError) -> bool {
         OTelSdkError::AlreadyShutdown => false,
         OTelSdkError::InternalFailure(msg) => !msg.contains("Status Code: 4"),
     }
+}
+
+/// True iff `err` is the OTLP exporter's HTTP 429 surface form. The HTTP
+/// exporter formats failures as `... Status Code: NNN, ...`; we string-match
+/// the 429 case so a single shared ERROR is logged on the operator side.
+fn is_rate_limited(err: &OTelSdkError) -> bool {
+    matches!(err, OTelSdkError::InternalFailure(msg) if msg.contains("Status Code: 429"))
 }
 
 fn backoff_for(attempt: u32) -> Duration {
@@ -131,6 +167,23 @@ mod tests {
     #[test]
     fn classifies_already_shutdown_as_non_retryable() {
         assert!(!is_retryable(&OTelSdkError::AlreadyShutdown));
+    }
+
+    #[test]
+    fn classifies_429_as_rate_limited() {
+        let e = OTelSdkError::InternalFailure(
+            "OpenTelemetry logs export failed. Url: ..., Status Code: 429, Response: ...".into(),
+        );
+        assert!(is_rate_limited(&e));
+        assert!(!is_retryable(&e));
+    }
+
+    #[test]
+    fn classifies_other_4xx_as_not_rate_limited() {
+        let e = OTelSdkError::InternalFailure(
+            "OpenTelemetry logs export failed. Url: ..., Status Code: 401, Response: ...".into(),
+        );
+        assert!(!is_rate_limited(&e));
     }
 
     #[test]

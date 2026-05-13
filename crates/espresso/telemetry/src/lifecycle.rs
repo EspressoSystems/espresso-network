@@ -23,7 +23,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    sync::{Arc, OnceLock, atomic::AtomicBool},
     time::Duration,
 };
 
@@ -134,6 +134,14 @@ pub struct TelemetryHandle {
     endpoint: String,
     metrics_interval: Duration,
     metrics_push: Option<MetricsPushHandle>,
+    /// Process-wide latch flipped on the first observed HTTP 429 from either
+    /// pipeline. Shared with the OTel log retry wrapper and the metrics push
+    /// task so a single operator-facing ERROR is logged across all signals.
+    rate_limit_warned: Arc<AtomicBool>,
+    /// Snapshot of `ESPRESSO_TELEMETRY_LOG` at startup (default `"warn"` if
+    /// unset). Embedded in the rate-limit ERROR so operators can see exactly
+    /// what filter their process is running with.
+    telemetry_log_filter: Arc<String>,
 }
 
 impl std::fmt::Debug for TelemetryHandle {
@@ -179,6 +187,8 @@ impl TelemetryHandle {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let jwt = self.jwt.clone();
         let interval = self.metrics_interval;
+        let rate_limit_warned = self.rate_limit_warned.clone();
+        let telemetry_log_filter = self.telemetry_log_filter.clone();
         let thread = match std::thread::Builder::new()
             .name("espresso-telemetry-metrics".into())
             .spawn(move || {
@@ -200,6 +210,8 @@ impl TelemetryHandle {
                     push_endpoint,
                     jwt,
                     interval,
+                    rate_limit_warned,
+                    telemetry_log_filter,
                     shutdown_rx,
                 ));
             }) {
@@ -297,7 +309,21 @@ pub fn init(
         );
     }
 
-    let provider = build_logger_provider(jwt.clone(), &endpoint, node_name)?;
+    // Resolve the operator's filter once at startup. We embed it verbatim in
+    // the rate-limit ERROR so operators can see exactly what the process was
+    // configured with (env var, not the parsed `EnvFilter`). Default matches
+    // the `TelemetryOptions::log_filter` default.
+    let telemetry_log_filter: Arc<String> =
+        Arc::new(std::env::var("ESPRESSO_TELEMETRY_LOG").unwrap_or_else(|_| "warn".to_string()));
+    let rate_limit_warned: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+
+    let provider = build_logger_provider(
+        jwt.clone(),
+        &endpoint,
+        node_name,
+        rate_limit_warned.clone(),
+        telemetry_log_filter.clone(),
+    )?;
 
     let metrics_interval = Duration::from_secs(opts.metrics_interval_secs.max(1));
     let mut handle = TelemetryHandle {
@@ -307,6 +333,8 @@ pub fn init(
         endpoint,
         metrics_interval,
         metrics_push: None,
+        rate_limit_warned,
+        telemetry_log_filter,
     };
 
     if let Some(registry) = registry {
@@ -320,6 +348,8 @@ fn build_logger_provider(
     jwt: String,
     endpoint: &str,
     node_name: Option<&str>,
+    rate_limit_warned: Arc<AtomicBool>,
+    telemetry_log_filter: Arc<String>,
 ) -> anyhow::Result<SdkLoggerProvider> {
     let logs_endpoint = format!("{}/v1/logs", endpoint.trim_end_matches('/'));
 
@@ -348,6 +378,10 @@ fn build_logger_provider(
 
     Ok(SdkLoggerProvider::builder()
         .with_resource(resource.build())
-        .with_batch_exporter(RetryingLogExporter::new(exporter))
+        .with_batch_exporter(RetryingLogExporter::new(
+            exporter,
+            rate_limit_warned,
+            telemetry_log_filter,
+        ))
         .build())
 }

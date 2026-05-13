@@ -3,9 +3,13 @@
 //! Mirrors the canonical loop in the espresso-node-telemetry mock-node.
 //! `tokio::select!` between the interval tick and a shutdown signal; on shutdown
 //! drive one final scrape-and-flush so the last interval's samples aren't lost.
-//! Errors are `warn!`-logged and never panic / never block consensus.
+//! Errors are `warn!`-logged and never panic / never block consensus. HTTP 429
+//! triggers a single shared ERROR via [`crate::rate_limit::log_rate_limit_once`].
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
 
 use prometheus::Registry;
 use reqwest::{
@@ -15,7 +19,7 @@ use reqwest::{
 use tokio::{sync::oneshot, time::MissedTickBehavior};
 use url::Url;
 
-use crate::{build_write_request, encode_to_snappy};
+use crate::{build_write_request, encode_to_snappy, rate_limit::log_rate_limit_once};
 
 /// Spawn the periodic push loop. Owns the HTTP client; reuses it across ticks.
 ///
@@ -27,6 +31,8 @@ pub(crate) async fn run(
     endpoint: Url,
     jwt: String,
     interval: Duration,
+    rate_limit_warned: Arc<AtomicBool>,
+    telemetry_log_filter: Arc<String>,
     mut shutdown: oneshot::Receiver<()>,
 ) {
     let url = format!("{}/api/v1/write", endpoint.as_str().trim_end_matches('/'));
@@ -50,17 +56,24 @@ pub(crate) async fn run(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                push_once(&client, &url, &jwt, &registry).await;
+                push_once(&client, &url, &jwt, &registry, &rate_limit_warned, &telemetry_log_filter).await;
             }
             _ = &mut shutdown => {
-                push_once(&client, &url, &jwt, &registry).await;
+                push_once(&client, &url, &jwt, &registry, &rate_limit_warned, &telemetry_log_filter).await;
                 break;
             }
         }
     }
 }
 
-async fn push_once(client: &Client, url: &str, jwt: &str, registry: &Registry) {
+async fn push_once(
+    client: &Client,
+    url: &str,
+    jwt: &str,
+    registry: &Registry,
+    rate_limit_warned: &AtomicBool,
+    telemetry_log_filter: &str,
+) {
     let families = registry.gather();
     let request = match build_write_request(&families) {
         Ok(r) => r,
@@ -88,6 +101,14 @@ async fn push_once(client: &Client, url: &str, jwt: &str, registry: &Registry) {
 
     match resp {
         Ok(r) if r.status().is_success() => {},
+        Ok(r) if r.status().as_u16() == 429 => {
+            let retry_after = r
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            log_rate_limit_once(rate_limit_warned, telemetry_log_filter, retry_after);
+        },
         Ok(r) => tracing::warn!(status = %r.status(), "telemetry: metrics push non-2xx"),
         Err(e) => tracing::warn!(error = %e, "telemetry: metrics push failed"),
     }
