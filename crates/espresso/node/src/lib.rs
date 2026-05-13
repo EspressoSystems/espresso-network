@@ -9,7 +9,7 @@ pub mod catchup;
 pub mod consensus_handle;
 pub mod context;
 pub mod genesis;
-pub mod keyset;
+pub use espresso_keyset as keyset;
 pub mod network;
 pub mod options;
 pub mod persistence;
