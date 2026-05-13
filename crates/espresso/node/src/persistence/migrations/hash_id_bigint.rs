@@ -3,16 +3,18 @@
 //!
 //! The expand SQL migration (`V1302__hash_id_bigint_expand.sql`) adds the new
 //! `id_big` / `hash_id_big` columns and replaces the exhausted `hash_id_seq` with
-//! a placeholder sequence. This module provides the four trait implementations that
+//! a placeholder sequence. This module provides the trait implementations that
 //! complete the migration in the background:
 //!
 //! 1. [`BackfillIds`] — fills `hash.id_big = hash.id` for every existing row.
-//! 2. [`BackfillRefs`] — fills `*.hash_id_big = *.hash_id::bigint` across
-//!    all four merkle tree tables; starts only after [`BackfillIds`] is done.
+//! 2. [`BackfillRefs`] — fills `*.hash_id_big = *.hash_id::bigint` for one merkle
+//!    tree table; registered once per table so each has its own offset.
 //! 3. [`CreateIndex`] — creates `UNIQUE INDEX CONCURRENTLY` on `hash.id_big` so
 //!    the cleanup can promote it to a primary key.
 //! 4. [`Cleanup`] — drops the old columns, renames the new columns, and restores
 //!    the primary key and FK constraints.
+
+use std::borrow::Cow;
 
 use async_trait::async_trait;
 use hotshot_query_service::{
@@ -21,6 +23,20 @@ use hotshot_query_service::{
         CleanupMigration, DataBackfill, DeferredSchemaChange, DualReadAdapter, MigrationMeta,
     },
 };
+
+pub const MERKLE_TABLES: &[&str] = &[
+    "fee_merkle_tree",
+    "block_merkle_tree",
+    "reward_merkle_tree",
+    "reward_merkle_tree_v2",
+];
+
+pub const BACKFILL_REFS_NAMES: &[&str] = &[
+    "hash_id_bigint_backfill_refs_fee_merkle_tree",
+    "hash_id_bigint_backfill_refs_block_merkle_tree",
+    "hash_id_bigint_backfill_refs_reward_merkle_tree",
+    "hash_id_bigint_backfill_refs_reward_merkle_tree_v2",
+];
 
 pub struct HashIdAdapter;
 
@@ -45,8 +61,8 @@ impl DualReadAdapter for HashIdAdapter {
 pub struct BackfillIds;
 
 impl MigrationMeta for BackfillIds {
-    fn name(&self) -> &'static str {
-        "hash_id_bigint_backfill_ids"
+    fn name(&self) -> Cow<'static, str> {
+        "hash_id_bigint_backfill_ids".into()
     }
 
     fn order(&self) -> u32 {
@@ -94,15 +110,35 @@ impl DataBackfill for BackfillIds {
     }
 }
 
-pub struct BackfillRefs;
+/// Backfills `hash_id_big` for a single merkle tree table. Each table is registered
+/// as its own backfill so progress is tracked per-table — see PR #4284 discussion.
+pub struct BackfillRefs {
+    pub table: &'static str,
+    pub name: &'static str,
+    pub order: u32,
+}
+
+impl BackfillRefs {
+    pub fn all() -> impl Iterator<Item = Self> {
+        MERKLE_TABLES
+            .iter()
+            .zip(BACKFILL_REFS_NAMES.iter())
+            .enumerate()
+            .map(|(idx, (&table, &name))| Self {
+                table,
+                name,
+                order: 2 + idx as u32,
+            })
+    }
+}
 
 impl MigrationMeta for BackfillRefs {
-    fn name(&self) -> &'static str {
-        "hash_id_bigint_backfill_refs"
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed(self.name)
     }
 
     fn order(&self) -> u32 {
-        2
+        self.order
     }
 }
 
@@ -119,49 +155,37 @@ impl DataBackfill for BackfillRefs {
         tx: &mut Transaction<Write>,
         offset: u64,
     ) -> anyhow::Result<Option<u64>> {
-        let mut max_created: Option<i64> = None;
+        let next: Option<i64> = sqlx::query_scalar(&format!(
+            "WITH batch AS (
+                SELECT path, created FROM \"{table}\"
+                WHERE hash_id_big IS NULL AND created > $1
+                ORDER BY created
+                LIMIT $2
+            ),
+            updated AS (
+                UPDATE \"{table}\" t
+                SET hash_id_big = t.hash_id::bigint
+                FROM batch
+                WHERE t.path = batch.path AND t.created = batch.created
+                RETURNING t.created
+            )
+            SELECT MAX(created) FROM updated",
+            table = self.table,
+        ))
+        .bind(offset as i64)
+        .bind(self.batch_size() as i64)
+        .fetch_one(tx.as_mut())
+        .await?;
 
-        for table in &[
-            "fee_merkle_tree",
-            "block_merkle_tree",
-            "reward_merkle_tree",
-            "reward_merkle_tree_v2",
-        ] {
-            let next: Option<i64> = sqlx::query_scalar(&format!(
-                "WITH batch AS (
-                    SELECT path, created FROM \"{table}\"
-                    WHERE hash_id_big IS NULL AND created > $1
-                    ORDER BY created
-                    LIMIT $2
-                ),
-                updated AS (
-                    UPDATE \"{table}\" t
-                    SET hash_id_big = t.hash_id::bigint
-                    FROM batch
-                    WHERE t.path = batch.path AND t.created = batch.created
-                    RETURNING t.created
-                )
-                SELECT MAX(created) FROM updated",
-            ))
-            .bind(offset as i64)
-            .bind(self.batch_size() as i64)
-            .fetch_one(tx.as_mut())
-            .await?;
-
-            if let Some(c) = next {
-                max_created = Some(max_created.unwrap_or(i64::MIN).max(c));
-            }
-        }
-
-        Ok(max_created.map(|c| c as u64))
+        Ok(next.map(|c| c as u64))
     }
 }
 
 pub struct CreateIndex;
 
 impl MigrationMeta for CreateIndex {
-    fn name(&self) -> &'static str {
-        "hash_id_bigint_create_index"
+    fn name(&self) -> Cow<'static, str> {
+        "hash_id_bigint_create_index".into()
     }
 
     fn order(&self) -> u32 {
@@ -191,8 +215,8 @@ impl DeferredSchemaChange for CreateIndex {
 pub struct Cleanup;
 
 impl MigrationMeta for Cleanup {
-    fn name(&self) -> &'static str {
-        "hash_id_bigint_cleanup"
+    fn name(&self) -> Cow<'static, str> {
+        "hash_id_bigint_cleanup".into()
     }
 
     fn order(&self) -> u32 {
@@ -205,7 +229,10 @@ impl CleanupMigration for Cleanup {
     fn requires(&self) -> &'static [&'static str] {
         &[
             "hash_id_bigint_backfill_ids",
-            "hash_id_bigint_backfill_refs",
+            "hash_id_bigint_backfill_refs_fee_merkle_tree",
+            "hash_id_bigint_backfill_refs_block_merkle_tree",
+            "hash_id_bigint_backfill_refs_reward_merkle_tree",
+            "hash_id_bigint_backfill_refs_reward_merkle_tree_v2",
             "hash_id_bigint_create_index",
         ]
     }
