@@ -53,6 +53,7 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
             TimeoutData, TimeoutVote, ViewSyncCommitData, ViewSyncCommitVote, ViewSyncFinalizeData,
             ViewSyncFinalizeVote, ViewSyncPreCommitData, ViewSyncPreCommitVote,
         },
+        traits::election::Membership,
     };
 
     let (sender, priv_key) = PubKey::generated_from_seed_indexed(Default::default(), 0);
@@ -72,6 +73,10 @@ async fn test_message_compat<Ver: StaticVersionType>(_ver: Ver) {
         epoch_height,
         &storage,
     );
+
+    EpochMembershipCoordinator::<SeqTypes>::membership(&membership)
+        .set_first_epoch(1.into(), [0u8; 32]);
+
     let upgrade_data = UpgradeProposalData {
         old_version: Version { major: 0, minor: 1 },
         new_version: Version { major: 1, minor: 0 },
