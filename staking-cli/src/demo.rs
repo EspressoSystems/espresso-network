@@ -1079,8 +1079,9 @@ fn dotenv_get(name: &str) -> Result<String> {
 
 /// Load consensus, state, and x25519 keys for a validator.
 ///
-/// If `mnemonic_phrase` is `Some`, derives all three keys from the mnemonic using `val_index` as
-/// the derivation index. Otherwise reads each key from the corresponding
+/// If `mnemonic_phrase` is `Some`, derives all three keys from the mnemonic at index
+/// `DEMO_VALIDATOR_START_INDEX + val_index`, matching the Ethereum signer account index for the
+/// same validator. Otherwise reads each key from the corresponding
 /// `ESPRESSO_DEMO_NODE_{STAKING,STATE,X25519}_PRIVATE_KEY_{val_index}` environment variable.
 fn load_validator_keys(
     val_index: u16,
@@ -1090,7 +1091,7 @@ fn load_validator_keys(
         let mnemonic = Mnemonic::<English>::new_from_phrase(phrase)?;
         let keyset = KeySet::try_from(KeySetOptions {
             mnemonic: Some(mnemonic),
-            index: Some(val_index.into()),
+            index: Some(u64::from(DEMO_VALIDATOR_START_INDEX) + u64::from(val_index)),
             key_file: None,
             private_staking_key: None,
             private_state_key: None,
@@ -1889,16 +1890,17 @@ mod test {
     use crate::{deploy::TestSystem, info::stake_table_info};
 
     /// Verify that the per-validator consensus keys in `.env` are exactly what `DEV_MNEMONIC` at
-    /// validator index `N` produces. Otherwise the demo would diverge depending on whether
-    /// `ESPRESSO_NODE_KEY_MNEMONIC` is set: nodes (using individual `.env` keys) would have
-    /// different consensus keys than the validator records registered on-chain by `staking-cli`.
+    /// mnemonic index `DEMO_VALIDATOR_START_INDEX + val_index` produces. Otherwise the demo would
+    /// diverge depending on whether `ESPRESSO_NODE_KEY_MNEMONIC` is set: nodes (using individual
+    /// `.env` keys) would have different consensus keys than the validator records registered
+    /// on-chain by `staking-cli`.
     #[test]
     fn dev_mnemonic_matches_env_demo_keys() {
-        for i in 0..5u64 {
+        for val_index in 0..5u64 {
             let mnemonic = Mnemonic::<English>::new_from_phrase(crate::DEV_MNEMONIC).unwrap();
             let keyset = KeySet::try_from(KeySetOptions {
                 mnemonic: Some(mnemonic),
-                index: Some(i),
+                index: Some(u64::from(DEMO_VALIDATOR_START_INDEX) + val_index),
                 key_file: None,
                 private_staking_key: None,
                 private_state_key: None,
@@ -1907,23 +1909,33 @@ mod test {
             .unwrap();
 
             let env_bls = parse_bls_priv_key(
-                &dotenvy::var(format!("ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{i}")).unwrap(),
+                &dotenvy::var(format!(
+                    "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
+                ))
+                .unwrap(),
             )
             .unwrap();
             let env_state = parse_state_priv_key(
-                &dotenvy::var(format!("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{i}")).unwrap(),
+                &dotenvy::var(format!("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}")).unwrap(),
             )
             .unwrap();
             let env_x25519 = parse_x25519_priv_key(
-                &dotenvy::var(format!("ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{i}")).unwrap(),
+                &dotenvy::var(format!("ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"))
+                    .unwrap(),
             )
             .unwrap();
 
-            assert_eq!(keyset.staking, env_bls, "staking key mismatch at index {i}");
-            assert_eq!(keyset.state, env_state, "state key mismatch at index {i}");
+            assert_eq!(
+                keyset.staking, env_bls,
+                "staking key mismatch at validator {val_index}"
+            );
+            assert_eq!(
+                keyset.state, env_state,
+                "state key mismatch at validator {val_index}"
+            );
             assert_eq!(
                 keyset.x25519, env_x25519,
-                "x25519 key mismatch at index {i}"
+                "x25519 key mismatch at validator {val_index}"
             );
         }
     }
