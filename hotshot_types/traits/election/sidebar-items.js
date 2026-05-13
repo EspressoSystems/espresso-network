@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["NoStakeTableHash"],"trait":["Membership"]};
+window.SIDEBAR_ITEMS = {"struct":["NoStakeTableHash"],"trait":["Membership","MembershipSnapshot","NonEpochMembershipSnapshot"]};

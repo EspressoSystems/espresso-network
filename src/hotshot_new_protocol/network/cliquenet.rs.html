@@ -227,14 +227,14 @@
 <a href=#227 id=227 data-nosnippet>227</a>        coord: <span class="kw-2">&amp;</span>EpochMembershipCoordinator&lt;T&gt;,
 <a href=#228 id=228 data-nosnippet>228</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), NetworkError&gt; {
 <a href=#229 id=229 data-nosnippet>229</a>        <span class="comment">// Validators of the new epoch.
-<a href=#230 id=230 data-nosnippet>230</a>        </span><span class="kw">let </span><span class="prelude-val">Some</span>(curr_infos) = coord.epoch_peers(<span class="prelude-val">Some</span>(epoch)).<span class="kw">await else </span>{
+<a href=#230 id=230 data-nosnippet>230</a>        </span><span class="kw">let </span><span class="prelude-val">Some</span>(curr_infos) = coord.epoch_peers(<span class="prelude-val">Some</span>(epoch)) <span class="kw">else </span>{
 <a href=#231 id=231 data-nosnippet>231</a>            <span class="macro">error!</span>(%epoch, <span class="string">"no stake table available"</span>);
 <a href=#232 id=232 data-nosnippet>232</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
 <a href=#233 id=233 data-nosnippet>233</a>        };
 <a href=#234 id=234 data-nosnippet>234</a>
 <a href=#235 id=235 data-nosnippet>235</a>        <span class="comment">// Validators leaving are retained as peers for one additional epoch.
 <a href=#236 id=236 data-nosnippet>236</a>        </span><span class="kw">let </span>prev_infos = <span class="kw">if </span><span class="kw-2">*</span>epoch &gt; <span class="number">0 </span>{
-<a href=#237 id=237 data-nosnippet>237</a>            coord.epoch_peers(<span class="prelude-val">Some</span>(epoch - <span class="number">1</span>)).<span class="kw">await</span>.unwrap_or_else(|| {
+<a href=#237 id=237 data-nosnippet>237</a>            coord.epoch_peers(<span class="prelude-val">Some</span>(epoch - <span class="number">1</span>)).unwrap_or_else(|| {
 <a href=#238 id=238 data-nosnippet>238</a>                <span class="macro">info!</span>(%epoch, <span class="string">"previous epoch's stake table unavailable"</span>);
 <a href=#239 id=239 data-nosnippet>239</a>                HashMap::new()
 <a href=#240 id=240 data-nosnippet>240</a>            })
@@ -243,7 +243,7 @@
 <a href=#243 id=243 data-nosnippet>243</a>        };
 <a href=#244 id=244 data-nosnippet>244</a>
 <a href=#245 id=245 data-nosnippet>245</a>        <span class="comment">// Validators joining in the next epoch are connected to early.
-<a href=#246 id=246 data-nosnippet>246</a>        </span><span class="kw">let </span>next_infos = coord.epoch_peers(<span class="prelude-val">Some</span>(epoch + <span class="number">1</span>)).<span class="kw">await</span>.unwrap_or_else(|| {
+<a href=#246 id=246 data-nosnippet>246</a>        </span><span class="kw">let </span>next_infos = coord.epoch_peers(<span class="prelude-val">Some</span>(epoch + <span class="number">1</span>)).unwrap_or_else(|| {
 <a href=#247 id=247 data-nosnippet>247</a>            <span class="macro">info!</span>(%epoch, <span class="string">"next epoch's stake table not available"</span>);
 <a href=#248 id=248 data-nosnippet>248</a>            HashMap::new()
 <a href=#249 id=249 data-nosnippet>249</a>        });

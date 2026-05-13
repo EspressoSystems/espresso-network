@@ -51,8 +51,8 @@
 <a href=#51 id=51 data-nosnippet>51</a>
 <a href=#52 id=52 data-nosnippet>52</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; Threshold&lt;TYPES&gt; <span class="kw">for </span>SuccessThreshold {
 <a href=#53 id=53 data-nosnippet>53</a>    <span class="kw">async fn </span>threshold(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; U256 {
-<a href=#54 id=54 data-nosnippet>54</a>        membership.success_threshold().<span class="kw">await
-<a href=#55 id=55 data-nosnippet>55</a>    </span>}
+<a href=#54 id=54 data-nosnippet>54</a>        membership.success_threshold()
+<a href=#55 id=55 data-nosnippet>55</a>    }
 <a href=#56 id=56 data-nosnippet>56</a>}
 <a href=#57 id=57 data-nosnippet>57</a>
 <a href=#58 id=58 data-nosnippet>58</a><span class="doccomment">/// Defines a threshold which is f + 1 (i.e at least one of the stake is honest)
@@ -61,8 +61,8 @@
 <a href=#61 id=61 data-nosnippet>61</a>
 <a href=#62 id=62 data-nosnippet>62</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; Threshold&lt;TYPES&gt; <span class="kw">for </span>OneHonestThreshold {
 <a href=#63 id=63 data-nosnippet>63</a>    <span class="kw">async fn </span>threshold(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; U256 {
-<a href=#64 id=64 data-nosnippet>64</a>        membership.failure_threshold().<span class="kw">await
-<a href=#65 id=65 data-nosnippet>65</a>    </span>}
+<a href=#64 id=64 data-nosnippet>64</a>        membership.failure_threshold()
+<a href=#65 id=65 data-nosnippet>65</a>    }
 <a href=#66 id=66 data-nosnippet>66</a>}
 <a href=#67 id=67 data-nosnippet>67</a>
 <a href=#68 id=68 data-nosnippet>68</a><span class="doccomment">/// Defines a threshold which is 0.9n + 1 (i.e. over 90% of the nodes with stake)
@@ -71,8 +71,8 @@
 <a href=#71 id=71 data-nosnippet>71</a>
 <a href=#72 id=72 data-nosnippet>72</a><span class="kw">impl</span>&lt;TYPES: NodeType&gt; Threshold&lt;TYPES&gt; <span class="kw">for </span>UpgradeThreshold {
 <a href=#73 id=73 data-nosnippet>73</a>    <span class="kw">async fn </span>threshold(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; U256 {
-<a href=#74 id=74 data-nosnippet>74</a>        membership.upgrade_threshold().<span class="kw">await
-<a href=#75 id=75 data-nosnippet>75</a>    </span>}
+<a href=#74 id=74 data-nosnippet>74</a>        membership.upgrade_threshold()
+<a href=#75 id=75 data-nosnippet>75</a>    }
 <a href=#76 id=76 data-nosnippet>76</a>}
 <a href=#77 id=77 data-nosnippet>77</a>
 <a href=#78 id=78 data-nosnippet>78</a><span class="doccomment">/// A certificate which can be created by aggregating many simple votes on the commitment.
@@ -207,20 +207,20 @@
 <a href=#207 id=207 data-nosnippet>207</a>        membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
 <a href=#208 id=208 data-nosnippet>208</a>        pub_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
 <a href=#209 id=209 data-nosnippet>209</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;PeerConfig&lt;TYPES&gt;&gt; {
-<a href=#210 id=210 data-nosnippet>210</a>        membership.da_stake(pub_key).<span class="kw">await
-<a href=#211 id=211 data-nosnippet>211</a>    </span>}
+<a href=#210 id=210 data-nosnippet>210</a>        membership.da_stake(pub_key)
+<a href=#211 id=211 data-nosnippet>211</a>    }
 <a href=#212 id=212 data-nosnippet>212</a>
 <a href=#213 id=213 data-nosnippet>213</a>    <span class="doccomment">/// Proxy's to `Membership.da_stake_table`
 <a href=#214 id=214 data-nosnippet>214</a>    </span><span class="kw">async fn </span>stake_table(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; HSStakeTable&lt;TYPES&gt; {
-<a href=#215 id=215 data-nosnippet>215</a>        membership.da_stake_table().<span class="kw">await
-<a href=#216 id=216 data-nosnippet>216</a>    </span>}
+<a href=#215 id=215 data-nosnippet>215</a>        membership.da_stake_table().collect()
+<a href=#216 id=216 data-nosnippet>216</a>    }
 <a href=#217 id=217 data-nosnippet>217</a>    <span class="doccomment">/// Proxy's to `Membership.da_total_nodes`
 <a href=#218 id=218 data-nosnippet>218</a>    </span><span class="kw">async fn </span>total_nodes(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; usize {
-<a href=#219 id=219 data-nosnippet>219</a>        membership.da_total_nodes().<span class="kw">await
-<a href=#220 id=220 data-nosnippet>220</a>    </span>}
+<a href=#219 id=219 data-nosnippet>219</a>        membership.da_total_nodes()
+<a href=#220 id=220 data-nosnippet>220</a>    }
 <a href=#221 id=221 data-nosnippet>221</a>    <span class="kw">async fn </span>threshold(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; U256 {
-<a href=#222 id=222 data-nosnippet>222</a>        membership.da_success_threshold().<span class="kw">await
-<a href=#223 id=223 data-nosnippet>223</a>    </span>}
+<a href=#222 id=222 data-nosnippet>222</a>        membership.da_success_threshold()
+<a href=#223 id=223 data-nosnippet>223</a>    }
 <a href=#224 id=224 data-nosnippet>224</a>    <span class="kw">fn </span>data(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Voteable {
 <a href=#225 id=225 data-nosnippet>225</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.data
 <a href=#226 id=226 data-nosnippet>226</a>    }
@@ -287,20 +287,20 @@
 <a href=#287 id=287 data-nosnippet>287</a>        membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
 <a href=#288 id=288 data-nosnippet>288</a>        pub_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
 <a href=#289 id=289 data-nosnippet>289</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;PeerConfig&lt;TYPES&gt;&gt; {
-<a href=#290 id=290 data-nosnippet>290</a>        membership.da_stake(pub_key).<span class="kw">await
-<a href=#291 id=291 data-nosnippet>291</a>    </span>}
+<a href=#290 id=290 data-nosnippet>290</a>        membership.da_stake(pub_key)
+<a href=#291 id=291 data-nosnippet>291</a>    }
 <a href=#292 id=292 data-nosnippet>292</a>
 <a href=#293 id=293 data-nosnippet>293</a>    <span class="doccomment">/// Proxy's to `Membership.da_stake_table`
 <a href=#294 id=294 data-nosnippet>294</a>    </span><span class="kw">async fn </span>stake_table(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; HSStakeTable&lt;TYPES&gt; {
-<a href=#295 id=295 data-nosnippet>295</a>        membership.da_stake_table().<span class="kw">await
-<a href=#296 id=296 data-nosnippet>296</a>    </span>}
+<a href=#295 id=295 data-nosnippet>295</a>        membership.da_stake_table().collect()
+<a href=#296 id=296 data-nosnippet>296</a>    }
 <a href=#297 id=297 data-nosnippet>297</a>    <span class="doccomment">/// Proxy's to `Membership.da_total_nodes`
 <a href=#298 id=298 data-nosnippet>298</a>    </span><span class="kw">async fn </span>total_nodes(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; usize {
-<a href=#299 id=299 data-nosnippet>299</a>        membership.da_total_nodes().<span class="kw">await
-<a href=#300 id=300 data-nosnippet>300</a>    </span>}
+<a href=#299 id=299 data-nosnippet>299</a>        membership.da_total_nodes()
+<a href=#300 id=300 data-nosnippet>300</a>    }
 <a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">async fn </span>threshold(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; U256 {
-<a href=#302 id=302 data-nosnippet>302</a>        membership.da_success_threshold().<span class="kw">await
-<a href=#303 id=303 data-nosnippet>303</a>    </span>}
+<a href=#302 id=302 data-nosnippet>302</a>        membership.da_success_threshold()
+<a href=#303 id=303 data-nosnippet>303</a>    }
 <a href=#304 id=304 data-nosnippet>304</a>    <span class="kw">fn </span>data(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Voteable {
 <a href=#305 id=305 data-nosnippet>305</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.data
 <a href=#306 id=306 data-nosnippet>306</a>    }
@@ -373,17 +373,17 @@
 <a href=#373 id=373 data-nosnippet>373</a>        membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
 <a href=#374 id=374 data-nosnippet>374</a>        pub_key: <span class="kw-2">&amp;</span>TYPES::SignatureKey,
 <a href=#375 id=375 data-nosnippet>375</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;PeerConfig&lt;TYPES&gt;&gt; {
-<a href=#376 id=376 data-nosnippet>376</a>        membership.stake(pub_key).<span class="kw">await
-<a href=#377 id=377 data-nosnippet>377</a>    </span>}
+<a href=#376 id=376 data-nosnippet>376</a>        membership.stake(pub_key)
+<a href=#377 id=377 data-nosnippet>377</a>    }
 <a href=#378 id=378 data-nosnippet>378</a>
 <a href=#379 id=379 data-nosnippet>379</a>    <span class="kw">async fn </span>stake_table(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; HSStakeTable&lt;TYPES&gt; {
-<a href=#380 id=380 data-nosnippet>380</a>        membership.stake_table().<span class="kw">await
-<a href=#381 id=381 data-nosnippet>381</a>    </span>}
+<a href=#380 id=380 data-nosnippet>380</a>        membership.stake_table().collect()
+<a href=#381 id=381 data-nosnippet>381</a>    }
 <a href=#382 id=382 data-nosnippet>382</a>
 <a href=#383 id=383 data-nosnippet>383</a>    <span class="doccomment">/// Proxy's to `Membership.total_nodes`
 <a href=#384 id=384 data-nosnippet>384</a>    </span><span class="kw">async fn </span>total_nodes(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;) -&gt; usize {
-<a href=#385 id=385 data-nosnippet>385</a>        membership.total_nodes().<span class="kw">await
-<a href=#386 id=386 data-nosnippet>386</a>    </span>}
+<a href=#385 id=385 data-nosnippet>385</a>        membership.total_nodes()
+<a href=#386 id=386 data-nosnippet>386</a>    }
 <a href=#387 id=387 data-nosnippet>387</a>
 <a href=#388 id=388 data-nosnippet>388</a>    <span class="kw">fn </span>data(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span><span class="self">Self</span>::Voteable {
 <a href=#389 id=389 data-nosnippet>389</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.data
@@ -444,11 +444,11 @@
 <a href=#444 id=444 data-nosnippet>444</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
 <a href=#445 id=445 data-nosnippet>445</a>        <span class="macro">ensure!</span>(epoch == membership.epoch(), <span class="string">"Epochs don't match!"</span>);
 <a href=#446 id=446 data-nosnippet>446</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(cert) = upgrade_certificate {
-<a href=#447 id=447 data-nosnippet>447</a>            <span class="kw">let </span>membership_stake_table = membership.stake_table().<span class="kw">await</span>;
-<a href=#448 id=448 data-nosnippet>448</a>            <span class="kw">let </span>membership_upgrade_threshold = membership.upgrade_threshold().<span class="kw">await</span>;
+<a href=#447 id=447 data-nosnippet>447</a>            <span class="kw">let </span>membership_stake_table = membership.stake_table();
+<a href=#448 id=448 data-nosnippet>448</a>            <span class="kw">let </span>membership_upgrade_threshold = membership.upgrade_threshold();
 <a href=#449 id=449 data-nosnippet>449</a>
 <a href=#450 id=450 data-nosnippet>450</a>            cert.is_valid_cert(
-<a href=#451 id=451 data-nosnippet>451</a>                <span class="kw-2">&amp;</span>StakeTableEntries::&lt;TYPES&gt;::from(membership_stake_table).<span class="number">0</span>,
+<a href=#451 id=451 data-nosnippet>451</a>                <span class="kw-2">&amp;</span>StakeTableEntries::from_iter(membership_stake_table).<span class="number">0</span>,
 <a href=#452 id=452 data-nosnippet>452</a>                membership_upgrade_threshold,
 <a href=#453 id=453 data-nosnippet>453</a>                upgrade_lock,
 <a href=#454 id=454 data-nosnippet>454</a>            )

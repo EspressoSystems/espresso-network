@@ -208,7 +208,7 @@
 <a href=#208 id=208 data-nosnippet>208</a><span class="kw">impl </span>StakeTable {
 <a href=#209 id=209 data-nosnippet>209</a>    <span class="doccomment">/// Get a stake table from a particular epoch's quorum membership.
 <a href=#210 id=210 data-nosnippet>210</a>    </span><span class="kw">pub async fn </span>from_membership(membership: <span class="kw-2">&amp;</span>EpochMembership&lt;SeqTypes&gt;) -&gt; <span class="self">Self </span>{
-<a href=#211 id=211 data-nosnippet>211</a>        membership.stake_table().<span class="kw">await</span>.into()
+<a href=#211 id=211 data-nosnippet>211</a>        HSStakeTable::from_iter(membership.stake_table()).into()
 <a href=#212 id=212 data-nosnippet>212</a>    }
 <a href=#213 id=213 data-nosnippet>213</a>
 <a href=#214 id=214 data-nosnippet>214</a>    <span class="doccomment">/// Verify that a certificate is signed by a quorum of this stake table.
@@ -241,7 +241,7 @@
 <a href=#241 id=241 data-nosnippet>241</a>    }
 <a href=#242 id=242 data-nosnippet>242</a>
 <a href=#243 id=243 data-nosnippet>243</a>    <span class="kw">async fn </span>next_epoch_stake_table(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;Arc&lt;StakeTable&gt;&gt; {
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">let </span>membership = <span class="self">self</span>.next_epoch_stake_table().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="kw">let </span>membership = <span class="self">self</span>.next_epoch_stake_table()<span class="question-mark">?</span>;
 <a href=#245 id=245 data-nosnippet>245</a>        <span class="prelude-val">Ok</span>(Arc::new(StakeTable::from_membership(<span class="kw-2">&amp;</span>membership).<span class="kw">await</span>))
 <a href=#246 id=246 data-nosnippet>246</a>    }
 <a href=#247 id=247 data-nosnippet>247</a>}

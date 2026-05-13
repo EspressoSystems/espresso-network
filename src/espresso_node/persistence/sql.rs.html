@@ -4669,142 +4669,140 @@
 <a href=#4669 id=4669 data-nosnippet>4669</a>        instance_state
 <a href=#4670 id=4670 data-nosnippet>4670</a>            .coordinator
 <a href=#4671 id=4671 data-nosnippet>4671</a>            .membership()
-<a href=#4672 id=4672 data-nosnippet>4672</a>            .write()
-<a href=#4673 id=4673 data-nosnippet>4673</a>            .<span class="kw">await
-<a href=#4674 id=4674 data-nosnippet>4674</a>            </span>.set_first_epoch(EpochNumber::genesis(), Default::default());
-<a href=#4675 id=4675 data-nosnippet>4675</a>
-<a href=#4676 id=4676 data-nosnippet>4676</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
-<a href=#4677 id=4677 data-nosnippet>4677</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
-<a href=#4678 id=4678 data-nosnippet>4678</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
-<a href=#4679 id=4679 data-nosnippet>4679</a>
-<a href=#4680 id=4680 data-nosnippet>4680</a>        <span class="kw">let </span>txs = [
-<a href=#4681 id=4681 data-nosnippet>4681</a>            Tx::new(<span class="number">10001u32</span>.into(), <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]),
-<a href=#4682 id=4682 data-nosnippet>4682</a>            Tx::new(<span class="number">10001u32</span>.into(), <span class="macro">vec!</span>[<span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>]),
-<a href=#4683 id=4683 data-nosnippet>4683</a>            Tx::new(<span class="number">10009u32</span>.into(), <span class="macro">vec!</span>[<span class="number">7</span>, <span class="number">8</span>, <span class="number">9</span>]),
-<a href=#4684 id=4684 data-nosnippet>4684</a>        ];
-<a href=#4685 id=4685 data-nosnippet>4685</a>
-<a href=#4686 id=4686 data-nosnippet>4686</a>        <span class="kw">let </span>validated_state = Default::default();
-<a href=#4687 id=4687 data-nosnippet>4687</a>        <span class="kw">let </span>justify_qc =
-<a href=#4688 id=4688 data-nosnippet>4688</a>            QuorumCertificate::genesis(<span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state, TEST_VERSIONS.test).<span class="kw">await</span>;
-<a href=#4689 id=4689 data-nosnippet>4689</a>        <span class="kw">let </span>view_number: ViewNumber = justify_qc.view_number + <span class="number">1</span>;
-<a href=#4690 id=4690 data-nosnippet>4690</a>        <span class="kw">let </span>parent_leaf = Leaf::genesis(<span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state, TEST_VERSIONS.test.base)
-<a href=#4691 id=4691 data-nosnippet>4691</a>            .<span class="kw">await
-<a href=#4692 id=4692 data-nosnippet>4692</a>            </span>.into();
-<a href=#4693 id=4693 data-nosnippet>4693</a>
-<a href=#4694 id=4694 data-nosnippet>4694</a>        <span class="kw">let </span>(payload, ns_table) =
-<a href=#4695 id=4695 data-nosnippet>4695</a>            Payload::from_transactions(txs.clone(), <span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state)
-<a href=#4696 id=4696 data-nosnippet>4696</a>                .<span class="kw">await
-<a href=#4697 id=4697 data-nosnippet>4697</a>                </span>.unwrap();
-<a href=#4698 id=4698 data-nosnippet>4698</a>        <span class="kw">let </span>payload_bytes = payload.encode();
-<a href=#4699 id=4699 data-nosnippet>4699</a>        <span class="kw">let </span>payload_commitment = vid_commitment(
-<a href=#4700 id=4700 data-nosnippet>4700</a>            <span class="kw-2">&amp;</span>payload_bytes,
-<a href=#4701 id=4701 data-nosnippet>4701</a>            <span class="kw-2">&amp;</span>ns_table.encode(),
-<a href=#4702 id=4702 data-nosnippet>4702</a>            GENESIS_VID_NUM_STORAGE_NODES,
-<a href=#4703 id=4703 data-nosnippet>4703</a>            instance_state.current_version,
-<a href=#4704 id=4704 data-nosnippet>4704</a>        );
-<a href=#4705 id=4705 data-nosnippet>4705</a>        <span class="kw">let </span>builder_commitment = payload.builder_commitment(<span class="kw-2">&amp;</span>ns_table);
-<a href=#4706 id=4706 data-nosnippet>4706</a>        <span class="kw">let </span>(fee_account, fee_key) = FeeAccount::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">0</span>);
-<a href=#4707 id=4707 data-nosnippet>4707</a>        <span class="kw">let </span>fee_amount = <span class="number">0</span>;
-<a href=#4708 id=4708 data-nosnippet>4708</a>        <span class="kw">let </span>fee_signature = FeeAccount::sign_fee(<span class="kw-2">&amp;</span>fee_key, fee_amount, <span class="kw-2">&amp;</span>ns_table).unwrap();
-<a href=#4709 id=4709 data-nosnippet>4709</a>        <span class="kw">let </span>block_header = Header::new(
-<a href=#4710 id=4710 data-nosnippet>4710</a>            <span class="kw-2">&amp;</span>validated_state,
-<a href=#4711 id=4711 data-nosnippet>4711</a>            <span class="kw-2">&amp;</span>instance_state,
-<a href=#4712 id=4712 data-nosnippet>4712</a>            <span class="kw-2">&amp;</span>parent_leaf,
-<a href=#4713 id=4713 data-nosnippet>4713</a>            payload_commitment,
-<a href=#4714 id=4714 data-nosnippet>4714</a>            builder_commitment,
-<a href=#4715 id=4715 data-nosnippet>4715</a>            ns_table,
-<a href=#4716 id=4716 data-nosnippet>4716</a>            BuilderFee {
-<a href=#4717 id=4717 data-nosnippet>4717</a>                fee_amount,
-<a href=#4718 id=4718 data-nosnippet>4718</a>                fee_account,
-<a href=#4719 id=4719 data-nosnippet>4719</a>                fee_signature,
-<a href=#4720 id=4720 data-nosnippet>4720</a>            },
-<a href=#4721 id=4721 data-nosnippet>4721</a>            instance_state.current_version,
-<a href=#4722 id=4722 data-nosnippet>4722</a>            view_number.u64(),
-<a href=#4723 id=4723 data-nosnippet>4723</a>        )
-<a href=#4724 id=4724 data-nosnippet>4724</a>        .<span class="kw">await
-<a href=#4725 id=4725 data-nosnippet>4725</a>        </span>.unwrap();
-<a href=#4726 id=4726 data-nosnippet>4726</a>        <span class="kw">let </span>proposal = QuorumProposal {
-<a href=#4727 id=4727 data-nosnippet>4727</a>            block_header: block_header.clone(),
-<a href=#4728 id=4728 data-nosnippet>4728</a>            view_number,
-<a href=#4729 id=4729 data-nosnippet>4729</a>            justify_qc: justify_qc.clone(),
-<a href=#4730 id=4730 data-nosnippet>4730</a>            upgrade_certificate: <span class="prelude-val">None</span>,
-<a href=#4731 id=4731 data-nosnippet>4731</a>            proposal_certificate: <span class="prelude-val">None</span>,
-<a href=#4732 id=4732 data-nosnippet>4732</a>        };
-<a href=#4733 id=4733 data-nosnippet>4733</a>        <span class="kw">let </span>leaf: Leaf2 = Leaf::from_quorum_proposal(<span class="kw-2">&amp;</span>proposal).into();
-<a href=#4734 id=4734 data-nosnippet>4734</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc = justify_qc.to_qc2();
-<a href=#4735 id=4735 data-nosnippet>4735</a>        qc.data.leaf_commit = leaf.commit();
-<a href=#4736 id=4736 data-nosnippet>4736</a>        qc.view_number = view_number;
-<a href=#4737 id=4737 data-nosnippet>4737</a>
-<a href=#4738 id=4738 data-nosnippet>4738</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.db.write().<span class="kw">await</span>.unwrap();
-<a href=#4739 id=4739 data-nosnippet>4739</a>        tx.insert_leaf(<span class="kw-2">&amp;</span>LeafQueryData::new(leaf, qc).unwrap())
-<a href=#4740 id=4740 data-nosnippet>4740</a>            .<span class="kw">await
-<a href=#4741 id=4741 data-nosnippet>4741</a>            </span>.unwrap();
-<a href=#4742 id=4742 data-nosnippet>4742</a>        tx.insert_block(<span class="kw-2">&amp;</span>BlockQueryData::&lt;SeqTypes&gt;::new(block_header, payload))
-<a href=#4743 id=4743 data-nosnippet>4743</a>            .<span class="kw">await
-<a href=#4744 id=4744 data-nosnippet>4744</a>            </span>.unwrap();
-<a href=#4745 id=4745 data-nosnippet>4745</a>        tx.commit().<span class="kw">await</span>.unwrap();
-<a href=#4746 id=4746 data-nosnippet>4746</a>
-<a href=#4747 id=4747 data-nosnippet>4747</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.db.read().<span class="kw">await</span>.unwrap();
-<a href=#4748 id=4748 data-nosnippet>4748</a>        <span class="kw">let </span>rows = query(
-<a href=#4749 id=4749 data-nosnippet>4749</a>            <span class="string">"
-<a href=#4750 id=4750 data-nosnippet>4750</a>            SELECT ns_id, read_ns_id(get_ns_table(h.data), t.ns_index) AS read_ns_id
-<a href=#4751 id=4751 data-nosnippet>4751</a>              FROM header AS h
-<a href=#4752 id=4752 data-nosnippet>4752</a>              JOIN transactions AS t ON t.block_height = h.height
-<a href=#4753 id=4753 data-nosnippet>4753</a>              ORDER BY t.ns_index, t.position
-<a href=#4754 id=4754 data-nosnippet>4754</a>        "</span>,
-<a href=#4755 id=4755 data-nosnippet>4755</a>        )
-<a href=#4756 id=4756 data-nosnippet>4756</a>        .fetch_all(tx.as_mut())
-<a href=#4757 id=4757 data-nosnippet>4757</a>        .<span class="kw">await
-<a href=#4758 id=4758 data-nosnippet>4758</a>        </span>.unwrap();
-<a href=#4759 id=4759 data-nosnippet>4759</a>        <span class="macro">assert_eq!</span>(rows.len(), txs.len());
-<a href=#4760 id=4760 data-nosnippet>4760</a>        <span class="kw">for </span>(i, row) <span class="kw">in </span>rows.into_iter().enumerate() {
-<a href=#4761 id=4761 data-nosnippet>4761</a>            <span class="kw">let </span>ns = u64::from(txs[i].namespace()) <span class="kw">as </span>i64;
-<a href=#4762 id=4762 data-nosnippet>4762</a>            <span class="macro">assert_eq!</span>(row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"ns_id"</span>), ns);
-<a href=#4763 id=4763 data-nosnippet>4763</a>            <span class="macro">assert_eq!</span>(row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"read_ns_id"</span>), ns);
-<a href=#4764 id=4764 data-nosnippet>4764</a>        }
-<a href=#4765 id=4765 data-nosnippet>4765</a>    }
-<a href=#4766 id=4766 data-nosnippet>4766</a>
-<a href=#4767 id=4767 data-nosnippet>4767</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#4768 id=4768 data-nosnippet>4768</a>    </span><span class="kw">async fn </span>test_postgres_read_ns_table_v0_1() {
-<a href=#4769 id=4769 data-nosnippet>4769</a>        test_postgres_read_ns_table(NodeState::mock()).<span class="kw">await</span>;
-<a href=#4770 id=4770 data-nosnippet>4770</a>    }
-<a href=#4771 id=4771 data-nosnippet>4771</a>
-<a href=#4772 id=4772 data-nosnippet>4772</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#4773 id=4773 data-nosnippet>4773</a>    </span><span class="kw">async fn </span>test_postgres_read_ns_table_v0_2() {
-<a href=#4774 id=4774 data-nosnippet>4774</a>        test_postgres_read_ns_table(NodeState::mock_v2()).<span class="kw">await</span>;
-<a href=#4775 id=4775 data-nosnippet>4775</a>    }
-<a href=#4776 id=4776 data-nosnippet>4776</a>
-<a href=#4777 id=4777 data-nosnippet>4777</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#4778 id=4778 data-nosnippet>4778</a>    </span><span class="kw">async fn </span>test_postgres_read_ns_table_v0_3() {
-<a href=#4779 id=4779 data-nosnippet>4779</a>        test_postgres_read_ns_table(NodeState::mock_v3().with_epoch_height(<span class="number">0</span>)).<span class="kw">await</span>;
-<a href=#4780 id=4780 data-nosnippet>4780</a>    }
-<a href=#4781 id=4781 data-nosnippet>4781</a>
-<a href=#4782 id=4782 data-nosnippet>4782</a>    <span class="doccomment">/// Verify that concurrent calls to `record_action` all succeed under
-<a href=#4783 id=4783 data-nosnippet>4783</a>    /// PostgreSQL SERIALIZABLE isolation. `WRITE_BACKOFF.retry_if` handles any
-<a href=#4784 id=4784 data-nosnippet>4784</a>    /// 40001 serialization failures that arise when many tasks race to update
-<a href=#4785 id=4785 data-nosnippet>4785</a>    /// the same row.
-<a href=#4786 id=4786 data-nosnippet>4786</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#4787 id=4787 data-nosnippet>4787</a>    </span><span class="kw">async fn </span>test_record_action_concurrent() {
-<a href=#4788 id=4788 data-nosnippet>4788</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
-<a href=#4789 id=4789 data-nosnippet>4789</a>        <span class="kw">let </span>storage = Arc::new(Persistence::connect(<span class="kw-2">&amp;</span>tmp).<span class="kw">await</span>);
-<a href=#4790 id=4790 data-nosnippet>4790</a>
-<a href=#4791 id=4791 data-nosnippet>4791</a>        <span class="kw">let </span>handles: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0u64</span>..<span class="number">20</span>)
-<a href=#4792 id=4792 data-nosnippet>4792</a>            .map(|i| {
-<a href=#4793 id=4793 data-nosnippet>4793</a>                <span class="kw">let </span>storage = Arc::clone(<span class="kw-2">&amp;</span>storage);
-<a href=#4794 id=4794 data-nosnippet>4794</a>                tokio::spawn(<span class="kw">async move </span>{
-<a href=#4795 id=4795 data-nosnippet>4795</a>                    storage
-<a href=#4796 id=4796 data-nosnippet>4796</a>                        .record_action(ViewNumber::new(i), <span class="prelude-val">None</span>, HotShotAction::Vote)
-<a href=#4797 id=4797 data-nosnippet>4797</a>                        .<span class="kw">await
-<a href=#4798 id=4798 data-nosnippet>4798</a>                </span>})
-<a href=#4799 id=4799 data-nosnippet>4799</a>            })
-<a href=#4800 id=4800 data-nosnippet>4800</a>            .collect();
-<a href=#4801 id=4801 data-nosnippet>4801</a>
-<a href=#4802 id=4802 data-nosnippet>4802</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles {
-<a href=#4803 id=4803 data-nosnippet>4803</a>            handle.<span class="kw">await</span>.unwrap().unwrap();
-<a href=#4804 id=4804 data-nosnippet>4804</a>        }
-<a href=#4805 id=4805 data-nosnippet>4805</a>
-<a href=#4806 id=4806 data-nosnippet>4806</a>        <span class="kw">let </span>latest = storage.load_latest_acted_view().<span class="kw">await</span>.unwrap();
-<a href=#4807 id=4807 data-nosnippet>4807</a>        <span class="macro">assert_eq!</span>(latest, <span class="prelude-val">Some</span>(ViewNumber::new(<span class="number">19</span>)));
-<a href=#4808 id=4808 data-nosnippet>4808</a>    }
-<a href=#4809 id=4809 data-nosnippet>4809</a>}
+<a href=#4672 id=4672 data-nosnippet>4672</a>            .set_first_epoch(EpochNumber::genesis(), Default::default());
+<a href=#4673 id=4673 data-nosnippet>4673</a>
+<a href=#4674 id=4674 data-nosnippet>4674</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
+<a href=#4675 id=4675 data-nosnippet>4675</a>        <span class="kw">let </span><span class="kw-2">mut </span>opt = Persistence::options(<span class="kw-2">&amp;</span>tmp);
+<a href=#4676 id=4676 data-nosnippet>4676</a>        <span class="kw">let </span>storage = opt.create().<span class="kw">await</span>.unwrap();
+<a href=#4677 id=4677 data-nosnippet>4677</a>
+<a href=#4678 id=4678 data-nosnippet>4678</a>        <span class="kw">let </span>txs = [
+<a href=#4679 id=4679 data-nosnippet>4679</a>            Tx::new(<span class="number">10001u32</span>.into(), <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]),
+<a href=#4680 id=4680 data-nosnippet>4680</a>            Tx::new(<span class="number">10001u32</span>.into(), <span class="macro">vec!</span>[<span class="number">4</span>, <span class="number">5</span>, <span class="number">6</span>]),
+<a href=#4681 id=4681 data-nosnippet>4681</a>            Tx::new(<span class="number">10009u32</span>.into(), <span class="macro">vec!</span>[<span class="number">7</span>, <span class="number">8</span>, <span class="number">9</span>]),
+<a href=#4682 id=4682 data-nosnippet>4682</a>        ];
+<a href=#4683 id=4683 data-nosnippet>4683</a>
+<a href=#4684 id=4684 data-nosnippet>4684</a>        <span class="kw">let </span>validated_state = Default::default();
+<a href=#4685 id=4685 data-nosnippet>4685</a>        <span class="kw">let </span>justify_qc =
+<a href=#4686 id=4686 data-nosnippet>4686</a>            QuorumCertificate::genesis(<span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state, TEST_VERSIONS.test).<span class="kw">await</span>;
+<a href=#4687 id=4687 data-nosnippet>4687</a>        <span class="kw">let </span>view_number: ViewNumber = justify_qc.view_number + <span class="number">1</span>;
+<a href=#4688 id=4688 data-nosnippet>4688</a>        <span class="kw">let </span>parent_leaf = Leaf::genesis(<span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state, TEST_VERSIONS.test.base)
+<a href=#4689 id=4689 data-nosnippet>4689</a>            .<span class="kw">await
+<a href=#4690 id=4690 data-nosnippet>4690</a>            </span>.into();
+<a href=#4691 id=4691 data-nosnippet>4691</a>
+<a href=#4692 id=4692 data-nosnippet>4692</a>        <span class="kw">let </span>(payload, ns_table) =
+<a href=#4693 id=4693 data-nosnippet>4693</a>            Payload::from_transactions(txs.clone(), <span class="kw-2">&amp;</span>validated_state, <span class="kw-2">&amp;</span>instance_state)
+<a href=#4694 id=4694 data-nosnippet>4694</a>                .<span class="kw">await
+<a href=#4695 id=4695 data-nosnippet>4695</a>                </span>.unwrap();
+<a href=#4696 id=4696 data-nosnippet>4696</a>        <span class="kw">let </span>payload_bytes = payload.encode();
+<a href=#4697 id=4697 data-nosnippet>4697</a>        <span class="kw">let </span>payload_commitment = vid_commitment(
+<a href=#4698 id=4698 data-nosnippet>4698</a>            <span class="kw-2">&amp;</span>payload_bytes,
+<a href=#4699 id=4699 data-nosnippet>4699</a>            <span class="kw-2">&amp;</span>ns_table.encode(),
+<a href=#4700 id=4700 data-nosnippet>4700</a>            GENESIS_VID_NUM_STORAGE_NODES,
+<a href=#4701 id=4701 data-nosnippet>4701</a>            instance_state.current_version,
+<a href=#4702 id=4702 data-nosnippet>4702</a>        );
+<a href=#4703 id=4703 data-nosnippet>4703</a>        <span class="kw">let </span>builder_commitment = payload.builder_commitment(<span class="kw-2">&amp;</span>ns_table);
+<a href=#4704 id=4704 data-nosnippet>4704</a>        <span class="kw">let </span>(fee_account, fee_key) = FeeAccount::generated_from_seed_indexed([<span class="number">0</span>; <span class="number">32</span>], <span class="number">0</span>);
+<a href=#4705 id=4705 data-nosnippet>4705</a>        <span class="kw">let </span>fee_amount = <span class="number">0</span>;
+<a href=#4706 id=4706 data-nosnippet>4706</a>        <span class="kw">let </span>fee_signature = FeeAccount::sign_fee(<span class="kw-2">&amp;</span>fee_key, fee_amount, <span class="kw-2">&amp;</span>ns_table).unwrap();
+<a href=#4707 id=4707 data-nosnippet>4707</a>        <span class="kw">let </span>block_header = Header::new(
+<a href=#4708 id=4708 data-nosnippet>4708</a>            <span class="kw-2">&amp;</span>validated_state,
+<a href=#4709 id=4709 data-nosnippet>4709</a>            <span class="kw-2">&amp;</span>instance_state,
+<a href=#4710 id=4710 data-nosnippet>4710</a>            <span class="kw-2">&amp;</span>parent_leaf,
+<a href=#4711 id=4711 data-nosnippet>4711</a>            payload_commitment,
+<a href=#4712 id=4712 data-nosnippet>4712</a>            builder_commitment,
+<a href=#4713 id=4713 data-nosnippet>4713</a>            ns_table,
+<a href=#4714 id=4714 data-nosnippet>4714</a>            BuilderFee {
+<a href=#4715 id=4715 data-nosnippet>4715</a>                fee_amount,
+<a href=#4716 id=4716 data-nosnippet>4716</a>                fee_account,
+<a href=#4717 id=4717 data-nosnippet>4717</a>                fee_signature,
+<a href=#4718 id=4718 data-nosnippet>4718</a>            },
+<a href=#4719 id=4719 data-nosnippet>4719</a>            instance_state.current_version,
+<a href=#4720 id=4720 data-nosnippet>4720</a>            view_number.u64(),
+<a href=#4721 id=4721 data-nosnippet>4721</a>        )
+<a href=#4722 id=4722 data-nosnippet>4722</a>        .<span class="kw">await
+<a href=#4723 id=4723 data-nosnippet>4723</a>        </span>.unwrap();
+<a href=#4724 id=4724 data-nosnippet>4724</a>        <span class="kw">let </span>proposal = QuorumProposal {
+<a href=#4725 id=4725 data-nosnippet>4725</a>            block_header: block_header.clone(),
+<a href=#4726 id=4726 data-nosnippet>4726</a>            view_number,
+<a href=#4727 id=4727 data-nosnippet>4727</a>            justify_qc: justify_qc.clone(),
+<a href=#4728 id=4728 data-nosnippet>4728</a>            upgrade_certificate: <span class="prelude-val">None</span>,
+<a href=#4729 id=4729 data-nosnippet>4729</a>            proposal_certificate: <span class="prelude-val">None</span>,
+<a href=#4730 id=4730 data-nosnippet>4730</a>        };
+<a href=#4731 id=4731 data-nosnippet>4731</a>        <span class="kw">let </span>leaf: Leaf2 = Leaf::from_quorum_proposal(<span class="kw-2">&amp;</span>proposal).into();
+<a href=#4732 id=4732 data-nosnippet>4732</a>        <span class="kw">let </span><span class="kw-2">mut </span>qc = justify_qc.to_qc2();
+<a href=#4733 id=4733 data-nosnippet>4733</a>        qc.data.leaf_commit = leaf.commit();
+<a href=#4734 id=4734 data-nosnippet>4734</a>        qc.view_number = view_number;
+<a href=#4735 id=4735 data-nosnippet>4735</a>
+<a href=#4736 id=4736 data-nosnippet>4736</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.db.write().<span class="kw">await</span>.unwrap();
+<a href=#4737 id=4737 data-nosnippet>4737</a>        tx.insert_leaf(<span class="kw-2">&amp;</span>LeafQueryData::new(leaf, qc).unwrap())
+<a href=#4738 id=4738 data-nosnippet>4738</a>            .<span class="kw">await
+<a href=#4739 id=4739 data-nosnippet>4739</a>            </span>.unwrap();
+<a href=#4740 id=4740 data-nosnippet>4740</a>        tx.insert_block(<span class="kw-2">&amp;</span>BlockQueryData::&lt;SeqTypes&gt;::new(block_header, payload))
+<a href=#4741 id=4741 data-nosnippet>4741</a>            .<span class="kw">await
+<a href=#4742 id=4742 data-nosnippet>4742</a>            </span>.unwrap();
+<a href=#4743 id=4743 data-nosnippet>4743</a>        tx.commit().<span class="kw">await</span>.unwrap();
+<a href=#4744 id=4744 data-nosnippet>4744</a>
+<a href=#4745 id=4745 data-nosnippet>4745</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = storage.db.read().<span class="kw">await</span>.unwrap();
+<a href=#4746 id=4746 data-nosnippet>4746</a>        <span class="kw">let </span>rows = query(
+<a href=#4747 id=4747 data-nosnippet>4747</a>            <span class="string">"
+<a href=#4748 id=4748 data-nosnippet>4748</a>            SELECT ns_id, read_ns_id(get_ns_table(h.data), t.ns_index) AS read_ns_id
+<a href=#4749 id=4749 data-nosnippet>4749</a>              FROM header AS h
+<a href=#4750 id=4750 data-nosnippet>4750</a>              JOIN transactions AS t ON t.block_height = h.height
+<a href=#4751 id=4751 data-nosnippet>4751</a>              ORDER BY t.ns_index, t.position
+<a href=#4752 id=4752 data-nosnippet>4752</a>        "</span>,
+<a href=#4753 id=4753 data-nosnippet>4753</a>        )
+<a href=#4754 id=4754 data-nosnippet>4754</a>        .fetch_all(tx.as_mut())
+<a href=#4755 id=4755 data-nosnippet>4755</a>        .<span class="kw">await
+<a href=#4756 id=4756 data-nosnippet>4756</a>        </span>.unwrap();
+<a href=#4757 id=4757 data-nosnippet>4757</a>        <span class="macro">assert_eq!</span>(rows.len(), txs.len());
+<a href=#4758 id=4758 data-nosnippet>4758</a>        <span class="kw">for </span>(i, row) <span class="kw">in </span>rows.into_iter().enumerate() {
+<a href=#4759 id=4759 data-nosnippet>4759</a>            <span class="kw">let </span>ns = u64::from(txs[i].namespace()) <span class="kw">as </span>i64;
+<a href=#4760 id=4760 data-nosnippet>4760</a>            <span class="macro">assert_eq!</span>(row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"ns_id"</span>), ns);
+<a href=#4761 id=4761 data-nosnippet>4761</a>            <span class="macro">assert_eq!</span>(row.get::&lt;i64, <span class="kw">_</span>&gt;(<span class="string">"read_ns_id"</span>), ns);
+<a href=#4762 id=4762 data-nosnippet>4762</a>        }
+<a href=#4763 id=4763 data-nosnippet>4763</a>    }
+<a href=#4764 id=4764 data-nosnippet>4764</a>
+<a href=#4765 id=4765 data-nosnippet>4765</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#4766 id=4766 data-nosnippet>4766</a>    </span><span class="kw">async fn </span>test_postgres_read_ns_table_v0_1() {
+<a href=#4767 id=4767 data-nosnippet>4767</a>        test_postgres_read_ns_table(NodeState::mock()).<span class="kw">await</span>;
+<a href=#4768 id=4768 data-nosnippet>4768</a>    }
+<a href=#4769 id=4769 data-nosnippet>4769</a>
+<a href=#4770 id=4770 data-nosnippet>4770</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#4771 id=4771 data-nosnippet>4771</a>    </span><span class="kw">async fn </span>test_postgres_read_ns_table_v0_2() {
+<a href=#4772 id=4772 data-nosnippet>4772</a>        test_postgres_read_ns_table(NodeState::mock_v2()).<span class="kw">await</span>;
+<a href=#4773 id=4773 data-nosnippet>4773</a>    }
+<a href=#4774 id=4774 data-nosnippet>4774</a>
+<a href=#4775 id=4775 data-nosnippet>4775</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#4776 id=4776 data-nosnippet>4776</a>    </span><span class="kw">async fn </span>test_postgres_read_ns_table_v0_3() {
+<a href=#4777 id=4777 data-nosnippet>4777</a>        test_postgres_read_ns_table(NodeState::mock_v3().with_epoch_height(<span class="number">0</span>)).<span class="kw">await</span>;
+<a href=#4778 id=4778 data-nosnippet>4778</a>    }
+<a href=#4779 id=4779 data-nosnippet>4779</a>
+<a href=#4780 id=4780 data-nosnippet>4780</a>    <span class="doccomment">/// Verify that concurrent calls to `record_action` all succeed under
+<a href=#4781 id=4781 data-nosnippet>4781</a>    /// PostgreSQL SERIALIZABLE isolation. `WRITE_BACKOFF.retry_if` handles any
+<a href=#4782 id=4782 data-nosnippet>4782</a>    /// 40001 serialization failures that arise when many tasks race to update
+<a href=#4783 id=4783 data-nosnippet>4783</a>    /// the same row.
+<a href=#4784 id=4784 data-nosnippet>4784</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#4785 id=4785 data-nosnippet>4785</a>    </span><span class="kw">async fn </span>test_record_action_concurrent() {
+<a href=#4786 id=4786 data-nosnippet>4786</a>        <span class="kw">let </span>tmp = Persistence::tmp_storage().<span class="kw">await</span>;
+<a href=#4787 id=4787 data-nosnippet>4787</a>        <span class="kw">let </span>storage = Arc::new(Persistence::connect(<span class="kw-2">&amp;</span>tmp).<span class="kw">await</span>);
+<a href=#4788 id=4788 data-nosnippet>4788</a>
+<a href=#4789 id=4789 data-nosnippet>4789</a>        <span class="kw">let </span>handles: Vec&lt;<span class="kw">_</span>&gt; = (<span class="number">0u64</span>..<span class="number">20</span>)
+<a href=#4790 id=4790 data-nosnippet>4790</a>            .map(|i| {
+<a href=#4791 id=4791 data-nosnippet>4791</a>                <span class="kw">let </span>storage = Arc::clone(<span class="kw-2">&amp;</span>storage);
+<a href=#4792 id=4792 data-nosnippet>4792</a>                tokio::spawn(<span class="kw">async move </span>{
+<a href=#4793 id=4793 data-nosnippet>4793</a>                    storage
+<a href=#4794 id=4794 data-nosnippet>4794</a>                        .record_action(ViewNumber::new(i), <span class="prelude-val">None</span>, HotShotAction::Vote)
+<a href=#4795 id=4795 data-nosnippet>4795</a>                        .<span class="kw">await
+<a href=#4796 id=4796 data-nosnippet>4796</a>                </span>})
+<a href=#4797 id=4797 data-nosnippet>4797</a>            })
+<a href=#4798 id=4798 data-nosnippet>4798</a>            .collect();
+<a href=#4799 id=4799 data-nosnippet>4799</a>
+<a href=#4800 id=4800 data-nosnippet>4800</a>        <span class="kw">for </span>handle <span class="kw">in </span>handles {
+<a href=#4801 id=4801 data-nosnippet>4801</a>            handle.<span class="kw">await</span>.unwrap().unwrap();
+<a href=#4802 id=4802 data-nosnippet>4802</a>        }
+<a href=#4803 id=4803 data-nosnippet>4803</a>
+<a href=#4804 id=4804 data-nosnippet>4804</a>        <span class="kw">let </span>latest = storage.load_latest_acted_view().<span class="kw">await</span>.unwrap();
+<a href=#4805 id=4805 data-nosnippet>4805</a>        <span class="macro">assert_eq!</span>(latest, <span class="prelude-val">Some</span>(ViewNumber::new(<span class="number">19</span>)));
+<a href=#4806 id=4806 data-nosnippet>4806</a>    }
+<a href=#4807 id=4807 data-nosnippet>4807</a>}
 </code></pre></div></section></main></body></html>

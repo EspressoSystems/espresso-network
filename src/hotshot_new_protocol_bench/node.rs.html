@@ -204,11 +204,11 @@
 <a href=#204 id=204 data-nosnippet>204</a>        .build();
 <a href=#205 id=205 data-nosnippet>205</a>
 <a href=#206 id=206 data-nosnippet>206</a>    <span class="comment">// Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-<a href=#207 id=207 data-nosnippet>207</a>    </span>coordinator.start().<span class="kw">await</span>;
+<a href=#207 id=207 data-nosnippet>207</a>    </span>coordinator.start();
 <a href=#208 id=208 data-nosnippet>208</a>
 <a href=#209 id=209 data-nosnippet>209</a>    <span class="comment">// Process initial outputs so the timer resets before the event loop.
 <a href=#210 id=210 data-nosnippet>210</a>    </span><span class="kw">while let </span><span class="prelude-val">Some</span>(output) = coordinator.outbox_mut().pop_front() {
-<a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = coordinator.process_consensus_output(output).<span class="kw">await </span>{
+<a href=#211 id=211 data-nosnippet>211</a>        <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = coordinator.process_consensus_output(output) {
 <a href=#212 id=212 data-nosnippet>212</a>            <span class="macro">warn!</span>(%e, <span class="string">"error processing initial output"</span>);
 <a href=#213 id=213 data-nosnippet>213</a>        }
 <a href=#214 id=214 data-nosnippet>214</a>    }
@@ -231,7 +231,7 @@
 <a href=#231 id=231 data-nosnippet>231</a>        <span class="kw">match </span>coordinator.next_consensus_input().<span class="kw">await </span>{
 <a href=#232 id=232 data-nosnippet>232</a>            <span class="prelude-val">Ok</span>(input) =&gt; {
 <a href=#233 id=233 data-nosnippet>233</a>                metrics.on_input(<span class="kw-2">&amp;</span>input);
-<a href=#234 id=234 data-nosnippet>234</a>                coordinator.apply_consensus(input).<span class="kw">await</span>;
+<a href=#234 id=234 data-nosnippet>234</a>                coordinator.apply_consensus(input);
 <a href=#235 id=235 data-nosnippet>235</a>            },
 <a href=#236 id=236 data-nosnippet>236</a>            <span class="prelude-val">Err</span>(err)
 <a href=#237 id=237 data-nosnippet>237</a>                <span class="kw">if </span>err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =&gt;
@@ -265,7 +265,7 @@
 <a href=#265 id=265 data-nosnippet>265</a>                );
 <a href=#266 id=266 data-nosnippet>266</a>                <span class="kw">let </span>header_input = ConsensusInput::HeaderCreated(req.view, header);
 <a href=#267 id=267 data-nosnippet>267</a>                metrics.on_input(<span class="kw-2">&amp;</span>header_input);
-<a href=#268 id=268 data-nosnippet>268</a>                coordinator.apply_consensus(header_input).<span class="kw">await</span>;
+<a href=#268 id=268 data-nosnippet>268</a>                coordinator.apply_consensus(header_input);
 <a href=#269 id=269 data-nosnippet>269</a>                <span class="kw">let </span>block_input = ConsensusInput::BlockBuilt {
 <a href=#270 id=270 data-nosnippet>270</a>                    view: req.view,
 <a href=#271 id=271 data-nosnippet>271</a>                    epoch: req.epoch,
@@ -273,11 +273,11 @@
 <a href=#273 id=273 data-nosnippet>273</a>                    metadata: block.metadata,
 <a href=#274 id=274 data-nosnippet>274</a>                };
 <a href=#275 id=275 data-nosnippet>275</a>                metrics.on_input(<span class="kw-2">&amp;</span>block_input);
-<a href=#276 id=276 data-nosnippet>276</a>                coordinator.apply_consensus(block_input).<span class="kw">await</span>;
+<a href=#276 id=276 data-nosnippet>276</a>                coordinator.apply_consensus(block_input);
 <a href=#277 id=277 data-nosnippet>277</a>                <span class="kw">continue</span>; <span class="comment">// skip process_consensus_output for this one
 <a href=#278 id=278 data-nosnippet>278</a>            </span>}
 <a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = coordinator.process_consensus_output(output).<span class="kw">await </span>{
+<a href=#280 id=280 data-nosnippet>280</a>            <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = coordinator.process_consensus_output(output) {
 <a href=#281 id=281 data-nosnippet>281</a>                <span class="kw">if </span>err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
 <a href=#282 id=282 data-nosnippet>282</a>                    <span class="macro">error!</span>(%err, <span class="string">"critical error processing output"</span>);
 <a href=#283 id=283 data-nosnippet>283</a>                    metrics.write_csv(<span class="kw-2">&amp;</span>output_path)<span class="question-mark">?</span>;

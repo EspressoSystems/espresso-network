@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["block","chain_config","fee_info","header","instance_state","l1","reward","stake_table","state","transaction"]};
+window.SIDEBAR_ITEMS = {"mod":["block","chain_config","committee","fee_info","header","instance_state","l1","reward","stake_table","state","transaction"]};

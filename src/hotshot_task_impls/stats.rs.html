@@ -352,61 +352,59 @@
 <a href=#352 id=352 data-nosnippet>352</a>
 <a href=#353 id=353 data-nosnippet>353</a>                <span class="kw">let </span>leader = <span class="self">self
 <a href=#354 id=354 data-nosnippet>354</a>                    </span>.membership_coordinator
-<a href=#355 id=355 data-nosnippet>355</a>                    .membership_for_epoch(<span class="kw-2">*</span>epoch)
-<a href=#356 id=356 data-nosnippet>356</a>                    .<span class="kw">await</span><span class="question-mark">?
-<a href=#357 id=357 data-nosnippet>357</a>                    </span>.leader(<span class="kw-2">*</span>view)
-<a href=#358 id=358 data-nosnippet>358</a>                    .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#359 id=359 data-nosnippet>359</a>                <span class="kw">if </span>leader == <span class="self">self</span>.public_key {
-<a href=#360 id=360 data-nosnippet>360</a>                    <span class="self">self</span>.leader_entry(<span class="kw-2">*</span>view).builder_start = <span class="prelude-val">Some</span>(now);
-<a href=#361 id=361 data-nosnippet>361</a>                }
-<a href=#362 id=362 data-nosnippet>362</a>            },
-<a href=#363 id=363 data-nosnippet>363</a>            HotShotEvent::Timeout(view, <span class="kw">_</span>) =&gt; {
-<a href=#364 id=364 data-nosnippet>364</a>                <span class="self">self</span>.replica_entry(<span class="kw-2">*</span>view).timeout_triggered = <span class="prelude-val">Some</span>(now);
-<a href=#365 id=365 data-nosnippet>365</a>                <span class="self">self</span>.timeouts.insert(<span class="kw-2">*</span>view);
-<a href=#366 id=366 data-nosnippet>366</a>            },
-<a href=#367 id=367 data-nosnippet>367</a>            HotShotEvent::TransactionsRecv(_txns) =&gt; {
-<a href=#368 id=368 data-nosnippet>368</a>                <span class="comment">// TODO: Track transactions by time
-<a href=#369 id=369 data-nosnippet>369</a>                // #3526 https://github.com/EspressoSystems/espresso-network/issues/3526
-<a href=#370 id=370 data-nosnippet>370</a>            </span>},
-<a href=#371 id=371 data-nosnippet>371</a>            HotShotEvent::SendPayloadCommitmentAndMetadata(<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, view, <span class="kw">_</span>) =&gt; {
-<a href=#372 id=372 data-nosnippet>372</a>                <span class="self">self</span>.leader_entry(<span class="kw-2">*</span>view).vid_disperse_send = <span class="prelude-val">Some</span>(now);
-<a href=#373 id=373 data-nosnippet>373</a>            },
-<a href=#374 id=374 data-nosnippet>374</a>            HotShotEvent::VidShareRecv(<span class="kw">_</span>, proposal) =&gt; {
-<a href=#375 id=375 data-nosnippet>375</a>                <span class="self">self</span>.replica_entry(proposal.data.view_number())
-<a href=#376 id=376 data-nosnippet>376</a>                    .vid_share_recv = <span class="prelude-val">Some</span>(now);
-<a href=#377 id=377 data-nosnippet>377</a>            },
-<a href=#378 id=378 data-nosnippet>378</a>            HotShotEvent::VidShareValidated(proposal) =&gt; {
-<a href=#379 id=379 data-nosnippet>379</a>                <span class="self">self</span>.replica_entry(proposal.data.view_number())
-<a href=#380 id=380 data-nosnippet>380</a>                    .vid_share_validated = <span class="prelude-val">Some</span>(now);
-<a href=#381 id=381 data-nosnippet>381</a>            },
-<a href=#382 id=382 data-nosnippet>382</a>            HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) =&gt; {
-<a href=#383 id=383 data-nosnippet>383</a>                <span class="self">self</span>.replica_entry(proposal.data.view_number())
-<a href=#384 id=384 data-nosnippet>384</a>                    .proposal_prelim_validated = <span class="prelude-val">Some</span>(now);
-<a href=#385 id=385 data-nosnippet>385</a>            },
-<a href=#386 id=386 data-nosnippet>386</a>            HotShotEvent::LeavesDecided(leaves) =&gt; {
-<a href=#387 id=387 data-nosnippet>387</a>                <span class="kw">for </span>leaf <span class="kw">in </span>leaves {
-<a href=#388 id=388 data-nosnippet>388</a>                    <span class="kw">if </span>leaf.view_number() == ViewNumber::genesis() {
-<a href=#389 id=389 data-nosnippet>389</a>                        <span class="kw">continue</span>;
-<a href=#390 id=390 data-nosnippet>390</a>                    }
-<a href=#391 id=391 data-nosnippet>391</a>                    <span class="kw">let </span>view = leaf.view_number();
-<a href=#392 id=392 data-nosnippet>392</a>                    <span class="kw">let </span>timestamp = leaf.block_header().timestamp_millis() <span class="kw">as </span>i128;
-<a href=#393 id=393 data-nosnippet>393</a>                    <span class="kw">let </span>now_millis = now / <span class="number">1_000_000</span>;
-<a href=#394 id=394 data-nosnippet>394</a>                    <span class="kw">let </span>latency = now_millis - timestamp;
-<a href=#395 id=395 data-nosnippet>395</a>                    <span class="macro">tracing::debug!</span>(<span class="string">"View {} Latency: {}ms"</span>, view, latency);
-<a href=#396 id=396 data-nosnippet>396</a>                    <span class="self">self</span>.latencies_by_view.insert(view, latency);
-<a href=#397 id=397 data-nosnippet>397</a>                    <span class="self">self</span>.sizes_by_view.insert(
-<a href=#398 id=398 data-nosnippet>398</a>                        view,
-<a href=#399 id=399 data-nosnippet>399</a>                        leaf.block_payload().map(|p| p.txn_bytes()).unwrap_or(<span class="number">0</span>) <span class="kw">as </span>i128,
-<a href=#400 id=400 data-nosnippet>400</a>                    );
-<a href=#401 id=401 data-nosnippet>401</a>                }
-<a href=#402 id=402 data-nosnippet>402</a>            },
-<a href=#403 id=403 data-nosnippet>403</a>            <span class="kw">_ </span>=&gt; {},
-<a href=#404 id=404 data-nosnippet>404</a>        }
-<a href=#405 id=405 data-nosnippet>405</a>        <span class="prelude-val">Ok</span>(())
-<a href=#406 id=406 data-nosnippet>406</a>    }
-<a href=#407 id=407 data-nosnippet>407</a>
-<a href=#408 id=408 data-nosnippet>408</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#409 id=409 data-nosnippet>409</a>        <span class="comment">// No subtasks to cancel
-<a href=#410 id=410 data-nosnippet>410</a>    </span>}
-<a href=#411 id=411 data-nosnippet>411</a>}
+<a href=#355 id=355 data-nosnippet>355</a>                    .membership_for_epoch(<span class="kw-2">*</span>epoch)<span class="question-mark">?
+<a href=#356 id=356 data-nosnippet>356</a>                    </span>.leader(<span class="kw-2">*</span>view)<span class="question-mark">?</span>;
+<a href=#357 id=357 data-nosnippet>357</a>                <span class="kw">if </span>leader == <span class="self">self</span>.public_key {
+<a href=#358 id=358 data-nosnippet>358</a>                    <span class="self">self</span>.leader_entry(<span class="kw-2">*</span>view).builder_start = <span class="prelude-val">Some</span>(now);
+<a href=#359 id=359 data-nosnippet>359</a>                }
+<a href=#360 id=360 data-nosnippet>360</a>            },
+<a href=#361 id=361 data-nosnippet>361</a>            HotShotEvent::Timeout(view, <span class="kw">_</span>) =&gt; {
+<a href=#362 id=362 data-nosnippet>362</a>                <span class="self">self</span>.replica_entry(<span class="kw-2">*</span>view).timeout_triggered = <span class="prelude-val">Some</span>(now);
+<a href=#363 id=363 data-nosnippet>363</a>                <span class="self">self</span>.timeouts.insert(<span class="kw-2">*</span>view);
+<a href=#364 id=364 data-nosnippet>364</a>            },
+<a href=#365 id=365 data-nosnippet>365</a>            HotShotEvent::TransactionsRecv(_txns) =&gt; {
+<a href=#366 id=366 data-nosnippet>366</a>                <span class="comment">// TODO: Track transactions by time
+<a href=#367 id=367 data-nosnippet>367</a>                // #3526 https://github.com/EspressoSystems/espresso-network/issues/3526
+<a href=#368 id=368 data-nosnippet>368</a>            </span>},
+<a href=#369 id=369 data-nosnippet>369</a>            HotShotEvent::SendPayloadCommitmentAndMetadata(<span class="kw">_</span>, <span class="kw">_</span>, <span class="kw">_</span>, view, <span class="kw">_</span>) =&gt; {
+<a href=#370 id=370 data-nosnippet>370</a>                <span class="self">self</span>.leader_entry(<span class="kw-2">*</span>view).vid_disperse_send = <span class="prelude-val">Some</span>(now);
+<a href=#371 id=371 data-nosnippet>371</a>            },
+<a href=#372 id=372 data-nosnippet>372</a>            HotShotEvent::VidShareRecv(<span class="kw">_</span>, proposal) =&gt; {
+<a href=#373 id=373 data-nosnippet>373</a>                <span class="self">self</span>.replica_entry(proposal.data.view_number())
+<a href=#374 id=374 data-nosnippet>374</a>                    .vid_share_recv = <span class="prelude-val">Some</span>(now);
+<a href=#375 id=375 data-nosnippet>375</a>            },
+<a href=#376 id=376 data-nosnippet>376</a>            HotShotEvent::VidShareValidated(proposal) =&gt; {
+<a href=#377 id=377 data-nosnippet>377</a>                <span class="self">self</span>.replica_entry(proposal.data.view_number())
+<a href=#378 id=378 data-nosnippet>378</a>                    .vid_share_validated = <span class="prelude-val">Some</span>(now);
+<a href=#379 id=379 data-nosnippet>379</a>            },
+<a href=#380 id=380 data-nosnippet>380</a>            HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) =&gt; {
+<a href=#381 id=381 data-nosnippet>381</a>                <span class="self">self</span>.replica_entry(proposal.data.view_number())
+<a href=#382 id=382 data-nosnippet>382</a>                    .proposal_prelim_validated = <span class="prelude-val">Some</span>(now);
+<a href=#383 id=383 data-nosnippet>383</a>            },
+<a href=#384 id=384 data-nosnippet>384</a>            HotShotEvent::LeavesDecided(leaves) =&gt; {
+<a href=#385 id=385 data-nosnippet>385</a>                <span class="kw">for </span>leaf <span class="kw">in </span>leaves {
+<a href=#386 id=386 data-nosnippet>386</a>                    <span class="kw">if </span>leaf.view_number() == ViewNumber::genesis() {
+<a href=#387 id=387 data-nosnippet>387</a>                        <span class="kw">continue</span>;
+<a href=#388 id=388 data-nosnippet>388</a>                    }
+<a href=#389 id=389 data-nosnippet>389</a>                    <span class="kw">let </span>view = leaf.view_number();
+<a href=#390 id=390 data-nosnippet>390</a>                    <span class="kw">let </span>timestamp = leaf.block_header().timestamp_millis() <span class="kw">as </span>i128;
+<a href=#391 id=391 data-nosnippet>391</a>                    <span class="kw">let </span>now_millis = now / <span class="number">1_000_000</span>;
+<a href=#392 id=392 data-nosnippet>392</a>                    <span class="kw">let </span>latency = now_millis - timestamp;
+<a href=#393 id=393 data-nosnippet>393</a>                    <span class="macro">tracing::debug!</span>(<span class="string">"View {} Latency: {}ms"</span>, view, latency);
+<a href=#394 id=394 data-nosnippet>394</a>                    <span class="self">self</span>.latencies_by_view.insert(view, latency);
+<a href=#395 id=395 data-nosnippet>395</a>                    <span class="self">self</span>.sizes_by_view.insert(
+<a href=#396 id=396 data-nosnippet>396</a>                        view,
+<a href=#397 id=397 data-nosnippet>397</a>                        leaf.block_payload().map(|p| p.txn_bytes()).unwrap_or(<span class="number">0</span>) <span class="kw">as </span>i128,
+<a href=#398 id=398 data-nosnippet>398</a>                    );
+<a href=#399 id=399 data-nosnippet>399</a>                }
+<a href=#400 id=400 data-nosnippet>400</a>            },
+<a href=#401 id=401 data-nosnippet>401</a>            <span class="kw">_ </span>=&gt; {},
+<a href=#402 id=402 data-nosnippet>402</a>        }
+<a href=#403 id=403 data-nosnippet>403</a>        <span class="prelude-val">Ok</span>(())
+<a href=#404 id=404 data-nosnippet>404</a>    }
+<a href=#405 id=405 data-nosnippet>405</a>
+<a href=#406 id=406 data-nosnippet>406</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#407 id=407 data-nosnippet>407</a>        <span class="comment">// No subtasks to cancel
+<a href=#408 id=408 data-nosnippet>408</a>    </span>}
+<a href=#409 id=409 data-nosnippet>409</a>}
 </code></pre></div></section></main></body></html>

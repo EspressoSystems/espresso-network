@@ -1008,9 +1008,9 @@
 <a href=#1008 id=1008 data-nosnippet>1008</a>        membership: EpochMembershipCoordinator&lt;TYPES&gt;,
 <a href=#1009 id=1009 data-nosnippet>1009</a>        upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
 <a href=#1010 id=1010 data-nosnippet>1010</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#1011 id=1011 data-nosnippet>1011</a>        <span class="kw">let </span>stake_table = membership.membership_for_epoch(<span class="self">self</span>.epoch).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="kw">let </span>entries = StakeTableEntries::&lt;TYPES&gt;::from(stake_table.stake_table().<span class="kw">await</span>).<span class="number">0</span>;
-<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw">let </span>threshold = stake_table.success_threshold().<span class="kw">await</span>;
+<a href=#1011 id=1011 data-nosnippet>1011</a>        <span class="kw">let </span>stake_table = membership.membership_for_epoch(<span class="self">self</span>.epoch)<span class="question-mark">?</span>;
+<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="kw">let </span>entries = StakeTableEntries::from_iter(stake_table.stake_table()).<span class="number">0</span>;
+<a href=#1013 id=1013 data-nosnippet>1013</a>        <span class="kw">let </span>threshold = stake_table.success_threshold();
 <a href=#1014 id=1014 data-nosnippet>1014</a>        <span class="self">self</span>.justify_qc
 <a href=#1015 id=1015 data-nosnippet>1015</a>            .is_valid_cert(<span class="kw-2">&amp;</span>entries, threshold, upgrade_lock)<span class="question-mark">?</span>;
 <a href=#1016 id=1016 data-nosnippet>1016</a>        <span class="kw">let </span>view_change_view = <span class="kw">match </span><span class="kw-2">&amp;</span><span class="self">self</span>.view_change_evidence {

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["StrictMembership"]};
+window.SIDEBAR_ITEMS = {"struct":["Inner","StrictEpochSnapshot","StrictMembership","StrictMembershipError","StrictNonEpochSnapshot"]};

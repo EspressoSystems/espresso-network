@@ -101,7 +101,7 @@
 <a href=#101 id=101 data-nosnippet>101</a><span class="kw">pub trait </span>TestStakeTable&lt;
 <a href=#102 id=102 data-nosnippet>102</a>    PubKey: SignatureKey,
 <a href=#103 id=103 data-nosnippet>103</a>    StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
-<a href=#104 id=104 data-nosnippet>104</a>&gt;: Debug + std::marker::Send + std::marker::Sync
+<a href=#104 id=104 data-nosnippet>104</a>&gt;: Clone + Debug + std::marker::Send + std::marker::Sync
 <a href=#105 id=105 data-nosnippet>105</a>{
 <a href=#106 id=106 data-nosnippet>106</a>    <span class="kw">fn </span>new(
 <a href=#107 id=107 data-nosnippet>107</a>        quorum_members: Vec&lt;TestStakeTableEntry&lt;PubKey, StatePubKey&gt;&gt;,

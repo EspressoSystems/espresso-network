@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["spawn_catchup"],"struct":["EpochMembership","EpochMembershipCoordinator"],"type":["DrbMap","EpochMap","EpochSender"]};
+window.SIDEBAR_ITEMS = {"enum":["EpochMembershipSnapshot"],"fn":["spawn_catchup"],"struct":["EpochMembership","EpochMembershipCoordinator"],"type":["DrbMap","EpochMap","EpochSender","Snapshot","SnapshotStakeTableHash"]};

@@ -292,12 +292,12 @@
 <a href=#292 id=292 data-nosnippet>292</a>        membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
 <a href=#293 id=293 data-nosnippet>293</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;LightClientStateUpdateCertificateV2&lt;TYPES&gt;&gt; {
 <a href=#294 id=294 data-nosnippet>294</a>        <span class="kw">let </span>epoch = membership.epoch()<span class="question-mark">?</span>;
-<a href=#295 id=295 data-nosnippet>295</a>        <span class="kw">let </span>threshold = membership.success_threshold().<span class="kw">await</span>;
+<a href=#295 id=295 data-nosnippet>295</a>        <span class="kw">let </span>threshold = membership.success_threshold();
 <a href=#296 id=296 data-nosnippet>296</a>        <span class="kw">let </span>PeerConfig {
 <a href=#297 id=297 data-nosnippet>297</a>            stake_table_entry,
 <a href=#298 id=298 data-nosnippet>298</a>            state_ver_key,
 <a href=#299 id=299 data-nosnippet>299</a>            ..
-<a href=#300 id=300 data-nosnippet>300</a>        } = membership.stake(key).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#300 id=300 data-nosnippet>300</a>        } = membership.stake(key)<span class="question-mark">?</span>;
 <a href=#301 id=301 data-nosnippet>301</a>
 <a href=#302 id=302 data-nosnippet>302</a>        <span class="kw">if </span>!&lt;TYPES::StateSignatureKey <span class="kw">as </span>LCV2StateSignatureKey&gt;::verify_state_sig(
 <a href=#303 id=303 data-nosnippet>303</a>            <span class="kw-2">&amp;</span>state_ver_key,
