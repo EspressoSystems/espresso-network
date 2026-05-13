@@ -741,6 +741,12 @@ pub struct Persistence {
 const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
 
 impl Persistence {
+    #[cfg(any(test, feature = "testing"))]
+    #[allow(dead_code)]
+    pub(crate) fn storage(&self) -> &SqlStorage {
+        &self.db
+    }
+
     /// Ensure the `leaf_hash` column is populated for all existing quorum proposals.
     ///
     /// This column was added in a migration, but because it requires computing a commitment of the

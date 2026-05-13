@@ -17,6 +17,8 @@
 use std::borrow::Cow;
 
 use async_trait::async_trait;
+#[cfg(any(test, feature = "testing"))]
+use hotshot_query_service::data_source::{Transaction as _, VersionedDataSource};
 use hotshot_query_service::{
     data_source::storage::sql::{SqlStorage, Transaction, Write},
     migration::{
@@ -94,12 +96,12 @@ impl DataBackfill for BackfillIds {
                 LIMIT $2
             ),
             updated AS (
-                UPDATE hash SET id_big = id
+                UPDATE hash SET id_big = hash.id
                 FROM batch
                 WHERE hash.id = batch.id
                 RETURNING hash.id
             )
-            SELECT MAX(id) FROM updated",
+            SELECT MAX(id)::bigint FROM updated",
         )
         .bind(offset as i64)
         .bind(self.batch_size() as i64)
@@ -331,7 +333,7 @@ impl CleanupMigration for Cleanup {
 // ---------------------------------------------------------------------------
 
 #[cfg(any(test, feature = "testing"))]
-use hotshot_query_service::testing::migration::{AdapterTest, DeferredSchemaTest};
+use hotshot_query_service::testing::migration::{AdapterTest, BackfillTest, DeferredSchemaTest};
 
 #[cfg(any(test, feature = "testing"))]
 impl AdapterTest for HashIdAdapter {
@@ -343,12 +345,171 @@ impl AdapterTest for HashIdAdapter {
 #[cfg(any(test, feature = "testing"))]
 impl DeferredSchemaTest for CreateIndex {}
 
+#[cfg(any(test, feature = "testing"))]
+async fn seed_legacy_hash_rows(storage: &SqlStorage, n: usize) -> anyhow::Result<()> {
+    let mut tx = storage.write().await?;
+    for i in 1..=n as i32 {
+        sqlx::query(
+            "INSERT INTO hash (id, value, id_big) VALUES ($1, $2, NULL) ON CONFLICT DO NOTHING",
+        )
+        .bind(i)
+        .bind(format!("legacy-{i}").into_bytes())
+        .execute(tx.as_mut())
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl BackfillTest for BackfillIds {
+    async fn seed_legacy(&self, storage: &SqlStorage, n: usize) -> anyhow::Result<()> {
+        seed_legacy_hash_rows(storage, n).await
+    }
+
+    async fn assert_all_readable_as_new(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        let mut tx = storage.read().await?;
+        let unmigrated: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM hash WHERE id > 0 AND id_big IS NULL")
+                .fetch_one(tx.as_mut())
+                .await?;
+        anyhow::ensure!(
+            unmigrated == 0,
+            "{unmigrated} legacy hash rows still have NULL id_big after backfill",
+        );
+        let mismatch: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM hash WHERE id > 0 AND id_big <> id::bigint")
+                .fetch_one(tx.as_mut())
+                .await?;
+        anyhow::ensure!(
+            mismatch == 0,
+            "{mismatch} hash rows have id_big != id after backfill",
+        );
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl BackfillTest for BackfillRefs {
+    async fn seed_legacy(&self, storage: &SqlStorage, n: usize) -> anyhow::Result<()> {
+        seed_legacy_hash_rows(storage, n).await?;
+
+        let mut tx = storage.write().await?;
+        let table = self.table;
+        let sql = format!(
+            "INSERT INTO \"{table}\" (path, created, hash_id, hash_id_big) VALUES ($1::jsonb, $2, \
+             $3, NULL)"
+        );
+        for i in 1..=n as i32 {
+            sqlx::query(&sql)
+                .bind(format!("[{i}]"))
+                .bind(i as i64)
+                .bind(i)
+                .execute(tx.as_mut())
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn assert_all_readable_as_new(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        let mut tx = storage.read().await?;
+        let table = self.table;
+        let unmigrated: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM \"{table}\" WHERE hash_id IS NOT NULL AND hash_id_big IS NULL",
+        ))
+        .fetch_one(tx.as_mut())
+        .await?;
+        anyhow::ensure!(
+            unmigrated == 0,
+            "{unmigrated} legacy {table} rows still have NULL hash_id_big after backfill",
+        );
+        let mismatch: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM \"{table}\" WHERE hash_id IS NOT NULL AND hash_id_big <> \
+             hash_id::bigint",
+        ))
+        .fetch_one(tx.as_mut())
+        .await?;
+        anyhow::ensure!(
+            mismatch == 0,
+            "{mismatch} {table} rows have hash_id_big != hash_id after backfill",
+        );
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::{sql::Persistence, tests::TestablePersistence};
 
     #[test]
     fn adapter_laws() {
         HashIdAdapter::assert_adapter_laws();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_ids_runs_to_completion() {
+        let db = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&db).await;
+        BackfillIds
+            .assert_runs_to_completion(persistence.storage(), 100)
+            .await
+            .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_ids_idempotent() {
+        let db = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&db).await;
+        BackfillIds
+            .assert_idempotent(persistence.storage(), 100)
+            .await
+            .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_ids_resumable() {
+        let db = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&db).await;
+        BackfillIds
+            .assert_resumable(persistence.storage(), 100)
+            .await
+            .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_refs_runs_to_completion() {
+        for refs in BackfillRefs::all() {
+            let db = Persistence::tmp_storage().await;
+            let persistence = Persistence::connect(&db).await;
+            refs.assert_runs_to_completion(persistence.storage(), 50)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_refs_idempotent() {
+        for refs in BackfillRefs::all() {
+            let db = Persistence::tmp_storage().await;
+            let persistence = Persistence::connect(&db).await;
+            refs.assert_idempotent(persistence.storage(), 50)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_refs_resumable() {
+        for refs in BackfillRefs::all() {
+            let db = Persistence::tmp_storage().await;
+            let persistence = Persistence::connect(&db).await;
+            refs.assert_resumable(persistence.storage(), 50)
+                .await
+                .unwrap();
+        }
     }
 }
