@@ -1922,7 +1922,8 @@ mod test {
             )
             .unwrap();
             let env_state = parse_state_priv_key(
-                &dotenv_require(&format!("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}")).unwrap(),
+                &dotenv_require(&format!("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"))
+                    .unwrap(),
             )
             .unwrap();
             let env_x25519 = parse_x25519_priv_key(
