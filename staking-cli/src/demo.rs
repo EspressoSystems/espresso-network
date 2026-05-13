@@ -1194,7 +1194,19 @@ pub(crate) async fn stake_for_demo(
     let stake_table_address = config.stake_table_address;
     tracing::info!("stake table address: {}", stake_table_address);
 
-    let mnemonic_env = dotenv_require("ESPRESSO_NODE_KEY_MNEMONIC").ok();
+    let mnemonic_env = dotenvy::var("ESPRESSO_NODE_KEY_MNEMONIC")
+        .ok()
+        .filter(|v| !v.is_empty());
+    if mnemonic_env.is_some() {
+        tracing::info!(
+            "ESPRESSO_NODE_KEY_MNEMONIC is set: deriving validator consensus keys from mnemonic"
+        );
+    } else {
+        tracing::info!(
+            "ESPRESSO_NODE_KEY_MNEMONIC is not set: reading validator consensus keys from \
+             per-validator ESPRESSO_DEMO_NODE_{{STAKING,STATE,X25519}}_PRIVATE_KEY_N env vars"
+        );
+    }
 
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
