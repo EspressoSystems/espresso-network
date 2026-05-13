@@ -1356,6 +1356,52 @@ mod test {
         assert_eq!(cached_version, DRB_AND_HEADER_UPGRADE_VERSION);
     }
 
+    /// Regression: when iter 1 of the catchup loop starts from a DB-cached lower bound, the
+    /// snapshot version for `lower_bound + 1` is the version of `root_in(lower_bound - 1)`, not
+    /// `stored_version` (the snapshot version for `lower_bound` itself, at
+    /// `root_in(lower_bound - 2)`). Activate CLIQUENET exactly at `root_in(lower_bound - 1)` so
+    /// the two roots differ. With the correct seed (CLIQUENET), iter 1's filter drops every
+    /// test validator (none have x25519) and `quorum_for_epoch` returns an error. With the
+    /// buggy seed (stored V4), iter 1 keeps every validator and catchup wrongly succeeds.
+    ///
+    /// This is a bit brittle: it observes the bug via "an error happens at all" rather than
+    /// asserting the exact filter version, but it avoids adding x25519/p2p plumbing to the
+    /// shared test client just for this one case.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_fetch_stake_table_catchup_db_load_advances_snapshot_version() {
+        use crate::client::Client;
+
+        let client = TestClient::with_epoch_height(10);
+        let genesis = client.genesis().await;
+        let db = SqliteStorage::default().await.unwrap();
+        let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
+
+        let lower_bound = genesis.first_epoch_with_dynamic_stake_table;
+        let target_epoch = lower_bound + 1;
+        let snapshot_height = root_block_in_epoch(*target_epoch - 2, 10);
+
+        let mut prev_state = StakeTableState::default();
+        for event in client.stake_table_events(lower_bound).await.unwrap() {
+            prev_state.apply_event(event).unwrap().unwrap();
+        }
+        db.insert_stake_table(lower_bound, &prev_state, DRB_AND_HEADER_UPGRADE_VERSION)
+            .await
+            .unwrap();
+
+        client.set_upgrade(snapshot_height, CLIQUENET_VERSION).await;
+
+        let err = lc.quorum_for_epoch(target_epoch).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("No validators met the minimum criteria")
+                || err.chain().any(|e| e
+                    .to_string()
+                    .contains("No validators met the minimum criteria")),
+            "{err:#}"
+        );
+    }
+
     /// Regression: catchup filtered the candidate active set at `root.version()` (root in
     /// epoch `e-1`) instead of the snapshot root's version (epoch `e-2`). When those versions
     /// differ across CLIQUENET, the LC diverges from the espresso node.
