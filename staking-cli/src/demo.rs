@@ -23,7 +23,7 @@ use alloy::{
     },
     transports::{TransportError, http::Http},
 };
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use espresso_contract_deployer::{HttpProviderWithWallet, build_provider, build_signer};
 use espresso_keyset::{KeySet, KeySetOptions};
@@ -1073,8 +1073,14 @@ pub fn generate_delegator_signer(index: u64) -> PrivateKeySigner {
     PrivateKeySigner::random_with(&mut rng)
 }
 
-fn dotenv_get(name: &str) -> Result<String> {
-    dotenvy::var(name).with_context(|| format!("environment variable {name} is not set"))
+/// Read a required environment variable, returning a distinct error for unset and empty values.
+fn dotenv_require(name: &str) -> Result<String> {
+    let value =
+        dotenvy::var(name).with_context(|| format!("environment variable {name} is not set"))?;
+    if value.is_empty() {
+        bail!("environment variable {name} is empty");
+    }
+    Ok(value)
 }
 
 /// Load consensus, state, and x25519 keys for a validator.
@@ -1103,14 +1109,14 @@ fn load_validator_keys(
             x25519::Keypair::from(keyset.x25519),
         ))
     } else {
-        let bls: BLSKeyPair = parse_bls_priv_key(&dotenv_get(&format!(
+        let bls: BLSKeyPair = parse_bls_priv_key(&dotenv_require(&format!(
             "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
         ))?)?
         .into();
-        let state_sign = parse_state_priv_key(&dotenv_get(&format!(
+        let state_sign = parse_state_priv_key(&dotenv_require(&format!(
             "ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"
         ))?)?;
-        let x25519_secret = parse_x25519_priv_key(&dotenv_get(&format!(
+        let x25519_secret = parse_x25519_priv_key(&dotenv_require(&format!(
             "ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"
         ))?)?;
         Ok((
@@ -1133,9 +1139,9 @@ fn load_validator_keys(
 ///
 /// The base form takes precedence when `HOSTNAME` is set.
 fn load_p2p_addr(val_index: u16) -> Result<NetAddr> {
-    if let Ok(hostname) = dotenv_get("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME") {
+    if let Ok(hostname) = dotenv_require("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME") {
         let base_port_var = "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_BASE_PORT";
-        let base_port: u16 = dotenv_get(base_port_var)?
+        let base_port: u16 = dotenv_require(base_port_var)?
             .parse()
             .with_context(|| format!("{base_port_var} must be a u16"))?;
         let port = base_port
@@ -1148,7 +1154,7 @@ fn load_p2p_addr(val_index: u16) -> Result<NetAddr> {
     }
 
     let name = format!("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{val_index}");
-    let value = dotenv_get(&name)?;
+    let value = dotenv_require(&name)?;
     value
         .parse()
         .with_context(|| format!("invalid p2p address {name}={value}"))
@@ -1188,7 +1194,7 @@ pub(crate) async fn stake_for_demo(
     let stake_table_address = config.stake_table_address;
     tracing::info!("stake table address: {}", stake_table_address);
 
-    let mnemonic_env = dotenv_get("ESPRESSO_NODE_KEY_MNEMONIC").ok();
+    let mnemonic_env = dotenv_require("ESPRESSO_NODE_KEY_MNEMONIC").ok();
 
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
@@ -1909,19 +1915,21 @@ mod test {
             .unwrap();
 
             let env_bls = parse_bls_priv_key(
-                &dotenvy::var(format!(
+                &dotenv_require(&format!(
                     "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
                 ))
                 .unwrap(),
             )
             .unwrap();
             let env_state = parse_state_priv_key(
-                &dotenvy::var(format!("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}")).unwrap(),
+                &dotenv_require(&format!("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}")).unwrap(),
             )
             .unwrap();
             let env_x25519 = parse_x25519_priv_key(
-                &dotenvy::var(format!("ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"))
-                    .unwrap(),
+                &dotenv_require(&format!(
+                    "ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"
+                ))
+                .unwrap(),
             )
             .unwrap();
 
