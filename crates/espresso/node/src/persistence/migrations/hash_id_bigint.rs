@@ -440,7 +440,11 @@ impl BackfillTest for BackfillRefs {
     }
 }
 
-#[cfg(test)]
+// Tests use TmpDb which requires a PostgreSQL Docker container when not using embedded-db.
+// The migration itself is PostgreSQL-only: SQLite's INTEGER PRIMARY KEY is already 64-bit,
+// so the INT → BIGINT widening and its PostgreSQL-specific SQL (::bigint casts, CONCURRENTLY
+// index, sequences) do not apply to SQLite.
+#[cfg(all(test, not(feature = "embedded-db")))]
 mod tests {
     use super::*;
     use crate::persistence::{sql::Persistence, tests::TestablePersistence};
