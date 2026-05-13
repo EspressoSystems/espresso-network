@@ -217,18 +217,31 @@ where
     }
 
     /// Bootstrap the coordinator so the view-1 leader can propose.
-    ///
-    /// Genesis is never decided through the normal consensus path, so
-    /// downstream consumers (persistence, query service) would never see
-    /// the genesis header. We emit a `LeafDecided` for it here so that application
-    /// layer sees this event
-    pub async fn start(&mut self) {
+    pub fn start(&mut self) {
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
 
         if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
+            // Append the genesis DA proposal to storage.
+            //
+            // The genesis payload is always empty, but it never flows through the
+            // regular block-builder/VID path that would otherwise persist a DA
+            // proposal for view 0. Storage consumers downstream still expect one,
+            // so we synthesize and append it here.
             let genesis_leaf = self.consensus.last_decided_leaf().clone();
-            self.append_genesis_da(&genesis_leaf);
+            let (payload, metadata) = T::BlockPayload::empty();
+            self.storage.append_da(
+                ViewNumber::genesis(),
+                EpochNumber::genesis(),
+                payload,
+                metadata,
+                genesis_leaf.payload_commitment(),
+            );
+
+            // Genesis is never decided through the normal consensus path, so
+            // downstream consumers (persistence, query service) would never see
+            // the genesis header. We emit a `LeafDecided` for it here so that
+            // application layer sees this event
             self.outbox.push_back(ConsensusOutput::LeafDecided {
                 leaves: vec![genesis_leaf],
                 cert1: self
@@ -244,7 +257,7 @@ where
         self.outbox
             .push_back(ConsensusOutput::ViewChanged(view, epoch));
 
-        if let Some(leader) = self.leader(view, epoch).await
+        if let Some(leader) = self.leader(view, epoch)
             && leader == self.public_key
         {
             let genesis_proposal = self
@@ -261,23 +274,6 @@ where
                     },
                 ));
         }
-    }
-
-    /// Append the genesis DA proposal to storage.
-    ///
-    /// The genesis payload is always empty, but it never flows through the
-    /// regular block-builder/VID path that would otherwise persist a DA
-    /// proposal for view 0. Storage consumers downstream still expect one,
-    /// so we synthesize and append it here.
-    fn append_genesis_da(&mut self, genesis_leaf: &Leaf2<T>) {
-        let (payload, metadata) = T::BlockPayload::empty();
-        self.storage.append_da(
-            ViewNumber::genesis(),
-            EpochNumber::genesis(),
-            payload,
-            metadata,
-            genesis_leaf.payload_commitment(),
-        );
     }
 
     pub async fn stop(mut self) {
@@ -391,8 +387,7 @@ where
                         return Err(CoordinatorError::critical(msg).context("gc certificate"))
                     };
                     self.gc(cert.view_number(), epoch);
-                } //blocks in storage
-                    //
+                }
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         self.state_manager.request_header(HeaderRequest::from(&block));
@@ -410,8 +405,7 @@ where
                             next_view,
                             epoch,
                             BlockMessage::DedupManifest(manifest),
-                        )
-                        .await?;
+                        )?;
                         return Ok(block.into())
                     }
                     Err(err) => {
@@ -468,47 +462,8 @@ where
         }
     }
 
-    pub fn handle_proposal_and_vid_share(
-        &mut self,
-        validated: ValidatedProposal<T>,
-        vid_share: VidDisperseShare2<T>,
-    ) -> Result<ConsensusInput<T>, CoordinatorError> {
-        self.storage.append_vid(vid_share.clone());
-        self.storage
-            .append_proposal(validated.message.proposal.data.clone());
-
-        // Persist the state cert carried by epoch root proposals.
-        if let Some(state_cert) = validated.message.proposal.data.state_cert.clone() {
-            self.storage.append_state_cert(
-                ViewNumber::new(state_cert.light_client_state.view_number),
-                state_cert,
-            );
-        }
-
-        let m = validated
-            .message
-            .proposal
-            .data
-            .block_header
-            .metadata()
-            .clone();
-        self.vid_reconstructor
-            .handle_vid_share(vid_share.clone(), m);
-
-        // GC for the cache
-        let view = validated.message.proposal.data.view_number();
-        self.cached_vid_shares = self.cached_vid_shares.split_off(&(view + 1));
-        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(view + 1));
-
-        Ok(ConsensusInput::ProposalWithVidShare(
-            validated.sender,
-            validated.message,
-            vid_share,
-        ))
-    }
-
-    pub async fn apply_consensus(&mut self, input: ConsensusInput<T>) {
-        self.consensus.apply(input, &mut self.outbox).await;
+    pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
+        self.consensus.apply(input, &mut self.outbox)
     }
 
     pub fn node_id(&self) -> &KeyPrefix {
@@ -642,7 +597,7 @@ where
                 match msg {
                     BlockMessage::Transactions(msg) => self.block_builder.on_transactions(msg),
                     BlockMessage::DedupManifest(manifest) => {
-                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch).await
+                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
                             && view_leader == message.sender
                         {
                             self.block_builder.on_dedup_manifest(manifest)
@@ -697,7 +652,38 @@ where
         }
     }
 
-    pub async fn process_consensus_output(
+    pub fn handle_proposal_and_vid_share(
+        &mut self,
+        validated: ValidatedProposal<T>,
+        vid_share: VidDisperseShare2<T>,
+    ) -> Result<ConsensusInput<T>, CoordinatorError> {
+        self.storage.append_vid(vid_share.clone());
+        self.storage
+            .append_proposal(validated.message.proposal.data.clone());
+
+        let m = validated
+            .message
+            .proposal
+            .data
+            .block_header
+            .metadata()
+            .clone();
+        self.vid_reconstructor
+            .handle_vid_share(vid_share.clone(), m);
+
+        // GC for the cache
+        let view = validated.message.proposal.data.view_number();
+        self.cached_vid_shares = self.cached_vid_shares.split_off(&(view + 1));
+        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(view + 1));
+
+        Ok(ConsensusInput::ProposalWithVidShare(
+            validated.sender,
+            validated.message,
+            vid_share,
+        ))
+    }
+
+    pub fn process_consensus_output(
         &mut self,
         output: ConsensusOutput<T>,
     ) -> Result<(), CoordinatorError> {
@@ -796,7 +782,7 @@ where
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
-                if let Some(leader) = self.leader(view, epoch).await {
+                if let Some(leader) = self.leader(view, epoch) {
                     let message = Message {
                         sender: self.public_key.clone(),
                         message_type: MessageType::Consensus(ConsensusMessage::TimeoutCertificate(
@@ -864,7 +850,6 @@ where
                             transactions: txns,
                         }),
                     )
-                    .await
                     .map_err(|e| e.context("unicast transactions"))?;
                 }
 
@@ -882,13 +867,13 @@ where
         Ok(())
     }
 
-    async fn unicast_to_leader(
+    fn unicast_to_leader(
         &mut self,
         view: ViewNumber,
         epoch: EpochNumber,
         msg: BlockMessage<T>,
     ) -> Result<(), CoordinatorError> {
-        let Some(leader) = self.leader(view, epoch).await else {
+        let Some(leader) = self.leader(view, epoch) else {
             warn!(%view, %epoch, "failed to resolve leader for unicast");
             return Ok(());
         };
@@ -901,13 +886,12 @@ where
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
-    async fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
+    fn leader(&mut self, view: ViewNumber, epoch: EpochNumber) -> Option<T::SignatureKey> {
         let membership = self
             .membership_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
             .ok()?;
-        membership.leader(view).await.ok()
+        membership.leader(view).ok()
     }
 
     fn on_client_request(&mut self, request: ClientRequest<T>) -> Result<(), CoordinatorError> {

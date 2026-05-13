@@ -4669,8 +4669,6 @@ mod postgres_tests {
         instance_state
             .coordinator
             .membership()
-            .write()
-            .await
             .set_first_epoch(EpochNumber::genesis(), Default::default());
 
         let tmp = Persistence::tmp_storage().await;

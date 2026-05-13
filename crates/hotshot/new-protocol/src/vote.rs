@@ -118,7 +118,6 @@ where
         let m = self
             .epoch_membership_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
             .ok()?;
         self.membership_cache.insert(epoch, m.clone());
         Some(m)
@@ -396,7 +395,7 @@ mod tests {
         assert_eq!(cert.view_number(), view);
 
         let membership = mock_membership().await;
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         verify_cert(&cert, &expected_data, &epoch_membership).await;
     }
 
@@ -436,7 +435,7 @@ mod tests {
         assert_eq!(cert_views, views.to_vec());
 
         let membership = mock_membership().await;
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         for cert in &certs {
             verify_cert(cert, &expected_data, &epoch_membership).await;
         }
@@ -461,7 +460,7 @@ mod tests {
         assert_eq!(cert.view_number(), view);
 
         let membership = mock_membership().await;
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         verify_cert(&cert, &expected_data, &epoch_membership).await;
     }
 
@@ -495,7 +494,7 @@ mod tests {
         assert_eq!(cert_views, views.to_vec());
 
         let membership = mock_membership().await;
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         for cert in &certs {
             verify_cert(cert, &expected_data, &epoch_membership).await;
         }
@@ -609,7 +608,7 @@ mod tests {
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_no_certs(&mut task).await;
         let membership = mock_membership().await;
-        let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         verify_cert(&cert, &vote_2_data(), &epoch_membership).await;
     }
 

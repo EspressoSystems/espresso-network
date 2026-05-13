@@ -237,10 +237,10 @@ impl<TYPES: NodeType> NetworkResponseState<TYPES> {
 
     /// Makes sure the sender is allowed to send a request in the given epoch.
     async fn valid_sender(&self, sender: &TYPES::SignatureKey, epoch: Option<EpochNumber>) -> bool {
-        let Ok(memb) = self.membership.stake_table_for_epoch(epoch).await else {
+        let Ok(memb) = self.membership.stake_table_for_epoch(epoch) else {
             return false;
         };
-        memb.has_stake(sender).await
+        memb.has_stake(sender)
     }
 }
 

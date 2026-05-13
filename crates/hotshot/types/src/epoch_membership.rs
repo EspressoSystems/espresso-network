@@ -1,24 +1,24 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     sync::Arc,
 };
 
 use alloy::primitives::U256;
 use async_broadcast::{InactiveReceiver, Sender, broadcast};
-use async_lock::{Mutex, RwLock};
 use committable::Commitment;
+use either::Either;
 use hotshot_utils::{anytrace::*, *};
+use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
 use versions::DRB_FIX_VERSION;
 
 use crate::{
     PeerConfig, PeerConnectInfo,
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{BlockNumber, EpochNumber, Leaf2, ViewNumber},
     drb::{DrbDifficultySelectorFn, DrbInput, DrbResult, compute_drb_result},
-    stake_table::HSStakeTable,
     traits::{
         block_contents::BlockHeader,
-        election::Membership,
+        election::{Membership, MembershipSnapshot, NonEpochMembershipSnapshot},
         node_implementation::NodeType,
         signature_key::StakeTableEntryType,
         storage::{
@@ -34,31 +34,23 @@ type DrbMap = HashSet<EpochNumber>;
 
 type EpochSender<TYPES> = (EpochNumber, Sender<Result<EpochMembership<TYPES>>>);
 
+/// The per-epoch snapshot type associated with `T::Membership`.
+type Snapshot<T> = <<T as NodeType>::Membership as Membership<T>>::Snapshot;
+
+/// The stake-table hash type associated with `T::Membership`'s per-epoch
+/// snapshot.
+type SnapshotStakeTableHash<T> = <Snapshot<T> as MembershipSnapshot<T>>::StakeTableHash;
+
 /// Struct to Coordinate membership catchup
 pub struct EpochMembershipCoordinator<TYPES: NodeType> {
-    /// The underlying membership
-    membership: Arc<RwLock<TYPES::Membership>>,
-
-    /// Any in progress attempts at catching up are stored in this map
-    /// Any new callers wantin an `EpochMembership` will await on the signal
-    /// alerting them the membership is ready.  The first caller for an epoch will
-    /// wait for the actual catchup and alert future callers when it's done
+    membership: Arc<TYPES::Membership>,
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
-
     drb_calculation_map: Arc<Mutex<DrbMap>>,
-
-    /// Number of blocks in an epoch
-    pub epoch_height: u64,
-
+    epoch_height: BlockNumber,
     store_drb_progress_fn: StoreDrbProgressFn,
-
     load_drb_progress_fn: LoadDrbProgressFn,
-
-    /// Callback function to store a drb result in storage when one is calculated during catchup
     store_drb_result_fn: StoreDrbResultFn,
-
-    /// Callback function to select a DRB difficulty based on the view number of the seed
-    pub drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
+    drb_difficulty_selector: Arc<RwLock<Option<DrbDifficultySelectorFn>>>,
 }
 
 impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
@@ -76,21 +68,18 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
     }
 }
 
-impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES>
-where
-    Self: Send,
-{
-    /// Create an EpochMembershipCoordinator
-    pub fn new<S: Storage<TYPES>>(
-        membership: Arc<RwLock<TYPES::Membership>>,
-        epoch_height: u64,
-        storage: &S,
-    ) -> Self {
+impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
+    pub fn new<M, S, B>(membership: M, epoch_height: B, storage: &S) -> Self
+    where
+        M: Into<Arc<TYPES::Membership>>,
+        B: Into<BlockNumber>,
+        S: Storage<TYPES>,
+    {
         Self {
-            membership,
+            membership: membership.into(),
             catchup_map: Arc::default(),
             drb_calculation_map: Arc::default(),
-            epoch_height,
+            epoch_height: epoch_height.into(),
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
             store_drb_result_fn: store_drb_result_fn(storage.clone()),
@@ -98,94 +87,102 @@ where
         }
     }
 
+    pub fn epoch_height(&self) -> BlockNumber {
+        self.epoch_height
+    }
+
     /// Get a reference to the membership
-    #[must_use]
-    pub fn membership(&self) -> &Arc<RwLock<TYPES::Membership>> {
+    pub fn membership(&self) -> &TYPES::Membership {
         &self.membership
     }
 
     /// Set the DRB difficulty selector
-    pub async fn set_drb_difficulty_selector(
-        &self,
-        drb_difficulty_selector: DrbDifficultySelectorFn,
-    ) {
-        let mut drb_difficulty_selector_writer = self.drb_difficulty_selector.write().await;
-
-        *drb_difficulty_selector_writer = Some(drb_difficulty_selector);
+    pub fn set_drb_difficulty_selector(&self, f: DrbDifficultySelectorFn) {
+        let mut drb_difficulty_selector_writer = self.drb_difficulty_selector.write();
+        *drb_difficulty_selector_writer = Some(f);
     }
 
     /// Get a Membership for a given Epoch, which is guaranteed to have a randomized stake
     /// table for the given Epoch
-    pub async fn membership_for_epoch(
+    pub fn membership_for_epoch(
         &self,
         maybe_epoch: Option<EpochNumber>,
     ) -> Result<EpochMembership<TYPES>> {
-        let ret_val = EpochMembership {
-            epoch: maybe_epoch,
-            coordinator: self.clone(),
-        };
         let Some(epoch) = maybe_epoch else {
-            return Ok(ret_val);
+            return Ok(EpochMembership {
+                coordinator: self.clone(),
+                snapshot: EpochMembershipSnapshot::NonEpoch(self.membership.non_epoch_snapshot()),
+            });
         };
-        if self
-            .membership
-            .read()
-            .await
-            .has_randomized_stake_table(epoch)
-            .map_err(|e| {
-                error!(
-                    "membership_for_epoch failed while called with maybe_epoch {maybe_epoch:?}: \
-                     {e}"
-                )
-            })?
-        {
-            return Ok(ret_val);
-        }
-        if self.catchup_map.lock().await.contains_key(&epoch) {
-            return Err(warn!(
-                "Randomized stake table for epoch {epoch:?} unavailable. Catchup already in \
-                 progress"
+        let Some(first_epoch) = self.membership.first_epoch() else {
+            return Err(error!(
+                "membership_for_epoch called with epoch {epoch:?} but first_epoch is unset"
+            ));
+        };
+        if epoch < first_epoch {
+            return Err(error!(
+                "membership_for_epoch called with epoch {epoch:?} before first_epoch {first_epoch}"
             ));
         }
-        let coordinator = self.clone();
-        let (tx, rx) = broadcast(1);
-        self.catchup_map.lock().await.insert(epoch, rx.deactivate());
-        spawn_catchup(coordinator, epoch, tx);
-
-        Err(warn!(
-            "Randomized stake table for epoch {epoch:?} unavailable. Starting catchup"
-        ))
+        if let Some(snapshot) = self.membership.snapshot(epoch)
+            && snapshot.has_drb()
+        {
+            return Ok(EpochMembership {
+                coordinator: self.clone(),
+                snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
+            });
+        }
+        let mut catchup_map = self.catchup_map.lock();
+        match catchup_map.entry(epoch) {
+            Entry::Occupied(_) => Err(warn!(
+                "Randomized stake table for epoch {epoch:?} unavailable. Catchup already in \
+                 progress"
+            )),
+            Entry::Vacant(e) => {
+                let coordinator = self.clone();
+                let (tx, rx) = broadcast(1);
+                e.insert(rx.deactivate());
+                drop(catchup_map);
+                spawn_catchup(coordinator, epoch, tx);
+                Err(warn!(
+                    "Randomized stake table for epoch {epoch:?} unavailable. Starting catchup"
+                ))
+            },
+        }
     }
 
     /// Get a Membership for a given Epoch, which is guaranteed to have a stake
     /// table for the given Epoch
-    pub async fn stake_table_for_epoch(
-        &self,
-        maybe_epoch: Option<EpochNumber>,
-    ) -> Result<EpochMembership<TYPES>> {
-        let ret_val = EpochMembership {
-            epoch: maybe_epoch,
-            coordinator: self.clone(),
+    pub fn stake_table_for_epoch(&self, e: Option<EpochNumber>) -> Result<EpochMembership<TYPES>> {
+        let Some(epoch) = e else {
+            return Ok(EpochMembership {
+                coordinator: self.clone(),
+                snapshot: EpochMembershipSnapshot::NonEpoch(self.membership.non_epoch_snapshot()),
+            });
         };
-        let Some(epoch) = maybe_epoch else {
-            return Ok(ret_val);
-        };
-        if self.membership.read().await.has_stake_table(epoch) {
-            return Ok(ret_val);
+        if let Some(snapshot) = self.membership.snapshot(epoch) {
+            return Ok(EpochMembership {
+                coordinator: self.clone(),
+                snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
+            });
         }
-        if self.catchup_map.lock().await.contains_key(&epoch) {
-            return Err(warn!(
-                "Stake table for Epoch {epoch:?} Unavailable. Catch up already in Progress"
-            ));
-        }
-        let coordinator = self.clone();
-        let (tx, rx) = broadcast(1);
-        self.catchup_map.lock().await.insert(epoch, rx.deactivate());
-        spawn_catchup(coordinator, epoch, tx);
+        let mut catchup_map = self.catchup_map.lock();
+        match catchup_map.entry(epoch) {
+            Entry::Occupied(_) => Err(warn!(
+                "Stake table for epoch {epoch:?} unavailable. Catchup already in progress"
+            )),
+            Entry::Vacant(e) => {
+                let coordinator = self.clone();
+                let (tx, rx) = broadcast(1);
+                e.insert(rx.deactivate());
+                drop(catchup_map);
+                spawn_catchup(coordinator, epoch, tx);
 
-        Err(warn!(
-            "Stake table for Epoch {epoch:?} Unavailable. Starting catchup"
-        ))
+                Err(warn!(
+                    "Stake table for epoch {epoch:?} unavailable. Starting catchup"
+                ))
+            },
+        }
     }
 
     /// Return the union of the stake table and DA committee for `epoch`,
@@ -194,19 +191,23 @@ where
     ///
     /// Returns `None` if the stake table for `epoch` is unavailable
     /// (e.g. catchup is still in progress).
-    pub async fn epoch_peers(
+    pub fn epoch_peers(
         &self,
-        epoch: Option<EpochNumber>,
+        e: Option<EpochNumber>,
     ) -> Option<HashMap<TYPES::SignatureKey, Option<PeerConnectInfo>>> {
-        let membership = self.stake_table_for_epoch(epoch).await.ok()?;
-        let st = membership.stake_table().await;
-        let da = membership.da_stake_table().await;
-        Some(
-            st.0.into_iter()
-                .chain(da.0)
-                .map(|m| (m.stake_table_entry.public_key(), m.connect_info))
-                .collect(),
-        )
+        let membership = self.stake_table_for_epoch(e).ok()?;
+        Some(if let Some(snap) = membership.snapshot() {
+            snap.stake_table()
+                .chain(snap.da_stake_table())
+                .map(|m| (m.stake_table_entry.public_key(), m.connect_info.clone()))
+                .collect()
+        } else {
+            let snap = membership.non_epoch_snapshot()?;
+            snap.stake_table()
+                .chain(snap.da_stake_table())
+                .map(|m| (m.stake_table_entry.public_key(), m.connect_info.clone()))
+                .collect()
+        })
     }
 
     /// Collect the union of `epoch-1`, `epoch`, and `epoch+1` stake tables
@@ -217,17 +218,14 @@ where
     ///
     /// Used to seed networks like cliquenet with the same window
     /// `on_epoch_change` would build for `epoch`.
-    pub async fn window_peers(
-        &self,
-        epoch: EpochNumber,
-    ) -> HashMap<TYPES::SignatureKey, PeerConnectInfo> {
-        let curr = self.epoch_peers(Some(epoch)).await.unwrap_or_default();
-        let prev = if *epoch > 0 {
-            self.epoch_peers(Some(epoch - 1)).await.unwrap_or_default()
+    pub fn window_peers(&self, e: EpochNumber) -> HashMap<TYPES::SignatureKey, PeerConnectInfo> {
+        let curr = self.epoch_peers(Some(e)).unwrap_or_default();
+        let prev = if *e > 0 {
+            self.epoch_peers(Some(e - 1)).unwrap_or_default()
         } else {
             HashMap::new()
         };
-        let next = self.epoch_peers(Some(epoch + 1)).await.unwrap_or_default();
+        let next = self.epoch_peers(Some(e + 1)).unwrap_or_default();
 
         // Newest-wins merge: start from prev, overlay curr and next.
         let mut merged: HashMap<TYPES::SignatureKey, Option<PeerConnectInfo>> = prev;
@@ -242,38 +240,45 @@ where
     }
 
     /// Catches the membership up to the epoch passed as an argument.
-    /// To do this, try to get the stake table for the epoch containing this epoch's root and
-    /// the stake table for the epoch containing this epoch's drb result.
-    /// If they do not exist, then go one by one back until we find a stake table.
+    /// To do this, try to get the stake table for the epoch containing this
+    /// epoch's root and the stake table for the epoch containing this epoch's
+    /// drb result. If they do not exist, then go one by one back until we
+    /// find a stake table.
     ///
     /// If there is another catchup in progress this will not duplicate efforts
-    /// e.g. if we start with only the first epoch stake table and call catchup for epoch 10, then call catchup for epoch 20
-    /// the first caller will actually do the work for to catchup to epoch 10 then the second caller will continue
-    /// catching up to epoch 20
-    async fn catchup(
-        mut self,
-        epoch: EpochNumber,
-        epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
-    ) {
+    /// e.g. if we start with only the first epoch stake table and call catchup
+    /// for epoch 10, then call catchup for epoch 20 the first caller will
+    /// actually do the work for to catchup to epoch 10 then the second caller
+    /// will continue catching up to epoch 20
+    //
+    // Clippy claims "this `MutexGuard` is held across an await point", however
+    // the guard is explicitly dropped before. See also:
+    // https://github.com/rust-lang/rust-clippy/issues/6446
+    //
+    // Even more annoying is that the warning can only be disabled on function
+    // level, instead of putting this attribute on the expression, see
+    // https://github.com/rust-lang/rust-clippy/issues/9047.
+    #[allow(clippy::await_holding_lock)]
+    async fn catchup(self, epoch: EpochNumber, epoch_tx: Sender<Result<EpochMembership<TYPES>>>) {
         // We need to fetch the requested epoch, that's for sure
         let mut fetch_epochs = vec![];
 
         let mut try_epoch = EpochNumber::new(epoch.saturating_sub(1));
-        let maybe_first_epoch = self.membership.read().await.first_epoch();
+        let maybe_first_epoch = self.membership.first_epoch();
         let Some(first_epoch) = maybe_first_epoch else {
             let err = anytrace::error!(
                 "We got a catchup request for epoch {epoch:?} but the first epoch is not set"
             );
-            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
-                .await;
+            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
             return;
         };
 
         // First figure out which epochs we need to fetch
         loop {
-            let has_stake_table = self.membership.read().await.has_stake_table(try_epoch);
+            let has_stake_table = self.membership.snapshot(try_epoch).is_some();
             if has_stake_table {
-                // We have this stake table but we need to make sure we have the epoch root of the requested epoch
+                // We have this stake table but we need to make sure we have the
+                // epoch root of the requested epoch
                 if try_epoch <= EpochNumber::new(epoch.saturating_sub(2)) {
                     break;
                 }
@@ -284,18 +289,18 @@ where
                         "We are trying to catchup to an epoch lower than the second epoch! This \
                          means the initial stake table is missing!"
                     );
-                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
-                        .await;
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
                     return;
                 }
                 // Lock the catchup map
-                let mut map_lock = self.catchup_map.lock().await;
+                let mut map_lock = self.catchup_map.lock();
                 match map_lock
                     .get(&try_epoch)
                     .map(InactiveReceiver::activate_cloned)
                 {
                     Some(mut rx) => {
-                        // Somebody else is already fetching this epoch, drop the lock and wait for them to finish
+                        // Somebody else is already fetching this epoch, drop
+                        // the lock and wait for them to finish
                         drop(map_lock);
                         if let Ok(Ok(_)) = rx.recv_direct().await {
                             break;
@@ -303,7 +308,8 @@ where
                         // If we didn't receive the epoch then we need to try again
                     },
                     _ => {
-                        // Nobody else is fetching this epoch. We need to do it. Put it in the map and move on to the next epoch
+                        // Nobody else is fetching this epoch. We need to do it.
+                        // Put it in the map and move on to the next epoch
                         let (mut tx, rx) = broadcast(1);
                         tx.set_overflow(true);
                         map_lock.insert(try_epoch, rx.deactivate());
@@ -314,6 +320,7 @@ where
                 }
             };
         }
+
         let epochs = fetch_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>();
         tracing::warn!("Fetching stake tables for epochs: {epochs:?}");
 
@@ -323,53 +330,58 @@ where
                 Ok(_) => {},
                 Err(err) => {
                     fetch_epochs.push((current_fetch_epoch, tx));
-                    self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err)
-                        .await;
+                    self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err);
                     return;
                 },
             };
 
-            // Signal the other tasks about the success
-            if let Ok(Some(res)) = tx.try_broadcast(Ok(EpochMembership {
-                epoch: Some(current_fetch_epoch),
+            // Signal the other tasks about the success. `fetch_stake_table`
+            // returned `Ok`, so a snapshot must be present. If it isn't,
+            // treat that as a catchup failure: push the in-flight epoch
+            // back and run cleanup so waiters get notified.
+            let Some(snapshot) = self.membership.snapshot(current_fetch_epoch) else {
+                let err = anytrace::error!(
+                    "snapshot for epoch {current_fetch_epoch} unavailable after fetch_stake_table"
+                );
+                fetch_epochs.push((current_fetch_epoch, tx));
+                self.catchup_cleanup(epoch, epoch_tx, fetch_epochs, err);
+                return;
+            };
+            let mem = EpochMembership {
                 coordinator: self.clone(),
-            })) {
+                snapshot: EpochMembershipSnapshot::Epoch {
+                    epoch: current_fetch_epoch,
+                    snapshot,
+                },
+            };
+            if let Ok(Some(res)) = tx.try_broadcast(Ok(mem)) {
                 tracing::warn!(
                     "The catchup channel for epoch {} was overflown, dropped message {:?}",
                     current_fetch_epoch,
-                    res.map(|em| em.epoch)
+                    res.map(|em| em.epoch())
                 );
             }
 
             // Remove the epoch from the catchup map to indicate that the catchup is complete
-            self.catchup_map.lock().await.remove(&current_fetch_epoch);
+            self.catchup_map.lock().remove(&current_fetch_epoch);
         }
 
         let root_leaf = match self.fetch_stake_table(epoch).await {
             Ok(root_leaf) => root_leaf,
             Err(err) => {
                 tracing::error!("Failed to fetch stake table for epoch {epoch:?}: {err:?}");
-                self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
-                    .await;
+                self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
                 return;
             },
         };
 
-        match <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
-            self.membership.clone(),
-            epoch,
-        )
-        .await
-        {
+        match self.membership.get_epoch_drb(epoch).await {
             Ok(drb_result) => {
                 tracing::warn!(
                     ?drb_result,
                     "DRB result for epoch {epoch:?} retrieved from peers. Updating membership."
                 );
-                self.membership
-                    .write()
-                    .await
-                    .add_drb_result(epoch, drb_result);
+                self.membership.add_drb_result(epoch, drb_result);
             },
             Err(err) => {
                 tracing::warn!(
@@ -383,26 +395,35 @@ where
                 log!(result);
 
                 if let Err(err) = result {
-                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err)
-                        .await;
+                    self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+                    return;
                 }
             },
         };
 
-        // Signal the other tasks about the success
-        if let Ok(Some(res)) = epoch_tx.try_broadcast(Ok(EpochMembership {
-            epoch: Some(epoch),
+        // Signal the other tasks about the success. As above, the snapshot
+        // must be present at this point — if not, treat as a catchup failure.
+        let Some(snapshot) = self.membership.snapshot(epoch) else {
+            let err = anytrace::error!(
+                "snapshot for epoch {epoch} unavailable after fetch_stake_table + DRB"
+            );
+            self.catchup_cleanup(epoch, epoch_tx.clone(), fetch_epochs, err);
+            return;
+        };
+        let mem = EpochMembership {
             coordinator: self.clone(),
-        })) {
+            snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
+        };
+        if let Ok(Some(res)) = epoch_tx.try_broadcast(Ok(mem)) {
             tracing::warn!(
                 "The catchup channel for epoch {} was overflown, dropped message {:?}",
                 epoch,
-                res.map(|em| em.epoch)
+                res.map(|em| em.epoch())
             );
         }
 
         // Remove the epoch from the catchup map to indicate that the catchup is complete
-        self.catchup_map.lock().await.remove(&epoch);
+        self.catchup_map.lock().remove(&epoch);
     }
 
     /// Get the stake table for `epoch`, blocking on catchup if necessary.
@@ -412,7 +433,7 @@ where
     /// to drive the existing catchup chain synchronously before consensus is
     /// running.
     pub async fn wait_for_stake_table(&self, epoch: EpochNumber) -> Result<EpochMembership<TYPES>> {
-        match self.stake_table_for_epoch(Some(epoch)).await {
+        match self.stake_table_for_epoch(Some(epoch)) {
             Ok(mem) => Ok(mem),
             Err(_) => self.wait_for_catchup(epoch).await,
         }
@@ -427,15 +448,14 @@ where
         let maybe_receiver = self
             .catchup_map
             .lock()
-            .await
             .get(&epoch)
             .map(InactiveReceiver::activate_cloned);
         let Some(mut rx) = maybe_receiver else {
             // There is no catchup in progress, maybe the epoch is already finalized
-            if self.membership.read().await.has_stake_table(epoch) {
+            if let Some(snapshot) = self.membership.snapshot(epoch) {
                 return Ok(EpochMembership {
-                    epoch: Some(epoch),
                     coordinator: self.clone(),
+                    snapshot: EpochMembershipSnapshot::Epoch { epoch, snapshot },
                 });
             }
             return Err(anytrace::error!(
@@ -454,8 +474,8 @@ where
     /// `EpochMembershipCoordinator` by removing the failed epochs from the
     /// `catchup_map` and broadcasting the error to any tasks that are waiting for the
     /// catchup to complete.
-    async fn catchup_cleanup(
-        &mut self,
+    fn catchup_cleanup(
+        &self,
         req_epoch: EpochNumber,
         epoch_tx: Sender<Result<EpochMembership<TYPES>>>,
         mut cancel_epochs: Vec<EpochSender<TYPES>>,
@@ -468,12 +488,15 @@ where
             "catchup for epoch {req_epoch:?} failed: {err:?}. Canceling catchup for epochs: {:?}",
             cancel_epochs.iter().map(|(e, _)| e).collect::<Vec<_>>()
         );
-        let mut map_lock = self.catchup_map.lock().await;
-        for (epoch, _) in cancel_epochs.iter() {
-            // Remove the failed epochs from the catchup map
-            map_lock.remove(epoch);
+
+        {
+            let mut map_lock = self.catchup_map.lock();
+            for (epoch, _) in cancel_epochs.iter() {
+                // Remove the failed epochs from the catchup map
+                map_lock.remove(epoch);
+            }
         }
-        drop(map_lock);
+
         for (cancel_epoch, tx) in cancel_epochs {
             // Signal the other tasks about the failures
             if let Ok(Some(res)) = tx.try_broadcast(Err(err.clone())) {
@@ -481,7 +504,7 @@ where
                     "The catchup channel for epoch {} was overflown during cleanup, dropped \
                      message {:?}",
                     cancel_epoch,
-                    res.map(|em| em.epoch)
+                    res.map(|em| em.epoch())
                 );
             }
         }
@@ -499,10 +522,11 @@ where
     /// # Returns
     ///
     /// * `Ok(Leaf2<TYPES>)` containing the epoch root leaf if successful.
-    /// * `Err(Error)` if the root membership or root leaf cannot be found, or if updating the membership fails.
+    /// * `Err(Error)` if the root membership or root leaf cannot be found, or if
+    ///   updating the membership fails.
     async fn fetch_stake_table(&self, epoch: EpochNumber) -> Result<Leaf2<TYPES>> {
         let root_epoch = EpochNumber::new(epoch.saturating_sub(2));
-        let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)).await else {
+        let Ok(root_membership) = self.stake_table_for_epoch(Some(root_epoch)) else {
             return Err(anytrace::error!(
                 "We tried to fetch stake table for epoch {epoch:?} but we don't have its root \
                  epoch {root_epoch:?}. This should not happen"
@@ -517,14 +541,12 @@ where
             ));
         };
 
-        Membership::add_epoch_root(
-            Arc::clone(&self.membership),
-            root_leaf.block_header().clone(),
-        )
-        .await
-        .map_err(|e| {
-            anytrace::error!("Failed to add epoch root for epoch {epoch:?} to membership: {e}")
-        })?;
+        self.membership
+            .add_epoch_root(root_leaf.block_header().clone())
+            .await
+            .map_err(|e| {
+                anytrace::error!("Failed to add epoch root for epoch {epoch:?} to membership: {e}")
+            })?;
 
         Ok(root_leaf)
     }
@@ -534,18 +556,18 @@ where
         epoch: EpochNumber,
         root_leaf: Leaf2<TYPES>,
     ) -> Result<DrbResult> {
-        let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
+        {
+            let mut drb_calculation_map_lock = self.drb_calculation_map.lock();
 
-        if drb_calculation_map_lock.contains(&epoch) {
-            return Err(anytrace::debug!(
-                "DRB calculation for epoch {} already in progress",
-                epoch
-            ));
-        } else {
-            drb_calculation_map_lock.insert(epoch);
+            if drb_calculation_map_lock.contains(&epoch) {
+                return Err(anytrace::debug!(
+                    "DRB calculation for epoch {} already in progress",
+                    epoch
+                ));
+            } else {
+                drb_calculation_map_lock.insert(epoch);
+            }
         }
-
-        drop(drb_calculation_map_lock);
 
         let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures) else {
             return Err(anytrace::error!(
@@ -553,8 +575,7 @@ where
             ));
         };
 
-        let Some(drb_difficulty_selector) = self.drb_difficulty_selector.read().await.clone()
-        else {
+        let Some(drb_difficulty_selector) = self.drb_difficulty_selector.read().clone() else {
             return Err(anytrace::error!(
                 "The DRB difficulty selector is missing from the epoch membership coordinator. \
                  This node will not be able to spawn any DRB calculation tasks from catchup."
@@ -584,15 +605,13 @@ where
 
         let drb = compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await;
 
-        let mut drb_calculation_map_lock = self.drb_calculation_map.lock().await;
-        drb_calculation_map_lock.remove(&epoch);
-        drop(drb_calculation_map_lock);
+        self.drb_calculation_map.lock().remove(&epoch);
 
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
             tracing::warn!("Failed to add drb result to storage: {e}");
         }
-        self.membership.write().await.add_drb_result(epoch, drb);
+        self.membership.add_drb_result(epoch, drb);
 
         Ok(drb)
     }
@@ -607,266 +626,273 @@ fn spawn_catchup<T: NodeType>(
         coordinator.clone().catchup(epoch, epoch_tx).await;
     });
 }
-/// Wrapper around a membership that guarantees that the epoch
-/// has a stake table
+
+/// Wrapper around a membership that holds a captured snapshot for a given
+/// epoch (or the pre-epoch state). All accessors observe one consistent
+/// view because the snapshot is held inline.
 pub struct EpochMembership<TYPES: NodeType> {
-    /// Epoch the `membership` is guaranteed to have a stake table for
-    pub epoch: Option<EpochNumber>,
-    /// Underlying membership
+    /// The captured snapshot, either per-epoch or pre-epoch.
+    snapshot: EpochMembershipSnapshot<TYPES>,
+    /// Underlying coordinator, retained so navigation methods like
+    /// `next_epoch` can construct fresh snapshots.
     pub coordinator: EpochMembershipCoordinator<TYPES>,
+}
+
+enum EpochMembershipSnapshot<TYPES: NodeType> {
+    Epoch {
+        epoch: EpochNumber,
+        snapshot: <TYPES::Membership as Membership<TYPES>>::Snapshot,
+    },
+    NonEpoch(<TYPES::Membership as Membership<TYPES>>::NonEpochSnapshot),
+}
+
+impl<TYPES: NodeType> Clone for EpochMembershipSnapshot<TYPES> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Epoch { epoch, snapshot } => Self::Epoch {
+                epoch: *epoch,
+                snapshot: snapshot.clone(),
+            },
+            Self::NonEpoch(s) => Self::NonEpoch(s.clone()),
+        }
+    }
 }
 
 impl<TYPES: NodeType> Clone for EpochMembership<TYPES> {
     fn clone(&self) -> Self {
         Self {
             coordinator: self.coordinator.clone(),
-            epoch: self.epoch,
+            snapshot: self.snapshot.clone(),
         }
     }
 }
 
 impl<TYPES: NodeType> EpochMembership<TYPES> {
-    /// Get the epoch this membership is good for
     pub fn epoch(&self) -> Option<EpochNumber> {
-        self.epoch
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { epoch, .. } => Some(*epoch),
+            EpochMembershipSnapshot::NonEpoch(_) => None,
+        }
     }
 
-    /// Get a membership for the next epoch
-    pub async fn next_epoch(&self) -> Result<Self> {
-        ensure!(
-            self.epoch().is_some(),
-            "No next epoch because epoch is None"
-        );
-        self.coordinator
-            .membership_for_epoch(self.epoch.map(|e| e + 1))
-            .await
-    }
-    /// Get a membership for the next epoch
-    pub async fn next_epoch_stake_table(&self) -> Result<Self> {
-        ensure!(
-            self.epoch().is_some(),
-            "No next epoch because epoch is None"
-        );
-        self.coordinator
-            .stake_table_for_epoch(self.epoch.map(|e| e + 1))
-            .await
-    }
-    pub async fn get_new_epoch(&self, epoch: Option<EpochNumber>) -> Result<Self> {
-        self.coordinator.membership_for_epoch(epoch).await
+    pub fn next_epoch(&self) -> Result<Self> {
+        let epoch = self
+            .epoch()
+            .ok_or_else(|| anytrace::error!("No next epoch because epoch is None"))?;
+        self.coordinator.membership_for_epoch(Some(epoch + 1))
     }
 
-    /// Wraps the same named Membership trait fn
+    pub fn next_epoch_stake_table(&self) -> Result<Self> {
+        let epoch = self
+            .epoch()
+            .ok_or_else(|| anytrace::error!("No next epoch because epoch is None"))?;
+        self.coordinator.stake_table_for_epoch(Some(epoch + 1))
+    }
+
+    pub fn get_new_epoch(&self, epoch: Option<EpochNumber>) -> Result<Self> {
+        self.coordinator.membership_for_epoch(epoch)
+    }
+
     async fn get_epoch_root(&self) -> anyhow::Result<Leaf2<TYPES>> {
-        let Some(epoch) = self.epoch else {
+        let Some(epoch) = self.epoch() else {
             anyhow::bail!("Cannot get root for None epoch");
         };
-        <TYPES::Membership as Membership<TYPES>>::get_epoch_root(
-            self.coordinator.membership.clone(),
-            epoch,
-        )
-        .await
+        let leaf = self.coordinator.membership.get_epoch_root(epoch).await?;
+        Ok(leaf)
     }
 
-    /// Wraps the same named Membership trait fn
     pub async fn get_epoch_drb(&self) -> Result<DrbResult> {
-        let Some(epoch) = self.epoch else {
+        let Some(epoch) = self.epoch() else {
             return Err(anytrace::warn!("Cannot get drb for None epoch"));
         };
-        <TYPES::Membership as Membership<TYPES>>::get_epoch_drb(
-            self.coordinator.membership.clone(),
-            epoch,
-        )
-        .await
-        .wrap()
-    }
-
-    /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn stake_table(&self) -> HSStakeTable<TYPES> {
         self.coordinator
             .membership
-            .read()
+            .get_epoch_drb(epoch)
             .await
-            .stake_table(self.epoch)
+            .wrap()
     }
 
-    /// Get all participants in the committee (including their stake) for a specific epoch
-    pub async fn da_stake_table(&self) -> HSStakeTable<TYPES> {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .da_stake_table(self.epoch)
+    /// Borrow the per-epoch snapshot, or `None` for the pre-epoch case.
+    pub fn snapshot(&self) -> Option<&<TYPES::Membership as Membership<TYPES>>::Snapshot> {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => Some(snapshot),
+            EpochMembershipSnapshot::NonEpoch(_) => None,
+        }
     }
 
-    /// Get all participants in the committee for a specific view for a specific epoch
-    pub async fn committee_members(
+    /// Borrow the pre-epoch snapshot, or `None` if this is a per-epoch
+    /// membership.
+    pub fn non_epoch_snapshot(
         &self,
-        view_number: ViewNumber,
-    ) -> BTreeSet<TYPES::SignatureKey> {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .committee_members(view_number, self.epoch)
+    ) -> Option<&<TYPES::Membership as Membership<TYPES>>::NonEpochSnapshot> {
+        match &self.snapshot {
+            EpochMembershipSnapshot::NonEpoch(s) => Some(s),
+            EpochMembershipSnapshot::Epoch { .. } => None,
+        }
     }
 
-    /// Get all participants in the committee for a specific view for a specific epoch
-    pub async fn da_committee_members(
+    /// Add the DRB result for this epoch to the membership.
+    pub fn add_drb_result(&self, drb_result: DrbResult) {
+        if let Some(epoch) = self.epoch() {
+            self.coordinator
+                .membership
+                .add_drb_result(epoch, drb_result);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Single-call convenience accessors. Each delegates to whichever
+    // snapshot was captured at construction time, so a single accessor
+    // call observes one consistent view. For *sequences* of related reads
+    // that must observe the same view, take a snapshot via
+    // [`Self::snapshot`] / [`Self::non_epoch_snapshot`] and call methods
+    // on it directly.
+    // ---------------------------------------------------------------------
+
+    pub fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<TYPES>> + Send {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => Either::Left(snapshot.stake_table()),
+            EpochMembershipSnapshot::NonEpoch(s) => Either::Right(s.stake_table()),
+        }
+    }
+
+    pub fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<TYPES>> + Send {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => {
+                Either::Left(snapshot.da_stake_table())
+            },
+            EpochMembershipSnapshot::NonEpoch(s) => Either::Right(s.da_stake_table()),
+        }
+    }
+
+    pub fn committee_members(
         &self,
-        view_number: ViewNumber,
-    ) -> BTreeSet<TYPES::SignatureKey> {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .da_committee_members(view_number, self.epoch)
+        view: ViewNumber,
+    ) -> impl ExactSizeIterator<Item = &TYPES::SignatureKey> + Send {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => {
+                Either::Left(snapshot.committee_members(view))
+            },
+            EpochMembershipSnapshot::NonEpoch(s) => Either::Right(s.committee_members(view)),
+        }
     }
 
-    /// Get the stake table entry for a public key, returns `None` if the
-    /// key is not in the table for a specific epoch
-    pub async fn stake(&self, pub_key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .stake(pub_key, self.epoch)
+    pub fn da_committee_members(
+        &self,
+        view: ViewNumber,
+    ) -> impl ExactSizeIterator<Item = &TYPES::SignatureKey> + Send {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => {
+                Either::Left(snapshot.da_committee_members(view))
+            },
+            EpochMembershipSnapshot::NonEpoch(s) => Either::Right(s.da_committee_members(view)),
+        }
     }
 
-    /// Get the DA stake table entry for a public key, returns `None` if the
-    /// key is not in the table for a specific epoch
-    pub async fn da_stake(&self, pub_key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .da_stake(pub_key, self.epoch)
+    pub fn stake(&self, key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.stake(key),
+            EpochMembershipSnapshot::NonEpoch(s) => s.stake(key),
+        }
     }
 
-    /// See if a node has stake in the committee in a specific epoch
-    pub async fn has_stake(&self, pub_key: &TYPES::SignatureKey) -> bool {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .has_stake(pub_key, self.epoch)
+    pub fn da_stake(&self, key: &TYPES::SignatureKey) -> Option<PeerConfig<TYPES>> {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.da_stake(key),
+            EpochMembershipSnapshot::NonEpoch(s) => s.da_stake(key),
+        }
     }
 
-    /// See if a node has stake in the committee in a specific epoch
-    pub async fn has_da_stake(&self, pub_key: &TYPES::SignatureKey) -> bool {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .has_da_stake(pub_key, self.epoch)
+    pub fn has_stake(&self, key: &TYPES::SignatureKey) -> bool {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.has_stake(key),
+            EpochMembershipSnapshot::NonEpoch(s) => s.has_stake(key),
+        }
     }
 
-    /// The leader of the committee for view `view_number` in `epoch`.
-    ///
-    /// Note: this function uses a HotShot-internal error type.
-    /// You should implement `lookup_leader`, rather than implementing this function directly.
+    pub fn has_da_stake(&self, key: &TYPES::SignatureKey) -> bool {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.has_da_stake(key),
+            EpochMembershipSnapshot::NonEpoch(s) => s.has_da_stake(key),
+        }
+    }
+
+    /// The leader for `view`, returning a HotShot-internal error type.
     ///
     /// # Errors
+    ///
     /// Returns an error if the leader cannot be calculated.
-    pub async fn leader(&self, view: ViewNumber) -> Result<TYPES::SignatureKey> {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .leader(view, self.epoch)
+    pub fn leader(&self, view: ViewNumber) -> Result<TYPES::SignatureKey> {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.leader(view),
+            EpochMembershipSnapshot::NonEpoch(s) => s.leader(view),
+        }
     }
 
-    /// The leader of the committee for view `view_number` in `epoch`.
-    ///
-    /// Note: There is no such thing as a DA leader, so any consumer
-    /// requiring a leader should call this.
+    /// The leader for `view`, returning the membership-impl error type.
     ///
     /// # Errors
-    /// Returns an error if the leader cannot be calculated
-    pub async fn lookup_leader(
+    ///
+    /// Returns the membership-impl error if the leader cannot be calculated.
+    pub fn lookup_leader(
         &self,
         view: ViewNumber,
     ) -> std::result::Result<
         TYPES::SignatureKey,
         <<TYPES as NodeType>::Membership as Membership<TYPES>>::Error,
     > {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .lookup_leader(view, self.epoch)
-    }
-
-    /// Returns the number of total nodes in the committee in an epoch `epoch`
-    pub async fn total_nodes(&self) -> usize {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .total_nodes(self.epoch)
-    }
-
-    /// Returns the number of total DA nodes in the committee in an epoch `epoch`
-    pub async fn da_total_nodes(&self) -> usize {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .da_total_nodes(self.epoch)
-    }
-
-    /// Returns the threshold for a specific `Membership` implementation
-    pub async fn success_threshold(&self) -> U256 {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .success_threshold(self.epoch)
-    }
-
-    /// Returns the DA threshold for a specific `Membership` implementation
-    pub async fn da_success_threshold(&self) -> U256 {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .da_success_threshold(self.epoch)
-    }
-
-    /// Returns the threshold for a specific `Membership` implementation
-    pub async fn failure_threshold(&self) -> U256 {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .failure_threshold(self.epoch)
-    }
-
-    /// Returns the threshold required to upgrade the network protocol
-    pub async fn upgrade_threshold(&self) -> U256 {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .upgrade_threshold(self.epoch)
-    }
-
-    /// Add the epoch result to the membership
-    pub async fn add_drb_result(&self, drb_result: DrbResult) {
-        if let Some(epoch) = self.epoch() {
-            self.coordinator
-                .membership
-                .write()
-                .await
-                .add_drb_result(epoch, drb_result);
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.lookup_leader(view),
+            EpochMembershipSnapshot::NonEpoch(s) => s.lookup_leader(view),
         }
     }
-    pub async fn stake_table_hash(
-        &self,
-    ) -> Option<Commitment<<TYPES::Membership as Membership<TYPES>>::StakeTableHash>> {
-        self.coordinator
-            .membership
-            .read()
-            .await
-            .stake_table_hash(self.epoch?)
+
+    pub fn total_nodes(&self) -> usize {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.total_nodes(),
+            EpochMembershipSnapshot::NonEpoch(s) => s.total_nodes(),
+        }
+    }
+
+    pub fn da_total_nodes(&self) -> usize {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.da_total_nodes(),
+            EpochMembershipSnapshot::NonEpoch(s) => s.da_total_nodes(),
+        }
+    }
+
+    pub fn success_threshold(&self) -> U256 {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.success_threshold(),
+            EpochMembershipSnapshot::NonEpoch(s) => s.success_threshold(),
+        }
+    }
+
+    pub fn da_success_threshold(&self) -> U256 {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.da_success_threshold(),
+            EpochMembershipSnapshot::NonEpoch(s) => s.da_success_threshold(),
+        }
+    }
+
+    pub fn failure_threshold(&self) -> U256 {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.failure_threshold(),
+            EpochMembershipSnapshot::NonEpoch(s) => s.failure_threshold(),
+        }
+    }
+
+    pub fn upgrade_threshold(&self) -> U256 {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.upgrade_threshold(),
+            EpochMembershipSnapshot::NonEpoch(s) => s.upgrade_threshold(),
+        }
+    }
+
+    pub fn stake_table_hash(&self) -> Option<Commitment<SnapshotStakeTableHash<TYPES>>> {
+        match &self.snapshot {
+            EpochMembershipSnapshot::Epoch { snapshot, .. } => snapshot.stake_table_hash(),
+            EpochMembershipSnapshot::NonEpoch(_) => None,
+        }
     }
 }

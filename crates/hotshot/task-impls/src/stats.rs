@@ -352,10 +352,8 @@ impl<TYPES: NodeType> TaskState for StatsTaskState<TYPES> {
 
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(*epoch)
-                    .await?
-                    .leader(*view)
-                    .await?;
+                    .membership_for_epoch(*epoch)?
+                    .leader(*view)?;
                 if leader == self.public_key {
                     self.leader_entry(*view).builder_start = Some(now);
                 }

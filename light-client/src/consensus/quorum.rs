@@ -208,7 +208,7 @@ impl FromIterator<StakeTableEntry<PubKey>> for StakeTable {
 impl StakeTable {
     /// Get a stake table from a particular epoch's quorum membership.
     pub async fn from_membership(membership: &EpochMembership<SeqTypes>) -> Self {
-        membership.stake_table().await.into()
+        HSStakeTable::from_iter(membership.stake_table()).into()
     }
 
     /// Verify that a certificate is signed by a quorum of this stake table.
@@ -241,7 +241,7 @@ impl StakeTablePair for EpochMembership<SeqTypes> {
     }
 
     async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
-        let membership = self.next_epoch_stake_table().await?;
+        let membership = self.next_epoch_stake_table()?;
         Ok(Arc::new(StakeTable::from_membership(&membership).await))
     }
 }
