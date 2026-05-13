@@ -1166,13 +1166,24 @@ async fn test_cli_stake_table_full(#[case] version: StakeTableContractVersion) -
     let amount = parse_ether("1.123")?;
     system.delegate(amount).await?;
 
-    system
+    let mut assertion = system
         .cmd(Signer::Mnemonic)
         .arg("stake-table")
         .assert()
         .success()
         .stdout(str::contains("BLS_VER_KEY~ksjrqSN9jEvKOeCNNySv9Gcg7UjZvROpOm99zHov8SgxfzhLyno8IUfE1nxOBhGnajBmeTbchVI94ZUg5VLgAT2DBKXBnIC6bY9y2FBaK1wPpIQVgx99-fAzWqbweMsiXKFYwiT-0yQjJBXkWyhtCuTHT4l3CRok68mkobI09q0c comm=12.34 % stake=1.123000000000000000 ESP"))
         .stdout(str::contains(" - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=1.123000000000000000 ESP"));
+
+    if matches!(version, StakeTableContractVersion::V3) {
+        assertion = assertion
+            .stdout(str::contains(
+                " - X25519_PK~dhmbHhcLwJ8d83fT0i85vp9HMFY_AiOg3YlvTFBlhlft",
+            ))
+            .stdout(str::contains(" - p2p_addr=127.0.0.1:8080"));
+    }
+
+    let stdout = assertion.get_output().stdout.clone();
+    println!("{}", String::from_utf8_lossy(&stdout));
 
     Ok(())
 }
@@ -1185,7 +1196,7 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
     let amount = parse_ether("1.123")?;
     system.delegate(amount).await?;
 
-    system
+    let mut assertion = system
         .cmd(Signer::Mnemonic)
         .arg("stake-table")
         .arg("--compact")
@@ -1199,6 +1210,17 @@ async fn test_cli_stake_table_compact(#[case] version: StakeTableContractVersion
             " - Delegator 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266: stake=1.123000000000000000 \
              ESP",
         ));
+
+    if matches!(version, StakeTableContractVersion::V3) {
+        assertion = assertion
+            .stdout(str::contains(
+                " - X25519_PK~dhmbHhcLwJ8d83fT0i85vp9HMFY_Ai..",
+            ))
+            .stdout(str::contains(" - p2p_addr=127.0.0.1:8080"));
+    }
+
+    let stdout = assertion.get_output().stdout.clone();
+    println!("{}", String::from_utf8_lossy(&stdout));
 
     Ok(())
 }

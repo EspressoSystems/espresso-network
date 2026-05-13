@@ -1132,7 +1132,7 @@ fn load_validator_keys(
 ///
 /// The base form takes precedence when `HOSTNAME` is set.
 fn load_p2p_addr(val_index: u16) -> Result<NetAddr> {
-    if let Ok(hostname) = dotenvy::var("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME") {
+    if let Ok(hostname) = dotenv_get("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME") {
         let base_port_var = "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_BASE_PORT";
         let base_port: u16 = dotenv_get(base_port_var)?
             .parse()
@@ -1187,7 +1187,7 @@ pub(crate) async fn stake_for_demo(
     let stake_table_address = config.stake_table_address;
     tracing::info!("stake table address: {}", stake_table_address);
 
-    let mnemonic_env = dotenvy::var("ESPRESSO_NODE_KEY_MNEMONIC").ok();
+    let mnemonic_env = dotenv_get("ESPRESSO_NODE_KEY_MNEMONIC").ok();
 
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
