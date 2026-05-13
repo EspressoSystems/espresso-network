@@ -1,4 +1,4 @@
-use std::{collections::HashMap, mem, net::IpAddr, sync::Arc};
+use std::{collections::HashMap, mem, net::IpAddr, sync::Arc, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
@@ -35,7 +35,7 @@ pub struct Server {
     obound: UnboundedReceiver<Command>,
     next_slot: watch::Receiver<Slot>,
     accept_tasks: JoinSet<Result<Connection, NetworkError>>,
-    hello_tasks: JoinMap<PublicKey, Result<(Connection, Hello), NetworkError>>,
+    hello_tasks: JoinMap<PublicKey, Result<(Hello, Connection, Hello), NetworkError>>,
     connect_tasks: JoinMap<PublicKey, Connection>,
     peer_tasks: JoinMap<PublicKey, Peer>,
 }
@@ -91,9 +91,11 @@ impl Server {
         rx: UnboundedReceiver<Command>,
         sx: watch::Receiver<Slot>,
     ) -> JoinHandle<()> {
+        let our_key = conf.keypair.public_key();
         let parties = conf
             .parties
             .iter()
+            .filter(|&(k, _)| *k != our_key)
             .map(|(k, a)| {
                 let p = Party::new(Role::Active, a.clone());
                 (*k, p)
@@ -101,7 +103,7 @@ impl Server {
             .collect();
 
         let this = Self {
-            key: conf.keypair.public_key(),
+            key: our_key,
             conf,
             role,
             ibound: tx,
@@ -124,7 +126,6 @@ impl Server {
         for (k, a) in self
             .parties
             .iter()
-            .filter(|&(k, _)| *k != self.key)
             .map(|(k, p)| (*k, p.addr.clone()))
             .collect::<Vec<_>>()
         {
@@ -155,6 +156,17 @@ impl Server {
 
                 Some(h) = self.accept_tasks.join_next() => match h {
                     Ok(Ok(conn)) => {
+                        if conn.key == self.key {
+                            warn!(
+                                name = %self.conf.name,
+                                node = %self.key,
+                                peer = %conn.key,
+                                addr = %conn.addr,
+                                "rejecting connection with the same key"
+                            );
+                            self.spawn_hello(conn, Hello::BackOff(Duration::MAX));
+                            continue
+                        }
                         let Some(party) = self.parties.get_mut(&conn.key) else {
                             info!(
                                 name = %self.conf.name,
@@ -195,7 +207,12 @@ impl Server {
                 },
 
                 Some(r) = self.hello_tasks.join_next() => match r {
-                    (_, Ok(Ok((conn, hello)))) => {
+                    (_, Ok(Ok((our_hello, conn, their_hello)))) => {
+                        if conn.key == self.key {
+                            // This case has been addressed already by rejecting the peer,
+                            // i.e. we told the peer to backoff forever.
+                            continue
+                        }
                         let Some(party) = self.parties.get_mut(&conn.key) else {
                             info!(
                                 name = %self.conf.name,
@@ -206,14 +223,15 @@ impl Server {
                             );
                             continue
                         };
-                        if !hello.is_ok() {
+                        if !(our_hello.is_ok() && their_hello.is_ok()) {
                             warn!(
-                                name  = %self.conf.name,
-                                node  = %self.key,
-                                peer  = %conn.key,
-                                addr  = %conn.addr,
-                                hello = ?hello,
-                                "peer hello is not ok"
+                                name   = %self.conf.name,
+                                node   = %self.key,
+                                peer   = %conn.key,
+                                addr   = %conn.addr,
+                                ours   = ?our_hello,
+                                theirs = ?their_hello,
+                                "hello failed"
                             );
                             continue
                         }
@@ -264,7 +282,8 @@ impl Server {
                             name = %self.conf.name,
                             node = %self.key,
                             peer = %key,
-                            %err, "hello failed"
+                            %err,
+                            "hello task error"
                         )
                     }
                     (key, Err(err)) => {
@@ -407,6 +426,10 @@ impl Server {
                 cmd = self.obound.recv() => match cmd {
                     Some(Command::Peer(PeerCommand::Add(role, parties))) => {
                         for (k, a) in parties {
+                            if k == self.key {
+                                self.role = role;
+                                continue
+                            }
                             if let Some(p) = self.parties.get_mut(&k) {
                                 if p.addr == a {
                                     p.role = role;
@@ -435,6 +458,15 @@ impl Server {
                     }
                     Some(Command::Peer(PeerCommand::Remove(peers))) => {
                         for k in &peers {
+                            if *k == self.key {
+                                info!(
+                                    name = %self.conf.name,
+                                    node = %self.key,
+                                    "removing self sets role to passive"
+                                );
+                                self.role = Role::Passive;
+                                continue
+                            }
                             info!(
                                 name = %self.conf.name,
                                 node = %self.key,
@@ -448,6 +480,10 @@ impl Server {
                     }
                     Some(Command::Peer(PeerCommand::Assign(role, peers))) => {
                         for k in &peers {
+                            if *k == self.key {
+                                self.role = role;
+                                continue
+                            }
                             if let Some(p) = self.parties.get_mut(k) {
                                 p.role = role
                             } else {
@@ -574,6 +610,9 @@ impl Server {
     }
 
     fn spawn_connect(&mut self, key: PublicKey, addr: NetAddr) {
+        if self.key == key {
+            return;
+        }
         debug!(
             name = %self.conf.name,
             node = %self.key,
@@ -606,8 +645,8 @@ impl Server {
         self.hello_tasks.spawn(conn.key, async move {
             let future = async {
                 let theirs = conn.recv_hello().await?;
-                conn.send_hello(ours).await?;
-                Ok((conn, theirs))
+                conn.send_hello(ours.clone()).await?;
+                Ok((ours, conn, theirs))
             };
             match timeout(duration, future).await {
                 Ok(re) => re,
