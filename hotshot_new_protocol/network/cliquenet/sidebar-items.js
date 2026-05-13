@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["map_peer_role","to_network_error"],"struct":["Cliquenet"]};
+window.SIDEBAR_ITEMS = {"fn":["map_peer_role","to_network_error"],"struct":["Cliquenet","CliquenetConfig","CliquenetMetrics","Counters","Gauges"]};
