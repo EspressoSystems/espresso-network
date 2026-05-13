@@ -767,6 +767,7 @@ where
             GossipConfig::default(),
             RequestResponseConfig::default(),
             bind_address,
+            Vec::new(),
             public_key,
             private_key,
             Libp2pMetricsValue::default(),

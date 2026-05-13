@@ -59,6 +59,29 @@ impl NetAddr {
     pub fn is_ip(&self) -> bool {
         matches!(self, Self::Inet(..))
     }
+
+    /// Whether this address is plausibly publicly routable. Returns `false` for IP literals
+    /// in non-globally-routable ranges (loopback, unspecified, RFC 1918 private, link-local,
+    /// broadcast, documentation, IPv6 multicast) and the literal `localhost`. Other hostnames
+    /// are trusted and return `true`. Approximates the (still unstable) `IpAddr::is_global`
+    /// using stable predicates; the IPv6 surface is incomplete (`fe80::/10` link-local and
+    /// `fc00::/7` unique-local addresses are treated as global here).
+    pub fn is_probably_global(&self) -> bool {
+        match self {
+            Self::Inet(IpAddr::V4(v4), _) => {
+                !(v4.is_loopback()
+                    || v4.is_unspecified()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_documentation())
+            },
+            Self::Inet(IpAddr::V6(v6), _) => {
+                !(v6.is_loopback() || v6.is_unspecified() || v6.is_multicast())
+            },
+            Self::Name(host, _) => !host.eq_ignore_ascii_case("localhost"),
+        }
+    }
 }
 
 impl fmt::Display for NetAddr {
@@ -188,5 +211,33 @@ mod tests {
         };
         assert_eq!("sub.domain.com", &h);
         assert_eq!(1234, p);
+    }
+
+    #[test]
+    fn test_is_probably_global() {
+        let cases: &[(&str, bool)] = &[
+            ("127.0.0.1:1234", false),
+            ("0.0.0.0:1234", false),
+            ("10.0.0.1:1234", false),
+            ("172.16.5.4:1234", false),
+            ("192.168.1.1:1234", false),
+            ("169.254.0.1:1234", false),
+            ("255.255.255.255:1234", false),
+            ("192.0.2.1:1234", false),
+            ("::1:1234", false),
+            (":::1234", false),
+            ("ff00::1:1234", false),
+            ("localhost:1234", false),
+            ("LOCALHOST:1234", false),
+            ("8.8.8.8:1234", true),
+            ("1.1.1.1:1234", true),
+            ("2606:4700:4700::1111:1234", true),
+            ("example.com:1234", true),
+            ("node.internal:1234", true),
+        ];
+        for (s, expected) in cases {
+            let a: NetAddr = s.parse().unwrap_or_else(|_| panic!("parse {s}"));
+            assert_eq!(a.is_probably_global(), *expected, "for input {s}");
+        }
     }
 }
