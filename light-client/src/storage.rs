@@ -153,14 +153,22 @@ impl Default for LightClientSqliteOptions {
     }
 }
 
+/// Resolve to a SQLite connection URI for the in-memory case.
+///
+/// FIXME: a bare `:memory:` gives every pool connection its own private database, so the schema
+/// migration is invisible to all but the first connection. Fix in the next commit.
+fn in_memory_uri() -> String {
+    ":memory:".to_string()
+}
+
 impl LightClientSqliteOptions {
     /// Create or connect to a database with the given options.
     pub async fn connect(self) -> Result<SqliteStorage> {
-        let path = match &self.lc_path {
-            Some(path) => path.to_str().context("invalid file path")?,
-            None => ":memory:",
+        let path = match self.lc_path.as_ref() {
+            Some(p) => p.to_str().context("invalid file path")?.to_string(),
+            None => in_memory_uri(),
         };
-        let opt = SqliteConnectOptions::from_str(path)?.create_if_missing(true);
+        let opt = SqliteConnectOptions::from_str(&path)?.create_if_missing(true);
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
             .connect_with(opt)
@@ -521,6 +529,33 @@ mod test {
 
     use super::*;
     use crate::testing::{leaf_chain, random_validator};
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_in_memory_uri_shares_state_across_connections() {
+        use sqlx::ConnectOptions;
+
+        let uri = in_memory_uri();
+        let mut a = SqliteConnectOptions::from_str(&uri)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE regression (x INTEGER)")
+            .execute(&mut a)
+            .await
+            .unwrap();
+
+        let mut b = SqliteConnectOptions::from_str(&uri)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO regression VALUES (42)")
+            .execute(&mut b)
+            .await
+            .expect("second connection must see schema from first (shared cache)");
+    }
 
     #[tokio::test]
     #[test_log::test]
