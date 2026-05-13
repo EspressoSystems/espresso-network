@@ -33,21 +33,21 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
-    availability::{BlockId, LeafQueryData},
+    availability::BlockId,
     data_source::{
         Transaction as _, VersionedDataSource,
         storage::{
             AvailabilityStorage,
             pruning::PrunerCfg,
             sql::{
-                Config, Db, Read, SqlStorage, StorageConnectionType, Transaction, TransactionMode,
-                Write, include_migrations, query_as, syntax_helpers::MAX_FN,
+                Config, Db, Read, SqlStorage, StorageConnectionType, Transaction, Write,
+                include_migrations, query_as, syntax_helpers::MAX_FN,
             },
         },
     },
     fetching::{
         Provider,
-        request::{LeafRequest, PayloadRequest, VidCommonRequest},
+        request::{PayloadRequest, VidCommonRequest},
     },
     merklized_state::MerklizedState,
 };
@@ -3546,71 +3546,6 @@ impl Provider<SeqTypes, PayloadRequest> for Persistence {
     }
 }
 
-#[async_trait]
-impl Provider<SeqTypes, LeafRequest<SeqTypes>> for Persistence {
-    #[tracing::instrument(skip(self))]
-    async fn fetch(&self, req: LeafRequest<SeqTypes>) -> Option<LeafQueryData<SeqTypes>> {
-        let mut tx = match self.db.read().await {
-            Ok(tx) => tx,
-            Err(err) => {
-                tracing::warn!("could not open transaction: {err:#}");
-                return None;
-            },
-        };
-
-        let (leaf, qc) = match fetch_leaf_from_proposals(&mut tx, req).await {
-            Ok(res) => res?,
-            Err(err) => {
-                tracing::info!("requested leaf not found in undecided proposals: {err:#}");
-                return None;
-            },
-        };
-
-        match LeafQueryData::new(leaf, qc) {
-            Ok(leaf) => Some(leaf),
-            Err(err) => {
-                tracing::warn!("fetched invalid leaf: {err:#}");
-                None
-            },
-        }
-    }
-}
-
-async fn fetch_leaf_from_proposals<Mode: TransactionMode>(
-    tx: &mut Transaction<Mode>,
-    req: LeafRequest<SeqTypes>,
-) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
-    // Look for a quorum proposal corresponding to this leaf.
-    let Some((proposal_bytes,)) =
-        query_as::<(Vec<u8>,)>("SELECT data FROM quorum_proposals2 WHERE leaf_hash = $1 LIMIT 1")
-            .bind(req.expected_leaf.to_string())
-            .fetch_optional(tx.as_mut())
-            .await
-            .context("fetching proposal")?
-    else {
-        return Ok(None);
-    };
-
-    // Look for a QC corresponding to this leaf.
-    let Some((qc_bytes,)) =
-        query_as::<(Vec<u8>,)>("SELECT data FROM quorum_certificate2 WHERE leaf_hash = $1 LIMIT 1")
-            .bind(req.expected_leaf.to_string())
-            .fetch_optional(tx.as_mut())
-            .await
-            .context("fetching QC")?
-    else {
-        return Ok(None);
-    };
-
-    let proposal: Proposal<SeqTypes, QuorumProposalWrapper<SeqTypes>> =
-        bincode::deserialize(&proposal_bytes).context("deserializing quorum proposal")?;
-    let qc: QuorumCertificate2<SeqTypes> =
-        bincode::deserialize(&qc_bytes).context("deserializing quorum certificate")?;
-
-    let leaf = Leaf2::from_quorum_proposal(&proposal.data);
-    Ok(Some((leaf, qc)))
-}
-
 #[cfg(test)]
 mod testing {
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
@@ -4064,7 +3999,6 @@ mod test {
             .justify_qc
             .data
             .leaf_commit = Committable::commit(&leaf.clone());
-        let qc = next_quorum_proposal.data.justify_qc();
 
         // Add to database.
         storage
@@ -4094,18 +4028,6 @@ mod test {
             leaf_payload,
             storage
                 .fetch(PayloadRequest(vid_share.data.payload_commitment()))
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            LeafQueryData::new(leaf.clone(), qc.clone()).unwrap(),
-            storage
-                .fetch(LeafRequest::new(
-                    leaf.block_header().block_number(),
-                    Committable::commit(&leaf),
-                    qc.view_number(),
-                    qc.data,
-                ))
                 .await
                 .unwrap()
         );
@@ -4726,7 +4648,8 @@ mod postgres_tests {
     use espresso_types::{FeeAccount, Header, Leaf, NodeState, Transaction as Tx};
     use hotshot_example_types::node_types::TEST_VERSIONS;
     use hotshot_query_service::{
-        availability::BlockQueryData, data_source::storage::UpdateAvailabilityStorage,
+        availability::{BlockQueryData, LeafQueryData},
+        data_source::storage::UpdateAvailabilityStorage,
     };
     use hotshot_types::{
         data::vid_commitment,
@@ -4746,8 +4669,6 @@ mod postgres_tests {
         instance_state
             .coordinator
             .membership()
-            .write()
-            .await
             .set_first_epoch(EpochNumber::genesis(), Default::default());
 
         let tmp = Persistence::tmp_storage().await;

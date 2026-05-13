@@ -9,7 +9,7 @@ pub mod catchup;
 pub mod consensus_handle;
 pub mod context;
 pub mod genesis;
-pub mod keyset;
+pub use espresso_keyset as keyset;
 pub mod network;
 pub mod options;
 pub mod persistence;
@@ -23,7 +23,7 @@ use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
-use async_lock::{Mutex, RwLock};
+use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
@@ -722,12 +722,11 @@ where
     )
     .await;
 
-    let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
         network_config.config.epoch_height,
-        &persistence.clone(),
+        &persistence,
     );
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
@@ -937,7 +936,6 @@ pub mod testing {
         },
         signers::{k256::ecdsa::SigningKey, local::LocalSigner},
     };
-    use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
@@ -1592,7 +1590,7 @@ pub mod testing {
             );
             membership.reload_stake(50).await;
 
-            let membership = Arc::new(RwLock::new(membership));
+            let membership = Arc::new(membership);
             let persistence = Arc::new(persistence);
 
             let coordinator = EpochMembershipCoordinator::new(

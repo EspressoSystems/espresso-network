@@ -1535,7 +1535,7 @@ mod tests {
 
         let current_membership = membership_coordinator.membership();
         {
-            let membership_state = current_membership.read().await;
+            let membership_state = current_membership;
             let stake_table_fetcher = membership_state.fetcher();
 
             let block1 = anvil_provider
@@ -1567,7 +1567,7 @@ mod tests {
             .expect("latest l1 block");
 
         {
-            let membership_state = current_membership.read().await;
+            let membership_state = current_membership;
             let stake_table_fetcher = membership_state.fetcher();
 
             assert_events_eq(

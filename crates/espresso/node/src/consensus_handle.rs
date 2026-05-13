@@ -454,11 +454,11 @@ where
     N: Network<T>,
     S: NewProtocolStorage<T>,
 {
-    coord.start().await;
+    coord.start();
 
     loop {
         match coord.next_consensus_input().await {
-            Ok(input) => coord.apply_consensus(input).await,
+            Ok(input) => coord.apply_consensus(input),
             Err(err) if err.severity == Severity::Critical => {
                 tracing::error!(%err, "coordinator: critical error");
                 return;
@@ -471,7 +471,7 @@ where
             if let Some(event) = consensus_event(coord.state_manager(), &output) {
                 broadcast_event(&tx, event).await;
             }
-            if let Err(err) = coord.process_consensus_output(output).await {
+            if let Err(err) = coord.process_consensus_output(output) {
                 if err.severity == Severity::Critical {
                     tracing::error!(%err, "coordinator: critical error processing output");
                     return;

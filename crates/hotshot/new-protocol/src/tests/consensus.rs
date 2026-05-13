@@ -280,7 +280,7 @@ async fn test_state_validation_failed_removes_proposal() {
     // We need to call consensus.apply directly to avoid auto StateVerified.
     let proposal_input = test_data.views[1].proposal_input_consensus(&node_key);
     let mut outbox = Outbox::new();
-    harness.consensus.apply(proposal_input, &mut outbox).await;
+    harness.consensus.apply(proposal_input, &mut outbox);
     harness.collected.extend(outbox.take());
 
     // Send StateVerificationFailed — removes proposal
