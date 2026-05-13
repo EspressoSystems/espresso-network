@@ -4761,6 +4761,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "espresso-keyset"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "blake3",
+ "clap 4.6.1",
+ "derivative",
+ "dotenvy",
+ "hotshot",
+ "hotshot-types",
+ "rand 0.8.6",
+ "tagged-base64",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "espresso-macros"
 version = "0.1.0"
 source = "git+https://github.com/EspressoSystems/espresso-macros.git?tag=0.1.0#9e0b0258c99757c567676c4dd92f1501db0cf580"
@@ -4802,6 +4820,7 @@ dependencies = [
  "escargot",
  "espresso-api",
  "espresso-contract-deployer",
+ "espresso-keyset",
  "espresso-macros",
  "espresso-node",
  "espresso-types",
@@ -7524,8 +7543,8 @@ dependencies = [
 
 [[package]]
 name = "jf-merkle-tree"
-version = "0.4.0"
-source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.4.0#c6f3114507eb9fed48f7b2cbceab988d48764837"
+version = "0.4.2"
+source = "git+https://github.com/EspressoSystems/jellyfish?tag=jf-merkle-tree-v0.4.2#0d86d16d47e07cf9fe8934dfda4865a5c37d648f"
 dependencies = [
  "ark-bls12-377",
  "ark-bls12-381",
@@ -7534,7 +7553,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
- "derivative",
+ "derive-where",
  "digest 0.10.7",
  "displaydoc",
  "hashbrown 0.14.5",
@@ -12482,6 +12501,7 @@ dependencies = [
  "directories 6.0.0",
  "dotenvy",
  "espresso-contract-deployer",
+ "espresso-keyset",
  "espresso-safe-tx-builder",
  "espresso-types",
  "espresso-utils",
@@ -14128,6 +14148,7 @@ dependencies = [
  "ark-serialize 0.5.0",
  "ark-std 0.5.0",
  "base64-bytes",
+ "blake3",
  "criterion 0.8.2",
  "displaydoc",
  "jf-crhf",
