@@ -407,7 +407,7 @@ struct Counters {
 impl CliquenetMetrics {
     pub fn new(m: Box<dyn Metrics>) -> Self {
         Self {
-            metrics: m,
+            metrics: m.subgroup("cliquenet".to_string()),
             gauges: RwLock::new(Gauges::default()),
             counters: RwLock::new(Counters::default()),
         }
