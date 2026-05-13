@@ -577,11 +577,12 @@ where
         // Look up an earlier stake table we can catch up from, in cache or DB.
         //
         // `epoch_root_protocol_version` is the version of the snapshot root header (root in epoch
-        // `k-2` for the epoch `k` we are computing).On DB load we seed it from the stored version;
-        // on genesis we fetch the root at `first_dynamic - 2` (signed by the genesis stake table)
-        // and use its version.
+        // `k-2` for the epoch `k` we are computing). On DB load we seed it from the stored
+        // `next_snapshot_version` of `lower_bound`, which is the snapshot for `lower_bound + 1`
+        // (= iter 1's target). On genesis we fetch the root at `first_dynamic - 2` (signed by
+        // the genesis stake table) and use its version.
         let (lower_bound, mut stake_table, mut prev_quorum, mut epoch_root_protocol_version) =
-            if let Some((lower_bound, stake_table, stored_version)) =
+            if let Some((lower_bound, stake_table, stored_version, next_stored_version)) =
                 self.db.stake_table_lower_bound(epoch).await?
             {
                 if lower_bound == epoch {
@@ -591,7 +592,12 @@ where
                 }
 
                 let quorum = stake_table_state_to_quorum(&stake_table, stored_version)?;
-                (lower_bound, stake_table, Arc::new(quorum), stored_version)
+                (
+                    lower_bound,
+                    stake_table,
+                    Arc::new(quorum),
+                    next_stored_version,
+                )
             } else {
                 // We don't have any stake table earlier than `epoch` as a starting point, so we must
                 // start from the genesis state.
@@ -675,13 +681,17 @@ where
                 bail!("epoch {epoch} root {root_height} does not have next stake table hash");
             }
 
-            // Cache the reconstructed stake table in the database.
+            // Cache the reconstructed stake table in the database. We store
+            // `epoch_root_protocol_version` (snapshot for this epoch, used by cache hits) and
+            // `root.version()` (snapshot for `epoch + 1`, used to seed iter 1 of a future
+            // catchup that resumes from this row).
             if let Err(err) = self
                 .db
                 .insert_stake_table(
                     EpochNumber::new(epoch),
                     &stake_table,
                     epoch_root_protocol_version,
+                    root.version(),
                 )
                 .await
             {
@@ -1350,23 +1360,24 @@ mod test {
 
         lc.quorum_for_epoch(epoch).await.unwrap();
 
-        let (cached_epoch, _, cached_version) =
+        let (cached_epoch, _, cached_version, _) =
             db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
         assert_eq!(cached_epoch, epoch);
         assert_eq!(cached_version, DRB_AND_HEADER_UPGRADE_VERSION);
     }
 
-    /// Regression: when iter 1 of the catchup loop starts from a DB-cached lower bound, the
-    /// snapshot version for `lower_bound + 1` is the version of `root_in(lower_bound - 1)`, not
-    /// `stored_version` (the snapshot version for `lower_bound` itself, at
-    /// `root_in(lower_bound - 2)`). Activate CLIQUENET exactly at `root_in(lower_bound - 1)` so
-    /// the two roots differ. With the correct seed (CLIQUENET), iter 1's filter drops every
-    /// test validator (none have x25519) and `quorum_for_epoch` returns an error. With the
-    /// buggy seed (stored V4), iter 1 keeps every validator and catchup wrongly succeeds.
+    /// Regression: iter 1 of DB-load catchup must seed from `next_stored_version`, not
+    /// `stored_version`.
     ///
-    /// This is a bit brittle: it observes the bug via "an error happens at all" rather than
-    /// asserting the exact filter version, but it avoids adding x25519/p2p plumbing to the
-    /// shared test client just for this one case.
+    /// - insert stake table for `lower_bound_epoch` with `stored_version` = V4 and
+    ///   `next_stored_version` = CLIQUENET
+    /// - activate the upgrade at `target_epoch_root`
+    /// - request quorum for `target_epoch`
+    /// - fix: seed = `next_stored_version` = CLIQUENET, filter drops all validators, errors
+    /// - previous bug: seed = `stored_version` = V4, no filter, catchup wrongly succeeds
+    ///
+    /// Brittle: asserts that an error happens, not the filter version. Avoids x25519/p2p
+    /// plumbing in the shared test client.
     #[tokio::test]
     #[test_log::test]
     async fn test_fetch_stake_table_catchup_db_load_advances_snapshot_version() {
@@ -1377,19 +1388,26 @@ mod test {
         let db = SqliteStorage::default().await.unwrap();
         let lc = LightClient::from_genesis(db.clone(), client.clone(), genesis.clone());
 
-        let lower_bound = genesis.first_epoch_with_dynamic_stake_table;
-        let target_epoch = lower_bound + 1;
-        let snapshot_height = root_block_in_epoch(*target_epoch - 2, 10);
+        let lower_bound_epoch = genesis.first_epoch_with_dynamic_stake_table;
+        let target_epoch = lower_bound_epoch + 1;
+        let target_epoch_root = root_block_in_epoch(*target_epoch - 2, 10);
 
         let mut prev_state = StakeTableState::default();
-        for event in client.stake_table_events(lower_bound).await.unwrap() {
+        for event in client.stake_table_events(lower_bound_epoch).await.unwrap() {
             prev_state.apply_event(event).unwrap().unwrap();
         }
-        db.insert_stake_table(lower_bound, &prev_state, DRB_AND_HEADER_UPGRADE_VERSION)
-            .await
-            .unwrap();
+        db.insert_stake_table(
+            lower_bound_epoch,
+            &prev_state,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            CLIQUENET_VERSION,
+        )
+        .await
+        .unwrap();
 
-        client.set_upgrade(snapshot_height, CLIQUENET_VERSION).await;
+        client
+            .set_upgrade(target_epoch_root, CLIQUENET_VERSION)
+            .await;
 
         let err = lc.quorum_for_epoch(target_epoch).await.unwrap_err();
         assert!(
@@ -1423,9 +1441,14 @@ mod test {
         for event in client.stake_table_events(prev_epoch).await.unwrap() {
             prev_state.apply_event(event).unwrap().unwrap();
         }
-        db.insert_stake_table(prev_epoch, &prev_state, DRB_AND_HEADER_UPGRADE_VERSION)
-            .await
-            .unwrap();
+        db.insert_stake_table(
+            prev_epoch,
+            &prev_state,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+        )
+        .await
+        .unwrap();
 
         client.set_upgrade(root_height, CLIQUENET_VERSION).await;
 
@@ -1466,7 +1489,7 @@ mod test {
         let state = StakeTableState::new(validators, Default::default(), used_bls, used_schnorr);
 
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
-        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION)
+        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, CLIQUENET_VERSION)
             .await
             .unwrap();
 
@@ -1500,7 +1523,7 @@ mod test {
         let expected = client.quorum_for_epoch(epoch).await.into();
         assert_eq!(*lc.quorum_for_epoch(epoch).await.unwrap(), expected);
 
-        let (cached_epoch, _, cached_version) =
+        let (cached_epoch, _, cached_version, _) =
             db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
         assert_eq!(cached_epoch, epoch);
         assert_eq!(cached_version, DRB_AND_HEADER_UPGRADE_VERSION);
