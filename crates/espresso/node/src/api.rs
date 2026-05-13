@@ -5771,8 +5771,7 @@ mod test {
 
     #[rstest]
     #[case(POS_V3)]
-    // #[case(POS_V4)]
-    // TODO: currently broken: See https://github.com/EspressoSystems/espresso-network/issues/4277
+    #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_merklized_state_catchup_on_restart(
         #[case] upgrade: Upgrade,
