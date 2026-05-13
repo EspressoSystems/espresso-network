@@ -138,9 +138,8 @@ pub struct LightClientSqliteOptions {
 
     /// Path at which the light client database is persisted.
     ///
-    /// If absent, the database lives in-memory and is destroyed when the storage is dropped.
-    /// Operators running with the `query` API module must set this; the production startup path
-    /// enforces it. Tests omit it.
+    /// If not present, the database will exist only in memory and will be destroyed when the
+    /// [`SqlitePersistence`] object is dropped
     #[cfg_attr(
         feature = "clap",
         clap(long = "light-client-db-path", env = "LIGHT_CLIENT_DB_PATH")

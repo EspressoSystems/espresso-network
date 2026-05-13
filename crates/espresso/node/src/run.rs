@@ -22,16 +22,6 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
 
-    if let Some(query) = &modules.query
-        && query.light_client_db.lc_path.is_none()
-    {
-        anyhow::bail!(
-            "LIGHT_CLIENT_DB_PATH must be set when the query module is enabled; without a path \
-             the light client cache lives in memory and is destroyed on restart, so catchup \
-             cannot persist"
-        );
-    }
-
     let genesis = Genesis::from_file(&opt.genesis_file)?;
     tracing::warn!(?genesis, "genesis");
 
