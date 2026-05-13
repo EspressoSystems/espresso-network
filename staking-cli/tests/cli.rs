@@ -5,16 +5,20 @@ use alloy::{
         Address, U256,
         utils::{format_ether, parse_ether},
     },
+    providers::Provider as _,
     signers::local::coins_bip39::{English, Mnemonic},
 };
 use anyhow::Result;
 use common::{MetadataCommand, Signer, TestSystemExt, base_cmd};
+use espresso_contract_deployer::build_signer;
+use espresso_types::{L1Client, v0_3::Fetcher};
 use hotshot_contract_adapter::stake_table::StakeTableContractVersion;
-use hotshot_types::{signature_key::BLSPubKey, x25519};
+use hotshot_types::{addr::NetAddr, signature_key::BLSPubKey, x25519};
 use predicates::{prelude::PredicateBooleanExt, str};
 use rand::{SeedableRng as _, rngs::StdRng};
 use serde::Deserialize;
 use staking_cli::{
+    DEMO_VALIDATOR_START_INDEX, DEV_MNEMONIC,
     demo::DelegationConfig,
     deploy::{self, TestSystem},
     fetch_metadata,
@@ -844,7 +848,7 @@ async fn test_cli_stake_for_demo_with_mnemonic_env(
     let system = TestSystem::deploy_version(version).await?;
 
     let mut cmd = system.cmd(Signer::Mnemonic).into_inner();
-    cmd.env("ESPRESSO_NODE_KEY_MNEMONIC", staking_cli::DEV_MNEMONIC)
+    cmd.env("ESPRESSO_NODE_KEY_MNEMONIC", DEV_MNEMONIC)
         .env_remove("ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_0")
         .env_remove("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_0")
         .env_remove("ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_0")
@@ -854,6 +858,55 @@ async fn test_cli_stake_for_demo_with_mnemonic_env(
         .arg("1")
         .assert()
         .success();
+    Ok(())
+}
+
+/// `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME` + `..._BASE_PORT` should let the demo register
+/// any number of validators without per-index `ADVERTISE_ADDRESS_N` env vars. Six validators
+/// exceeds the five hardcoded per-index addresses in `.env`, so this would fail without the new
+/// hostname/base-port feature. Only V3 stake table records p2p addresses.
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn test_cli_stake_for_demo_with_advertise_hostname_and_base_port() -> Result<()> {
+    let system = TestSystem::deploy_version(StakeTableContractVersion::V3).await?;
+
+    let hostname = "127.0.0.1";
+    let base_port: u16 = 47829;
+    let num_validators: u16 = 6;
+
+    let mut cmd = system.cmd(Signer::Mnemonic).into_inner();
+    cmd.env("ESPRESSO_NODE_KEY_MNEMONIC", DEV_MNEMONIC)
+        .env("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME", hostname)
+        .env(
+            "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_BASE_PORT",
+            base_port.to_string(),
+        )
+        .arg("demo")
+        .arg("stake")
+        .arg("--num-validators")
+        .arg(num_validators.to_string())
+        .assert()
+        .success();
+
+    let l1 = L1Client::new(vec![system.rpc_url.clone()])?;
+    let block = system.provider.get_block_number().await?;
+    let (validators, _) =
+        Fetcher::fetch_all_validators_from_contract(l1, system.stake_table, block).await?;
+    assert_eq!(validators.len(), num_validators as usize);
+    for i in 0..num_validators {
+        let signer = build_signer(DEV_MNEMONIC, DEMO_VALIDATOR_START_INDEX + i as u32);
+        let validator = validators.get(&signer.address()).unwrap_or_else(|| {
+            panic!(
+                "validator at index {i} ({}) not registered",
+                signer.address()
+            )
+        });
+        let expected: NetAddr = format!("{hostname}:{}", base_port + i).parse()?;
+        assert_eq!(
+            validator.p2p_addr,
+            Some(expected),
+            "p2p_addr mismatch for validator {i}"
+        );
+    }
     Ok(())
 }
 

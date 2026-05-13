@@ -49,9 +49,13 @@ Validator consensus keys (BLS, Schnorr state, x25519) are loaded as follows:
 - Otherwise, keys are read per validator from `ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{N}`,
   `ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{N}`, and `ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{N}`.
 
-The mnemonic takes precedence: when it is set, the per-validator env vars are ignored.
-`ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{N}` is always read from the environment (not derivable from a
-mnemonic).
+The mnemonic takes precedence: when it is set, the per-validator key env vars are ignored.
+
+The p2p advertise address can be configured in two ways:
+
+- Set `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME` and `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_BASE_PORT`. The
+  registered address for validator `N` is then `{hostname}:{base_port + N}`. This scales to any number of validators.
+- Otherwise set `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{N}` per validator.
 
 ### `demo delegate`
 
