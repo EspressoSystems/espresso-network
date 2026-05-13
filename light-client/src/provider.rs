@@ -1,13 +1,13 @@
 //! Functionality for using the [`LightClient`] as a query service fetching [`Provider`].
 
 use async_trait::async_trait;
-use espresso_types::{Payload, SeqTypes};
+use espresso_types::{Certificate2, Payload, SeqTypes};
 use hotshot_query_service::{
     availability::{BlockQueryData, LeafId, LeafQueryData, VidCommonQueryData},
     fetching::{
         NonEmptyRange, Provider,
         request::{
-            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest, RangeRequest,
+            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -18,12 +18,12 @@ use hotshot_types::data::VidCommon;
 use crate::{LightClient, client::Client, storage::Storage};
 
 #[async_trait]
-impl<P, S> Provider<SeqTypes, LeafRequest<SeqTypes>> for LightClient<P, S>
+impl<P, S> Provider<SeqTypes, LeafRequest> for LightClient<P, S>
 where
     P: Storage,
     S: Client,
 {
-    async fn fetch(&self, req: LeafRequest<SeqTypes>) -> Option<LeafQueryData<SeqTypes>> {
+    async fn fetch(&self, req: LeafRequest) -> Option<LeafQueryData<SeqTypes>> {
         match self.fetch_leaf(LeafId::Number(req.height as usize)).await {
             Ok(leaf) => Some(leaf),
             Err(err) => {
@@ -69,15 +69,12 @@ where
 }
 
 #[async_trait]
-impl<P, S> Provider<SeqTypes, LeafRangeRequest<SeqTypes>> for LightClient<P, S>
+impl<P, S> Provider<SeqTypes, LeafRangeRequest> for LightClient<P, S>
 where
     P: Storage,
     S: Client,
 {
-    async fn fetch(
-        &self,
-        req: LeafRangeRequest<SeqTypes>,
-    ) -> Option<NonEmptyRange<LeafQueryData<SeqTypes>>> {
+    async fn fetch(&self, req: LeafRangeRequest) -> Option<NonEmptyRange<LeafQueryData<SeqTypes>>> {
         let leaves = match self
             .fetch_leaves_in_range(req.start as usize, req.end as usize)
             .await
@@ -108,7 +105,6 @@ where
         &self,
         req: BlockRangeRequest,
     ) -> Option<NonEmptyRange<BlockQueryData<SeqTypes>>> {
-        let req = RangeRequest::from(req);
         let blocks = match self
             .fetch_blocks_in_range(req.start as usize, req.end as usize)
             .await
@@ -139,7 +135,6 @@ where
         &self,
         req: VidCommonRangeRequest,
     ) -> Option<NonEmptyRange<VidCommonQueryData<SeqTypes>>> {
-        let req = RangeRequest::from(req);
         let vid_common = match self
             .fetch_vid_common_in_range(req.start as usize, req.end as usize)
             .await
@@ -154,6 +149,23 @@ where
             Ok(vid_common) => Some(vid_common),
             Err(err) => {
                 tracing::warn!(?req, "received invalid VID common range: {err:#}");
+                None
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl<P, S> Provider<SeqTypes, Certificate2Request> for LightClient<P, S>
+where
+    P: Storage,
+    S: Client,
+{
+    async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<SeqTypes>>> {
+        match self.fetch_certificate2(req.height).await {
+            Ok(cert2) => Some(cert2),
+            Err(err) => {
+                tracing::warn!(?req, "failed to fetch cert2: {err:#}");
                 None
             },
         }

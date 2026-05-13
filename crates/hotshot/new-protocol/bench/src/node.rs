@@ -17,7 +17,7 @@ use hotshot_new_protocol::{
     epoch_root_vote_collector::EpochRootVoteCollector,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
-    proposal::ProposalValidator,
+    proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -167,6 +167,8 @@ async fn build_coordinator(
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let share_validator =
+        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
     let timer = Timer::new(
         cfg.timeout_duration(),
@@ -189,6 +191,7 @@ async fn build_coordinator(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .share_validator(share_validator)
         .storage(hotshot_new_protocol::storage::Storage::new(
             TestStorage::default(),
             private_key,
@@ -201,11 +204,11 @@ async fn build_coordinator(
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-    coordinator.start().await;
+    coordinator.start();
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
-        if let Err(e) = coordinator.process_consensus_output(output).await {
+        if let Err(e) = coordinator.process_consensus_output(output) {
             warn!(%e, "error processing initial output");
         }
     }
@@ -228,7 +231,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         match coordinator.next_consensus_input().await {
             Ok(input) => {
                 metrics.on_input(&input);
-                coordinator.apply_consensus(input).await;
+                coordinator.apply_consensus(input);
             },
             Err(err)
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
@@ -262,7 +265,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 );
                 let header_input = ConsensusInput::HeaderCreated(req.view, header);
                 metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input).await;
+                coordinator.apply_consensus(header_input);
                 let block_input = ConsensusInput::BlockBuilt {
                     view: req.view,
                     epoch: req.epoch,
@@ -270,11 +273,11 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     metadata: block.metadata,
                 };
                 metrics.on_input(&block_input);
-                coordinator.apply_consensus(block_input).await;
+                coordinator.apply_consensus(block_input);
                 continue; // skip process_consensus_output for this one
             }
 
-            if let Err(err) = coordinator.process_consensus_output(output).await {
+            if let Err(err) = coordinator.process_consensus_output(output) {
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
                     error!(%err, "critical error processing output");
                     metrics.write_csv(&output_path)?;
@@ -351,7 +354,7 @@ fn build_genesis_cert1(
         block_number: Some(0),
     };
     hotshot_new_protocol::message::Certificate1::new(
-        data.clone(),
+        data,
         data.commit(),
         ViewNumber::genesis(),
         None,

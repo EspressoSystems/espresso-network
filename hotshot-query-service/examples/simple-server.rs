@@ -19,7 +19,6 @@
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
-use async_lock::RwLock;
 use clap::Parser;
 use futures::future::{join_all, try_join_all};
 use hotshot::{
@@ -27,7 +26,9 @@ use hotshot::{
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{SignatureKey, SystemContextHandle},
 };
-use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
+use hotshot_example_types::{
+    membership::TestableMembership, state_types::TestInstanceState, storage_types::TestStorage,
+};
 use hotshot_query_service::{
     Error, data_source,
     fetching::provider::NoFetching,
@@ -40,13 +41,9 @@ use hotshot_query_service::{
 };
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
-    HotShotConfig, PeerConfig,
-    consensus::ConsensusMetricsValue,
-    epoch_membership::EpochMembershipCoordinator,
-    light_client::StateKeyPair,
-    signature_key::BLSPubKey,
-    storage_metrics::StorageMetricsValue,
-    traits::{election::Membership, network::Topic},
+    HotShotConfig, PeerConfig, consensus::ConsensusMetricsValue,
+    epoch_membership::EpochMembershipCoordinator, light_client::StateKeyPair,
+    signature_key::BLSPubKey, storage_metrics::StorageMetricsValue, traits::network::Topic,
 };
 use test_utils::reserve_tcp_port;
 use tracing_subscriber::EnvFilter;
@@ -254,7 +251,7 @@ async fn init_consensus(
                 );
 
                 let coordinator = EpochMembershipCoordinator::new(
-                    Arc::new(RwLock::new(membership)),
+                    membership,
                     config.epoch_height,
                     &storage.clone(),
                 );

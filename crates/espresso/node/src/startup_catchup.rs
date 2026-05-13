@@ -20,8 +20,6 @@ use hotshot_types::{
     data::EpochNumber, epoch_membership::EpochMembershipCoordinator, traits::election::Membership,
 };
 
-const STAKE_TABLE_CATCHUP_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Walk forward from the highest already-known epoch until peers can no
 /// longer serve the next epoch root leaf, populating the membership with
 /// stake tables for every epoch up through `N+1` (where `N` is the current
@@ -33,6 +31,7 @@ const STAKE_TABLE_CATCHUP_TIMEOUT: Duration = Duration::from_secs(10);
 pub async fn bootstrap_epoch_window(
     coordinator: &EpochMembershipCoordinator<SeqTypes>,
     epoch_height: u64,
+    step_timeout: Duration,
 ) -> anyhow::Result<EpochNumber> {
     if epoch_height == 0 {
         // Pre-epoch chain: epochs aren't enabled yet, the non-epoch
@@ -42,8 +41,6 @@ pub async fn bootstrap_epoch_window(
 
     let membership = coordinator.membership();
     let first_epoch = membership
-        .read()
-        .await
         .first_epoch()
         .context("first_epoch not seeded; genesis stake table missing")?;
 
@@ -60,10 +57,11 @@ pub async fn bootstrap_epoch_window(
     // `set_first_epoch` always seeds `first_epoch` and `first_epoch + 1`,
     // so the scan terminates at worst at `first_epoch + 1`.
     let mut highest = {
-        let m = membership.read().await;
-        let initial = m.highest_known_epoch().unwrap_or(first_epoch + 1);
+        let initial = membership.highest_known_epoch().unwrap_or(first_epoch + 1);
         let mut h = initial;
-        while h > first_epoch + 1 && !(m.has_stake_table(h) && m.has_stake_table(h - 1)) {
+        while h > first_epoch + 1
+            && !(membership.snapshot(h).is_some() && membership.snapshot(h - 1).is_some())
+        {
             h = h - 1;
         }
         h
@@ -76,18 +74,13 @@ pub async fn bootstrap_epoch_window(
     );
 
     // Walk forward; each successful iteration drives `add_epoch_root` via
-    // the existing catchup machinery, persisting the new stake table.
-    //
-    // The underlying `fetch_leaf` retries forever, so each step is bounded
-    // by `STAKE_TABLE_CATCHUP_TIMEOUT`.  When it times out we treat this as the stake table
-    // not being available yet.
+    // the existing catchup machinery, persisting the new stake table. The
+    // walk terminates when the catchup chain returns an error
+    // (`Ok(Err(_))`) or a single step exceeds the hang bound (`Err(_)`).
     loop {
         let target = highest + 1;
-        let result = tokio::time::timeout(
-            STAKE_TABLE_CATCHUP_TIMEOUT,
-            coordinator.wait_for_stake_table(target),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(step_timeout, coordinator.wait_for_stake_table(target)).await;
         match result {
             Ok(Ok(_)) => {
                 tracing::info!(%target, "bootstrap_epoch_window: derived stake table");
@@ -104,7 +97,7 @@ pub async fn bootstrap_epoch_window(
             Err(_) => {
                 tracing::info!(
                     %target,
-                    timeout_secs = STAKE_TABLE_CATCHUP_TIMEOUT.as_secs(),
+                    timeout_secs = step_timeout.as_secs(),
                     "bootstrap_epoch_window: catchup timed out; treating as live tip",
                 );
                 break;
@@ -116,13 +109,12 @@ pub async fn bootstrap_epoch_window(
     // the last finalized one peers can serve). So current epoch N = highest - 1.
     let current = EpochNumber::new(highest.saturating_sub(1));
 
-    let m = membership.read().await;
     ensure!(
-        m.has_stake_table(current),
+        membership.snapshot(current).is_some(),
         "missing stake table for current epoch {current} after bootstrap"
     );
     ensure!(
-        m.has_stake_table(highest),
+        membership.snapshot(highest).is_some(),
         "missing stake table for next epoch {highest} after bootstrap"
     );
 

@@ -27,7 +27,7 @@ use crate::{
     message::{Certificate1, Proposal},
     network::Network,
     outbox::Outbox,
-    proposal::ProposalValidator,
+    proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     vid::{VidDisperser, VidReconstructor},
     vote::VoteCollector,
@@ -169,6 +169,8 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let share_validator =
+        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
     let mut coordinator = Coordinator::builder()
         .consensus(consensus)
@@ -185,6 +187,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         .epoch_manager(epoch_manager)
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .share_validator(share_validator)
         .storage(crate::storage::Storage::new(storage, private_key))
         .client(client)
         .membership_coordinator(membership)
@@ -198,12 +201,12 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
-    coordinator.start().await;
+    coordinator.start();
 
     // Process the initial outputs so the timer resets and block builder
     // gets notified before the event loop starts.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
-        let _ = coordinator.process_consensus_output(output).await;
+        let _ = coordinator.process_consensus_output(output);
     }
 
     coordinator
@@ -220,7 +223,7 @@ fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestType
         block_number: Some(0),
     };
     Certificate1::new(
-        data.clone(),
+        data,
         data.commit(),
         ViewNumber::genesis(),
         None,

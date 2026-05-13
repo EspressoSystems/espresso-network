@@ -44,11 +44,9 @@ pub(crate) async fn handle_quorum_vote_recv<TYPES: NodeType, I: NodeImplementati
     let epoch_membership = task_state
         .membership_coordinator
         .membership_for_epoch(vote.data.epoch)
-        .await
         .context(warn!("No stake table for epoch"))?;
 
-    let we_are_leader =
-        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key;
+    let we_are_leader = epoch_membership.leader(vote.view_number() + 1)? == task_state.public_key;
     ensure!(
         in_transition || we_are_leader,
         info!(
@@ -83,10 +81,8 @@ pub(crate) async fn handle_quorum_vote_recv<TYPES: NodeType, I: NodeImplementati
     {
         // If the vote sender belongs to the next epoch, collect it separately to form the second QC
         let has_stake = epoch_membership
-            .next_epoch_stake_table()
-            .await?
-            .has_stake(&vote.signing_key())
-            .await;
+            .next_epoch_stake_table()?
+            .has_stake(&vote.signing_key());
         if has_stake {
             handle_vote(
                 &mut task_state.next_epoch_vote_collectors,
@@ -96,7 +92,7 @@ pub(crate) async fn handle_quorum_vote_recv<TYPES: NodeType, I: NodeImplementati
                 // so we must request the full randomized stake table.
                 //
                 // I'm not sure this is really necessary, but I've opted not to modify the logic.
-                &epoch_membership.next_epoch().await?.clone(),
+                &epoch_membership.next_epoch()?.clone(),
                 task_state.id,
                 &event,
                 sender,
@@ -131,11 +127,9 @@ pub(crate) async fn handle_epoch_root_quorum_vote_recv<
     let epoch_membership = task_state
         .membership_coordinator
         .membership_for_epoch(vote.vote.data.epoch)
-        .await
         .context(warn!("No stake table for epoch"))?;
 
-    let we_are_leader =
-        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key;
+    let we_are_leader = epoch_membership.leader(vote.view_number() + 1)? == task_state.public_key;
     ensure!(
         we_are_leader,
         info!("We are not the leader for view {}", vote.view_number() + 1)
@@ -166,11 +160,10 @@ pub(crate) async fn handle_timeout_vote_recv<TYPES: NodeType, I: NodeImplementat
     let epoch_membership = task_state
         .membership_coordinator
         .membership_for_epoch(task_state.cur_epoch)
-        .await
         .context(warn!("No stake table for epoch"))?;
     // Are we the leader for this view?
     ensure!(
-        epoch_membership.leader(vote.view_number() + 1).await? == task_state.public_key,
+        epoch_membership.leader(vote.view_number() + 1)? == task_state.public_key,
         info!("We are not the leader for view {}", vote.view_number() + 1)
     );
 
@@ -180,8 +173,7 @@ pub(crate) async fn handle_timeout_vote_recv<TYPES: NodeType, I: NodeImplementat
         task_state.public_key.clone(),
         &task_state
             .membership_coordinator
-            .membership_for_epoch(vote.data.epoch)
-            .await?,
+            .membership_for_epoch(vote.data.epoch)?,
         task_state.id,
         &event,
         sender,
@@ -259,10 +251,8 @@ pub async fn send_high_qc<TYPES: NodeType, I: NodeImplementation<TYPES>>(
     } else {
         let leader = task_state
             .membership_coordinator
-            .membership_for_epoch(task_state.cur_epoch)
-            .await?
-            .leader(new_view_number)
-            .await?;
+            .membership_for_epoch(task_state.cur_epoch)?
+            .leader(new_view_number)?;
 
         let (high_qc, maybe_next_epoch_qc) = if high_qc
             .data
@@ -409,10 +399,8 @@ pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TY
     let old_view_leader_key = task_state
         .membership_coordinator
         .membership_for_epoch(task_state.cur_epoch)
-        .await
         .context(warn!("No stake table for epoch"))?
-        .leader(old_view_number)
-        .await?;
+        .leader(old_view_number)?;
 
     let consensus_reader = task_state.consensus.read().await;
     consensus_reader
@@ -473,10 +461,8 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
         task_state
             .membership_coordinator
             .stake_table_for_epoch(epoch)
-            .await
             .context(warn!("No stake table for epoch"))?
-            .has_stake(&task_state.public_key)
-            .await,
+            .has_stake(&task_state.public_key),
         debug!("We were not chosen for the consensus committee for view {view_number}",)
     );
 
@@ -541,10 +527,8 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     let leader = task_state
         .membership_coordinator
         .membership_for_epoch(task_state.cur_epoch)
-        .await
         .context(warn!("No stake table for epoch"))?
-        .leader(view_number)
-        .await;
+        .leader(view_number);
 
     let consensus_reader = task_state.consensus.read().await;
     consensus_reader.metrics.number_of_timeouts.add(1);

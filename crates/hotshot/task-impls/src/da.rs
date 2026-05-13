@@ -125,10 +125,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 let view_leader_key = self
                     .membership_coordinator
                     .membership_for_epoch(proposal.data.epoch)
-                    .await
                     .context(warn!("No stake table for epoch {:?}", proposal.data.epoch))?
-                    .leader(view)
-                    .await?;
+                    .leader(view)?;
                 ensure!(
                     view_leader_key == sender,
                     warn!(
@@ -161,7 +159,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 let membership = self
                     .membership_coordinator
                     .stake_table_for_epoch(epoch_number)
-                    .await
                     .context(warn!("No stake table for epoch"))?;
 
                 ensure!(
@@ -187,14 +184,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 .await;
 
                 ensure!(
-                    membership.has_da_stake(&self.public_key).await,
+                    membership.has_da_stake(&self.public_key),
                     debug!(
                         "We were not chosen for consensus committee for view {view_number} in \
                          epoch {epoch_number:?}"
                     )
                 );
-                let total_weight =
-                    vid_total_weight::<TYPES>(&membership.stake_table().await, epoch_number);
+                let total_weight = vid_total_weight(membership.stake_table(), epoch_number);
 
                 let version = self.upgrade_lock.version_infallible(view_number);
 
@@ -214,12 +210,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                     .epochs_enabled(proposal.data.view_number())
                     && epoch_number.is_some()
                 {
-                    let next_epoch_total_weight = vid_total_weight::<TYPES>(
-                        &membership
-                            .next_epoch_stake_table()
-                            .await?
-                            .stake_table()
-                            .await,
+                    let next_stake_table = membership.next_epoch_stake_table()?;
+                    let next_epoch_total_weight = vid_total_weight(
+                        next_stake_table.stake_table(),
                         epoch_number.map(|epoch| epoch + 1),
                     );
 
@@ -301,15 +294,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                     let next_epoch = epoch_number.map(|epoch| epoch + 1);
 
                     let mut target_epochs = vec![];
-                    if membership.has_stake(&public_key).await {
+                    if membership.has_stake(&public_key) {
                         target_epochs.push(epoch_number);
                     }
-                    if membership
-                        .next_epoch_stake_table()
-                        .await?
-                        .has_stake(&public_key)
-                        .await
-                    {
+                    if membership.next_epoch_stake_table()?.has_stake(&public_key) {
                         target_epochs.push(next_epoch);
                     }
                     if target_epochs.is_empty() {
@@ -367,16 +355,15 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 let membership = self
                     .membership_coordinator
                     .membership_for_epoch(epoch)
-                    .await
                     .context(warn!("No stake table for epoch"))?;
 
                 ensure!(
-                    membership.leader(view).await? == self.public_key,
+                    membership.leader(view)? == self.public_key,
                     debug!(
                         "We are not the DA committee leader for view {} are we leader for next \
                          view? {}",
                         *view,
-                        membership.leader(view + 1).await? == self.public_key
+                        membership.leader(view + 1)? == self.public_key
                     )
                 );
 
@@ -430,10 +417,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                 let leader = self
                     .membership_coordinator
                     .membership_for_epoch(epoch)
-                    .await
                     .context(warn!("No stake table for epoch"))?
-                    .leader(view_number)
-                    .await?;
+                    .leader(view_number)?;
                 if leader != self.public_key {
                     tracing::debug!(
                         "We are not the leader in the current epoch. Do not send the DA proposal"
@@ -451,17 +436,17 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> DaTaskState<TYPES, I> {
                         (Some(block_number), Some(cur_epoch)) => {
                             let epoch = epoch_from_block_number(
                                 block_number,
-                                self.membership_coordinator.epoch_height,
+                                *self.membership_coordinator.epoch_height(),
                             );
                             if epoch < *cur_epoch {
                                 // We are in a new epoch, we can't be in transition
                                 EpochTransitionIndicator::NotInTransition
                             } else if !is_last_block(
                                 block_number,
-                                self.membership_coordinator.epoch_height,
+                                *self.membership_coordinator.epoch_height(),
                             ) && is_ge_epoch_root(
                                 block_number,
-                                self.membership_coordinator.epoch_height,
+                                *self.membership_coordinator.epoch_height(),
                             ) {
                                 EpochTransitionIndicator::InTransition
                             } else {

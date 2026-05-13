@@ -402,6 +402,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
         gossip_config: GossipConfig,
         request_response_config: RequestResponseConfig,
         bind_address: Multiaddr,
+        announce_addresses: Vec<Multiaddr>,
         pub_key: &T::SignatureKey,
         priv_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
         metrics: Libp2pMetricsValue,
@@ -453,7 +454,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
         config_builder
             .keypair(keypair)
             .replication_factor(replication_factor)
-            .bind_address(Some(bind_address.clone()));
+            .bind_address(Some(bind_address.clone()))
+            .announce_addresses(announce_addresses);
 
         // Connect to the provided bootstrap nodes
         config_builder.to_connect_addrs(HashSet::from_iter(libp2p_config.bootstrap_nodes.clone()));
@@ -1007,13 +1009,13 @@ impl<T: NodeType> ConnectedNetwork<T::SignatureKey> for Libp2pNetwork<T> {
         let future_view = ViewNumber::new(*view) + LOOK_AHEAD;
         let epoch = epoch.map(|e| EpochNumber::new(*e));
 
-        let membership = match membership_coordinator.membership_for_epoch(epoch).await {
+        let membership = match membership_coordinator.membership_for_epoch(epoch) {
             Ok(m) => m,
             Err(e) => {
                 return tracing::warn!(e.message);
             },
         };
-        let future_leader = match membership.leader(future_view).await {
+        let future_leader = match membership.leader(future_view) {
             Ok(l) => l,
             Err(e) => {
                 return tracing::info!("Failed to calculate leader for view {future_view}: {e}");

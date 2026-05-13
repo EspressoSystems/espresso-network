@@ -258,7 +258,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/free-disk-space
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: ./.github/actions/install-foundry
       - uses: taiki-e/install-action@nextest
 
       - name: Download archive
@@ -291,9 +291,7 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v6
-      - uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: nightly
+      - uses: ./.github/actions/install-foundry
       - uses: taiki-e/install-action@nextest
 
       - name: Download archive
@@ -363,6 +361,7 @@ jobs:
           - test-name: test_native_demo_fee_to_drb_header_upgrade
           - test-name: test_native_demo_epoch_reward_upgrade
           - test-name: test_native_demo_da_committee
+          - test-name: test_native_demo_ff_base
 
       fail-fast: false
     runs-on: ubuntu-latest

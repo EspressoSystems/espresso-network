@@ -36,8 +36,8 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     storage_metrics::StorageMetricsValue,
     traits::{
-        election::Membership, leaf_fetcher_network::ConnectedNetworkLeafFetcher,
-        node_implementation::NodeType, signature_key::SignatureKey,
+        leaf_fetcher_network::ConnectedNetworkLeafFetcher, node_implementation::NodeType,
+        signature_key::SignatureKey,
     },
     x25519::Keypair,
 };
@@ -123,7 +123,7 @@ async fn spawn_legacy_cluster(
                 is_da,
             );
         let public_key = validator_config.public_key;
-        let mut membership = <TestTypes as NodeType>::Membership::new(
+        let membership = <TestTypes as NodeType>::Membership::new(
             hotshot_config.known_nodes_with_stake.clone(),
             hotshot_config.known_da_nodes.clone(),
             public_key,
@@ -138,9 +138,8 @@ async fn spawn_legacy_cluster(
             public_key,
             external_chan.1.new_receiver(),
         );
-        let memberships = Arc::new(RwLock::new(membership));
         let coordinator =
-            EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height, &storage);
+            EpochMembershipCoordinator::new(membership, hotshot_config.epoch_height, &storage);
 
         let initializer = HotShotInitializer::<TestTypes>::from_genesis(
             TestInstanceState::default(),
@@ -248,7 +247,7 @@ async fn build_handover_coordinator(
         consensus::Consensus,
         epoch::EpochManager,
         epoch_root_vote_collector::EpochRootVoteCollector,
-        proposal::ProposalValidator,
+        proposal::{ProposalValidator, VidShareValidator},
         state::StateManager,
         vid::{VidDisperser, VidReconstructor},
         vote::VoteCollector,
@@ -287,6 +286,8 @@ async fn build_handover_coordinator(
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+    let share_validator =
+        VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
     Coordinator::builder()
         .consensus(consensus)
@@ -306,6 +307,7 @@ async fn build_handover_coordinator(
         .epoch_manager(EpochManager::new(epoch_height, membership.clone()))
         .block_builder(block_builder)
         .proposal_validator(proposal_validator)
+        .share_validator(share_validator)
         .storage(crate::storage::Storage::new(storage, private_key))
         .client(client)
         .membership_coordinator(membership)
@@ -341,7 +343,7 @@ async fn run_handover_node(
 
     loop {
         match coord.next_consensus_input().await {
-            Ok(input) => coord.apply_consensus(input).await,
+            Ok(input) => coord.apply_consensus(input),
             Err(err) if err.severity == Severity::Critical => {
                 tracing::error!(%err, "handover coord: critical error");
                 return;
@@ -358,7 +360,7 @@ async fn run_handover_node(
                     });
                 }
             }
-            if let Err(err) = coord.process_consensus_output(output).await
+            if let Err(err) = coord.process_consensus_output(output)
                 && err.severity == Severity::Critical
             {
                 tracing::error!(%err, "handover coord: critical error processing output");

@@ -88,10 +88,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> VidTaskState<TYPES, I> {
                 if self
                     .membership_coordinator
                     .membership_for_epoch(epoch)
-                    .await
                     .ok()?
                     .leader(*view_number)
-                    .await
                     .ok()?
                     != self.public_key
                 {

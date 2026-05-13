@@ -1,4 +1,4 @@
-use std::{collections::HashMap, mem, net::IpAddr, sync::Arc};
+use std::{collections::HashMap, mem, net::IpAddr, sync::Arc, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
@@ -35,7 +35,7 @@ pub struct Server {
     obound: UnboundedReceiver<Command>,
     next_slot: watch::Receiver<Slot>,
     accept_tasks: JoinSet<Result<Connection, NetworkError>>,
-    hello_tasks: JoinMap<PublicKey, Result<(Connection, Hello), NetworkError>>,
+    hello_tasks: JoinMap<PublicKey, Result<(Hello, Connection, Hello), NetworkError>>,
     connect_tasks: JoinMap<PublicKey, Connection>,
     peer_tasks: JoinMap<PublicKey, Peer>,
 }
@@ -91,9 +91,11 @@ impl Server {
         rx: UnboundedReceiver<Command>,
         sx: watch::Receiver<Slot>,
     ) -> JoinHandle<()> {
+        let our_key = conf.keypair.public_key();
         let parties = conf
             .parties
             .iter()
+            .filter(|&(k, _)| *k != our_key)
             .map(|(k, a)| {
                 let p = Party::new(Role::Active, a.clone());
                 (*k, p)
@@ -101,7 +103,7 @@ impl Server {
             .collect();
 
         let this = Self {
-            key: conf.keypair.public_key(),
+            key: our_key,
             conf,
             role,
             ibound: tx,
@@ -124,7 +126,6 @@ impl Server {
         for (k, a) in self
             .parties
             .iter()
-            .filter(|&(k, _)| *k != self.key)
             .map(|(k, p)| (*k, p.addr.clone()))
             .collect::<Vec<_>>()
         {
@@ -141,7 +142,7 @@ impl Server {
                             %addr,
                             "accepted new connection"
                         );
-                        self.spawn_handshake(stream)
+                        self.spawn_accept(stream)
                     }
                     Err(err) => {
                         warn!(
@@ -155,6 +156,17 @@ impl Server {
 
                 Some(h) = self.accept_tasks.join_next() => match h {
                     Ok(Ok(conn)) => {
+                        if conn.key == self.key {
+                            warn!(
+                                name = %self.conf.name,
+                                node = %self.key,
+                                peer = %conn.key,
+                                addr = %conn.addr,
+                                "rejecting connection with the same key"
+                            );
+                            self.spawn_hello(conn, Hello::BackOff(Duration::MAX));
+                            continue
+                        }
                         let Some(party) = self.parties.get_mut(&conn.key) else {
                             info!(
                                 name = %self.conf.name,
@@ -195,7 +207,12 @@ impl Server {
                 },
 
                 Some(r) = self.hello_tasks.join_next() => match r {
-                    (_, Ok(Ok((conn, hello)))) => {
+                    (_, Ok(Ok((our_hello, conn, their_hello)))) => {
+                        if conn.key == self.key {
+                            // This case has been addressed already by rejecting the peer,
+                            // i.e. we told the peer to backoff forever.
+                            continue
+                        }
                         let Some(party) = self.parties.get_mut(&conn.key) else {
                             info!(
                                 name = %self.conf.name,
@@ -206,14 +223,15 @@ impl Server {
                             );
                             continue
                         };
-                        if !hello.is_ok() {
+                        if !(our_hello.is_ok() && their_hello.is_ok()) {
                             warn!(
-                                name  = %self.conf.name,
-                                node  = %self.key,
-                                peer  = %conn.key,
-                                addr  = %conn.addr,
-                                hello = ?hello,
-                                "peer hello is not ok"
+                                name   = %self.conf.name,
+                                node   = %self.key,
+                                peer   = %conn.key,
+                                addr   = %conn.addr,
+                                ours   = ?our_hello,
+                                theirs = ?their_hello,
+                                "hello failed"
                             );
                             continue
                         }
@@ -264,7 +282,8 @@ impl Server {
                             name = %self.conf.name,
                             node = %self.key,
                             peer = %key,
-                            %err, "hello failed"
+                            %err,
+                            "hello task error"
                         )
                     }
                     (key, Err(err)) => {
@@ -404,176 +423,199 @@ impl Server {
                     }
                 }
 
-                cmd = self.obound.recv() => match cmd {
-                    Some(Command::Peer(PeerCommand::Add(role, parties))) => {
-                        for (k, a) in parties {
-                            if let Some(p) = self.parties.get_mut(&k) {
-                                if p.addr == a {
-                                    p.role = role;
-                                } else {
+                cmd = self.obound.recv() => {
+                    self.conf.metrics.set(&self.key, "channel_size", self.obound.len());
+                    match cmd {
+                        Some(Command::Peer(PeerCommand::Add(role, parties))) => {
+                            for (k, a) in parties {
+                                if k == self.key {
+                                    self.role = role;
+                                    continue
+                                }
+                                if let Some(p) = self.parties.get_mut(&k) {
+                                    if p.addr == a {
+                                        p.role = role;
+                                    } else {
+                                        info!(
+                                            name = %self.conf.name,
+                                            node = %self.key,
+                                            peer = %k,
+                                            addr = %a,
+                                            "updating party address"
+                                        );
+                                        p.addr = a.clone();
+                                        p.role = role;
+                                        self.connect_tasks.abort(&k);
+                                        if let PeerState::Connected(cancel) = &p.peer {
+                                            cancel.cancel()
+                                        } else {
+                                            self.spawn_connect(k, a)
+                                        }
+                                    }
+                                    continue
+                                }
+                                self.parties.insert(k, Party::new(role, a.clone()));
+                                self.spawn_connect(k, a)
+                            }
+                        }
+                        Some(Command::Peer(PeerCommand::Remove(peers))) => {
+                            for k in &peers {
+                                if *k == self.key {
                                     info!(
                                         name = %self.conf.name,
                                         node = %self.key,
-                                        peer = %k,
-                                        addr = %a,
-                                        "updating party address"
+                                        "removing self sets role to passive"
                                     );
-                                    p.addr = a.clone();
-                                    p.role = role;
-                                    self.connect_tasks.abort(&k);
-                                    if let PeerState::Connected(cancel) = &p.peer {
-                                        cancel.cancel()
-                                    } else {
-                                        self.spawn_connect(k, a)
-                                    }
+                                    self.role = Role::Passive;
+                                    continue
                                 }
-                                continue
-                            }
-                            self.parties.insert(k, Party::new(role, a.clone()));
-                            self.spawn_connect(k, a)
-                        }
-                    }
-                    Some(Command::Peer(PeerCommand::Remove(peers))) => {
-                        for k in &peers {
-                            info!(
-                                name = %self.conf.name,
-                                node = %self.key,
-                                peer = %k,
-                                "removing peer"
-                            );
-                            self.parties.remove(k);
-                            self.connect_tasks.abort(k);
-                            self.peer_tasks.abort(k);
-                        }
-                    }
-                    Some(Command::Peer(PeerCommand::Assign(role, peers))) => {
-                        for k in &peers {
-                            if let Some(p) = self.parties.get_mut(k) {
-                                p.role = role
-                            } else {
-                                warn!(
+                                info!(
                                     name = %self.conf.name,
                                     node = %self.key,
                                     peer = %k,
-                                    role = ?role,
-                                    "peer to assign role to not found"
+                                    "removing peer"
                                 );
+                                self.parties.remove(k);
+                                self.connect_tasks.abort(k);
+                                self.peer_tasks.abort(k);
                             }
                         }
-                    }
-                    Some(Command::Send(cmd)) => match cmd.action {
-                        SendAction::Unicast(to, m) => {
-                            if cmd.slot < self.lower_bound {
-                                continue
-                            }
-
-                            if to == self.key {
-                                trace!(name = %self.conf.name, node = %self.key, "sending message");
-                                if let Err(err) = self.ibound.send((self.key, m.into(), None)) {
-                                    warn!(
-                                        name = %self.conf.name,
-                                        node = %self.key,
-                                        err  = %err,
-                                        "channel closed"
-                                    );
-                                    return
-                                }
-                                trace!(name = %self.conf.name, node = %self.key, "message delivered");
-                                continue
-                            }
-
-                            let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
-
-                            if let Some(party) = self.parties.get(&to) {
-                                party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes));
-                            } else {
-                                warn!(
-                                    name = %self.conf.name,
-                                    node = %self.key,
-                                    peer = %to,
-                                    "unicast target not found"
-                                );
-                            }
-                        }
-                        SendAction::Multicast(parties, m) => {
-                            if cmd.slot < self.lower_bound {
-                                continue
-                            }
-
-                            let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
-
-                            if parties.contains(&self.key) {
-                                let bytes = remove_trailer(bytes.clone());
-                                trace!(name = %self.conf.name, node = %self.key, "sending message");
-                                if let Err(err) = self.ibound.send((self.key, bytes, None)) {
-                                    warn!(
-                                        name = %self.conf.name,
-                                        node = %self.key,
-                                        err  = %err,
-                                        "channel closed"
-                                    );
-                                    return
-                                }
-                                trace!(name = %self.conf.name, node = %self.key, "message delivered");
-                            }
-
-                            for (to, party) in &self.parties {
-                                if !parties.contains(to) {
+                        Some(Command::Peer(PeerCommand::Assign(role, peers))) => {
+                            for k in &peers {
+                                if *k == self.key {
+                                    self.role = role;
                                     continue
                                 }
-                                trace!(name = %self.conf.name, node = %self.key, %to, "sending message");
-                                party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
-                            }
-                        }
-                        SendAction::Broadcast(m) => {
-                            if cmd.slot < self.lower_bound {
-                                continue
-                            }
-
-                            let msgid = self.next_msgid();
-                            let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
-
-                            if self.role.is_active() {
-                                let bytes = remove_trailer(bytes.clone());
-                                trace!(name = %self.conf.name, node = %self.key, "sending message");
-                                if let Err(err) = self.ibound.send((self.key, bytes, None)) {
+                                if let Some(p) = self.parties.get_mut(k) {
+                                    p.role = role
+                                } else {
                                     warn!(
                                         name = %self.conf.name,
                                         node = %self.key,
-                                        err  = %err,
-                                        "channel closed"
+                                        peer = %k,
+                                        role = ?role,
+                                        "peer to assign role to not found"
                                     );
-                                    return
                                 }
-                                trace!(name = %self.conf.name, node = %self.key, "message delivered");
                             }
-                            for (key, party) in &self.parties {
-                                if party.role.is_active() {
-                                    trace!(
-                                        name  = %self.conf.name,
-                                        node  = %self.key,
-                                        to    = %key,
-                                        "sending message"
+                        }
+                        Some(Command::Send(cmd)) => match cmd.action {
+                            SendAction::Unicast(to, m) => {
+                                if cmd.slot < self.lower_bound {
+                                    continue
+                                }
+
+                                if to == self.key {
+                                    trace!(name = %self.conf.name, node = %self.key, "sending message");
+                                    if let Err(err) = self.ibound.send((self.key, m.into(), None)) {
+                                        warn!(
+                                            name = %self.conf.name,
+                                            node = %self.key,
+                                            err  = %err,
+                                            "channel closed"
+                                        );
+                                        return
+                                    }
+                                    trace!(name = %self.conf.name, node = %self.key, "message delivered");
+                                    continue
+                                }
+
+                                let msgid = self.next_msgid();
+                                let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
+
+                                if let Some(party) = self.parties.get(&to) {
+                                    party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes));
+                                } else {
+                                    warn!(
+                                        name = %self.conf.name,
+                                        node = %self.key,
+                                        peer = %to,
+                                        "unicast target not found"
                                     );
+                                }
+                            }
+                            SendAction::Multicast(parties, m) => {
+                                if cmd.slot < self.lower_bound {
+                                    continue
+                                }
+
+                                let msgid = self.next_msgid();
+                                let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
+
+                                if parties.contains(&self.key) {
+                                    let bytes = remove_trailer(bytes.clone());
+                                    trace!(name = %self.conf.name, node = %self.key, "sending message");
+                                    if let Err(err) = self.ibound.send((self.key, bytes, None)) {
+                                        warn!(
+                                            name = %self.conf.name,
+                                            node = %self.key,
+                                            err  = %err,
+                                            "channel closed"
+                                        );
+                                        return
+                                    }
+                                    trace!(name = %self.conf.name, node = %self.key, "message delivered");
+                                }
+
+                                for (to, party) in &self.parties {
+                                    if !parties.contains(to) {
+                                        continue
+                                    }
+                                    trace!(name = %self.conf.name, node = %self.key, %to, "sending message");
                                     party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
                                 }
                             }
+                            SendAction::Broadcast(m) => {
+                                if cmd.slot < self.lower_bound {
+                                    continue
+                                }
+
+                                let msgid = self.next_msgid();
+                                let bytes = append_trailer(cmd.retry, cmd.slot, msgid, m);
+
+                                if self.role.is_active() {
+                                    let bytes = remove_trailer(bytes.clone());
+                                    trace!(name = %self.conf.name, node = %self.key, "sending message");
+                                    if let Err(err) = self.ibound.send((self.key, bytes, None)) {
+                                        warn!(
+                                            name = %self.conf.name,
+                                            node = %self.key,
+                                            err  = %err,
+                                            "channel closed"
+                                        );
+                                        return
+                                    }
+                                    trace!(name = %self.conf.name, node = %self.key, "message delivered");
+                                }
+                                for (key, party) in &self.parties {
+                                    if party.role.is_active() {
+                                        trace!(
+                                            name  = %self.conf.name,
+                                            node  = %self.key,
+                                            to    = %key,
+                                            "sending message"
+                                        );
+                                        party.outbox.enqueue(cmd.slot, msgid, (cmd.retry, bytes.clone()));
+                                    }
+                                }
+                            }
                         }
+                        Some(Command::Shutdown(tx)) => {
+                            debug!(name = %self.conf.name, node = %self.key, "shutting down");
+                            let _ = tx.send(());
+                            return
+                        }
+                        None => return
                     }
-                    Some(Command::Shutdown(tx)) => {
-                        debug!(name = %self.conf.name, node = %self.key, "shutting down");
-                        let _ = tx.send(());
-                        return
-                    }
-                    None => return
                 }
             }
         }
     }
 
     fn spawn_connect(&mut self, key: PublicKey, addr: NetAddr) {
+        if self.key == key {
+            return;
+        }
         debug!(
             name = %self.conf.name,
             node = %self.key,
@@ -583,12 +625,19 @@ impl Server {
         );
         let conn = Connection::connect(self.conf.clone(), key, addr);
         self.connect_tasks.spawn(key, conn);
+        self.conf.metrics.add(&key, "connect_attempts", 1);
+        self.conf
+            .metrics
+            .set(&self.key, "connect_tasks", self.connect_tasks.len());
     }
 
-    fn spawn_handshake(&mut self, stream: TcpStream) {
-        debug!(name = %self.conf.name, node = %self.key, "spawning handshake task");
+    fn spawn_accept(&mut self, stream: TcpStream) {
+        debug!(name = %self.conf.name, node = %self.key, "spawning accept task");
         let conn = Connection::accept(self.conf.clone(), stream);
         self.accept_tasks.spawn(conn);
+        self.conf
+            .metrics
+            .set(&self.key, "accept_tasks", self.accept_tasks.len());
     }
 
     fn spawn_hello(&mut self, mut conn: Connection, ours: Hello) {
@@ -602,18 +651,22 @@ impl Server {
 
         let duration = self.conf.handshake_timeout;
 
+        self.conf.metrics.add(&conn.key, "hellos", 1);
         self.hello_tasks.abort(&conn.key);
         self.hello_tasks.spawn(conn.key, async move {
             let future = async {
                 let theirs = conn.recv_hello().await?;
-                conn.send_hello(ours).await?;
-                Ok((conn, theirs))
+                conn.send_hello(ours.clone()).await?;
+                Ok((ours, conn, theirs))
             };
             match timeout(duration, future).await {
                 Ok(re) => re,
                 Err(_) => Err(NetworkError::Timeout),
             }
-        })
+        });
+        self.conf
+            .metrics
+            .set(&self.key, "hello_tasks", self.hello_tasks.len());
     }
 
     fn spawn_peer(&mut self, key: PublicKey, mut peer: Peer) {
@@ -626,6 +679,7 @@ impl Server {
         );
         let node = self.key;
         let name = self.conf.name.clone();
+        let conf = self.conf.clone();
         self.peer_tasks.spawn(key, async move {
             let Err(err) = peer.start().await;
             if !matches!(err, NetworkError::PeerInterrupt) {
@@ -637,9 +691,13 @@ impl Server {
                     %err,
                     "peer failure"
                 );
+                conf.metrics.add(peer.public_key(), "errors", 1)
             }
             peer
         });
+        self.conf
+            .metrics
+            .set(&self.key, "peer_tasks", self.peer_tasks.len());
     }
 
     fn next_msgid(&mut self) -> MsgId {

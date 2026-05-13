@@ -48,6 +48,13 @@ pub trait Network<T: NodeType> {
         epoch: EpochNumber,
         coord: &EpochMembershipCoordinator<T>,
     ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Helper used by `on_epoch_change`.
+    fn apply_epoch(
+        &mut self,
+        epoch: EpochNumber,
+        coord: &EpochMembershipCoordinator<T>,
+    ) -> impl Future<Output = Result<()>> + Send;
 }
 
 #[derive(Clone, Copy, Debug)]

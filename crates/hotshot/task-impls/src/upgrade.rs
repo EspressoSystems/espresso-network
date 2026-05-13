@@ -243,10 +243,8 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 // We then validate that the proposal was issued by the leader for the view.
                 let view_leader_key = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
-                    .leader(view)
-                    .await?;
+                    .membership_for_epoch(self.cur_epoch)?
+                    .leader(view)?;
                 ensure!(
                     view_leader_key == *sender,
                     info!(
@@ -291,14 +289,13 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 let view = vote.view_number();
                 let epoch_membership = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?;
+                    .membership_for_epoch(self.cur_epoch)?;
                 ensure!(
-                    epoch_membership.leader(view).await? == self.public_key,
+                    epoch_membership.leader(view)? == self.public_key,
                     debug!(
                         "We are not the leader for view {} are we leader for next view? {}",
                         *view,
-                        epoch_membership.leader(view + 1).await? == self.public_key
+                        epoch_membership.leader(view + 1)? == self.public_key
                     )
                 );
 
@@ -347,10 +344,8 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
 
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
-                    .leader(ViewNumber::new(view + propose_offset))
-                    .await?;
+                    .membership_for_epoch(self.cur_epoch)?
+                    .leader(ViewNumber::new(view + propose_offset))?;
 
                 let old_version_last_view = view + begin_offset;
                 let new_version_first_view = view + finish_offset;

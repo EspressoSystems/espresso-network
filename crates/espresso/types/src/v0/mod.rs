@@ -26,11 +26,10 @@ pub use impls::reward::{
 };
 #[cfg(any(test, feature = "testing"))]
 pub use impls::testing;
-#[allow(unused_imports)]
-pub(crate) use impls::validator_set_from_l1_events;
 pub use impls::{
-    BuilderValidationError, EpochCommittees, FeeError, ProposalValidationError,
-    StateValidationError, get_l1_deposits, retain_accounts, validators_from_l1_events,
+    BuilderValidationError, EpochCommittees, EpochCommitteesError, EpochSnapshot, FeeError,
+    ProposalValidationError, StateValidationError, ValidatorSet, get_l1_deposits, retain_accounts,
+    validators_from_l1_events,
 };
 pub use nsproof::*;
 pub use txproof::*;
@@ -180,7 +179,7 @@ pub use self::impls::{
 pub use crate::{
     v0::impls::{
         StakeTableHash, StakeTableState, calculate_proportion_staked_and_reward_rate,
-        select_active_validator_set, to_registered_validator_map,
+        to_registered_validator_map,
     },
     v0_1::{
         BLOCK_MERKLE_TREE_HEIGHT, FEE_MERKLE_TREE_HEIGHT, NS_ID_BYTE_LEN, NS_OFFSET_BYTE_LEN,

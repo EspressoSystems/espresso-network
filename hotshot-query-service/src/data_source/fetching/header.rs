@@ -31,9 +31,9 @@ use crate::{
     data_source::{
         fetching::{
             Fetchable, HeaderQueryData, LeafQueryData, Notifiers,
-            block::fetch_block_range_with_headers,
+            block::fetch_block_range,
             leaf::{RangeRequest, fetch_leaf_range_with_callbacks},
-            vid::fetch_vid_common_range_with_headers,
+            vid::fetch_vid_common_range,
         },
         storage::{
             AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage,
@@ -195,23 +195,15 @@ where
         }
     }
 
-    pub(super) fn run_range(self, headers: NonEmptyRange<Header<Types>>) {
+    pub(super) fn run_range(self, start: u64, end: u64) {
         match self {
             Self::Payload { fetcher } => {
-                tracing::info!(
-                    "fetched leaves {}..{}, will now fetch payload",
-                    headers.start(),
-                    headers.end(),
-                );
-                fetch_block_range_with_headers(fetcher, headers);
+                tracing::info!("fetched leaves {start}..{end}, will now fetch payload",);
+                fetch_block_range(fetcher, start, end);
             },
             Self::VidCommon { fetcher } => {
-                tracing::info!(
-                    "fetched leaves {}..{}, will now fetch VID common",
-                    headers.start(),
-                    headers.end(),
-                );
-                fetch_vid_common_range_with_headers(fetcher, headers);
+                tracing::info!("fetched leaves {start}..{end}, will now fetch VID common",);
+                fetch_vid_common_range(fetcher, start, end);
             },
         }
     }
@@ -262,7 +254,7 @@ where
     // header and leaf.
     match req {
         BlockId::Number(n) => {
-            fetch_leaf_with_callbacks(tx, callback.fetcher(), n.into(), [callback.into()]).await?;
+            fetch_leaf_with_callbacks(callback.fetcher(), n.into(), [callback.into()]).await?;
         },
         BlockId::Hash(h) => {
             // Given only the hash, we cannot tell if the corresponding leaf actually exists, since
@@ -292,10 +284,11 @@ where
     for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
     P: AvailabilityProvider<Types>,
 {
-    // Check if at least the headers are available in local storage.
+    // Check if the headers are already available in local storage; then we only need to fetch the
+    // payload data.
     match <NonEmptyRange<LeafQueryData<Types>>>::load(tx, req).await {
-        Ok(leaves) => {
-            callback.run_range(leaves.as_ref_cloned());
+        Ok(_) => {
+            callback.run_range(req.start, req.end);
             return Ok(());
         },
         Err(QueryError::Missing | QueryError::NotFound) => {
@@ -311,7 +304,7 @@ where
     }
 
     // Fetch the headers (in fact, the entire leaves) first, then fetch the remaining payload data.
-    fetch_leaf_range_with_callbacks(tx, callback.fetcher(), req, [callback.into()]).await?;
+    fetch_leaf_range_with_callbacks(callback.fetcher(), req, [callback.into()]).await?;
 
     Ok(())
 }

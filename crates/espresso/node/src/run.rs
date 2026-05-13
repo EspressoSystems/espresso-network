@@ -91,6 +91,7 @@ where
         catchup_backoff: opt.catchup_backoff,
         catchup_base_timeout: opt.catchup_base_timeout,
         local_catchup_timeout: opt.local_catchup_timeout,
+        bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
         libp2p_history_gossip: opt.libp2p_history_gossip,
         libp2p_history_length: opt.libp2p_history_length,
         libp2p_max_ihave_length: opt.libp2p_max_ihave_length,
@@ -269,6 +270,11 @@ mod test {
                 .to_string(),
             "--cliquenet-bind-address",
             &format!("127.0.0.1:{port2}"),
+            // Never bound: this test blocks at orchestrator before libp2p starts. Port 0 is a
+            // placeholder to satisfy the orchestrator-bootstrap requirement on the advertise
+            // address.
+            "--libp2p-advertise-address",
+            "127.0.0.1:0",
             "--genesis-file",
             &genesis_file.display().to_string(),
         ]);

@@ -9,7 +9,7 @@ use std::{
 
 use alloy::{
     primitives::{Address, U256},
-    providers::ProviderBuilder,
+    providers::{Provider, ProviderBuilder},
 };
 use anyhow::{Context, Result, anyhow};
 use client::SequencerClient;
@@ -20,7 +20,7 @@ use futures::{
     FutureExt,
     future::{BoxFuture, join_all},
 };
-use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV2};
+use hotshot_contract_adapter::sol_types::{EspTokenV2, LightClientV3, RewardClaim, StakeTableV3};
 use surf_disco::Url;
 use tokio::time::{sleep, timeout};
 
@@ -76,6 +76,10 @@ pub struct TestRequirements {
     /// claimed_rewards to increase. This avoids exiting early on a claim made against an older
     /// LC state (before the new reward scheme was active).
     pub claim_after_lc_block: Option<u64>,
+    /// Whether the network under test runs an external builder. The new protocol does not use a
+    /// builder, so tests on `NEW_PROTOCOL_VERSION` set this to false to skip waiting on the
+    /// builder healthcheck and skip builder-fee balance conservation checks.
+    pub requires_builder: bool,
 }
 
 impl Default for TestRequirements {
@@ -90,6 +94,7 @@ impl Default for TestRequirements {
             max_consecutive_blocks_without_tx: 10,
             first_reward_block: None,
             claim_after_lc_block: None,
+            requires_builder: true,
         }
     }
 }
@@ -194,25 +199,36 @@ impl TestConfig {
 
 impl TestRuntime {
     pub async fn initialize(config: TestConfig) -> Result<Self> {
-        let builder_url = {
+        let builder_address = if config.requirements.requires_builder {
             let url = url_from_port(dotenvy::var("ESPRESSO_BUILDER_SERVER_PORT")?)?;
             let url = Url::from_str(&url)?;
-            wait_for_service(url.clone(), Duration::from_secs(1), Duration::from_secs(90)).await?;
-            url.join("block_info/builderaddress")?
+            wait_for_service(
+                url.clone(),
+                Duration::from_secs(1),
+                Duration::from_secs(300),
+            )
+            .await?;
+            let builder_url = url.join("block_info/builderaddress")?;
+            get_builder_address(builder_url).await
+        } else {
+            Address::ZERO
         };
-
-        let builder_address = get_builder_address(builder_url).await;
 
         let client = SequencerClient::new(config.sequencer_api_url.clone());
 
-        let (initial_height, initial_txns) = timeout(Duration::from_secs(30), async {
+        let (initial_height, initial_txns) = timeout(Duration::from_secs(120), async {
             loop {
                 match (
                     client.get_height().await,
                     client.get_transaction_count().await,
                 ) {
                     (Ok(height), Ok(txns)) => return (height, txns),
-                    _ => {
+                    (height_res, txn_res) => {
+                        tracing::debug!(
+                            "sequencer not ready yet: height={:?} txn_count={:?}",
+                            height_res.as_ref().err(),
+                            txn_res.as_ref().err(),
+                        );
                         sleep(Duration::from_millis(500)).await;
                     },
                 }
@@ -223,7 +239,7 @@ impl TestRuntime {
 
         let provider = ProviderBuilder::new().connect_http(config.l1_endpoint.clone());
         let reward_claim_address = async {
-            let stake_table = StakeTableV2::new(config.stake_table_address, &provider);
+            let stake_table = StakeTableV3::new(config.stake_table_address, &provider);
             let token_address = stake_table.token().call().await.ok()?;
 
             let esp_token = EspTokenV2::new(token_address, &provider);
@@ -237,14 +253,19 @@ impl TestRuntime {
         }
         .await;
 
-        let mut futures: Vec<BoxFuture<Result<String>>> = vec![
-            wait_for_service(
-                Url::from_str(&config.load_generator_url)?,
-                Duration::from_secs(1),
-                Duration::from_secs(90),
-            )
-            .boxed(),
-        ];
+        let mut futures: Vec<BoxFuture<Result<String>>> = Vec::new();
+        if config.requirements.requires_builder {
+            // The load generator (submit-transactions-private) depends on the builder, so it
+            // only exists when the network has a builder.
+            futures.push(
+                wait_for_service(
+                    Url::from_str(&config.load_generator_url)?,
+                    Duration::from_secs(1),
+                    Duration::from_secs(90),
+                )
+                .boxed(),
+            );
+        }
 
         for client in &config.sequencer_clients {
             futures.push(
@@ -261,6 +282,23 @@ impl TestRuntime {
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
+
+        // Wait for the LightClient proxy to be deployed before any caller
+        // (e.g. `test_state()`) reads it. The contract deployer runs
+        // independently of sequencer startup, so for tests that don't gate
+        // on a builder this can otherwise race the first read and panic
+        // with `ZeroData("finalizedState", SolTypes(Overrun))` when the
+        // call returns empty bytes.
+        timeout(Duration::from_secs(300), async {
+            loop {
+                match provider.get_code_at(config.light_client_address).await {
+                    Ok(code) if !code.is_empty() => return,
+                    _ => sleep(Duration::from_millis(500)).await,
+                }
+            }
+        })
+        .await
+        .context("timed out waiting for LightClient proxy to be deployed")?;
 
         Ok(Self {
             config,
@@ -280,7 +318,7 @@ impl TestRuntime {
     /// Call this after the reward claim contract has been deployed
     pub async fn update_reward_claim_address(&mut self) -> Result<()> {
         let provider = ProviderBuilder::new().connect_http(self.config.l1_endpoint.clone());
-        let stake_table = StakeTableV2::new(self.config.stake_table_address, &provider);
+        let stake_table = StakeTableV3::new(self.config.stake_table_address, &provider);
         let token_address = stake_table.token().call().await?;
 
         let esp_token = EspTokenV2::new(token_address, &provider);
@@ -323,10 +361,14 @@ impl TestRuntime {
         let block_height = client.get_height().await.ok();
         let txn_count = client.get_transaction_count().await.unwrap();
 
-        let builder_balance = client
-            .get_espresso_balance(self.builder_address, block_height)
-            .await
-            .unwrap();
+        let builder_balance = if self.builder_address == Address::ZERO {
+            FeeAmount::default()
+        } else {
+            client
+                .get_espresso_balance(self.builder_address, block_height)
+                .await
+                .unwrap()
+        };
         let recipient_balance = client
             .get_espresso_balance(self.config.recipient_address, block_height)
             .await

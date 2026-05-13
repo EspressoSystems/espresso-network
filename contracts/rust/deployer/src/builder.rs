@@ -1,13 +1,13 @@
 //! builder pattern for
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use alloy::{
     hex::FromHex,
     primitives::{Address, B256, Bytes, U256},
     providers::{Provider, WalletProvider},
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use derive_builder::Builder;
 use espresso_types::v0_1::L1Client;
 use hotshot_contract_adapter::sol_types::{LightClientStateSol, StakeTableStateSol};
@@ -19,14 +19,16 @@ use crate::{
     proposals::{
         multisig::{
             LightClientV2UpgradeParams, MultisigOwnerCheck, StakeTableV2UpgradeParams,
-            TransferOwnershipParams, encode_generic_calldata,
+            StakeTableV3UpgradeParams, TransferOwnershipParams, encode_generic_calldata,
             transfer_ownership_from_multisig_to_timelock, upgrade_esp_token_v2_multisig_owner,
             upgrade_fee_contract_multisig_owner, upgrade_light_client_v2_multisig_owner,
             upgrade_light_client_v3_multisig_owner, upgrade_stake_table_v2_multisig_owner,
+            upgrade_stake_table_v3_multisig_owner,
         },
         timelock::{
-            TimelockOperationParams, TimelockOperationPayload, TimelockOperationType,
-            derive_timelock_address_from_contract_type, perform_timelock_operation,
+            StakeTableV3TimelockProposalParams, TimelockOperationParams, TimelockOperationPayload,
+            TimelockOperationType, derive_timelock_address_from_contract_type,
+            perform_timelock_operation, upgrade_stake_table_v3_timelock_proposal,
         },
     },
 };
@@ -146,6 +148,8 @@ pub struct DeployerArgs<P: Provider + WalletProvider> {
     multisig_transaction_value: Option<String>,
     #[builder(default)]
     output_path: Option<PathBuf>,
+    #[builder(default)]
+    output_dir: Option<PathBuf>,
     #[builder(default)]
     chain_id: u64,
 }
@@ -495,6 +499,78 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                     // initializeV2() handles ownership transfer, so no separate call needed
                 }
             },
+            Contract::StakeTableV3 => {
+                let use_multisig = self.use_multisig;
+                let use_timelock_owner = self.use_timelock_owner.unwrap_or(false);
+                tracing::info!(
+                    ?use_multisig,
+                    ?use_timelock_owner,
+                    "Upgrading to StakeTableV3"
+                );
+                if use_timelock_owner {
+                    // StakeTableV3 upgrade via timelock-owned proxy: deploy the new impl
+                    // and emit `schedule` + `execute` timelock calldata. An operator
+                    // submits `schedule` through a timelock proposer, waits for the
+                    // delay to elapse, then submits `execute` through an executor.
+                    let salt_str = self.timelock_operation_salt.clone().context(
+                        "timelock_operation_salt must be set for StakeTableV3 upgrade with \
+                         --use-timelock-owner",
+                    )?;
+                    let salt_trimmed = salt_str.trim();
+                    let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
+                    let salt = B256::from_hex(hex_str).context("Invalid salt hex format")?;
+                    ensure!(
+                        salt != B256::ZERO,
+                        "timelock_operation_salt must be non-zero"
+                    );
+                    let delay = self.timelock_operation_delay.context(
+                        "timelock_operation_delay must be set for StakeTableV3 upgrade with \
+                         --use-timelock-owner",
+                    )?;
+
+                    let proposal = upgrade_stake_table_v3_timelock_proposal(
+                        provider,
+                        contracts,
+                        StakeTableV3TimelockProposalParams { salt, delay },
+                    )
+                    .await?;
+
+                    let output_dir = self
+                        .output_dir
+                        .as_deref()
+                        .context("--calldata-out-dir required for StakeTableV3 timelock upgrade")?;
+                    fs::create_dir_all(output_dir).with_context(|| {
+                        format!("failed to create output dir {}", output_dir.display())
+                    })?;
+                    output_safe_tx_builder(
+                        &proposal.schedule,
+                        Some(&output_dir.join("schedule.json")),
+                        self.chain_id,
+                    )?;
+                    output_safe_tx_builder(
+                        &proposal.execute,
+                        Some(&output_dir.join("execute.json")),
+                        self.chain_id,
+                    )?;
+                } else if use_multisig {
+                    let calldata = upgrade_stake_table_v3_multisig_owner(
+                        provider,
+                        contracts,
+                        StakeTableV3UpgradeParams {
+                            multisig_address: self.multisig.context(
+                                "Multisig address required for StakeTableV3 upgrade with \
+                                 --use-multisig",
+                            )?,
+                        },
+                        MultisigOwnerCheck::RequireContract,
+                    )
+                    .await?
+                    .with_description("Upgrade StakeTable to V3".to_string());
+                    output_safe_tx_builder(&calldata, self.output_path.as_deref(), self.chain_id)?;
+                } else {
+                    crate::upgrade_stake_table_v3(provider, contracts).await?;
+                }
+            },
             Contract::OpsTimelock => {
                 let ops_timelock_delay = self
                     .ops_timelock_delay
@@ -605,13 +681,20 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
         Ok(())
     }
 
-    /// Deploy all contracts
-    pub async fn deploy_all(&self, contracts: &mut Contracts) -> Result<()> {
+    /// Deploy all contracts up to and including stake table V2.
+    pub async fn deploy_to_stake_table_v2(&self, contracts: &mut Contracts) -> Result<()> {
         self.deploy_to_stake_table_v1(contracts).await?;
         self.deploy(contracts, Contract::StakeTableV2).await?;
         self.deploy(contracts, Contract::LightClientV3).await?;
         self.deploy(contracts, Contract::RewardClaimProxy).await?;
         self.deploy(contracts, Contract::EspTokenV2).await?;
+        Ok(())
+    }
+
+    /// Deploy all contracts up to and including stake table V3.
+    pub async fn deploy_to_stake_table_v3(&self, contracts: &mut Contracts) -> Result<()> {
+        self.deploy_to_stake_table_v2(contracts).await?;
+        self.deploy(contracts, Contract::StakeTableV3).await?;
         Ok(())
     }
 
@@ -686,14 +769,13 @@ impl<P: Provider + WalletProvider> DeployerArgs<P> {
                 encode_function_call(function_signature, function_values.clone())
                     .context("Failed to encode function data")?;
 
-            // Parse salt from string to B256
             let salt_trimmed = salt.trim();
-            let salt_bytes = if salt_trimmed.is_empty() || salt_trimmed == "0x" {
-                B256::ZERO
-            } else {
-                let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
-                B256::from_hex(hex_str).context("Invalid salt hex format")?
-            };
+            let hex_str = salt_trimmed.strip_prefix("0x").unwrap_or(salt_trimmed);
+            let salt_bytes = B256::from_hex(hex_str).context("Invalid salt hex format")?;
+            ensure!(
+                salt_bytes != B256::ZERO,
+                "timelock_operation_salt must be non-zero"
+            );
 
             let operation = TimelockOperationPayload {
                 target: target_addr,

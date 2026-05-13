@@ -19,12 +19,12 @@ use hotshot_types::{data::VidCommon, traits::node_implementation::NodeType};
 use super::{Provider, Request};
 use crate::{
     Payload,
-    availability::{BlockQueryData, LeafQueryData, VidCommonQueryData},
+    availability::{BlockQueryData, Certificate2, LeafQueryData, VidCommonQueryData},
     data_source::AvailabilityProvider,
     fetching::{
         NonEmptyRange,
         request::{
-            BlockRangeRequest, LeafRangeRequest, LeafRequest, PayloadRequest,
+            BlockRangeRequest, Certificate2Request, LeafRangeRequest, LeafRequest, PayloadRequest,
             VidCommonRangeRequest, VidCommonRequest,
         },
     },
@@ -52,10 +52,11 @@ where
 
 type PayloadProvider<Types> = Arc<dyn DebugProvider<Types, PayloadRequest>>;
 type PayloadRangeProvider<Types> = Arc<dyn DebugProvider<Types, BlockRangeRequest>>;
-type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest<Types>>>;
-type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest<Types>>>;
+type LeafProvider<Types> = Arc<dyn DebugProvider<Types, LeafRequest>>;
+type LeafRangeProvider<Types> = Arc<dyn DebugProvider<Types, LeafRangeRequest>>;
 type VidCommonProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRequest>>;
 type VidCommonRangeProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRangeRequest>>;
+type Cert2Provider<Types> = Arc<dyn DebugProvider<Types, Certificate2Request>>;
 
 /// Adaptor combining multiple data availability providers.
 ///
@@ -64,12 +65,12 @@ type VidCommonRangeProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRange
 /// have the object, the request will eventually succeed.
 ///
 /// This can be used to combine multiple instances of the same kind of provider, like using
-/// [`QueryServiceProvider`](super::QueryServiceProvider) to request objects from a number of
-/// different query services. It can also be used to search different kinds of data providers for
-/// the same object, like searching for a block both in another instance of the query service and in
-/// the HotShot DA committee. Finally, [`AnyProvider`] can be used to combine a provider which only
-/// provides blocks and one which only provides leaves into a provider which provides both, and thus
-/// can be used as a provider for the availability API module.
+/// [`TrustedQueryServiceProvider`](super::TrustedQueryServiceProvider) to request objects from a
+/// number of different query services. It can also be used to search different kinds of data
+/// providers for the same object, like searching for a block both in another instance of the query
+/// service and in the HotShot DA committee. Finally, [`AnyProvider`] can be used to combine a
+/// provider which only provides blocks and one which only provides leaves into a provider which
+/// provides both, and thus can be used as a provider for the availability API module.
 ///
 /// # Examples
 ///
@@ -83,12 +84,12 @@ type VidCommonRangeProvider<Types> = Arc<dyn DebugProvider<Types, VidCommonRange
 /// #   Types: NodeType,
 /// # {
 /// use hotshot_query_service::{
-///     fetching::provider::{AnyProvider, QueryServiceProvider},
+///     fetching::provider::{AnyProvider, TrustedQueryServiceProvider},
 ///     testing::mocks::MockBase,
 /// };
 ///
-/// let qs1 = QueryServiceProvider::new("https://backup.query-service.1".parse()?, MockBase::instance());
-/// let qs2 = QueryServiceProvider::new("https://backup.query-service.2".parse()?, MockBase::instance());
+/// let qs1 = TrustedQueryServiceProvider::new("https://backup.query-service.1".parse()?, MockBase::instance());
+/// let qs2 = TrustedQueryServiceProvider::new("https://backup.query-service.2".parse()?, MockBase::instance());
 /// let provider = AnyProvider::<Types>::default()
 ///     .with_provider(qs1)
 ///     .with_provider(qs2);
@@ -107,6 +108,7 @@ where
     leaf_range_providers: Vec<LeafRangeProvider<Types>>,
     vid_common_providers: Vec<VidCommonProvider<Types>>,
     vid_common_range_providers: Vec<VidCommonRangeProvider<Types>>,
+    cert2_providers: Vec<Cert2Provider<Types>>,
 }
 
 #[async_trait]
@@ -130,24 +132,21 @@ where
 }
 
 #[async_trait]
-impl<Types> Provider<Types, LeafRequest<Types>> for AnyProvider<Types>
+impl<Types> Provider<Types, LeafRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(&self, req: LeafRequest<Types>) -> Option<LeafQueryData<Types>> {
+    async fn fetch(&self, req: LeafRequest) -> Option<LeafQueryData<Types>> {
         any_fetch(&self.leaf_providers, req).await
     }
 }
 
 #[async_trait]
-impl<Types> Provider<Types, LeafRangeRequest<Types>> for AnyProvider<Types>
+impl<Types> Provider<Types, LeafRangeRequest> for AnyProvider<Types>
 where
     Types: NodeType,
 {
-    async fn fetch(
-        &self,
-        req: LeafRangeRequest<Types>,
-    ) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
+    async fn fetch(&self, req: LeafRangeRequest) -> Option<NonEmptyRange<LeafQueryData<Types>>> {
         any_fetch(&self.leaf_range_providers, req).await
     }
 }
@@ -175,6 +174,16 @@ where
     }
 }
 
+#[async_trait]
+impl<Types> Provider<Types, Certificate2Request> for AnyProvider<Types>
+where
+    Types: NodeType,
+{
+    async fn fetch(&self, req: Certificate2Request) -> Option<Option<Certificate2<Types>>> {
+        any_fetch(&self.cert2_providers, req).await
+    }
+}
+
 impl<Types> AnyProvider<Types>
 where
     Types: NodeType,
@@ -190,7 +199,8 @@ where
         self.leaf_providers.push(provider.clone());
         self.leaf_range_providers.push(provider.clone());
         self.vid_common_providers.push(provider.clone());
-        self.vid_common_range_providers.push(provider);
+        self.vid_common_range_providers.push(provider.clone());
+        self.cert2_providers.push(provider);
         self
     }
 
@@ -215,7 +225,7 @@ where
     /// Add a sub-provider which fetches leaves.
     pub fn with_leaf_provider<P>(mut self, provider: P) -> Self
     where
-        P: Provider<Types, LeafRequest<Types>> + Debug + 'static,
+        P: Provider<Types, LeafRequest> + Debug + 'static,
     {
         self.leaf_providers.push(Arc::new(provider));
         self
@@ -224,7 +234,7 @@ where
     /// Add a sub-provider which fetches leaf ranges.
     pub fn with_leaf_range_provider<P>(mut self, provider: P) -> Self
     where
-        P: Provider<Types, LeafRangeRequest<Types>> + Debug + 'static,
+        P: Provider<Types, LeafRangeRequest> + Debug + 'static,
     {
         self.leaf_range_providers.push(Arc::new(provider));
         self
@@ -295,7 +305,7 @@ mod test {
         ApiState, Error,
         availability::{AvailabilityDataSource, UpdateAvailabilityData, define_api},
         data_source::storage::sql::testing::TmpDb,
-        fetching::provider::{NoFetching, QueryServiceProvider},
+        fetching::provider::{NoFetching, TrustedQueryServiceProvider},
         task::BackgroundTask,
         testing::{
             consensus::{MockDataSource, MockNetwork},
@@ -331,13 +341,12 @@ mod test {
 
         // Start a data source which is not receiving events from consensus, only from a peer.
         let db = TmpDb::init().await;
-        let provider =
-            Provider::default()
-                .with_provider(NoFetching)
-                .with_provider(QueryServiceProvider::new(
-                    format!("http://localhost:{port}").parse().unwrap(),
-                    MockBase::instance(),
-                ));
+        let provider = Provider::default().with_provider(NoFetching).with_provider(
+            TrustedQueryServiceProvider::new(
+                format!("http://localhost:{port}").parse().unwrap(),
+                MockBase::instance(),
+            ),
+        );
         let data_source = db.config().connect(provider.clone()).await.unwrap();
 
         // Start consensus.

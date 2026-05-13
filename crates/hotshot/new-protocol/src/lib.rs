@@ -12,6 +12,7 @@ pub mod network;
 pub mod outbox;
 pub mod state;
 pub mod storage;
+pub mod utils;
 pub mod vid;
 pub mod vote;
 

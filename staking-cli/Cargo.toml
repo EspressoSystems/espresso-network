@@ -19,11 +19,12 @@ derive_more = { workspace = true }
 directories = { workspace = true }
 dotenvy = { workspace = true }
 espresso-contract-deployer = { workspace = true }
+espresso-keyset = { workspace = true }
 espresso-safe-tx-builder = { workspace = true }
 espresso-types = { workspace = true }
-futures-util = { workspace = true }
 
 espresso-utils = { workspace = true }
+futures-util = { workspace = true }
 hotshot-contract-adapter = { workspace = true }
 hotshot-state-prover = { workspace = true }
 hotshot-types = { workspace = true }

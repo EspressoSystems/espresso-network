@@ -66,8 +66,17 @@ impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for HSStakeTable<TYPES> {
     }
 }
 
-#[inline]
+impl<'a, T: NodeType> FromIterator<&'a PeerConfig<T>> for HSStakeTable<T> {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = &'a PeerConfig<T>>,
+    {
+        Self(iter.into_iter().cloned().collect())
+    }
+}
+
 /// A helper function to compute the quorum threshold given a total amount of stake.
+#[inline]
 pub fn one_honest_threshold(total_stake: U256) -> U256 {
     total_stake / U256::from(3) + U256::from(1)
 }
@@ -170,5 +179,18 @@ impl<TYPES: NodeType> From<Vec<PeerConfig<TYPES>>> for StakeTableEntries<TYPES> 
 impl<TYPES: NodeType> From<HSStakeTable<TYPES>> for StakeTableEntries<TYPES> {
     fn from(stake_table: HSStakeTable<TYPES>) -> Self {
         Self::from(stake_table.0)
+    }
+}
+
+impl<'a, T: NodeType> FromIterator<&'a PeerConfig<T>> for StakeTableEntries<T> {
+    fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = &'a PeerConfig<T>>,
+    {
+        Self(
+            iter.into_iter()
+                .map(|peer| peer.stake_table_entry.clone())
+                .collect(),
+        )
     }
 }

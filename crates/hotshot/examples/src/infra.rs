@@ -15,7 +15,6 @@ use std::{
     time::Instant,
 };
 
-use async_lock::RwLock;
 use async_trait::async_trait;
 use cdn_broker::reexports::crypto::signature::KeyPair;
 use chrono::Utc;
@@ -34,6 +33,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestTransaction},
+    membership::TestableMembership,
     node_types::{Libp2pImpl, PushCdnImpl},
     state_types::TestInstanceState,
     storage_types::TestStorage,
@@ -59,7 +59,6 @@ use hotshot_types::{
     storage_metrics::StorageMetricsValue,
     traits::{
         block_contents::{BlockHeader, TestableBlock},
-        election::Membership,
         network::ConnectedNetwork,
         node_implementation::NodeType,
         states::TestableState,
@@ -346,7 +345,7 @@ pub trait RunDa<
 > where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
     TYPES: NodeType<Transaction = TestTransaction>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
@@ -388,12 +387,12 @@ pub trait RunDa<
         let epoch_height = config.config.epoch_height;
         let storage = TestStorage::<TYPES>::default();
 
-        let membership = Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
+        let membership = <TYPES as NodeType>::Membership::new(
             config.config.known_nodes_with_stake.clone(),
             config.config.known_da_nodes.clone(),
             pk.clone(),
             config.config.epoch_height,
-        )));
+        );
 
         SystemContext::init(
             pk,
@@ -539,10 +538,8 @@ pub trait RunDa<
             .membership_for_epoch(genesis_epoch_from_version(
                 context.hotshot.upgrade_lock.upgrade().base,
             ))
-            .await
             .unwrap()
             .stake_table()
-            .await
             .len();
         let consensus_lock = context.hotshot.consensus();
         let consensus_reader = consensus_lock.read().await;
@@ -637,7 +634,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -718,7 +715,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -765,6 +762,7 @@ where
             GossipConfig::default(),
             RequestResponseConfig::default(),
             bind_address,
+            Vec::new(),
             public_key,
             private_key,
             Libp2pMetricsValue::default(),
@@ -820,7 +818,7 @@ impl<
 where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
     Self: Sync,
 {
@@ -902,7 +900,7 @@ pub async fn main_entry_point<
 ) where
     <TYPES as NodeType>::ValidatedState: TestableState<TYPES>,
     <TYPES as NodeType>::BlockPayload: TestableBlock<TYPES>,
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
     Leaf<TYPES>: TestableLeaf,
 {
     // Initialize logging

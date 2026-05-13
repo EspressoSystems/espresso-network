@@ -64,14 +64,11 @@ where
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>> {
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
-        // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
-        // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {BLOCK_COLUMNS}
               FROM header AS h
               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
               WHERE {where_clause}
-              ORDER BY h.height
               LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
@@ -86,14 +83,11 @@ where
     async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>> {
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
-        // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
-        // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {PAYLOAD_COLUMNS}
               FROM header AS h
               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
               WHERE {where_clause}
-              ORDER BY h.height
               LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
@@ -107,14 +101,11 @@ where
     ) -> QueryResult<PayloadMetadata<Types>> {
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
-        // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
-        // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {PAYLOAD_METADATA_COLUMNS}
               FROM header AS h
               JOIN payload AS p ON (h.payload_hash, h.ns_table) = (p.hash, p.ns_table)
               WHERE {where_clause}
-              ORDER BY h.height ASC
               LIMIT 1"
         );
         let row = query
@@ -135,14 +126,11 @@ where
     ) -> QueryResult<VidCommonQueryData<Types>> {
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
-        // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
-        // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {VID_COMMON_COLUMNS}
               FROM header AS h
               JOIN vid_common AS v ON h.payload_hash = v.hash
               WHERE {where_clause}
-              ORDER BY h.height
               LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
@@ -156,14 +144,11 @@ where
     ) -> QueryResult<VidCommonMetadata<Types>> {
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
-        // ORDER BY h.height ASC ensures that if there are duplicate blocks (this can happen when
-        // selecting by payload ID, as payloads are not unique), we return the first one.
         let sql = format!(
             "SELECT {VID_COMMON_METADATA_COLUMNS}
               FROM header AS h
               JOIN vid_common AS v ON h.payload_hash = v.hash
               WHERE {where_clause}
-              ORDER BY h.height ASC
               LIMIT 1"
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
@@ -371,17 +356,6 @@ where
         );
         let row = query.query(&sql).fetch_one(self.as_mut()).await?;
         Ok(BlockQueryData::from_row(&row)?)
-    }
-
-    async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>> {
-        let row = query(&format!(
-            "SELECT {LEAF_COLUMNS} FROM leaf2 WHERE height >= $1 ORDER BY height ASC LIMIT 1"
-        ))
-        .bind(from as i64)
-        .fetch_one(self.as_mut())
-        .await?;
-        let leaf = LeafQueryData::from_row(&row)?;
-        Ok(leaf)
     }
 }
 

@@ -280,12 +280,10 @@ async fn upgrade_certificate_handover() {
         crate::tests::common::utils::mock_membership_with_client(num_nodes, 100, public_key).await;
     let epoch_membership = membership
         .membership_for_epoch(Some(EpochNumber::genesis()))
-        .await
         .unwrap();
-    let stake_entries =
-        StakeTableEntries::<TestTypes>::from(epoch_membership.stake_table().await).0;
-    let threshold = epoch_membership.upgrade_threshold().await;
-    cert.is_valid_cert(&stake_entries, threshold, &test_upgrade_lock::<TestTypes>())
+    let entries = StakeTableEntries::from_iter(epoch_membership.stake_table()).0;
+    let threshold = epoch_membership.upgrade_threshold();
+    cert.is_valid_cert(&entries, threshold, &test_upgrade_lock::<TestTypes>())
         .expect("upgrade certificate should verify against the validator stake table");
 
     // Hand the legacy chain to a new-protocol cluster: anchor at view 1

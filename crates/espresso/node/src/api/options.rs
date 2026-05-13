@@ -32,7 +32,8 @@ use super::{
     ApiState, StorageState,
     data_source::{
         CatchupDataSource, HotShotConfigDataSource, NodeStateDataSource, Provider,
-        SequencerDataSource, StateSignatureDataSource, SubmitDataSource, provider,
+        PruningDataSource, SequencerDataSource, StateSignatureDataSource, SubmitDataSource,
+        provider,
     },
     endpoints, fs, light_client, sql,
     state::NodeApiStateImpl,
@@ -288,7 +289,7 @@ impl Options {
     where
         N: ConnectedNetwork<PubKey>,
         P: SequencerPersistence,
-        D: SequencerDataSource + CatchupStorage + Send + Sync + 'static,
+        D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
     {
         let metrics = ds.populate_metrics();
         let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
@@ -428,7 +429,6 @@ impl Options {
         // missing from the query service from ephemeral consensus storage.
         let db_provider = mod_opt.clone().create().await?;
         provider = provider
-            .with_leaf_provider(db_provider.clone())
             .with_block_provider(db_provider.clone())
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.

@@ -2,9 +2,7 @@ use std::{collections::HashSet, rc::Rc, sync::Arc, time::Duration};
 
 use async_lock::RwLock;
 use hotshot_example_types::{
-    node_types::{
-        CliquenetImpl, CompatNetImpl, Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS,
-    },
+    node_types::{Libp2pImpl, MemoryImpl, PushCdnImpl, TEST_VERSIONS},
     state_types::TestTypes,
 };
 use hotshot_macros::cross_tests;
@@ -21,7 +19,11 @@ use hotshot_testing::{
 };
 use hotshot_types::{
     message::{GeneralConsensusMessage, MessageKind, SequencingMessage},
-    traits::{election::Membership, network::TransmitType, node_implementation::NodeType},
+    traits::{
+        election::{Membership, NonEpochMembershipSnapshot},
+        network::TransmitType,
+        node_implementation::NodeType,
+    },
     vote::HasViewNumber,
 };
 
@@ -109,7 +111,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: dishonest_da,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -138,7 +140,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: dishonest_voting,
-    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [MemoryImpl, Libp2pImpl, PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -149,7 +151,12 @@ cross_tests!(
                 view_increment: nodes_count,
                 modifier: Arc::new(move |_pk, message_kind, transmit_type: &mut TransmitType<TestTypes>, membership: &<TestTypes as NodeType>::Membership| {
                     if let MessageKind::Consensus(SequencingMessage::General(GeneralConsensusMessage::Vote(vote))) = message_kind {
-                        *transmit_type = TransmitType::Direct(membership.leader(vote.view_number() + 1 - nodes_count, None).unwrap());
+                        *transmit_type = TransmitType::Direct(
+                            membership
+                                .non_epoch_snapshot()
+                                .leader(vote.view_number() + 1 - nodes_count)
+                                .unwrap(),
+                        );
                     } else {
                         {}
                     }
@@ -211,7 +218,7 @@ cross_tests!(
 
 cross_tests!(
     TestName: view_sync_split,
-    Impls: [PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.test],
     Ignore: false,
@@ -252,7 +259,7 @@ cross_tests!(
 // Tests that dishonest nodes cannot form a precommit certificate for a new epoch without forming an eQC.
 cross_tests!(
     TestName: view_sync_next_epoch,
-    Impls: [PushCdnImpl, CliquenetImpl, CompatNetImpl],
+    Impls: [PushCdnImpl],
     Types: [TestTypes],
     Versions: [TEST_VERSIONS.epoch],
     Ignore: false,

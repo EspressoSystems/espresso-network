@@ -22,7 +22,7 @@ use crate::{
     message::Message,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
-    proposal::ProposalValidator,
+    proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
     tests::common::mock::MockCoordinator,
     vid::{VidDisperser, VidReconstructor},
@@ -104,6 +104,8 @@ impl TestHarness {
 
         let proposal_validator =
             ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
+        let share_validator =
+            VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
         let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
             .expect("keypair derivation should succeed");
@@ -136,6 +138,7 @@ impl TestHarness {
             .epoch_manager(epoch_manager)
             .block_builder(block_builder)
             .proposal_validator(proposal_validator)
+            .share_validator(share_validator)
             .storage(crate::storage::Storage::new(storage, private_key))
             .client(client)
             .membership_coordinator(membership)
@@ -165,11 +168,11 @@ impl TestHarness {
     }
 
     pub async fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
-        self.coordinator.apply_consensus(input).await;
+        self.coordinator.apply_consensus(input);
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
-            if let Err(err) = self.coordinator.process_consensus_output(out).await {
+            if let Err(err) = self.coordinator.process_consensus_output(out) {
                 panic!("unexpected error: {err}")
             }
         }
