@@ -173,7 +173,7 @@ impl<T: NodeType> Validator<T> {
             Err(err) => return Err(ValidationError::NoLeader(view, epoch, err)),
         };
         // TODO(Chengyu): this also check the consistency of vid common and vid commitment.
-        let total_weight = vid_total_weight(&stake_table, Some(epoch));
+        let total_weight = vid_total_weight(stake_table, Some(epoch));
         if !leader.validate(
             &vid_proposal.signature,
             vid_proposal.data.payload_commitment.as_ref(),
@@ -196,7 +196,7 @@ impl<T: NodeType> Validator<T> {
             ));
         };
         let membership = self.membership(epoch).await?;
-        let entries = StakeTableEntries::<T>::from(membership.stake_table()).0;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
         let threshold = membership.success_threshold();
         match proposal
             .justify_qc

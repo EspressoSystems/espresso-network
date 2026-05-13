@@ -272,16 +272,16 @@ impl TestView {
         )
         .await;
 
+        // One snapshot for the next-view epoch, reused for leader-key
+        // lookup, payload commitment, VID proposal, and DA cert below.
+        let membership = self
+            .membership
+            .membership_for_epoch(self.epoch_number)
+            .unwrap();
+
         //let (private_key, public_key) = key_pair_for_id::<TestTypes>(*next_view);
-        let (private_key, public_key) = Self::find_leader_key_pair(
-            &self
-                .membership
-                .membership_for_epoch(self.epoch_number)
-                .unwrap(),
-            &self.node_key_map,
-            next_view,
-        )
-        .await;
+        let (private_key, public_key) =
+            Self::find_leader_key_pair(&membership, &self.node_key_map, next_view).await;
 
         let leader_public_key = public_key;
 
@@ -299,10 +299,6 @@ impl TestView {
         );
 
         let version = self.upgrade_lock.version_infallible(next_view);
-        let membership = self
-            .membership
-            .membership_for_epoch(self.epoch_number)
-            .unwrap();
         let payload_commitment = da_payload_commitment::<TestTypes>(
             &membership,
             transactions.clone(),

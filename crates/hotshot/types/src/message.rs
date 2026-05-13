@@ -46,7 +46,7 @@ use crate::{
         ViewSyncPreCommitVote2,
     },
     traits::{
-        election::Membership,
+        election::{Membership, NonEpochMembershipSnapshot},
         network::{DataRequest, ResponseMessage, ViewMessage},
         node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -582,7 +582,7 @@ where
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         let view_number = self.data.view_number();
-        let view_leader_key = membership.leader(view_number, None)?;
+        let view_leader_key = membership.non_epoch_snapshot().leader(view_number)?;
         let proposed_leaf = Leaf::from_quorum_proposal(&self.data);
 
         ensure!(

@@ -23,7 +23,7 @@ use hotshot_types::{
         CheckpointData, HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote,
         TimeoutData2, TimeoutVote2, Vote2Data,
     },
-    stake_table::StakeTableEntries,
+    stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         block_contents::BlockHeader,
         node_implementation::NodeType,
@@ -1097,9 +1097,8 @@ impl<T: NodeType> Consensus<T> {
             .map_err(|e| anyhow::anyhow!("membership lookup failed: {e}"))?;
         let next_stake_table = membership
             .next_epoch_stake_table()
-            .map_err(|e| anyhow::anyhow!("next-epoch stake table lookup failed: {e}"))?
-            .stake_table();
-        let next_stake_table_state = next_stake_table
+            .map_err(|e| anyhow::anyhow!("next-epoch stake table lookup failed: {e}"))?;
+        let next_stake_table_state = HSStakeTable::from_iter(next_stake_table.stake_table())
             .commitment(self.stake_table_capacity)
             .map_err(|e| anyhow::anyhow!("failed to compute stake table commitment: {e}"))?;
         let v2_signature = <T::StateSignatureKey as LCV2StateSignatureKey>::sign_state(
@@ -1385,7 +1384,7 @@ impl<T: NodeType> Consensus<T> {
             .membership_for_epoch(Some(epoch))
         {
             Ok(stake_table) => {
-                let entries = StakeTableEntries::<T>::from(stake_table.stake_table()).0;
+                let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
                 let threshold = stake_table.success_threshold();
                 match cert.is_valid_cert(&entries, threshold, &self.upgrade_lock) {
                     Ok(()) => true,
@@ -1414,7 +1413,7 @@ impl<T: NodeType> Consensus<T> {
             .membership_for_epoch(Some(epoch))
         {
             Ok(stake_table) => {
-                let entries = StakeTableEntries::<T>::from(stake_table.stake_table()).0;
+                let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
                 let threshold = stake_table.success_threshold();
                 match cert.is_valid_cert(&entries, threshold, &self.upgrade_lock) {
                     Ok(()) => CertVerification::Valid,

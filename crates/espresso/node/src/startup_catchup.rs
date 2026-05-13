@@ -60,7 +60,7 @@ pub async fn bootstrap_epoch_window(
         let initial = membership.highest_known_epoch().unwrap_or(first_epoch + 1);
         let mut h = initial;
         while h > first_epoch + 1
-            && !(membership.has_stake_table(h) && membership.has_stake_table(h - 1))
+            && !(membership.snapshot(h).is_some() && membership.snapshot(h - 1).is_some())
         {
             h = h - 1;
         }
@@ -110,11 +110,11 @@ pub async fn bootstrap_epoch_window(
     let current = EpochNumber::new(highest.saturating_sub(1));
 
     ensure!(
-        membership.has_stake_table(current),
+        membership.snapshot(current).is_some(),
         "missing stake table for current epoch {current} after bootstrap"
     );
     ensure!(
-        membership.has_stake_table(highest),
+        membership.snapshot(highest).is_some(),
         "missing stake table for next epoch {highest} after bootstrap"
     );
 

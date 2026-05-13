@@ -33,6 +33,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
+    traits::election::MembershipSnapshot,
     utils::{epoch_from_block_number, is_last_block},
     vote::HasViewNumber,
 };
@@ -1685,10 +1686,11 @@ async fn reward_header_dependencies(
             },
         };
 
-        let leader = epoch_membership.leader(proposal.view_number())?;
-        let validator = coordinator
-            .membership()
-            .get_validator_config(&proposal_epoch, leader)?;
+        let snapshot = epoch_membership
+            .snapshot()
+            .with_context(|| format!("no committee for epoch={proposal_epoch}"))?;
+        let leader = snapshot.lookup_leader(proposal.view_number())?;
+        let validator = snapshot.validator_config(&leader)?;
 
         reward_accounts.insert(RewardAccountV2(validator.account));
 

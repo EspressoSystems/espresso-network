@@ -361,7 +361,7 @@ impl<TYPES: NodeType>
 {
     async fn leader(&self, membership: &EpochMembership<TYPES>) -> Result<TYPES::SignatureKey> {
         let epoch = membership
-            .epoch
+            .epoch()
             .map(|e| EpochNumber::new(e.saturating_sub(1)));
         membership
             .get_new_epoch(epoch)?
@@ -748,7 +748,7 @@ async fn create_epoch_root_vote_collection_task_state<TYPES: NodeType>(
         accumulator: Some(new_accumulator),
         state_vote_accumulator: Some(state_vote_accumulator),
         view: info.view,
-        epoch: info.membership.epoch,
+        epoch: info.membership.epoch(),
         id: info.id,
     };
 

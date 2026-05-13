@@ -191,6 +191,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                     self.membership_coordinator
                         .stake_table_for_epoch(Some(next_epoch))?
                         .stake_table()
+                        .cloned()
+                        .collect::<Vec<_>>()
                 );
             },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {

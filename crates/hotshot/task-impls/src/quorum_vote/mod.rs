@@ -703,12 +703,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumVoteTaskState<TYPES, I
                 let cert_epoch = cert.data.epoch;
 
                 let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch)?;
-                let membership_da_stake_table = epoch_membership.da_stake_table();
+                let membership_da_stake_table =
+                    StakeTableEntries::from_iter(epoch_membership.da_stake_table()).0;
                 let membership_da_success_threshold = epoch_membership.da_success_threshold();
 
                 // Validate the DAC.
                 cert.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
+                    &membership_da_stake_table,
                     membership_da_success_threshold,
                     &self.upgrade_lock,
                 )
@@ -761,18 +762,13 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumVoteTaskState<TYPES, I
                 ensure!(
                     membership_reader
                         .da_committee_members(view)
-                        .contains(sender)
+                        .any(|k| k == sender)
                         || *sender == membership_reader.leader(view)?,
                     "VID share was not sent by a DA member or the view leader."
                 );
 
-                let total_weight = vid_total_weight::<TYPES>(
-                    &self
-                        .membership
-                        .membership_for_epoch(target_epoch)?
-                        .stake_table(),
-                    target_epoch,
-                );
+                let membership = self.membership.membership_for_epoch(target_epoch)?;
+                let total_weight = vid_total_weight(membership.stake_table(), target_epoch);
 
                 if !share.data.verify(total_weight) {
                     bail!("Failed to verify VID share");

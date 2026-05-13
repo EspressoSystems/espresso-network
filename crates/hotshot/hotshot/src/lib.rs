@@ -371,7 +371,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         let (stake_table, success_threshold) =
             if let Ok(epoch_membership) = membership_coordinator.stake_table_for_epoch(epoch) {
                 (
-                    epoch_membership.stake_table(),
+                    HSStakeTable::from_iter(epoch_membership.stake_table()),
                     epoch_membership.success_threshold(),
                 )
             } else {
@@ -610,7 +610,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
         spawn(async move {
             let memberships_da_committee_members = membership
                 .da_committee_members(view_number)
-                .iter()
                 .cloned()
                 .collect();
 

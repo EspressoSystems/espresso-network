@@ -158,7 +158,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for NetworkRequest
 
                 // Get the committee members for the view and the leader, if applicable
                 let membership_reader = self.membership_coordinator.membership_for_epoch(epoch)?;
-                let mut da_committee_for_view = membership_reader.da_committee_members(view);
+                let mut da_committee_for_view: BTreeSet<_> = membership_reader
+                    .da_committee_members(view)
+                    .cloned()
+                    .collect();
                 if let Ok(leader) = membership_reader.leader(view) {
                     da_committee_for_view.insert(leader);
                 }
@@ -280,7 +283,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> NetworkRequestState<TYPES, I
         // Get committee members for view
         let mut recipients: Vec<TYPES::SignatureKey> = membership_reader
             .da_committee_members(view)
-            .into_iter()
+            .cloned()
             .collect();
 
         // Randomize the recipients so all replicas don't overload the same 1 recipients

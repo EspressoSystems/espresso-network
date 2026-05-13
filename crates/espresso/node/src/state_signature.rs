@@ -140,7 +140,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         );
                         return;
                     };
-                    let stake_table = membership.stake_table();
+                    let stake_table = HSStakeTable::from_iter(membership.stake_table());
                     match stake_table.commitment(self.stake_table_capacity) {
                         Ok(stake_table_state) => {
                             self.should_vote = should_vote(&stake_table, &self.ver_key);
