@@ -86,6 +86,10 @@ impl Budget {
     pub fn new(amount: NonZeroUsize) -> Self {
         Self(Arc::new(Semaphore::new(amount.get())))
     }
+
+    fn remaining(&self) -> usize {
+        self.0.available_permits()
+    }
 }
 
 #[bon]
@@ -315,10 +319,16 @@ impl Peer {
                     self.retry.gc(s);
                 }
 
-                // Check if there are messages that should be re-sent:
-                t = clock.tick(), if !self.retry.is_empty() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "retry check");
-                    self.retry.check(t)
+                // Periodic maintenance:
+                //
+                // - Retry messages
+                // - Update metrics
+                t = clock.tick() => {
+                    if !self.retry.is_empty() {
+                        trace!(name = %self.conf.name, peer = %self.conn.key, "retry check");
+                        self.retry.check(t);
+                    }
+                    self.update_metrics()
                 }
 
                 // If messages should be re-sent and we can do so, send it:
@@ -560,5 +570,22 @@ impl Peer {
                 }
             }
         }
+    }
+
+    fn update_metrics(&self) {
+        self.conf
+            .metrics
+            .set(&self.conn.key, "outbound_messages", self.msgs.len());
+
+        self.conf
+            .metrics
+            .set(&self.conn.key, "retrying_messages", self.retry.len());
+
+        self.conf
+            .metrics
+            .set(&self.conn.key, "remaining_budget", self.budget.remaining());
+
+        let lb = u64::from(self.lower_bound) as usize;
+        self.conf.metrics.set(&self.conn.key, "lower_bound", lb);
     }
 }

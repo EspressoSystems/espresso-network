@@ -27,6 +27,7 @@ use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
+use dyn_clone::clone_box;
 use espresso_types::{
     BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
     SeqTypes, ValidatedState,
@@ -45,7 +46,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::cliquenet::Cliquenet;
+use hotshot_new_protocol::network::cliquenet::{Cliquenet, CliquenetConfig, CliquenetMetrics};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -62,7 +63,7 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::BuilderCommitment,
-    x25519,
+    x25519::{self, Keypair},
 };
 use libp2p::Multiaddr;
 use moka::future::Cache;
@@ -804,15 +805,15 @@ where
         // TODO: This creates a separate UpgradeLock from the one HotShot will
         // use. They should share a single lock so upgrade certificate updates
         // are visible to both.
-        Cliquenet::create(
-            "espresso",
-            pub_key,
-            network_params.x25519_secret_key.into(),
-            network_params.cliquenet_bind_addr.clone(),
-            vec![],
-            UpgradeLock::new(version_upgrade),
-        )
-        .await?
+        let lock = UpgradeLock::new(version_upgrade);
+        let conf = CliquenetConfig::builder()
+            .name("espresso")
+            .keypair(Keypair::from(network_params.x25519_secret_key).into())
+            .bind(network_params.cliquenet_bind_addr.clone())
+            .parties([])
+            .metrics(Box::new(CliquenetMetrics::new(clone_box(&*metrics))))
+            .build();
+        Cliquenet::create_with_config(pub_key, lock, conf, []).await?
     };
 
     let network = Arc::new(combined_network);
