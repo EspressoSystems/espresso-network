@@ -43,15 +43,20 @@ Example:
 
 Validator consensus keys (BLS, Schnorr state, x25519) are loaded as follows:
 
-- If `ESPRESSO_NODE_KEY_MNEMONIC` is set, all three keys are derived from that mnemonic using the validator index
-  (0..num-validators) as the derivation index. This matches the derivation `espresso-node` performs at startup, so a
-  single mnemonic configures both the nodes and this registration step.
+- If `ESPRESSO_NODE_KEY_MNEMONIC` is set, all three keys are derived from that mnemonic at index
+  `DEMO_VALIDATOR_START_INDEX + N` (currently `20 + N`), matching the Ethereum signer account index for the same
+  validator. This matches the derivation `espresso-node` performs at startup, so a single mnemonic configures both the
+  nodes and this registration step.
 - Otherwise, keys are read per validator from `ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{N}`,
   `ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{N}`, and `ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{N}`.
 
-The mnemonic takes precedence: when it is set, the per-validator env vars are ignored.
-`ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{N}` is always read from the environment (not derivable from a
-mnemonic).
+The mnemonic takes precedence: when it is set, the per-validator key env vars are ignored.
+
+The p2p advertise address can be configured in two ways:
+
+- Set `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME` and `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_BASE_PORT`. The
+  registered address for validator `N` is then `{hostname}:{base_port + N}`. This scales to any number of validators.
+- Otherwise set `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{N}` per validator.
 
 ### `demo delegate`
 
