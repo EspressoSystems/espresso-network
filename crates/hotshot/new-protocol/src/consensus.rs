@@ -1276,7 +1276,20 @@ impl<T: NodeType> Consensus<T> {
             return;
         };
 
-        // Vote2 fires as soon as we have cert1
+        // Vote2 and lock-update share a common prerequisite: we must have a
+        // local proposal that matches cert1's leaf commit.
+        let Some(proposal) = self.proposals.get(&view) else {
+            debug!(%view, "proposal not available; vote2 and lock deferred");
+            return;
+        };
+        let proposal_epoch = proposal.epoch;
+        let proposal_commit = proposal_commitment(proposal);
+        if cert1.data.leaf_commit != proposal_commit {
+            warn!(%view, "cert1 commitment does not match proposal commitment");
+            return;
+        }
+
+        // Vote2: block not required.
         if !self.voted_2_views.contains(&view)
             && let Some(epoch) = cert1.data.epoch
             && let Some(block_number) = cert1.data.block_number
@@ -1303,20 +1316,9 @@ impl<T: NodeType> Consensus<T> {
             }
         }
 
-        // Lock update / ViewChanged / SendCertificate1 still require the local
-        // proposal + a verified reconstruction (or leader self-knowledge via
-        // `self.blocks`).
-        let Some(proposal) = self.proposals.get(&view) else {
-            debug!("proposal not available; lock deferred");
-            return;
-        };
-        let proposal_epoch = proposal.epoch;
-        let proposal_commit = proposal_commitment(proposal);
-        if cert1.data.leaf_commit != proposal_commit {
-            warn!(%view, "cert1 commitment does not match proposal commitment");
-            return;
-        }
-
+        // Lock update / ViewChanged / SendCertificate1: additionally require
+        // the block to be locally available (leader via `self.blocks`, others
+        // via `self.blocks_reconstructed`).
         if !self.blocks.contains_key(&view) && !self.blocks_reconstructed.contains_key(&view) {
             debug!(%view, "block not available; lock deferred");
             return;
