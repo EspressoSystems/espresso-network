@@ -986,6 +986,11 @@ impl<T: NodeType> Consensus<T> {
             debug!("cert2 commitment does not match proposal commitment");
             return;
         }
+        // Decide requires the block to be locally available.
+        if !self.blocks.contains_key(&view) && !self.blocks_reconstructed.contains_key(&view) {
+            debug!(%view, "decide deferred: block not yet locally available");
+            return;
+        }
         // Handle Epoch Change by broadcasting the epoch change message if we have
         // all the data we need.
         if is_last_block(proposal.block_header.block_number(), *self.epoch_height)
@@ -1266,44 +1271,56 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
-        if self.voted_2_views.contains(&view) {
-            return;
-        }
-        let Some(reconstructed_block_commitment) = self.blocks_reconstructed.get(&view) else {
-            debug!("reconstructed block commitment not available");
-            return;
-        };
-        let Some(cert1) = self.certs.get(&view) else {
+        let Some(cert1) = self.certs.get(&view).cloned() else {
             debug!("cert1 not available");
             return;
         };
+
+        // Vote2 fires as soon as we have cert1
+        if !self.voted_2_views.contains(&view)
+            && let Some(epoch) = cert1.data.epoch
+            && let Some(block_number) = cert1.data.block_number
+            && self.staked_in_epoch(epoch)
+        {
+            match SimpleVote::create_signed_vote(
+                Vote2Data {
+                    leaf_commit: cert1.data.leaf_commit,
+                    epoch,
+                    block_number,
+                },
+                view,
+                &self.public_key,
+                &self.private_key,
+                &self.upgrade_lock,
+            ) {
+                Ok(vote) => {
+                    outbox.push_back(ConsensusOutput::SendVote2(vote));
+                    self.voted_2_views.insert(view);
+                },
+                Err(err) => {
+                    warn!(%view, %err, "failed to create signed vote2");
+                },
+            }
+        }
+
+        // Lock update / ViewChanged / SendCertificate1 still require the local
+        // proposal + a verified reconstruction (or leader self-knowledge via
+        // `self.blocks`).
         let Some(proposal) = self.proposals.get(&view) else {
-            debug!("proposal not available");
+            debug!("proposal not available; lock deferred");
             return;
         };
         let proposal_epoch = proposal.epoch;
-
         let proposal_commit = proposal_commitment(proposal);
-
-        // The certificate must match the proposal
         if cert1.data.leaf_commit != proposal_commit {
             warn!(%view, "cert1 commitment does not match proposal commitment");
             return;
         }
-        // The proposal block commitment must match the reconstructed block commitment
-        let VidCommitment::V2(proposal_block_commitment) =
-            proposal.block_header.payload_commitment()
-        else {
-            warn!(%view, "proposal payload commitment is not a V2 VID commitment");
-            return;
-        };
-        if &proposal_block_commitment != reconstructed_block_commitment {
-            warn!(%view, "proposal commitment does not match reconstructed block commitment");
+
+        if !self.blocks.contains_key(&view) && !self.blocks_reconstructed.contains_key(&view) {
+            debug!(%view, "block not available; lock deferred");
             return;
         }
-
-        // We have a valid certificate, proposal, and reconstructed block
-        // We can now update the lock, change view and vote
         if self
             .locked_cert
             .as_mut()
@@ -1312,32 +1329,8 @@ impl<T: NodeType> Consensus<T> {
             self.locked_cert = Some(cert1.clone());
             self.current_epoch = Some(proposal_epoch);
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
-            outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
+            outbox.push_back(ConsensusOutput::SendCertificate1(cert1));
         }
-
-        if !self.staked_in_epoch(proposal_epoch) {
-            return;
-        }
-
-        let vote = match SimpleVote::create_signed_vote(
-            Vote2Data {
-                leaf_commit: proposal_commit,
-                epoch: proposal_epoch,
-                block_number: proposal.block_header.block_number(),
-            },
-            view,
-            &self.public_key,
-            &self.private_key,
-            &self.upgrade_lock,
-        ) {
-            Ok(vote) => vote,
-            Err(err) => {
-                warn!(%view, %err, "failed to created signed vote2");
-                return;
-            },
-        };
-        outbox.push_back(ConsensusOutput::SendVote2(vote));
-        self.voted_2_views.insert(view);
     }
 
     #[instrument(level = "trace", skip_all)]
