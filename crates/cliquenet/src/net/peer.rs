@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
 use crate::{
-    Config, PublicKey,
+    Config, Metrics, PublicKey,
     connection::Connection,
     error::{Empty, NetworkError},
     msg::{Ack, FrameType, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, Slot, Trailer},
@@ -77,6 +77,8 @@ pub struct Peer {
     ///
     /// It accounts for the additional `Trailer` bytes.
     max_message_size: usize,
+
+    metrics: Arc<dyn Metrics>,
 }
 
 /// A budget limits how many messages a peer can delivery to the application.
@@ -102,6 +104,7 @@ impl Peer {
         inbound: UnboundedSender<PeerMessage>,
         next_slot: watch::Receiver<Slot>,
         connection: Connection,
+        metrics: Arc<dyn Metrics>,
     ) -> Self {
         Self {
             max_message_size: config.max_message_size.get() + Trailer::MAX_SIZE,
@@ -115,6 +118,7 @@ impl Peer {
             msgs: messages,
             countdown: Countdown::new(),
             cancel: CancellationToken::new(),
+            metrics,
         }
     }
 
@@ -573,19 +577,11 @@ impl Peer {
     }
 
     fn update_metrics(&self) {
-        self.conf
-            .metrics
+        self.metrics
             .set(&self.conn.key, "outbound_messages", self.msgs.len());
-
-        self.conf
-            .metrics
+        self.metrics
             .set(&self.conn.key, "retrying_messages", self.retry.len());
-
-        self.conf
-            .metrics
+        self.metrics
             .set(&self.conn.key, "remaining_budget", self.budget.remaining());
-
-        let lb = u64::from(self.lower_bound) as usize;
-        self.conf.metrics.set(&self.conn.key, "lower_bound", lb);
     }
 }

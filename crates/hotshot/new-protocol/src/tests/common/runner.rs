@@ -10,8 +10,13 @@ use committable::Committable;
 use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
-    PeerConnectInfo, addr::NetAddr, data::ViewNumber, message::UpgradeLock,
-    traits::signature_key::SignatureKey, vote::HasViewNumber, x25519::Keypair,
+    PeerConnectInfo,
+    addr::NetAddr,
+    data::ViewNumber,
+    message::UpgradeLock,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    vote::HasViewNumber,
+    x25519::Keypair,
 };
 use tokio::{
     select,
@@ -541,7 +546,9 @@ async fn create_network(
         )
         .build();
 
-    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone())
+    let met = Box::new(NoMetrics);
+
+    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
         .await
         .unwrap()
 }

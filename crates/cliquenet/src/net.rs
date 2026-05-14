@@ -3,6 +3,7 @@ pub mod server;
 
 use std::{
     collections::HashMap,
+    fmt,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
@@ -21,8 +22,8 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    Config, Role, addr::NetAddr, error::NetworkError, msg::Slot, net::server::Server,
-    x25519::PublicKey,
+    Config, Metrics, Role, addr::NetAddr, error::NetworkError, metrics::NoMetrics, msg::Slot,
+    net::server::Server, x25519::PublicKey,
 };
 
 type PeerMessage = (PublicKey, Bytes, Option<OwnedSemaphorePermit>);
@@ -38,7 +39,6 @@ pub struct NetworkReceiver {
     rx: UnboundedReceiver<PeerMessage>,
 }
 
-#[derive(Debug)]
 pub struct NetworkController {
     conf: Arc<Config>,
     node: PublicKey,
@@ -47,6 +47,17 @@ pub struct NetworkController {
     next_slot: watch::Sender<Slot>,
     lower_bound: Slot,
     task: JoinHandle<()>,
+    metrics: Arc<dyn Metrics>,
+}
+
+impl fmt::Debug for NetworkController {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NetworkController")
+            .field("node", &self.node)
+            .field("lower_bound", &self.lower_bound)
+            .field("conf", &self.conf)
+            .finish()
+    }
 }
 
 /// Server task instructions.
@@ -119,8 +130,17 @@ impl Network {
 
         let (etx, erx) = watch::channel(Slot::MIN);
 
+        let metr = conf.metrics.clone().unwrap_or_else(|| Arc::new(NoMetrics));
         let conf = Arc::new(conf);
-        let serv = Server::spawn(conf.clone(), listener, Role::Active, itx, orx, erx);
+        let serv = Server::spawn(
+            conf.clone(),
+            listener,
+            Role::Active,
+            itx,
+            orx,
+            erx,
+            metr.clone(),
+        );
         let recv = NetworkReceiver { rx: irx };
         let ctrl = NetworkController {
             conf: conf.clone(),
@@ -130,6 +150,7 @@ impl Network {
             task: serv,
             next_slot: etx,
             lower_bound: Slot::MIN,
+            metrics: metr,
         };
 
         info!(name = %conf.name, %node, addr = %_addr, "listening");
@@ -257,7 +278,7 @@ impl NetworkController {
         let peers = peers.into_iter().collect::<Vec<_>>();
         for p in &peers {
             self.parties.remove(p);
-            self.conf.metrics.del(p);
+            self.metrics.del(p);
         }
         self.tx
             .send(Command::Peer(PeerCommand::Remove(peers)))
