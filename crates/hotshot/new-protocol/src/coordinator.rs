@@ -354,8 +354,7 @@ where
                 },
                 Some(item) = self.proposal_validator.next() => match item {
                     Ok(validated) => {
-                        // Refresh the network's peer set when a proposal is validated
-                        // on_epoch_change should return immediately if the epoch is not new
+                        // Refresh the network's peer set when a proposal is validated.
                         let epoch = validated.message.proposal.data.epoch;
                         if let Err(err) = self
                             .network
