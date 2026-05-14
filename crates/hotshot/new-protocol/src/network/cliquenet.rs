@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 pub use cliquenet::Config as CliquenetConfig;
 use cliquenet::{NetAddr, NetworkError as CliquenetError, Role, Slot, x25519::PublicKey};
@@ -37,6 +40,7 @@ impl<T: NodeType> Cliquenet<T> {
         addr: A,
         parties: P,
         upgrade_lock: UpgradeLock<T>,
+        metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         A: Into<cliquenet::NetAddr>,
@@ -55,19 +59,22 @@ impl<T: NodeType> Cliquenet<T> {
             )
             .build();
 
-        Self::create_with_config(signing_key, upgrade_lock, cfg, parties).await
+        Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
     }
 
-    pub async fn create_with_config<P>(
+    pub(crate) async fn create_with_config<P>(
         signing_key: T::SignatureKey,
         upgrade_lock: UpgradeLock<T>,
-        config: cliquenet::Config,
+        mut config: cliquenet::Config,
         parties: P,
+        metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
     {
         let public_key = config.public_key();
+        assert!(config.metrics.is_none());
+        config.metrics = Some(Arc::new(CliquenetMetrics::new(metrics)));
         let network = cliquenet::Network::create(config)
             .await
             .map_err(to_network_error)?;
@@ -386,7 +393,7 @@ fn to_network_error(e: CliquenetError) -> NetworkError {
     }
 }
 
-pub struct CliquenetMetrics {
+struct CliquenetMetrics {
     metrics: Box<dyn Metrics>,
     gauges: RwLock<Gauges>,
     counters: RwLock<Counters>,
