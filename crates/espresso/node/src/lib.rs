@@ -860,7 +860,7 @@ async fn check_cliquenet_info_registered(
     stake_table_contract: Option<alloy::primitives::Address>,
     l1_client: &espresso_types::v0::L1Client,
 ) {
-    if current_version != versions::VID2_UPGRADE_VERSION {
+    if current_version != versions::EPOCH_REWARD_VERSION {
         return;
     }
     let Some(addr) = stake_table_contract else {

@@ -465,8 +465,8 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts required for V5 header"),
             }),
-            // V6 header format is used for v0.6, v0.7, and v0.8 (new protocol).
-            (0, 6) | (0, 7) | (0, 8) => {
+            // V6 header format is used for v0.6 (new protocol).
+            (0, 6) => {
                 let fields = v0_6::Header {
                     chain_config: chain_config.into(),
                     height,
@@ -787,8 +787,8 @@ impl Header {
                 next_stake_table_hash,
                 leader_counts: leader_counts.expect("leader_counts is required for V5 headers"),
             }),
-            // V6 header format is used for v0.6, v0.7, and v0.8 (new protocol).
-            (0, 6) | (0, 7) | (0, 8) => {
+            // V6 header format is used for v0.6 (new protocol).
+            (0, 6) => {
                 let fields = v0_6::Header {
                     chain_config: chain_config.into(),
                     height,
