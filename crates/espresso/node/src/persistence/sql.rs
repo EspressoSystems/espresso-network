@@ -701,6 +701,21 @@ impl PersistenceOptions for Options {
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
+
+        // Backfills and deferred schema changes (e.g. CREATE INDEX CONCURRENTLY) run as a
+        // background task so the node is not blocked from starting consensus while they complete.
+        // SQLite's INTEGER is already 64-bit, so the hash-id backfill is PostgreSQL-only.
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            let db = persistence.db.clone();
+            tokio::spawn(async move {
+                let registry = build_registry();
+                if let Err(err) = db.run_deferred_migrations(&registry).await {
+                    tracing::error!("deferred migrations failed: {err:#}");
+                }
+            });
+        }
+
         Ok(persistence)
     }
 
