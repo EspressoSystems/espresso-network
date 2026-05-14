@@ -33,19 +33,6 @@ use crate::{
     vote::VoteCollector,
 };
 
-/// Build a [`Coordinator`] for testing with an externally provided network.
-///
-/// The coordinator is fully bootstrapped: consensus is seeded with a genesis
-/// certificate and proposal so that the view-1 leader can propose without any
-/// external injection.  The initial `ViewChanged` and (for the leader)
-/// `RequestBlockAndHeader` outputs are already queued in the outbox.
-///
-/// If `pre_cutover_seed` is provided, it is applied **synchronously before**
-/// `coord.start()` runs. This prevents the startup race where `start()`
-/// emits `ViewChanged(1)` and the view-1 leader proposes before an
-/// async-dispatched seed can land. With a seed in place, `start()` reads the
-/// (now advanced) `current_view` and emits `ViewChanged(max_seeded_view + 1)`
-/// instead.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_test_coordinator<N: Network<TestTypes>>(
     node_index: u64,
@@ -105,13 +92,6 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         genesis_leaf.clone(),
     );
 
-    // If a pre-cutover seed is provided, seed the StateManager for each
-    // pre-cutover leaf. The new protocol's proposal validator pipelines
-    // state validation against the parent's stored state — without this,
-    // the leader of `max_seeded_view + 1` cannot validate its own proposal
-    // (no parent state on file). For tests we use the default
-    // `TestValidatedState`; in production the espresso bridge would carry
-    // legacy state forward.
     if let Some(seed) = pre_cutover_seed.as_ref() {
         let default_state = Arc::new(TestValidatedState::default());
         state_manager.seed_state(
@@ -129,11 +109,6 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
     consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
 
-    // Apply the legacy → new-protocol seed (if provided) BEFORE we hand
-    // consensus to the coordinator builder. `jump_to_cutover` then skips
-    // `current_view` to `cutover_view - 1` so `coord.start()` emits
-    // `ViewChanged(cutover_view)` — the new protocol must never propose
-    // any view below `cutover_view`.
     if let Some(seed) = pre_cutover_seed {
         consensus.set_pre_cutover_anchor(seed.decided_anchor);
         consensus.seed_pre_cutover_leaves(seed.undecided);
@@ -141,9 +116,6 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         consensus.jump_to_cutover(seed.cutover_view);
     }
 
-    // Seed the genesis proposal into the backing TestStorage so that
-    // peers can serve the genesis block to late-joiners during
-    // `EpochMembershipCoordinator::catchup` (epoch 0 root block == 0).
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2 {
             block_header: genesis_leaf.block_header().clone(),

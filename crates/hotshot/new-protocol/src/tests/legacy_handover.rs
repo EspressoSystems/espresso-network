@@ -1,10 +1,5 @@
-//! End-to-end handover test mirroring `SequencerContext::init`: per
-//! node, a legacy `SystemContext` (MemoryNetwork) and a new-protocol
-//! `Coordinator` (Cliquenet) run concurrently. A per-node watcher polls
-//! [`harvest::try_perform_handover`] — the same trigger
-//! `ConsensusHandle::new_protocol` uses — so the seed flows through
-//! `ClientApi::seed_pre_cutover` and into the coordinator's
-//! `SeedPreCutover` handler, the only seeding path production uses.
+//! End-to-end handover tests: legacy + new-protocol clusters run
+//! concurrently per node, with a watcher polling [`try_perform_handover`].
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -63,12 +58,6 @@ use crate::{
 
 const UPGRADE_VIEW: u64 = 5;
 const EPOCH_HEIGHT: u64 = 1000;
-/// Default new-protocol view timeout. Matches the legacy
-/// `next_view_timeout` (6s, from `default_multiple_rounds`) so silent-leader
-/// post-cutover views advance promptly. The view-0 timer firing during the
-/// legacy phase is harmless: the resulting TC2 advances `current_view` but
-/// `handle_timeout_certificate` aborts when `locked_cert` is unset, so no
-/// proposal/vote work happens until the seed lands.
 const DEFAULT_NEW_PROTO_VIEW_TIMEOUT: Duration = Duration::from_secs(6);
 
 async fn spawn_legacy_cluster(
@@ -83,14 +72,11 @@ async fn spawn_legacy_cluster(
     metadata.upgrade_view = Some(upgrade_view);
     metadata.test_config.epoch_height = EPOCH_HEIGHT;
     metadata.test_config.set_view_upgrade(upgrade_view);
-    // Tighten cutover offsets; defaults push it ~20 views out.
     metadata.test_config.upgrade_propose_offset = Some(1);
     metadata.test_config.upgrade_decide_by_offset = Some(10);
     metadata.test_config.upgrade_begin_offset = Some(12);
     metadata.test_config.upgrade_finish_offset = Some(15);
 
-    // SimpleBuilder HTTP server — without it the upgrade task never
-    // sees proposals. Leaked so it outlives the test run.
     let port = test_utils::reserve_tcp_port().expect("port");
     let builder_url = Url::parse(&format!("http://localhost:{port}")).expect("url");
     let builder_task =
@@ -174,9 +160,6 @@ async fn spawn_legacy_cluster(
     handles
 }
 
-/// Per-node `(x25519 keypair, BLS public key, Cliquenet addr)`,
-/// deterministic from the same seed the legacy cluster uses so both
-/// stacks share BLS identities (one validator key, two transports).
 fn build_parties(num_nodes: usize) -> Vec<(Keypair, BLSPubKey, NetAddr)> {
     (0..num_nodes)
         .map(|i| {
@@ -222,10 +205,6 @@ async fn build_new_protocol_network(
         .expect("cliquenet creation should succeed")
 }
 
-/// Production-shaped `Coordinator` build (mirrors `Coordinator::maker`):
-/// no `seed_genesis`, no `coord.start()`, no inline pre-cutover seeding.
-/// Boots at view 0 and waits for the seed via `ClientApi`. The pre-built
-/// `CoordinatorClient` is shared with the membership's leaf fetcher.
 #[allow(clippy::too_many_arguments)]
 async fn build_handover_coordinator(
     node_index: u64,
@@ -260,7 +239,6 @@ async fn build_handover_coordinator(
     let instance = Arc::new(TestInstanceState::default());
     let upgrade_lock = test_upgrade_lock();
 
-    // Throwaway view-0 anchor; the seed advances past it later.
     let genesis_state = TestValidatedState::default();
     let genesis_leaf =
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
@@ -328,9 +306,6 @@ struct DecisionEvent {
     commit: [u8; 32],
 }
 
-/// Mirror of `consensus_handle::run_coordinator`: drive the coordinator
-/// loop, forward `ExternalMessageReceived` to the leaf-fetcher channel,
-/// and report decided views to `decision_tx`.
 async fn run_handover_node(
     mut coord: Coordinator<
         TestTypes,
@@ -380,9 +355,6 @@ async fn run_handover_node(
     }
 }
 
-/// Polls [`try_perform_handover`] until the cutover crosses. Production
-/// triggers the same call lazily from any `ConsensusHandle` method;
-/// the test polls because nothing else exercises the gate.
 async fn handover_watcher(
     legacy: Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>,
     client_api: ClientApi<TestTypes>,
@@ -399,9 +371,6 @@ async fn handover_watcher(
     }
 }
 
-/// Build a new-protocol coordinator + spawn its runner + watcher +
-/// timeout-vote forwarder for one node — exactly the bundle
-/// `ConsensusHandle::new` spawns in production.
 async fn spawn_node(
     i: usize,
     num_nodes: usize,
@@ -454,56 +423,14 @@ struct NodeState {
     runner_abort: AbortHandle,
 }
 
-/// A node held silent for the test, with its shutdown timed by view.
 struct SilentNode {
-    /// Index of the legacy node to shut down.
     idx: usize,
-    /// Wait until any non-silent legacy node's `cur_view` reaches this
-    /// view, then shut down the silent node. Setting `idx=3` and
-    /// `at_view=18` (with num_nodes=4, cutover=20) makes view 19
-    /// (leader=node 3) time out cluster-wide.
+    /// Shut down once any other node's `cur_view` reaches this view.
     at_view: ViewNumber,
 }
 
-/// Run a handover scenario: spin up legacy + new-protocol clusters
-/// per node, optionally silence nodes at either layer on per-view
-/// triggers, then verify every non-silent node decides at least
-/// `target_decisions` views and that no view fails unless it is in
-/// `expected_failed_views`.
-///
-/// `silent_nodes[i]` takes node `silent_nodes[i].idx` fully offline —
-/// shutting down its legacy `SystemContext` AND aborting its
-/// new-protocol `Coordinator` runner — once any other node's legacy
-/// `cur_view` reaches `silent_nodes[i].at_view`. Models a node that
-/// has either crashed or been disconnected at the trigger view, just
-/// like in production: a node is either online or offline.
-///
-/// `num_nodes` must satisfy supermajority thresholds with the silent
-/// nodes excluded — i.e.
-/// `num_nodes - silent_nodes.len() >= (2*num_nodes/3) + 1`.
-///
-/// `expected_failed_views` is the set of views that are *allowed* to be
-/// missing from each alive node's decided chain (silent-leader views
-/// that legitimately time out, or legacy views the new protocol skipped
-/// via forwarded TC2s). The verifier walks each alive node's decided
-/// chain from `min(decided)` to `max(decided)` and asserts that every
-/// view in that range is either decided or in `expected_failed_views`.
-/// An unexpected gap means the new protocol skipped or timed out a view
-/// we predicted would commit — a real consensus deviation worth
-/// surfacing. An expected-failed view that *does* show up in the chain
-/// means we mispredicted the failure and is also surfaced.
-///
-/// The verifier checks **new-protocol** decisions only. The legacy
-/// undecided leaves carried across the cutover via the pre-cutover seed
-/// are decided by the new protocol itself: when its first post-cutover
-/// Cert2 lands, `maybe_decide`'s chain walk follows `justify_qc` back
-/// through the seeded chain and emits a `Decide` for every view between
-/// the legacy decided anchor and the boundary. So the `min..=max` range
-/// naturally extends back to the legacy anchor without any test-side
-/// fold-in, and a non-terminal legacy timeout (a view legacy left
-/// without a `Decide` event but whose ancestors have QCs in the seed)
-/// shows up as a real new-protocol decision rather than a synthetic
-/// fold-in.
+/// Verify every live node decides `target_decisions` views with no
+/// gap outside `expected_failed_views`.
 async fn run_handover_test(
     num_nodes: usize,
     target_decisions: usize,
@@ -523,8 +450,6 @@ async fn run_handover_test(
         .map(|h| Arc::new(RwLock::new(h)))
         .collect();
 
-    // Both stacks alive concurrently from here — same shape as
-    // `SequencerContext::init`.
     let mut bg_handles: Vec<AbortHandle> = Vec::new();
     let mut node_state: Vec<NodeState> = Vec::with_capacity(num_nodes);
     for (i, legacy_arc) in legacy_arcs.iter().enumerate() {
@@ -586,13 +511,7 @@ async fn run_handover_test(
         sleep(Duration::from_millis(50)).await;
     }
 
-    // Walk every alive node's decided chain from `min` to `max` and assert
-    // that every intermediate view is either committed or explicitly
-    // listed in `expected_failed_views`. An unlisted gap means a view we
-    // predicted would commit was actually skipped (e.g. timed out from
-    // a race) — a consensus deviation worth surfacing. A view in
-    // `expected_failed_views` that *does* commit means we mispredicted
-    // the failure and is also surfaced.
+    // Each live node's `min..=max` decided range must match `expected_failed_views`.
     for &i in &live_indices {
         let decided: BTreeSet<ViewNumber> = decided_per_node[i].keys().copied().collect();
         let (&min_v, &max_v) = match (decided.iter().next(), decided.iter().last()) {
@@ -628,8 +547,6 @@ async fn run_handover_test(
         }
     }
 
-    // Cross-check commits for every shared decided view among live nodes
-    // — catches forks the per-node walk alone misses.
     let live_decided: Vec<&BTreeMap<ViewNumber, [u8; 32]>> =
         live_indices.iter().map(|i| &decided_per_node[*i]).collect();
     let common_views: BTreeSet<ViewNumber> =
@@ -668,8 +585,6 @@ async fn run_handover_test(
     }
 }
 
-/// Poll non-silent legacy `cur_view`s until one reaches `target_view`.
-/// Returns when crossed; panics if `timeout` elapses first.
 async fn await_legacy_view(
     watch: &[Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>],
     target_view: ViewNumber,
@@ -689,9 +604,6 @@ async fn await_legacy_view(
     }
 }
 
-/// Watcher that takes `silent.idx` fully offline — shuts down its
-/// legacy `SystemContext` AND aborts its new-protocol coordinator —
-/// once any non-silent node's legacy `cur_view` reaches `silent.at_view`.
 fn spawn_silence_at_view(
     legacy_arcs: &[Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>],
     silent: &SilentNode,
@@ -715,25 +627,11 @@ fn spawn_silence_at_view(
     .abort_handle()
 }
 
-/// Predicted cutover view = `upgrade_view + upgrade_finish_offset`. Used
-/// by timeout scenarios that need to know which node leads which view
-/// before the cluster actually decides the upgrade cert.
+/// `upgrade_view + upgrade_finish_offset`.
 const PREDICTED_CUTOVER_VIEW: u64 = UPGRADE_VIEW + 15;
 
-/// End-to-end happy-path handover: legacy + new-protocol clusters run
-/// concurrently, the upgrade cert decides naturally, and the new
-/// protocol takes over via the seed-bootstrap path.
-///
-/// No silent nodes. The new protocol decides the seeded undecided
-/// chain when its first post-cutover Cert2 lands (chain walk back
-/// through `justify_qc`), then continues forward normally.
-///
-/// `expected_failed_views = [cutover_view - 1]`: legacy stops voting at
-/// `cutover_view`, so view `cutover_view - 1`'s votes go to the
-/// leader of `cutover_view` who never aggregates them on the legacy
-/// side. The last legacy view therefore has no QC at handover, and the
-/// new protocol skips it via `TimeoutCertificate2` view-change
-/// evidence rather than a justify_qc chain.
+/// Happy path. `cutover_view - 1` reliably has no QC at handover, so
+/// the new protocol skips it via TC2.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
     run_handover_test(
@@ -747,23 +645,8 @@ async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
     .await;
 }
 
-/// Timeout-bridge handover: the leader of the last legacy view
-/// (`cutover_view - 1`) is shut down one view *before* it would propose,
-/// so that view times out cluster-wide. Active legacy nodes emit
-/// `TimeoutVote2`s; the bridge forwards them; the new-protocol
-/// coordinator rebroadcasts on cliquenet; `TimeoutCertificate2` forms;
-/// the first 0.8 leader uses the TC as view-change evidence; and the
-/// network decides past the cutover with one validator down.
-///
-/// Silent leader 3 leads new-proto view 23 (rotates back every 4
-/// views), so view 23 times out.
-///
-/// `expected_failed_views`:
-/// - `cutover_view - 2` (= 18): the silent leader of view
-///   `cutover_view - 1` was the aggregator for view `cutover_view - 2`'s
-///   votes, so no QC for view `cutover_view - 2` ever forms.
-/// - `cutover_view - 1` (= 19): silent leader, view times out.
-/// - `23`: silent leader in the new protocol's rotation.
+/// Silence the leader of the last legacy view; exercises the
+/// `TimeoutVote2` bridge into TC2.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_last_view_times_out_then_new_protocol_takes_over() {
     const NUM_NODES: usize = 4;
@@ -782,27 +665,7 @@ async fn legacy_last_view_times_out_then_new_protocol_takes_over() {
     .await;
 }
 
-/// View-sync handover: the leaders of the **two** views right before
-/// the cutover (`cutover_view - 2` and `cutover_view - 1`) are both
-/// silent, so two consecutive legacy views time out at the boundary.
-/// Bumped to 7 nodes — the BFT supermajority threshold for n=7 is 5,
-/// so silencing 2 leaves exactly quorum on the live nodes. The bridge
-/// forwards two batches of `TimeoutVote2`s; the new-protocol forms TC2s
-/// for both views; `handle_timeout_certificate` advances through the
-/// sequence; and the first 0.8 leader proposes against `locked_cert`
-/// and the latest TC.
-///
-/// Silent leaders 4 and 5 lead post-cutover views 25 and 26 (their
-/// first rotation after the cutover) — both time out, and the test
-/// reaches its 6-decision target on view 27.
-///
-/// `expected_failed_views`:
-/// - `cutover_view - 3` (= 17): the silent leader of view
-///   `cutover_view - 2` was the aggregator for view `cutover_view - 3`'s
-///   votes, so no QC for view `cutover_view - 3` ever forms.
-/// - `cutover_view - 2` (= 18): silent leader, view times out.
-/// - `cutover_view - 1` (= 19): silent leader, view times out.
-/// - `25`, `26`: new-proto views led by the silent nodes.
+/// Silence two consecutive pre-cutover leaders; exercises TC2 chaining.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_two_views_view_sync_then_new_protocol_takes_over() {
     const NUM_NODES: usize = 7;
@@ -835,31 +698,7 @@ async fn legacy_two_views_view_sync_then_new_protocol_takes_over() {
     .await;
 }
 
-/// New-protocol first-leader timeout: the leader of `cutover_view` (=
-/// the first post-cutover view) goes offline right at `cutover_view`.
-/// Trigger is set to `cutover_view` so that view (cutover_view - 1)
-/// has already QC'd in the legacy (its votes go to leader-of-cutover_view
-/// = the silent node, who must be alive long enough to aggregate them).
-/// After silence: legacy view `cutover_view` times out (TC routed to
-/// leader of cutover_view+1, alive); legacy advances; alive watchers
-/// seed the new-protocol cluster; new-protocol view `cutover_view`
-/// also times out (silent leader); new-proto-native TC2 forms on
-/// cliquenet (no bridge involved); leader of `cutover_view + 1`
-/// proposes; the network decides.
-///
-/// Bumped to 7 nodes so the silent leader (= leader of view 20) only
-/// rotates back every 7 views, keeping the number of new-protocol
-/// timeouts bounded within the deadline.
-///
-/// Silent leader 6 leads view 20 only within the test horizon (next
-/// rotation is view 27, past the 6-decision exit).
-///
-/// `expected_failed_views`:
-/// - `cutover_view - 1` (= 19): legacy stops voting at `cutover_view`,
-///   so view `cutover_view - 1`'s votes never form a QC on the legacy
-///   side and the new protocol skips it via TC2 evidence.
-/// - `cutover_view` (= 20): silent leader, view times out in the new
-///   protocol.
+/// Silence the leader of `cutover_view`; exercises native TC2 formation.
 #[tokio::test(flavor = "multi_thread")]
 async fn new_protocol_first_leader_offline_then_recovers() {
     const NUM_NODES: usize = 7;
@@ -878,36 +717,9 @@ async fn new_protocol_first_leader_offline_then_recovers() {
     .await;
 }
 
-/// Non-terminal legacy timeout: the leader of `cutover_view - 2` (=
-/// view 18, the view *before* the last legacy view) is silenced one
-/// view before it would propose, so view 18 times out cluster-wide.
-/// The silent node is also the aggregator for view 17's votes (the
-/// leader of view N aggregates view N-1's votes), so view 17's QC
-/// never forms either. View 19's leader proposes on top of view 16's
-/// QC with a `TimeoutCertificate2` for view 18 as view-change
-/// evidence. View 16 has a valid QC and ends up as the topmost leaf
-/// legacy hands off in the seed; the new protocol picks up from
-/// there.
-///
-/// The goal is to verify that the non-terminal legacy timeout still
-/// lets the chain make progress through view 16, even though no
-/// `Decide` event ever fires for it in legacy (the HotStuff-2
-/// two-chain rule never completes because view 17 has no QC). The
-/// new protocol decides view 16 when its first post-cutover Cert2
-/// lands and `maybe_decide`'s walk follows `justify_qc` back through
-/// the seeded chain, so view 16 shows up as a real new-protocol
-/// decision rather than via any test-side fold.
-///
-/// `NUM_NODES = 4`. Silent node 2 leads legacy view 18 and new-proto
-/// views 22 and 26 (rotation period = `NUM_NODES`). Expected
-/// `expected_failed_views`:
-/// - `17`: no QC ever formed — the silent leader of view 18 was the
-///   aggregator for view 17's votes.
-/// - `18`: timed out in legacy (silent leader); never QC'd.
-/// - `19`: locally aggregated at node 0 (leader of view 20) but
-///   handover triggered before the QC propagated cluster-wide via
-///   `send_high_qc`, so it doesn't appear in any node's seed.
-/// - `22`, `26`: new-proto views led by silent node 2.
+/// Non-terminal legacy timeout: silence view 18's leader. View 16 must
+/// be decided by the new protocol via the seeded `justify_qc` chain
+/// walk — the regression this test guards against.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_view_before_last_times_out_then_new_protocol_takes_over() {
     const NUM_NODES: usize = 4;

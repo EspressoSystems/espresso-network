@@ -39,19 +39,17 @@ use versions::version;
 /// Status of the legacy → 0.8 protocol cutover.
 #[derive(Clone, Debug)]
 pub enum CutoverStatus {
-    /// No upgrade certificate has been decided yet — the network is running
-    /// purely on the legacy protocol.
+    /// No upgrade certificate decided yet.
     NotConfigured,
-    /// The cutover view is in the future. `views_remaining` is how many views
-    /// before the new protocol takes over. Operators should ensure Cliquenet
-    /// peer connectivity is established by the time this hits 0.
+    /// `views_remaining` until the cutover view.
     Approaching {
         cur_view: ViewNumber,
         cutover_view: ViewNumber,
         views_remaining: u64,
     },
-    /// The new protocol is active.
-    Active { cutover_view: ViewNumber },
+    Active {
+        cutover_view: ViewNumber,
+    },
 }
 
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
@@ -156,20 +154,10 @@ where
         let coordinator_task =
             AbortOnDropHandle::new(spawn(run_coordinator(coordinator, event_tx)));
 
-        // Forward `LegacyTimeoutVoteEmitted` events from the legacy task into
-        // the new-protocol coordinator's timeout collectors. This is how the
-        // first 0.8 leader gets a `TimeoutCertificate2` for the boundary
-        // view if 0.4 timed out before its QC formed.
         spawn(forward_legacy_timeout_votes(
             legacy_event_rx.clone(),
             client_api.clone(),
         ));
-
-        // Forward legacy decides to the coordinator as `bump_network_epoch`
-        // calls so cliquenet's peer window keeps up with the live network
-        // during the legacy phase. Without this, a node running through
-        // many legacy epoch transitions reaches the cutover with the peer
-        // set from boot.
         spawn(forward_legacy_epoch_changes(
             legacy_event_rx.clone(),
             client_api.clone(),
@@ -210,8 +198,6 @@ where
             >= version(0, 8)
     }
 
-    /// Status of the legacy → 0.8 cutover relative to the current view.
-    /// Use for operator monitoring around the upgrade boundary.
     pub async fn cutover_status(&self) -> CutoverStatus {
         let legacy = self.legacy_handle.read().await;
         let cur_view = legacy.cur_view().await;

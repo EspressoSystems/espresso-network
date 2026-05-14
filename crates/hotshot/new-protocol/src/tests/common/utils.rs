@@ -302,16 +302,8 @@ impl TestData {
         Self::new_with_upgrade(num_views, epoch_height, num_nodes, None).await
     }
 
-    /// Build a chain of `num_views` legacy-style views and, if
-    /// `upgrade_at_view` is set, attach a real, quorum-signed
-    /// `UpgradeCertificate` to that view's leaf.
-    ///
-    /// The returned upgrade certificate is properly signed by every
-    /// validator in the test stake table — it verifies under the same
-    /// `EpochMembership` that signs the `cert1` chain, exactly the way the
-    /// upgrade task forms one in production legacy hotshot. Subsequent
-    /// views in the chain re-sign their `cert1` because the upgraded
-    /// leaf's commit changes when the certificate is attached.
+    /// Chain of `num_views` views, optionally with a real
+    /// `UpgradeCertificate` attached at `upgrade_at_view`.
     pub async fn new_with_upgrade(
         num_views: usize,
         epoch_height: u64,
@@ -324,19 +316,13 @@ impl TestData {
             mock_membership_with_num_nodes(num_nodes, epoch_height, public_key).await;
         let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
-        // Match `test_upgrade_lock()` (used by `ConsensusHarness` and
-        // `TestRunner`) so signature commitments computed during view
-        // generation are byte-identical to what those harnesses verify.
-        // Different versions in `Upgrade::trivial` would produce
-        // different `VersionedVoteData` commitments, breaking cert
-        // signature verification across the boundary.
+        // Must match `test_upgrade_lock()` so signature commitments are
+        // byte-identical across harnesses.
         let upgrade = versions::Upgrade::trivial(versions::CLIQUENET_VERSION);
 
         let mut generator =
             TestViewGenerator::generate(membership.clone(), node_key_map.clone(), upgrade);
 
-        // Pre-build the upgrade certificate so we can attach it to the
-        // matching view in the patching loop below.
         let upgrade_cert: Option<(ViewNumber, UpgradeCertificate<TestTypes>)> =
             if let Some((target_view, ref data)) = upgrade_at_view {
                 let epoch_membership = membership
@@ -434,10 +420,6 @@ impl TestData {
                 proposal.next_epoch_justify_qc = prev_new_cert2.clone();
             }
 
-            // Attach the upgrade certificate at the requested view. The
-            // leaf's commitment will absorb the certificate; subsequent
-            // views must rebuild their justify_qc against the new commit
-            // (handled below via `prev_new_cert1`).
             let upgrade_attached = upgrade_cert.as_ref().is_some_and(|(target_view, cert)| {
                 if *target_view == view_number {
                     proposal.upgrade_certificate = Some(cert.clone());
@@ -452,11 +434,8 @@ impl TestData {
             let leaf = Leaf2::from(proposal.clone());
             let leaf_commit = leaf.commit();
 
-            // Compute DRB for epoch root blocks so transition-window
-            // proposals carry the correct next_drb_result.  We call
-            // add_epoch_root + compute_drb_result on the *generator's own*
-            // membership (not the harness's), mirroring what the
-            // EpochManager does in production.
+            // Compute DRB for epoch roots so transition-window proposals
+            // carry next_drb_result, mirroring `EpochManager`.
             if epoch_height > 0 && is_epoch_root(block_number, epoch_height) {
                 let target_epoch =
                     EpochNumber::new(epoch_from_block_number(block_number, epoch_height) + 2);
@@ -603,21 +582,6 @@ pub async fn mock_membership_with_num_nodes(
     (coord, storage, client)
 }
 
-/// Create a mock membership coordinator for `num_nodes` validators.
-///
-/// The membership's `Leaf2Fetcher` is wired to a fresh
-/// [`CoordinatorClient`] via [`ClientLeafFetcherNetwork`] — catchup
-/// direct-messages are routed through the `Coordinator` (which owns the
-/// only `Network` handle).  The returned `CoordinatorClient` must be
-/// installed on the node's `Coordinator` (via `.client(...)`) so the
-/// routed messages are actually drained and dispatched.
-///
-/// The returned [`TestStorage`] is the storage the membership's
-/// `Leaf2Fetcher` reads from; share it with the `Coordinator` so
-/// self-produced proposals land in the same store.  The returned
-/// [`Sender`] is the tx half of the external-events channel feeding the
-/// membership's `Leaf2Fetcher`; pass it into `build_test_coordinator` so
-/// the coordinator forwards `ExternalMessageReceived` events to it.
 pub async fn mock_membership_with_client(
     num_nodes: usize,
     epoch_height: u64,
@@ -640,14 +604,6 @@ pub async fn mock_membership_with_client(
     (coord, storage, client, external_events_tx)
 }
 
-/// Build a mock membership coordinator wired to an arbitrary
-/// `LeafFetcherNetwork`.  `public_key` is the node's identity — peers
-/// will send leaf-fetcher responses back to this key, so passing the
-/// wrong one means responses don't return to this node's fetcher.
-///
-/// Creates and installs the external-events channel internally; the
-/// returned [`Sender`] is the tx half — hand it to the coordinator so it
-/// forwards `ExternalMessageReceived` events to the fetcher.
 pub async fn mock_membership_with_leaf_fetcher_network(
     num_nodes: usize,
     epoch_height: u64,

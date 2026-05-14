@@ -216,15 +216,8 @@ where
             .build()
     }
 
-    /// Bootstrap the coordinator so the leader of `current_view + 1` can
-    /// propose.
-    ///
-    /// Reads `current_view` and `current_epoch` from the inner `Consensus`
-    /// instance — these default to genesis after `seed_genesis`, but a
-    /// pre-cutover seed advances them to the highest seeded view. Emits
-    /// `ViewChanged(next_view)` and, if this node is the next-view leader,
-    /// a `RequestBlockAndHeader` whose parent is the proposal at
-    /// `current_view`.
+    /// Emit `ViewChanged(current_view + 1)` and, if leader, a
+    /// `RequestBlockAndHeader`.
     pub fn start(&mut self) {
         let cur_view = self.consensus.current_view();
         let next_view = cur_view + 1;
@@ -234,12 +227,7 @@ where
             .unwrap_or(EpochNumber::genesis());
 
         if self.consensus.last_decided_leaf().view_number() == ViewNumber::genesis() {
-            // Append the genesis DA proposal to storage.
-            //
-            // The genesis payload is always empty, but it never flows through the
-            // regular block-builder/VID path that would otherwise persist a DA
-            // proposal for view 0. Storage consumers downstream still expect one,
-            // so we synthesize and append it here.
+            // Genesis DA never flows through the normal block-builder path.
             let genesis_leaf = self.consensus.last_decided_leaf().clone();
             let (payload, metadata) = T::BlockPayload::empty();
             self.storage.append_da(
@@ -250,10 +238,7 @@ where
                 genesis_leaf.payload_commitment(),
             );
 
-            // Genesis is never decided through the normal consensus path, so
-            // downstream consumers (persistence, query service) would never see
-            // the genesis header. We emit a `LeafDecided` for it here so that
-            // application layer sees this event
+            // Emit `LeafDecided` for genesis so persistence sees the header.
             self.outbox.push_back(ConsensusOutput::LeafDecided {
                 leaves: vec![genesis_leaf],
                 cert1: self
@@ -288,24 +273,9 @@ where
         }
     }
 
-    /// Boundary-case kick for the legacy → new-protocol cutover.
-    ///
-    /// `handle_timeout_certificate` for forwarded legacy timeout votes can
-    /// fire before the seed lands, advancing `current_view` past the highest
-    /// seeded view but aborting before triggering the leader (no
-    /// `locked_cert` yet, so no parent proposal). After the seed installs
-    /// `locked_cert` and the seeded proposals, the leader of `current_view`
-    /// has all the data it needs, but nothing has told it to propose.
-    ///
-    /// This method nudges that leader: if `current_view` was reached via a
-    /// stored `TimeoutCertificate2` and we are its leader, request a block
-    /// using the locked-cert's seeded proposal as parent. The TC2 itself is
-    /// the view-change evidence — the same role it would play if it had
-    /// arrived after the seed.
-    ///
-    /// No-op if the local node isn't the leader, if there is no TC at
-    /// `current_view`, or if the locked cert / its seeded proposal are
-    /// missing.
+    /// Kick the leader after the seed lands when a forwarded TC2 had
+    /// already advanced `current_view`. No-op unless leader and all
+    /// prerequisites are present.
     async fn resume_after_cutover_tc(&mut self) {
         let cur_view = self.consensus.current_view();
         if self.consensus.timeout_cert_at(cur_view).is_none() {
@@ -1065,8 +1035,6 @@ where
                     states = validated_states.len(),
                     "coordinator: applying legacy → new-protocol seed",
                 );
-                // Seed StateManager BEFORE handing the leaves to consensus.
-                // Consensus needs the parent view's state extend.
                 let anchor_view = decided_anchor.view_number();
                 if let Some(state) = validated_states.get(&anchor_view).cloned() {
                     self.state_manager
@@ -1078,12 +1046,6 @@ where
                         self.state_manager.seed_state(view, state, leaf.clone());
                     }
                 }
-                // Compute the cutover epoch from the highest seeded leaf
-                // before consuming `undecided`. The first new-protocol
-                // proposal lands at `cutover_view`, whose parent is the
-                // topmost seeded leaf, so its epoch dictates which
-                // {prev,curr,next} stake-table window the network must be
-                // dialed against.
                 let highest_seeded_leaf = undecided.last().unwrap_or(&decided_anchor);
                 let cutover_epoch = EpochNumber::new(epoch_from_block_number(
                     highest_seeded_leaf.block_header().block_number(),
@@ -1093,27 +1055,12 @@ where
                 self.consensus.set_pre_cutover_anchor(decided_anchor);
                 self.consensus.seed_pre_cutover_leaves(undecided);
                 if let Some(qc) = high_qc {
-                    // Register the topmost legacy QC so `maybe_propose` for the
-                    // first 0.8 view can find `certs[N-1]`.
                     self.consensus.register_proposal_justify_qc(&qc);
                 }
-                // Skip directly to the last pre-cutover view. The new
-                // protocol must never propose, vote on, or decide
-                // anything below `cutover_view` — those views belong to
-                // legacy, even when legacy could not QC them. The first
-                // ViewChanged we emit below targets `cutover_view`
-                // exactly.
                 self.consensus.jump_to_cutover(cutover_view);
 
-                // Refresh the network's peer set for the cutover epoch
-                // BEFORE the boot kick. The new-protocol coordinator's
-                // other `on_epoch_change` call site only fires on a
-                // validated proposal (`proposal_validator.next()`) — but
-                // we cannot validate the first post-cutover proposal
-                // until the network is dialed against the right stake
-                // table window. Idempotent: cliquenet short-circuits if
-                // it already advanced past this epoch via the legacy
-                // bridge.
+                // Refresh peers for the cutover epoch before kicking the
+                // leader — the proposal-driven site can't fire yet.
                 if let Err(err) = self
                     .network
                     .on_epoch_change(cutover_epoch, &self.membership_coordinator)
@@ -1126,29 +1073,6 @@ where
                     );
                 }
 
-                // Boot kick. Two cases:
-                //
-                // 1. Forwarded TC2(`cutover_view - 1`) (or higher) is
-                //    already in `timeout_certs`: a forwarded legacy
-                //    timeout vote has already given us view-change
-                //    evidence for the cutover boundary. Trigger the
-                //    leader of `current_view` to propose against the
-                //    seeded chain. (`current_view` may already be
-                //    `cutover_view` if `handle_timeout_certificate`
-                //    ran before the seed.)
-                //
-                // 2. We have `certs[cutover_view - 1]`: the topmost
-                //    seeded leaf's QC is for `cutover_view - 1`, no TC
-                //    needed. Emit `ViewChanged(cutover_view)` and, if
-                //    leader, request a block.
-                //
-                // Otherwise we wait at `cutover_view - 1` for either a
-                // forwarded TC2 to arrive or our local timer to fire
-                // (which will produce a fresh new-protocol TC2 of our
-                // own and drive us forward via
-                // `handle_timeout_certificate`). Either path advances
-                // through the proper view-change machinery — never by
-                // re-proposing a pre-cutover view.
                 let cur_view = self.consensus.current_view();
                 if self.consensus.timeout_cert_at(cur_view).is_some() {
                     self.resume_after_cutover_tc().await;
@@ -1158,8 +1082,6 @@ where
                 {
                     self.start();
                 } else {
-                    // Park at `cutover_view - 1`. The timer (or a
-                    // forwarded TC2) will drive us forward.
                     let epoch = self
                         .consensus
                         .current_epoch()
@@ -1182,17 +1104,11 @@ where
                 let _ = respond.send(());
             },
             ClientRequest::SubmitTimeoutVote { vote, respond } => {
-                // Same dual-feed as the wire-message path
-                // (`ConsensusMessage::TimeoutVote`): aggregate into both the
-                // success-threshold and one-honest collectors.
                 self.timeout_collector.accumulate_vote(vote.clone()).await;
                 self.timeout_one_honest_collector
                     .accumulate_vote(vote.clone())
                     .await;
-                // Rebroadcast on cliquenet so peer coordinators can aggregate
-                // it too. The bridge only fires for the local legacy node, so
-                // without this each coordinator sees just one vote and TC2
-                // never forms at the cutover boundary.
+                // Rebroadcast so peer coordinators can aggregate too.
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
@@ -1205,10 +1121,6 @@ where
                 let _ = respond.send(());
             },
             ClientRequest::BumpNetworkEpoch { epoch, respond } => {
-                // Refresh cliquenet's peer set when the legacy protocol
-                // advances to a new epoch. `Cliquenet::on_epoch_change` is
-                // idempotent (no-op if the epoch isn't strictly newer), so
-                // overshooting is fine.
                 if let Err(err) = self
                     .network
                     .on_epoch_change(epoch, &self.membership_coordinator)

@@ -98,22 +98,17 @@ pub struct TestRunner {
     #[builder(default)]
     node_changes: Vec<(u64, Vec<NodeChange>)>,
 
-    /// Optional legacy → new-protocol seed handed to each coordinator
-    /// before its run loop starts.
     pre_cutover_seed: Option<PreCutoverSeed>,
 
     #[builder(skip = test_upgrade_lock())]
     upgrade_lock: UpgradeLock<TestTypes>,
 }
 
-/// Seed handed to every coordinator at startup to bridge legacy state.
 #[derive(Clone)]
 pub struct PreCutoverSeed {
     pub decided_anchor: hotshot_types::data::Leaf2<TestTypes>,
     pub undecided: Vec<hotshot_types::data::Leaf2<TestTypes>>,
     pub high_qc: crate::message::Certificate1<TestTypes>,
-    /// First view the new protocol is responsible for. Anything strictly
-    /// below is owned by legacy.
     pub cutover_view: ViewNumber,
 }
 
@@ -183,11 +178,6 @@ enum NodeEvent {
     TimedOut(ViewNumber),
 }
 
-/// Event with its originating node index and generation.
-///
-/// The generation is bumped each time a node is restarted so that events
-/// queued by the aborted task can be distinguished from events produced by
-/// the fresh task.
 struct TaggedEvent {
     idx: usize,
     generation: u64,
@@ -195,11 +185,6 @@ struct TaggedEvent {
 }
 
 impl TestRunner {
-    /// Compute the set of nodes that should be offline at test start.
-    ///
-    /// This is the union of permanently-down nodes (`down_nodes`) and any
-    /// node whose first action in `node_changes` is `Start` (meaning it
-    /// begins offline and is brought up later).
     fn initially_down_nodes(&self) -> BTreeSet<usize> {
         let mut down = self.down_nodes.clone();
         let mut first_action_seen: BTreeSet<usize> = BTreeSet::new();
@@ -239,15 +224,6 @@ impl TestRunner {
         result
     }
 
-    /// Run the integration test using the given network backend.
-    ///
-    /// Spins up `self.num_nodes` coordinators connected via `N`.  Each
-    /// coordinator self-starts via the genesis bootstrap (no side-channel
-    /// injection needed).
-    ///
-    /// When `node_changes` is non-empty, nodes are dynamically started,
-    /// restarted, or shut down at the specified views.  Verification is
-    /// adjusted to account for the dynamic topology.
     pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
 
@@ -299,13 +275,6 @@ impl TestRunner {
             } else {
                 let (cancel_tx, cancel_rx) = oneshot::channel();
                 cancels.insert(i, cancel_tx);
-                // Pre-populate commits with seeded leaves so the verifier
-                // sees them as decided (they are inherited from the legacy
-                // protocol; the new protocol won't fire LeafDecided for
-                // them). Also stamp views 1..anchor with the anchor's
-                // commit so the verifier accepts them as legacy-decided —
-                // it only checks node-cross consistency on these slots,
-                // not the actual chain shape.
                 let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
                 if let Some(seed) = &self.pre_cutover_seed {
                     let anchor_view = seed.decided_anchor.view_number();
@@ -347,13 +316,7 @@ impl TestRunner {
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut max_decided_view: u64 = 0;
 
-        // Pre-populate commits for seeded leaves: those views are
-        // "previously decided" (in the legacy protocol) and the new-protocol
-        // nodes inherit them via the seed rather than re-deriving them, so
-        // they will never appear in `LeafDecided` outputs. The verifier
-        // expects every view in `1..=target_decisions` to be either decided
-        // or expected-to-fail; without this pre-population the seeded views
-        // would falsely fail the `NotEnoughDecided` check.
+        // Seeded leaves never fire `LeafDecided`; pre-populate them.
         if let Some(seed) = &self.pre_cutover_seed {
             let anchor_view = seed.decided_anchor.view_number();
             let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
@@ -608,11 +571,6 @@ async fn create_network(
         .unwrap()
 }
 
-/// Event loop for a single node.  Processes coordinator inputs, collects
-/// decided leaf commits, and forwards them to the test runner.  All events
-/// are tagged with the node's index and generation so the runner can
-/// multiplex a single receive channel across every node and drop events
-/// from tasks that have been superseded by a restart.
 async fn run_node<N: Network<TestTypes>>(
     mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
     output_tx: UnboundedSender<TaggedEvent>,

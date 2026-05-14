@@ -1,6 +1,4 @@
-//! Legacy → new-protocol handover: harvest legacy state and dispatch
-//! the seed via `ClientApi`. Shared by `ConsensusHandle::new_protocol`
-//! (production) and `tests::legacy_handover` (integration).
+//! Harvest legacy state and dispatch the seed via `ClientApi`.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -19,29 +17,19 @@ use versions::CLIQUENET_VERSION;
 
 use crate::client::ClientApi;
 
-/// Inputs to the new protocol's `seed_pre_cutover` request.
+/// Inputs to `seed_pre_cutover`.
 pub struct LegacyPreCutoverSeed<T: NodeType> {
     pub decided_anchor: Leaf2<T>,
-    /// Oldest-first chain above the anchor, walked from `high_qc` via
-    /// `justify_qc` back to the anchor.
+    /// Oldest-first chain above the anchor.
     pub undecided: Vec<Leaf2<T>>,
     pub high_qc: QuorumCertificate2<T>,
-    /// Per-view validated state for the anchor + each undecided leaf.
-    /// The first post-cutover header request needs the parent view's
-    /// state to build against.
     pub validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
-    /// First view the new protocol is responsible for (= the upgrade
-    /// certificate's `new_version_first_view`). Anything strictly below
-    /// is owned by legacy; the new protocol must never propose, vote on,
-    /// or decide views below this — even if legacy left some of them
-    /// without QCs (e.g. because the leader of view N+1 was silent and
-    /// couldn't aggregate view N's votes).
+    /// `upgrade_cert.new_version_first_view`.
     pub cutover_view: ViewNumber,
 }
 
-/// Walk the legacy `Consensus` to produce a [`LegacyPreCutoverSeed`].
-/// `None` on a broken walk (fork or missing leaf). Validated states
-/// are best-effort; missing entries are tolerated by the handler.
+/// Walk legacy state to produce a [`LegacyPreCutoverSeed`]; `None` on
+/// a broken walk.
 pub async fn harvest_legacy_pre_cutover_seed<T, I>(
     handle: &SystemContextHandle<T, I>,
 ) -> Option<LegacyPreCutoverSeed<T>>
@@ -49,9 +37,6 @@ where
     T: NodeType,
     I: NodeImplementation<T>,
 {
-    // The cutover view comes from the decided upgrade certificate; without
-    // it we don't know where legacy's responsibility ends and where the
-    // new protocol takes over, so abort.
     let cutover_view = match handle.hotshot.upgrade_lock.decided_upgrade_cert() {
         Some(cert) => cert.data.new_version_first_view,
         None => {
@@ -128,13 +113,8 @@ where
     })
 }
 
-/// Returns `true` once `legacy.cur_view`'s version >= `CLIQUENET_VERSION`,
-/// dispatching a best-effort `seed_pre_cutover` through `client_api` on
-/// the way. Logs but does not surface harvest/seed failures — the boundary
-/// signal stands regardless so callers don't flip back to legacy.
-///
-/// Re-seeding is idempotent at the consensus layer; callers should still
-/// gate repeats with a once-flag.
+/// Returns `true` once legacy crossed into the new version, dispatching
+/// the seed along the way. Callers should gate repeats with a once-flag.
 pub async fn try_perform_handover<T, I>(
     legacy: &SystemContextHandle<T, I>,
     client_api: &ClientApi<T>,
@@ -171,14 +151,8 @@ where
     true
 }
 
-/// Forward `LegacyTimeoutVoteEmitted` events from the legacy task into the
-/// new-protocol coordinator's timeout collectors. Lets the first 0.8
-/// leader form a `TimeoutCertificate2` for the boundary view if 0.4
-/// timed out before its QC formed.
-///
-/// Run as a long-lived task. Spawned by `ConsensusHandle::new` in
-/// production and by the integration test for the same parity reason
-/// `try_perform_handover` is shared.
+/// Forward legacy `TimeoutVote2` events into the new-protocol timeout
+/// collectors so the first new leader can form TC2 at the boundary.
 pub async fn forward_legacy_timeout_votes<T: NodeType>(
     legacy_event_rx: InactiveReceiver<Event<T>>,
     client_api: ClientApi<T>,
@@ -193,18 +167,8 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
     }
 }
 
-/// Forward legacy `Decide` events to the coordinator as `bump_network_epoch`
-/// requests so cliquenet's peer window tracks the live network's epoch.
-///
-/// The new-protocol coordinator's only post-startup `on_epoch_change` call
-/// site is `proposal_validator.next()` — but no new-protocol proposals are
-/// validated during the legacy phase, so without this bridge a node that
-/// stayed up across many legacy epoch transitions arrives at the cutover
-/// with peers from the boot epoch's window. `bump_network_epoch` is
-/// idempotent at the cliquenet layer.
-///
-/// `epoch_height == 0` disables the bridge (the pre-epoch chain has no
-/// epoch transitions to track).
+/// Bridge legacy epoch transitions into `bump_network_epoch`.
+/// `epoch_height == 0` disables the bridge.
 pub async fn forward_legacy_epoch_changes<T: NodeType>(
     legacy_event_rx: InactiveReceiver<Event<T>>,
     client_api: ClientApi<T>,
@@ -219,8 +183,6 @@ pub async fn forward_legacy_epoch_changes<T: NodeType>(
         let EventType::Decide { leaf_chain, .. } = &event.event else {
             continue;
         };
-        // `leaf_chain` is sorted newest-first; the first entry's block
-        // number gives the highest decided view's epoch.
         let Some(newest) = leaf_chain.first() else {
             continue;
         };

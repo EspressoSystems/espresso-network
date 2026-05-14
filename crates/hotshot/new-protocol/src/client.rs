@@ -114,17 +114,7 @@ impl<T: NodeType> ClientApi<T> {
         .await?
     }
 
-    /// Forward a `TimeoutVote2` produced by the legacy (pre-0.8) consensus
-    /// task into the new-protocol coordinator's timeout collectors. Used at
-    /// the legacy → new-protocol boundary: when a legacy view near the
-    /// cutover times out, the legacy task signs a `TimeoutVote2` (whose
-    /// commitment is version-tagged via the shared `UpgradeLock`) and
-    /// submits it here so the first 0.8 leader can collect a
-    /// `TimeoutCertificate2` for that pre-cutover view.
-    ///
-    /// `TimeoutVote2` is structurally identical between 0.4 and 0.8
-    /// (`SimpleVote<TYPES, TimeoutData2>`) so the same vote feeds both
-    /// systems' aggregators without re-signing.
+    /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
     pub async fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::SubmitTimeoutVote { vote, respond }, rx)
@@ -132,48 +122,14 @@ impl<T: NodeType> ClientApi<T> {
     }
 
     /// Refresh the coordinator network's peer set for `epoch`.
-    ///
-    /// Used during the legacy → new-protocol phase to keep the coordinator's
-    /// `Cliquenet` connected to the live stake-table window even though no
-    /// new-protocol proposals are flowing yet (the only other call site for
-    /// `Network::on_epoch_change` is on a validated proposal). Without this,
-    /// a node that stayed up across many legacy epoch transitions would
-    /// arrive at the cutover with peers from the boot epoch's window.
-    ///
-    /// Idempotent at the network layer: `Cliquenet::on_epoch_change`
-    /// short-circuits when `epoch <= self.epoch`.
     pub async fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::BumpNetworkEpoch { epoch, respond }, rx)
             .await
     }
 
-    /// Bridge legacy (pre-0.8) state into the running coordinator at the
-    /// legacy → new-protocol cutover.
-    ///
-    /// - `decided_anchor` is the highest leaf 0.4 had decided.
-    /// - `undecided` is the chain of undecided 0.4 leaves above the anchor
-    ///   (oldest-first).
-    /// - `high_qc` is the QC of the topmost undecided leaf, if 0.4 voting
-    ///   completed enough for that QC to form. Required for the first 0.8
-    ///   leader to find `certs[N-1]` when proposing at view N (= the
-    ///   topmost leaf's view + 1). May be `None` if the chain stalled
-    ///   before the topmost leaf got a QC; in that case the first 0.8
-    ///   leader will need view-change evidence.
-    /// - `validated_states` is the validated state of every seeded leaf
-    ///   (anchor + undecided), keyed by view number. The new protocol
-    ///   pipelines header creation and state validation against the
-    ///   parent's stored state — without seeding these, the first
-    ///   post-cutover leader cannot build a header (no parent state) and
-    ///   peers cannot validate the first post-cutover proposal.
-    /// - `cutover_view` is the upgrade certificate's
-    ///   `new_version_first_view`. The new protocol must never propose,
-    ///   vote on, or decide any view strictly below this — those views
-    ///   belong to legacy, even when legacy left some without QCs.
-    ///
-    /// Idempotent at the consensus level: `set_pre_cutover_anchor` no-ops if
-    /// the supplied view is not above the current `last_decided_view`, and
-    /// `seed_pre_cutover_leaves` reinserts views that are already in the set.
+    /// Bridge legacy state into the coordinator at the cutover.
+    /// Idempotent at the consensus layer.
     pub async fn seed_pre_cutover(
         &self,
         decided_anchor: Leaf2<T>,
@@ -282,8 +238,6 @@ pub(crate) enum ClientRequest<T: NodeType> {
         undecided: Vec<Leaf2<T>>,
         cutover_view: ViewNumber,
         high_qc: Option<QuorumCertificate2<T>>,
-        /// Validated state for each seeded leaf, keyed by view. Empty if
-        /// the caller has no states to seed (e.g. legacy-only test paths).
         validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
         respond: oneshot::Sender<()>,
     },

@@ -140,10 +140,7 @@ pub struct Consensus<T: NodeType> {
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
 
-    /// Views bridged in from the legacy (pre-0.8) protocol via
-    /// `seed_pre_cutover_leaves`. Skipped by `maybe_vote_2_and_update_lock`
-    /// (V1 AvidM dispersal, no V2 reconstruction possible). Cert1 is the
-    /// inherited 0.4 QC; Cert2 forms post-cutover via Vote2.
+    /// Skipped by `maybe_vote_2_and_update_lock` (V1 AvidM dispersal).
     pre_cutover_views: BTreeSet<ViewNumber>,
 
     /// Certificates whose epoch membership was not yet available when they
@@ -260,47 +257,18 @@ impl<T: NodeType> Consensus<T> {
             .insert(ViewNumber::genesis(), genesis_proposal);
     }
 
-    /// Bridge a chain of legacy (pre-0.8) UNDECIDED leaves into this Consensus
-    /// instance so the new protocol can decide them via Cert2.
-    ///
-    /// `leaves` must be ordered oldest-first. `Leaf2` and `QuorumCertificate2`
-    /// are shared between 0.4 and 0.8, so each leaf's `justify_qc` is exactly
-    /// a new-protocol Cert1 for the *parent* view. We register that Cert1,
-    /// then synthesize and store a new-protocol `Proposal` from each leaf so
-    /// the decide rule has the (Cert1, proposal) pair it needs.
-    ///
-    /// The youngest seeded leaf has no Cert1 yet (the QC for it would have
-    /// been formed by the next leaf, which doesn't exist). Its Cert1 will
-    /// land automatically when the first post-cutover proposal arrives,
-    /// carrying it as `justify_qc` — see [`Self::register_proposal_justify_qc`].
-    ///
-    /// Seeded views are added to `pre_cutover_views`, which causes
-    /// `maybe_vote_2_and_update_lock` to skip them (V1 AvidM dispersal).
-    ///
-    /// Does NOT advance `current_view`; the caller is responsible for
-    /// jumping to `cutover_view - 1` so the leader of `cutover_view` is
-    /// the first new-protocol view we ever propose. Re-running the
-    /// seeded views (or any pre-cutover view that legacy could not QC)
-    /// is a correctness violation: those views belong to legacy.
+    /// Bridge legacy undecided leaves so the new protocol can decide
+    /// them via Cert2. `leaves` is oldest-first. Caller must follow
+    /// with [`Self::jump_to_cutover`].
     pub fn seed_pre_cutover_leaves(&mut self, leaves: Vec<Leaf2<T>>) {
         for leaf in leaves {
             let view = leaf.view_number();
             let justify_qc = leaf.justify_qc().clone();
-            // Register Cert1 for the parent view (the QC of the parent leaf,
-            // embedded as this leaf's justify_qc).
             self.register_proposal_justify_qc(&justify_qc);
 
-            // Compute the epoch from the block number; pre-cutover leaves
-            // don't carry an explicit epoch field but the new-protocol
-            // Proposal does.
             let block_number = leaf.block_header().block_number();
             let epoch = EpochNumber::new(epoch_from_block_number(block_number, *self.epoch_height));
 
-            // Synthesize the new-protocol Proposal from the leaf. The decide
-            // rule only consults `block_header`, `view_number`, `epoch`,
-            // and `justify_qc`; `state_cert` is `None` for non-epoch-root
-            // pre-cutover leaves (epoch roots in 0.4 storage are decided and
-            // therefore not in this seed list).
             let view_change_evidence = leaf.view_change_evidence.clone().and_then(|e| match e {
                 ViewChangeEvidence2::Timeout(tc) => Some(tc),
                 ViewChangeEvidence2::ViewSync(_) => None,
@@ -321,51 +289,15 @@ impl<T: NodeType> Consensus<T> {
             self.proposals.insert(view, proposal);
             self.pre_cutover_views.insert(view);
 
-            // Mark this view as already proposed/voted-on so the network
-            // doesn't try to re-propose or re-vote at it. The seeded chain
-            // is authoritative for these views.
             self.proposed_views.insert(view);
             self.voted_1_views.insert(view);
             self.voted_2_views.insert(view);
         }
     }
 
-    /// Jump `current_view` and `timeout_view` to `cutover_view - 1`
-    /// after applying the legacy → new-protocol seed. The caller passes
-    /// the upgrade certificate's `new_version_first_view`.
-    ///
-    /// These two markers — together with the protocol's monotonic
-    /// forward progress — are sufficient to guarantee the new protocol
-    /// never proposes or votes on any view below `cutover_view`:
-    ///
-    /// - `current_view = cutover_view - 1`: the next `ViewChanged` (from
-    ///   `start()` or `handle_timeout_certificate`) targets `cutover_view`
-    ///   exactly. There is no path that decreases `current_view`.
-    /// - `timeout_view = cutover_view - 1`: `maybe_vote_1` refuses any
-    ///   `view <= timeout_view`, so a stale pre-cutover proposal sneaking
-    ///   in over the network gets stored but never voted on.
-    ///
-    /// `last_decided_view` is **deliberately left** at the legacy decided
-    /// anchor (set by [`Self::set_pre_cutover_anchor`]). When the first
-    /// post-cutover Cert2 lands, `maybe_decide`'s chain walk follows
-    /// `justify_qc` links back through the seeded undecided leaves and
-    /// emits a `Decide` for every view between the anchor and the
-    /// boundary — i.e. the new protocol takes responsibility for
-    /// deciding the views legacy left undecided. The walk terminates
-    /// naturally at the anchor (where `parent_view > last_decided_view`
-    /// goes false), so it never reaches into legacy's already-decided
-    /// range.
-    ///
-    /// We deliberately do NOT bulk-populate `proposed_views`,
-    /// `voted_1_views`, or `voted_2_views` with pre-cutover entries. In
-    /// production `cutover_view` will be in the millions and that loop
-    /// would burn memory and time for no benefit: the markers above
-    /// already gate every relevant code path, and the `maybe_*` helpers
-    /// short-circuit on missing data (no header, no reconstructed block,
-    /// no DRB) for pre-cutover views.
-    ///
-    /// No-op if the markers are already past `cutover_view - 1` (e.g.
-    /// forwarded TC2s have already advanced us).
+    /// Advance `current_view`/`timeout_view` to `cutover_view - 1`.
+    /// `last_decided_view` is **deliberately left** at the legacy anchor
+    /// so `maybe_decide`'s chain walk can pick up the seeded leaves.
     pub fn jump_to_cutover(&mut self, cutover_view: ViewNumber) {
         if cutover_view == ViewNumber::genesis() {
             return;
@@ -379,17 +311,8 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Register a proposal's `justify_qc` as Cert1 for the parent view, if
-    /// not already known. This is how Cert1 for the topmost pre-cutover leaf
-    /// (and, in general, any view whose Cert1 we don't independently form)
-    /// enters this Consensus instance after the legacy/new-protocol cutover.
-    ///
-    /// Idempotent: existing entries are not overwritten.
-    ///
-    /// Also bumps `locked_cert` to this QC if its view is higher than the
-    /// current locked view. The seeded pre-cutover chain advances
-    /// `locked_cert` here because `maybe_vote_2_and_update_lock` (which
-    /// would normally bump it) skips pre-cutover views.
+    /// Register `justify_qc` as Cert1 for its parent view (idempotent)
+    /// and bump `locked_cert` if newer.
     pub fn register_proposal_justify_qc(&mut self, justify_qc: &Certificate1<T>) {
         let parent_view = justify_qc.view_number();
         self.certs
@@ -404,14 +327,8 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Advance the decided-anchor (`last_decided_leaf`/`last_decided_view`)
-    /// to the supplied leaf. Use this at the legacy → new-protocol cutover
-    /// to position the anchor at the highest leaf 0.4 had decided, so the
-    /// new protocol's decide-walk starts from the correct boundary instead
-    /// of from the boot-time genesis anchor.
-    ///
-    /// No-op if `leaf.view_number()` is not strictly greater than the
-    /// current `last_decided_view`.
+    /// Position the decided-anchor at the highest leaf legacy decided.
+    /// No-op if not strictly newer than `last_decided_view`.
     pub fn set_pre_cutover_anchor(&mut self, leaf: Leaf2<T>) {
         let view = leaf.view_number();
         if view <= self.last_decided_view {
@@ -703,10 +620,6 @@ impl<T: NodeType> Consensus<T> {
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
 
-        // Register the proposal's `justify_qc` as Cert1 for the parent
-        // view. This is how Cert1 enters the system for views whose votes
-        // we never collected ourselves -- in particular, the topmost
-        // pre-cutover leaf seeded via `seed_pre_cutover_leaves`.
         self.register_proposal_justify_qc(&proposal.justify_qc);
 
         // Request the DRB if we don't have it yet.  A mismatching DRB is
@@ -1360,13 +1273,7 @@ impl<T: NodeType> Consensus<T> {
         // Verify parent chain unless justify_qc is the genesis QC
         let parent_view = proposal.justify_qc.view_number();
 
-        // We don't need the genesis block or the last block of the epoch to be reconstructed or verified
-        // or the genesis qc to be verified.
-        //
-        // Pre-cutover parents are also exempt: their data was certified
-        // available under 0.4's DA mechanism and their VID shares are V1
-        // (AvidM) which cannot be reconstructed under V2. We still verify
-        // the justify_qc/proposal commitment binding below.
+        // Pre-cutover parents are V1 AvidM, not V2-reconstructable.
         let parent_is_pre_cutover = self.pre_cutover_views.contains(&parent_view);
         if parent_view != ViewNumber::genesis()
             && !is_last_block(
@@ -1460,10 +1367,7 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
-        // Pre-cutover leaves were dispersed under AvidM (V1) and certified
-        // available by 0.4's DA; the new protocol does not re-vote them.
-        // `seed_pre_cutover_leaves` marks them as voted, but make the
-        // exclusion explicit so this path stays single-mode.
+        // V1 AvidM dispersal cannot be re-voted under V2.
         if self.pre_cutover_views.contains(&view) {
             return;
         }
