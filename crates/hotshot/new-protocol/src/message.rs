@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use committable::{Commitment, Committable};
 pub use hotshot_types::new_protocol::Proposal;
 use hotshot_types::{
-    data::{EpochNumber, VidDisperseShare2, ViewNumber},
+    data::{EpochNumber, VidCommitment, VidDisperseShare2, ViewNumber},
     message::Proposal as SignedProposal,
     request_response::ProposalRequestPayload,
     simple_certificate::{
@@ -13,7 +13,9 @@ use hotshot_types::{
         CheckpointData, LightClientStateUpdateVote2, QuorumData2, QuorumVote2, SimpleVote,
         TimeoutData2, TimeoutVote2, Vote2Data,
     },
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{
+        block_contents::BlockPayload, node_implementation::NodeType, signature_key::SignatureKey,
+    },
     vote::HasViewNumber,
 };
 use serde::{Deserialize, Serialize};
@@ -67,6 +69,65 @@ impl<T: NodeType, S> HasViewNumber for ProposalMessage<T, S> {
 
 /// A signed VidShare to be sent to the replicas.
 pub type VidShareMessage<T> = SignedProposal<T, VidDisperseShare2<T>>;
+
+/// Push of the full block payload from L_V to L_{V+1}, signed over
+/// `payload_commitment`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(bound(deserialize = ""))]
+pub struct BlockPushMessage<T: NodeType> {
+    pub view: ViewNumber,
+    pub epoch: EpochNumber,
+    pub payload: T::BlockPayload,
+    pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    pub payload_commitment: VidCommitment,
+    /// Sign over the payload commitment, for cheap filteration to prevent DoS.
+    pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+}
+
+impl<T: NodeType> HasViewNumber for BlockPushMessage<T> {
+    fn view_number(&self) -> ViewNumber {
+        self.view
+    }
+}
+
+impl<T: NodeType> BlockPushMessage<T> {
+    pub fn new(
+        view: ViewNumber,
+        epoch: EpochNumber,
+        payload: T::BlockPayload,
+        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+        payload_commitment: VidCommitment,
+        private_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
+    ) -> Result<Self, <T::SignatureKey as SignatureKey>::SignError> {
+        let signature = T::SignatureKey::sign(private_key, payload_commitment.as_ref())?;
+        Ok(Self {
+            view,
+            epoch,
+            payload,
+            metadata,
+            payload_commitment,
+            signature,
+        })
+    }
+
+    pub fn verify_signature(&self, key: &T::SignatureKey) -> bool {
+        key.validate(&self.signature, self.payload_commitment.as_ref())
+    }
+}
+
+// Short-circuit Eq/PartialEq/Hash to avoid touching the massive payload.
+impl<T: NodeType> PartialEq for BlockPushMessage<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.view == other.view && self.payload_commitment == other.payload_commitment
+    }
+}
+impl<T: NodeType> Eq for BlockPushMessage<T> {}
+impl<T: NodeType> std::hash::Hash for BlockPushMessage<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.view.hash(state);
+        self.payload_commitment.hash(state);
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
@@ -161,6 +222,7 @@ pub enum ConsensusMessage<T: NodeType, S> {
     EpochChange(EpochChangeMessage<T>),
     Checkpoint(CheckpointVote<T>),
     VidShare(VidShareMessage<T>),
+    BlockPush(BlockPushMessage<T>),
 }
 
 impl<T: NodeType, S> ConsensusMessage<T, S> {
@@ -177,6 +239,7 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
             Self::VidShare(v) => ConsensusMessage::VidShare(v),
+            Self::BlockPush(p) => ConsensusMessage::BlockPush(p),
         }
     }
 }
@@ -194,6 +257,7 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Checkpoint(vote) => vote.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
             Self::VidShare(vid_share) => vid_share.data.view_number(),
+            Self::BlockPush(push) => push.view_number(),
         }
     }
 }

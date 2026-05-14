@@ -56,7 +56,7 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     match second {
         Err(_elapsed) => { /* timed out — no duplicate, good */ },
         Ok(None) => { /* no more tasks — no duplicate, good */ },
-        Ok(Some(Err(()))) => { /* error, not a duplicate success */ },
+        Ok(Some(Err(_))) => { /* error, not a duplicate success */ },
         Ok(Some(Ok(out))) => {
             panic!(
                 "BUG: got a duplicate BlockReconstructed for view {:?} — the reconstructor \
@@ -122,7 +122,7 @@ async fn test_shares_after_reconstruction_are_ignored() {
     match extra {
         Err(_elapsed) => { /* timed out — good, no extra task */ },
         Ok(None) => { /* no tasks — good */ },
-        Ok(Some(Err(()))) => { /* error, not a duplicate success */ },
+        Ok(Some(Err(_))) => { /* error, not a duplicate success */ },
         Ok(Some(Ok(out))) => {
             panic!(
                 "BUG: got a duplicate BlockReconstructed for view {:?} after reconstruction was \

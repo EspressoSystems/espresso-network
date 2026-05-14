@@ -39,16 +39,16 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
-        Message, MessageType, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest,
-        TransactionMessage, Unchecked, Vote2,
+        self, BlockMessage, BlockPushMessage, Certificate2, CheckpointCertificate, CheckpointVote,
+        ConsensusMessage, Message, MessageType, Proposal, ProposalFetchMessage, ProposalMessage,
+        TimeoutOneHonest, TransactionMessage, Unchecked, Vote2,
     },
     network::Network,
     outbox::Outbox,
     proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
     state::{HeaderRequest, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
+    vid::{VidDisperseRequest, VidDisperser, VidReconstructError, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -438,8 +438,16 @@ where
                         );
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
-                    Err(()) => {
-                        return Err(CoordinatorError::unspecified().context("vid reconstruction"))
+                    Err(err) => {
+                        match err {
+                            VidReconstructError::VerifyBlock(view) => {
+                                warn!(%view, "block push verify failed; falling back to share-based recover");
+                            },
+                            VidReconstructError::Reconstruct(view) => {
+                                error!(%view, "share-based VID reconstruction failed");
+                            },
+                        }
+                        continue;
                     }
                 },
                 Some(result) = self.epoch_manager.next() => match result {
@@ -509,6 +517,24 @@ where
 
     pub async fn apply_consensus(&mut self, input: ConsensusInput<T>) {
         self.consensus.apply(input, &mut self.outbox).await;
+    }
+
+    async fn handle_block_push(&mut self, block: BlockPushMessage<T>) {
+        let view = block.view;
+        if self.vid_reconstructor.reconstructed.contains(&view) {
+            return;
+        }
+        let Some(leader) = self.leader(view, block.epoch).await else {
+            warn!(%view, epoch = %block.epoch, "block push: leader lookup failed; dropping");
+            return;
+        };
+        if !block.verify_signature(&leader) {
+            warn!(%view, epoch = %block.epoch, "block push: signature verification failed; dropping");
+            return;
+        }
+        self.vid_reconstructor
+            .spawn_verify_block_task(block, &self.membership_coordinator)
+            .await;
     }
 
     pub fn node_id(&self) -> &KeyPrefix {
@@ -635,6 +661,10 @@ where
                 },
                 ConsensusMessage::Checkpoint(checkpoint) => {
                     self.checkpoint_collector.accumulate_vote(checkpoint).await;
+                    None
+                },
+                ConsensusMessage::BlockPush(push) => {
+                    self.handle_block_push(push).await;
                     None
                 },
             },
@@ -781,6 +811,21 @@ where
                         } else {
                             warn!(%err, "network error while sending vid share")
                         }
+                    }
+                }
+            },
+            ConsensusOutput::SendBlockToLeader { next_leader, block } => {
+                let view = block.view;
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::BlockPush(block)),
+                };
+                if let Err(err) = self.network.unicast(view, &next_leader, &message) {
+                    let err = CoordinatorError::from(err).context("block push unicast");
+                    if err.severity == Severity::Critical {
+                        return Err(err);
+                    } else {
+                        warn!(%err, %view, "network error while pushing block to next leader");
                     }
                 }
             },

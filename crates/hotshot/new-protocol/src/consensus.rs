@@ -41,7 +41,7 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal,
+        BlockPushMessage, Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal,
         ProposalFetchRequest, ProposalMessage, Validated, VidShareMessage, Vote1, Vote2,
     },
     outbox::Outbox,
@@ -90,6 +90,10 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestDrbResult(EpochNumber),
     SendProposal(SignedProposal<T, Proposal<T>>),
     SendVidShares(Vec<VidShareMessage<T>>),
+    SendBlockToLeader {
+        next_leader: T::SignatureKey,
+        block: BlockPushMessage<T>,
+    },
     SendCheckpointVote(CheckpointVote<T>),
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
     SendVote1(Vote1<T>),
@@ -127,6 +131,7 @@ pub struct Consensus<T: NodeType> {
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
     blocks: BTreeMap<ViewNumber, T::BlockPayload>,
+    block_metadata: BTreeMap<ViewNumber, <T::BlockPayload as BlockPayload<T>>::Metadata>,
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
@@ -204,6 +209,7 @@ impl<T: NodeType> Consensus<T> {
             signed_proposals: BTreeMap::new(),
             proposed_views: BTreeSet::new(),
             blocks: BTreeMap::new(),
+            block_metadata: BTreeMap::new(),
             states_verified: BTreeMap::new(),
             blocks_reconstructed: BTreeMap::new(),
             certs: BTreeMap::new(),
@@ -365,13 +371,18 @@ impl<T: NodeType> Consensus<T> {
                     view,
                     epoch,
                     payload: payload.clone(),
-                    metadata,
+                    metadata: metadata.clone(),
                 });
                 self.blocks.insert(view, payload);
+                self.block_metadata.insert(view, metadata);
                 Protocol::Continue
             },
             ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
-                // Directly send the VID shares before making a proposal.
+                // Push the full payload to L_{V+1} first
+                if let Some(epoch) = vid_disperse.epoch {
+                    self.maybe_send_block_to_next_leader(view, epoch, outbox)
+                        .await;
+                }
                 self.send_vid_shares(&view, vid_disperse, outbox).await;
                 Protocol::Continue
             },
@@ -458,6 +469,7 @@ impl<T: NodeType> Consensus<T> {
         self.states_verified = self.states_verified.split_off(&view);
         self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
         self.blocks = self.blocks.split_off(&view);
+        self.block_metadata = self.block_metadata.split_off(&view);
         self.certs = self.certs.split_off(&view);
         self.certs2 = self.certs2.split_off(&view);
         self.pending_certs1 = self.pending_certs1.split_off(&view);
@@ -808,6 +820,66 @@ impl<T: NodeType> Consensus<T> {
         self.certs.insert(cert1.view_number(), cert1);
         self.certs2.insert(cert2.view_number(), cert2);
         Protocol::Continue
+    }
+
+    // Push the full payload to the leader of V+1.
+    #[instrument(level = "debug", skip_all)]
+    async fn maybe_send_block_to_next_leader(
+        &self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        let Some(header) = self.headers.get(&view) else {
+            debug!(%view, "block push skipped: no block header");
+            return;
+        };
+        let next_epoch = if is_last_block(header.block_number(), *self.epoch_height) {
+            epoch + 1
+        } else {
+            epoch
+        };
+        let next_view = view + 1;
+        let Ok(membership) = self
+            .stake_table_coordinator
+            .membership_for_epoch(Some(next_epoch))
+            .await
+        else {
+            debug!(%next_epoch, "block push skipped: next-epoch membership unavailable");
+            return;
+        };
+        let Ok(next_leader) = membership.leader(next_view).await else {
+            debug!(%next_view, "block push skipped: leader lookup failed");
+            return;
+        };
+        if next_leader == self.public_key {
+            debug!(%next_view, "block push skipped: we are the next leader");
+            return;
+        }
+        let Some(payload) = self.blocks.get(&view).cloned() else {
+            warn!(%view, "block push skipped: no payload");
+            return;
+        };
+        let Some(metadata) = self.block_metadata.get(&view).cloned() else {
+            warn!(%view, "block push skipped: no metadata");
+            return;
+        };
+        let payload_commitment = header.payload_commitment();
+        let block = match BlockPushMessage::new(
+            view,
+            epoch,
+            payload,
+            metadata,
+            payload_commitment,
+            &self.private_key,
+        ) {
+            Ok(block) => block,
+            Err(err) => {
+                warn!(%view, %err, "block push skipped: failed to sign");
+                return;
+            },
+        };
+        outbox.push_back(ConsensusOutput::SendBlockToLeader { next_leader, block });
     }
 
     // The leader's own share is also unicast back to itself (cliquenet
