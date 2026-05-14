@@ -24,6 +24,7 @@ use prometheus::{
     core::{AtomicU64, GenericCounter, GenericCounterVec, GenericGauge, GenericGaugeVec},
 };
 use snafu::Snafu;
+use tracing::warn;
 
 #[derive(Debug, Snafu)]
 pub enum MetricsError {
@@ -378,6 +379,12 @@ impl metrics::MetricsFamily<Box<dyn metrics::Counter>> for CounterFamily {
     fn create(&self, labels: Vec<String>) -> Box<dyn metrics::Counter> {
         Box::new(self.get(&labels))
     }
+
+    fn destroy(&self, labels: &[&str]) {
+        if let Err(err) = self.0.remove_label_values(labels) {
+            warn!(%err, "failed to remove prometheus counter")
+        }
+    }
 }
 
 /// A [GaugeFamily](metrics::GaugeFamily) metric.
@@ -401,6 +408,12 @@ impl GaugeFamily {
 impl metrics::MetricsFamily<Box<dyn metrics::Gauge>> for GaugeFamily {
     fn create(&self, labels: Vec<String>) -> Box<dyn metrics::Gauge> {
         Box::new(self.get(&labels))
+    }
+
+    fn destroy(&self, labels: &[&str]) {
+        if let Err(err) = self.0.remove_label_values(labels) {
+            warn!(%err, "failed to remove prometheus gauge")
+        }
     }
 }
 
@@ -426,6 +439,12 @@ impl metrics::MetricsFamily<Box<dyn metrics::Histogram>> for HistogramFamily {
     fn create(&self, labels: Vec<String>) -> Box<dyn metrics::Histogram> {
         Box::new(self.get(&labels))
     }
+
+    fn destroy(&self, labels: &[&str]) {
+        if let Err(err) = self.0.remove_label_values(labels) {
+            warn!(%err, "failed to remove prometheus histogram")
+        }
+    }
 }
 
 /// A [TextFamily](metrics::TextFamily) metric.
@@ -441,6 +460,10 @@ impl TextFamily {
 impl metrics::MetricsFamily<()> for TextFamily {
     fn create(&self, labels: Vec<String>) {
         self.0.create(labels).set(1);
+    }
+
+    fn destroy(&self, labels: &[&str]) {
+        self.0.destroy(labels)
     }
 }
 
@@ -615,5 +638,57 @@ mod test {
             lines.contains(&"version{rev=\"d1b650a7\",semver=\"0.1.0\"} 1"),
             "{lines:?}"
         );
+    }
+
+    #[test_log::test]
+    fn test_destroy() {
+        let metrics = PrometheusMetrics::default();
+
+        let counters = metrics.counter_family("requests".into(), vec!["peer".into()]);
+        counters.create(vec!["alice".into()]).add(1);
+        counters.create(vec!["bob".into()]).add(2);
+
+        let gauges = Metrics::gauge_family(&metrics, "queue".into(), vec!["peer".into()]);
+        gauges.create(vec!["alice".into()]).set(7);
+        gauges.create(vec!["bob".into()]).set(9);
+
+        let histograms = metrics.histogram_family("latency".into(), vec!["peer".into()]);
+        histograms.create(vec!["alice".into()]).add_point(1.0);
+        histograms.create(vec!["bob".into()]).add_point(2.0);
+
+        let texts = metrics.text_family("version".into(), vec!["peer".into()]);
+        texts.create(vec!["alice".into()]);
+        texts.create(vec!["bob".into()]);
+
+        // Before destroy: both peers are present in the export.
+        let before = metrics.export().unwrap();
+        assert!(before.contains("requests{peer=\"alice\"} 1"), "{before}");
+        assert!(before.contains("requests{peer=\"bob\"} 2"), "{before}");
+        assert!(before.contains("queue{peer=\"alice\"} 7"), "{before}");
+        assert!(before.contains("queue{peer=\"bob\"} 9"), "{before}");
+        assert!(before.contains("latency_count{peer=\"alice\"}"), "{before}");
+        assert!(before.contains("latency_count{peer=\"bob\"}"), "{before}");
+        assert!(before.contains("version{peer=\"alice\"} 1"), "{before}");
+        assert!(before.contains("version{peer=\"bob\"} 1"), "{before}");
+
+        // Destroy alice from every family.
+        counters.destroy(&["alice"]);
+        gauges.destroy(&["alice"]);
+        histograms.destroy(&["alice"]);
+        texts.destroy(&["alice"]);
+
+        // After destroy: alice is gone, bob is untouched.
+        let after = metrics.export().unwrap();
+        assert!(!after.contains("peer=\"alice\""), "{after}");
+        assert!(after.contains("requests{peer=\"bob\"} 2"), "{after}");
+        assert!(after.contains("queue{peer=\"bob\"} 9"), "{after}");
+        assert!(after.contains("latency_count{peer=\"bob\"}"), "{after}");
+        assert!(after.contains("version{peer=\"bob\"} 1"), "{after}");
+
+        // Destroying a non-existent variant is a no-op (just logs a warning).
+        counters.destroy(&["nobody"]);
+        gauges.destroy(&["nobody"]);
+        histograms.destroy(&["nobody"]);
+        texts.destroy(&["nobody"]);
     }
 }
