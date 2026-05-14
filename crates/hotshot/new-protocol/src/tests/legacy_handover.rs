@@ -1,5 +1,7 @@
 //! End-to-end handover tests: legacy + new-protocol clusters run
-//! concurrently per node, with a watcher polling [`try_perform_handover`].
+//! concurrently per node. The new-protocol coordinator drives a
+//! [`HandoverGate`] on every loop iteration — the same gating call site
+//! production uses from [`ConsensusHandle::new_protocol`].
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -46,10 +48,9 @@ use url::Url;
 use versions::{CLIQUENET_VERSION, Upgrade, version};
 
 use crate::{
-    client::ClientApi,
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity, timer::Timer},
-    harvest::{forward_legacy_timeout_votes, try_perform_handover},
+    harvest::{HandoverGate, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
@@ -229,6 +230,7 @@ async fn build_handover_coordinator(
         epoch_root_vote_collector::EpochRootVoteCollector,
         proposal::{ProposalValidator, VidShareValidator},
         state::StateManager,
+        tests::common::coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
         vid::{VidDisperser, VidReconstructor},
         vote::VoteCollector,
     };
@@ -243,18 +245,26 @@ async fn build_handover_coordinator(
     let genesis_leaf =
         Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
 
-    let consensus = Consensus::new(
+    let mut consensus = Consensus::new(
         membership.clone(),
         public_key,
         private_key.clone(),
         state_private_key,
         10,
         upgrade_lock.clone(),
-        genesis_leaf,
+        genesis_leaf.clone(),
         epoch_height,
     );
 
-    let state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
+    let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
+
+    // Mirror production (`Coordinator::maker`): seed genesis cert/proposal
+    // and genesis state so the coordinator can run consensus from view 1
+    // alongside legacy until the cutover seed lands.
+    let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+    let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+    consensus.seed_genesis(genesis_cert1, genesis_proposal);
+    state_manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);
 
     let block_builder = BlockBuilder::new(
         instance.clone(),
@@ -314,8 +324,24 @@ async fn run_handover_node(
     >,
     decision_tx: UnboundedSender<DecisionEvent>,
     external_events_tx: async_broadcast::Sender<Event<TestTypes>>,
+    legacy: Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>,
+    handover_gate: HandoverGate,
 ) {
+    // Mirror production (`consensus_handle::run_coordinator`): kick the
+    // coordinator before pumping the event loop so it runs from genesis
+    // until the cutover seed lands.
+    coord.start();
+    let client_api = coord.client_api().clone();
+
     loop {
+        // Mirror production (`ConsensusHandle::new_protocol`): poll the
+        // handover gate on each iteration so the shared latching path
+        // is exercised, not a test-only watcher task.
+        if !handover_gate.is_active() {
+            let guard = legacy.read().await;
+            handover_gate.check(&guard, &client_api).await;
+        }
+
         match coord.next_consensus_input().await {
             Ok(input) => coord.apply_consensus(input),
             Err(err) if err.severity == Severity::Critical => {
@@ -355,22 +381,6 @@ async fn run_handover_node(
     }
 }
 
-async fn handover_watcher(
-    legacy: Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>,
-    client_api: ClientApi<TestTypes>,
-) {
-    loop {
-        let crossed = {
-            let guard = legacy.read().await;
-            try_perform_handover(&guard, &client_api).await
-        };
-        if crossed {
-            return;
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-}
-
 async fn spawn_node(
     i: usize,
     num_nodes: usize,
@@ -406,11 +416,15 @@ async fn spawn_node(
         .abort_handle(),
     );
 
-    bg_handles.push(tokio::spawn(handover_watcher(legacy, client_api.clone())).abort_handle());
-
     let (decision_tx, decision_rx) = mpsc::unbounded_channel::<DecisionEvent>();
-    let runner_abort =
-        tokio::spawn(run_handover_node(coord, decision_tx, external_events_tx)).abort_handle();
+    let runner_abort = tokio::spawn(run_handover_node(
+        coord,
+        decision_tx,
+        external_events_tx,
+        legacy,
+        HandoverGate::new(),
+    ))
+    .abort_handle();
 
     NodeState {
         decision_rx,

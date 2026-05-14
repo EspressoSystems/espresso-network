@@ -1,10 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{collections::HashMap, sync::Arc};
 
 use async_broadcast::{InactiveReceiver, Sender};
 use async_lock::RwLock;
@@ -16,8 +10,8 @@ use hotshot_new_protocol::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     harvest::{
-        LegacyPreCutoverSeed, forward_legacy_epoch_changes, forward_legacy_timeout_votes,
-        harvest_legacy_pre_cutover_seed, try_perform_handover,
+        HandoverGate, LegacyPreCutoverSeed, forward_legacy_epoch_changes,
+        forward_legacy_timeout_votes, harvest_legacy_pre_cutover_seed,
     },
     network::Network,
     state::{StateManager, UpdateLeaf},
@@ -123,7 +117,7 @@ pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     client_api: ClientApi<T>,
     coordinator_task: AbortOnDropHandle<()>,
     epoch_height: u64,
-    new_protocol_active: AtomicBool,
+    handover_gate: HandoverGate,
     legacy_event_rx: InactiveReceiver<Event<T>>,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
 }
@@ -169,7 +163,7 @@ where
             client_api,
             coordinator_task,
             epoch_height,
-            new_protocol_active: AtomicBool::new(false),
+            handover_gate: HandoverGate::new(),
             legacy_event_rx,
             event_rx: event_rx.deactivate(),
         }
@@ -218,15 +212,11 @@ where
     }
 
     async fn new_protocol(&self) -> bool {
-        if self.new_protocol_active.load(Ordering::Relaxed) {
+        if self.handover_gate.is_active() {
             return true;
         }
         let legacy = self.legacy_handle.read().await;
-        let active = try_perform_handover(&legacy, &self.client_api).await;
-        if active {
-            self.new_protocol_active.store(true, Ordering::Relaxed);
-        }
-        active
+        self.handover_gate.check(&legacy, &self.client_api).await
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {

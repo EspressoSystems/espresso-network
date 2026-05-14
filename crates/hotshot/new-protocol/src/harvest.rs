@@ -1,9 +1,14 @@
 //! Harvest legacy state and dispatch the seed via `ClientApi`.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use async_broadcast::InactiveReceiver;
-use committable::Committable;
 use futures::StreamExt;
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
@@ -51,37 +56,19 @@ where
     let consensus = consensus_arc.read().await;
     let decided_anchor = consensus.decided_leaf();
     let decided_view = decided_anchor.view_number();
-    let decided_commit = decided_anchor.commit();
 
     let high_qc = consensus.high_qc().clone();
     let saved = consensus.saved_leaves();
 
-    let mut chain: Vec<Leaf2<T>> = Vec::new();
-    let mut next_commit = high_qc.data.leaf_commit;
-    loop {
-        if next_commit == decided_commit {
-            break;
-        }
-        let Some(leaf) = saved.get(&next_commit) else {
-            tracing::warn!(
-                %next_commit,
-                "harvest_legacy_pre_cutover_seed: missing leaf in saved_leaves; aborting",
-            );
-            return None;
-        };
-        if leaf.view_number() <= decided_view {
-            tracing::warn!(
-                leaf_view = *leaf.view_number(),
-                %decided_view,
-                "harvest_legacy_pre_cutover_seed: walked below decided view without matching commit; aborting",
-            );
-            return None;
-        }
-        chain.push(leaf.clone());
-        next_commit = leaf.justify_qc().data.leaf_commit;
-    }
-
-    chain.reverse();
+    // `saved_leaves` is canonical — a non-canonical entry would break legacy
+    // decide — so we can take every leaf above `decided_view` without
+    // re-validating via a `justify_qc` walk.
+    let mut undecided: Vec<Leaf2<T>> = saved
+        .values()
+        .filter(|leaf| leaf.view_number() > decided_view)
+        .cloned()
+        .collect();
+    undecided.sort_by_key(|leaf| leaf.view_number());
 
     let mut validated_states = BTreeMap::new();
     if let Some(state) = consensus.state(decided_view) {
@@ -92,7 +79,7 @@ where
             "harvest_legacy_pre_cutover_seed: no validated state for decided anchor",
         );
     }
-    for leaf in &chain {
+    for leaf in &undecided {
         let view = leaf.view_number();
         if let Some(state) = consensus.state(view) {
             validated_states.insert(view, state.clone());
@@ -106,7 +93,7 @@ where
 
     Some(LegacyPreCutoverSeed {
         decided_anchor,
-        undecided: chain,
+        undecided,
         high_qc,
         validated_states,
         cutover_view,
@@ -149,6 +136,47 @@ where
     }
 
     true
+}
+
+/// Latches once legacy crosses into the new protocol. Wraps
+/// [`try_perform_handover`] so production and tests share a single
+/// gating call site (one-shot harvest + dispatch, then short-circuit).
+#[derive(Debug, Default)]
+pub struct HandoverGate {
+    active: AtomicBool,
+}
+
+impl HandoverGate {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `true` once a previous `check` succeeded. Lets callers skip the
+    /// legacy read lock when already crossed.
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
+    }
+
+    /// Returns `true` once legacy has crossed into the new protocol.
+    /// Idempotent and cheap after the first success.
+    pub async fn check<T, I>(
+        &self,
+        legacy: &SystemContextHandle<T, I>,
+        client_api: &ClientApi<T>,
+    ) -> bool
+    where
+        T: NodeType,
+        I: NodeImplementation<T>,
+    {
+        if self.is_active() {
+            return true;
+        }
+        let active = try_perform_handover(legacy, client_api).await;
+        if active {
+            self.active.store(true, Ordering::Relaxed);
+        }
+        active
+    }
 }
 
 /// Forward legacy `TimeoutVote2` events into the new-protocol timeout

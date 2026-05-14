@@ -188,7 +188,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
 ///
 /// Uses `QuorumCertificate2::new` with `None` signatures, matching the
 /// pattern used by `Leaf2::genesis` for its justify_qc.
-fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
+pub(crate) fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
     let data = QuorumData2 {
         leaf_commit: genesis_leaf.commit(),
         epoch: Some(EpochNumber::genesis()),
@@ -204,7 +204,7 @@ fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestType
 }
 
 /// Create a genesis `Proposal` from the genesis leaf and cert.
-fn build_genesis_proposal(
+pub(crate) fn build_genesis_proposal(
     genesis_leaf: &Leaf2<TestTypes>,
     genesis_cert1: &Certificate1<TestTypes>,
 ) -> Proposal<TestTypes> {
