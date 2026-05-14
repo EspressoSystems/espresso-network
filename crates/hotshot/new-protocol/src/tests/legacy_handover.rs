@@ -431,6 +431,15 @@ struct SilentNode {
 
 /// Verify every live node decides `target_decisions` views with no
 /// gap outside `expected_failed_views`.
+///
+/// When `loose` is `false`, the assertion is exact: every view in
+/// `expected_failed_views` that falls inside the decided range must
+/// actually be a gap. When `loose` is `true`, `expected_failed_views`
+/// is interpreted as a permitted-failures superset — gaps must lie
+/// inside it, but predicted views that ended up being decided do not
+/// trip the assertion. The loose variant is used by the permutation
+/// sweep below, where the exact post-cutover failure pattern is hard
+/// to predict precisely.
 async fn run_handover_test(
     num_nodes: usize,
     target_decisions: usize,
@@ -438,6 +447,7 @@ async fn run_handover_test(
     deadline: Duration,
     view_timeout: Duration,
     silent_nodes: Vec<SilentNode>,
+    loose: bool,
 ) {
     crate::logging::init_test_logging();
 
@@ -534,7 +544,7 @@ async fn run_handover_test(
                         .collect::<Vec<_>>(),
                 );
             }
-            if in_chain && expected_fail {
+            if !loose && in_chain && expected_fail {
                 panic!(
                     "live node {i} committed view {v} but it was listed in \
                      expected_failed_views={:?}",
@@ -630,6 +640,11 @@ fn spawn_silence_at_view(
 /// `upgrade_view + upgrade_finish_offset`.
 const PREDICTED_CUTOVER_VIEW: u64 = UPGRADE_VIEW + 15;
 
+/// Last legacy view — naturally TC2-skipped at handover. Used as the
+/// anchor for the permutation sweep below: each test silences some
+/// subset of `{V-2, V-1, V, V+1, V+2}`.
+const V: u64 = PREDICTED_CUTOVER_VIEW - 1;
+
 /// Happy path. `cutover_view - 1` reliably has no QC at handover, so
 /// the new protocol skips it via TC2.
 #[tokio::test(flavor = "multi_thread")]
@@ -641,6 +656,7 @@ async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
         Duration::from_secs(180),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         Vec::new(),
+        false,
     )
     .await;
 }
@@ -661,6 +677,7 @@ async fn legacy_last_view_times_out_then_new_protocol_takes_over() {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW - 2),
         }],
+        false,
     )
     .await;
 }
@@ -694,6 +711,7 @@ async fn legacy_two_views_view_sync_then_new_protocol_takes_over() {
                 at_view: trigger,
             },
         ],
+        false,
     )
     .await;
 }
@@ -713,6 +731,7 @@ async fn new_protocol_first_leader_offline_then_recovers() {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW),
         }],
+        false,
     )
     .await;
 }
@@ -734,6 +753,247 @@ async fn legacy_view_before_last_times_out_then_new_protocol_takes_over() {
             idx: silent_idx,
             at_view: ViewNumber::new(PREDICTED_CUTOVER_VIEW - 3),
         }],
+        false,
     )
     .await;
+}
+
+// ============================================================
+// Permutation sweep: timeouts in {V-2, V-1, V, V+1, V+2}.
+//
+// Five candidate views (`V-2..=V+2`) × {silenced, not} = 32 subsets.
+// Existing tests above cover five of them (∅, {V-1}, {V}, {V+1},
+// {V-1, V}); the 27 tests below cover the rest.
+
+/// Pick a cluster size so that:
+/// - all five candidate views have distinct leaders (≥5 nodes), and
+/// - the cluster tolerates `n_silent` faults (n ≥ 3f+1).
+fn perm_num_nodes(n_silent: usize) -> usize {
+    match n_silent {
+        0..=2 => 7,
+        3 => 10,
+        4 => 13,
+        _ => 16,
+    }
+}
+
+fn perm_deadline(n_silent: usize) -> Duration {
+    match n_silent {
+        0..=2 => Duration::from_secs(240),
+        3 => Duration::from_secs(300),
+        4 => Duration::from_secs(360),
+        _ => Duration::from_secs(480),
+    }
+}
+
+/// Build a `SilentNode` that takes out the leader of `view`. For
+/// pre-cutover views we trip the silencer at `view - 1` so the node is
+/// gone before its leader slot; post-cutover, legacy doesn't reliably
+/// advance far past `PREDICTED_CUTOVER_VIEW`, so use `view` itself
+/// (matching `new_protocol_first_leader_offline_then_recovers`).
+fn silent_for_view(view: u64, num_nodes: usize) -> SilentNode {
+    let silent_idx = view as usize % num_nodes;
+    let at_view = if view < PREDICTED_CUTOVER_VIEW {
+        view - 1
+    } else {
+        view
+    };
+    SilentNode {
+        idx: silent_idx,
+        at_view: ViewNumber::new(at_view),
+    }
+}
+
+/// Build a permissive failed-views superset for the loose check.
+/// Includes the natural TC2 skip, each silencer's `at_view` (boundary
+/// effect when the silent node disconnects mid-view), and every
+/// downstream view where the silent node would be leader. `max_view`
+/// is a conservative ceiling on the highest view a live node will
+/// decide before the loop exits.
+fn permitted_failures(
+    num_nodes: usize,
+    silent_nodes: &[SilentNode],
+    max_view: u64,
+) -> BTreeSet<ViewNumber> {
+    let mut failed = BTreeSet::new();
+    failed.insert(ViewNumber::new(PREDICTED_CUTOVER_VIEW - 1));
+    for s in silent_nodes {
+        let at_view = *s.at_view;
+        failed.insert(ViewNumber::new(at_view));
+        for v in at_view..=max_view {
+            if (v as usize) % num_nodes == s.idx {
+                failed.insert(ViewNumber::new(v));
+            }
+        }
+    }
+    failed
+}
+
+/// Run a single permutation: silence the leader of every view in
+/// `views_to_silence`, then assert liveness with a permissive
+/// failed-views set (gaps must lie inside the predicted set, but
+/// predicted views that actually decided don't trip the assertion).
+async fn run_perm_test(views_to_silence: Vec<u64>) {
+    let n_silent = views_to_silence.len();
+    let num_nodes = perm_num_nodes(n_silent);
+    let silent_nodes: Vec<SilentNode> = views_to_silence
+        .iter()
+        .map(|&v| silent_for_view(v, num_nodes))
+        .collect();
+    let permitted = permitted_failures(num_nodes, &silent_nodes, 50);
+    run_handover_test(
+        num_nodes,
+        6,
+        permitted,
+        perm_deadline(n_silent),
+        DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
+        silent_nodes,
+        true,
+    )
+    .await;
+}
+
+// --- Singletons (2 of 5 not already covered) -----------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2() {
+    run_perm_test(vec![V - 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_p2() {
+    run_perm_test(vec![V + 2]).await;
+}
+
+// --- Pairs (9 of 10 not already covered) ---------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_m1() {
+    run_perm_test(vec![V - 2, V - 1]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_v() {
+    run_perm_test(vec![V - 2, V]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_p1() {
+    run_perm_test(vec![V - 2, V + 1]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_p2() {
+    run_perm_test(vec![V - 2, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m1_p1() {
+    run_perm_test(vec![V - 1, V + 1]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m1_p2() {
+    run_perm_test(vec![V - 1, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_v_p1() {
+    run_perm_test(vec![V, V + 1]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_v_p2() {
+    run_perm_test(vec![V, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_p1_p2() {
+    run_perm_test(vec![V + 1, V + 2]).await;
+}
+
+// --- Triples (10) -------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_m1_v() {
+    run_perm_test(vec![V - 2, V - 1, V]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_m1_p1() {
+    run_perm_test(vec![V - 2, V - 1, V + 1]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_m1_p2() {
+    run_perm_test(vec![V - 2, V - 1, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_v_p1() {
+    run_perm_test(vec![V - 2, V, V + 1]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_v_p2() {
+    run_perm_test(vec![V - 2, V, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_p1_p2() {
+    run_perm_test(vec![V - 2, V + 1, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m1_v_p1() {
+    run_perm_test(vec![V - 1, V, V + 1]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m1_v_p2() {
+    run_perm_test(vec![V - 1, V, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m1_p1_p2() {
+    run_perm_test(vec![V - 1, V + 1, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_v_p1_p2() {
+    run_perm_test(vec![V, V + 1, V + 2]).await;
+}
+
+// --- Quads (5) ----------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_m1_v_p1() {
+    run_perm_test(vec![V - 2, V - 1, V, V + 1]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_m1_v_p2() {
+    run_perm_test(vec![V - 2, V - 1, V, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_m1_p1_p2() {
+    run_perm_test(vec![V - 2, V - 1, V + 1, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m2_v_p1_p2() {
+    run_perm_test(vec![V - 2, V, V + 1, V + 2]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_m1_v_p1_p2() {
+    run_perm_test(vec![V - 1, V, V + 1, V + 2]).await;
+}
+
+// --- Quint (1) ----------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn perm_silence_all() {
+    run_perm_test(vec![V - 2, V - 1, V, V + 1, V + 2]).await;
 }
