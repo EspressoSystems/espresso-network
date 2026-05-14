@@ -25,7 +25,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    consensus::ConsensusOutput,
+    consensus::{ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     helpers::test_upgrade_lock,
     network::{Network, cliquenet::Cliquenet},
@@ -98,18 +98,10 @@ pub struct TestRunner {
     #[builder(default)]
     node_changes: Vec<(u64, Vec<NodeChange>)>,
 
-    pre_cutover_seed: Option<PreCutoverSeed>,
+    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 
     #[builder(skip = test_upgrade_lock())]
     upgrade_lock: UpgradeLock<TestTypes>,
-}
-
-#[derive(Clone)]
-pub struct PreCutoverSeed {
-    pub decided_anchor: hotshot_types::data::Leaf2<TestTypes>,
-    pub undecided: Vec<hotshot_types::data::Leaf2<TestTypes>>,
-    pub high_qc: crate::message::Certificate1<TestTypes>,
-    pub cutover_view: ViewNumber,
 }
 
 #[derive(Debug)]

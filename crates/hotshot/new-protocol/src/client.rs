@@ -1,18 +1,20 @@
-use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc};
 
 use async_trait::async_trait;
 use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
-    simple_certificate::QuorumCertificate2,
     simple_vote::TimeoutVote2,
     traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
     utils::StateAndDelta,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
+use crate::{
+    consensus::PreCutoverSeed, coordinator::error::CoordinatorError, message::Proposal,
+    state::UpdateLeaf,
+};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -130,27 +132,10 @@ impl<T: NodeType> ClientApi<T> {
 
     /// Bridge legacy state into the coordinator at the cutover.
     /// Idempotent at the consensus layer.
-    pub async fn seed_pre_cutover(
-        &self,
-        decided_anchor: Leaf2<T>,
-        undecided: Vec<Leaf2<T>>,
-        high_qc: Option<QuorumCertificate2<T>>,
-        validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
-        cutover_view: ViewNumber,
-    ) -> Result<(), QueryError> {
+    pub async fn seed_pre_cutover(&self, seed: PreCutoverSeed<T>) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
-        self.call(
-            ClientRequest::SeedPreCutover {
-                decided_anchor,
-                undecided,
-                high_qc,
-                validated_states,
-                cutover_view,
-                respond,
-            },
-            rx,
-        )
-        .await
+        self.call(ClientRequest::SeedPreCutover { seed, respond }, rx)
+            .await
     }
 
     async fn call<A>(
@@ -234,11 +219,7 @@ pub(crate) enum ClientRequest<T: NodeType> {
         respond: oneshot::Sender<Result<(), QueryError>>,
     },
     SeedPreCutover {
-        decided_anchor: Leaf2<T>,
-        undecided: Vec<Leaf2<T>>,
-        cutover_view: ViewNumber,
-        high_qc: Option<QuorumCertificate2<T>>,
-        validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
+        seed: PreCutoverSeed<T>,
         respond: oneshot::Sender<()>,
     },
     SubmitTimeoutVote {

@@ -7,11 +7,11 @@ use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
     client::ClientApi,
-    consensus::ConsensusOutput,
+    consensus::{ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     harvest::{
-        HandoverGate, LegacyPreCutoverSeed, forward_legacy_epoch_changes,
-        forward_legacy_timeout_votes, harvest_legacy_pre_cutover_seed,
+        HandoverGate, forward_legacy_epoch_changes, forward_legacy_timeout_votes,
+        harvest_legacy_pre_cutover_seed,
     },
     network::Network,
     state::{StateManager, UpdateLeaf},
@@ -169,7 +169,7 @@ where
         }
     }
 
-    pub async fn harvest_legacy_pre_cutover_seed(&self) -> Option<LegacyPreCutoverSeed<T>> {
+    pub async fn harvest_legacy_pre_cutover_seed(&self) -> Option<PreCutoverSeed<T>> {
         let legacy = self.legacy_handle.read().await;
         harvest_legacy_pre_cutover_seed(&legacy).await
     }

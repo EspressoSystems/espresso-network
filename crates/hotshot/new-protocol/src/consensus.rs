@@ -2,6 +2,7 @@ use std::{
     cmp::max,
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
+    sync::Arc,
 };
 
 use committable::{Commitment, Committable};
@@ -16,7 +17,7 @@ use hotshot_types::{
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{
-        LightClientStateUpdateCertificateV2, TimeoutCertificate2,
+        LightClientStateUpdateCertificateV2, QuorumCertificate2, TimeoutCertificate2,
         check_qc_state_cert_correspondence,
     },
     simple_vote::{
@@ -47,6 +48,30 @@ use crate::{
     outbox::Outbox,
     state::{StateRequest, StateResponse},
 };
+
+/// Inputs to [`Consensus::apply_pre_cutover_seed`].
+///
+/// Carries everything the new protocol needs to take over from the legacy
+/// stack at a decided upgrade boundary: the highest legacy-decided leaf,
+/// the legacy undecided chain above it, the legacy `high_qc` (if any),
+/// the validated states for those leaves, and the upgrade certificate's
+/// `new_version_first_view`.
+#[derive(Clone, Debug)]
+pub struct PreCutoverSeed<T: NodeType> {
+    /// Highest leaf legacy decided. Anchors `last_decided_view`.
+    pub decided_anchor: Leaf2<T>,
+    /// Legacy undecided chain above the anchor, oldest-first.
+    pub undecided: Vec<Leaf2<T>>,
+    /// Legacy `high_qc`. `None` is allowed for cold-start tests; production
+    /// harvest always supplies one.
+    pub high_qc: Option<QuorumCertificate2<T>>,
+    /// Validated states keyed by view, for the anchor and every undecided leaf.
+    pub validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
+    /// `upgrade_cert.new_version_first_view`. `current_view`/`timeout_view`
+    /// are advanced to `cutover_view - 1` so the new protocol's normal
+    /// proposal/timeout machinery takes over at `cutover_view`.
+    pub cutover_view: ViewNumber,
+}
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -257,10 +282,27 @@ impl<T: NodeType> Consensus<T> {
             .insert(ViewNumber::genesis(), genesis_proposal);
     }
 
+    /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
+    /// protocol. Performs the four operations the seed describes
+    /// atomically: anchor the decided view, install the undecided
+    /// leaves so they can be decided via Cert2, register the legacy
+    /// high_qc, and advance `current_view`/`timeout_view` to the
+    /// pre-cutover frontier.
+    ///
+    /// Idempotent: calling with the same seed twice (or with an older
+    /// seed) does not regress decided/locked state.
+    pub fn apply_pre_cutover_seed(&mut self, seed: PreCutoverSeed<T>) {
+        self.advance_decided_anchor(seed.decided_anchor);
+        self.install_pre_cutover_leaves(seed.undecided);
+        if let Some(high_qc) = &seed.high_qc {
+            self.register_proposal_justify_qc(high_qc);
+        }
+        self.advance_to_cutover(seed.cutover_view);
+    }
+
     /// Bridge legacy undecided leaves so the new protocol can decide
-    /// them via Cert2. `leaves` is oldest-first. Caller must follow
-    /// with [`Self::jump_to_cutover`].
-    pub fn seed_pre_cutover_leaves(&mut self, leaves: Vec<Leaf2<T>>) {
+    /// them via Cert2. `leaves` is oldest-first.
+    pub(crate) fn install_pre_cutover_leaves(&mut self, leaves: Vec<Leaf2<T>>) {
         for leaf in leaves {
             let view = leaf.view_number();
             let justify_qc = leaf.justify_qc().clone();
@@ -298,7 +340,7 @@ impl<T: NodeType> Consensus<T> {
     /// Advance `current_view`/`timeout_view` to `cutover_view - 1`.
     /// `last_decided_view` is **deliberately left** at the legacy anchor
     /// so `maybe_decide`'s chain walk can pick up the seeded leaves.
-    pub fn jump_to_cutover(&mut self, cutover_view: ViewNumber) {
+    pub(crate) fn advance_to_cutover(&mut self, cutover_view: ViewNumber) {
         if cutover_view == ViewNumber::genesis() {
             return;
         }
@@ -313,7 +355,7 @@ impl<T: NodeType> Consensus<T> {
 
     /// Register `justify_qc` as Cert1 for its parent view (idempotent)
     /// and bump `locked_cert` if newer.
-    pub fn register_proposal_justify_qc(&mut self, justify_qc: &Certificate1<T>) {
+    pub(crate) fn register_proposal_justify_qc(&mut self, justify_qc: &Certificate1<T>) {
         let parent_view = justify_qc.view_number();
         self.certs
             .entry(parent_view)
@@ -329,7 +371,7 @@ impl<T: NodeType> Consensus<T> {
 
     /// Position the decided-anchor at the highest leaf legacy decided.
     /// No-op if not strictly newer than `last_decided_view`.
-    pub fn set_pre_cutover_anchor(&mut self, leaf: Leaf2<T>) {
+    pub(crate) fn advance_decided_anchor(&mut self, leaf: Leaf2<T>) {
         let view = leaf.view_number();
         if view <= self.last_decided_view {
             return;

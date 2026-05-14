@@ -1019,45 +1019,39 @@ where
                     });
                 let _ = respond.send(result);
             },
-            ClientRequest::SeedPreCutover {
-                decided_anchor,
-                undecided,
-                cutover_view,
-                high_qc,
-                validated_states,
-                respond,
-            } => {
+            ClientRequest::SeedPreCutover { seed, respond } => {
                 tracing::info!(
-                    undecided = undecided.len(),
-                    anchor_view = *decided_anchor.view_number(),
-                    high_qc_view = high_qc.as_ref().map(|qc| *qc.view_number()),
-                    cutover_view = *cutover_view,
-                    states = validated_states.len(),
+                    undecided = seed.undecided.len(),
+                    anchor_view = *seed.decided_anchor.view_number(),
+                    high_qc_view = seed.high_qc.as_ref().map(|qc| *qc.view_number()),
+                    cutover_view = *seed.cutover_view,
+                    states = seed.validated_states.len(),
                     "coordinator: applying legacy → new-protocol seed",
                 );
-                let anchor_view = decided_anchor.view_number();
-                if let Some(state) = validated_states.get(&anchor_view).cloned() {
+
+                // State manager is owned by the coordinator, so the
+                // validated-state map must be applied here before the
+                // seed is consumed by consensus.
+                let anchor_view = seed.decided_anchor.view_number();
+                if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
                     self.state_manager
-                        .seed_state(anchor_view, state, decided_anchor.clone());
+                        .seed_state(anchor_view, state, seed.decided_anchor.clone());
                 }
-                for leaf in &undecided {
+                for leaf in &seed.undecided {
                     let view = leaf.view_number();
-                    if let Some(state) = validated_states.get(&view).cloned() {
+                    if let Some(state) = seed.validated_states.get(&view).cloned() {
                         self.state_manager.seed_state(view, state, leaf.clone());
                     }
                 }
-                let highest_seeded_leaf = undecided.last().unwrap_or(&decided_anchor);
+
+                let highest_seeded_leaf = seed.undecided.last().unwrap_or(&seed.decided_anchor);
                 let cutover_epoch = EpochNumber::new(epoch_from_block_number(
                     highest_seeded_leaf.block_header().block_number(),
                     *self.consensus.epoch_height,
                 ));
+                let cutover_view = seed.cutover_view;
 
-                self.consensus.set_pre_cutover_anchor(decided_anchor);
-                self.consensus.seed_pre_cutover_leaves(undecided);
-                if let Some(qc) = high_qc {
-                    self.consensus.register_proposal_justify_qc(&qc);
-                }
-                self.consensus.jump_to_cutover(cutover_view);
+                self.consensus.apply_pre_cutover_seed(seed);
 
                 // Refresh peers for the cutover epoch before kicking the
                 // leader — the proposal-driven site can't fire yet.

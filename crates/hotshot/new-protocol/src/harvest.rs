@@ -2,42 +2,27 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use async_broadcast::InactiveReceiver;
 use futures::StreamExt;
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, ViewNumber},
+    data::{EpochNumber, Leaf2},
     event::{Event, EventType},
-    simple_certificate::QuorumCertificate2,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::epoch_from_block_number,
 };
 use versions::CLIQUENET_VERSION;
 
-use crate::client::ClientApi;
+use crate::{client::ClientApi, consensus::PreCutoverSeed};
 
-/// Inputs to `seed_pre_cutover`.
-pub struct LegacyPreCutoverSeed<T: NodeType> {
-    pub decided_anchor: Leaf2<T>,
-    /// Oldest-first chain above the anchor.
-    pub undecided: Vec<Leaf2<T>>,
-    pub high_qc: QuorumCertificate2<T>,
-    pub validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
-    /// `upgrade_cert.new_version_first_view`.
-    pub cutover_view: ViewNumber,
-}
-
-/// Walk legacy state to produce a [`LegacyPreCutoverSeed`]; `None` on
+/// Walk legacy state to produce a [`PreCutoverSeed`]; `None` on
 /// a broken walk.
 pub async fn harvest_legacy_pre_cutover_seed<T, I>(
     handle: &SystemContextHandle<T, I>,
-) -> Option<LegacyPreCutoverSeed<T>>
+) -> Option<PreCutoverSeed<T>>
 where
     T: NodeType,
     I: NodeImplementation<T>,
@@ -45,9 +30,7 @@ where
     let cutover_view = match handle.hotshot.upgrade_lock.decided_upgrade_cert() {
         Some(cert) => cert.data.new_version_first_view,
         None => {
-            tracing::warn!(
-                "harvest_legacy_pre_cutover_seed: no decided upgrade certificate; aborting",
-            );
+            tracing::warn!("no decided upgrade certificate; aborting harvest");
             return None;
         },
     };
@@ -74,27 +57,21 @@ where
     if let Some(state) = consensus.state(decided_view) {
         validated_states.insert(decided_view, state.clone());
     } else {
-        tracing::warn!(
-            %decided_view,
-            "harvest_legacy_pre_cutover_seed: no validated state for decided anchor",
-        );
+        tracing::warn!(%decided_view, "no validated state for decided anchor");
     }
     for leaf in &undecided {
         let view = leaf.view_number();
         if let Some(state) = consensus.state(view) {
             validated_states.insert(view, state.clone());
         } else {
-            tracing::warn!(
-                %view,
-                "harvest_legacy_pre_cutover_seed: no validated state for undecided leaf",
-            );
+            tracing::warn!(%view, "no validated state for undecided leaf");
         }
     }
 
-    Some(LegacyPreCutoverSeed {
+    Some(PreCutoverSeed {
         decided_anchor,
         undecided,
-        high_qc,
+        high_qc: Some(high_qc),
         validated_states,
         cutover_view,
     })
@@ -117,22 +94,11 @@ where
     }
 
     if let Some(seed) = harvest_legacy_pre_cutover_seed(legacy).await {
-        if let Err(err) = client_api
-            .seed_pre_cutover(
-                seed.decided_anchor,
-                seed.undecided,
-                Some(seed.high_qc),
-                seed.validated_states,
-                seed.cutover_view,
-            )
-            .await
-        {
+        if let Err(err) = client_api.seed_pre_cutover(seed).await {
             tracing::warn!(%err, "seed_pre_cutover client request failed");
         }
     } else {
-        tracing::warn!(
-            "harvest_legacy_pre_cutover_seed returned None; coordinator will not be seeded",
-        );
+        tracing::warn!("harvest returned None; coordinator will not be seeded");
     }
 
     true

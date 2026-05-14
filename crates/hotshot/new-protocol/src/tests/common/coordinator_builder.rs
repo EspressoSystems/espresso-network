@@ -19,7 +19,7 @@ use hotshot_types::{
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     client::CoordinatorClient,
-    consensus::Consensus,
+    consensus::{Consensus, PreCutoverSeed},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
@@ -42,7 +42,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-    pre_cutover_seed: Option<crate::tests::common::runner::PreCutoverSeed>,
+    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 ) -> Coordinator<TestTypes, N, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
@@ -93,14 +93,15 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     );
 
     if let Some(seed) = pre_cutover_seed.as_ref() {
-        let default_state = Arc::new(TestValidatedState::default());
-        state_manager.seed_state(
-            seed.decided_anchor.view_number(),
-            default_state.clone(),
-            seed.decided_anchor.clone(),
-        );
+        let anchor_view = seed.decided_anchor.view_number();
+        if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
+            state_manager.seed_state(anchor_view, state, seed.decided_anchor.clone());
+        }
         for leaf in &seed.undecided {
-            state_manager.seed_state(leaf.view_number(), default_state.clone(), leaf.clone());
+            let view = leaf.view_number();
+            if let Some(state) = seed.validated_states.get(&view).cloned() {
+                state_manager.seed_state(view, state, leaf.clone());
+            }
         }
     }
 
@@ -110,10 +111,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
 
     if let Some(seed) = pre_cutover_seed {
-        consensus.set_pre_cutover_anchor(seed.decided_anchor);
-        consensus.seed_pre_cutover_leaves(seed.undecided);
-        consensus.register_proposal_justify_qc(&seed.high_qc);
-        consensus.jump_to_cutover(seed.cutover_view);
+        consensus.apply_pre_cutover_seed(seed);
     }
 
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
