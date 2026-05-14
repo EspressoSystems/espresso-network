@@ -39,19 +39,6 @@ pub struct UpgradeConfig {
     pub start_voting_time: u64,
     /// Unix time in seconds at which we stop voting on an upgrade. To prevent voting on an upgrade, set stop_voting_time <= start_voting_time.
     pub stop_voting_time: u64,
-    /// Override for `UpgradeConstants::propose_offset`. Falls back to `TYPES::UPGRADE_CONSTANTS.propose_offset` when `None`.
-    #[serde(default)]
-    pub propose_offset: Option<u64>,
-    /// Override for `UpgradeConstants::decide_by_offset`. Falls back to `TYPES::UPGRADE_CONSTANTS.decide_by_offset` when `None`.
-    #[serde(default)]
-    pub decide_by_offset: Option<u64>,
-    /// Override for `UpgradeConstants::begin_offset`. Falls back to `TYPES::UPGRADE_CONSTANTS.begin_offset` when `None`.
-    #[serde(default)]
-    pub begin_offset: Option<u64>,
-    /// Override for `UpgradeConstants::finish_offset`. Falls back to `TYPES::UPGRADE_CONSTANTS.finish_offset` when `None`.
-    /// For a zero-blackout upgrade (e.g. 0.4 → 0.8), set `finish_offset == begin_offset`.
-    #[serde(default)]
-    pub finish_offset: Option<u64>,
 }
 
 // Explicitly implementing `Default` for clarity.
@@ -67,10 +54,6 @@ impl Default for UpgradeConfig {
             stop_proposing_time: 0,
             start_voting_time: u64::MAX,
             stop_voting_time: 0,
-            propose_offset: None,
-            decide_by_offset: None,
-            begin_offset: None,
-            finish_offset: None,
         }
     }
 }

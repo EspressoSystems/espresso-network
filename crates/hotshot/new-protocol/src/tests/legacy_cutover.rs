@@ -73,10 +73,6 @@ async fn spawn_legacy_cluster(
     metadata.upgrade_view = Some(upgrade_view);
     metadata.test_config.epoch_height = EPOCH_HEIGHT;
     metadata.test_config.set_view_upgrade(upgrade_view);
-    metadata.test_config.upgrade_propose_offset = Some(1);
-    metadata.test_config.upgrade_decide_by_offset = Some(10);
-    metadata.test_config.upgrade_begin_offset = Some(12);
-    metadata.test_config.upgrade_finish_offset = Some(15);
 
     let port = test_utils::reserve_tcp_port().expect("port");
     let builder_url = Url::parse(&format!("http://localhost:{port}")).expect("url");
@@ -651,8 +647,8 @@ fn spawn_silence_at_view(
     .abort_handle()
 }
 
-/// `upgrade_view + upgrade_finish_offset`.
-const PREDICTED_CUTOVER_VIEW: u64 = UPGRADE_VIEW + 15;
+/// `upgrade_view + TEST_UPGRADE_CONSTANTS.finish_offset`.
+const PREDICTED_CUTOVER_VIEW: u64 = UPGRADE_VIEW + 20;
 
 /// Last legacy view — naturally TC2-skipped at cutover. Used as the
 /// anchor for the permutation sweep below: each test silences some
@@ -684,7 +680,7 @@ async fn legacy_last_view_times_out_then_new_protocol_takes_over() {
     run_cutover_test(
         NUM_NODES,
         6,
-        views([PREDICTED_CUTOVER_VIEW - 2, PREDICTED_CUTOVER_VIEW - 1, 23]),
+        views([PREDICTED_CUTOVER_VIEW - 2, PREDICTED_CUTOVER_VIEW - 1, 28]),
         Duration::from_secs(180),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         vec![SilentNode {
@@ -710,8 +706,8 @@ async fn legacy_two_views_view_sync_then_new_protocol_takes_over() {
             PREDICTED_CUTOVER_VIEW - 3,
             PREDICTED_CUTOVER_VIEW - 2,
             PREDICTED_CUTOVER_VIEW - 1,
-            25,
-            26,
+            30,
+            31,
         ]),
         Duration::from_secs(240),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
@@ -750,9 +746,10 @@ async fn new_protocol_first_leader_offline_then_recovers() {
     .await;
 }
 
-/// Non-terminal legacy timeout: silence view 18's leader. View 16 must
-/// be decided by the new protocol via the seeded `justify_qc` chain
-/// walk — the regression this test guards against.
+/// Non-terminal legacy timeout: silence a pre-cutover leader several
+/// views before cutover. The view immediately before that silenced
+/// view must be decided by the new protocol via the seeded `justify_qc`
+/// chain walk — the regression this test guards against.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_view_before_last_times_out_then_new_protocol_takes_over() {
     const NUM_NODES: usize = 4;
@@ -760,7 +757,7 @@ async fn legacy_view_before_last_times_out_then_new_protocol_takes_over() {
     run_cutover_test(
         NUM_NODES,
         6,
-        views([17, 18, 19, 22, 26]),
+        views([22, 23, 24, 27, 31]),
         Duration::from_secs(240),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         vec![SilentNode {

@@ -74,35 +74,6 @@ Time based:
 - **start_proposing_time:** the earliest UNIX timestamp in which the node can propose an upgrade.
 - **stop_proposing_time:** UNIX timestamp after which the node stops proposing an upgrade.
 
-### Optional offset overrides
-
-The upgrade task uses four offsets (defined in `UpgradeConstants` at `crates/hotshot/types/src/constants.rs`) to derive
-the precise views in the upgrade certificate:
-
-- `propose_offset`: how far ahead of the current view the upgrade proposal is sent.
-- `decide_by_offset`: deadline (in views) by which the certificate must decide.
-- `begin_offset`: `old_version_last_view = current_view + begin_offset`.
-- `finish_offset`: `new_version_first_view = current_view + finish_offset`.
-
-By default these come from `TYPES::UPGRADE_CONSTANTS`. Each can be overridden per-upgrade via the `[[upgrade]]` TOML
-stanza:
-
-```toml
-[[upgrade]]
-version = "0.8"
-start_proposing_view = 5
-stop_proposing_view = 15
-# Optional: zero-blackout cutover (no null-block window between versions)
-begin_offset = 110
-finish_offset = 111
-```
-
-Setting `finish_offset = begin_offset + 1` produces a "zero-blackout" upgrade where the first new-version view
-immediately follows the last old-version view (no view satisfies
-`view > old_version_last_view && view < new_version_first_view`, so `upgrading_in()` returns false everywhere and no
-null-block window is produced). This is required for major protocol jumps (e.g. 0.4 → 0.8) where the new protocol
-decides previously-undecided old-protocol leaves rather than waiting for null blocks during a transition window.
-
 The window between `start_proposing_view/time` and `stop_proposing_view/time` should provide sufficient time for nodes
 to continue proposing the upgrade until successful.
 

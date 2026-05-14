@@ -87,18 +87,6 @@ pub struct UpgradeTaskState<TYPES: NodeType> {
     /// Unix time in seconds at which we stop voting on an upgrade
     pub stop_voting_time: u64,
 
-    /// Override for `UpgradeConstants::propose_offset` (falls back to trait const when `None`).
-    pub upgrade_propose_offset: Option<u64>,
-
-    /// Override for `UpgradeConstants::decide_by_offset` (falls back to trait const when `None`).
-    pub upgrade_decide_by_offset: Option<u64>,
-
-    /// Override for `UpgradeConstants::begin_offset` (falls back to trait const when `None`).
-    pub upgrade_begin_offset: Option<u64>,
-
-    /// Override for `UpgradeConstants::finish_offset` (falls back to trait const when `None`).
-    pub upgrade_finish_offset: Option<u64>,
-
     /// Lock for a decided upgrade
     pub upgrade_lock: UpgradeLock<TYPES>,
 
@@ -329,27 +317,16 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     ))?
                     .as_secs();
 
-                let propose_offset = self
-                    .upgrade_propose_offset
-                    .unwrap_or(TYPES::UPGRADE_CONSTANTS.propose_offset);
-                let begin_offset = self
-                    .upgrade_begin_offset
-                    .unwrap_or(TYPES::UPGRADE_CONSTANTS.begin_offset);
-                let finish_offset = self
-                    .upgrade_finish_offset
-                    .unwrap_or(TYPES::UPGRADE_CONSTANTS.finish_offset);
-                let decide_by_offset = self
-                    .upgrade_decide_by_offset
-                    .unwrap_or(TYPES::UPGRADE_CONSTANTS.decide_by_offset);
-
                 let leader = self
                     .membership_coordinator
                     .membership_for_epoch(self.cur_epoch)?
-                    .leader(ViewNumber::new(view + propose_offset))?;
+                    .leader(ViewNumber::new(
+                        view + TYPES::UPGRADE_CONSTANTS.propose_offset,
+                    ))?;
 
-                let old_version_last_view = view + begin_offset;
-                let new_version_first_view = view + finish_offset;
-                let decide_by = view + decide_by_offset;
+                let old_version_last_view = view + TYPES::UPGRADE_CONSTANTS.begin_offset;
+                let new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
+                let decide_by = view + TYPES::UPGRADE_CONSTANTS.decide_by_offset;
 
                 let epoch_upgrade_checks = if upgrade.target >= EPOCH_VERSION
                     && upgrade.base < EPOCH_VERSION
@@ -409,7 +386,9 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
 
                     let upgrade_proposal = UpgradeProposal {
                         upgrade_proposal: upgrade_proposal_data.clone(),
-                        view_number: ViewNumber::new(view + propose_offset),
+                        view_number: ViewNumber::new(
+                            view + TYPES::UPGRADE_CONSTANTS.propose_offset,
+                        ),
                     };
 
                     let signature = TYPES::SignatureKey::sign(
