@@ -12,10 +12,11 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
+    stake_table::HSStakeTable,
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
-        election::Membership,
+        election::{Membership, MembershipSnapshot},
         node_implementation::NodeType,
         signature_key::BuilderSignatureKey,
     },
@@ -876,22 +877,23 @@ impl Header {
         let epoch = EpochNumber::new(epoch_from_block_number(height, epoch_height));
 
         let coordinator = instance_state.coordinator.clone();
-        let epoch_membership = coordinator
+        coordinator
             .membership_for_epoch(Some(epoch))
-            .await
             .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
-        let membership = epoch_membership.coordinator.membership().read().await;
 
         // Resolve the leader for this view and find their index in the stake table.
-        let leader = membership
-            .leader(ViewNumber::new(view_number), Some(epoch))
-            .context(format!("leader for epoch {epoch:?} not found"))?;
+        let snapshot = coordinator
+            .membership()
+            .snapshot(epoch)
+            .with_context(|| format!("no committee for epoch {epoch:?}"))?;
 
-        let index = membership
-            .get_validator_index(&epoch, &leader)
-            .context(format!(
-                "Leader {leader} not found in stake table for epoch {epoch}"
-            ))?;
+        let leader = snapshot
+            .leader(ViewNumber::new(view_number))
+            .with_context(|| format!("leader for epoch {epoch:?} not found"))?;
+
+        let index = snapshot.validator_index(&leader).with_context(|| {
+            format!("Leader {leader} not found in stake table for epoch {epoch}")
+        })?;
 
         Ok(Some(index))
     }
@@ -937,8 +939,6 @@ impl Header {
         let coordinator = instance_state.coordinator.clone();
         let first_epoch = coordinator
             .membership()
-            .read()
-            .await
             .first_epoch()
             .context("first_epoch not available")?;
 
@@ -987,7 +987,7 @@ impl Header {
             // the background result is missing
             // Fetch the previous epoch's leaf and compute rewards synchronously.
             let prev_epoch_last_block = *prev_epoch * epoch_height;
-            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)).await {
+            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)) {
                 tracing::info!(%prev_epoch, "stake table missing for prev_epoch, triggering catchup: {err:#}");
                 coordinator
                     .wait_for_catchup(prev_epoch)
@@ -995,10 +995,13 @@ impl Header {
                     .context(format!("failed to catch up for prev_epoch={prev_epoch}"))?;
             }
 
-            let membership = coordinator.membership().read().await;
-            let stake_table = membership.stake_table(Some(prev_epoch));
-            let success_threshold = membership.success_threshold(Some(prev_epoch));
-            drop(membership);
+            let prev_snapshot = coordinator
+                .membership()
+                .snapshot(prev_epoch)
+                .with_context(|| format!("no committee for prev_epoch={prev_epoch}"))?;
+
+            let stake_table = HSStakeTable::from_iter(prev_snapshot.stake_table());
+            let success_threshold = prev_snapshot.success_threshold();
 
             let prev_epoch_leaf = instance_state
                 .state_catchup
@@ -1566,8 +1569,6 @@ impl BlockHeader<SeqTypes> for Header {
                 let first_epoch = {
                     coordinator
                         .membership()
-                        .read()
-                        .await
                         .first_epoch()
                         .context("The first epoch was not set.")?
                 };
@@ -1578,12 +1579,10 @@ impl BlockHeader<SeqTypes> for Header {
                 if epoch > first_epoch {
                     let epoch_membership = coordinator
                         .stake_table_for_epoch(Some(epoch + 1))
-                        .await
                         .map_err(|e| anyhow::anyhow!("failed to get epoch membership: {e}"))?;
                     next_stake_table_hash = Some(
                         epoch_membership
                             .stake_table_hash()
-                            .await
                             .context("failed to get next stake table hash")?,
                     );
                 }

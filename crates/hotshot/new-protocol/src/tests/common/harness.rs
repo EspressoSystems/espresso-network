@@ -168,11 +168,11 @@ impl TestHarness {
     }
 
     pub async fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
-        self.coordinator.apply_consensus(input).await;
+        self.coordinator.apply_consensus(input);
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
-            if let Err(err) = self.coordinator.process_consensus_output(out).await {
+            if let Err(err) = self.coordinator.process_consensus_output(out) {
                 panic!("unexpected error: {err}")
             }
         }

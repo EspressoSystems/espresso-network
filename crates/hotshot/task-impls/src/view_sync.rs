@@ -360,11 +360,10 @@ impl<TYPES: NodeType> ViewSyncTaskState<TYPES> {
 
                 let epoch_mem = self
                     .membership_coordinator
-                    .membership_for_epoch(vote.date().epoch)
-                    .await?;
+                    .membership_for_epoch(vote.date().epoch)?;
                 // We do not have a relay task already running, so start one
                 ensure!(
-                    epoch_mem.leader(vote_view + relay).await? == self.public_key,
+                    epoch_mem.leader(vote_view + relay)? == self.public_key,
                     "View sync vote sent to wrong leader"
                 );
 
@@ -415,10 +414,9 @@ impl<TYPES: NodeType> ViewSyncTaskState<TYPES> {
                 // We do not have a relay task already running, so start one
                 let epoch_mem = self
                     .membership_coordinator
-                    .membership_for_epoch(vote.date().epoch)
-                    .await?;
+                    .membership_for_epoch(vote.date().epoch)?;
                 ensure!(
-                    epoch_mem.leader(vote_view + relay).await? == self.public_key,
+                    epoch_mem.leader(vote_view + relay)? == self.public_key,
                     debug!("View sync vote sent to wrong leader")
                 );
 
@@ -468,11 +466,10 @@ impl<TYPES: NodeType> ViewSyncTaskState<TYPES> {
 
                 let epoch_mem = self
                     .membership_coordinator
-                    .membership_for_epoch(vote.date().epoch)
-                    .await?;
+                    .membership_for_epoch(vote.date().epoch)?;
                 // We do not have a relay task already running, so start one
                 ensure!(
-                    epoch_mem.leader(vote_view + relay).await? == self.public_key,
+                    epoch_mem.leader(vote_view + relay)? == self.public_key,
                     debug!("View sync vote sent to wrong leader")
                 );
 
@@ -570,10 +567,8 @@ impl<TYPES: NodeType> ViewSyncTaskState<TYPES> {
                 }
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
-                    .leader(view_number)
-                    .await?;
+                    .membership_for_epoch(self.cur_epoch)?
+                    .leader(view_number)?;
                 tracing::warn!(
                     %leader,
                     leader_mnemonic = hotshot_types::utils::mnemonic(&leader),
@@ -660,12 +655,13 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 }
 
                 let membership = self.membership_for_epoch(certificate.epoch()).await?;
-                let membership_stake_table = membership.stake_table().await;
-                let membership_failure_threshold = membership.failure_threshold().await;
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(membership.stake_table()).0;
+                let membership_failure_threshold = membership.failure_threshold();
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    &membership_stake_table,
                     membership_failure_threshold,
                     &self.upgrade_lock,
                 ) {
@@ -750,12 +746,13 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 }
 
                 let membership = self.membership_for_epoch(certificate.epoch()).await?;
-                let membership_stake_table = membership.stake_table().await;
-                let membership_success_threshold = membership.success_threshold().await;
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(membership.stake_table()).0;
+                let membership_success_threshold = membership.success_threshold();
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    &membership_stake_table,
                     membership_success_threshold,
                     &self.upgrade_lock,
                 ) {
@@ -849,12 +846,13 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
                 }
 
                 let membership = self.membership_for_epoch(certificate.epoch()).await?;
-                let membership_stake_table = membership.stake_table().await;
-                let membership_success_threshold = membership.success_threshold().await;
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(membership.stake_table()).0;
+                let membership_success_threshold = membership.success_threshold();
 
                 // If certificate is not valid, return current state
                 if let Err(e) = certificate.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                    &membership_stake_table,
                     membership_success_threshold,
                     &self.upgrade_lock,
                 ) {
@@ -1014,11 +1012,7 @@ impl<TYPES: NodeType> ViewSyncReplicaTaskState<TYPES> {
         &self,
         epoch: Option<EpochNumber>,
     ) -> Option<EpochMembership<TYPES>> {
-        match self
-            .membership_coordinator
-            .membership_for_epoch(epoch)
-            .await
-        {
+        match self.membership_coordinator.membership_for_epoch(epoch) {
             Ok(m) => Some(m),
             Err(e) => {
                 tracing::warn!(e.message);

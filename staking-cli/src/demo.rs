@@ -17,12 +17,16 @@ use alloy::{
         client::RpcClient,
         types::{TransactionReceipt, TransactionRequest},
     },
-    signers::local::PrivateKeySigner,
+    signers::local::{
+        PrivateKeySigner,
+        coins_bip39::{English, Mnemonic},
+    },
     transports::{TransportError, http::Http},
 };
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use espresso_contract_deployer::{HttpProviderWithWallet, build_provider, build_signer};
+use espresso_keyset::{KeySet, KeySetOptions};
 use espresso_types::parse_duration;
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use hotshot_contract_adapter::{
@@ -1069,6 +1073,49 @@ pub fn generate_delegator_signer(index: u64) -> PrivateKeySigner {
     PrivateKeySigner::random_with(&mut rng)
 }
 
+/// Load consensus, state, and x25519 keys for a validator.
+///
+/// If `mnemonic_phrase` is `Some`, derives all three keys from the mnemonic using `val_index` as
+/// the derivation index. Otherwise reads each key from the corresponding
+/// `ESPRESSO_DEMO_NODE_{STAKING,STATE,X25519}_PRIVATE_KEY_{val_index}` environment variable.
+fn load_validator_keys(
+    val_index: u16,
+    mnemonic_phrase: Option<&str>,
+) -> Result<(BLSKeyPair, StateKeyPair, x25519::Keypair)> {
+    if let Some(phrase) = mnemonic_phrase {
+        let mnemonic = Mnemonic::<English>::new_from_phrase(phrase)?;
+        let keyset = KeySet::try_from(KeySetOptions {
+            mnemonic: Some(mnemonic),
+            index: Some(val_index as u64),
+            key_file: None,
+            private_staking_key: None,
+            private_state_key: None,
+            private_x25519_key: None,
+        })?;
+        Ok((
+            BLSKeyPair::from(keyset.staking),
+            StateKeyPair::from_sign_key(keyset.state),
+            x25519::Keypair::from(keyset.x25519),
+        ))
+    } else {
+        let bls: BLSKeyPair = parse_bls_priv_key(&dotenvy::var(format!(
+            "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
+        ))?)?
+        .into();
+        let state_sign = parse_state_priv_key(&dotenvy::var(format!(
+            "ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"
+        ))?)?;
+        let x25519_secret = parse_x25519_priv_key(&dotenvy::var(format!(
+            "ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"
+        ))?)?;
+        Ok((
+            bls,
+            StateKeyPair::from_sign_key(state_sign),
+            x25519::Keypair::from(x25519_secret),
+        ))
+    }
+}
+
 /// Register validators, and delegate to themselves for demo purposes.
 ///
 /// The environment variables used only for this function but not for the normal staking CLI are
@@ -1103,6 +1150,8 @@ pub(crate) async fn stake_for_demo(
     let stake_table_address = config.stake_table_address;
     tracing::info!("stake table address: {}", stake_table_address);
 
+    let mnemonic_env = dotenvy::var("ESPRESSO_NODE_KEY_MNEMONIC").ok();
+
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
         let signer = build_signer(
@@ -1110,25 +1159,16 @@ pub(crate) async fn stake_for_demo(
             DEMO_VALIDATOR_START_INDEX + val_index as u32,
         );
 
-        let consensus_private_key = parse_bls_priv_key(&dotenvy::var(format!(
-            "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
-        ))?)?
-        .into();
-        let state_private_key = parse_state_priv_key(&dotenvy::var(format!(
-            "ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"
-        ))?)?;
-        let x25519_private_key = parse_x25519_priv_key(&dotenvy::var(format!(
-            "ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"
-        ))?)?;
+        let (bls, state, x25519) = load_validator_keys(val_index, mnemonic_env.as_deref())?;
         let p2p_addr = dotenvy::var(format!(
             "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{val_index}"
         ))?
         .parse()?;
         validator_keys.push(StakingKeySet {
             signer,
-            bls: consensus_private_key,
-            state: StateKeyPair::from_sign_key(state_private_key),
-            x25519: x25519::Keypair::from(x25519_private_key),
+            bls,
+            state,
+            x25519,
             p2p_addr,
         });
     }

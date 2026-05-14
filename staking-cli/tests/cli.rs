@@ -837,6 +837,26 @@ async fn test_cli_stake_for_demo_three_validators(
     Ok(())
 }
 
+#[test_log::test(rstest_reuse::apply(stake_table_versions))]
+async fn test_cli_stake_for_demo_with_mnemonic_env(
+    #[case] version: StakeTableContractVersion,
+) -> Result<()> {
+    let system = TestSystem::deploy_version(version).await?;
+
+    let mut cmd = system.cmd(Signer::Mnemonic).into_inner();
+    cmd.env("ESPRESSO_NODE_KEY_MNEMONIC", staking_cli::DEV_MNEMONIC)
+        .env_remove("ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_0")
+        .env_remove("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_0")
+        .env_remove("ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_0")
+        .arg("demo")
+        .arg("stake")
+        .arg("--num-validators")
+        .arg("1")
+        .assert()
+        .success();
+    Ok(())
+}
+
 #[test_log::test(rstest::rstest)]
 #[tokio::test]
 async fn stake_for_demo_delegation_config_helper(

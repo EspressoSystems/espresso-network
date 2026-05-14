@@ -1217,7 +1217,7 @@ async fn validate_next_stake_table_hash(
         epoch_height,
     ));
     let coordinator = instance.coordinator.clone();
-    let Some(first_epoch) = coordinator.membership().read().await.first_epoch() else {
+    let Some(first_epoch) = coordinator.membership().first_epoch() else {
         return Err(ProposalValidationError::NoFirstEpoch);
     };
 
@@ -1233,11 +1233,9 @@ async fn validate_next_stake_table_hash(
     let epoch_membership = instance
         .coordinator
         .stake_table_for_epoch(Some(epoch + 1))
-        .await
         .map_err(|_| ProposalValidationError::NextStakeTableNotFound)?;
     let next_stake_table_hash = epoch_membership
         .stake_table_hash()
-        .await
         .ok_or(ProposalValidationError::NextStakeTableHashNotFound)?;
     if next_stake_table_hash != proposed_next_stake_table_hash {
         return Err(ProposalValidationError::NextStakeTableHashMismatch {

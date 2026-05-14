@@ -9,7 +9,7 @@ pub mod catchup;
 pub mod consensus_handle;
 pub mod context;
 pub mod genesis;
-pub mod keyset;
+pub use espresso_keyset as keyset;
 pub mod network;
 pub mod options;
 pub mod persistence;
@@ -23,10 +23,11 @@ use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
-use async_lock::{Mutex, RwLock};
+use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
+use dyn_clone::clone_box;
 use espresso_types::{
     BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
     SeqTypes, ValidatedState,
@@ -45,7 +46,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::cliquenet::Cliquenet;
+use hotshot_new_protocol::network::cliquenet::{Cliquenet, CliquenetConfig, CliquenetMetrics};
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -62,7 +63,7 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::BuilderCommitment,
-    x25519,
+    x25519::{self, Keypair},
 };
 use libp2p::Multiaddr;
 use moka::future::Cache;
@@ -722,12 +723,11 @@ where
     )
     .await;
 
-    let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
         network_config.config.epoch_height,
-        &persistence.clone(),
+        &persistence,
     );
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
@@ -805,15 +805,15 @@ where
         // TODO: This creates a separate UpgradeLock from the one HotShot will
         // use. They should share a single lock so upgrade certificate updates
         // are visible to both.
-        Cliquenet::create(
-            "espresso",
-            pub_key,
-            network_params.x25519_secret_key.into(),
-            network_params.cliquenet_bind_addr.clone(),
-            vec![],
-            UpgradeLock::new(version_upgrade),
-        )
-        .await?
+        let lock = UpgradeLock::new(version_upgrade);
+        let conf = CliquenetConfig::builder()
+            .name("espresso")
+            .keypair(Keypair::from(network_params.x25519_secret_key).into())
+            .bind(network_params.cliquenet_bind_addr.clone())
+            .parties([])
+            .metrics(Box::new(CliquenetMetrics::new(clone_box(&*metrics))))
+            .build();
+        Cliquenet::create_with_config(pub_key, lock, conf, []).await?
     };
 
     let network = Arc::new(combined_network);
@@ -937,7 +937,6 @@ pub mod testing {
         },
         signers::{k256::ecdsa::SigningKey, local::LocalSigner},
     };
-    use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
@@ -1592,7 +1591,7 @@ pub mod testing {
             );
             membership.reload_stake(50).await;
 
-            let membership = Arc::new(RwLock::new(membership));
+            let membership = Arc::new(membership);
             let persistence = Arc::new(persistence);
 
             let coordinator = EpochMembershipCoordinator::new(

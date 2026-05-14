@@ -296,15 +296,11 @@ impl<T: NodeType> VidReconstructor<T> {
             warn!(%view, "block push expected non-V2 commit; dropping");
             return;
         };
-        let Ok(membership) = membership_coordinator
-            .stake_table_for_epoch(Some(block.epoch))
-            .await
-        else {
+        let Ok(membership) = membership_coordinator.stake_table_for_epoch(Some(block.epoch)) else {
             warn!(%view, epoch = %block.epoch, "block push verify: stake table unavailable");
             return;
         };
-        let total_weight =
-            vid_total_weight::<T>(&membership.stake_table().await, Some(block.epoch));
+        let total_weight = vid_total_weight(membership.stake_table(), Some(block.epoch));
         let epoch = block.epoch;
         let task = self.tasks.spawn_blocking(move || {
             let payload_bytes = block.payload.encode();
