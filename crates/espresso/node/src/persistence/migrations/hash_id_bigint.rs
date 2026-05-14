@@ -3,24 +3,42 @@
 //!
 //! The expand SQL migration (`V1302__hash_id_bigint_expand.sql`) adds the new
 //! `id_big` / `hash_id_big` columns and replaces the exhausted `hash_id_seq` with
-//! a placeholder sequence. This module provides the four trait implementations that
+//! a placeholder sequence. This module provides the trait implementations that
 //! complete the migration in the background:
 //!
 //! 1. [`BackfillIds`] — fills `hash.id_big = hash.id` for every existing row.
-//! 2. [`BackfillRefs`] — fills `*.hash_id_big = *.hash_id::bigint` across
-//!    all four merkle tree tables; starts only after [`BackfillIds`] is done.
+//! 2. [`BackfillRefs`] — fills `*.hash_id_big = *.hash_id::bigint` for one merkle
+//!    tree table; registered once per table so each has its own offset.
 //! 3. [`CreateIndex`] — creates `UNIQUE INDEX CONCURRENTLY` on `hash.id_big` so
 //!    the cleanup can promote it to a primary key.
 //! 4. [`Cleanup`] — drops the old columns, renames the new columns, and restores
 //!    the primary key and FK constraints.
 
+use std::borrow::Cow;
+
 use async_trait::async_trait;
+#[cfg(any(test, feature = "testing"))]
+use hotshot_query_service::data_source::{Transaction as _, VersionedDataSource};
 use hotshot_query_service::{
     data_source::storage::sql::{SqlStorage, Transaction, Write},
     migration::{
         CleanupMigration, DataBackfill, DeferredSchemaChange, DualReadAdapter, MigrationMeta,
     },
 };
+
+pub const MERKLE_TABLES: &[&str] = &[
+    "fee_merkle_tree",
+    "block_merkle_tree",
+    "reward_merkle_tree",
+    "reward_merkle_tree_v2",
+];
+
+pub const BACKFILL_REFS_NAMES: &[&str] = &[
+    "hash_id_bigint_backfill_refs_fee_merkle_tree",
+    "hash_id_bigint_backfill_refs_block_merkle_tree",
+    "hash_id_bigint_backfill_refs_reward_merkle_tree",
+    "hash_id_bigint_backfill_refs_reward_merkle_tree_v2",
+];
 
 pub struct HashIdAdapter;
 
@@ -45,8 +63,8 @@ impl DualReadAdapter for HashIdAdapter {
 pub struct BackfillIds;
 
 impl MigrationMeta for BackfillIds {
-    fn name(&self) -> &'static str {
-        "hash_id_bigint_backfill_ids"
+    fn name(&self) -> Cow<'static, str> {
+        "hash_id_bigint_backfill_ids".into()
     }
 
     fn order(&self) -> u32 {
@@ -78,12 +96,12 @@ impl DataBackfill for BackfillIds {
                 LIMIT $2
             ),
             updated AS (
-                UPDATE hash SET id_big = id
+                UPDATE hash SET id_big = hash.id
                 FROM batch
                 WHERE hash.id = batch.id
                 RETURNING hash.id
             )
-            SELECT MAX(id) FROM updated",
+            SELECT MAX(id)::bigint FROM updated",
         )
         .bind(offset as i64)
         .bind(self.batch_size() as i64)
@@ -94,15 +112,35 @@ impl DataBackfill for BackfillIds {
     }
 }
 
-pub struct BackfillRefs;
+/// Backfills `hash_id_big` for a single merkle tree table. Each table is registered
+/// as its own backfill so progress is tracked per-table — see PR #4284 discussion.
+pub struct BackfillRefs {
+    pub table: &'static str,
+    pub name: &'static str,
+    pub order: u32,
+}
+
+impl BackfillRefs {
+    pub fn all() -> impl Iterator<Item = Self> {
+        MERKLE_TABLES
+            .iter()
+            .zip(BACKFILL_REFS_NAMES.iter())
+            .enumerate()
+            .map(|(idx, (&table, &name))| Self {
+                table,
+                name,
+                order: 2 + idx as u32,
+            })
+    }
+}
 
 impl MigrationMeta for BackfillRefs {
-    fn name(&self) -> &'static str {
-        "hash_id_bigint_backfill_refs"
+    fn name(&self) -> Cow<'static, str> {
+        Cow::Borrowed(self.name)
     }
 
     fn order(&self) -> u32 {
-        2
+        self.order
     }
 }
 
@@ -119,49 +157,37 @@ impl DataBackfill for BackfillRefs {
         tx: &mut Transaction<Write>,
         offset: u64,
     ) -> anyhow::Result<Option<u64>> {
-        let mut max_created: Option<i64> = None;
+        let next: Option<i64> = sqlx::query_scalar(&format!(
+            "WITH batch AS (
+                SELECT path, created FROM \"{table}\"
+                WHERE hash_id_big IS NULL AND created > $1
+                ORDER BY created
+                LIMIT $2
+            ),
+            updated AS (
+                UPDATE \"{table}\" t
+                SET hash_id_big = t.hash_id::bigint
+                FROM batch
+                WHERE t.path = batch.path AND t.created = batch.created
+                RETURNING t.created
+            )
+            SELECT MAX(created) FROM updated",
+            table = self.table,
+        ))
+        .bind(offset as i64)
+        .bind(self.batch_size() as i64)
+        .fetch_one(tx.as_mut())
+        .await?;
 
-        for table in &[
-            "fee_merkle_tree",
-            "block_merkle_tree",
-            "reward_merkle_tree",
-            "reward_merkle_tree_v2",
-        ] {
-            let next: Option<i64> = sqlx::query_scalar(&format!(
-                "WITH batch AS (
-                    SELECT path, created FROM \"{table}\"
-                    WHERE hash_id_big IS NULL AND created > $1
-                    ORDER BY created
-                    LIMIT $2
-                ),
-                updated AS (
-                    UPDATE \"{table}\" t
-                    SET hash_id_big = t.hash_id::bigint
-                    FROM batch
-                    WHERE t.path = batch.path AND t.created = batch.created
-                    RETURNING t.created
-                )
-                SELECT MAX(created) FROM updated",
-            ))
-            .bind(offset as i64)
-            .bind(self.batch_size() as i64)
-            .fetch_one(tx.as_mut())
-            .await?;
-
-            if let Some(c) = next {
-                max_created = Some(max_created.unwrap_or(i64::MIN).max(c));
-            }
-        }
-
-        Ok(max_created.map(|c| c as u64))
+        Ok(next.map(|c| c as u64))
     }
 }
 
 pub struct CreateIndex;
 
 impl MigrationMeta for CreateIndex {
-    fn name(&self) -> &'static str {
-        "hash_id_bigint_create_index"
+    fn name(&self) -> Cow<'static, str> {
+        "hash_id_bigint_create_index".into()
     }
 
     fn order(&self) -> u32 {
@@ -191,8 +217,8 @@ impl DeferredSchemaChange for CreateIndex {
 pub struct Cleanup;
 
 impl MigrationMeta for Cleanup {
-    fn name(&self) -> &'static str {
-        "hash_id_bigint_cleanup"
+    fn name(&self) -> Cow<'static, str> {
+        "hash_id_bigint_cleanup".into()
     }
 
     fn order(&self) -> u32 {
@@ -205,7 +231,10 @@ impl CleanupMigration for Cleanup {
     fn requires(&self) -> &'static [&'static str] {
         &[
             "hash_id_bigint_backfill_ids",
-            "hash_id_bigint_backfill_refs",
+            "hash_id_bigint_backfill_refs_fee_merkle_tree",
+            "hash_id_bigint_backfill_refs_block_merkle_tree",
+            "hash_id_bigint_backfill_refs_reward_merkle_tree",
+            "hash_id_bigint_backfill_refs_reward_merkle_tree_v2",
             "hash_id_bigint_create_index",
         ]
     }
@@ -304,7 +333,7 @@ impl CleanupMigration for Cleanup {
 // ---------------------------------------------------------------------------
 
 #[cfg(any(test, feature = "testing"))]
-use hotshot_query_service::testing::migration::{AdapterTest, DeferredSchemaTest};
+use hotshot_query_service::testing::migration::{AdapterTest, BackfillTest, DeferredSchemaTest};
 
 #[cfg(any(test, feature = "testing"))]
 impl AdapterTest for HashIdAdapter {
@@ -316,12 +345,175 @@ impl AdapterTest for HashIdAdapter {
 #[cfg(any(test, feature = "testing"))]
 impl DeferredSchemaTest for CreateIndex {}
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
+async fn seed_legacy_hash_rows(storage: &SqlStorage, n: usize) -> anyhow::Result<()> {
+    let mut tx = storage.write().await?;
+    for i in 1..=n as i32 {
+        sqlx::query(
+            "INSERT INTO hash (id, value, id_big) VALUES ($1, $2, NULL) ON CONFLICT DO NOTHING",
+        )
+        .bind(i)
+        .bind(format!("legacy-{i}").into_bytes())
+        .execute(tx.as_mut())
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl BackfillTest for BackfillIds {
+    async fn seed_legacy(&self, storage: &SqlStorage, n: usize) -> anyhow::Result<()> {
+        seed_legacy_hash_rows(storage, n).await
+    }
+
+    async fn assert_all_readable_as_new(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        let mut tx = storage.read().await?;
+        let unmigrated: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM hash WHERE id > 0 AND id_big IS NULL")
+                .fetch_one(tx.as_mut())
+                .await?;
+        anyhow::ensure!(
+            unmigrated == 0,
+            "{unmigrated} legacy hash rows still have NULL id_big after backfill",
+        );
+        let mismatch: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM hash WHERE id > 0 AND id_big <> id::bigint")
+                .fetch_one(tx.as_mut())
+                .await?;
+        anyhow::ensure!(
+            mismatch == 0,
+            "{mismatch} hash rows have id_big != id after backfill",
+        );
+        Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+#[async_trait]
+impl BackfillTest for BackfillRefs {
+    async fn seed_legacy(&self, storage: &SqlStorage, n: usize) -> anyhow::Result<()> {
+        seed_legacy_hash_rows(storage, n).await?;
+
+        let mut tx = storage.write().await?;
+        let table = self.table;
+        let sql = format!(
+            "INSERT INTO \"{table}\" (path, created, hash_id, hash_id_big) VALUES ($1::jsonb, $2, \
+             $3, NULL)"
+        );
+        for i in 1..=n as i32 {
+            sqlx::query(&sql)
+                .bind(format!("[{i}]"))
+                .bind(i as i64)
+                .bind(i)
+                .execute(tx.as_mut())
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn assert_all_readable_as_new(&self, storage: &SqlStorage) -> anyhow::Result<()> {
+        let mut tx = storage.read().await?;
+        let table = self.table;
+        let unmigrated: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM \"{table}\" WHERE hash_id IS NOT NULL AND hash_id_big IS NULL",
+        ))
+        .fetch_one(tx.as_mut())
+        .await?;
+        anyhow::ensure!(
+            unmigrated == 0,
+            "{unmigrated} legacy {table} rows still have NULL hash_id_big after backfill",
+        );
+        let mismatch: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM \"{table}\" WHERE hash_id IS NOT NULL AND hash_id_big <> \
+             hash_id::bigint",
+        ))
+        .fetch_one(tx.as_mut())
+        .await?;
+        anyhow::ensure!(
+            mismatch == 0,
+            "{mismatch} {table} rows have hash_id_big != hash_id after backfill",
+        );
+        Ok(())
+    }
+}
+
+// Tests use TmpDb which requires a PostgreSQL Docker container when not using embedded-db.
+// The migration itself is PostgreSQL-only: SQLite's INTEGER PRIMARY KEY is already 64-bit,
+// so the INT → BIGINT widening and its PostgreSQL-specific SQL (::bigint casts, CONCURRENTLY
+// index, sequences) do not apply to SQLite.
+#[cfg(all(test, not(feature = "embedded-db")))]
 mod tests {
     use super::*;
+    use crate::persistence::{sql::Persistence, tests::TestablePersistence};
 
     #[test]
     fn adapter_laws() {
         HashIdAdapter::assert_adapter_laws();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_ids_runs_to_completion() {
+        let db = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&db).await;
+        BackfillIds
+            .assert_runs_to_completion(persistence.storage(), 100)
+            .await
+            .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_ids_idempotent() {
+        let db = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&db).await;
+        BackfillIds
+            .assert_idempotent(persistence.storage(), 100)
+            .await
+            .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_ids_resumable() {
+        let db = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&db).await;
+        BackfillIds
+            .assert_resumable(persistence.storage(), 100)
+            .await
+            .unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_refs_runs_to_completion() {
+        for refs in BackfillRefs::all() {
+            let db = Persistence::tmp_storage().await;
+            let persistence = Persistence::connect(&db).await;
+            refs.assert_runs_to_completion(persistence.storage(), 50)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_refs_idempotent() {
+        for refs in BackfillRefs::all() {
+            let db = Persistence::tmp_storage().await;
+            let persistence = Persistence::connect(&db).await;
+            refs.assert_idempotent(persistence.storage(), 50)
+                .await
+                .unwrap();
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_refs_resumable() {
+        for refs in BackfillRefs::all() {
+            let db = Persistence::tmp_storage().await;
+            let persistence = Persistence::connect(&db).await;
+            refs.assert_resumable(persistence.storage(), 50)
+                .await
+                .unwrap();
+        }
     }
 }
