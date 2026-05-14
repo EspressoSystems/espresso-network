@@ -7817,6 +7817,75 @@ mod test {
                                     ),
                                 }
                             }
+
+                            // Parity tests for block-state, fee-state, reward-state V1
+                            let http = reqwest::Client::new();
+
+                            // reward-state V1 parity: block-height and proof
+                            compare_endpoints(
+                                &http,
+                                api_port,
+                                axum_port,
+                                "reward-state/block-height",
+                            )
+                            .await?;
+                            for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!("reward-state/proof/{height}/{address}"),
+                                )
+                                .await?;
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!("reward-state/{height}/{address}"),
+                                )
+                                .await?;
+                                break; // one address is sufficient
+                            }
+
+                            // block-state V1 parity
+                            compare_endpoints(
+                                &http,
+                                api_port,
+                                axum_port,
+                                "block-state/block-height",
+                            )
+                            .await?;
+                            if height > 0 {
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!("block-state/{height}/{}", height - 1),
+                                )
+                                .await?;
+                            }
+
+                            // fee-state V1 parity
+                            compare_endpoints(&http, api_port, axum_port, "fee-state/block-height")
+                                .await?;
+                            if let Some((fee_acct, _)) =
+                                validated_state.fee_merkle_tree.iter().next()
+                            {
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!("fee-state/{height}/{fee_acct}"),
+                                )
+                                .await?;
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!("fee-state/fee-balance/latest/{fee_acct}"),
+                                )
+                                .await?;
+                            }
                         } else {
                             // V2 case
 
@@ -7908,6 +7977,80 @@ mod test {
                                              addr={address}, got {other:?}"
                                         ),
                                     }
+                                }
+
+                                // Parity tests for block-state, fee-state, reward-state V1
+                                let http = reqwest::Client::new();
+
+                                // reward-state V1 parity: block-height and proof
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    "reward-state/block-height",
+                                )
+                                .await?;
+                                for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
+                                    compare_endpoints(
+                                        &http,
+                                        api_port,
+                                        axum_port,
+                                        &format!("reward-state/proof/{height}/{address}"),
+                                    )
+                                    .await?;
+                                    compare_endpoints(
+                                        &http,
+                                        api_port,
+                                        axum_port,
+                                        &format!("reward-state/{height}/{address}"),
+                                    )
+                                    .await?;
+                                    break; // one address is sufficient
+                                }
+
+                                // block-state V1 parity
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    "block-state/block-height",
+                                )
+                                .await?;
+                                if height > 0 {
+                                    compare_endpoints(
+                                        &http,
+                                        api_port,
+                                        axum_port,
+                                        &format!("block-state/{height}/{}", height - 1),
+                                    )
+                                    .await?;
+                                }
+
+                                // fee-state V1 parity
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    "fee-state/block-height",
+                                )
+                                .await?;
+                                if let Some((fee_acct, _)) =
+                                    validated_state.fee_merkle_tree.iter().next()
+                                {
+                                    compare_endpoints(
+                                        &http,
+                                        api_port,
+                                        axum_port,
+                                        &format!("fee-state/{height}/{fee_acct}"),
+                                    )
+                                    .await?;
+                                    compare_endpoints(
+                                        &http,
+                                        api_port,
+                                        axum_port,
+                                        &format!("fee-state/fee-balance/latest/{fee_acct}"),
+                                    )
+                                    .await?;
                                 }
                             } else {
                                 // V2 case
@@ -8426,6 +8569,74 @@ mod test {
                                         "availability/stream/blocks/{avail_block}/namespace/\
                                          {avail_ns}"
                                     ),
+                                )
+                                .await?;
+
+                                // Block-state V2 parity
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    "block-state/block-height",
+                                )
+                                .await?;
+                                if avail_block > 0 {
+                                    compare_endpoints(
+                                        &http,
+                                        api_port,
+                                        axum_port,
+                                        &format!("block-state/{avail_block}/{}", avail_block - 1),
+                                    )
+                                    .await?;
+                                }
+
+                                // Fee-state V2 parity
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    "fee-state/block-height",
+                                )
+                                .await?;
+                                if let Some((fee_acct, _)) =
+                                    validated_state.fee_merkle_tree.iter().next()
+                                {
+                                    compare_endpoints(
+                                        &http,
+                                        api_port,
+                                        axum_port,
+                                        &format!("fee-state/{avail_block}/{fee_acct}"),
+                                    )
+                                    .await?;
+                                    compare_endpoints(
+                                        &http,
+                                        api_port,
+                                        axum_port,
+                                        &format!("fee-state/fee-balance/latest/{fee_acct}"),
+                                    )
+                                    .await?;
+                                }
+
+                                // Reward-state shared endpoints (same data as reward-state-v2)
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    "reward-state/block-height",
+                                )
+                                .await?;
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!("reward-state/reward-merkle-tree-v2/{height}"),
+                                )
+                                .await?;
+                                compare_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!("reward-state/reward-amounts/{height}/0/1000"),
                                 )
                                 .await?;
                             }

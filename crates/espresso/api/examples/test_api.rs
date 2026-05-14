@@ -315,6 +315,93 @@ impl v1::HotShotAvailabilityApi for TestApi {
     }
 }
 
+// Stub implementations for block-state, fee-state, and reward-state V1 APIs.
+
+#[async_trait]
+impl v1::BlockStateApi for TestApi {
+    type BlockMerklePath = serde_json::Value;
+
+    async fn get_block_state_height(&self) -> Result<u64> {
+        Ok(100)
+    }
+
+    async fn get_block_state_path(&self, _height: u64, _key: u64) -> Result<Self::BlockMerklePath> {
+        Ok(serde_json::json!({}))
+    }
+
+    async fn get_block_state_path_by_commit(
+        &self,
+        _commit: String,
+        _key: u64,
+    ) -> Result<Self::BlockMerklePath> {
+        Ok(serde_json::json!({}))
+    }
+}
+
+#[async_trait]
+impl v1::FeeStateApi for TestApi {
+    type FeeMerklePath = serde_json::Value;
+    type FeeBalance = serde_json::Value;
+
+    async fn get_fee_state_height(&self) -> Result<u64> {
+        Ok(100)
+    }
+
+    async fn get_fee_state_path(
+        &self,
+        _height: u64,
+        _address: String,
+    ) -> Result<Self::FeeMerklePath> {
+        Ok(serde_json::json!({}))
+    }
+
+    async fn get_fee_state_path_by_commit(
+        &self,
+        _commit: String,
+        _address: String,
+    ) -> Result<Self::FeeMerklePath> {
+        Ok(serde_json::json!({}))
+    }
+
+    async fn get_fee_balance(&self, _address: String) -> Result<Option<Self::FeeBalance>> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl v1::RewardStateApi for TestApi {
+    type RewardMerklePath = serde_json::Value;
+    type RewardAccountQueryData = serde_json::Value;
+
+    async fn get_reward_state_height(&self) -> Result<u64> {
+        Ok(100)
+    }
+
+    async fn get_reward_state_path(
+        &self,
+        _height: u64,
+        _address: String,
+    ) -> Result<Self::RewardMerklePath> {
+        Ok(serde_json::json!({}))
+    }
+
+    async fn get_reward_state_path_by_commit(
+        &self,
+        _commit: String,
+        _address: String,
+    ) -> Result<Self::RewardMerklePath> {
+        Ok(serde_json::json!({}))
+    }
+
+    async fn get_reward_state_proof(
+        &self,
+        _height: u64,
+        _address: String,
+    ) -> Result<Self::RewardAccountQueryData> {
+        Ok(serde_json::json!({}))
+    }
+}
+
 // Implement v2::RewardApi (simplified API - latest-only for claim/balance/proof)
 #[async_trait]
 impl v2::RewardApi for TestApi {
