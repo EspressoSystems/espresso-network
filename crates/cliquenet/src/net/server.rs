@@ -460,6 +460,13 @@ impl Server {
                                     }
                                     continue
                                 }
+                                info!(
+                                    name = %self.conf.name,
+                                    node = %self.key,
+                                    peer = %k,
+                                    addr = %a,
+                                    "adding new peer"
+                                );
                                 self.parties.insert(k, Party::new(role, a.clone()));
                                 self.spawn_connect(k, a)
                             }
@@ -493,6 +500,13 @@ impl Server {
                                     continue
                                 }
                                 if let Some(p) = self.parties.get_mut(k) {
+                                    info!(
+                                        name = %self.conf.name,
+                                        node = %self.key,
+                                        peer = %k,
+                                        %role,
+                                        "assigning role to peer"
+                                    );
                                     p.role = role
                                 } else {
                                     warn!(

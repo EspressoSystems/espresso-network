@@ -87,7 +87,7 @@ impl<T: NodeType> Cliquenet<T> {
             my_keys: (signing_key, public_key),
             inner: network,
             peers,
-            epoch: EpochNumber::genesis(),
+            epoch: EpochNumber::new(0),
             upgrade_lock,
         })
     }
@@ -221,7 +221,7 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     ///
     /// We keep validators that were in `e-1` but not in `e` for one additional
     /// epoch and eagerly connect to new validators of `e+1`.
-    async fn on_epoch_change(
+    async fn apply_epoch(
         &mut self,
         epoch: EpochNumber,
         coord: &EpochMembershipCoordinator<T>,
@@ -230,14 +230,7 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
             info!(%epoch, ours = %self.epoch, "epoch already seen");
             return Ok(());
         }
-        self.apply_epoch(epoch, coord).await
-    }
 
-    async fn apply_epoch(
-        &mut self,
-        epoch: EpochNumber,
-        coord: &EpochMembershipCoordinator<T>,
-    ) -> Result<(), NetworkError> {
         // Validators of the new epoch.
         let Some(curr_infos) = coord.epoch_peers(Some(epoch)) else {
             error!(%epoch, "no stake table available");
