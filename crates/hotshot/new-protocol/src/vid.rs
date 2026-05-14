@@ -293,7 +293,7 @@ impl<T: NodeType> VidReconstructor<T> {
             return;
         }
         let VidCommitment::V2(expected_v2) = block.payload_commitment else {
-            warn!(%view, "block push expected non-V2 commit; dropping");
+            warn!(%view, "block push has non-V2 commit; dropping");
             return;
         };
         let Ok(membership) = membership_coordinator.stake_table_for_epoch(Some(block.epoch)) else {

@@ -476,7 +476,9 @@ where
 
     async fn handle_block_push(&mut self, block: BlockPushMessage<T>) {
         let view = block.view;
-        if self.vid_reconstructor.reconstructed.contains(&view) {
+        if view < self.consensus.current_view()
+            || self.vid_reconstructor.reconstructed.contains(&view)
+        {
             return;
         }
         let Some(leader) = self.leader(view, block.epoch) else {

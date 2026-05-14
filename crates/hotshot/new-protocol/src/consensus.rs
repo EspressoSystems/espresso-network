@@ -31,7 +31,7 @@ use hotshot_types::{
             LCV2StateSignatureKey, LCV3StateSignatureKey, SignatureKey, StateSignatureKey,
         },
     },
-    utils::{is_epoch_root, is_epoch_transition, is_last_block},
+    utils::{epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block},
     vote::{self, Certificate, HasViewNumber},
 };
 use tracing::{debug, instrument, warn};
@@ -131,7 +131,6 @@ pub struct Consensus<T: NodeType> {
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeMap<ViewNumber, VidCommitment2>,
     blocks: BTreeMap<ViewNumber, T::BlockPayload>,
-    block_metadata: BTreeMap<ViewNumber, <T::BlockPayload as BlockPayload<T>>::Metadata>,
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
@@ -144,6 +143,7 @@ pub struct Consensus<T: NodeType> {
 
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
+    pushed_block_views: BTreeSet<ViewNumber>,
 
     /// Certificates whose epoch membership was not yet available when they
     /// arrived.  They are retried when new epoch data becomes available.
@@ -209,7 +209,6 @@ impl<T: NodeType> Consensus<T> {
             signed_proposals: BTreeMap::new(),
             proposed_views: BTreeSet::new(),
             blocks: BTreeMap::new(),
-            block_metadata: BTreeMap::new(),
             states_verified: BTreeMap::new(),
             blocks_reconstructed: BTreeMap::new(),
             certs: BTreeMap::new(),
@@ -229,6 +228,7 @@ impl<T: NodeType> Consensus<T> {
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
+            pushed_block_views: BTreeSet::new(),
             pending_certs1: BTreeMap::new(),
             pending_certs2: BTreeMap::new(),
             private_key,
@@ -339,6 +339,7 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::HeaderCreated(view, header) => {
                 self.headers.insert(view, header);
+                self.maybe_send_block_to_next_leader(view, outbox);
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
@@ -369,14 +370,11 @@ impl<T: NodeType> Consensus<T> {
                     metadata: metadata.clone(),
                 });
                 self.blocks.insert(view, payload);
-                self.block_metadata.insert(view, metadata);
                 Protocol::Continue
             },
             ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
-                // Push the full payload to L_{V+1} first
-                if let Some(epoch) = vid_disperse.epoch {
-                    self.maybe_send_block_to_next_leader(view, epoch, outbox);
-                }
+                // Push the full payload to L_{V+1} first.
+                self.maybe_send_block_to_next_leader(view, outbox);
                 // Directly send the VID shares before making a proposal.
                 self.send_vid_shares(&view, vid_disperse, outbox);
                 Protocol::Continue
@@ -464,7 +462,6 @@ impl<T: NodeType> Consensus<T> {
         self.states_verified = self.states_verified.split_off(&view);
         self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
         self.blocks = self.blocks.split_off(&view);
-        self.block_metadata = self.block_metadata.split_off(&view);
         self.certs = self.certs.split_off(&view);
         self.certs2 = self.certs2.split_off(&view);
         self.pending_certs1 = self.pending_certs1.split_off(&view);
@@ -476,6 +473,7 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
+        self.pushed_block_views = self.pushed_block_views.split_off(&view);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -820,16 +818,20 @@ impl<T: NodeType> Consensus<T> {
     // Push the full payload to the leader of V+1.
     #[instrument(level = "debug", skip_all)]
     fn maybe_send_block_to_next_leader(
-        &self,
+        &mut self,
         view: ViewNumber,
-        epoch: EpochNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) {
+        if self.pushed_block_views.contains(&view) {
+            return;
+        }
         let Some(header) = self.headers.get(&view) else {
-            debug!(%view, "block push skipped: no block header");
+            debug!(%view, "block push deferred: no block header");
             return;
         };
-        let next_epoch = if is_last_block(header.block_number(), *self.epoch_height) {
+        let epoch_height = *self.epoch_height;
+        let epoch = EpochNumber::new(epoch_from_block_number(header.block_number(), epoch_height));
+        let next_epoch = if is_last_block(header.block_number(), epoch_height) {
             epoch + 1
         } else {
             epoch
@@ -851,13 +853,10 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let Some(payload) = self.blocks.get(&view).cloned() else {
-            warn!(%view, "block push skipped: no payload");
+            debug!(%view, "block push deferred: no payload yet");
             return;
         };
-        let Some(metadata) = self.block_metadata.get(&view).cloned() else {
-            warn!(%view, "block push skipped: no metadata");
-            return;
-        };
+        let metadata = header.metadata().clone();
         let payload_commitment = header.payload_commitment();
         let block = match BlockPushMessage::new(
             view,
@@ -874,6 +873,7 @@ impl<T: NodeType> Consensus<T> {
             },
         };
         outbox.push_back(ConsensusOutput::SendBlockToLeader { next_leader, block });
+        self.pushed_block_views.insert(view);
     }
 
     // The leader's own share is also unicast back to itself (cliquenet

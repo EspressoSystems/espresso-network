@@ -80,7 +80,7 @@ pub struct BlockPushMessage<T: NodeType> {
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     pub payload_commitment: VidCommitment,
-    /// Sign over the payload commitment, for cheap filteration to prevent DoS.
+    /// Sign over the payload commitment, for cheap filtration to prevent DoS.
     pub signature: <T::SignatureKey as SignatureKey>::PureAssembledSignatureType,
 }
 
