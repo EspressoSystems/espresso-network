@@ -6,7 +6,7 @@ pub trait Metrics: Send + Sync {
     fn del(&self, key: &PublicKey);
 }
 
-pub struct NoMetrics;
+pub(crate) struct NoMetrics;
 
 impl Metrics for NoMetrics {
     fn set(&self, _: &PublicKey, _: &str, _: usize) {}
