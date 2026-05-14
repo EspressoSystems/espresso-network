@@ -359,10 +359,10 @@ where
                         let epoch = validated.message.proposal.data.epoch;
                         if let Err(err) = self
                             .network
-                            .on_epoch_change(epoch, &self.membership_coordinator)
+                            .apply_epoch(epoch, &self.membership_coordinator)
                             .await
                         {
-                            error!(%epoch, %err, "network on_epoch_change failed");
+                            error!(%epoch, %err, "network apply_epoch failed");
                         }
 
                         let view = validated.message.proposal.data.view_number();
