@@ -473,7 +473,7 @@ where
         self.consensus.apply(input, &mut self.outbox)
     }
 
-    async fn handle_block_push(&mut self, block: BlockPushMessage<T>) {
+    async fn handle_block_push(&mut self, sender: T::SignatureKey, block: BlockPushMessage<T>) {
         let view = block.view;
         if view < self.consensus.current_view()
             || self.vid_reconstructor.reconstructed.contains(&view)
@@ -484,6 +484,10 @@ where
             warn!(%view, epoch = %block.epoch, "block push: leader lookup failed; dropping");
             return;
         };
+        if sender != leader {
+            warn!(%view, epoch = %block.epoch, %sender, "block push: sender is not view leader; dropping");
+            return;
+        }
         if !block.verify_signature(&leader) {
             warn!(%view, epoch = %block.epoch, "block push: signature verification failed; dropping");
             return;
@@ -823,7 +827,7 @@ where
                     None
                 },
                 ConsensusMessage::BlockPush(block) => {
-                    self.handle_block_push(block).await;
+                    self.handle_block_push(message.sender, block).await;
                     None
                 },
             },
