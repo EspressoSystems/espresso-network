@@ -7,7 +7,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
-    traits::signature_key::SignatureKey,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
 use super::utils::mock_membership_with_num_nodes;
@@ -119,6 +119,7 @@ impl TestHarness {
             addr,
             vec![],
             upgrade_lock.clone(),
+            Box::new(NoMetrics),
         )
         .await
         .expect("cliquenet creation should succeed");
@@ -168,11 +169,11 @@ impl TestHarness {
     }
 
     pub async fn apply_and_process(&mut self, input: ConsensusInput<TestTypes>) {
-        self.coordinator.apply_consensus(input).await;
+        self.coordinator.apply_consensus(input);
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
-            if let Err(err) = self.coordinator.process_consensus_output(out).await {
+            if let Err(err) = self.coordinator.process_consensus_output(out) {
                 panic!("unexpected error: {err}")
             }
         }

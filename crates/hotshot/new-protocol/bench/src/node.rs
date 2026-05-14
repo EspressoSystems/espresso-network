@@ -28,7 +28,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
@@ -91,6 +91,7 @@ async fn create_network(
         bind_addr,
         parties,
         upgrade_lock(),
+        Box::new(NoMetrics),
     )
     .await
     .map_err(|e| anyhow::anyhow!("failed to create cliquenet: {e}"))?;
@@ -204,11 +205,11 @@ async fn build_coordinator(
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.
-    coordinator.start().await;
+    coordinator.start();
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
-        if let Err(e) = coordinator.process_consensus_output(output).await {
+        if let Err(e) = coordinator.process_consensus_output(output) {
             warn!(%e, "error processing initial output");
         }
     }
@@ -231,16 +232,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         match coordinator.next_consensus_input().await {
             Ok(input) => {
                 metrics.on_input(&input);
-                // For BlockReconstructed, also record when the share threshold was
-                // reached (i.e. when AvidmGf2::recover started). The reconstructor
-                // populates this on the same view's first `try_reconstruct` call;
-                // the BlockReconstructed input fires when recover finishes.
-                if let ConsensusInput::BlockReconstructed(view, _) = &input
-                    && let Some(ts) = coordinator.vid_reconstructor().threshold_reached_ns(*view)
-                {
-                    metrics.on_vid_threshold(**view, ts);
-                }
-                coordinator.apply_consensus(input).await;
+                coordinator.apply_consensus(input);
             },
             Err(err)
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical =>
@@ -258,14 +250,6 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         while let Some(output) = coordinator.outbox_mut().pop_front() {
             metrics.on_output(&output);
 
-            // Capture the view of a SendProposal so we can stamp `unicast_done`
-            // after `process_consensus_output` finishes the per-recipient fan-out.
-            let sent_proposal_view = if let ConsensusOutput::SendProposal(p) = &output {
-                Some(*p.data.view_number)
-            } else {
-                None
-            };
-
             // Intercept block requests and inject test block (bypassing BlockBuilder).
             if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
                 && cfg.block_size > 0
@@ -282,7 +266,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 );
                 let header_input = ConsensusInput::HeaderCreated(req.view, header);
                 metrics.on_input(&header_input);
-                coordinator.apply_consensus(header_input).await;
+                coordinator.apply_consensus(header_input);
                 let block_input = ConsensusInput::BlockBuilt {
                     view: req.view,
                     epoch: req.epoch,
@@ -290,20 +274,17 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     metadata: block.metadata,
                 };
                 metrics.on_input(&block_input);
-                coordinator.apply_consensus(block_input).await;
+                coordinator.apply_consensus(block_input);
                 continue; // skip process_consensus_output for this one
             }
 
-            if let Err(err) = coordinator.process_consensus_output(output).await {
+            if let Err(err) = coordinator.process_consensus_output(output) {
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
                     error!(%err, "critical error processing output");
                     metrics.write_csv(&output_path)?;
                     return Err(anyhow::anyhow!("{err}"));
                 }
                 warn!(%err, "recoverable error processing output");
-            }
-            if let Some(view) = sent_proposal_view {
-                metrics.on_unicast_done(view);
             }
         }
 
@@ -374,7 +355,7 @@ fn build_genesis_cert1(
         block_number: Some(0),
     };
     hotshot_new_protocol::message::Certificate1::new(
-        data.clone(),
+        data,
         data.commit(),
         ViewNumber::genesis(),
         None,

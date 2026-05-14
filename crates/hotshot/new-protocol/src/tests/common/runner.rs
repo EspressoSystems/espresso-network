@@ -10,8 +10,13 @@ use committable::Committable;
 use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
-    PeerConnectInfo, addr::NetAddr, data::ViewNumber, message::UpgradeLock,
-    traits::signature_key::SignatureKey, vote::HasViewNumber, x25519::Keypair,
+    PeerConnectInfo,
+    addr::NetAddr,
+    data::ViewNumber,
+    message::UpgradeLock,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    vote::HasViewNumber,
+    x25519::Keypair,
 };
 use tokio::{
     select,
@@ -541,7 +546,9 @@ async fn create_network(
         )
         .build();
 
-    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone())
+    let met = Box::new(NoMetrics);
+
+    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
         .await
         .unwrap()
 }
@@ -572,7 +579,7 @@ async fn run_node<N: Network<TestTypes>>(
     loop {
         select! {
             i = coord.next_consensus_input() => match i {
-                Ok(input) => coord.apply_consensus(input).await,
+                Ok(input) => coord.apply_consensus(input),
                 Err(err) if err.severity == Severity::Critical => break,
                 Err(_) => continue,
             },
@@ -617,7 +624,7 @@ async fn run_node<N: Network<TestTypes>>(
                 last_view = *view;
             }
 
-            if let Err(err) = coord.process_consensus_output(output).await
+            if let Err(err) = coord.process_consensus_output(output)
                 && err.severity == Severity::Critical
             {
                 tracing::error!(%err, node = %coord.node_id(), "critical error processing output");
