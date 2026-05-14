@@ -8525,6 +8525,7 @@ dependencies = [
  "sqlx",
  "static_assertions",
  "surf-disco",
+ "tempfile",
  "test-log",
  "test-utils",
  "tokio",

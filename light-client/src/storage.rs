@@ -1,4 +1,9 @@
-use std::{future::Future, path::PathBuf, str::FromStr};
+use std::{
+    future::Future,
+    path::PathBuf,
+    str::FromStr,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
@@ -131,10 +136,10 @@ pub struct LightClientSqliteOptions {
     )]
     pub num_stake_tables: u32,
 
-    /// Create or open storage that is persisted on the file system.
+    /// Path at which the light client database is persisted.
     ///
     /// If not present, the database will exist only in memory and will be destroyed when the
-    /// [`SqlitePersistence`] object is dropped.
+    /// [`SqlitePersistence`] object is dropped
     #[cfg_attr(
         feature = "clap",
         clap(long = "light-client-db-path", env = "LIGHT_CLIENT_DB_PATH")
@@ -153,14 +158,45 @@ impl Default for LightClientSqliteOptions {
     }
 }
 
+enum LightClientDb {
+    InMemory,
+    File(PathBuf),
+}
+
+impl LightClientDb {
+    /// Resolve to a SQLite connection URI, creating the parent directory for file-backed DBs.
+    ///
+    /// The in-memory variant uses a shared-cache URI with a fresh per-call name so every
+    /// pool connection sees the same database; a bare `:memory:` would give each connection
+    /// its own private DB and the schema migration would be invisible to all but one.
+    fn into_uri(self) -> Result<String> {
+        match self {
+            Self::InMemory => {
+                static COUNTER: AtomicU64 = AtomicU64::new(0);
+                let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+                Ok(format!("file:lc-mem-{id}?mode=memory&cache=shared"))
+            },
+            Self::File(p) => {
+                if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating parent directory {parent:?}"))?;
+                }
+                p.into_os_string()
+                    .into_string()
+                    .map_err(|s| anyhow::anyhow!("invalid file path: {s:?}"))
+            },
+        }
+    }
+}
+
 impl LightClientSqliteOptions {
     /// Create or connect to a database with the given options.
     pub async fn connect(self) -> Result<SqliteStorage> {
-        let path = match &self.lc_path {
-            Some(path) => path.to_str().context("invalid file path")?,
-            None => ":memory:",
-        };
-        let opt = SqliteConnectOptions::from_str(path)?.create_if_missing(true);
+        let db = self
+            .lc_path
+            .map(LightClientDb::File)
+            .unwrap_or(LightClientDb::InMemory);
+        let opt = SqliteConnectOptions::from_str(&db.into_uri()?)?.create_if_missing(true);
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
             .connect_with(opt)
@@ -517,10 +553,54 @@ impl Storage for SqliteStorage {
 #[cfg(test)]
 mod test {
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
     use versions::{CLIQUENET_VERSION, EPOCH_VERSION};
 
     use super::*;
     use crate::testing::{leaf_chain, random_validator};
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_in_memory_uri_shares_state_across_connections() {
+        use sqlx::ConnectOptions;
+
+        let uri = LightClientDb::InMemory.into_uri().unwrap();
+        let mut a = SqliteConnectOptions::from_str(&uri)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE regression (x INTEGER)")
+            .execute(&mut a)
+            .await
+            .unwrap();
+
+        let mut b = SqliteConnectOptions::from_str(&uri)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO regression VALUES (42)")
+            .execute(&mut b)
+            .await
+            .expect("second connection must see schema from first (shared cache)");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_file_backed_creates_parent_dir() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join("subdir").join("lc.db");
+        let db = LightClientSqliteOptions {
+            lc_path: Some(path.clone()),
+            ..Default::default()
+        }
+        .connect()
+        .await
+        .unwrap();
+        assert_eq!(db.block_height().await.unwrap(), 0);
+        assert!(path.exists(), "sqlite file should have been created");
+    }
 
     #[tokio::test]
     #[test_log::test]
