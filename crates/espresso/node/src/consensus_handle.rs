@@ -9,9 +9,9 @@ use hotshot_new_protocol::{
     client::ClientApi,
     consensus::{ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
-    harvest::{
-        HandoverGate, forward_legacy_epoch_changes, forward_legacy_timeout_votes,
-        harvest_legacy_pre_cutover_seed,
+    cutover::{
+        CutoverGate, extract_pre_cutover_seed, forward_legacy_epoch_changes,
+        forward_legacy_timeout_votes,
     },
     network::Network,
     state::{StateManager, UpdateLeaf},
@@ -35,15 +35,27 @@ use versions::version;
 pub enum CutoverStatus {
     /// No upgrade certificate decided yet.
     NotConfigured,
-    /// `views_remaining` until the cutover view.
+    /// The cutover view is set; legacy hasn't reached it yet.
     Approaching {
         cur_view: ViewNumber,
         cutover_view: ViewNumber,
-        views_remaining: u64,
     },
-    Active {
-        cutover_view: ViewNumber,
-    },
+    /// Legacy is at or past the cutover view.
+    Active { cutover_view: ViewNumber },
+}
+
+impl CutoverStatus {
+    /// Views between `cur_view` and `cutover_view`, or `None` when the
+    /// cutover isn't approaching (already active, or not configured).
+    pub fn views_remaining(&self) -> Option<u64> {
+        match self {
+            Self::Approaching {
+                cur_view,
+                cutover_view,
+            } => Some(**cutover_view - **cur_view),
+            _ => None,
+        }
+    }
 }
 
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
@@ -117,7 +129,7 @@ pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     client_api: ClientApi<T>,
     coordinator_task: AbortOnDropHandle<()>,
     epoch_height: u64,
-    handover_gate: HandoverGate,
+    cutover_gate: CutoverGate,
     legacy_event_rx: InactiveReceiver<Event<T>>,
     event_rx: InactiveReceiver<CoordinatorEvent<T>>,
 }
@@ -163,15 +175,15 @@ where
             client_api,
             coordinator_task,
             epoch_height,
-            handover_gate: HandoverGate::new(),
+            cutover_gate: CutoverGate::new(),
             legacy_event_rx,
             event_rx: event_rx.deactivate(),
         }
     }
 
-    pub async fn harvest_legacy_pre_cutover_seed(&self) -> Option<PreCutoverSeed<T>> {
+    pub async fn extract_pre_cutover_seed(&self) -> Option<PreCutoverSeed<T>> {
         let legacy = self.legacy_handle.read().await;
-        harvest_legacy_pre_cutover_seed(&legacy).await
+        extract_pre_cutover_seed(&legacy).await
     }
 
     pub fn legacy_consensus(&self) -> Arc<RwLock<SystemContextHandle<T, I>>> {
@@ -182,7 +194,11 @@ where
         &self.client_api
     }
 
-    async fn new_protocol_at(&self, view: ViewNumber) -> bool {
+    /// Whether `view` is at or past the new-protocol upgrade boundary,
+    /// according to the legacy upgrade lock. This is a stateless version
+    /// check — use it when routing per-view queries like `state(view)`.
+    /// For "should we route to the coordinator?" use [`cutover_active`](Self::cutover_active).
+    async fn at_or_past_cutover(&self, view: ViewNumber) -> bool {
         self.legacy_handle
             .read()
             .await
@@ -206,17 +222,20 @@ where
             CutoverStatus::Approaching {
                 cur_view,
                 cutover_view,
-                views_remaining: *cutover_view - *cur_view,
             }
         }
     }
 
-    async fn new_protocol(&self) -> bool {
-        if self.handover_gate.is_active() {
+    /// Whether the cutover has happened — the gate has latched on this
+    /// node. Stateful: the first call after legacy crosses the cutover
+    /// view triggers seed extraction + dispatch. Use this for "should
+    /// we route to the coordinator?" decisions.
+    async fn cutover_active(&self) -> bool {
+        if self.cutover_gate.is_active() {
             return true;
         }
         let legacy = self.legacy_handle.read().await;
-        self.handover_gate.check(&legacy, &self.client_api).await
+        self.cutover_gate.check(&legacy, &self.client_api).await
     }
 
     pub fn event_stream(&self) -> BoxStream<'static, CoordinatorEvent<T>> {
@@ -231,7 +250,7 @@ where
     }
 
     pub async fn current_view(&self) -> ViewNumber {
-        if self.new_protocol().await {
+        if self.cutover_active().await {
             return self
                 .client_api
                 .current_view()
@@ -242,7 +261,7 @@ where
     }
 
     pub async fn decided_leaf(&self) -> Leaf2<T> {
-        if self.new_protocol().await {
+        if self.cutover_active().await {
             return self
                 .client_api
                 .decided_leaf()
@@ -253,7 +272,7 @@ where
     }
 
     pub async fn decided_state(&self) -> Arc<T::ValidatedState> {
-        if self.new_protocol().await {
+        if self.cutover_active().await {
             return self
                 .client_api
                 .decided_state()
@@ -265,7 +284,7 @@ where
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
-        if self.new_protocol_at(view).await {
+        if self.at_or_past_cutover(view).await {
             return self
                 .client_api
                 .state(view)
@@ -276,7 +295,7 @@ where
     }
 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
-        if self.new_protocol_at(view).await {
+        if self.at_or_past_cutover(view).await {
             return self
                 .client_api
                 .state_and_delta(view)
@@ -294,7 +313,7 @@ where
     }
 
     pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
-        if self.new_protocol().await {
+        if self.cutover_active().await {
             return self
                 .client_api
                 .undecided_leaves()
@@ -312,7 +331,7 @@ where
     }
 
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
-        if self.new_protocol().await {
+        if self.cutover_active().await {
             return self
                 .client_api
                 .current_epoch()
@@ -323,7 +342,7 @@ where
     }
 
     pub async fn epoch_height(&self) -> u64 {
-        if self.new_protocol().await {
+        if self.cutover_active().await {
             return self.epoch_height;
         }
         self.legacy_handle.read().await.epoch_height
@@ -404,7 +423,7 @@ where
     ) -> anyhow::Result<
         BoxFuture<'static, anyhow::Result<SignedProposal<T, QuorumProposalWrapper<T>>>>,
     > {
-        if self.new_protocol_at(view).await {
+        if self.at_or_past_cutover(view).await {
             let client_api = self.client_api.clone();
             return Ok(async move {
                 client_api
@@ -427,7 +446,7 @@ where
 
     pub async fn submit_transaction(&self, tx: T::Transaction) -> anyhow::Result<()> {
         let view = self.current_view().await;
-        if self.new_protocol_at(view).await {
+        if self.at_or_past_cutover(view).await {
             return self
                 .client_api
                 .submit_transaction(tx)
@@ -449,7 +468,7 @@ where
         delta: Option<Arc<<T::ValidatedState as ValidatedState<T>>::Delta>>,
     ) -> anyhow::Result<()> {
         let view = leaf.view_number();
-        if self.new_protocol_at(view).await {
+        if self.at_or_past_cutover(view).await {
             return self
                 .client_api
                 .update_leaf(UpdateLeaf {
@@ -473,7 +492,7 @@ where
     }
 
     pub async fn start_consensus(&self) {
-        if self.new_protocol().await {
+        if self.cutover_active().await {
             // New protocol consensus is already running via the coordinator task.
             // Don't start legacy HotShot consensus tasks.
             return;

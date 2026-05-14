@@ -1,7 +1,7 @@
-//! End-to-end handover tests: legacy + new-protocol clusters run
+//! End-to-end cutover tests: legacy + new-protocol clusters run
 //! concurrently per node. The new-protocol coordinator drives a
-//! [`HandoverGate`] on every loop iteration — the same gating call site
-//! production uses from [`ConsensusHandle::new_protocol`].
+//! [`CutoverGate`] on every loop iteration — the same gating call site
+//! production uses from [`ConsensusHandle::cutover_active`].
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -50,7 +50,7 @@ use versions::{CLIQUENET_VERSION, Upgrade, version};
 use crate::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity, timer::Timer},
-    harvest::{HandoverGate, forward_legacy_timeout_votes},
+    cutover::{CutoverGate, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
@@ -191,7 +191,7 @@ async fn build_new_protocol_network(
         })
         .collect();
     let config = cliquenet::Config::builder()
-        .name("legacy-handover")
+        .name("legacy-cutover")
         .keypair(parties[i].0.clone().into())
         .bind(parties[i].2.clone())
         .random_connect_delay(false)
@@ -207,7 +207,7 @@ async fn build_new_protocol_network(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn build_handover_coordinator(
+async fn build_cutover_coordinator(
     node_index: u64,
     network: Cliquenet<TestTypes>,
     membership: EpochMembershipCoordinator<TestTypes>,
@@ -316,7 +316,7 @@ struct DecisionEvent {
     commit: [u8; 32],
 }
 
-async fn run_handover_node(
+async fn run_cutover_node(
     mut coord: Coordinator<
         TestTypes,
         Cliquenet<TestTypes>,
@@ -325,7 +325,7 @@ async fn run_handover_node(
     decision_tx: UnboundedSender<DecisionEvent>,
     external_events_tx: async_broadcast::Sender<Event<TestTypes>>,
     legacy: Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>,
-    handover_gate: HandoverGate,
+    cutover_gate: CutoverGate,
 ) {
     // Mirror production (`consensus_handle::run_coordinator`): kick the
     // coordinator before pumping the event loop so it runs from genesis
@@ -334,21 +334,21 @@ async fn run_handover_node(
     let client_api = coord.client_api().clone();
 
     loop {
-        // Mirror production (`ConsensusHandle::new_protocol`): poll the
-        // handover gate on each iteration so the shared latching path
+        // Mirror production (`ConsensusHandle::cutover_active`): poll the
+        // cutover gate on each iteration so the shared latching path
         // is exercised, not a test-only watcher task.
-        if !handover_gate.is_active() {
+        if !cutover_gate.is_active() {
             let guard = legacy.read().await;
-            handover_gate.check(&guard, &client_api).await;
+            cutover_gate.check(&guard, &client_api).await;
         }
 
         match coord.next_consensus_input().await {
             Ok(input) => coord.apply_consensus(input),
             Err(err) if err.severity == Severity::Critical => {
-                tracing::error!(%err, "handover coord: critical error");
+                tracing::error!(%err, "cutover coord: critical error");
                 return;
             },
-            Err(err) => tracing::warn!(%err, "handover coord: non-critical error"),
+            Err(err) => tracing::warn!(%err, "cutover coord: non-critical error"),
         }
 
         while let Some(output) = coord.outbox_mut().pop_front() {
@@ -363,7 +363,7 @@ async fn run_handover_node(
             if let Err(err) = coord.process_consensus_output(output)
                 && err.severity == Severity::Critical
             {
-                tracing::error!(%err, "handover coord: critical error processing output");
+                tracing::error!(%err, "cutover coord: critical error processing output");
                 return;
             }
         }
@@ -394,7 +394,7 @@ async fn spawn_node(
     let (membership, storage, client, external_events_tx) =
         mock_membership_with_client(num_nodes, EPOCH_HEIGHT, parties[i].1).await;
 
-    let coord = build_handover_coordinator(
+    let coord = build_cutover_coordinator(
         i as u64,
         network,
         membership,
@@ -417,12 +417,12 @@ async fn spawn_node(
     );
 
     let (decision_tx, decision_rx) = mpsc::unbounded_channel::<DecisionEvent>();
-    let runner_abort = tokio::spawn(run_handover_node(
+    let runner_abort = tokio::spawn(run_cutover_node(
         coord,
         decision_tx,
         external_events_tx,
         legacy,
-        HandoverGate::new(),
+        CutoverGate::new(),
     ))
     .abort_handle();
 
@@ -454,7 +454,7 @@ struct SilentNode {
 /// trip the assertion. The loose variant is used by the permutation
 /// sweep below, where the exact post-cutover failure pattern is hard
 /// to predict precisely.
-async fn run_handover_test(
+async fn run_cutover_test(
     num_nodes: usize,
     target_decisions: usize,
     expected_failed_views: BTreeSet<ViewNumber>,
@@ -654,16 +654,16 @@ fn spawn_silence_at_view(
 /// `upgrade_view + upgrade_finish_offset`.
 const PREDICTED_CUTOVER_VIEW: u64 = UPGRADE_VIEW + 15;
 
-/// Last legacy view — naturally TC2-skipped at handover. Used as the
+/// Last legacy view — naturally TC2-skipped at cutover. Used as the
 /// anchor for the permutation sweep below: each test silences some
 /// subset of `{V-2, V-1, V, V+1, V+2}`.
 const V: u64 = PREDICTED_CUTOVER_VIEW - 1;
 
-/// Happy path. `cutover_view - 1` reliably has no QC at handover, so
+/// Happy path. `cutover_view - 1` reliably has no QC at cutover, so
 /// the new protocol skips it via TC2.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
-    run_handover_test(
+    run_cutover_test(
         4,
         6,
         views([PREDICTED_CUTOVER_VIEW - 1]),
@@ -681,7 +681,7 @@ async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
 async fn legacy_last_view_times_out_then_new_protocol_takes_over() {
     const NUM_NODES: usize = 4;
     let silent_idx = ((PREDICTED_CUTOVER_VIEW - 1) as usize) % NUM_NODES;
-    run_handover_test(
+    run_cutover_test(
         NUM_NODES,
         6,
         views([PREDICTED_CUTOVER_VIEW - 2, PREDICTED_CUTOVER_VIEW - 1, 23]),
@@ -703,7 +703,7 @@ async fn legacy_two_views_view_sync_then_new_protocol_takes_over() {
     let silent_n_minus_2 = ((PREDICTED_CUTOVER_VIEW - 2) as usize) % NUM_NODES;
     let silent_n_minus_1 = ((PREDICTED_CUTOVER_VIEW - 1) as usize) % NUM_NODES;
     let trigger = ViewNumber::new(PREDICTED_CUTOVER_VIEW - 3);
-    run_handover_test(
+    run_cutover_test(
         NUM_NODES,
         6,
         views([
@@ -735,7 +735,7 @@ async fn legacy_two_views_view_sync_then_new_protocol_takes_over() {
 async fn new_protocol_first_leader_offline_then_recovers() {
     const NUM_NODES: usize = 7;
     let silent_idx = (PREDICTED_CUTOVER_VIEW as usize) % NUM_NODES;
-    run_handover_test(
+    run_cutover_test(
         NUM_NODES,
         6,
         views([PREDICTED_CUTOVER_VIEW - 1, PREDICTED_CUTOVER_VIEW]),
@@ -757,7 +757,7 @@ async fn new_protocol_first_leader_offline_then_recovers() {
 async fn legacy_view_before_last_times_out_then_new_protocol_takes_over() {
     const NUM_NODES: usize = 4;
     let silent_idx = ((PREDICTED_CUTOVER_VIEW - 2) as usize) % NUM_NODES;
-    run_handover_test(
+    run_cutover_test(
         NUM_NODES,
         6,
         views([17, 18, 19, 22, 26]),
@@ -855,7 +855,7 @@ async fn run_perm_test(views_to_silence: Vec<u64>) {
         .map(|&v| silent_for_view(v, num_nodes))
         .collect();
     let permitted = permitted_failures(num_nodes, &silent_nodes, 50);
-    run_handover_test(
+    run_cutover_test(
         num_nodes,
         6,
         permitted,

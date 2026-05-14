@@ -19,8 +19,8 @@ use crate::{
 };
 
 /// Build a `PreCutoverSeed` from leaves, using `TestValidatedState::default()`
-/// for every seeded view. Mirrors what production harvest does, just with a
-/// trivial state.
+/// for every seeded view. Mirrors what production seed extraction does,
+/// just with a trivial state.
 fn test_seed(
     decided_anchor: Leaf2<TestTypes>,
     undecided: Vec<Leaf2<TestTypes>>,
@@ -167,7 +167,7 @@ async fn five_nodes_decide_after_pre_cutover_seed() {
 
 /// Cutover with a real quorum-signed `UpgradeCertificate` in the seed.
 #[tokio::test(flavor = "multi_thread")]
-async fn upgrade_certificate_handover() {
+async fn upgrade_certificate_cutover() {
     use crate::tests::common::runner::TestRunner;
 
     let num_nodes = 5;

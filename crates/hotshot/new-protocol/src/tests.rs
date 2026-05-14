@@ -7,7 +7,7 @@ mod cutover;
 mod epoch_change;
 mod failures;
 mod integration;
-mod legacy_handover;
+mod legacy_cutover;
 mod restarts;
 mod state;
 mod vid;

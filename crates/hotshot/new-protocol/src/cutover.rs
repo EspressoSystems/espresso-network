@@ -1,4 +1,14 @@
-//! Harvest legacy state and dispatch the seed via `ClientApi`.
+//! Legacy → new-protocol cutover machinery.
+//!
+//! Three concerns live here:
+//! - [`extract_pre_cutover_seed`] walks a live legacy [`SystemContextHandle`]
+//!   and produces a [`PreCutoverSeed`].
+//! - [`CutoverGate`] latches once legacy has crossed into the new version,
+//!   extracts the seed, and dispatches it into the new coordinator.
+//! - [`forward_legacy_timeout_votes`] and [`forward_legacy_epoch_changes`]
+//!   tail the legacy event stream and bridge those events into the
+//!   coordinator's client API so the new protocol can form TC2s and
+//!   refresh its peer set at epoch boundaries.
 
 use std::{
     collections::BTreeMap,
@@ -20,7 +30,7 @@ use crate::{client::ClientApi, consensus::PreCutoverSeed};
 
 /// Walk legacy state to produce a [`PreCutoverSeed`]; `None` on
 /// a broken walk.
-pub async fn harvest_legacy_pre_cutover_seed<T, I>(
+pub async fn extract_pre_cutover_seed<T, I>(
     handle: &SystemContextHandle<T, I>,
 ) -> Option<PreCutoverSeed<T>>
 where
@@ -30,7 +40,7 @@ where
     let cutover_view = match handle.hotshot.upgrade_lock.decided_upgrade_cert() {
         Some(cert) => cert.data.new_version_first_view,
         None => {
-            tracing::warn!("no decided upgrade certificate; aborting harvest");
+            tracing::warn!("no decided upgrade certificate; aborting seed extraction");
             return None;
         },
     };
@@ -77,42 +87,16 @@ where
     })
 }
 
-/// Returns `true` once legacy crossed into the new version, dispatching
-/// the seed along the way. Callers should gate repeats with a once-flag.
-pub async fn try_perform_handover<T, I>(
-    legacy: &SystemContextHandle<T, I>,
-    client_api: &ClientApi<T>,
-) -> bool
-where
-    T: NodeType,
-    I: NodeImplementation<T>,
-{
-    let cur_view = legacy.cur_view().await;
-    let crossed = legacy.hotshot.upgrade_lock.version_infallible(cur_view) >= CLIQUENET_VERSION;
-    if !crossed {
-        return false;
-    }
-
-    if let Some(seed) = harvest_legacy_pre_cutover_seed(legacy).await {
-        if let Err(err) = client_api.seed_pre_cutover(seed).await {
-            tracing::warn!(%err, "seed_pre_cutover client request failed");
-        }
-    } else {
-        tracing::warn!("harvest returned None; coordinator will not be seeded");
-    }
-
-    true
-}
-
-/// Latches once legacy crosses into the new protocol. Wraps
-/// [`try_perform_handover`] so production and tests share a single
-/// gating call site (one-shot harvest + dispatch, then short-circuit).
+/// Latches once legacy crosses into the new protocol. The single API
+/// production and tests share: poll [`check`](Self::check) on every
+/// coordinator loop iteration; once it returns `true` the cutover has
+/// happened and subsequent calls short-circuit.
 #[derive(Debug, Default)]
-pub struct HandoverGate {
+pub struct CutoverGate {
     active: AtomicBool,
 }
 
-impl HandoverGate {
+impl CutoverGate {
     pub fn new() -> Self {
         Self::default()
     }
@@ -124,7 +108,9 @@ impl HandoverGate {
     }
 
     /// Returns `true` once legacy has crossed into the new protocol.
-    /// Idempotent and cheap after the first success.
+    /// On the first call that observes the crossing, extracts the
+    /// pre-cutover seed and dispatches it into the coordinator;
+    /// subsequent calls short-circuit.
     pub async fn check<T, I>(
         &self,
         legacy: &SystemContextHandle<T, I>,
@@ -137,11 +123,22 @@ impl HandoverGate {
         if self.is_active() {
             return true;
         }
-        let active = try_perform_handover(legacy, client_api).await;
-        if active {
-            self.active.store(true, Ordering::Relaxed);
+        let cur_view = legacy.cur_view().await;
+        let crossed = legacy.hotshot.upgrade_lock.version_infallible(cur_view) >= CLIQUENET_VERSION;
+        if !crossed {
+            return false;
         }
-        active
+
+        if let Some(seed) = extract_pre_cutover_seed(legacy).await {
+            if let Err(err) = client_api.seed_pre_cutover(seed).await {
+                tracing::warn!(%err, "seed_pre_cutover client request failed");
+            }
+        } else {
+            tracing::warn!("seed extraction returned None; coordinator will not be seeded");
+        }
+
+        self.active.store(true, Ordering::Relaxed);
+        true
     }
 }
 
@@ -161,8 +158,8 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
     }
 }
 
-/// Bridge legacy epoch transitions into `bump_network_epoch`.
-/// `epoch_height == 0` disables the bridge.
+/// Forward legacy epoch transitions into `bump_network_epoch`.
+/// `epoch_height == 0` disables forwarding.
 pub async fn forward_legacy_epoch_changes<T: NodeType>(
     legacy_event_rx: InactiveReceiver<Event<T>>,
     client_api: ClientApi<T>,

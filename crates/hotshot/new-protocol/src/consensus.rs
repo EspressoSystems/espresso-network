@@ -63,7 +63,7 @@ pub struct PreCutoverSeed<T: NodeType> {
     /// Legacy undecided chain above the anchor, oldest-first.
     pub undecided: Vec<Leaf2<T>>,
     /// Legacy `high_qc`. `None` is allowed for cold-start tests; production
-    /// harvest always supplies one.
+    /// seed extraction always supplies one.
     pub high_qc: Option<QuorumCertificate2<T>>,
     /// Validated states keyed by view, for the anchor and every undecided leaf.
     pub validated_states: BTreeMap<ViewNumber, Arc<T::ValidatedState>>,
