@@ -46,7 +46,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::cliquenet::{Cliquenet, CliquenetConfig, CliquenetMetrics};
+use hotshot_new_protocol::network::cliquenet::Cliquenet;
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -63,7 +63,7 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::BuilderCommitment,
-    x25519::{self, Keypair},
+    x25519,
 };
 use libp2p::Multiaddr;
 use moka::future::Cache;
@@ -795,26 +795,19 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    // Legacy HotShot uses CombinedNetworks (CDN + libp2p).
-    // The new Coordinator uses CliqueNet directly.
-    // Each protocol gets its own dedicated network
-    // If we later upgrade to CliqueNet before the Fast Finality upgrade, we can
-    // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
-    // for the fast finality consensus upgrade i.e Coordinator.
-    let cliquenet = {
-        // TODO: This creates a separate UpgradeLock from the one HotShot will
-        // use. They should share a single lock so upgrade certificate updates
-        // are visible to both.
-        let lock = UpgradeLock::new(version_upgrade);
-        let conf = CliquenetConfig::builder()
-            .name("espresso")
-            .keypair(Keypair::from(network_params.x25519_secret_key).into())
-            .bind(network_params.cliquenet_bind_addr.clone())
-            .parties([])
-            .metrics(Box::new(CliquenetMetrics::new(clone_box(&*metrics))))
-            .build();
-        Cliquenet::create_with_config(pub_key, lock, conf, []).await?
-    };
+    // TODO: This creates a separate UpgradeLock from the one HotShot will
+    // use. They should share a single lock so upgrade certificate updates
+    // are visible to both.
+    let cliquenet = Cliquenet::create(
+        "espresso",
+        pub_key,
+        network_params.x25519_secret_key.into(),
+        network_params.cliquenet_bind_addr.clone(),
+        [],
+        UpgradeLock::new(version_upgrade),
+        clone_box(&*metrics),
+    )
+    .await?;
 
     let network = Arc::new(combined_network);
 
@@ -1634,8 +1627,9 @@ pub mod testing {
                     my_peer_config.stake_table_entry.stake_key,
                     keypair,
                     addr,
-                    vec![],
+                    [],
                     lock,
+                    Box::new(NoMetrics),
                 )
                 .await
                 .expect("cliquenet creation should succeed")
