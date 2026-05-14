@@ -1,5 +1,6 @@
 mod addr;
 mod connection;
+mod metrics;
 mod msg;
 mod net;
 mod queue;
@@ -13,6 +14,7 @@ use std::{fmt, num::NonZeroUsize, sync::Arc, time::Duration};
 pub use addr::NetAddr;
 use bon::Builder;
 pub use error::NetworkError;
+pub use metrics::{Metrics, NoMetrics};
 pub use msg::Slot;
 pub use net::{
     Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
@@ -21,7 +23,7 @@ pub use net::{
 
 use crate::x25519::{Keypair, PublicKey};
 
-#[derive(Debug, Builder)]
+#[derive(Builder)]
 pub struct Config {
     /// Network name.
     #[builder(with = |s: impl Into<String>| Arc::new(s.into()))]
@@ -66,6 +68,29 @@ pub struct Config {
 
     #[builder(default = Duration::from_secs(30))]
     backoff_duration: Duration,
+
+    #[builder(default = Box::new(NoMetrics))]
+    metrics: Box<dyn Metrics>,
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("name", &self.name)
+            .field("key", &self.keypair.public_key())
+            .field("bind", &self.bind)
+            .field("parties", &self.parties)
+            .field("peer_budget", &self.peer_budget)
+            .field("max_message_size", &self.max_message_size)
+            .field("retry_delays", &self.retry_delays)
+            .field("max_retry_delay", &self.max_retry_delay)
+            .field("random_connect_delay", &self.random_connect_delay)
+            .field("connect_timeout", &self.connect_timeout)
+            .field("handshake_timeout", &self.handshake_timeout)
+            .field("receive_timeout", &self.receive_timeout)
+            .field("backoff_duration", &self.backoff_duration)
+            .finish()
+    }
 }
 
 impl Config {

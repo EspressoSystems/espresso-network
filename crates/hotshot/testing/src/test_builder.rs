@@ -6,7 +6,6 @@
 
 use std::{collections::HashMap, num::NonZeroUsize, rc::Rc, sync::Arc, time::Duration};
 
-use async_lock::RwLock;
 use hotshot::{
     HotShotInitializer, SystemContext, TwinsHandlerState,
     tasks::EventTransformerState,
@@ -251,7 +250,7 @@ pub async fn create_test_handle<
     metadata: TestDescription<TYPES, I>,
     node_id: u64,
     network: Network<TYPES, I>,
-    memberships: Arc<RwLock<TYPES::Membership>>,
+    memberships: Arc<TYPES::Membership>,
     config: HotShotConfig<TYPES>,
     storage: I::Storage,
 ) -> SystemContextHandle<TYPES, I> {

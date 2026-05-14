@@ -257,6 +257,7 @@ impl NetworkController {
         let peers = peers.into_iter().collect::<Vec<_>>();
         for p in &peers {
             self.parties.remove(p);
+            self.conf.metrics.del(p);
         }
         self.tx
             .send(Command::Peer(PeerCommand::Remove(peers)))

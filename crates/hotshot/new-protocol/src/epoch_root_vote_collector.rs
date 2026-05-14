@@ -119,7 +119,6 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
         let m = self
             .epoch_membership_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
             .ok()?;
         self.membership_cache.insert(epoch, m.clone());
         Some(m)

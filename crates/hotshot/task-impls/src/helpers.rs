@@ -7,7 +7,6 @@
 use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use async_broadcast::{Receiver, SendError, Sender};
-use async_lock::RwLock;
 use committable::{Commitment, Committable};
 use hotshot_task::dependency::{Dependency, EventDependency};
 use hotshot_types::{
@@ -115,15 +114,13 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType>(
 
     let justify_qc_epoch = justify_qc.data.epoch();
 
-    let epoch_membership = membership_coordinator
-        .stake_table_for_epoch(justify_qc_epoch)
-        .await?;
-    let membership_stake_table = epoch_membership.stake_table().await;
-    let membership_success_threshold = epoch_membership.success_threshold().await;
+    let epoch_membership = membership_coordinator.stake_table_for_epoch(justify_qc_epoch)?;
+    let membership_stake_table = StakeTableEntries::from_iter(epoch_membership.stake_table()).0;
+    let membership_success_threshold = epoch_membership.success_threshold();
 
     justify_qc
         .is_valid_cert(
-            &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+            &membership_stake_table,
             membership_success_threshold,
             upgrade_lock,
         )
@@ -149,7 +146,7 @@ pub(crate) async fn fetch_proposal<TYPES: NodeType>(
     Ok((leaf, view))
 }
 pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
-    membership: &Arc<RwLock<TYPES::Membership>>,
+    membership: &TYPES::Membership,
     epoch: EpochNumber,
     storage: &I::Storage,
     drb_result: DrbResult,
@@ -159,7 +156,7 @@ pub async fn handle_drb_result<TYPES: NodeType, I: NodeImplementation<TYPES>>(
         tracing::error!("Failed to store drb result for epoch {epoch}: {e}");
     }
 
-    membership.write().await.add_drb_result(epoch, drb_result)
+    membership.add_drb_result(epoch, drb_result)
 }
 
 /// Verify the DRB result from the proposal for the next epoch if this is the last block of the
@@ -203,17 +200,14 @@ pub(crate) async fn verify_drb_result<TYPES: NodeType, I: NodeImplementation<TYP
             .membership
             .coordinator
             .stake_table_for_epoch(epoch)
-            .await
             .context(warn!("No stake table for epoch {}", epoch_val))?;
 
-        let has_stake_current_epoch = current_epoch_membership
-            .has_stake(&validation_info.public_key)
-            .await;
+        let has_stake_current_epoch =
+            current_epoch_membership.has_stake(&validation_info.public_key);
 
         if has_stake_current_epoch {
             let computed_result = current_epoch_membership
                 .next_epoch()
-                .await
                 .context(warn!("No stake table for epoch {}", epoch_val + 1))?
                 .get_epoch_drb()
                 .await
@@ -275,11 +269,10 @@ async fn decide_epoch_root<TYPES: NodeType, I: NodeImplementation<TYPES>>(
             // First add the epoch root to `membership`
             {
                 let start = Instant::now();
-                if let Err(e) = Membership::add_epoch_root(
-                    Arc::clone(membership_clone.membership()),
-                    decided_block_header,
-                )
-                .await
+                if let Err(e) = membership_clone
+                    .membership()
+                    .add_epoch_root(decided_block_header)
+                    .await
                 {
                     tracing::error!("Failed to add epoch root for epoch {next_epoch_number}: {e}");
                 }
@@ -1142,14 +1135,15 @@ pub(crate) async fn validate_proposal_view_and_certs<
                      preceding view"
                 );
                 let timeout_cert_epoch = timeout_cert.data().epoch();
-                membership = membership.get_new_epoch(timeout_cert_epoch).await?;
+                membership = membership.get_new_epoch(timeout_cert_epoch)?;
 
-                let membership_stake_table = membership.stake_table().await;
-                let membership_success_threshold = membership.success_threshold().await;
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(membership.stake_table()).0;
+                let membership_success_threshold = membership.success_threshold();
 
                 timeout_cert
                     .is_valid_cert(
-                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                        &membership_stake_table,
                         membership_success_threshold,
                         &validation_info.upgrade_lock,
                     )
@@ -1166,15 +1160,16 @@ pub(crate) async fn validate_proposal_view_and_certs<
                 );
 
                 let view_sync_cert_epoch = view_sync_cert.data().epoch();
-                membership = membership.get_new_epoch(view_sync_cert_epoch).await?;
+                membership = membership.get_new_epoch(view_sync_cert_epoch)?;
 
-                let membership_stake_table = membership.stake_table().await;
-                let membership_success_threshold = membership.success_threshold().await;
+                let membership_stake_table =
+                    StakeTableEntries::from_iter(membership.stake_table()).0;
+                let membership_success_threshold = membership.success_threshold();
 
                 // View sync certs must also be valid.
                 view_sync_cert
                     .is_valid_cert(
-                        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                        &membership_stake_table,
                         membership_success_threshold,
                         &validation_info.upgrade_lock,
                     )
@@ -1230,15 +1225,13 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType>(
 ) -> Result<()> {
     let cert = CertificatePair::new(qc.clone(), maybe_next_epoch_qc.cloned());
 
-    let mut epoch_membership = membership_coordinator
-        .stake_table_for_epoch(cert.epoch())
-        .await?;
+    let mut epoch_membership = membership_coordinator.stake_table_for_epoch(cert.epoch())?;
 
-    let membership_stake_table = epoch_membership.stake_table().await;
-    let membership_success_threshold = epoch_membership.success_threshold().await;
+    let membership_stake_table = StakeTableEntries::from_iter(epoch_membership.stake_table()).0;
+    let membership_success_threshold = epoch_membership.success_threshold();
 
     if let Err(e) = cert.qc().is_valid_cert(
-        &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+        &membership_stake_table,
         membership_success_threshold,
         upgrade_lock,
     ) {
@@ -1250,12 +1243,13 @@ pub async fn validate_qc_and_next_epoch_qc<TYPES: NodeType>(
     if upgrade_lock.epochs_enabled(cert.view_number())
         && let Some(next_epoch_qc) = cert.verify_next_epoch_qc(epoch_height)?
     {
-        epoch_membership = epoch_membership.next_epoch_stake_table().await?;
-        let membership_next_stake_table = epoch_membership.stake_table().await;
-        let membership_next_success_threshold = epoch_membership.success_threshold().await;
+        epoch_membership = epoch_membership.next_epoch_stake_table()?;
+        let membership_next_stake_table =
+            StakeTableEntries::from_iter(epoch_membership.stake_table()).0;
+        let membership_next_success_threshold = epoch_membership.success_threshold();
         next_epoch_qc
             .is_valid_cert(
-                &StakeTableEntries::<TYPES>::from(membership_next_stake_table).0,
+                &membership_next_stake_table,
                 membership_next_success_threshold,
                 upgrade_lock,
             )

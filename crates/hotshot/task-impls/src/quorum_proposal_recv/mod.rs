@@ -165,8 +165,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalRecvTaskState<
                     proposal.data.block_header().block_number(),
                     self.epoch_height,
                 );
-                let Ok(epoch_membership) =
-                    self.membership.membership_for_epoch(proposal_epoch).await
+                let Ok(epoch_membership) = self.membership.membership_for_epoch(proposal_epoch)
                 else {
                     tracing::warn!("No Stake table for epoch = {proposal_epoch:?}");
                     return;
