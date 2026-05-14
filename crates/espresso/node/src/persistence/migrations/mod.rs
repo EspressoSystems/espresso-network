@@ -6,9 +6,9 @@ use self::hash_id_bigint::{BackfillIds, BackfillRefs, Cleanup, CreateIndex};
 
 /// Build the [`MigrationRegistry`] for the espresso node's deferred migrations.
 pub fn build_registry() -> MigrationRegistry {
-    MigrationRegistry::new()
-        .backfill(BackfillIds)
-        .backfill(BackfillRefs)
-        .deferred_schema(CreateIndex)
-        .cleanup(Cleanup)
+    let mut registry = MigrationRegistry::new().backfill(BackfillIds);
+    for refs in BackfillRefs::all() {
+        registry = registry.backfill(refs);
+    }
+    registry.deferred_schema(CreateIndex).cleanup(Cleanup)
 }

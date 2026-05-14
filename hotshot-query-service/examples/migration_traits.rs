@@ -20,6 +20,8 @@
 //! a real-world migration of this shape would only ship for the Postgres
 //! backend.
 
+use std::borrow::Cow;
+
 use anyhow::Context;
 use async_trait::async_trait;
 use hotshot_query_service::{
@@ -106,8 +108,8 @@ impl DualReadAdapter for ScoreAdapter {
 pub struct BackfillScores;
 
 impl MigrationMeta for BackfillScores {
-    fn name(&self) -> &'static str {
-        "scores_v1_backfill"
+    fn name(&self) -> Cow<'static, str> {
+        "scores_v1_backfill".into()
     }
     fn order(&self) -> u32 {
         1
@@ -167,8 +169,8 @@ impl DataBackfill for BackfillScores {
 pub struct IndexScores;
 
 impl MigrationMeta for IndexScores {
-    fn name(&self) -> &'static str {
-        "scores_v1_index"
+    fn name(&self) -> Cow<'static, str> {
+        "scores_v1_index".into()
     }
     fn order(&self) -> u32 {
         2
@@ -191,8 +193,8 @@ impl DeferredSchemaChange for IndexScores {
 pub struct DropLegacyScores;
 
 impl MigrationMeta for DropLegacyScores {
-    fn name(&self) -> &'static str {
-        "scores_v1_drop_legacy"
+    fn name(&self) -> Cow<'static, str> {
+        "scores_v1_drop_legacy".into()
     }
     fn order(&self) -> u32 {
         1

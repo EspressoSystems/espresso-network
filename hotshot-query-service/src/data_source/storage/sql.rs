@@ -714,19 +714,20 @@ impl SqlStorage {
     pub async fn run_pending_cleanups(&self, registry: &MigrationRegistry) -> Result<(), Error> {
         for cleanup in registry.cleanup_migrations() {
             if self.cleanup_requirements_met(cleanup.requires()).await? {
-                tracing::info!("running cleanup migration {}", cleanup.name());
+                let name = cleanup.name();
+                tracing::info!("running cleanup migration {}", name);
                 let mut tx = self.write().await?;
                 cleanup.run(&mut tx).await?;
                 sqlx::query(
                     "INSERT INTO deferred_migrations (name, done_at) VALUES ($1, $2)
                      ON CONFLICT (name) DO UPDATE SET done_at = EXCLUDED.done_at",
                 )
-                .bind(cleanup.name())
+                .bind(name.as_ref())
                 .bind(Utc::now().to_rfc3339())
                 .execute(tx.as_mut())
                 .await?;
                 tx.commit().await?;
-                tracing::info!("cleanup migration {} complete", cleanup.name());
+                tracing::info!("cleanup migration {} complete", name);
             }
         }
         Ok(())
@@ -764,15 +765,16 @@ impl SqlStorage {
         backfills.sort_by_key(|m| m.order());
 
         for backfill in &backfills {
-            if self.migration_done(backfill.name()).await? {
+            let name = backfill.name();
+            if self.migration_done(&name).await? {
                 continue;
             }
             tracing::info!(
                 "starting backfill migration {} (batch_size={})",
-                backfill.name(),
+                name,
                 backfill.batch_size()
             );
-            let mut offset = self.migration_progress(backfill.name()).await?;
+            let mut offset = self.migration_progress(&name).await?;
             loop {
                 let mut tx = self.write().await?;
                 let next = backfill.migrate_batch(&mut tx, offset).await?;
@@ -784,7 +786,7 @@ impl SqlStorage {
                             "INSERT INTO deferred_migrations (name, progress) VALUES ($1, $2)
                              ON CONFLICT (name) DO UPDATE SET progress = EXCLUDED.progress",
                         )
-                        .bind(backfill.name())
+                        .bind(name.as_ref())
                         .bind(new_offset as i64)
                         .execute(tx.as_mut())
                         .await?;
@@ -799,13 +801,13 @@ impl SqlStorage {
                                   SET progress = EXCLUDED.progress,
                                       done_at  = EXCLUDED.done_at",
                         )
-                        .bind(backfill.name())
+                        .bind(name.as_ref())
                         .bind(offset as i64)
                         .bind(Utc::now().to_rfc3339())
                         .execute(tx.as_mut())
                         .await?;
                         tx.commit().await?;
-                        tracing::info!("backfill migration {} complete", backfill.name());
+                        tracing::info!("backfill migration {} complete", name);
                         break;
                     },
                 }
@@ -817,22 +819,23 @@ impl SqlStorage {
         deferred.sort_by_key(|m| m.order());
 
         for schema_change in &deferred {
-            if self.migration_done(schema_change.name()).await? {
+            let name = schema_change.name();
+            if self.migration_done(&name).await? {
                 continue;
             }
-            tracing::info!("running deferred schema change {}", schema_change.name());
+            tracing::info!("running deferred schema change {}", name);
             schema_change.run(self).await?;
             let mut tx = self.write().await?;
             sqlx::query(
                 "INSERT INTO deferred_migrations (name, done_at) VALUES ($1, $2)
                  ON CONFLICT (name) DO UPDATE SET done_at = EXCLUDED.done_at",
             )
-            .bind(schema_change.name())
+            .bind(name.as_ref())
             .bind(Utc::now().to_rfc3339())
             .execute(tx.as_mut())
             .await?;
             tx.commit().await?;
-            tracing::info!("deferred schema change {} complete", schema_change.name());
+            tracing::info!("deferred schema change {} complete", name);
         }
 
         // Pick up any cleanup migrations that just became eligible.

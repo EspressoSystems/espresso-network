@@ -22,7 +22,7 @@
 //! The kind traits are directly object-safe; [`MigrationRegistry`] stores
 //! `Box<dyn KindTrait>` for each bucket.
 
-use std::collections::HashSet;
+use std::{borrow::Cow, collections::HashSet};
 
 use anyhow::bail;
 use async_trait::async_trait;
@@ -36,7 +36,7 @@ use crate::data_source::storage::sql::{SqlStorage, Transaction, Write};
 /// the lifetime of the migration. `order` is unique within each bucket and
 /// determines the order in which migrations of the same kind run.
 pub trait MigrationMeta: Send + Sync + 'static {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> Cow<'static, str>;
     fn order(&self) -> u32;
 }
 
@@ -196,8 +196,8 @@ impl MigrationRegistry {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        let mut all_names: HashSet<&'static str> = HashSet::new();
-        let mut deferred_names: HashSet<&'static str> = HashSet::new();
+        let mut all_names: HashSet<String> = HashSet::new();
+        let mut deferred_names: HashSet<String> = HashSet::new();
         let mut deferred_orders: HashSet<u32> = HashSet::new();
         let mut backfill_orders: HashSet<u32> = HashSet::new();
         let mut cleanup_orders: HashSet<u32> = HashSet::new();
@@ -210,7 +210,7 @@ impl MigrationRegistry {
                 &mut all_names,
                 &mut deferred_orders,
             )?;
-            deferred_names.insert(m.name());
+            deferred_names.insert(m.name().into_owned());
         }
         for m in &self.backfills {
             check_unique(
@@ -220,7 +220,7 @@ impl MigrationRegistry {
                 &mut all_names,
                 &mut backfill_orders,
             )?;
-            deferred_names.insert(m.name());
+            deferred_names.insert(m.name().into_owned());
         }
         for m in &self.cleanups {
             check_unique(
@@ -234,7 +234,7 @@ impl MigrationRegistry {
 
         for c in &self.cleanups {
             for required in c.requires() {
-                if !deferred_names.contains(required) {
+                if !deferred_names.contains(*required) {
                     bail!(
                         "cleanup migration {} requires {} which is not a registered deferred or \
                          backfill migration",
@@ -262,12 +262,12 @@ impl MigrationRegistry {
 
 fn check_unique(
     bucket: &'static str,
-    name: &'static str,
+    name: Cow<'static, str>,
     order: u32,
-    all_names: &mut HashSet<&'static str>,
+    all_names: &mut HashSet<String>,
     bucket_orders: &mut HashSet<u32>,
 ) -> anyhow::Result<()> {
-    if !all_names.insert(name) {
+    if !all_names.insert(name.clone().into_owned()) {
         bail!("duplicate migration name {} (bucket {})", name, bucket);
     }
     if !bucket_orders.insert(order) {
@@ -286,8 +286,8 @@ mod tests {
 
     struct StubBackfill;
     impl MigrationMeta for StubBackfill {
-        fn name(&self) -> &'static str {
-            "stub_backfill"
+        fn name(&self) -> Cow<'static, str> {
+            "stub_backfill".into()
         }
         fn order(&self) -> u32 {
             1
@@ -322,8 +322,8 @@ mod tests {
 
     struct OkCleanup;
     impl MigrationMeta for OkCleanup {
-        fn name(&self) -> &'static str {
-            "ok_cleanup"
+        fn name(&self) -> Cow<'static, str> {
+            "ok_cleanup".into()
         }
         fn order(&self) -> u32 {
             2
@@ -341,8 +341,8 @@ mod tests {
 
     struct DanglingCleanup;
     impl MigrationMeta for DanglingCleanup {
-        fn name(&self) -> &'static str {
-            "dangling_cleanup"
+        fn name(&self) -> Cow<'static, str> {
+            "dangling_cleanup".into()
         }
         fn order(&self) -> u32 {
             3
@@ -367,8 +367,8 @@ mod tests {
     fn duplicate_name_rejected() {
         struct A;
         impl MigrationMeta for A {
-            fn name(&self) -> &'static str {
-                "dup"
+            fn name(&self) -> Cow<'static, str> {
+                "dup".into()
             }
             fn order(&self) -> u32 {
                 1
@@ -382,8 +382,8 @@ mod tests {
         }
         struct B;
         impl MigrationMeta for B {
-            fn name(&self) -> &'static str {
-                "dup"
+            fn name(&self) -> Cow<'static, str> {
+                "dup".into()
             }
             fn order(&self) -> u32 {
                 2
@@ -408,8 +408,8 @@ mod tests {
     fn duplicate_order_rejected() {
         struct A;
         impl MigrationMeta for A {
-            fn name(&self) -> &'static str {
-                "a"
+            fn name(&self) -> Cow<'static, str> {
+                "a".into()
             }
             fn order(&self) -> u32 {
                 1
@@ -423,8 +423,8 @@ mod tests {
         }
         struct B;
         impl MigrationMeta for B {
-            fn name(&self) -> &'static str {
-                "b"
+            fn name(&self) -> Cow<'static, str> {
+                "b".into()
             }
             fn order(&self) -> u32 {
                 1
