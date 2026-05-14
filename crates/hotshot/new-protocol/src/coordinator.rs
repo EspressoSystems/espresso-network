@@ -46,7 +46,7 @@ use crate::{
     network::Network,
     outbox::Outbox,
     proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
-    state::{HeaderRequest, StateManager, StateManagerOutput},
+    state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
     vid::{VidDisperseRequest, VidDisperser, VidReconstructError, VidReconstructor},
     vote::VoteCollector,
@@ -346,7 +346,7 @@ where
                         if !check_payload_commitment(&validated.message.proposal, &vid_share) {
                             continue;
                         }
-                        return self.handle_proposal_and_vid_share(validated, vid_share)
+                        return self.on_proposal_and_vid_share(validated, vid_share)
                     },
                     Err(e) => {
                         return Err(CoordinatorError::regular(e).context("vid share validation"))
@@ -375,7 +375,7 @@ where
                         if !check_payload_commitment(&validated.message.proposal, &vid_share) {
                             continue;
                         }
-                        return self.handle_proposal_and_vid_share(validated, vid_share)
+                        return self.on_proposal_and_vid_share(validated, vid_share)
                     }
                     Err(e) => {
                         return Err(CoordinatorError::regular(e).context("proposal validation"))
@@ -492,196 +492,6 @@ where
         self.vid_reconstructor
             .spawn_verify_block_task(block, &self.membership_coordinator)
             .await;
-    }
-
-    pub fn node_id(&self) -> &KeyPrefix {
-        &self.node_id
-    }
-
-    pub fn outbox(&self) -> &Outbox<ConsensusOutput<T>> {
-        &self.outbox
-    }
-
-    pub fn outbox_mut(&mut self) -> &mut Outbox<ConsensusOutput<T>> {
-        &mut self.outbox
-    }
-
-    pub fn coordinator_outbox(&self) -> &Outbox<CoordinatorOutput<T>> {
-        &self.coordinator_outbox
-    }
-
-    pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<CoordinatorOutput<T>> {
-        &mut self.coordinator_outbox
-    }
-
-    pub fn state_manager(&self) -> &StateManager<T> {
-        &self.state_manager
-    }
-
-    pub fn current_view(&self) -> ViewNumber {
-        self.consensus.current_view()
-    }
-
-    pub fn client_api(&self) -> &ClientApi<T> {
-        self.client.handle()
-    }
-
-    pub fn on_state_manager_output(
-        &mut self,
-        output: StateManagerOutput<T>,
-    ) -> Option<ConsensusInput<T>> {
-        match output {
-            StateManagerOutput::State {
-                response,
-                validated: true,
-            } => Some(ConsensusInput::StateValidated(response)),
-            StateManagerOutput::State {
-                response,
-                validated: false,
-            } => Some(ConsensusInput::StateValidationFailed(response)),
-            StateManagerOutput::Header {
-                response,
-                header: Some(hdr),
-            } => Some(ConsensusInput::HeaderCreated(response.view, hdr)),
-            StateManagerOutput::Header {
-                response,
-                header: None,
-            } => {
-                tracing::warn!(view = %response.view, "header creation failed");
-                None
-            },
-        }
-    }
-
-    pub async fn on_network_message(
-        &mut self,
-        message: Message<T, Unchecked>,
-    ) -> Option<ConsensusInput<T>> {
-        match message.message_type {
-            MessageType::Consensus(msg) => match msg {
-                ConsensusMessage::Proposal(p) => {
-                    if self.consensus.wants_proposal_for_view(&p.view_number()) {
-                        self.proposal_validator.validate(p);
-                    }
-                    None
-                },
-                ConsensusMessage::VidShare(share) => {
-                    if self
-                        .consensus
-                        .wants_proposal_for_view(&share.data.view_number())
-                    {
-                        self.share_validator.validate(share);
-                    }
-                    None
-                },
-                ConsensusMessage::Vote1(vote1) => {
-                    let bn = vote1.vote.data.block_number.unwrap_or(0);
-                    let epoch_height = *self.consensus.epoch_height;
-                    if is_epoch_root(bn, epoch_height) {
-                        // An epoch-root Vote1 MUST carry a state_vote.
-                        // Reject otherwise.
-                        vote1.state_vote.as_ref()?;
-                        self.epoch_root_collector.accumulate(vote1.clone()).await;
-                    } else {
-                        self.vote1_collector
-                            .accumulate_vote(vote1.vote.clone())
-                            .await;
-                    }
-                    self.vid_reconstructor
-                        .handle_vid_share(vote1.vid_share, None);
-                    None
-                },
-                ConsensusMessage::Vote2(vote2) => {
-                    self.vote2_collector.accumulate_vote(vote2).await;
-                    None
-                },
-                ConsensusMessage::Certificate1(certificate1, _key) => {
-                    Some(ConsensusInput::Certificate1(certificate1))
-                },
-                ConsensusMessage::Certificate2(certificate2, _key) => {
-                    Some(ConsensusInput::Certificate2(certificate2))
-                },
-                ConsensusMessage::TimeoutVote(timeout_msg) => {
-                    self.timeout_collector
-                        .accumulate_vote(timeout_msg.vote.clone())
-                        .await;
-                    self.timeout_one_honest_collector
-                        .accumulate_vote(timeout_msg.vote)
-                        .await;
-                    None
-                },
-                ConsensusMessage::TimeoutCertificate(tc) => {
-                    Some(ConsensusInput::TimeoutCertificate(tc))
-                },
-                ConsensusMessage::EpochChange(epoch_change) => {
-                    Some(ConsensusInput::EpochChange(epoch_change))
-                },
-                ConsensusMessage::Checkpoint(checkpoint) => {
-                    self.checkpoint_collector.accumulate_vote(checkpoint).await;
-                    None
-                },
-                ConsensusMessage::BlockPush(push) => {
-                    self.handle_block_push(push).await;
-                    None
-                },
-            },
-            MessageType::Block(msg) => {
-                match msg {
-                    BlockMessage::Transactions(msg) => self.block_builder.on_transactions(msg),
-                    BlockMessage::DedupManifest(manifest) => {
-                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
-                            && view_leader == message.sender
-                        {
-                            self.block_builder.on_dedup_manifest(manifest)
-                        }
-                    },
-                }
-                None
-            },
-            MessageType::ProposalFetch(ProposalFetchMessage::Request(request)) => {
-                if !request.validate_sender(&message.sender) {
-                    warn!(
-                        sender = %message.sender,
-                        view = %request.view_number(),
-                        "ignoring invalid proposal fetch request signature"
-                    );
-                    return None;
-                }
-                if let Some(proposal) = self
-                    .consensus
-                    .signed_proposal(&request.view_number())
-                    .cloned()
-                {
-                    let response = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(
-                            Box::new(proposal),
-                        )),
-                    };
-
-                    if let Err(err) =
-                        self.network
-                            .unicast(request.view_number(), &message.sender, &response)
-                    {
-                        let err = CoordinatorError::from(err).context("proposal response");
-                        warn!(%err, "network error while sending proposal response");
-                    }
-                }
-                None
-            },
-            MessageType::ProposalFetch(ProposalFetchMessage::Response(proposal)) => {
-                self.pending_proposal_fetches.resolve(&proposal);
-                None
-            },
-            MessageType::External(data) => {
-                self.coordinator_outbox
-                    .push_back(CoordinatorOutput::ExternalMessageReceived {
-                        sender: message.sender,
-                        data,
-                    });
-                None
-            },
-        }
     }
 
     pub fn handle_proposal_and_vid_share(
@@ -914,6 +724,227 @@ where
         Ok(())
     }
 
+    pub fn node_id(&self) -> &KeyPrefix {
+        &self.node_id
+    }
+
+    pub fn outbox(&self) -> &Outbox<ConsensusOutput<T>> {
+        &self.outbox
+    }
+
+    pub fn outbox_mut(&mut self) -> &mut Outbox<ConsensusOutput<T>> {
+        &mut self.outbox
+    }
+
+    pub fn coordinator_outbox(&self) -> &Outbox<CoordinatorOutput<T>> {
+        &self.coordinator_outbox
+    }
+
+    pub fn coordinator_outbox_mut(&mut self) -> &mut Outbox<CoordinatorOutput<T>> {
+        &mut self.coordinator_outbox
+    }
+
+    pub fn current_view(&self) -> ViewNumber {
+        self.consensus.current_view()
+    }
+
+    pub fn state(&self, v: ViewNumber) -> Option<&StateEntry<T>> {
+        self.state_manager.get_state(v)
+    }
+
+    pub fn client_api(&self) -> &ClientApi<T> {
+        self.client.handle()
+    }
+
+    pub(crate) async fn on_network_message(
+        &mut self,
+        message: Message<T, Unchecked>,
+    ) -> Option<ConsensusInput<T>> {
+        match message.message_type {
+            MessageType::Consensus(msg) => match msg {
+                ConsensusMessage::Proposal(p) => {
+                    if self.consensus.wants_proposal_for_view(&p.view_number()) {
+                        self.proposal_validator.validate(p);
+                    }
+                    None
+                },
+                ConsensusMessage::VidShare(share) => {
+                    if self
+                        .consensus
+                        .wants_proposal_for_view(&share.data.view_number())
+                    {
+                        self.share_validator.validate(share);
+                    }
+                    None
+                },
+                ConsensusMessage::Vote1(vote1) => {
+                    let bn = vote1.vote.data.block_number.unwrap_or(0);
+                    let epoch_height = *self.consensus.epoch_height;
+                    if is_epoch_root(bn, epoch_height) {
+                        // An epoch-root Vote1 MUST carry a state_vote.
+                        // Reject otherwise.
+                        vote1.state_vote.as_ref()?;
+                        self.epoch_root_collector.accumulate(vote1.clone()).await;
+                    } else {
+                        self.vote1_collector
+                            .accumulate_vote(vote1.vote.clone())
+                            .await;
+                    }
+                    self.vid_reconstructor
+                        .handle_vid_share(vote1.vid_share, None);
+                    None
+                },
+                ConsensusMessage::Vote2(vote2) => {
+                    self.vote2_collector.accumulate_vote(vote2).await;
+                    None
+                },
+                ConsensusMessage::Certificate1(certificate1, _key) => {
+                    Some(ConsensusInput::Certificate1(certificate1))
+                },
+                ConsensusMessage::Certificate2(certificate2, _key) => {
+                    Some(ConsensusInput::Certificate2(certificate2))
+                },
+                ConsensusMessage::TimeoutVote(timeout_msg) => {
+                    self.timeout_collector
+                        .accumulate_vote(timeout_msg.vote.clone())
+                        .await;
+                    self.timeout_one_honest_collector
+                        .accumulate_vote(timeout_msg.vote)
+                        .await;
+                    None
+                },
+                ConsensusMessage::TimeoutCertificate(tc) => {
+                    Some(ConsensusInput::TimeoutCertificate(tc))
+                },
+                ConsensusMessage::EpochChange(epoch_change) => {
+                    Some(ConsensusInput::EpochChange(epoch_change))
+                },
+                ConsensusMessage::Checkpoint(checkpoint) => {
+                    self.checkpoint_collector.accumulate_vote(checkpoint).await;
+                    None
+                },
+                ConsensusMessage::BlockPush(block) => {
+                    self.handle_block_push(block).await;
+                    None
+                },
+            },
+            MessageType::Block(msg) => {
+                match msg {
+                    BlockMessage::Transactions(msg) => self.block_builder.on_transactions(msg),
+                    BlockMessage::DedupManifest(manifest) => {
+                        if let Some(view_leader) = self.leader(manifest.view, manifest.epoch)
+                            && view_leader == message.sender
+                        {
+                            self.block_builder.on_dedup_manifest(manifest)
+                        }
+                    },
+                }
+                None
+            },
+            MessageType::ProposalFetch(ProposalFetchMessage::Request(request)) => {
+                if !request.validate_sender(&message.sender) {
+                    warn!(
+                        sender = %message.sender,
+                        view = %request.view_number(),
+                        "ignoring invalid proposal fetch request signature"
+                    );
+                    return None;
+                }
+                if let Some(proposal) = self
+                    .consensus
+                    .signed_proposal(&request.view_number())
+                    .cloned()
+                {
+                    let response = Message {
+                        sender: self.public_key.clone(),
+                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(
+                            Box::new(proposal),
+                        )),
+                    };
+
+                    if let Err(err) =
+                        self.network
+                            .unicast(request.view_number(), &message.sender, &response)
+                    {
+                        let err = CoordinatorError::from(err).context("proposal response");
+                        warn!(%err, "network error while sending proposal response");
+                    }
+                }
+                None
+            },
+            MessageType::ProposalFetch(ProposalFetchMessage::Response(proposal)) => {
+                self.pending_proposal_fetches.resolve(&proposal);
+                None
+            },
+            MessageType::External(data) => {
+                self.coordinator_outbox
+                    .push_back(CoordinatorOutput::ExternalMessageReceived {
+                        sender: message.sender,
+                        data,
+                    });
+                None
+            },
+        }
+    }
+
+    fn on_state_manager_output(
+        &mut self,
+        output: StateManagerOutput<T>,
+    ) -> Option<ConsensusInput<T>> {
+        match output {
+            StateManagerOutput::State {
+                response,
+                validated: true,
+            } => Some(ConsensusInput::StateValidated(response)),
+            StateManagerOutput::State {
+                response,
+                validated: false,
+            } => Some(ConsensusInput::StateValidationFailed(response)),
+            StateManagerOutput::Header {
+                response,
+                header: Some(hdr),
+            } => Some(ConsensusInput::HeaderCreated(response.view, hdr)),
+            StateManagerOutput::Header {
+                response,
+                header: None,
+            } => {
+                tracing::warn!(view = %response.view, "header creation failed");
+                None
+            },
+        }
+    }
+
+    fn on_proposal_and_vid_share(
+        &mut self,
+        validated: ValidatedProposal<T>,
+        vid_share: VidDisperseShare2<T>,
+    ) -> Result<ConsensusInput<T>, CoordinatorError> {
+        self.storage.append_vid(vid_share.clone());
+        self.storage
+            .append_proposal(validated.message.proposal.data.clone());
+
+        let m = validated
+            .message
+            .proposal
+            .data
+            .block_header
+            .metadata()
+            .clone();
+        self.vid_reconstructor
+            .handle_vid_share(vid_share.clone(), m);
+
+        // GC for the cache
+        let view = validated.message.proposal.data.view_number();
+        self.cached_vid_shares = self.cached_vid_shares.split_off(&(view + 1));
+        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(view + 1));
+
+        Ok(ConsensusInput::ProposalWithVidShare(
+            validated.sender,
+            validated.message,
+            vid_share,
+        ))
+    }
+
     fn unicast_to_leader(
         &mut self,
         view: ViewNumber,
@@ -954,16 +985,19 @@ where
             },
             ClientRequest::DecidedState(tx) => {
                 let view = self.consensus.last_decided_leaf().view_number();
-                let _ = tx.send(self.state_manager.get_state(&view));
+                let _ = tx.send(self.state(view).map(|s| s.state.clone()));
             },
             ClientRequest::UndecidedLeaves(tx) => {
                 let _ = tx.send(self.consensus.undecided_leaves().cloned().collect());
             },
             ClientRequest::GetState { view, respond } => {
-                let _ = respond.send(self.state_manager.get_state(&view));
+                let _ = respond.send(self.state(view).map(|s| s.state.clone()));
             },
             ClientRequest::GetStateAndDelta { view, respond } => {
-                let _ = respond.send(self.state_manager.get_state_and_delta(&view));
+                let _ = respond.send(match self.state(view) {
+                    Some(s) => (Some(s.state.clone()), s.delta.clone()),
+                    None => (None, None),
+                });
             },
             ClientRequest::SubmitTransaction { tx, respond } => {
                 self.block_builder.on_submit_transaction(tx);
