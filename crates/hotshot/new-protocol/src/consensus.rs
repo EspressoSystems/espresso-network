@@ -986,9 +986,9 @@ impl<T: NodeType> Consensus<T> {
             debug!("cert2 commitment does not match proposal commitment");
             return;
         }
-        // Decide requires the block to be locally available.
-        if !self.blocks.contains_key(&view) && !self.blocks_reconstructed.contains_key(&view) {
-            debug!(%view, "decide deferred: block not yet locally available");
+        // Decide requires the block to be locally available and its
+        // commitment to match the proposal.
+        if !self.block_matches_proposal(view, proposal) {
             return;
         }
         // Handle Epoch Change by broadcasting the epoch change message if we have
@@ -1290,37 +1290,41 @@ impl<T: NodeType> Consensus<T> {
         }
 
         // Vote2: block not required.
-        if !self.voted_2_views.contains(&view)
-            && let Some(epoch) = cert1.data.epoch
-            && let Some(block_number) = cert1.data.block_number
-            && self.staked_in_epoch(epoch)
-        {
-            match SimpleVote::create_signed_vote(
-                Vote2Data {
-                    leaf_commit: cert1.data.leaf_commit,
-                    epoch,
-                    block_number,
+        if !self.voted_2_views.contains(&view) {
+            match (cert1.data.epoch, cert1.data.block_number) {
+                (Some(epoch), Some(block_number)) if self.staked_in_epoch(epoch) => {
+                    match SimpleVote::create_signed_vote(
+                        Vote2Data {
+                            leaf_commit: cert1.data.leaf_commit,
+                            epoch,
+                            block_number,
+                        },
+                        view,
+                        &self.public_key,
+                        &self.private_key,
+                        &self.upgrade_lock,
+                    ) {
+                        Ok(vote) => {
+                            outbox.push_back(ConsensusOutput::SendVote2(vote));
+                            self.voted_2_views.insert(view);
+                        },
+                        Err(err) => {
+                            warn!(%view, %err, "failed to create signed vote2");
+                        },
+                    }
                 },
-                view,
-                &self.public_key,
-                &self.private_key,
-                &self.upgrade_lock,
-            ) {
-                Ok(vote) => {
-                    outbox.push_back(ConsensusOutput::SendVote2(vote));
-                    self.voted_2_views.insert(view);
+                (Some(_), Some(_)) => {
+                    debug!(%view, "vote2 skipped: not staked in cert1's epoch");
                 },
-                Err(err) => {
-                    warn!(%view, %err, "failed to create signed vote2");
+                _ => {
+                    debug!(%view, "vote2 skipped: cert1 missing epoch or block_number");
                 },
             }
         }
 
         // Lock update / ViewChanged / SendCertificate1: additionally require
-        // the block to be locally available (leader via `self.blocks`, others
-        // via `self.blocks_reconstructed`).
-        if !self.blocks.contains_key(&view) && !self.blocks_reconstructed.contains_key(&view) {
-            debug!(%view, "block not available; lock deferred");
+        // a locally available block whose commitment matches the proposal.
+        if !self.block_matches_proposal(view, proposal) {
             return;
         }
         if self
@@ -1332,6 +1336,29 @@ impl<T: NodeType> Consensus<T> {
             self.current_epoch = Some(proposal_epoch);
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1));
+        }
+    }
+
+    /// Returns true when a payload matching the proposal's commitment is
+    /// locally available.
+    fn block_matches_proposal(&self, view: ViewNumber, proposal: &Proposal<T>) -> bool {
+        if self.blocks.contains_key(&view) {
+            return true;
+        }
+        let VidCommitment::V2(expected) = proposal.block_header.payload_commitment() else {
+            warn!(%view, "proposal payload commitment is not a V2 VID commitment");
+            return false;
+        };
+        match self.blocks_reconstructed.get(&view) {
+            Some(c) if c == &expected => true,
+            Some(_) => {
+                warn!(%view, "reconstructed block commitment does not match proposal");
+                false
+            },
+            None => {
+                debug!(%view, "block not yet locally available");
+                false
+            },
         }
     }
 

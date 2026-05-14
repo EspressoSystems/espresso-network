@@ -340,6 +340,49 @@ async fn test_decide_requires_cert2() {
     );
 }
 
+/// Decide defers when cert2 arrives before the block, and fires once the
+/// block is locally available.
+#[tokio::test]
+async fn test_decide_fires_when_block_arrives_late() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Bootstrap view[0] so view[1]'s parent chain check is satisfied.
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+
+    let decided_before = count_matching(harness.outputs(), is_leaf_decided);
+
+    // View[1]: proposal + cert1 + cert2 arrive before reconstruction.
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+    harness.apply(test_data.views[1].cert2_input()).await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_leaf_decided),
+        decided_before,
+        "Decide must defer until BlockReconstructed arrives"
+    );
+
+    // Reconstruction lands — decide must now fire.
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_leaf_decided),
+        decided_before + 1,
+        "Decide must fire once the block is locally available"
+    );
+}
+
 /// Vote2 fires as soon as cert1 + proposal are present — it does NOT wait
 /// for BlockReconstructed.
 #[tokio::test]
@@ -363,7 +406,7 @@ async fn test_vote2_fires_without_block_reconstructed() {
 
     assert!(
         any(harness.outputs(), is_vote2),
-        "Vote2 should fire on cert1 + proposal, without waiting for BlockReconstructed"
+        "Vote2 should fire as soon as cert1 arrives (no BlockReconstructed required)"
     );
 }
 
