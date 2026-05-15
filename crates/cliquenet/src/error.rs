@@ -2,7 +2,7 @@ use std::io;
 
 use thiserror::Error;
 
-use crate::{Version, addr::NetAddr, msg::Header, x25519::PublicKey};
+use crate::{Version, addr::NetAddr, x25519::PublicKey};
 pub use crate::{addr::InvalidNetAddr, msg::InvalidHeader};
 
 /// The empty type has no values.
@@ -24,10 +24,6 @@ pub enum NetworkError {
     #[error("invalid frame header: {0}")]
     InvalidFrameHeader(#[from] InvalidHeader),
 
-    /// The received init frame is not valid.
-    #[error("invalid init frame")]
-    InvalidInit,
-
     /// The received message trailer is not valid.
     #[error("invalid message trailer")]
     InvalidTrailer,
@@ -43,10 +39,6 @@ pub enum NetworkError {
     /// The received frame has an unknown type.
     #[error("unknown frame type: {0}")]
     UnknownFrameType(u8),
-
-    /// The received frame is unexpected.
-    #[error("unexpected frame: {0}")]
-    UnexpectedFrame(Header),
 
     /// Version negotiation failed.
     #[error("version negotiation failed, ours = {ours:?}, theirs = {theirs:?}")]

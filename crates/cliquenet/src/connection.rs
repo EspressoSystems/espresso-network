@@ -307,9 +307,9 @@ async fn select_version(
 ) -> Result<(Version, Prologue)> {
     // NB that both ends send simultaneously before reading, hence the
     // initial frame must fit into the socket's send buffer, i.e. be
-    // very small. Since we only send a header plus two u16 version
-    // numbers (= 8 bytes), that should not be a problem, but the init
-    // frame should better not grow.
+    // very small. Since we only send two u16 version numbers (= 4 bytes),
+    // that should not be a problem, but the init frame should better not
+    // grow.
     const INIT_PAYLOAD_LEN: usize = 4;
 
     let our_min = conf
@@ -325,20 +325,14 @@ async fn select_version(
         .copied()
         .expect("noise_configs is not empty");
 
-    let mut send_buf = [0u8; Header::SIZE + INIT_PAYLOAD_LEN];
+    let mut send_buf = [0u8; INIT_PAYLOAD_LEN];
     let mut recv_buf = [0u8; INIT_PAYLOAD_LEN];
 
-    let payload = &mut send_buf[Header::SIZE..];
-    payload[0..2].copy_from_slice(&u16::from(our_min).to_be_bytes());
-    payload[2..4].copy_from_slice(&u16::from(our_max).to_be_bytes());
+    send_buf[0..2].copy_from_slice(&u16::from(our_min).to_be_bytes());
+    send_buf[2..4].copy_from_slice(&u16::from(our_max).to_be_bytes());
 
-    let h = Header::init(INIT_PAYLOAD_LEN as u16);
-    send_frame(stream, h, &mut send_buf[..]).await?;
-
-    let h = recv_frame(stream, &mut recv_buf).await?;
-    if !h.is_init() || h.is_partial() || h.len() != INIT_PAYLOAD_LEN as u16 {
-        return Err(NetworkError::InvalidInit);
-    }
+    stream.write_all(&send_buf).await?;
+    stream.read_exact(&mut recv_buf).await?;
 
     let their_min = Version::from(u16::from_be_bytes([recv_buf[0], recv_buf[1]]));
     let their_max = Version::from(u16::from_be_bytes([recv_buf[2], recv_buf[3]]));
@@ -358,11 +352,11 @@ async fn select_version(
     let mut prologue = Vec::new();
     prologue.extend_from_slice(conf.name.as_bytes());
     if is_initiator {
-        prologue.extend_from_slice(&send_buf[Header::SIZE..]);
+        prologue.extend_from_slice(&send_buf);
         prologue.extend_from_slice(&recv_buf);
     } else {
         prologue.extend_from_slice(&recv_buf);
-        prologue.extend_from_slice(&send_buf[Header::SIZE..]);
+        prologue.extend_from_slice(&send_buf);
     }
 
     Ok((selected, prologue))
