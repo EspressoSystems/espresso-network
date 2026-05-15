@@ -1,0 +1,4 @@
+code_review:
+  pull_request_opened:
+    help: true
+    code_review: false
