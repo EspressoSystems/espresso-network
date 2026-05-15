@@ -32,6 +32,7 @@ pub struct ViewMetrics {
     pub vote2_sent_ns: Option<i128>,
     pub cert2_formed_ns: Option<i128>,
     pub leaf_decided_ns: Option<i128>,
+    pub block_push_sent_ns: Option<i128>,
 }
 
 /// Collects per-view timing metrics.
@@ -156,6 +157,10 @@ impl MetricsCollector {
             },
             ConsensusOutput::ViewChanged(view, _epoch) => {
                 self.current_view = **view;
+            },
+            ConsensusOutput::SendBlockToLeader { block, .. } => {
+                let v = *block.view;
+                self.view_mut(v).block_push_sent_ns = Some(ts);
             },
             _ => {},
         }

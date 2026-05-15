@@ -3,12 +3,18 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber},
+    data::{
+        EpochNumber, VidCommitment, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber,
+        ns_table::parse_ns_table, vid_disperse::vid_total_weight,
+    },
     epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::NodeType,
-    vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
+    traits::{block_contents::EncodeBytes, node_implementation::NodeType},
+    vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share, init_avidm_gf2_param},
 };
 use tokio::task::{AbortHandle, JoinSet};
+use tracing::warn;
+
+use crate::message::BlockPushMessage;
 
 pub struct VidDisperseOutput<T: NodeType> {
     pub view: ViewNumber,
@@ -23,6 +29,24 @@ pub struct VidReconstructOutput<T: NodeType> {
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     pub tx_commitments: Vec<Commitment<T::Transaction>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum VidReconstructError {
+    /// `AvidmGf2::recover` (share-driven reconstruction) failed.
+    #[error("share-based reconstruction failed for view {0}")]
+    Reconstruct(ViewNumber),
+    /// `verify_block` failed (commit mismatch / param init / commit error).
+    #[error("block push verification failed for view {0}")]
+    VerifyBlock(ViewNumber),
+}
+
+impl VidReconstructError {
+    pub fn view(&self) -> ViewNumber {
+        match self {
+            Self::Reconstruct(v) | Self::VerifyBlock(v) => *v,
+        }
+    }
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -120,9 +144,10 @@ impl<T: NodeType> VidShareAccumulator<T> {
 #[derive(Default)]
 pub struct VidReconstructor<T: NodeType> {
     accumulators: BTreeMap<ViewNumber, VidShareAccumulator<T>>,
-    reconstructed: BTreeSet<ViewNumber>,
-    tasks: JoinSet<Result<VidReconstructOutput<T>, ()>>,
+    pub(crate) reconstructed: BTreeSet<ViewNumber>,
+    tasks: JoinSet<Result<VidReconstructOutput<T>, VidReconstructError>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
+    block_verifications: BTreeMap<ViewNumber, AbortHandle>,
     /// Wall-clock unix nanoseconds at which `try_reconstruct` first fired for a view —
     /// i.e., when 2N/3+1 shares had been accumulated and `AvidmGf2::recover` was about
     /// to start. Subtract this from `block_reconstructed_ns` to isolate recover CPU time
@@ -137,6 +162,7 @@ impl<T: NodeType> VidReconstructor<T> {
             reconstructed: BTreeSet::new(),
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
+            block_verifications: BTreeMap::new(),
             threshold_reached_ns: BTreeMap::new(),
         }
     }
@@ -186,18 +212,36 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    pub async fn next(&mut self) -> Option<Result<VidReconstructOutput<T>, ()>> {
+    pub async fn next(&mut self) -> Option<Result<VidReconstructOutput<T>, VidReconstructError>> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(Ok(out))) => {
-                    self.calculations.remove(&out.view);
-                    self.accumulators.remove(&out.view);
-                    self.reconstructed.insert(out.view);
+                    let view = out.view;
+                    if self.reconstructed.contains(&view) {
+                        self.calculations.remove(&view);
+                        self.block_verifications.remove(&view);
+                        continue;
+                    }
+                    if let Some(h) = self.calculations.remove(&view) {
+                        h.abort();
+                    }
+                    if let Some(h) = self.block_verifications.remove(&view) {
+                        h.abort();
+                    }
+                    self.accumulators.remove(&view);
+                    self.reconstructed.insert(view);
                     return Some(Ok(out));
                 },
-                Some(Ok(Err(()))) => {
-                    // TODO: Handle error
-                    return Some(Err(()));
+                Some(Ok(Err(err))) => {
+                    match &err {
+                        VidReconstructError::Reconstruct(view) => {
+                            self.calculations.remove(view);
+                        },
+                        VidReconstructError::VerifyBlock(view) => {
+                            self.block_verifications.remove(view);
+                        },
+                    }
+                    return Some(Err(err));
                 },
                 Some(Err(_)) => continue,
                 None => return None,
@@ -230,8 +274,7 @@ impl<T: NodeType> VidReconstructor<T> {
         });
         let task = self.tasks.spawn_blocking(move || {
             let Ok(result) = AvidmGf2Scheme::recover(&common, &shares) else {
-                // TODO: Handle error
-                return Err(());
+                return Err(VidReconstructError::Reconstruct(view));
             };
             let payload = T::BlockPayload::from_bytes(&result, &metadata);
             let tx_commitments = payload.transaction_commitments(&metadata);
@@ -253,7 +296,63 @@ impl<T: NodeType> VidReconstructor<T> {
             handle.abort();
         }
         self.calculations = keep;
+        let keep = self.block_verifications.split_off(&view_number);
+        for handle in self.block_verifications.values_mut() {
+            handle.abort();
+        }
+        self.block_verifications = keep;
         self.accumulators = self.accumulators.split_off(&view_number);
         self.threshold_reached_ns = self.threshold_reached_ns.split_off(&view_number);
+    }
+
+    /// Verify a `BlockPushMessage` off-thread.
+    pub async fn spawn_verify_block_task(
+        &mut self,
+        block: BlockPushMessage<T>,
+        membership_coordinator: &EpochMembershipCoordinator<T>,
+    ) {
+        let view = block.view;
+        if self.reconstructed.contains(&view) || self.block_verifications.contains_key(&view) {
+            return;
+        }
+        let VidCommitment::V2(expected_v2) = block.payload_commitment else {
+            warn!(%view, "block push has non-V2 commit; dropping");
+            return;
+        };
+        let Ok(membership) = membership_coordinator.stake_table_for_epoch(Some(block.epoch)) else {
+            warn!(%view, epoch = %block.epoch, "block push verify: stake table unavailable");
+            return;
+        };
+        let total_weight = vid_total_weight(membership.stake_table(), Some(block.epoch));
+        let epoch = block.epoch;
+        let task = self.tasks.spawn_blocking(move || {
+            let payload_bytes = block.payload.encode();
+            let metadata_bytes = block.metadata.encode();
+            let Ok(param) = init_avidm_gf2_param(total_weight) else {
+                warn!(%view, "block push verify: failed to init avidm param");
+                return Err(VidReconstructError::VerifyBlock(view));
+            };
+            let ns_table = parse_ns_table(payload_bytes.len(), metadata_bytes.as_ref());
+            let Ok((computed, _common)) =
+                AvidmGf2Scheme::commit(&param, payload_bytes.as_ref(), ns_table)
+            else {
+                warn!(%view, "block push verify: AvidmGf2Scheme::commit failed");
+                return Err(VidReconstructError::VerifyBlock(view));
+            };
+            if computed != expected_v2 {
+                warn!(%view, "block push commit mismatch; falling back to share-based recover");
+                return Err(VidReconstructError::VerifyBlock(view));
+            }
+            let tx_commitments = block.payload.transaction_commitments(&block.metadata);
+            Ok(VidReconstructOutput {
+                view,
+                epoch,
+                payload_commitment: expected_v2,
+                payload: block.payload,
+                metadata: block.metadata,
+                tx_commitments,
+            })
+        });
+        self.block_verifications.insert(view, task);
     }
 }
