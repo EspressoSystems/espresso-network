@@ -400,6 +400,9 @@ where
                             block.payload.metadata.clone(),
                             block.payload_commitment,
                         );
+                        // Leader has its own payload; skip share-based recover
+                        // and discard any future shares for this view.
+                        self.vid_reconstructor.mark_locally_available(block.view);
                         self.unicast_to_leader(
                             next_view,
                             epoch,

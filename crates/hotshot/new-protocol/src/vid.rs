@@ -201,6 +201,18 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
+    /// Mark a view's payload as locally available.
+    pub fn mark_locally_available(&mut self, view: ViewNumber) {
+        if let Some(h) = self.calculations.remove(&view) {
+            h.abort();
+        }
+        if let Some(h) = self.block_verifications.remove(&view) {
+            h.abort();
+        }
+        self.accumulators.remove(&view);
+        self.reconstructed.insert(view);
+    }
+
     pub async fn next(&mut self) -> Option<Result<VidReconstructOutput<T>, VidReconstructError>> {
         loop {
             match self.tasks.join_next().await {
@@ -211,14 +223,7 @@ impl<T: NodeType> VidReconstructor<T> {
                         self.block_verifications.remove(&view);
                         continue;
                     }
-                    if let Some(h) = self.calculations.remove(&view) {
-                        h.abort();
-                    }
-                    if let Some(h) = self.block_verifications.remove(&view) {
-                        h.abort();
-                    }
-                    self.accumulators.remove(&view);
-                    self.reconstructed.insert(view);
+                    self.mark_locally_available(view);
                     return Some(Ok(out));
                 },
                 Some(Ok(Err(err))) => {
@@ -294,6 +299,7 @@ impl<T: NodeType> VidReconstructor<T> {
         }
         self.block_verifications = keep;
         self.accumulators = self.accumulators.split_off(&view_number);
+        self.reconstructed = self.reconstructed.split_off(&view_number);
     }
 
     /// Verify a `BlockPushMessage` off-thread.
