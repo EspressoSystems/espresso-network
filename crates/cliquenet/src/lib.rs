@@ -14,7 +14,7 @@ use std::{fmt, num::NonZeroUsize, sync::Arc, time::Duration};
 pub use addr::NetAddr;
 use bon::Builder;
 pub use error::NetworkError;
-pub use metrics::{Metrics, NoMetrics};
+pub use metrics::Metrics;
 pub use msg::Slot;
 pub use net::{
     Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
@@ -24,53 +24,53 @@ pub use net::{
 use crate::x25519::{Keypair, PublicKey};
 
 #[derive(Builder)]
+#[non_exhaustive]
 pub struct Config {
     /// Network name.
     #[builder(with = |s: impl Into<String>| Arc::new(s.into()))]
-    name: Arc<String>,
+    pub name: Arc<String>,
 
     /// DH keypair
-    keypair: Keypair,
+    pub keypair: Keypair,
 
     /// Address to bind to.
-    bind: NetAddr,
+    pub bind: NetAddr,
 
     /// Network members with public key and network address.
     #[builder(with = <_>::from_iter)]
-    parties: Vec<(PublicKey, NetAddr)>,
+    pub parties: Vec<(PublicKey, NetAddr)>,
 
     #[builder(default = NonZeroUsize::new(100).expect("100 > 0"))]
-    peer_budget: NonZeroUsize,
+    pub peer_budget: NonZeroUsize,
 
     /// Max. number of bytes per message to send or receive.
     #[builder(default = NonZeroUsize::new(10485760).expect("10485760 > 0"))]
-    max_message_size: NonZeroUsize,
+    pub max_message_size: NonZeroUsize,
 
     /// Retry delays in seconds.
     #[builder(default = vec![1, 3, 5, 15, 30])]
-    retry_delays: Vec<u8>,
+    pub retry_delays: Vec<u8>,
 
     #[builder(default = Duration::from_secs(30))]
-    max_retry_delay: Duration,
+    pub max_retry_delay: Duration,
 
     /// Randomly delay the initial connect attempt between 0 and 1s.
     #[builder(default = true)]
-    random_connect_delay: bool,
+    pub random_connect_delay: bool,
 
     #[builder(default = Duration::from_secs(30))]
-    connect_timeout: Duration,
+    pub connect_timeout: Duration,
 
     #[builder(default = Duration::from_secs(10))]
-    handshake_timeout: Duration,
+    pub handshake_timeout: Duration,
 
     #[builder(default = Duration::from_secs(30))]
-    receive_timeout: Duration,
+    pub receive_timeout: Duration,
 
     #[builder(default = Duration::from_secs(30))]
-    backoff_duration: Duration,
+    pub backoff_duration: Duration,
 
-    #[builder(default = Box::new(NoMetrics))]
-    metrics: Box<dyn Metrics>,
+    pub metrics: Option<Arc<dyn Metrics>>,
 }
 
 impl fmt::Debug for Config {

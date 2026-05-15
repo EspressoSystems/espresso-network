@@ -28,7 +28,7 @@ use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
-    traits::{node_implementation::NodeType, signature_key::SignatureKey},
+    traits::{metrics::NoMetrics, node_implementation::NodeType, signature_key::SignatureKey},
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
@@ -91,6 +91,7 @@ async fn create_network(
         bind_addr,
         parties,
         upgrade_lock(),
+        Box::new(NoMetrics),
     )
     .await
     .map_err(|e| anyhow::anyhow!("failed to create cliquenet: {e}"))?;
