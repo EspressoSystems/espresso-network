@@ -34,8 +34,8 @@ use hotshot_types::{
     event::{Event, EventType},
     storage_metrics::StorageMetricsValue,
     traits::{
-        leaf_fetcher_network::ConnectedNetworkLeafFetcher, node_implementation::NodeType,
-        signature_key::SignatureKey,
+        leaf_fetcher_network::ConnectedNetworkLeafFetcher, metrics::NoMetrics,
+        node_implementation::NodeType, signature_key::SignatureKey,
     },
     x25519::Keypair,
 };
@@ -197,7 +197,8 @@ async fn build_new_protocol_network(
                 .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
         )
         .build();
-    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone())
+    let met = Box::new(NoMetrics);
+    Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
         .await
         .expect("cliquenet creation should succeed")
 }

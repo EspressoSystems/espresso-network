@@ -1059,7 +1059,7 @@ where
                 // leader — the proposal-driven site can't fire yet.
                 if let Err(err) = self
                     .network
-                    .on_epoch_change(cutover_epoch, &self.membership_coordinator)
+                    .apply_epoch(cutover_epoch, &self.membership_coordinator)
                     .await
                 {
                     tracing::error!(
@@ -1119,7 +1119,7 @@ where
             ClientRequest::BumpNetworkEpoch { epoch, respond } => {
                 if let Err(err) = self
                     .network
-                    .on_epoch_change(epoch, &self.membership_coordinator)
+                    .apply_epoch(epoch, &self.membership_coordinator)
                     .await
                 {
                     tracing::warn!(%epoch, %err, "network on_epoch_change failed");

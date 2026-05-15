@@ -295,7 +295,7 @@ impl<T: NodeType> Consensus<T> {
         self.advance_decided_anchor(seed.decided_anchor);
         self.install_pre_cutover_leaves(seed.undecided);
         if let Some(high_qc) = &seed.high_qc {
-            self.register_proposal_justify_qc(high_qc);
+            self.register_legacy_qc(high_qc);
         }
         self.advance_to_cutover(seed.cutover_view);
     }
@@ -306,7 +306,7 @@ impl<T: NodeType> Consensus<T> {
         for leaf in leaves {
             let view = leaf.view_number();
             let justify_qc = leaf.justify_qc().clone();
-            self.register_proposal_justify_qc(&justify_qc);
+            self.register_legacy_qc(&justify_qc);
 
             let block_number = leaf.block_header().block_number();
             let epoch = EpochNumber::new(epoch_from_block_number(block_number, *self.epoch_height));
@@ -355,7 +355,7 @@ impl<T: NodeType> Consensus<T> {
 
     /// Register `justify_qc` as Cert1 for its parent view (idempotent)
     /// and bump `locked_cert` if newer.
-    pub(crate) fn register_proposal_justify_qc(&mut self, justify_qc: &Certificate1<T>) {
+    pub(crate) fn register_legacy_qc(&mut self, justify_qc: &Certificate1<T>) {
         let parent_view = justify_qc.view_number();
         self.certs
             .entry(parent_view)
@@ -661,8 +661,6 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.insert(view, signed_proposal.clone());
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
-
-        self.register_proposal_justify_qc(&proposal.justify_qc);
 
         // Request the DRB if we don't have it yet.  A mismatching DRB is
         // a hard failure (invalid leader), but a missing DRB is
