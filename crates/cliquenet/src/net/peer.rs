@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
 use crate::{
-    Config, PublicKey,
+    Config, Metrics, PublicKey,
     connection::Connection,
     error::{Empty, NetworkError},
     msg::{Ack, FrameType, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, Slot, Trailer},
@@ -77,6 +77,8 @@ pub struct Peer {
     ///
     /// It accounts for the additional `Trailer` bytes.
     max_message_size: usize,
+
+    metrics: Arc<dyn Metrics>,
 }
 
 /// A budget limits how many messages a peer can delivery to the application.
@@ -85,6 +87,10 @@ pub struct Budget(Arc<Semaphore>);
 impl Budget {
     pub fn new(amount: NonZeroUsize) -> Self {
         Self(Arc::new(Semaphore::new(amount.get())))
+    }
+
+    fn remaining(&self) -> usize {
+        self.0.available_permits()
     }
 }
 
@@ -98,6 +104,7 @@ impl Peer {
         inbound: UnboundedSender<PeerMessage>,
         next_slot: watch::Receiver<Slot>,
         connection: Connection,
+        metrics: Arc<dyn Metrics>,
     ) -> Self {
         Self {
             max_message_size: config.max_message_size.get() + Trailer::MAX_SIZE,
@@ -111,6 +118,7 @@ impl Peer {
             msgs: messages,
             countdown: Countdown::new(),
             cancel: CancellationToken::new(),
+            metrics,
         }
     }
 
@@ -315,10 +323,16 @@ impl Peer {
                     self.retry.gc(s);
                 }
 
-                // Check if there are messages that should be re-sent:
-                t = clock.tick(), if !self.retry.is_empty() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "retry check");
-                    self.retry.check(t)
+                // Periodic maintenance:
+                //
+                // - Retry messages
+                // - Update metrics
+                t = clock.tick() => {
+                    if !self.retry.is_empty() {
+                        trace!(name = %self.conf.name, peer = %self.conn.key, "retry check");
+                        self.retry.check(t);
+                    }
+                    self.update_metrics()
                 }
 
                 // If messages should be re-sent and we can do so, send it:
@@ -560,5 +574,14 @@ impl Peer {
                 }
             }
         }
+    }
+
+    fn update_metrics(&self) {
+        self.metrics
+            .set(&self.conn.key, "outbound_messages", self.msgs.len());
+        self.metrics
+            .set(&self.conn.key, "retrying_messages", self.retry.len());
+        self.metrics
+            .set(&self.conn.key, "remaining_budget", self.budget.remaining());
     }
 }

@@ -208,7 +208,7 @@ impl FromIterator<StakeTableEntry<PubKey>> for StakeTable {
 impl StakeTable {
     /// Get a stake table from a particular epoch's quorum membership.
     pub async fn from_membership(membership: &EpochMembership<SeqTypes>) -> Self {
-        membership.stake_table().await.into()
+        HSStakeTable::from_iter(membership.stake_table()).into()
     }
 
     /// Verify that a certificate is signed by a quorum of this stake table.
@@ -241,7 +241,7 @@ impl StakeTablePair for EpochMembership<SeqTypes> {
     }
 
     async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
-        let membership = self.next_epoch_stake_table().await?;
+        let membership = self.next_epoch_stake_table()?;
         Ok(Arc::new(StakeTable::from_membership(&membership).await))
     }
 }
@@ -253,29 +253,6 @@ impl StakeTablePair for (Arc<StakeTable>, Arc<StakeTable>) {
 
     async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
         Ok(self.1.clone())
-    }
-}
-
-/// A `StakeTablePair` that promises only the previous-epoch stake table will be consulted.
-///
-/// Use when verifying a header whose QC cannot be an epoch-transition QC (i.e. the cert will not
-/// carry a `next_epoch_qc`), such as an epoch root header. If `next_epoch_stake_table` is ever
-/// consulted, this returns an error rather than silently returning the wrong table.
-pub struct PrevOnly(
-    /// The previous-epoch stake table.
-    pub Arc<StakeTable>,
-);
-
-impl StakeTablePair for PrevOnly {
-    async fn stake_table(&self) -> Result<Arc<StakeTable>> {
-        Ok(self.0.clone())
-    }
-
-    async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
-        bail!(
-            "next_epoch_stake_table consulted for a header asserted to be a non-epoch-transition \
-             block"
-        )
     }
 }
 
@@ -507,21 +484,5 @@ mod test {
             .await
             .unwrap();
         assert_eq!(version, leaves[0].header().version());
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn prev_only_returns_prev() {
-        let st: Arc<StakeTable> = Arc::new(Vec::<StakeTableEntry<PubKey>>::new().into());
-        let pair = PrevOnly(st.clone());
-        let got = pair.stake_table().await.unwrap();
-        assert_eq!(*got, *st);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn prev_only_next_errors() {
-        let st: Arc<StakeTable> = Arc::new(Vec::<StakeTableEntry<PubKey>>::new().into());
-        let pair = PrevOnly(st);
-        let err = pair.next_epoch_stake_table().await.unwrap_err();
-        assert!(err.to_string().contains("next_epoch_stake_table"));
     }
 }

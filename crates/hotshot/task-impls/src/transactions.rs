@@ -262,9 +262,8 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
         let num_storage_nodes = match self
             .membership_coordinator
             .stake_table_for_epoch(block_epoch)
-            .await
         {
-            Ok(epoch_stake_table) => epoch_stake_table.total_nodes().await,
+            Ok(epoch_stake_table) => epoch_stake_table.total_nodes(),
             Err(e) => {
                 tracing::warn!("Failed to get num_storage_nodes for epoch {block_epoch:?}: {e}");
                 return;
@@ -353,10 +352,8 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
 
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(*epoch)
-                    .await?
-                    .leader(view)
-                    .await?;
+                    .membership_for_epoch(*epoch)?
+                    .leader(view)?;
                 if leader == self.public_key {
                     self.handle_view_change(&event_stream, view, *epoch, None)
                         .await;
@@ -392,10 +389,8 @@ impl<TYPES: NodeType> TransactionTaskState<TYPES> {
 
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
-                    .leader(next_view)
-                    .await?;
+                    .membership_for_epoch(self.cur_epoch)?
+                    .leader(next_view)?;
                 if leader == self.public_key {
                     self.handle_view_change(&event_stream, next_view, self.cur_epoch, Some(vid))
                         .await;

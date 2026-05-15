@@ -246,15 +246,6 @@ where
     pub fn iter(&self) -> std::slice::Iter<'_, T> {
         self.0.iter()
     }
-
-    /// Convert a range of objects into an equivalent range of sub-objects with the same heights.
-    pub(crate) fn as_ref_cloned<U>(&self) -> NonEmptyRange<U>
-    where
-        T: AsRef<U>,
-        U: Clone,
-    {
-        NonEmptyRange(self.0.iter().map(|t| t.as_ref().clone()).collect())
-    }
 }
 
 impl<T> TryFrom<Vec<T>> for NonEmptyRange<T>

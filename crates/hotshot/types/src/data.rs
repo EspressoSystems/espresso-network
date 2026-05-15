@@ -1008,9 +1008,9 @@ impl<TYPES: NodeType> QuorumProposal2<TYPES> {
         membership: EpochMembershipCoordinator<TYPES>,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
-        let stake_table = membership.membership_for_epoch(self.epoch).await?;
-        let entries = StakeTableEntries::<TYPES>::from(stake_table.stake_table().await).0;
-        let threshold = stake_table.success_threshold().await;
+        let stake_table = membership.membership_for_epoch(self.epoch)?;
+        let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
+        let threshold = stake_table.success_threshold();
         self.justify_qc
             .is_valid_cert(&entries, threshold, upgrade_lock)?;
         let view_change_view = match &self.view_change_evidence {
@@ -1552,7 +1552,7 @@ impl<TYPES: NodeType> Leaf2<TYPES> {
         };
 
         let justify_qc = QuorumCertificate2::new(
-            null_quorum_data.clone(),
+            null_quorum_data,
             null_quorum_data.commit(),
             genesis_view,
             None,
@@ -1908,7 +1908,7 @@ impl<TYPES: NodeType> QuorumCertificate2<TYPES> {
         };
 
         let versioned_data =
-            VersionedVoteData::<_, _>::new_infallible(data.clone(), genesis_view, &upgrade_lock);
+            VersionedVoteData::<_, _>::new_infallible(data, genesis_view, &upgrade_lock);
 
         let bytes: [u8; 32] = versioned_data.commit().into();
 

@@ -201,7 +201,7 @@ pub async fn calc_proposal_msg(
 
             // form a justify qc
             SimpleCertificate::<TestTypes, QuorumData2<TestTypes>, SuccessThreshold>::new(
-                quorum_data.clone(),
+                quorum_data,
                 quorum_data.commit(),
                 prev_proposal.view_number(),
                 prev_justify_qc.signatures.clone(),

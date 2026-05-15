@@ -50,9 +50,11 @@ csv = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+dyn-clone = { workspace = true }
 either = { workspace = true }
 espresso-api = { path = "../api" }
 espresso-contract-deployer = { workspace = true }
+espresso-keyset = { workspace = true }
 espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
 futures = { workspace = true }

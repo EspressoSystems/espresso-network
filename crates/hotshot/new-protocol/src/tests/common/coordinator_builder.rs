@@ -161,12 +161,12 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).
-    coordinator.start().await;
+    coordinator.start();
 
     // Process the initial outputs so the timer resets and block builder
     // gets notified before the event loop starts.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
-        let _ = coordinator.process_consensus_output(output).await;
+        let _ = coordinator.process_consensus_output(output);
     }
 
     coordinator
@@ -183,7 +183,7 @@ fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestType
         block_number: Some(0),
     };
     Certificate1::new(
-        data.clone(),
+        data,
         data.commit(),
         ViewNumber::genesis(),
         None,

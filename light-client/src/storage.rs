@@ -1,4 +1,9 @@
-use std::{future::Future, path::PathBuf, str::FromStr};
+use std::{
+    future::Future,
+    path::PathBuf,
+    str::FromStr,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
@@ -73,26 +78,32 @@ pub trait Storage: Sized + Send + Sync + 'static {
 
     /// Get the stake table for the latest epoch which is not later than `epoch`.
     ///
-    /// If such a stake table is available in the database, returns the ordered entries, the
-    /// epoch number of the stake table that was loaded, and the protocol version in effect when
-    /// that stake table was cached.
+    /// If such a stake table is available in the database, returns the loaded epoch number, the
+    /// stake table state, the protocol version of the epoch root header under whose rules that
+    /// stake table's active set was selected, and the protocol version of the epoch root header
+    /// in the next epoch (used to seed iter 1 of a catchup that resumes from this row).
     fn stake_table_lower_bound(
         &self,
         epoch: EpochNumber,
-    ) -> impl Send + Future<Output = Result<Option<(EpochNumber, StakeTableState, Version)>>>;
+    ) -> impl Send + Future<Output = Result<Option<(EpochNumber, StakeTableState, Version, Version)>>>;
 
     /// Add a stake table to the cache.
     ///
-    /// `protocol_version` is the protocol version in effect at the epoch root header, used so
-    /// that future cache hits can apply the correct active-set selection rules without
-    /// re-fetching the root.
+    /// `epoch_root_protocol_version` is the protocol version of the epoch root header in epoch
+    /// `e-2` (the snapshot point), used so that future cache hits can apply the same active-set
+    /// selection rules without re-fetching the root.
+    ///
+    /// `next_epoch_root_protocol_version` is the protocol version of the epoch root header in
+    /// epoch `e-1` (the snapshot point for `e+1`), used so that a future catchup resuming from
+    /// this row can seed iter 1's filter version without re-fetching that root.
     ///
     /// This may result in an older stake table being removed.
     fn insert_stake_table(
         &self,
         epoch: EpochNumber,
         stake_table: &StakeTableState,
-        protocol_version: Version,
+        epoch_root_protocol_version: Version,
+        next_epoch_root_protocol_version: Version,
     ) -> impl Send + Future<Output = Result<()>>;
 }
 
@@ -132,10 +143,10 @@ pub struct LightClientSqliteOptions {
     )]
     pub num_stake_tables: u32,
 
-    /// Create or open storage that is persisted on the file system.
+    /// Path at which the light client database is persisted.
     ///
     /// If not present, the database will exist only in memory and will be destroyed when the
-    /// [`SqlitePersistence`] object is dropped.
+    /// [`SqlitePersistence`] object is dropped
     #[cfg_attr(
         feature = "clap",
         clap(long = "light-client-db-path", env = "LIGHT_CLIENT_DB_PATH")
@@ -154,14 +165,45 @@ impl Default for LightClientSqliteOptions {
     }
 }
 
+enum LightClientDb {
+    InMemory,
+    File(PathBuf),
+}
+
+impl LightClientDb {
+    /// Resolve to a SQLite connection URI, creating the parent directory for file-backed DBs.
+    ///
+    /// The in-memory variant uses a shared-cache URI with a fresh per-call name so every
+    /// pool connection sees the same database; a bare `:memory:` would give each connection
+    /// its own private DB and the schema migration would be invisible to all but one.
+    fn into_uri(self) -> Result<String> {
+        match self {
+            Self::InMemory => {
+                static COUNTER: AtomicU64 = AtomicU64::new(0);
+                let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+                Ok(format!("file:lc-mem-{id}?mode=memory&cache=shared"))
+            },
+            Self::File(p) => {
+                if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating parent directory {parent:?}"))?;
+                }
+                p.into_os_string()
+                    .into_string()
+                    .map_err(|s| anyhow::anyhow!("invalid file path: {s:?}"))
+            },
+        }
+    }
+}
+
 impl LightClientSqliteOptions {
     /// Create or connect to a database with the given options.
     pub async fn connect(self) -> Result<SqliteStorage> {
-        let path = match &self.lc_path {
-            Some(path) => path.to_str().context("invalid file path")?,
-            None => ":memory:",
-        };
-        let opt = SqliteConnectOptions::from_str(path)?.create_if_missing(true);
+        let db = self
+            .lc_path
+            .map(LightClientDb::File)
+            .unwrap_or(LightClientDb::InMemory);
+        let opt = SqliteConnectOptions::from_str(&db.into_uri()?)?.create_if_missing(true);
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
             .connect_with(opt)
@@ -326,23 +368,35 @@ impl Storage for SqliteStorage {
     async fn stake_table_lower_bound(
         &self,
         epoch: EpochNumber,
-    ) -> Result<Option<(EpochNumber, StakeTableState, Version)>> {
+    ) -> Result<Option<(EpochNumber, StakeTableState, Version, Version)>> {
         let mut tx = self.pool.begin().await?;
 
-        let Some((epoch, protocol_version)) = query_as::<_, (i64, String)>(
-            "SELECT epoch, protocol_version FROM stake_table_epoch WHERE epoch <= $1 ORDER BY \
-             epoch DESC LIMIT 1",
-        )
-        .bind(*epoch as i64)
-        .fetch_optional(tx.as_mut())
-        .await
-        .context("loading epoch lower bound")?
+        let Some((epoch, epoch_root_protocol_version, next_epoch_root_protocol_version)) =
+            query_as::<_, (i64, String, String)>(
+                "SELECT epoch, epoch_root_protocol_version, next_epoch_root_protocol_version FROM \
+                 stake_table_epoch WHERE epoch <= $1 ORDER BY epoch DESC LIMIT 1",
+            )
+            .bind(*epoch as i64)
+            .fetch_optional(tx.as_mut())
+            .await
+            .context("loading epoch lower bound")?
         else {
             return Ok(None);
         };
-        let protocol_version = versions::parse_version(&protocol_version).with_context(|| {
-            format!("parsing stored protocol version {protocol_version:?} for epoch {epoch}")
-        })?;
+        let epoch_root_protocol_version = versions::parse_version(&epoch_root_protocol_version)
+            .with_context(|| {
+                format!(
+                    "parsing stored epoch root protocol version {epoch_root_protocol_version:?} \
+                     for epoch {epoch}"
+                )
+            })?;
+        let next_epoch_root_protocol_version =
+            versions::parse_version(&next_epoch_root_protocol_version).with_context(|| {
+                format!(
+                    "parsing stored next epoch root protocol version \
+                     {next_epoch_root_protocol_version:?} for epoch {epoch}"
+                )
+            })?;
 
         let validators = query_as::<_, (Value,)>(
             "SELECT data FROM stake_table_validator WHERE epoch = $1 ORDER BY idx",
@@ -396,7 +450,8 @@ impl Storage for SqliteStorage {
                 used_bls_keys,
                 used_schnorr_keys,
             ),
-            protocol_version,
+            epoch_root_protocol_version,
+            next_epoch_root_protocol_version,
         )))
     }
 
@@ -404,22 +459,28 @@ impl Storage for SqliteStorage {
         &self,
         epoch: EpochNumber,
         stake_table: &StakeTableState,
-        protocol_version: Version,
+        epoch_root_protocol_version: Version,
+        next_epoch_root_protocol_version: Version,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        // Record that the stake table for this epoch is available, along with the protocol
-        // version in effect when it was selected.
+        // Record that the stake table for this epoch is available, along with the versions of
+        // the epoch root headers in epochs `e-2` and `e-1` (snapshot points for `e` and `e+1`).
         let epoch = i64::try_from(*epoch).context("epoch overflow")?;
-        let protocol_version_str = protocol_version.to_string();
-        query("INSERT INTO stake_table_epoch (epoch, protocol_version) VALUES ($1, $2)")
-            .bind(epoch)
-            .bind(&protocol_version_str)
-            .execute(tx.as_mut())
-            .await
-            .context(format!(
-                "recording stake table availability for epoch {epoch}"
-            ))?;
+        let epoch_root_protocol_version_str = epoch_root_protocol_version.to_string();
+        let next_epoch_root_protocol_version_str = next_epoch_root_protocol_version.to_string();
+        query(
+            "INSERT INTO stake_table_epoch (epoch, epoch_root_protocol_version, \
+             next_epoch_root_protocol_version) VALUES ($1, $2, $3)",
+        )
+        .bind(epoch)
+        .bind(&epoch_root_protocol_version_str)
+        .bind(&next_epoch_root_protocol_version_str)
+        .execute(tx.as_mut())
+        .await
+        .context(format!(
+            "recording stake table availability for epoch {epoch}"
+        ))?;
 
         // Insert validators for the new stake table.
         let validators = stake_table
@@ -518,10 +579,54 @@ impl Storage for SqliteStorage {
 #[cfg(test)]
 mod test {
     use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
     use versions::{CLIQUENET_VERSION, EPOCH_VERSION};
 
     use super::*;
     use crate::testing::{leaf_chain, random_validator};
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_in_memory_uri_shares_state_across_connections() {
+        use sqlx::ConnectOptions;
+
+        let uri = LightClientDb::InMemory.into_uri().unwrap();
+        let mut a = SqliteConnectOptions::from_str(&uri)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE regression (x INTEGER)")
+            .execute(&mut a)
+            .await
+            .unwrap();
+
+        let mut b = SqliteConnectOptions::from_str(&uri)
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO regression VALUES (42)")
+            .execute(&mut b)
+            .await
+            .expect("second connection must see schema from first (shared cache)");
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_file_backed_creates_parent_dir() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join("subdir").join("lc.db");
+        let db = LightClientSqliteOptions {
+            lc_path: Some(path.clone()),
+            ..Default::default()
+        }
+        .connect()
+        .await
+        .unwrap();
+        assert_eq!(db.block_height().await.unwrap(), 0);
+        assert!(path.exists(), "sqlite file should have been created");
+    }
 
     #[tokio::test]
     #[test_log::test]
@@ -755,12 +860,12 @@ mod test {
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
-        db.insert_stake_table(epoch, &state, EPOCH_VERSION)
+        db.insert_stake_table(epoch, &state, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
         assert_eq!(
             db.stake_table_lower_bound(epoch).await.unwrap().unwrap(),
-            (epoch, state, EPOCH_VERSION)
+            (epoch, state, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
@@ -771,7 +876,7 @@ mod test {
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
-        db.insert_stake_table(epoch, &state, EPOCH_VERSION)
+        db.insert_stake_table(epoch, &state, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
         assert_eq!(
@@ -779,7 +884,7 @@ mod test {
                 .await
                 .unwrap()
                 .unwrap(),
-            (epoch, state, EPOCH_VERSION)
+            (epoch, state, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
@@ -790,10 +895,10 @@ mod test {
 
         let state1 = random_stake_table();
         let state2 = chain_stake_table(&state1);
-        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
 
@@ -802,7 +907,7 @@ mod test {
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(2), state2, EPOCH_VERSION)
+            (EpochNumber::new(2), state2, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
@@ -810,9 +915,14 @@ mod test {
     #[test_log::test]
     async fn test_stake_table_lower_bound_not_found() {
         let db = SqliteStorage::default().await.unwrap();
-        db.insert_stake_table(EpochNumber::new(2), &random_stake_table(), EPOCH_VERSION)
-            .await
-            .unwrap();
+        db.insert_stake_table(
+            EpochNumber::new(2),
+            &random_stake_table(),
+            EPOCH_VERSION,
+            EPOCH_VERSION,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             db.stake_table_lower_bound(EpochNumber::new(1))
                 .await
@@ -835,13 +945,13 @@ mod test {
         let state1 = random_stake_table();
         let state2 = chain_stake_table(&state1);
         let state3 = chain_stake_table(&state2);
-        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        db.insert_stake_table(EpochNumber::new(3), &state3, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(3), &state3, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
 
@@ -850,21 +960,26 @@ mod test {
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(1), state1.clone(), EPOCH_VERSION)
+            (
+                EpochNumber::new(1),
+                state1.clone(),
+                EPOCH_VERSION,
+                EPOCH_VERSION
+            )
         );
         assert_eq!(
             db.stake_table_lower_bound(EpochNumber::new(2))
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(1), state1, EPOCH_VERSION)
+            (EpochNumber::new(1), state1, EPOCH_VERSION, EPOCH_VERSION)
         );
         assert_eq!(
             db.stake_table_lower_bound(EpochNumber::new(3))
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(3), state3, EPOCH_VERSION)
+            (EpochNumber::new(3), state3, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
@@ -875,10 +990,10 @@ mod test {
 
         let state1 = random_stake_table();
         let state2 = chain_stake_table(&state1);
-        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
 
@@ -887,32 +1002,33 @@ mod test {
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(1), state1, EPOCH_VERSION)
+            (EpochNumber::new(1), state1, EPOCH_VERSION, EPOCH_VERSION)
         );
         assert_eq!(
             db.stake_table_lower_bound(EpochNumber::new(2))
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(2), state2, EPOCH_VERSION)
+            (EpochNumber::new(2), state2, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_stake_table_protocol_version_roundtrip() {
+    async fn test_stake_table_epoch_root_protocol_version_roundtrip() {
         let db = SqliteStorage::default().await.unwrap();
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
-        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION)
+        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        let (loaded_epoch, loaded_state, loaded_protocol_version) =
+        let (loaded_epoch, loaded_state, loaded_version, loaded_next_version) =
             db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
         assert_eq!(loaded_epoch, epoch);
         assert_eq!(loaded_state, state);
-        assert_eq!(loaded_protocol_version, CLIQUENET_VERSION);
+        assert_eq!(loaded_version, CLIQUENET_VERSION);
+        assert_eq!(loaded_next_version, EPOCH_VERSION);
     }
 
     /// Make a stake table state with all fields populated.

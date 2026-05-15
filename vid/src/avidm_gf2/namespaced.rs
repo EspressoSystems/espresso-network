@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use jf_merkle_tree::MerkleTreeScheme;
+use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::{AvidmGf2Commit, AvidmGf2Share};
@@ -123,16 +124,22 @@ impl NsAvidmGf2Scheme {
         ns_table: impl IntoIterator<Item = Range<usize>>,
     ) -> VidResult<(NsAvidmGf2Commit, NsAvidmGf2Common, Vec<NsAvidmGf2Share>)> {
         let num_storage_nodes = distribution.len();
-        let mut ns_commits = vec![];
-        let mut disperses = vec![];
-        let mut ns_lens = vec![];
-        for ns_range in ns_table {
-            ns_lens.push(ns_range.len());
-            let (commit, shares) =
-                AvidmGf2Scheme::disperse(param, distribution, &payload[ns_range])?;
-            ns_commits.push(commit);
-            disperses.push(shares);
-        }
+        let ns_ranges: Vec<Range<usize>> = ns_table.into_iter().collect();
+        let ns_lens: Vec<usize> = ns_ranges.iter().map(|r| r.len()).collect();
+
+        // Per-namespace dispersals are independent; run them on rayon.
+        // Inner `AvidmGf2Scheme::disperse` also uses `par_iter` internally for
+        // leaf hashing and share assembly — rayon's work-stealing pool
+        // coordinates the nested parallelism.
+        let per_ns: Vec<(AvidmGf2Commit, Vec<AvidmGf2Share>)> = ns_ranges
+            .par_iter()
+            .map(|ns_range| {
+                AvidmGf2Scheme::disperse(param, distribution, &payload[ns_range.clone()])
+            })
+            .collect::<VidResult<Vec<_>>>()?;
+
+        let (ns_commits, disperses): (Vec<_>, Vec<_>) = per_ns.into_iter().unzip();
+
         let common = NsAvidmGf2Common {
             param: param.clone(),
             ns_commits,
@@ -169,12 +176,20 @@ impl NsAvidmGf2Scheme {
         {
             return Err(VidError::InvalidShare);
         }
-        for (commit, content) in common.ns_commits.iter().zip(share.0.iter()) {
-            if AvidmGf2Scheme::verify_share(&common.param, commit, content)?.is_err() {
-                return Ok(Err(()));
-            }
+        // Per-namespace verifications are independent. `find_any` short-
+        // circuits on the first failing namespace and avoids allocating an
+        // intermediate `Vec<VerificationResult>`.
+        match common
+            .ns_commits
+            .par_iter()
+            .zip(share.0.par_iter())
+            .map(|(commit, content)| AvidmGf2Scheme::verify_share(&common.param, commit, content))
+            .find_any(|r| !matches!(r, Ok(Ok(()))))
+        {
+            None => Ok(Ok(())),
+            Some(Ok(v)) => Ok(v),
+            Some(Err(e)) => Err(e),
         }
-        Ok(Ok(()))
     }
 
     /// Verify a namespaced share
@@ -194,11 +209,14 @@ impl NsAvidmGf2Scheme {
         if shares.is_empty() {
             return Err(VidError::InsufficientShares);
         }
-        let mut result = vec![];
-        for ns_index in 0..common.ns_lens.len() {
-            result.append(&mut Self::ns_recover(common, ns_index, shares)?)
-        }
-        Ok(result)
+        // Each `ns_recover` is independent: distinct decoder state, distinct
+        // output bytes. Run them on the rayon pool so multi-namespace blocks
+        // actually use more than one core.
+        let per_ns: Vec<Vec<u8>> = (0..common.ns_lens.len())
+            .into_par_iter()
+            .map(|ns_index| Self::ns_recover(common, ns_index, shares))
+            .collect::<VidResult<Vec<_>>>()?;
+        Ok(per_ns.concat())
     }
 
     /// Recover the payload for a given namespace.

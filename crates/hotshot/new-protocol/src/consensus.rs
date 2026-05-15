@@ -23,7 +23,7 @@ use hotshot_types::{
         CheckpointData, HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote,
         TimeoutData2, TimeoutVote2, Vote2Data,
     },
-    stake_table::StakeTableEntries,
+    stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
         block_contents::BlockHeader,
         node_implementation::NodeType,
@@ -287,11 +287,7 @@ impl<T: NodeType> Consensus<T> {
 
     /// Apply consensus to the given input and collect protocol outputs.
     #[instrument(level = "debug", skip_all, fields(node = %self.node_id, view = %input.view_number()))]
-    pub async fn apply(
-        &mut self,
-        input: ConsensusInput<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
+    pub fn apply(&mut self, input: ConsensusInput<T>, outbox: &mut Outbox<ConsensusOutput<T>>) {
         let drb_epoch = match &input {
             ConsensusInput::DrbResult(epoch, _) => Some(*epoch),
             _ => None,
@@ -309,23 +305,22 @@ impl<T: NodeType> Consensus<T> {
         let proto = match input {
             ConsensusInput::ProposalWithVidShare(sender, proposal, vid_share) => {
                 self.handle_proposal_with_vid_share(sender, proposal, vid_share, outbox)
-                    .await
             },
             ConsensusInput::Certificate1(certificate) => {
-                self.handle_certificate1(certificate, outbox).await
+                self.handle_certificate1(certificate, outbox)
             },
             ConsensusInput::Certificate2(certificate) => {
-                self.handle_certificate2(certificate, outbox).await
+                self.handle_certificate2(certificate, outbox)
             },
             ConsensusInput::EpochRootCertificates { cert1, state_cert } => {
                 // Store state_cert first so the subsequent Cert1 handler / leader
                 // proposer has it on hand. Atomicity invariant: this pair always
                 // arrives together; Consensus never sees the Cert1 alone.
                 self.state_certs.insert(state_cert.epoch, state_cert);
-                self.handle_certificate1(cert1, outbox).await
+                self.handle_certificate1(cert1, outbox)
             },
             ConsensusInput::TimeoutCertificate(certificate) => {
-                self.handle_timeout_certificate(certificate, outbox).await
+                self.handle_timeout_certificate(certificate, outbox)
             },
             ConsensusInput::BlockReconstructed(view, vid_commitment) => {
                 self.blocks_reconstructed.insert(view, vid_commitment);
@@ -372,7 +367,7 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
                 // Directly send the VID shares before making a proposal.
-                self.send_vid_shares(&view, vid_disperse, outbox).await;
+                self.send_vid_shares(&view, vid_disperse, outbox);
                 Protocol::Continue
             },
             ConsensusInput::DrbResult(epoch, drb_result) => {
@@ -380,7 +375,7 @@ impl<T: NodeType> Consensus<T> {
                 Protocol::Continue
             },
             ConsensusInput::EpochChange(epoch_change) => {
-                self.handle_epoch_change(epoch_change, outbox).await
+                self.handle_epoch_change(epoch_change, outbox)
             },
         };
 
@@ -389,18 +384,18 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
 
-        self.maybe_vote_1(view, outbox).await;
-        self.maybe_vote_2_and_update_lock(view, outbox).await;
+        self.maybe_vote_1(view, outbox);
+        self.maybe_vote_2_and_update_lock(view, outbox);
         self.maybe_decide(view, outbox);
-        self.maybe_propose(view, outbox).await;
+        self.maybe_propose(view, outbox);
         // An event from the current view or the previous view can trigger a propose
-        self.maybe_propose(view + 1, outbox).await;
+        self.maybe_propose(view + 1, outbox);
 
         // When new epoch data arrives (DRB result or epoch change), retry
         // any pending certificates that were deferred because their epoch
         // membership wasn't available yet.
         if drb_epoch.is_some() {
-            self.retry_pending_certs(outbox).await;
+            self.retry_pending_certs(outbox);
         }
     }
 
@@ -469,11 +464,10 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals = self.signed_proposals.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
-        self.last_decided_view = self.last_decided_view.max(view);
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_proposal_with_vid_share(
+    fn handle_proposal_with_vid_share(
         &mut self,
         sender: T::SignatureKey,
         proposal: ProposalMessage<T, Validated>,
@@ -512,7 +506,7 @@ impl<T: NodeType> Consensus<T> {
                 warn!(%epoch, "next epoch justify QC does not match proposal");
                 return Protocol::Abort;
             }
-            if !self.verify_cert(cert2, qc_epoch).await {
+            if !self.verify_cert(cert2, qc_epoch) {
                 warn!(%epoch, "next epoch justify QC not verified");
                 return Protocol::Abort;
             }
@@ -573,7 +567,7 @@ impl<T: NodeType> Consensus<T> {
             sender,
         });
 
-        if self.is_leader(view + 1, epoch).await {
+        if self.is_leader(view + 1, epoch) {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
                     view: view + 1,
@@ -587,7 +581,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate1(
+    fn handle_certificate1(
         &mut self,
         certificate: Certificate1<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
@@ -602,7 +596,7 @@ impl<T: NodeType> Consensus<T> {
         };
         // TODO: This signature check is slow (> 1ms).  We should consider
         // if this should be done off the main thread.
-        match self.try_verify_cert(&certificate, certificate_epoch).await {
+        match self.try_verify_cert(&certificate, certificate_epoch) {
             CertVerification::Valid => {},
             CertVerification::Invalid => {
                 warn!(%view, "certificate1 not verified");
@@ -620,7 +614,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_certificate2(
+    fn handle_certificate2(
         &mut self,
         certificate: Certificate2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
@@ -635,7 +629,7 @@ impl<T: NodeType> Consensus<T> {
         };
         // TODO: This signature check is slow (> 1ms).  We should consider
         // if this should be done off the main thread.
-        match self.try_verify_cert(&certificate, certificate_epoch).await {
+        match self.try_verify_cert(&certificate, certificate_epoch) {
             CertVerification::Valid => {},
             CertVerification::Invalid => {
                 warn!(%view, "certificate2 not verified");
@@ -685,7 +679,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_timeout_certificate(
+    fn handle_timeout_certificate(
         &mut self,
         certificate: TimeoutCertificate2<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
@@ -706,7 +700,7 @@ impl<T: NodeType> Consensus<T> {
             view,
             epoch,
         ));
-        if !self.is_leader(view, epoch).await {
+        if !self.is_leader(view, epoch) {
             debug!(%epoch, "not leader");
             return Protocol::Abort;
         }
@@ -734,7 +728,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn handle_epoch_change(
+    fn handle_epoch_change(
         &mut self,
         epoch_change: EpochChangeMessage<T>,
         outbox: &mut Outbox<ConsensusOutput<T>>,
@@ -780,11 +774,11 @@ impl<T: NodeType> Consensus<T> {
             warn!("epoch change certificate1 has no epoch number");
             return Protocol::Abort;
         };
-        if !self.verify_cert(&cert1, cert1_epoch).await {
+        if !self.verify_cert(&cert1, cert1_epoch) {
             warn!("epoch change certificate not verified");
             return Protocol::Abort;
         }
-        if !self.verify_cert(&cert2, cert2.data.epoch).await {
+        if !self.verify_cert(&cert2, cert2.data.epoch) {
             warn!("epoch change certificate not verified");
             return Protocol::Abort;
         }
@@ -795,7 +789,7 @@ impl<T: NodeType> Consensus<T> {
         outbox.push_back(ConsensusOutput::ViewChanged(next_view, next_epoch));
 
         // Request block and header if we're the first leader of the next epoch
-        if self.is_leader(next_view, next_epoch).await {
+        if self.is_leader(next_view, next_epoch) {
             outbox.push_back(ConsensusOutput::RequestBlockAndHeader(
                 BlockAndHeaderRequest {
                     view: next_view,
@@ -816,7 +810,7 @@ impl<T: NodeType> Consensus<T> {
     // path runs for its own proposal, populating `proposals`, `leaves`,
     // `states_verified`, and seeding the VID reconstructor's metadata.
     #[instrument(level = "debug", skip_all)]
-    async fn send_vid_shares(
+    fn send_vid_shares(
         &self,
         view: &ViewNumber,
         vid_disperse: VidDisperse2<T>,
@@ -837,7 +831,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+    fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
         if self.proposed_views.contains(&view) {
             return;
         }
@@ -878,7 +872,7 @@ impl<T: NodeType> Consensus<T> {
         } else {
             proposal.epoch
         };
-        if !self.is_leader(view, proposal_epoch).await {
+        if !self.is_leader(view, proposal_epoch) {
             warn!(epoch = %proposal_epoch, "not the leader for this view, we should not have a header");
             return;
         }
@@ -1084,7 +1078,7 @@ impl<T: NodeType> Consensus<T> {
     /// stake-table commitment, and signs both the LCV2 (pre-upgrade, for
     /// backward compatibility with existing relay infrastructure) and LCV3
     /// (current) Schnorr signatures.
-    async fn build_state_vote(
+    fn build_state_vote(
         &self,
         proposal: &Proposal<T>,
     ) -> anyhow::Result<LightClientStateUpdateVote2<T>> {
@@ -1100,15 +1094,11 @@ impl<T: NodeType> Consensus<T> {
         let membership = self
             .stake_table_coordinator
             .membership_for_epoch(Some(proposal.epoch))
-            .await
             .map_err(|e| anyhow::anyhow!("membership lookup failed: {e}"))?;
         let next_stake_table = membership
             .next_epoch_stake_table()
-            .await
-            .map_err(|e| anyhow::anyhow!("next-epoch stake table lookup failed: {e}"))?
-            .stake_table()
-            .await;
-        let next_stake_table_state = next_stake_table
+            .map_err(|e| anyhow::anyhow!("next-epoch stake table lookup failed: {e}"))?;
+        let next_stake_table_state = HSStakeTable::from_iter(next_stake_table.stake_table())
             .commitment(self.stake_table_capacity)
             .map_err(|e| anyhow::anyhow!("failed to compute stake table commitment: {e}"))?;
         let v2_signature = <T::StateSignatureKey as LCV2StateSignatureKey>::sign_state(
@@ -1136,7 +1126,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+    fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
         if view <= self.timeout_view {
             return;
         }
@@ -1177,7 +1167,7 @@ impl<T: NodeType> Consensus<T> {
             }
         }
 
-        if !self.staked_in_epoch(proposal.epoch).await {
+        if !self.staked_in_epoch(proposal.epoch) {
             return;
         }
 
@@ -1250,7 +1240,7 @@ impl<T: NodeType> Consensus<T> {
 
         let state_vote = if is_epoch_root(proposal.block_header.block_number(), *self.epoch_height)
         {
-            match self.build_state_vote(proposal).await {
+            match self.build_state_vote(proposal) {
                 Ok(sv) => Some(sv),
                 Err(err) => {
                     warn!(%view, %err, "failed to build state vote for epoch-root leaf; skipping vote1");
@@ -1271,7 +1261,7 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    async fn maybe_vote_2_and_update_lock(
+    fn maybe_vote_2_and_update_lock(
         &mut self,
         view: ViewNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
@@ -1325,7 +1315,7 @@ impl<T: NodeType> Consensus<T> {
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
         }
 
-        if !self.staked_in_epoch(proposal_epoch).await {
+        if !self.staked_in_epoch(proposal_epoch) {
             return;
         }
 
@@ -1385,18 +1375,17 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn verify_cert<A, C>(&self, cert: &C, epoch: EpochNumber) -> bool
+    fn verify_cert<A, C>(&self, cert: &C, epoch: EpochNumber) -> bool
     where
         C: vote::Certificate<T, A>,
     {
         match self
             .stake_table_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
         {
             Ok(stake_table) => {
-                let entries = StakeTableEntries::<T>::from(stake_table.stake_table().await).0;
-                let threshold = stake_table.success_threshold().await;
+                let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
+                let threshold = stake_table.success_threshold();
                 match cert.is_valid_cert(&entries, threshold, &self.upgrade_lock) {
                     Ok(()) => true,
                     Err(err) => {
@@ -1415,18 +1404,17 @@ impl<T: NodeType> Consensus<T> {
     /// Try to verify a certificate, distinguishing between "epoch not available"
     /// and "cryptographically invalid".
     #[instrument(level = "trace", skip_all)]
-    async fn try_verify_cert<A, C>(&self, cert: &C, epoch: EpochNumber) -> CertVerification
+    fn try_verify_cert<A, C>(&self, cert: &C, epoch: EpochNumber) -> CertVerification
     where
         C: vote::Certificate<T, A>,
     {
         match self
             .stake_table_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
         {
             Ok(stake_table) => {
-                let entries = StakeTableEntries::<T>::from(stake_table.stake_table().await).0;
-                let threshold = stake_table.success_threshold().await;
+                let entries = StakeTableEntries::from_iter(stake_table.stake_table()).0;
+                let threshold = stake_table.success_threshold();
                 match cert.is_valid_cert(&entries, threshold, &self.upgrade_lock) {
                     Ok(()) => CertVerification::Valid,
                     Err(err) => {
@@ -1440,32 +1428,31 @@ impl<T: NodeType> Consensus<T> {
     }
 
     /// Retry verification of pending certificates whose epoch may now be available.
-    async fn retry_pending_certs(&mut self, outbox: &mut Outbox<ConsensusOutput<T>>) {
+    fn retry_pending_certs(&mut self, outbox: &mut Outbox<ConsensusOutput<T>>) {
         // Retry pending cert1s.
         let pending = std::mem::take(&mut self.pending_certs1);
         for (view, cert) in pending {
-            self.handle_certificate1(cert.clone(), outbox).await;
-            self.maybe_vote_2_and_update_lock(view, outbox).await;
-            self.maybe_propose(view, outbox).await;
+            self.handle_certificate1(cert.clone(), outbox);
+            self.maybe_vote_2_and_update_lock(view, outbox);
+            self.maybe_propose(view, outbox);
         }
 
         // Retry pending cert2s.
         let pending = std::mem::take(&mut self.pending_certs2);
         for (view, cert) in pending {
-            self.handle_certificate2(cert.clone(), outbox).await;
+            self.handle_certificate2(cert.clone(), outbox);
             self.maybe_decide(view, outbox);
-            self.maybe_propose(view, outbox).await;
+            self.maybe_propose(view, outbox);
         }
     }
 
     #[instrument(level = "trace", skip_all)]
-    async fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
+    fn is_leader(&self, view: ViewNumber, epoch: EpochNumber) -> bool {
         match self
             .stake_table_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
         {
-            Ok(stake_table) => match stake_table.leader(view).await {
+            Ok(stake_table) => match stake_table.leader(view) {
                 Ok(leader) => leader == self.public_key,
                 Err(err) => {
                     warn!(%view, %epoch, %err, "failed to get leader from stake table");
@@ -1479,13 +1466,12 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    async fn staked_in_epoch(&self, epoch: EpochNumber) -> bool {
+    fn staked_in_epoch(&self, epoch: EpochNumber) -> bool {
         match self
             .stake_table_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
         {
-            Ok(stake_table) => stake_table.has_stake(&self.public_key).await,
+            Ok(stake_table) => stake_table.has_stake(&self.public_key),
             Err(err) => {
                 warn!(%epoch, %err, "failed to get stake table");
                 false

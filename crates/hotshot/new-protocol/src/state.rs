@@ -125,22 +125,16 @@ impl<T: NodeType> StateManager<T> {
         }
     }
 
-    /// Get the validated state for a given view
-    pub fn get_state(&self, view: &ViewNumber) -> Option<Arc<T::ValidatedState>> {
-        self.validated_states
-            .get(view)
-            .map(|entry| entry.state.clone())
+    /// Get the validated state for a given view.
+    pub fn get_state(&self, view: ViewNumber) -> Option<&StateEntry<T>> {
+        self.validated_states.get(&view)
     }
 
-    /// Get the validated state and delta for a given view
-    pub fn get_state_and_delta(
-        &self,
-        view: &ViewNumber,
-    ) -> (Option<Arc<T::ValidatedState>>, Option<Delta<T>>) {
-        match self.validated_states.get(view) {
-            Some(entry) => (Some(entry.state.clone()), entry.delta.clone()),
-            None => (None, None),
-        }
+    /// Get the leaf for a given view
+    pub fn get_leaf(&self, view: ViewNumber) -> Option<Leaf2<T>> {
+        self.validated_states
+            .get(&view)
+            .map(|entry| entry.leaf.clone())
     }
 
     pub fn seed_state(&mut self, view: ViewNumber, state: Arc<T::ValidatedState>, leaf: Leaf2<T>) {

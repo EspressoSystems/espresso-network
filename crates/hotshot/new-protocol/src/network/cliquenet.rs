@@ -1,14 +1,22 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
+pub use cliquenet::Config as CliquenetConfig;
 use cliquenet::{NetAddr, NetworkError as CliquenetError, Role, Slot, x25519::PublicKey};
 use hotshot_types::{
     PeerConnectInfo,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{EXTERNAL_MESSAGE_VERSION, MessageKind, UpgradeLock},
-    traits::node_implementation::NodeType,
+    traits::{
+        metrics::{Counter, CounterFamily, Gauge, GaugeFamily, Metrics},
+        node_implementation::NodeType,
+    },
     x25519::Keypair,
 };
+use parking_lot::RwLock;
 use tracing::{error, info};
 
 use crate::{
@@ -32,6 +40,7 @@ impl<T: NodeType> Cliquenet<T> {
         addr: A,
         parties: P,
         upgrade_lock: UpgradeLock<T>,
+        metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         A: Into<cliquenet::NetAddr>,
@@ -50,19 +59,22 @@ impl<T: NodeType> Cliquenet<T> {
             )
             .build();
 
-        Self::create_with_config(signing_key, upgrade_lock, cfg, parties).await
+        Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
     }
 
-    pub async fn create_with_config<P>(
+    pub(crate) async fn create_with_config<P>(
         signing_key: T::SignatureKey,
         upgrade_lock: UpgradeLock<T>,
-        config: cliquenet::Config,
+        mut config: cliquenet::Config,
         parties: P,
+        metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
     where
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
     {
         let public_key = config.public_key();
+        assert!(config.metrics.is_none());
+        config.metrics = Some(Arc::new(CliquenetMetrics::new(metrics)));
         let network = cliquenet::Network::create(config)
             .await
             .map_err(to_network_error)?;
@@ -75,7 +87,7 @@ impl<T: NodeType> Cliquenet<T> {
             my_keys: (signing_key, public_key),
             inner: network,
             peers,
-            epoch: EpochNumber::genesis(),
+            epoch: EpochNumber::new(0),
             upgrade_lock,
         })
     }
@@ -209,7 +221,7 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     ///
     /// We keep validators that were in `e-1` but not in `e` for one additional
     /// epoch and eagerly connect to new validators of `e+1`.
-    async fn on_epoch_change(
+    async fn apply_epoch(
         &mut self,
         epoch: EpochNumber,
         coord: &EpochMembershipCoordinator<T>,
@@ -220,14 +232,14 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         }
 
         // Validators of the new epoch.
-        let Some(curr_infos) = coord.epoch_peers(Some(epoch)).await else {
+        let Some(curr_infos) = coord.epoch_peers(Some(epoch)) else {
             error!(%epoch, "no stake table available");
             return Ok(());
         };
 
         // Validators leaving are retained as peers for one additional epoch.
         let prev_infos = if *epoch > 0 {
-            coord.epoch_peers(Some(epoch - 1)).await.unwrap_or_else(|| {
+            coord.epoch_peers(Some(epoch - 1)).unwrap_or_else(|| {
                 info!(%epoch, "previous epoch's stake table unavailable");
                 HashMap::new()
             })
@@ -236,7 +248,7 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
         };
 
         // Validators joining in the next epoch are connected to early.
-        let next_infos = coord.epoch_peers(Some(epoch + 1)).await.unwrap_or_else(|| {
+        let next_infos = coord.epoch_peers(Some(epoch + 1)).unwrap_or_else(|| {
             info!(%epoch, "next epoch's stake table not available");
             HashMap::new()
         });
@@ -371,5 +383,117 @@ fn to_network_error(e: CliquenetError) -> NetworkError {
         e @ CliquenetError::ChannelClosed => NetworkError::Critical(e.into()),
         e @ CliquenetError::BudgetClosed => NetworkError::Critical(e.into()),
         e => NetworkError::Io(e.into()),
+    }
+}
+
+struct CliquenetMetrics {
+    metrics: Box<dyn Metrics>,
+    gauges: RwLock<Gauges>,
+    counters: RwLock<Counters>,
+}
+
+#[derive(Default)]
+struct Gauges {
+    gauges: HashMap<PublicKey, HashMap<String, Box<dyn Gauge>>>,
+    family: HashMap<String, Box<dyn GaugeFamily>>,
+}
+
+#[derive(Default)]
+struct Counters {
+    counters: HashMap<PublicKey, HashMap<String, Box<dyn Counter>>>,
+    family: HashMap<String, Box<dyn CounterFamily>>,
+}
+
+impl CliquenetMetrics {
+    pub fn new(m: Box<dyn Metrics>) -> Self {
+        Self {
+            metrics: m.subgroup("cliquenet".to_string()),
+            gauges: RwLock::new(Gauges::default()),
+            counters: RwLock::new(Counters::default()),
+        }
+    }
+}
+
+// In here we lazily create counters and gauges based on their labels.
+// If not found, we create a family using the label, e.g. "connect_attempts",
+// indexed by the peer (key). Afterwards we create the actual counter or gauge,
+// and update its value. On the next call, the metric would be found and
+// updated right away.
+impl cliquenet::Metrics for CliquenetMetrics {
+    fn set(&self, key: &PublicKey, label: &str, val: usize) {
+        if let Some(g) = self
+            .gauges
+            .read()
+            .gauges
+            .get(key)
+            .and_then(|m| m.get(label))
+        {
+            return g.set(val);
+        }
+
+        let mut gauges = self.gauges.write();
+
+        // Check again, in case a concurrent write has created the gauge:
+        if let Some(g) = gauges.gauges.get(key).and_then(|m| m.get(label)) {
+            return g.set(val);
+        }
+
+        let g = gauges
+            .family
+            .entry(label.to_string())
+            .or_insert_with(|| {
+                self.metrics
+                    .gauge_family(label.to_string(), vec!["peer".to_string()])
+            })
+            .create(vec![key.to_string()]);
+
+        gauges
+            .gauges
+            .entry(*key)
+            .or_default()
+            .entry(label.to_string())
+            .or_insert(g)
+            .set(val)
+    }
+
+    fn add(&self, key: &PublicKey, label: &str, val: usize) {
+        if let Some(c) = self
+            .counters
+            .read()
+            .counters
+            .get(key)
+            .and_then(|m| m.get(label))
+        {
+            return c.add(val);
+        }
+
+        let mut counters = self.counters.write();
+
+        // Check again, in case a concurrent write has created the counter:
+        if let Some(c) = counters.counters.get(key).and_then(|m| m.get(label)) {
+            return c.add(val);
+        }
+
+        let c = counters
+            .family
+            .entry(label.to_string())
+            .or_insert_with(|| {
+                self.metrics
+                    .counter_family(label.to_string(), vec!["peer".to_string()])
+            })
+            .create(vec![key.to_string()]);
+
+        counters
+            .counters
+            .entry(*key)
+            .or_default()
+            .entry(label.to_string())
+            .or_insert(c)
+            .add(val)
+    }
+
+    fn del(&self, key: &PublicKey) {
+        self.gauges.write().gauges.remove(key);
+        self.counters.write().counters.remove(key);
     }
 }

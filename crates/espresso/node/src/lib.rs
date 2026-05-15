@@ -9,7 +9,7 @@ pub mod catchup;
 pub mod consensus_handle;
 pub mod context;
 pub mod genesis;
-pub mod keyset;
+pub use espresso_keyset as keyset;
 pub mod network;
 pub mod options;
 pub mod persistence;
@@ -23,10 +23,11 @@ use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
-use async_lock::{Mutex, RwLock};
+use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
+use dyn_clone::clone_box;
 use espresso_types::{
     BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
     SeqTypes, ValidatedState,
@@ -722,12 +723,11 @@ where
     )
     .await;
 
-    let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
         network_config.config.epoch_height,
-        &persistence.clone(),
+        &persistence,
     );
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
@@ -795,26 +795,19 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    // Legacy HotShot uses CombinedNetworks (CDN + libp2p).
-    // The new Coordinator uses CliqueNet directly.
-    // Each protocol gets its own dedicated network
-    // If we later upgrade to CliqueNet before the Fast Finality upgrade, we can
-    // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
-    // for the fast finality consensus upgrade i.e Coordinator.
-    let cliquenet = {
-        // TODO: This creates a separate UpgradeLock from the one HotShot will
-        // use. They should share a single lock so upgrade certificate updates
-        // are visible to both.
-        Cliquenet::create(
-            "espresso",
-            pub_key,
-            network_params.x25519_secret_key.into(),
-            network_params.cliquenet_bind_addr.clone(),
-            vec![], // Initialize with no peers, they are set during init.
-            UpgradeLock::new(version_upgrade),
-        )
-        .await?
-    };
+    // TODO: This creates a separate UpgradeLock from the one HotShot will
+    // use. They should share a single lock so upgrade certificate updates
+    // are visible to both.
+    let cliquenet = Cliquenet::create(
+        "espresso",
+        pub_key,
+        network_params.x25519_secret_key.into(),
+        network_params.cliquenet_bind_addr.clone(),
+        [],
+        UpgradeLock::new(version_upgrade),
+        clone_box(&*metrics),
+    )
+    .await?;
 
     let network = Arc::new(combined_network);
 
@@ -937,7 +930,6 @@ pub mod testing {
         },
         signers::{k256::ecdsa::SigningKey, local::LocalSigner},
     };
-    use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
@@ -1592,7 +1584,7 @@ pub mod testing {
             );
             membership.reload_stake(50).await;
 
-            let membership = Arc::new(RwLock::new(membership));
+            let membership = Arc::new(membership);
             let persistence = Arc::new(persistence);
 
             let coordinator = EpochMembershipCoordinator::new(
@@ -1635,8 +1627,9 @@ pub mod testing {
                     my_peer_config.stake_table_entry.stake_key,
                     keypair,
                     addr,
-                    vec![],
+                    [],
                     lock,
+                    Box::new(NoMetrics),
                 )
                 .await
                 .expect("cliquenet creation should succeed")

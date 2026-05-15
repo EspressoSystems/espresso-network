@@ -135,10 +135,7 @@ impl<T: NodeType> EpochManager<T> {
                 // spawns a catchup task and returns a "catchup in progress"
                 // error.  Either way, `wait_for_catchup` resolves once the
                 // stake table + DRB are both in place.
-                let membership = match membership_coordinator
-                    .membership_for_epoch(Some(epoch))
-                    .await
-                {
+                let membership = match membership_coordinator.membership_for_epoch(Some(epoch)) {
                     Ok(m) => m,
                     Err(_) => membership_coordinator
                         .wait_for_catchup(epoch)

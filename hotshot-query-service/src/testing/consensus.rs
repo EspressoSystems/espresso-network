@@ -13,7 +13,6 @@
 use std::{fmt::Display, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
-use async_lock::RwLock;
 use async_trait::async_trait;
 use futures::{
     future::{Future, join_all},
@@ -24,7 +23,9 @@ use hotshot::{
     traits::implementations::{MasterMap, MemoryNetwork},
     types::{Event, SystemContextHandle},
 };
-use hotshot_example_types::{state_types::TestInstanceState, storage_types::TestStorage};
+use hotshot_example_types::{
+    membership::TestableMembership, state_types::TestInstanceState, storage_types::TestStorage,
+};
 use hotshot_testing::block_builder::{SimpleBuilderImplementation, TestBuilderImplementation};
 use hotshot_types::{
     HotShotConfig, PeerConfig,
@@ -191,17 +192,14 @@ impl<D: DataSourceLifeCycle + UpdateStatusData> MockNetwork<D> {
                         ));
                         let hs_storage: TestStorage<MockTypes> = TestStorage::default();
 
-                        let membership = Arc::new(RwLock::new(MockMembership::new(
+                        let membership = MockMembership::new(
                             known_nodes_with_stake_clone.clone(),
                             known_nodes_with_stake_clone,
                             pub_keys[node_id],
                             config.epoch_height,
-                        )));
+                        );
 
-                        membership
-                            .write()
-                            .await
-                            .set_first_epoch(EpochNumber::new(0), INITIAL_DRB_RESULT);
+                        membership.set_first_epoch(EpochNumber::new(0), INITIAL_DRB_RESULT);
                         let memberships = EpochMembershipCoordinator::new(
                             membership,
                             config.epoch_height,
