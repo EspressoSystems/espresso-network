@@ -133,6 +133,7 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
     common: AvidmGf2Common,
     metadata: Option<<T::BlockPayload as BlockPayload<T>>::Metadata>,
     epoch: Option<EpochNumber>,
+    payload_commitment: VidCommitment2,
 }
 
 impl<T: NodeType> VidShareAccumulator<T> {
@@ -184,6 +185,7 @@ impl<T: NodeType> VidReconstructor<T> {
                 common: share.common.clone(),
                 metadata: None,
                 epoch: share_epoch,
+                payload_commitment,
             });
         if accumulator.metadata.is_none()
             && let Some(m) = metadata
@@ -225,7 +227,15 @@ impl<T: NodeType> VidReconstructor<T> {
                             self.calculations.remove(view);
                         },
                         VidReconstructError::VerifyBlock(view) => {
-                            self.block_verifications.remove(view);
+                            let view = *view;
+                            self.block_verifications.remove(&view);
+                            // Push verify failed — fall back to reconstruction
+                            if let Some(accumulator) = self.accumulators.get(&view)
+                                && accumulator.has_enough_shares()
+                            {
+                                let commit = accumulator.payload_commitment;
+                                self.try_reconstruct(view, commit);
+                            }
                         },
                     }
                     return Some(Err(err));
@@ -237,6 +247,10 @@ impl<T: NodeType> VidReconstructor<T> {
     }
 
     fn try_reconstruct(&mut self, view: ViewNumber, payload_commitment: VidCommitment2) {
+        // Do not start reconstructing if we are verifying a pushed block
+        if self.block_verifications.contains_key(&view) {
+            return;
+        }
         if self.calculations.contains_key(&view) {
             return;
         }
