@@ -292,18 +292,14 @@ impl<T: NodeType> Consensus<T> {
     /// Idempotent: calling with the same seed twice (or with an older
     /// seed) does not regress decided/locked state.
     pub fn apply_pre_cutover_seed(&mut self, seed: PreCutoverSeed<T>) {
-        self.advance_decided_anchor(seed.decided_anchor);
-        self.install_pre_cutover_leaves(seed.undecided);
-        if let Some(high_qc) = &seed.high_qc {
-            self.register_legacy_qc(high_qc);
+        
+        let view = seed.decided_anchor.view_number();
+        if view > self.last_decided_view {
+            self.last_decided_view = view;
+            self.last_decided_leaf = seed.decided_anchor;
         }
-        self.advance_to_cutover(seed.cutover_view);
-    }
 
-    /// Bridge legacy undecided leaves so the new protocol can decide
-    /// them via Cert2. `leaves` is oldest-first.
-    pub(crate) fn install_pre_cutover_leaves(&mut self, leaves: Vec<Leaf2<T>>) {
-        for leaf in leaves {
+        for leaf in seed.undecided {
             let view = leaf.view_number();
             let justify_qc = leaf.justify_qc().clone();
             self.register_legacy_qc(&justify_qc);
@@ -335,12 +331,12 @@ impl<T: NodeType> Consensus<T> {
             self.voted_1_views.insert(view);
             self.voted_2_views.insert(view);
         }
-    }
 
-    /// Advance `current_view`/`timeout_view` to `cutover_view - 1`.
-    /// `last_decided_view` is **deliberately left** at the legacy anchor
-    /// so `maybe_decide`'s chain walk can pick up the seeded leaves.
-    pub(crate) fn advance_to_cutover(&mut self, cutover_view: ViewNumber) {
+        if let Some(high_qc) = &seed.high_qc {
+            self.register_legacy_qc(high_qc);
+        }
+
+        let cutover_view = seed.cutover_view;
         if cutover_view == ViewNumber::genesis() {
             return;
         }
@@ -367,17 +363,6 @@ impl<T: NodeType> Consensus<T> {
         {
             self.locked_cert = Some(justify_qc.clone());
         }
-    }
-
-    /// Position the decided-anchor at the highest leaf legacy decided.
-    /// No-op if not strictly newer than `last_decided_view`.
-    pub(crate) fn advance_decided_anchor(&mut self, leaf: Leaf2<T>) {
-        let view = leaf.view_number();
-        if view <= self.last_decided_view {
-            return;
-        }
-        self.last_decided_view = view;
-        self.last_decided_leaf = leaf;
     }
 
     /// Return the proposal stored at the given view, if any.

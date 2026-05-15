@@ -1085,11 +1085,7 @@ where
                     self.outbox
                         .push_back(ConsensusOutput::ViewChanged(cur_view, epoch));
                 }
-                let mut outputs = Vec::new();
                 while let Some(output) = self.outbox.pop_front() {
-                    outputs.push(output);
-                }
-                for output in outputs {
                     if let Err(err) = self.process_consensus_output(output) {
                         tracing::warn!(
                             %err,

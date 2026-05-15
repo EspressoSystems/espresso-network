@@ -332,8 +332,7 @@ async fn run_cutover_node(
 
     loop {
         // Mirror production (`ConsensusHandle::cutover_active`): poll the
-        // cutover gate on each iteration so the shared latching path
-        // is exercised, not a test-only watcher task.
+        // cutover gate
         if !cutover_gate.is_active() {
             let guard = legacy.read().await;
             cutover_gate.check(&guard, &client_api).await;
