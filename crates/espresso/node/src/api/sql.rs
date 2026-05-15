@@ -509,7 +509,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
             // reward claim tests can query proofs at arbitrary heights. This can be
             // removed once all reward claim tests are updated
             if !cfg!(any(test, feature = "testing"))
-                && !(height + node_state.node_id).is_multiple_of(30)
+                || !(height + node_state.node_id).is_multiple_of(30)
             {
                 return Ok(());
             }
