@@ -8,7 +8,7 @@ use tokio::{
 };
 
 use crate::{
-    Config, Keypair, PublicKey,
+    Config, Keypair, NOISE_IK_25519_AESGCM_BLAKE2S, PublicKey,
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
@@ -32,6 +32,7 @@ fn config(kp: Keypair, recv_timeout: Duration) -> Arc<Config> {
             .receive_timeout(recv_timeout)
             .retry_delays(vec![2, 5])
             .max_retry_delay(Duration::from_secs(10))
+            .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
             .build(),
     )
 }
@@ -743,6 +744,7 @@ fn config_with_retry(kp: Keypair, recv_timeout: Duration, retry_delays: Vec<u8>)
             .receive_timeout(recv_timeout)
             .retry_delays(retry_delays)
             .max_retry_delay(Duration::from_secs(10))
+            .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
             .build(),
     )
 }
@@ -854,6 +856,7 @@ async fn backpressure_on_unacked() {
             .receive_timeout(Duration::from_secs(5))
             .retry_delays(vec![30])
             .max_retry_delay(Duration::from_secs(30))
+            .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
             .build(),
     );
     let conf_b = config(kb.clone(), Duration::from_secs(5));

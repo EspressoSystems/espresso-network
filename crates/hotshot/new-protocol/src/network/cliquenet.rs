@@ -4,7 +4,10 @@ use std::{
 };
 
 pub use cliquenet::Config as CliquenetConfig;
-use cliquenet::{NetAddr, NetworkError as CliquenetError, Role, Slot, x25519::PublicKey};
+use cliquenet::{
+    NOISE_IK_25519_AESGCM_BLAKE2S, NetAddr, NetworkError as CliquenetError, Role, Slot,
+    x25519::PublicKey,
+};
 use hotshot_types::{
     PeerConnectInfo,
     data::{EpochNumber, ViewNumber},
@@ -57,6 +60,7 @@ impl<T: NodeType> Cliquenet<T> {
                     .values()
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
+            .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await

@@ -9,7 +9,13 @@ mod time;
 pub mod error;
 pub mod x25519;
 
-use std::{fmt, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    num::NonZeroUsize,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 pub use addr::NetAddr;
 use bon::Builder;
@@ -20,8 +26,15 @@ pub use net::{
     Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
     SendCommandBuilder,
 };
+use snow::params::NoiseParams;
 
 use crate::x25519::{Keypair, PublicKey};
+
+pub static NOISE_IK_25519_AESGCM_BLAKE2S: LazyLock<NoiseParams> = LazyLock::new(|| {
+    "Noise_IK_25519_AESGCM_BLAKE2s"
+        .parse()
+        .expect("valid noise params")
+});
 
 #[derive(Builder)]
 #[non_exhaustive]
@@ -29,6 +42,20 @@ pub struct Config {
     /// Network name.
     #[builder(with = |s: impl Into<String>| Arc::new(s.into()))]
     pub name: Arc<String>,
+
+    #[builder(with = |xs: impl IntoIterator<Item = (Version, NoiseParams)>| {
+        let m = BTreeMap::from_iter(xs);
+        assert! {
+            !m.is_empty(),
+            "noise configs must not be empty"
+        }
+        assert! {
+            m.keys().zip(m.keys().skip(1)).all(|(a, b)| u16::from(*a) + 1 == u16::from(*b)),
+            "noise config versions must be consecutive"
+        }
+        m
+    })]
+    noise_configs: BTreeMap<Version, NoiseParams>,
 
     /// DH keypair
     pub keypair: Keypair,
@@ -123,5 +150,26 @@ impl fmt::Display for Role {
             Self::Active => f.write_str("active"),
             Self::Passive => f.write_str("passive"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Version(u16);
+
+impl From<u16> for Version {
+    fn from(v: u16) -> Self {
+        Self(v)
+    }
+}
+
+impl From<Version> for u16 {
+    fn from(v: Version) -> Self {
+        v.0
+    }
+}
+
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }

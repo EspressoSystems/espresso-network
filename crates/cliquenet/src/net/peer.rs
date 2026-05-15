@@ -560,6 +560,9 @@ impl Peer {
                                             self.retry.del(s, i);
                                             rstate = ReadState::Header { off: 0, buf: [0; _] };
                                         }
+                                        Ok(FrameType::Init) => {
+                                            return Err(NetworkError::UnexpectedFrame(*hdr))
+                                        }
                                         Err(t) => {
                                             return Err(NetworkError::UnknownFrameType(t))
                                         }

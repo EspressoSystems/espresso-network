@@ -19,8 +19,9 @@
 //!
 //! - Version (4 bits)
 //! - Type (4 bits)
-//!    - Data (0)
-//!    - Ack  (1)
+//!    - Init (0)
+//!    - Data (1)
+//!    - Ack  (2)
 //! - Partial (1 bit)
 //! - Reserved (7 bits)
 //! - Payload length (16 bits)
@@ -39,6 +40,7 @@ impl Header {
 
     pub fn new(ty: FrameType, len: u16) -> Self {
         match ty {
+            FrameType::Init => Self::init(len),
             FrameType::Data => Self::data(len),
             FrameType::Ack => Self::ack(len),
         }
@@ -49,21 +51,27 @@ impl Header {
         Self(n)
     }
 
+    /// Create an inital header with the given payload length.
+    pub fn init(len: u16) -> Self {
+        Self(len as u32)
+    }
+
     /// Create a data header with the given payload length.
     pub fn data(len: u16) -> Self {
-        Self(len as u32)
+        Self(0x1000000 | len as u32)
     }
 
     /// Create an ack header with the given payload length.
     pub fn ack(len: u16) -> Self {
-        Self(0x1000000 | len as u32)
+        Self(0x2000000 | len as u32)
     }
 
     /// The type of the frame following this header.
     pub fn frame_type(self) -> Result<FrameType, u8> {
         match (self.0 & 0xF000000) >> 24 {
-            0 => Ok(FrameType::Data),
-            1 => Ok(FrameType::Ack),
+            0 => Ok(FrameType::Init),
+            1 => Ok(FrameType::Data),
+            2 => Ok(FrameType::Ack),
             t => Err(t as u8),
         }
     }
@@ -73,14 +81,19 @@ impl Header {
         Self(self.0 | 0x800000)
     }
 
+    /// Is this an initial frame header?
+    pub fn is_init(self) -> bool {
+        self.0 & 0xF000000 == 0
+    }
+
     /// Is this a data frame header?
     pub fn is_data(self) -> bool {
-        self.0 & 0xF000000 == 0
+        self.0 & 0xF000000 == 0x1000000
     }
 
     /// Is this an ack frame header?
     pub fn is_ack(self) -> bool {
-        self.0 & 0xF000000 == 0x1000000
+        self.0 & 0xF000000 == 0x2000000
     }
 
     /// Is this a partial frame?
@@ -107,6 +120,7 @@ impl Header {
 /// The type of a frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameType {
+    Init,
     Data,
     Ack,
 }
@@ -138,6 +152,11 @@ mod tests {
     use super::{FrameType, Header};
 
     quickcheck! {
+        fn init(len: u16) -> bool {
+            let hdr = Header::init(len);
+            hdr.is_init() && !hdr.is_partial() && hdr.frame_type() == Ok(FrameType::Init)
+        }
+
         fn data(len: u16) -> bool {
             let hdr = Header::data(len);
             hdr.is_data() && !hdr.is_partial() && hdr.frame_type() == Ok(FrameType::Data)
@@ -148,12 +167,20 @@ mod tests {
             hdr.is_ack() && !hdr.is_partial() && hdr.frame_type() == Ok(FrameType::Ack)
         }
 
+        fn partial_init(len: u16) -> bool {
+            Header::init(len).partial().is_partial()
+        }
+
         fn partial_data(len: u16) -> bool {
             Header::data(len).partial().is_partial()
         }
 
         fn partial_ack(len: u16) -> bool {
             Header::ack(len).partial().is_partial()
+        }
+
+        fn init_len(len: u16) -> bool {
+            Header::init(len).len() == len
         }
 
         fn data_len(len: u16) -> bool {

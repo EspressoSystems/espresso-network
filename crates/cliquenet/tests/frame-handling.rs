@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::Ipv4Addr};
 
 use bytes::Bytes;
-use cliquenet::{Config, NetAddr, Network, Slot, x25519::Keypair};
+use cliquenet::{Config, NOISE_IK_25519_AESGCM_BLAKE2S, NetAddr, Network, Slot, x25519::Keypair};
 use rand::Rng;
 
 /// Send and receive 5 MiB messages.
@@ -28,6 +28,7 @@ async fn multiple_frames() {
                     .keypair(k)
                     .bind(a)
                     .parties(parties.iter().map(|(k, a)| (k.public_key(), a.clone())))
+                    .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
                     .build(),
             )
             .await
