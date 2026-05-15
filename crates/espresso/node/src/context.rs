@@ -565,6 +565,8 @@ async fn handle_events<N, P>(
                 {
                     tracing::warn!("Failed to handle legacy external message: {:?}", err);
                 }
+                // Check if we're ready to start the new protocol
+                consensus_handle.cutover_active().await;
             },
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {

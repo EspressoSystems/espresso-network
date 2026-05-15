@@ -230,7 +230,7 @@ where
     /// node. Stateful: the first call after legacy crosses the cutover
     /// view triggers seed extraction + dispatch. Use this for "should
     /// we route to the coordinator?" decisions.
-    async fn cutover_active(&self) -> bool {
+    pub async fn cutover_active(&self) -> bool {
         if self.cutover_gate.is_active() {
             return true;
         }
