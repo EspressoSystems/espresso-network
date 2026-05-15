@@ -51,7 +51,7 @@ impl Header {
         Self(n)
     }
 
-    /// Create an inital header with the given payload length.
+    /// Create an initial header with the given payload length.
     pub fn init(len: u16) -> Self {
         Self(len as u32)
     }

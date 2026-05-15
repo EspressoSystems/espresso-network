@@ -48,7 +48,10 @@ impl Connection {
             )
         }
 
-        let (version, prologue) = select_version(&conf, &mut stream, false).await?;
+        let (version, prologue) = {
+            let action = select_version(&conf, &mut stream, false);
+            until(conf.handshake_timeout, action).await?
+        };
 
         debug!(
             name = %conf.name,
@@ -71,26 +74,27 @@ impl Connection {
 
         let node = conf.keypair.public_key();
         let addr = stream.peer_addr()?;
-        match timeout(conf.handshake_timeout, on_handshake(&mut stream, hs)).await {
-            Ok(Ok(state)) => match remote_static_key(&state) {
-                Some(key) => Ok(Self {
-                    key,
-                    addr,
-                    stream,
-                    state,
-                }),
-                None => {
-                    warn! {
-                        name = %conf.name,
-                        %node,
-                        %addr,
-                        "missing or invalid remote static key"
-                    }
-                    Err(NetworkError::InvalidHandshakeMessage)
-                },
-            },
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(NetworkError::Timeout),
+
+        let state = {
+            let action = on_handshake(&mut stream, hs);
+            until(conf.handshake_timeout, action).await?
+        };
+
+        if let Some(key) = remote_static_key(&state) {
+            Ok(Self {
+                key,
+                addr,
+                stream,
+                state,
+            })
+        } else {
+            warn! {
+                name = %conf.name,
+                %node,
+                %addr,
+                "missing or invalid remote static key"
+            }
+            Err(NetworkError::InvalidHandshakeMessage)
         }
     }
 
@@ -101,7 +105,7 @@ impl Connection {
                 .expect("valid private key")
                 .remote_public_key(peer.as_slice())
                 .expect("valid remote pub key")
-                .prologue(&prologue)
+                .prologue(prologue)
                 .expect("1st time we set the prologue")
                 .build_initiator()
                 .expect("valid noise params yield valid handshake state")
@@ -133,8 +137,8 @@ impl Connection {
                 sleep(delays.next().expect("delays iterator is infinite")).await;
             }
             debug!(name = %conf.name, %node, %peer, %addr, "connecting");
-            match timeout(conf.connect_timeout, TcpStream::connect(&addr)).await {
-                Ok(Ok(mut stream)) => {
+            match until(conf.connect_timeout, TcpStream::connect(&addr)).await {
+                Ok(mut stream) => {
                     let addr = match stream.peer_addr() {
                         Ok(addr) => addr,
                         Err(err) => {
@@ -145,7 +149,8 @@ impl Connection {
                     if let Err(err) = stream.set_nodelay(true) {
                         warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option")
                     }
-                    let (version, prologue) = match select_version(&conf, &mut stream, true).await {
+                    let action = select_version(&conf, &mut stream, true);
+                    let (version, prologue) = match until(conf.handshake_timeout, action).await {
                         Ok((v, p)) => {
                             debug!(name = %conf.name, %node, version = %v, "negotiated version");
                             (v, p)
@@ -160,8 +165,8 @@ impl Connection {
                         .get(&version)
                         .expect("selected version has noise config");
                     let state = new_handshake_state(&prologue, params);
-                    match timeout(conf.handshake_timeout, handshake(&mut stream, state)).await {
-                        Ok(Ok(state)) => {
+                    match until(conf.handshake_timeout, handshake(&mut stream, state)).await {
+                        Ok(state) => {
                             debug!(name = %conf.name, %node, %peer, %addr, "connected");
                             match remote_static_key(&state) {
                                 Some(key) if key == peer => {
@@ -223,7 +228,7 @@ impl Connection {
                                 },
                             }
                         },
-                        Ok(Err(err)) => {
+                        Err(err) => {
                             warn!(
                                 name = %conf.name,
                                 %node,
@@ -232,16 +237,10 @@ impl Connection {
                                 %err, "handshake failure"
                             )
                         },
-                        Err(_) => {
-                            warn!(name = %conf.name, %node, %peer, %addr, "handshake timeout")
-                        },
                     }
                 },
-                Ok(Err(err)) => {
+                Err(err) => {
                     warn!(name = %conf.name, %node, %peer, %addr, %err, "connect failure");
-                },
-                Err(_) => {
-                    warn!(name = %conf.name, %node, %peer, %addr, "connect timeout");
                 },
             }
         }
@@ -283,6 +282,19 @@ impl Connection {
 fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
     let k = state.get_remote_static()?;
     PublicKey::try_from(k).ok()
+}
+
+/// A variant of `timeout` that merges the timeout into the network error.
+async fn until<F, A, E>(t: Duration, fut: F) -> Result<A>
+where
+    F: Future<Output = std::result::Result<A, E>>,
+    E: Into<NetworkError>,
+{
+    match timeout(t, fut).await {
+        Ok(Ok(a)) => Ok(a),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => Err(NetworkError::Timeout),
+    }
 }
 
 /// Select a version from the range that both sides support.
