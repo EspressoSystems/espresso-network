@@ -292,7 +292,6 @@ impl<T: NodeType> Consensus<T> {
     /// Idempotent: calling with the same seed twice (or with an older
     /// seed) does not regress decided/locked state.
     pub fn apply_pre_cutover_seed(&mut self, seed: PreCutoverSeed<T>) {
-        
         let view = seed.decided_anchor.view_number();
         if view > self.last_decided_view {
             self.last_decided_view = view;

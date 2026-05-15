@@ -30,34 +30,6 @@ use tokio::spawn;
 use tokio_util::task::AbortOnDropHandle;
 use versions::version;
 
-/// Status of the legacy → 0.8 protocol cutover.
-#[derive(Clone, Debug)]
-pub enum CutoverStatus {
-    /// No upgrade certificate decided yet.
-    NotConfigured,
-    /// The cutover view is set; legacy hasn't reached it yet.
-    Approaching {
-        cur_view: ViewNumber,
-        cutover_view: ViewNumber,
-    },
-    /// Legacy is at or past the cutover view.
-    Active { cutover_view: ViewNumber },
-}
-
-impl CutoverStatus {
-    /// Views between `cur_view` and `cutover_view`, or `None` when the
-    /// cutover isn't approaching (already active, or not configured).
-    pub fn views_remaining(&self) -> Option<u64> {
-        match self {
-            Self::Approaching {
-                cur_view,
-                cutover_view,
-            } => Some(**cutover_view - **cur_view),
-            _ => None,
-        }
-    }
-}
-
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 // vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
 // state and delta only become available one level up, in `Coordinator`.
@@ -219,24 +191,6 @@ where
             .upgrade_lock
             .version_infallible(view)
             >= version(0, 8)
-    }
-
-    pub async fn cutover_status(&self) -> CutoverStatus {
-        let legacy = self.legacy_handle.read().await;
-        let cur_view = legacy.cur_view().await;
-        let lock = &legacy.hotshot.upgrade_lock;
-        let Some(cert) = lock.decided_upgrade_cert() else {
-            return CutoverStatus::NotConfigured;
-        };
-        let cutover_view = cert.data.new_version_first_view;
-        if cur_view >= cutover_view {
-            CutoverStatus::Active { cutover_view }
-        } else {
-            CutoverStatus::Approaching {
-                cur_view,
-                cutover_view,
-            }
-        }
     }
 
     /// Whether the cutover has happened — the gate has latched on this
