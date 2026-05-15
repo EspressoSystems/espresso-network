@@ -295,9 +295,9 @@ async fn select_version(
 ) -> Result<(Version, Prologue)> {
     // NB that both ends send simultaneously before reading, hence the
     // initial frame must fit into the socket's send buffer, i.e. be
-    // very small. Since we only send two u16 version numbers, that
-    // should not be a problem, but the init frame should better not
-    // grow.
+    // very small. Since we only send a header plus two u16 version
+    // numbers (= 8 bytes), that should not be a problem, but the init
+    // frame should better not grow.
     const INIT_PAYLOAD_LEN: usize = 4;
 
     let our_min = conf
@@ -415,4 +415,89 @@ where
     msg[..Header::SIZE].copy_from_slice(&hdr.to_bytes());
     stream.write_all(msg).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use tokio::net::{TcpListener, TcpStream};
+
+    use super::{Prologue, Result, select_version};
+    use crate::{
+        Config, NOISE_IK_25519_AESGCM_BLAKE2S, NetAddr, NetworkError, Version, x25519::Keypair,
+    };
+
+    fn config<I, V>(versions: I) -> Config
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<Version>,
+    {
+        Config::builder()
+            .name("test")
+            .keypair(Keypair::generate().unwrap())
+            .bind(NetAddr::from((Ipv4Addr::LOCALHOST, 0u16)))
+            .parties([])
+            .noise_configs(
+                versions
+                    .into_iter()
+                    .map(|v| (v.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())),
+            )
+            .build()
+    }
+
+    async fn negotiate(
+        a: &Config,
+        b: &Config,
+    ) -> (Result<(Version, Prologue)>, Result<(Version, Prologue)>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::join!(
+            async {
+                let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+                select_version(a, &mut s, true).await
+            },
+            async {
+                let (mut s, _) = listener.accept().await.unwrap();
+                select_version(b, &mut s, false).await
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn picks_min_of_maxes() {
+        let (ra, rb) = negotiate(&config([1, 2, 3]), &config([1, 2])).await;
+        let (va, pa) = ra.unwrap();
+        let (vb, pb) = rb.unwrap();
+        assert_eq!(va, 2.into());
+        assert_eq!(vb, 2.into());
+        assert_eq!(pa, pb);
+    }
+
+    #[tokio::test]
+    async fn higher_overlap_takes_higher() {
+        let (ra, rb) = negotiate(&config([2, 3, 4]), &config([1, 2, 3])).await;
+        let (va, pa) = ra.unwrap();
+        let (vb, pb) = rb.unwrap();
+        assert_eq!(va, 3.into());
+        assert_eq!(vb, 3.into());
+        assert_eq!(pa, pb);
+    }
+
+    #[tokio::test]
+    async fn single_version_match() {
+        let (ra, rb) = negotiate(&config([1]), &config([1])).await;
+        let (va, pa) = ra.unwrap();
+        let (vb, pb) = rb.unwrap();
+        assert_eq!(va, 1.into());
+        assert_eq!(vb, 1.into());
+        assert_eq!(pa, pb);
+    }
+
+    #[tokio::test]
+    async fn disjoint_ranges_fail() {
+        let (ra, rb) = negotiate(&config([1]), &config([2])).await;
+        assert!(matches!(ra, Err(NetworkError::IncompatibleVersions { .. })));
+        assert!(matches!(rb, Err(NetworkError::IncompatibleVersions { .. })));
+    }
 }
