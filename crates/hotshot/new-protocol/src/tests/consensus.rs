@@ -17,8 +17,8 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, is_leaf_decided, is_proposal, is_request_block_and_header,
-            is_request_state, is_send_timeout_cert, is_send_timeout_vote, is_vote1, is_vote2,
-            node_index_for_key,
+            is_request_state, is_send_cert1, is_send_timeout_cert, is_send_timeout_vote,
+            is_view_changed, is_vote1, is_vote2, node_index_for_key,
         },
         utils::ConsensusHarness,
     },
@@ -340,13 +340,15 @@ async fn test_decide_requires_cert2() {
     );
 }
 
-/// Vote2 requires BlockReconstructed for the current view.
+/// Decide defers when cert2 arrives before the block, and fires once the
+/// block is locally available.
 #[tokio::test]
-async fn test_vote2_missing_block_reconstructed() {
+async fn test_decide_fires_when_block_arrives_late() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
+    // Bootstrap view[0] so view[1]'s parent chain check is satisfied.
     harness
         .apply(test_data.views[0].proposal_input_consensus(&node_key))
         .await;
@@ -354,46 +356,134 @@ async fn test_vote2_missing_block_reconstructed() {
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
 
-    // View 2: proposal + cert1, but NO block_reconstructed for view 2
+    let decided_before = count_matching(harness.outputs(), is_leaf_decided);
+
+    // View[1]: proposal + cert1 + cert2 arrive before reconstruction.
     harness
         .apply(test_data.views[1].proposal_input_consensus(&node_key))
         .await;
     harness.apply(test_data.views[1].cert1_input()).await;
+    harness.apply(test_data.views[1].cert2_input()).await;
 
-    assert!(
-        !any(harness.outputs(), is_vote2),
-        "Vote2 should not fire without BlockReconstructed"
+    assert_eq!(
+        count_matching(harness.outputs(), is_leaf_decided),
+        decided_before,
+        "Decide must defer until BlockReconstructed arrives"
     );
-}
 
-/// BlockReconstructed arriving after cert1 triggers vote2.
-#[tokio::test]
-async fn test_vote2_block_reconstructed_arrives_late() {
-    let mut harness = ConsensusHarness::new(0).await;
-    let test_data = TestData::new(3).await;
-    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
-
-    harness
-        .apply(test_data.views[0].proposal_input_consensus(&node_key))
-        .await;
-    harness
-        .apply(test_data.views[0].block_reconstructed_input())
-        .await;
-
-    // View 2: proposal + cert1 first (no block_reconstructed yet)
-    harness
-        .apply(test_data.views[1].proposal_input_consensus(&node_key))
-        .await;
-    harness.apply(test_data.views[1].cert1_input()).await;
-
-    // Now send block_reconstructed — should trigger vote2
+    // Reconstruction lands — decide must now fire.
     harness
         .apply(test_data.views[1].block_reconstructed_input())
         .await;
 
+    assert_eq!(
+        count_matching(harness.outputs(), is_leaf_decided),
+        decided_before + 1,
+        "Decide must fire once the block is locally available"
+    );
+}
+
+/// Vote2 fires as soon as cert1 + proposal are present — it does NOT wait
+/// for BlockReconstructed.
+#[tokio::test]
+async fn test_vote2_fires_without_block_reconstructed() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+
+    // View 2: proposal + cert1, no block_reconstructed for view 2.
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+
     assert!(
         any(harness.outputs(), is_vote2),
-        "Vote2 should fire when BlockReconstructed arrives late"
+        "Vote2 should fire as soon as cert1 arrives (no BlockReconstructed required)"
+    );
+}
+
+/// Regression test for the split between vote2 and lock-update branches:
+/// when cert1 arrives before BlockReconstructed, vote2 fires immediately but
+/// the lock-update branch (and its `ViewChanged` / `SendCertificate1` outputs)
+/// must defer. When BlockReconstructed arrives later, the lock-update branch
+/// must run on that subsequent apply() — the `voted_2_views` early-return must
+/// NOT short-circuit the lock branch.
+#[tokio::test]
+async fn test_lock_update_fires_when_recon_arrives_late() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Bootstrap view[0] fully (proposal + reconstruction) so view[1]'s parent
+    // chain check is satisfied.
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&node_key))
+        .await;
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+
+    // Snapshot baseline counts (view[0] may have emitted its own ViewChanged
+    // and SendCertificate1 during bootstrap).
+    let view_changed_before = count_matching(harness.outputs(), is_view_changed);
+    let send_cert1_before = count_matching(harness.outputs(), is_send_cert1);
+    let vote2_before = count_matching(harness.outputs(), is_vote2);
+
+    // View[1]: proposal + cert1 land before reconstruction.
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+    harness.apply(test_data.views[1].cert1_input()).await;
+
+    // After cert1 + proposal but with no reconstruction: vote2 must fire,
+    // but the lock-update branch must stay deferred — no new ViewChanged or
+    // SendCertificate1.
+    let vote2_after_cert1 = count_matching(harness.outputs(), is_vote2);
+    assert_eq!(
+        vote2_after_cert1,
+        vote2_before + 1,
+        "Vote2 should fire on cert1 + proposal (no recon required)"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_view_changed),
+        view_changed_before,
+        "ViewChanged must NOT fire until BlockReconstructed arrives"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert1),
+        send_cert1_before,
+        "SendCertificate1 must NOT fire until BlockReconstructed arrives"
+    );
+
+    // Reconstruction arrives. The lock-update branch must now fire on this
+    // subsequent apply() — the `voted_2_views` guard must NOT block it.
+    harness
+        .apply(test_data.views[1].block_reconstructed_input())
+        .await;
+
+    assert_eq!(
+        count_matching(harness.outputs(), is_view_changed),
+        view_changed_before + 1,
+        "ViewChanged must fire after BlockReconstructed arrives, even though vote2 already fired \
+         earlier"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_send_cert1),
+        send_cert1_before + 1,
+        "SendCertificate1 must fire when the lock updates on late reconstruction"
+    );
+    assert_eq!(
+        count_matching(harness.outputs(), is_vote2),
+        vote2_after_cert1,
+        "Vote2 must not fire a second time when recon arrives"
     );
 }
 

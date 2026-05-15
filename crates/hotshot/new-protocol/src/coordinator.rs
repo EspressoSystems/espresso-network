@@ -424,13 +424,27 @@ where
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
                     Ok(out) => {
+                        let reconstructed_commit = VidCommitment::V2(out.payload_commitment);
+                        // Early check if a proposal already exists
+                        if let Some(expected) = self
+                            .consensus
+                            .proposal_at(out.view)
+                            .map(|p| p.block_header.payload_commitment())
+                            && expected != reconstructed_commit
+                        {
+                            warn!(
+                                view = %out.view,
+                                "reconstructed payload commitment does not match local proposal; dropping payload",
+                            );
+                            continue;
+                        }
                         self.block_builder.on_block_reconstructed(out.tx_commitments);
                         self.storage.append_da(
                             out.view,
                             out.epoch,
                             out.payload,
                             out.metadata,
-                            VidCommitment::V2(out.payload_commitment),
+                            reconstructed_commit,
                         );
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
