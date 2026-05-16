@@ -143,7 +143,7 @@ impl Server {
                             name = %self.conf.name,
                             node = %self.key,
                             %addr,
-                            "accepted new connection"
+                            "accepted new tcp connection"
                         );
                         self.spawn_accept(stream)
                     }
@@ -152,7 +152,7 @@ impl Server {
                             name = %self.conf.name,
                             node = %self.key,
                             %err,
-                            "error accepting connection"
+                            "error accepting tcp connection"
                         )
                     }
                 },
@@ -513,7 +513,7 @@ impl Server {
                                         name = %self.conf.name,
                                         node = %self.key,
                                         peer = %k,
-                                        role = ?role,
+                                        role = %role,
                                         "peer to assign role to not found"
                                     );
                                 }

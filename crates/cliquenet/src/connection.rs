@@ -13,6 +13,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::{sleep, timeout},
+    try_join,
 };
 use tracing::{debug, warn};
 
@@ -39,78 +40,49 @@ type Prologue = Vec<u8>;
 
 impl Connection {
     pub async fn accept(conf: Arc<Config>, mut stream: TcpStream) -> Result<Self> {
-        if let Err(err) = stream.set_nodelay(true) {
-            warn!(
-                name = %conf.name,
-                node = %conf.keypair.public_key(),
-                %err,
-                "failed to enable NO_DELAY option"
-            )
-        }
-
-        let (version, prologue) = {
-            let action = select_version(&conf, &mut stream, false);
-            until(conf.handshake_timeout, action).await?
-        };
-
-        debug!(
-            name = %conf.name,
-            node = %conf.keypair.public_key(),
-            %version,
-            "negotiated version"
-        );
-
-        let params = conf
-            .noise_configs
-            .get(&version)
-            .expect("selected version has noise config");
-        let hs = Builder::new(params.clone())
-            .local_private_key(&conf.keypair.secret_key().as_bytes())
-            .expect("valid private key")
-            .prologue(&prologue)
-            .expect("1st time we set the prologue")
-            .build_responder()
-            .expect("valid noise params yield valid handshake state");
-
         let node = conf.keypair.public_key();
-        let addr = stream.peer_addr()?;
 
-        let state = {
-            let action = on_handshake(&mut stream, hs);
-            until(conf.handshake_timeout, action).await?
-        };
-
-        if let Some(key) = remote_static_key(&state) {
-            Ok(Self {
-                key,
-                addr,
-                stream,
-                state,
-            })
-        } else {
-            warn! {
-                name = %conf.name,
-                %node,
-                %addr,
-                "missing or invalid remote static key"
-            }
-            Err(NetworkError::InvalidHandshakeMessage)
+        if let Err(err) = stream.set_nodelay(true) {
+            warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option")
         }
+
+        until(conf.handshake_timeout, async move {
+            let (version, prologue) = select_version(&conf, &mut stream, false).await?;
+
+            debug!(name = %conf.name, %node, %version, "negotiated version");
+
+            let params = conf
+                .noise_configs
+                .get(&version)
+                .expect("selected version has noise config");
+
+            let hs = Builder::new(params.clone())
+                .local_private_key(&conf.keypair.secret_key().as_bytes())
+                .expect("valid private key")
+                .prologue(&prologue)
+                .expect("1st time we set the prologue")
+                .build_responder()
+                .expect("valid noise params yield valid handshake state");
+
+            let addr = stream.peer_addr()?;
+            let state = on_handshake(&mut stream, hs).await?;
+
+            if let Some(key) = remote_static_key(&state) {
+                Ok(Self {
+                    key,
+                    addr,
+                    stream,
+                    state,
+                })
+            } else {
+                warn!(name = %conf.name, %node, %addr, "invalid static key");
+                Err(NetworkError::InvalidHandshakeMessage)
+            }
+        })
+        .await
     }
 
     pub async fn connect(conf: Arc<Config>, peer: PublicKey, addr: NetAddr) -> Self {
-        let new_handshake_state = |prologue: &Prologue, params: &NoiseParams| {
-            Builder::new(params.clone())
-                .local_private_key(conf.keypair.secret_key().as_slice())
-                .expect("valid private key")
-                .remote_public_key(peer.as_slice())
-                .expect("valid remote pub key")
-                .prologue(prologue)
-                .expect("1st time we set the prologue")
-                .build_initiator()
-                .expect("valid noise params yield valid handshake state")
-        };
-
         let mut delays = once({
             if conf.random_connect_delay {
                 Duration::from_millis(rand::rng().random_range(0..1000))
@@ -136,111 +108,39 @@ impl Connection {
             } else {
                 sleep(delays.next().expect("delays iterator is infinite")).await;
             }
+
             debug!(name = %conf.name, %node, %peer, %addr, "connecting");
-            match until(conf.connect_timeout, TcpStream::connect(&addr)).await {
-                Ok(mut stream) => {
-                    let addr = match stream.peer_addr() {
-                        Ok(addr) => addr,
-                        Err(err) => {
-                            warn!(name = %conf.name, %node, %err, "failed to get peer address");
-                            continue;
-                        },
-                    };
-                    if let Err(err) = stream.set_nodelay(true) {
-                        warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option")
-                    }
-                    let action = select_version(&conf, &mut stream, true);
-                    let (version, prologue) = match until(conf.handshake_timeout, action).await {
-                        Ok((v, p)) => {
-                            debug!(name = %conf.name, %node, version = %v, "negotiated version");
-                            (v, p)
-                        },
-                        Err(err) => {
-                            warn!(name = %conf.name, %node, %err, "failed to negotiate version");
-                            continue;
-                        },
-                    };
-                    let params = conf
-                        .noise_configs
-                        .get(&version)
-                        .expect("selected version has noise config");
-                    let state = new_handshake_state(&prologue, params);
-                    match until(conf.handshake_timeout, handshake(&mut stream, state)).await {
-                        Ok(state) => {
-                            debug!(name = %conf.name, %node, %peer, %addr, "connected");
-                            match remote_static_key(&state) {
-                                Some(key) if key == peer => {
-                                    let mut conn = Self {
-                                        key,
-                                        addr,
-                                        stream,
-                                        state,
-                                    };
-                                    match conn
-                                        .exchange_hello(conf.handshake_timeout, Hello::Ok)
-                                        .await
-                                    {
-                                        Ok(h) if h.is_ok() => break conn,
-                                        Ok(h) => {
-                                            warn!(
-                                                name = %conf.name,
-                                                %node,
-                                                %peer,
-                                                remote = %key,
-                                                %addr,
-                                                "hello response was not ok"
-                                            );
-                                            backoff = h.backoff_duration();
-                                            continue;
-                                        },
-                                        Err(err) => {
-                                            warn!(
-                                                name = %conf.name,
-                                                %node,
-                                                %peer,
-                                                remote = %key,
-                                                %addr,
-                                                %err,
-                                                "failed to exchange hello"
-                                            );
-                                            continue;
-                                        },
-                                    }
-                                },
-                                Some(key) => {
-                                    warn!(
-                                        name = %conf.name,
-                                        %node,
-                                        %peer,
-                                        remote = %key,
-                                        %addr,
-                                        "remote static key mismatch"
-                                    )
-                                },
-                                None => {
-                                    warn!(
-                                        name = %conf.name,
-                                        %node,
-                                        %peer,
-                                        %addr,
-                                        "missing or invalid remote static key"
-                                    )
-                                },
-                            }
+
+            match try_connect(&conf, &peer, &addr).await {
+                Ok(mut conn) => {
+                    match conn.exchange_hello(conf.handshake_timeout, Hello::Ok).await {
+                        Ok(h) if h.is_ok() => break conn,
+                        Ok(h) => {
+                            warn!(
+                                name = %conf.name,
+                                %node,
+                                %peer,
+                                remote = %conn.key,
+                                %addr,
+                                "hello response was not ok"
+                            );
+                            backoff = h.backoff_duration();
                         },
                         Err(err) => {
                             warn!(
                                 name = %conf.name,
                                 %node,
                                 %peer,
+                                remote = %conn.key,
                                 %addr,
-                                %err, "handshake failure"
-                            )
+                                %err,
+                                "failed to exchange hello"
+                            );
                         },
                     }
                 },
                 Err(err) => {
-                    warn!(name = %conf.name, %node, %peer, %addr, %err, "connect failure");
+                    warn!(name = %conf.name, %node, %peer, %addr, %err, "connect/handshake error")
                 },
             }
         }
@@ -279,6 +179,61 @@ impl Connection {
     }
 }
 
+async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Connection> {
+    let new_handshake_state = |prologue: &Prologue, params: &NoiseParams| {
+        Builder::new(params.clone())
+            .local_private_key(conf.keypair.secret_key().as_slice())
+            .expect("valid private key")
+            .remote_public_key(peer.as_slice())
+            .expect("valid remote pub key")
+            .prologue(prologue)
+            .expect("1st time we set the prologue")
+            .build_initiator()
+            .expect("valid noise params yield valid handshake state")
+    };
+
+    let mut stream = until(conf.connect_timeout, TcpStream::connect(addr)).await?;
+
+    let node = conf.keypair.public_key();
+    let addr = stream.peer_addr()?;
+
+    debug!(name = %conf.name, %node, %peer, %addr, "tcp connection established");
+
+    if let Err(err) = stream.set_nodelay(true) {
+        warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option");
+    }
+
+    until(conf.handshake_timeout, async move {
+        let (version, prologue) = select_version(conf, &mut stream, true).await?;
+
+        debug!(name = %conf.name, %node, %peer, %addr, %version, "negotiated version");
+
+        let params = conf
+            .noise_configs
+            .get(&version)
+            .expect("selected version has noise config");
+
+        let state = handshake(&mut stream, new_handshake_state(&prologue, params)).await?;
+        match remote_static_key(&state) {
+            Some(key) if key == *peer => Ok(Connection {
+                key,
+                addr,
+                stream,
+                state,
+            }),
+            Some(key) => {
+                warn!(name = %conf.name, %node, %peer, remote = %key, %addr, "static key mismatch");
+                Err(NetworkError::InvalidHandshakeMessage)
+            },
+            None => {
+                warn!(name = %conf.name, %node, %peer, %addr, "invalid static key");
+                Err(NetworkError::InvalidHandshakeMessage)
+            },
+        }
+    })
+    .await
+}
+
 fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
     let k = state.get_remote_static()?;
     PublicKey::try_from(k).ok()
@@ -305,24 +260,17 @@ async fn select_version(
     stream: &mut TcpStream,
     is_initiator: bool,
 ) -> Result<(Version, Prologue)> {
-    // NB that both ends send simultaneously before reading, hence the
-    // initial frame must fit into the socket's send buffer, i.e. be
-    // very small. Since we only send two u16 version numbers (= 4 bytes),
-    // that should not be a problem, but the init frame should better not
-    // grow.
     const INIT_PAYLOAD_LEN: usize = 4;
 
     let our_min = conf
         .noise_configs
-        .keys()
-        .min()
-        .copied()
+        .first_key_value()
+        .map(|(k, _)| *k)
         .expect("noise_configs is not empty");
     let our_max = conf
         .noise_configs
-        .keys()
-        .max()
-        .copied()
+        .last_key_value()
+        .map(|(k, _)| *k)
         .expect("noise_configs is not empty");
 
     let mut send_buf = [0u8; INIT_PAYLOAD_LEN];
@@ -331,8 +279,8 @@ async fn select_version(
     send_buf[0..2].copy_from_slice(&u16::from(our_min).to_be_bytes());
     send_buf[2..4].copy_from_slice(&u16::from(our_max).to_be_bytes());
 
-    stream.write_all(&send_buf).await?;
-    stream.read_exact(&mut recv_buf).await?;
+    let (mut r, mut w) = stream.split();
+    try_join!(w.write_all(&send_buf), r.read_exact(&mut recv_buf))?;
 
     let their_min = Version::from(u16::from_be_bytes([recv_buf[0], recv_buf[1]]));
     let their_max = Version::from(u16::from_be_bytes([recv_buf[2], recv_buf[3]]));
