@@ -12,7 +12,7 @@ use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    time::{sleep, timeout},
+    time::sleep,
     try_join,
 };
 use tracing::{debug, warn};
@@ -22,6 +22,7 @@ use crate::{
     addr::NetAddr,
     error::NetworkError,
     msg::{Header, MAX_NOISE_MESSAGE_SIZE, hello::Hello},
+    until,
     x25519::PublicKey,
 };
 
@@ -113,7 +114,11 @@ impl Connection {
 
             match try_connect(&conf, &peer, &addr).await {
                 Ok(mut conn) => {
-                    match conn.exchange_hello(conf.handshake_timeout, Hello::Ok).await {
+                    let hello_exchange = until(conf.handshake_timeout, async {
+                        conn.send_hello(Hello::Ok).await?;
+                        conn.recv_hello().await
+                    });
+                    match hello_exchange.await {
                         Ok(h) if h.is_ok() => break conn,
                         Ok(h) => {
                             warn!(
@@ -143,17 +148,6 @@ impl Connection {
                     warn!(name = %conf.name, %node, %peer, %addr, %err, "connect/handshake error")
                 },
             }
-        }
-    }
-
-    async fn exchange_hello(&mut self, d: Duration, h: Hello) -> Result<Hello> {
-        let future = async {
-            self.send_hello(h).await?;
-            self.recv_hello().await
-        };
-        match timeout(d, future).await {
-            Ok(re) => re,
-            Err(_) => Err(NetworkError::Timeout),
         }
     }
 
@@ -237,19 +231,6 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
 fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
     let k = state.get_remote_static()?;
     PublicKey::try_from(k).ok()
-}
-
-/// A variant of `timeout` that merges the timeout into the network error.
-async fn until<F, A, E>(t: Duration, fut: F) -> Result<A>
-where
-    F: Future<Output = std::result::Result<A, E>>,
-    E: Into<NetworkError>,
-{
-    match timeout(t, fut).await {
-        Ok(Ok(a)) => Ok(a),
-        Ok(Err(e)) => Err(e.into()),
-        Err(_) => Err(NetworkError::Timeout),
-    }
 }
 
 /// Select a version from the range that both sides support.
