@@ -73,6 +73,7 @@ where
         let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
 
         // On postgres, fall back to legacy tables for any traversal-path nodes not yet backfilled.
+        // The legacy table only exists during the migration window; if it is absent we skip silently.
         #[cfg(not(feature = "embedded-db"))]
         let nodes = {
             let mut nodes = nodes;
@@ -88,15 +89,26 @@ where
                     let legacy_table = format!("{state_type}_legacy");
                     let (lq, lsql) =
                         build_legacy_path_query(&legacy_table, missing_paths, created)?;
-                    let legacy_rows = lq.query(&lsql).fetch_all(self.as_mut()).await?;
-                    nodes.extend(legacy_rows.into_iter().map(Node::from));
-                    // Re-sort leaf-first (longer path arrays first),
-                    // matching the original ORDER BY t.path DESC behaviour.
-                    nodes.sort_by(|a, b| {
-                        let la = a.path.as_array().map(|v| v.len()).unwrap_or(0);
-                        let lb = b.path.as_array().map(|v| v.len()).unwrap_or(0);
-                        lb.cmp(&la)
-                    });
+                    match lq.query(&lsql).fetch_all(self.as_mut()).await {
+                        Ok(legacy_rows) => {
+                            nodes.extend(legacy_rows.into_iter().map(Node::from));
+                            // Re-sort leaf-first (longer path arrays first),
+                            // matching the original ORDER BY t.path DESC behaviour.
+                            nodes.sort_by(|a, b| {
+                                let la = a.path.as_array().map(|v| v.len()).unwrap_or(0);
+                                let lb = b.path.as_array().map(|v| v.len()).unwrap_or(0);
+                                lb.cmp(&la)
+                            });
+                        }
+                        Err(e) if is_undefined_table(&e) => {
+                            // Legacy table absent (fresh install, tests, or post-contract phase).
+                        }
+                        Err(e) => {
+                            return Err(QueryError::Error {
+                                message: format!("legacy merkle path lookup failed: {e}"),
+                            });
+                        }
+                    }
                 }
             }
             nodes
@@ -141,18 +153,26 @@ where
                     .collect();
 
                 if !missing.is_empty() {
-                    let legacy: HashMap<i64, Vec<u8>> = sqlx::query_as(
+                    match sqlx::query_as(
                         "SELECT id::BIGINT, value FROM hash_legacy WHERE id = ANY($1::BIGINT[])",
                     )
                     .bind(&missing)
                     .fetch_all(self.as_mut())
                     .await
-                    .map_err(|e| QueryError::Error {
-                        message: format!("hash_legacy lookup failed: {e}"),
-                    })?
-                    .into_iter()
-                    .collect();
-                    result.extend(legacy);
+                    {
+                        Ok(rows) => {
+                            let legacy: HashMap<i64, Vec<u8>> = rows.into_iter().collect();
+                            result.extend(legacy);
+                        }
+                        Err(e) if is_undefined_table(&e) => {
+                            // hash_legacy absent (fresh install, tests, or post-contract phase).
+                        }
+                        Err(e) => {
+                            return Err(QueryError::Error {
+                                message: format!("hash_legacy lookup failed: {e}"),
+                            });
+                        }
+                    }
                 }
                 result
             }
@@ -759,6 +779,18 @@ impl Node {
 
         Ok(())
     }
+}
+
+/// Returns `true` if `e` is a PostgreSQL "undefined table" error (SQLSTATE 42P01).
+///
+/// Used to detect that a legacy table has not been created yet (fresh install, tests)
+/// or has already been dropped (post-contract phase), so callers can skip the fallback.
+#[cfg(not(feature = "embedded-db"))]
+fn is_undefined_table(e: &sqlx::Error) -> bool {
+    matches!(
+        e,
+        sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("42P01")
+    )
 }
 
 /// Compute the full set of path JSON values for a traversal path (leaf to root).
