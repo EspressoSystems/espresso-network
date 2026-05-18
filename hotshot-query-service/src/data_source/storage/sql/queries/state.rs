@@ -89,45 +89,19 @@ where
                     let legacy_table = format!("{state_type}_legacy");
                     let (lq, lsql) =
                         build_legacy_path_query(&legacy_table, missing_paths, created)?;
-                    // Use a SAVEPOINT so that SQLSTATE 42P01 (undefined table) does not
-                    // abort the outer transaction — we roll back to the savepoint instead.
-                    sqlx::query("SAVEPOINT sp_legacy_path")
-                        .execute(self.as_mut())
-                        .await
-                        .map_err(|e| QueryError::Error {
-                            message: format!("SAVEPOINT failed: {e}"),
-                        })?;
-                    match lq.query(&lsql).fetch_all(self.as_mut()).await {
-                        Ok(legacy_rows) => {
-                            sqlx::query("RELEASE SAVEPOINT sp_legacy_path")
-                                .execute(self.as_mut())
-                                .await
-                                .map_err(|e| QueryError::Error {
-                                    message: format!("RELEASE SAVEPOINT failed: {e}"),
-                                })?;
-                            nodes.extend(legacy_rows.into_iter().map(Node::from));
-                            // Re-sort leaf-first (longer path arrays first),
-                            // matching the original ORDER BY t.path DESC behaviour.
-                            nodes.sort_by(|a, b| {
-                                let la = a.path.as_array().map(|v| v.len()).unwrap_or(0);
-                                let lb = b.path.as_array().map(|v| v.len()).unwrap_or(0);
-                                lb.cmp(&la)
-                            });
-                        }
-                        Err(e) if is_undefined_table(&e) => {
-                            // Legacy table absent; roll back to restore the transaction.
-                            sqlx::query("ROLLBACK TO SAVEPOINT sp_legacy_path")
-                                .execute(self.as_mut())
-                                .await
-                                .map_err(|e| QueryError::Error {
-                                    message: format!("ROLLBACK TO SAVEPOINT failed: {e}"),
-                                })?;
-                        }
-                        Err(e) => {
-                            return Err(QueryError::Error {
-                                message: format!("legacy merkle path lookup failed: {e}"),
-                            });
-                        }
+                    savepoint(self.as_mut(), "sp_legacy_path").await?;
+                    let rows = lq.query(&lsql).fetch_all(self.as_mut()).await;
+                    if let Some(legacy_rows) =
+                        savepoint_finish(self.as_mut(), "sp_legacy_path", rows, "legacy merkle path lookup failed").await?
+                    {
+                        nodes.extend(legacy_rows.into_iter().map(Node::from));
+                        // Re-sort leaf-first (longer path arrays first),
+                        // matching the original ORDER BY t.path DESC behaviour.
+                        nodes.sort_by(|a, b| {
+                            let la = a.path.as_array().map(|v| v.len()).unwrap_or(0);
+                            let lb = b.path.as_array().map(|v| v.len()).unwrap_or(0);
+                            lb.cmp(&la)
+                        });
                     }
                 }
             }
@@ -173,44 +147,17 @@ where
                     .collect();
 
                 if !missing.is_empty() {
-                    // Use a SAVEPOINT so that SQLSTATE 42P01 does not abort the transaction.
-                    sqlx::query("SAVEPOINT sp_hash_legacy")
-                        .execute(self.as_mut())
-                        .await
-                        .map_err(|e| QueryError::Error {
-                            message: format!("SAVEPOINT failed: {e}"),
-                        })?;
-                    match sqlx::query_as(
+                    savepoint(self.as_mut(), "sp_hash_legacy").await?;
+                    let rows = sqlx::query_as::<_, (i64, Vec<u8>)>(
                         "SELECT id::BIGINT, value FROM hash_legacy WHERE id = ANY($1::BIGINT[])",
                     )
                     .bind(&missing)
                     .fetch_all(self.as_mut())
-                    .await
+                    .await;
+                    if let Some(rows) =
+                        savepoint_finish(self.as_mut(), "sp_hash_legacy", rows, "hash_legacy lookup failed").await?
                     {
-                        Ok(rows) => {
-                            sqlx::query("RELEASE SAVEPOINT sp_hash_legacy")
-                                .execute(self.as_mut())
-                                .await
-                                .map_err(|e| QueryError::Error {
-                                    message: format!("RELEASE SAVEPOINT failed: {e}"),
-                                })?;
-                            let legacy: HashMap<i64, Vec<u8>> = rows.into_iter().collect();
-                            result.extend(legacy);
-                        }
-                        Err(e) if is_undefined_table(&e) => {
-                            // hash_legacy absent; roll back to restore the transaction.
-                            sqlx::query("ROLLBACK TO SAVEPOINT sp_hash_legacy")
-                                .execute(self.as_mut())
-                                .await
-                                .map_err(|e| QueryError::Error {
-                                    message: format!("ROLLBACK TO SAVEPOINT failed: {e}"),
-                                })?;
-                        }
-                        Err(e) => {
-                            return Err(QueryError::Error {
-                                message: format!("hash_legacy lookup failed: {e}"),
-                            });
-                        }
+                        result.extend(rows);
                     }
                 }
                 result
@@ -830,6 +777,58 @@ fn is_undefined_table(e: &sqlx::Error) -> bool {
         e,
         sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("42P01")
     )
+}
+
+/// Set a named savepoint on `conn`.
+#[cfg(not(feature = "embedded-db"))]
+async fn savepoint(
+    conn: &mut sqlx::postgres::PgConnection,
+    sp: &'static str,
+) -> QueryResult<()> {
+    sqlx::query(&format!("SAVEPOINT {sp}"))
+        .execute(conn)
+        .await
+        .map(|_| ())
+        .map_err(|e| QueryError::Error {
+            message: format!("SAVEPOINT {sp} failed: {e}"),
+        })
+}
+
+/// RELEASE or ROLLBACK a savepoint based on a query result.
+///
+/// Returns `Ok(Some(rows))` on success, `Ok(None)` if the table was absent (SQLSTATE 42P01),
+/// or `Err` on any other error.  On 42P01 the savepoint is rolled back so the outer
+/// transaction remains usable.
+#[cfg(not(feature = "embedded-db"))]
+async fn savepoint_finish<T>(
+    conn: &mut sqlx::postgres::PgConnection,
+    sp: &'static str,
+    result: sqlx::Result<T>,
+    context: &'static str,
+) -> QueryResult<Option<T>> {
+    match result {
+        Ok(r) => {
+            sqlx::query(&format!("RELEASE SAVEPOINT {sp}"))
+                .execute(conn)
+                .await
+                .map_err(|e| QueryError::Error {
+                    message: format!("RELEASE SAVEPOINT {sp} failed: {e}"),
+                })?;
+            Ok(Some(r))
+        }
+        Err(e) if is_undefined_table(&e) => {
+            sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp}"))
+                .execute(conn)
+                .await
+                .map_err(|e| QueryError::Error {
+                    message: format!("ROLLBACK TO SAVEPOINT {sp} failed: {e}"),
+                })?;
+            Ok(None)
+        }
+        Err(e) => Err(QueryError::Error {
+            message: format!("{context}: {e}"),
+        }),
+    }
 }
 
 /// Compute the full set of path JSON values for a traversal path (leaf to root).
