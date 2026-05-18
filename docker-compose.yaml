@@ -91,9 +91,8 @@ services:
   # and leave the contract permanently stuck. Epochs are 1-indexed (genesis is
   # epoch 1), so we wait for epoch 2.
   wait-for-lc-epoch-2:
-    image: ghcr.io/foundry-rs/foundry:latest
-    entrypoint: /bin/sh
-    command: -c "/scripts/wait-for-light-client-epoch 2"
+    image: badouralix/curl-jq
+    command: /scripts/wait-for-light-client-epoch 2
     environment:
       - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS
       - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
@@ -104,6 +103,8 @@ services:
         condition: service_healthy
       wait-for-v4:
         condition: service_completed_successfully
+      prover-one-shot:
+        condition: service_started
 
   deploy-lcv3-upgrade:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
