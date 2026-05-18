@@ -15,7 +15,7 @@ services:
 
   deploy-espresso-contracts:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
+    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1 --upgrade-stake-table-v2 --upgrade-stake-table-v3
     environment:
       - ESPRESSO_ETH_MULTISIG_ADDRESS
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
@@ -109,7 +109,7 @@ services:
 
   deploy-pos-contracts-upgrades:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2 --upgrade-stake-table-v2
+    command: deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2
     environment:
       - ESPRESSO_ETH_MULTISIG_ADDRESS
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
