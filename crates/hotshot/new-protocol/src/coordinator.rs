@@ -295,11 +295,6 @@ where
                 },
                 () = &mut self.timer => {
                     let input = ConsensusInput::Timeout(self.timer.view(), self.timer.epoch());
-                    // Timer is only reset so we can resend the timeout vote
-                    // This isn't strictly necessary for the protocol, but it's a good idea to
-                    // resend the timeout vote to avoid a situation where the network is stuck
-                    // view because we fail to form a timeout certificate.
-                    self.timer.reset();
                     return Ok(input)
                 }
                 Some(output) = self.state_manager.next() => {
