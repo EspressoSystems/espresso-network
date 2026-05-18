@@ -3,19 +3,19 @@
 -- is a separate follow-up migration.
 
 -- Step 1: rename tables that have FK deps on hash first.
-ALTER TABLE fee_merkle_tree       RENAME TO fee_merkle_tree_legacy;
-ALTER TABLE block_merkle_tree     RENAME TO block_merkle_tree_legacy;
-ALTER TABLE reward_merkle_tree    RENAME TO reward_merkle_tree_legacy;
-ALTER TABLE reward_merkle_tree_v2 RENAME TO reward_merkle_tree_v2_legacy;
-ALTER TABLE hash                  RENAME TO hash_legacy;
+-- reward_merkle_tree and reward_merkle_tree_v2 are unused (always empty); drop them.
+ALTER TABLE fee_merkle_tree   RENAME TO fee_merkle_tree_legacy;
+ALTER TABLE block_merkle_tree RENAME TO block_merkle_tree_legacy;
+DROP TABLE reward_merkle_tree;
+DROP TABLE reward_merkle_tree_v2;
+ALTER TABLE hash              RENAME TO hash_legacy;
 
 -- Step 1b: rename the indexes that survived the table rename so they don't
 -- collide with the identically-named indexes we create in Step 4.
 -- PostgreSQL does NOT automatically rename indexes when a table is renamed.
-ALTER INDEX fee_merkle_tree_created         RENAME TO fee_merkle_tree_legacy_created;
-ALTER INDEX block_merkle_tree_created       RENAME TO block_merkle_tree_legacy_created;
-ALTER INDEX reward_merkle_tree_created      RENAME TO reward_merkle_tree_legacy_created;
-ALTER INDEX reward_merkle_tree_v2_created   RENAME TO reward_merkle_tree_v2_legacy_created;
+-- (reward_merkle_tree* indexes were dropped along with their tables above.)
+ALTER INDEX fee_merkle_tree_created   RENAME TO fee_merkle_tree_legacy_created;
+ALTER INDEX block_merkle_tree_created RENAME TO block_merkle_tree_legacy_created;
 
 -- Step 2: new hash table with BIGSERIAL.
 CREATE TABLE hash (
@@ -54,27 +54,3 @@ CREATE TABLE block_merkle_tree (
     PRIMARY KEY (path, created)
 );
 CREATE INDEX block_merkle_tree_created ON block_merkle_tree (created);
-
-CREATE TABLE reward_merkle_tree (
-    path            JSONB        NOT NULL,
-    created         BIGINT       NOT NULL,
-    hash_id         BIGINT       NOT NULL REFERENCES hash(id),
-    children        JSONB,
-    children_bitvec BIT VARYING,
-    idx             JSONB,
-    entry           JSONB,
-    PRIMARY KEY (path, created)
-);
-CREATE INDEX reward_merkle_tree_created ON reward_merkle_tree (created);
-
-CREATE TABLE reward_merkle_tree_v2 (
-    path            JSONB        NOT NULL,
-    created         BIGINT       NOT NULL,
-    hash_id         BIGINT       NOT NULL REFERENCES hash(id),
-    children        JSONB,
-    children_bitvec BIT VARYING,
-    idx             JSONB,
-    entry           JSONB,
-    PRIMARY KEY (path, created)
-);
-CREATE INDEX reward_merkle_tree_v2_created ON reward_merkle_tree_v2 (created);
