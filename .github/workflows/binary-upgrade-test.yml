@@ -21,6 +21,15 @@ jobs:
           fetch-tags: true
       - uses: taiki-e/install-action@just
 
+      - name: Pull docker images
+        env:
+          BASE_TAG: ${{ inputs.base_tag }}
+          UPGRADE_TAG: ${{ inputs.upgrade_tag }}
+          UPGRADE_PULL: "1"
+        run: |
+          set -o pipefail
+          ./binary-upgrade-tests/run.py --pull-only | sed -e 's/^/binary-upgrade: /;'
+
       - name: Run binary upgrade test
         env:
           BASE_TAG: ${{ inputs.base_tag }}

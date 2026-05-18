@@ -339,6 +339,11 @@ def compose_session(config: Config):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Binary upgrade test driver")
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--pull-only",
+        action="store_true",
+        help="Pull base and (if UPGRADE_PULL=1) upgrade images, then exit.",
+    )
     return parser.parse_args()
 
 
@@ -362,14 +367,18 @@ def main() -> int:
     load_project_env()
 
     with compose_session(config) as compose:
-        # Preflight: clean any stale stack.
-        compose.run("down", "-v", check=False, capture=True)
-
         log.info(f"Pulling base images (DOCKER_TAG={config.base_tag})")
         compose.run("pull", "--policy", "missing", docker_tag=config.base_tag)
         if config.upgrade_pull:
             log.info(f"Pulling upgrade images (DOCKER_TAG={config.upgrade_tag})")
             compose.run("pull", "--policy", "missing", docker_tag=config.upgrade_tag)
+
+        if args.pull_only:
+            log.info("--pull-only: images pulled, exiting before stack start")
+            return 0
+
+        # Preflight: clean any stale stack.
+        compose.run("down", "-v", check=False, capture=True)
 
         log.info(f"Starting network on {config.base_tag}")
         # `compose up -d` blocks on `depends_on: service_completed_successfully`,
