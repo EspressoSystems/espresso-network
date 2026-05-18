@@ -305,10 +305,13 @@ def load_project_env() -> None:
             os.environ.setdefault(k, v)
 
 
-def smoke_test(tag: str) -> None:
+def smoke_test(tag: str, base_dir: Path) -> None:
+    # cwd=base_dir so `source .env` in the script picks up base_tag's .env;
+    # deployed contract addresses match it, not REPO_ROOT/.env which may
+    # have shifted if main changed deploy ordering.
     subprocess.run(
-        ["timeout", "600", "scripts/smoke-test-demo"],
-        cwd=REPO_ROOT,
+        ["timeout", "600", str(REPO_ROOT / "scripts" / "smoke-test-demo")],
+        cwd=base_dir,
         env=os.environ | {"DOCKER_TAG": tag},
         check=True,
     )
@@ -386,7 +389,7 @@ def main() -> int:
         log.info(f"compose up -d running in background; log at {compose_up_log}")
 
         log.info("Initial smoke test")
-        smoke_test(config.base_tag)
+        smoke_test(config.base_tag, compose.base_dir)
 
         for n in NODE_INDICES:
             log.info(f"Rolling espresso-node-{n} to {config.upgrade_tag}")
@@ -399,7 +402,7 @@ def main() -> int:
         assert_all_espresso_images(compose, config.upgrade_tag)
 
         log.info("Final smoke test")
-        smoke_test(config.upgrade_tag)
+        smoke_test(config.upgrade_tag, compose.base_dir)
 
         log.info("Binary upgrade test complete")
     return 0
