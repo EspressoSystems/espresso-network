@@ -160,6 +160,17 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                 snapshot: EpochMembershipSnapshot::NonEpoch(self.membership.non_epoch_snapshot()),
             });
         };
+        let Some(first_epoch) = self.membership.first_epoch() else {
+            return Err(error!(
+                "stake_table_for_epoch called with epoch {epoch:?} but first_epoch is unset"
+            ));
+        };
+        if epoch < first_epoch {
+            return Err(error!(
+                "stake_table_for_epoch called with epoch {epoch:?} before first_epoch \
+                 {first_epoch}"
+            ));
+        }
         if let Some(snapshot) = self.membership.snapshot(epoch) {
             return Ok(EpochMembership {
                 coordinator: self.clone(),
