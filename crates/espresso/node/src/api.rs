@@ -1364,13 +1364,13 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                 .context("reward tree gc requires an epoch height")?;
             // EPOCH_REWARD_VERSION (V5)+ only persists a tree at each epoch boundary,
             // so 5 epochs = 5 trees on disk. Earlier versions persist a tree at
-            // every block, so 2 epochs is already 2 * epoch_height trees — keeping
-            // more would be expensive. We only need 1 epoch
-            // for both, but the extra trees are cheap for V5+ so it doesn't make much of a difference
+            // every block, so 1 epoch is already epoch_height trees — keeping more
+            // would be expensive. We only need 1 epoch for both, but the extra
+            // trees are cheap for V5+ so it doesn't make much of a difference.
             let epochs_to_retain = if version >= versions::EPOCH_REWARD_VERSION {
                 5
             } else {
-                2
+                1
             };
             let current_epoch = epoch_from_block_number(height, epoch_height);
             // First block of the oldest epoch we still want to retain.
