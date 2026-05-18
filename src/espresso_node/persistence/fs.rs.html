@@ -89,7 +89,7 @@
 <a href=#89 id=89 data-nosnippet>89</a></span><span class="kw">pub struct </span>Options {
 <a href=#90 id=90 data-nosnippet>90</a>    <span class="doccomment">/// Storage path for persistent data.
 <a href=#91 id=91 data-nosnippet>91</a>    </span><span class="attr">#[clap(long, env = <span class="string">"ESPRESSO_NODE_STORAGE_PATH"</span>)]
-<a href=#92 id=92 data-nosnippet>92</a>    </span>path: PathBuf,
+<a href=#92 id=92 data-nosnippet>92</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) path: PathBuf,
 <a href=#93 id=93 data-nosnippet>93</a>
 <a href=#94 id=94 data-nosnippet>94</a>    <span class="doccomment">/// Number of views to retain in consensus storage before data that hasn't been archived is
 <a href=#95 id=95 data-nosnippet>95</a>    /// garbage collected.
