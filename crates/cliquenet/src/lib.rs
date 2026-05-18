@@ -5,17 +5,13 @@ mod msg;
 mod net;
 mod queue;
 mod time;
+mod util;
 
 pub mod error;
+pub mod noise;
 pub mod x25519;
 
-use std::{
-    collections::BTreeMap,
-    fmt,
-    num::NonZeroUsize,
-    sync::{Arc, LazyLock},
-    time::Duration,
-};
+use std::{collections::BTreeMap, fmt, num::NonZeroUsize, sync::Arc, time::Duration};
 
 pub use addr::NetAddr;
 use bon::Builder;
@@ -26,78 +22,79 @@ pub use net::{
     Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
     SendCommandBuilder,
 };
-use snow::params::NoiseParams;
 
 use crate::x25519::{Keypair, PublicKey};
-
-pub static NOISE_IK_25519_AESGCM_BLAKE2S: LazyLock<NoiseParams> = LazyLock::new(|| {
-    "Noise_IK_25519_AESGCM_BLAKE2s"
-        .parse()
-        .expect("valid noise params")
-});
 
 #[derive(Builder)]
 #[non_exhaustive]
 pub struct Config {
     /// Network name.
     #[builder(with = |s: impl Into<String>| Arc::new(s.into()))]
-    pub name: Arc<String>,
+    name: Arc<String>,
 
-    #[builder(with = |xs: impl IntoIterator<Item = (Version, NoiseParams)>| {
+    /// The supported noise protocols.
+    ///
+    /// Nodes negotiate a common supported version which implies the exact
+    /// noise protocol parameters they are going to use for the subsequent
+    /// handshake.
+    ///
+    /// With this map, a node specifies the noise protocol names it supports
+    /// per version number.
+    #[builder(with = |xs: impl IntoIterator<Item = (Version, noise::Protocol)>| {
         let m = BTreeMap::from_iter(xs);
         assert! {
             !m.is_empty(),
-            "noise configs must not be empty"
+            "at least one noise protocol is required"
         }
         assert! {
             m.keys().zip(m.keys().skip(1)).all(|(a, b)| u16::from(*a) + 1 == u16::from(*b)),
-            "noise config versions must be consecutive"
+            "noise protocol versions must be consecutive"
         }
         m
     })]
-    noise_configs: BTreeMap<Version, NoiseParams>,
+    noise_protocols: BTreeMap<Version, noise::Protocol>,
 
     /// DH keypair
-    pub keypair: Keypair,
+    keypair: Keypair,
 
     /// Address to bind to.
-    pub bind: NetAddr,
+    bind: NetAddr,
 
     /// Network members with public key and network address.
     #[builder(with = <_>::from_iter)]
-    pub parties: Vec<(PublicKey, NetAddr)>,
+    parties: Vec<(PublicKey, NetAddr)>,
 
     #[builder(default = NonZeroUsize::new(100).expect("100 > 0"))]
-    pub peer_budget: NonZeroUsize,
+    peer_budget: NonZeroUsize,
 
     /// Max. number of bytes per message to send or receive.
     #[builder(default = NonZeroUsize::new(10485760).expect("10485760 > 0"))]
-    pub max_message_size: NonZeroUsize,
+    max_message_size: NonZeroUsize,
 
     /// Retry delays in seconds.
     #[builder(default = vec![1, 3, 5, 15, 30])]
-    pub retry_delays: Vec<u8>,
+    retry_delays: Vec<u8>,
 
     #[builder(default = Duration::from_secs(30))]
-    pub max_retry_delay: Duration,
+    max_retry_delay: Duration,
 
     /// Randomly delay the initial connect attempt between 0 and 1s.
     #[builder(default = true)]
-    pub random_connect_delay: bool,
+    random_connect_delay: bool,
 
     #[builder(default = Duration::from_secs(30))]
-    pub connect_timeout: Duration,
+    connect_timeout: Duration,
 
     #[builder(default = Duration::from_secs(10))]
-    pub handshake_timeout: Duration,
+    handshake_timeout: Duration,
 
     #[builder(default = Duration::from_secs(30))]
-    pub receive_timeout: Duration,
+    receive_timeout: Duration,
 
     #[builder(default = Duration::from_secs(30))]
-    pub backoff_duration: Duration,
+    backoff_duration: Duration,
 
-    pub metrics: Option<Arc<dyn Metrics>>,
+    metrics: Option<Arc<dyn Metrics>>,
 }
 
 impl fmt::Debug for Config {
@@ -123,6 +120,11 @@ impl fmt::Debug for Config {
 impl Config {
     pub fn public_key(&self) -> PublicKey {
         self.keypair.public_key()
+    }
+
+    pub fn with_metrics<M: Metrics + 'static>(mut self, m: M) -> Self {
+        self.metrics = Some(Arc::new(m));
+        self
     }
 }
 
@@ -171,18 +173,5 @@ impl From<Version> for u16 {
 impl fmt::Display for Version {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
-    }
-}
-
-/// A variant of `timeout` that merges the timeout error into network error.
-async fn until<F, A, E>(t: Duration, fut: F) -> Result<A, NetworkError>
-where
-    F: Future<Output = Result<A, E>>,
-    E: Into<NetworkError>,
-{
-    match tokio::time::timeout(t, fut).await {
-        Ok(Ok(a)) => Ok(a),
-        Ok(Err(e)) => Err(e.into()),
-        Err(_) => Err(NetworkError::Timeout),
     }
 }

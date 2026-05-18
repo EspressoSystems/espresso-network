@@ -3,7 +3,8 @@ use std::{
 };
 
 use cliquenet::{
-    Config, NOISE_IK_25519_AESGCM_BLAKE2S, Network, RetryPolicy, SendAction, SendCommand, Slot,
+    Config, Network, RetryPolicy, SendAction, SendCommand, Slot,
+    noise::Protocol,
     x25519::{Keypair, PublicKey},
 };
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -127,7 +128,7 @@ async fn setup_echo() -> Echo {
         .receive_timeout(Duration::from_secs(60))
         .retry_delays(vec![1, 3])
         .max_retry_delay(Duration::from_secs(5))
-        .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let conf_b = Config::builder()
@@ -139,7 +140,7 @@ async fn setup_echo() -> Echo {
         .receive_timeout(Duration::from_secs(60))
         .retry_delays(vec![1, 3])
         .max_retry_delay(Duration::from_secs(5))
-        .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let net_a = Network::create(conf_a).await.unwrap();
@@ -234,7 +235,7 @@ async fn setup_bidir() -> BiDir {
         .receive_timeout(Duration::from_secs(60))
         .retry_delays(vec![1, 3])
         .max_retry_delay(Duration::from_secs(5))
-        .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let conf_b = Config::builder()
@@ -246,7 +247,7 @@ async fn setup_bidir() -> BiDir {
         .receive_timeout(Duration::from_secs(60))
         .retry_delays(vec![1, 3])
         .max_retry_delay(Duration::from_secs(5))
-        .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let net_a = Network::create(conf_a).await.unwrap();

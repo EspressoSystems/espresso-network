@@ -22,7 +22,7 @@ use crate::{
     addr::NetAddr,
     error::NetworkError,
     msg::{Header, MAX_NOISE_MESSAGE_SIZE, hello::Hello},
-    until,
+    util::until,
     x25519::PublicKey,
 };
 
@@ -52,12 +52,12 @@ impl Connection {
 
             debug!(name = %conf.name, %node, %version, "negotiated version");
 
-            let params = conf
-                .noise_configs
+            let noise_proto = conf
+                .noise_protocols
                 .get(&version)
                 .expect("selected version has noise config");
 
-            let hs = Builder::new(params.clone())
+            let hs = Builder::new(noise_proto.noise_params())
                 .local_private_key(&conf.keypair.secret_key().as_bytes())
                 .expect("valid private key")
                 .prologue(&prologue)
@@ -174,8 +174,8 @@ impl Connection {
 }
 
 async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Connection> {
-    let new_handshake_state = |prologue: &Prologue, params: &NoiseParams| {
-        Builder::new(params.clone())
+    let new_handshake_state = |prologue: &Prologue, params: NoiseParams| {
+        Builder::new(params)
             .local_private_key(conf.keypair.secret_key().as_slice())
             .expect("valid private key")
             .remote_public_key(peer.as_slice())
@@ -202,12 +202,13 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
 
         debug!(name = %conf.name, %node, %peer, %addr, %version, "negotiated version");
 
-        let params = conf
-            .noise_configs
+        let noise_proto = conf
+            .noise_protocols
             .get(&version)
             .expect("selected version has noise config");
 
-        let state = handshake(&mut stream, new_handshake_state(&prologue, params)).await?;
+        let hshake = new_handshake_state(&prologue, noise_proto.noise_params());
+        let state = handshake(&mut stream, hshake).await?;
         match remote_static_key(&state) {
             Some(key) if key == *peer => Ok(Connection {
                 key,
@@ -244,12 +245,12 @@ async fn select_version(
     const INIT_PAYLOAD_LEN: usize = 4;
 
     let our_min = conf
-        .noise_configs
+        .noise_protocols
         .first_key_value()
         .map(|(k, _)| *k)
         .expect("noise_configs is not empty");
     let our_max = conf
-        .noise_configs
+        .noise_protocols
         .last_key_value()
         .map(|(k, _)| *k)
         .expect("noise_configs is not empty");
@@ -359,9 +360,7 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     use super::{Prologue, Result, select_version};
-    use crate::{
-        Config, NOISE_IK_25519_AESGCM_BLAKE2S, NetAddr, NetworkError, Version, x25519::Keypair,
-    };
+    use crate::{Config, NetAddr, NetworkError, Version, noise::Protocol, x25519::Keypair};
 
     fn config<I, V>(versions: I) -> Config
     where
@@ -373,10 +372,10 @@ mod tests {
             .keypair(Keypair::generate().unwrap())
             .bind(NetAddr::from((Ipv4Addr::LOCALHOST, 0u16)))
             .parties([])
-            .noise_configs(
+            .noise_protocols(
                 versions
                     .into_iter()
-                    .map(|v| (v.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())),
+                    .map(|v| (v.into(), Protocol::IK_25519_AesGcm_Blake2s)),
             )
             .build()
     }

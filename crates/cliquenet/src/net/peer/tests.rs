@@ -8,13 +8,14 @@ use tokio::{
 };
 
 use crate::{
-    Config, Keypair, NOISE_IK_25519_AESGCM_BLAKE2S, PublicKey,
+    Config, Keypair, PublicKey,
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
     metrics::NoMetrics,
     msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{RetryPolicy, peer::Peer},
+    noise::Protocol,
     queue::Queue,
 };
 
@@ -32,7 +33,7 @@ fn config(kp: Keypair, recv_timeout: Duration) -> Arc<Config> {
             .receive_timeout(recv_timeout)
             .retry_delays(vec![2, 5])
             .max_retry_delay(Duration::from_secs(10))
-            .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     )
 }
@@ -744,7 +745,7 @@ fn config_with_retry(kp: Keypair, recv_timeout: Duration, retry_delays: Vec<u8>)
             .receive_timeout(recv_timeout)
             .retry_delays(retry_delays)
             .max_retry_delay(Duration::from_secs(10))
-            .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     )
 }
@@ -856,7 +857,7 @@ async fn backpressure_on_unacked() {
             .receive_timeout(Duration::from_secs(5))
             .retry_delays(vec![30])
             .max_retry_delay(Duration::from_secs(30))
-            .noise_configs([(1.into(), NOISE_IK_25519_AESGCM_BLAKE2S.clone())])
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     );
     let conf_b = config(kb.clone(), Duration::from_secs(5));

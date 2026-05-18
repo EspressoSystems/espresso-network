@@ -21,7 +21,7 @@ use crate::{
     msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{Command, PeerCommand, PeerMessage, RetryPolicy, SendAction, peer::Peer},
     queue::Queue,
-    until,
+    util::until,
 };
 
 pub struct Server {
