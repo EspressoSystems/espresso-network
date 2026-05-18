@@ -57,7 +57,7 @@ pub struct Genesis {
     pub decaf_first_pos_epoch: Option<EpochNumber>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
     /// Maximum number of stake tables to cache in memory at any given time.

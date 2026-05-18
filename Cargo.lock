@@ -4670,6 +4670,7 @@ dependencies = [
  "hotshot-types",
  "include_dir",
  "indexmap 2.13.0",
+ "insta",
  "itertools 0.14.0",
  "jf-advz",
  "jf-crhf",
