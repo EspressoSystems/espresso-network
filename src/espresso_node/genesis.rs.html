@@ -1488,5 +1488,64 @@
 <a href=#1488 id=1488 data-nosnippet>1488</a>            U256::from(<span class="number">1</span>)
 <a href=#1489 id=1489 data-nosnippet>1489</a>        );
 <a href=#1490 id=1490 data-nosnippet>1490</a>    }
-<a href=#1491 id=1491 data-nosnippet>1491</a>}
+<a href=#1491 id=1491 data-nosnippet>1491</a>
+<a href=#1492 id=1492 data-nosnippet>1492</a>    <span class="doccomment">/// Verify that every BLS / Schnorr public key referenced in
+<a href=#1493 id=1493 data-nosnippet>1493</a>    /// `data/genesis/demo-da-committees.toml` is derived from `DEV_MNEMONIC` at index
+<a href=#1494 id=1494 data-nosnippet>1494</a>    /// `DEMO_VALIDATOR_START_INDEX + N`. Otherwise the live demo nodes (which use those
+<a href=#1495 id=1495 data-nosnippet>1495</a>    /// mnemonic-derived keys) cannot sign for the genesis-defined DA committees, and the chain
+<a href=#1496 id=1496 data-nosnippet>1496</a>    /// stalls at the first DA-committee epoch transition.
+<a href=#1497 id=1497 data-nosnippet>1497</a>    </span><span class="attr">#[test]
+<a href=#1498 id=1498 data-nosnippet>1498</a>    </span><span class="kw">fn </span>demo_da_committees_match_dev_mnemonic() {
+<a href=#1499 id=1499 data-nosnippet>1499</a>        <span class="kw">use </span>std::collections::HashSet;
+<a href=#1500 id=1500 data-nosnippet>1500</a>
+<a href=#1501 id=1501 data-nosnippet>1501</a>        <span class="kw">use </span>alloy::signers::local::coins_bip39::{English, Mnemonic};
+<a href=#1502 id=1502 data-nosnippet>1502</a>        <span class="kw">use </span>espresso_keyset::{KeySet, KeySetOptions};
+<a href=#1503 id=1503 data-nosnippet>1503</a>        <span class="kw">use </span>hotshot_types::{
+<a href=#1504 id=1504 data-nosnippet>1504</a>            light_client::StateKeyPair,
+<a href=#1505 id=1505 data-nosnippet>1505</a>            signature_key::{BLSKeyPair, BLSPubKey, SchnorrPubKey},
+<a href=#1506 id=1506 data-nosnippet>1506</a>        };
+<a href=#1507 id=1507 data-nosnippet>1507</a>        <span class="kw">use </span>staking_cli::{DEMO_VALIDATOR_START_INDEX, DEV_MNEMONIC};
+<a href=#1508 id=1508 data-nosnippet>1508</a>
+<a href=#1509 id=1509 data-nosnippet>1509</a>        <span class="kw">let </span>mnemonic = Mnemonic::&lt;English&gt;::new_from_phrase(DEV_MNEMONIC).unwrap();
+<a href=#1510 id=1510 data-nosnippet>1510</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected_bls: HashSet&lt;BLSPubKey&gt; = HashSet::new();
+<a href=#1511 id=1511 data-nosnippet>1511</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected_schnorr: HashSet&lt;SchnorrPubKey&gt; = HashSet::new();
+<a href=#1512 id=1512 data-nosnippet>1512</a>        <span class="kw">for </span>val_index <span class="kw">in </span><span class="number">0</span>..<span class="number">5u64 </span>{
+<a href=#1513 id=1513 data-nosnippet>1513</a>            <span class="kw">let </span>keyset = KeySet::try_from(KeySetOptions {
+<a href=#1514 id=1514 data-nosnippet>1514</a>                mnemonic: <span class="prelude-val">Some</span>(mnemonic.clone()),
+<a href=#1515 id=1515 data-nosnippet>1515</a>                index: <span class="prelude-val">Some</span>(u64::from(DEMO_VALIDATOR_START_INDEX) + val_index),
+<a href=#1516 id=1516 data-nosnippet>1516</a>                key_file: <span class="prelude-val">None</span>,
+<a href=#1517 id=1517 data-nosnippet>1517</a>                private_staking_key: <span class="prelude-val">None</span>,
+<a href=#1518 id=1518 data-nosnippet>1518</a>                private_state_key: <span class="prelude-val">None</span>,
+<a href=#1519 id=1519 data-nosnippet>1519</a>                private_x25519_key: <span class="prelude-val">None</span>,
+<a href=#1520 id=1520 data-nosnippet>1520</a>            })
+<a href=#1521 id=1521 data-nosnippet>1521</a>            .unwrap();
+<a href=#1522 id=1522 data-nosnippet>1522</a>            expected_bls.insert(BLSKeyPair::from(keyset.staking).ver_key());
+<a href=#1523 id=1523 data-nosnippet>1523</a>            expected_schnorr.insert(StateKeyPair::from_sign_key(keyset.state).ver_key());
+<a href=#1524 id=1524 data-nosnippet>1524</a>        }
+<a href=#1525 id=1525 data-nosnippet>1525</a>
+<a href=#1526 id=1526 data-nosnippet>1526</a>        <span class="kw">let </span>path = Path::new(<span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>))
+<a href=#1527 id=1527 data-nosnippet>1527</a>            .join(<span class="string">"../../../data/genesis/demo-da-committees.toml"</span>);
+<a href=#1528 id=1528 data-nosnippet>1528</a>        <span class="kw">let </span>genesis = Genesis::from_file(<span class="kw-2">&amp;</span>path).unwrap();
+<a href=#1529 id=1529 data-nosnippet>1529</a>        <span class="kw">let </span>da_committees = genesis.da_committees.expect(<span class="string">"da_committees in genesis"</span>);
+<a href=#1530 id=1530 data-nosnippet>1530</a>        <span class="macro">assert!</span>(!da_committees.is_empty());
+<a href=#1531 id=1531 data-nosnippet>1531</a>        <span class="kw">for </span>committee <span class="kw">in </span><span class="kw-2">&amp;</span>da_committees {
+<a href=#1532 id=1532 data-nosnippet>1532</a>            <span class="kw">for </span>entry <span class="kw">in </span><span class="kw-2">&amp;</span>committee.committee {
+<a href=#1533 id=1533 data-nosnippet>1533</a>                <span class="macro">assert!</span>(
+<a href=#1534 id=1534 data-nosnippet>1534</a>                    expected_bls.contains(<span class="kw-2">&amp;</span>entry.stake_table_entry.stake_key),
+<a href=#1535 id=1535 data-nosnippet>1535</a>                    <span class="string">"{path:?} epoch {} references a BLS key not derived from DEV_MNEMONIC at \
+<a href=#1536 id=1536 data-nosnippet>1536</a>                     indices {DEMO_VALIDATOR_START_INDEX}..{}"</span>,
+<a href=#1537 id=1537 data-nosnippet>1537</a>                    committee.start_epoch,
+<a href=#1538 id=1538 data-nosnippet>1538</a>                    u64::from(DEMO_VALIDATOR_START_INDEX) + <span class="number">5</span>,
+<a href=#1539 id=1539 data-nosnippet>1539</a>                );
+<a href=#1540 id=1540 data-nosnippet>1540</a>                <span class="macro">assert!</span>(
+<a href=#1541 id=1541 data-nosnippet>1541</a>                    expected_schnorr.contains(<span class="kw-2">&amp;</span>entry.state_ver_key),
+<a href=#1542 id=1542 data-nosnippet>1542</a>                    <span class="string">"{path:?} epoch {} references a Schnorr key not derived from DEV_MNEMONIC at \
+<a href=#1543 id=1543 data-nosnippet>1543</a>                     indices {DEMO_VALIDATOR_START_INDEX}..{}"</span>,
+<a href=#1544 id=1544 data-nosnippet>1544</a>                    committee.start_epoch,
+<a href=#1545 id=1545 data-nosnippet>1545</a>                    u64::from(DEMO_VALIDATOR_START_INDEX) + <span class="number">5</span>,
+<a href=#1546 id=1546 data-nosnippet>1546</a>                );
+<a href=#1547 id=1547 data-nosnippet>1547</a>            }
+<a href=#1548 id=1548 data-nosnippet>1548</a>        }
+<a href=#1549 id=1549 data-nosnippet>1549</a>    }
+<a href=#1550 id=1550 data-nosnippet>1550</a>}
 </code></pre></div></section></main></body></html>
