@@ -16,7 +16,6 @@ use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
 use espresso_utils::logging;
 use hotshot_types::addr::NetAddr;
 use libp2p::Multiaddr;
-use light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use serde::Serialize;
 use url::Url;
 
@@ -668,7 +667,6 @@ pub struct PublicNodeConfig {
     pub orchestrator_url: Url,
     pub cdn_endpoint: String,
     pub cliquenet_bind_address: NetAddr,
-    pub cliquenet_advertise_address: Option<NetAddr>,
     pub libp2p_bind_address: String,
     pub libp2p_advertise_address: Option<String>,
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
@@ -682,7 +680,6 @@ pub struct PublicNodeConfig {
     pub identity: Identity,
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
-    pub bootstrap_epoch_catchup_timeout: Duration,
     pub catchup_backoff: BackoffParams,
     pub proposal_fetcher: ProposalFetcherConfig,
     pub libp2p: Libp2pTuning,
@@ -775,15 +772,11 @@ pub struct ApiModulesConfig {
 pub struct HttpConfig {
     pub port: u16,
     pub max_connections: Option<usize>,
-    pub axum_port: Option<u16>,
-    pub tonic_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct QueryConfig {
     pub peers: Vec<Url>,
-    pub light_client: LightClientOptions,
-    pub light_client_db: LightClientSqliteOptions,
 }
 
 impl From<&persistence::sql::PruningOptions> for PruningView {
@@ -858,8 +851,6 @@ impl From<&api::options::Http> for HttpConfig {
         Self {
             port: o.port,
             max_connections: o.max_connections,
-            axum_port: o.axum_port,
-            tonic_port: o.tonic_port,
         }
     }
 }
@@ -868,8 +859,6 @@ impl From<&api::options::Query> for QueryConfig {
     fn from(o: &api::options::Query) -> Self {
         Self {
             peers: o.peers.clone(),
-            light_client: o.light_client.clone(),
-            light_client_db: o.light_client_db.clone(),
         }
     }
 }
@@ -1007,7 +996,6 @@ impl PublicNodeConfig {
             orchestrator_url: opt.orchestrator_url.clone(),
             cdn_endpoint: opt.cdn_endpoint.clone(),
             cliquenet_bind_address: opt.cliquenet_bind_address.clone(),
-            cliquenet_advertise_address: opt.cliquenet_advertise_address.clone(),
             libp2p_bind_address: opt.libp2p_bind_address.clone(),
             libp2p_advertise_address: opt.libp2p_advertise_address.clone(),
             libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes.clone(),
@@ -1021,7 +1009,6 @@ impl PublicNodeConfig {
             identity: opt.identity.clone(),
             catchup_base_timeout: opt.catchup_base_timeout,
             local_catchup_timeout: opt.local_catchup_timeout,
-            bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
             catchup_backoff: opt.catchup_backoff,
             proposal_fetcher: opt.proposal_fetcher_config,
             libp2p: Libp2pTuning::from(opt),
@@ -1176,9 +1163,9 @@ mod tests {
         let cfg = PublicNodeConfig::new(&opt, &modules);
 
         assert!(
-            cfg.cliquenet_advertise_address.is_none(),
+            cfg.libp2p_advertise_address.is_none(),
             "expected no advertise address: {:?}",
-            cfg.cliquenet_advertise_address
+            cfg.libp2p_advertise_address
         );
         assert!(
             cfg.libp2p_bootstrap_nodes.is_none(),
@@ -1199,10 +1186,7 @@ mod tests {
         assert!(cfg.modules.query.is_none());
 
         let value: serde_json::Value = serde_json::to_value(&cfg).unwrap();
-        assert_eq!(
-            value["cliquenet_advertise_address"],
-            serde_json::Value::Null
-        );
+        assert_eq!(value["libp2p_advertise_address"], serde_json::Value::Null);
         assert_eq!(value["libp2p_bootstrap_nodes"], serde_json::Value::Null);
         assert_eq!(value["config_peers"], serde_json::Value::Null);
         assert_eq!(value["public_api_url"], serde_json::Value::Null);
@@ -1221,8 +1205,6 @@ mod tests {
             "cdn.example:8081",
             "--cliquenet-bind-address",
             "0.0.0.0:9977",
-            "--cliquenet-advertise-address",
-            "node1.example:9977",
             "--libp2p-bind-address",
             "0.0.0.0:1769",
             "--libp2p-advertise-address",

@@ -6,7 +6,6 @@ expression: cfg
 orchestrator_url: "http://orchestrator.example:8080/"
 cdn_endpoint: "cdn.example:8081"
 cliquenet_bind_address: "0.0.0.0:9977"
-cliquenet_advertise_address: "node1.example:9977"
 libp2p_bind_address: "0.0.0.0:1769"
 libp2p_advertise_address: "node1.example:1769"
 libp2p_bootstrap_nodes:
@@ -44,9 +43,6 @@ catchup_base_timeout:
   nanos: 0
 local_catchup_timeout:
   secs: 5
-  nanos: 0
-bootstrap_epoch_catchup_timeout:
-  secs: 30
   nanos: 0
 catchup_backoff:
   factor: 4
@@ -176,18 +172,8 @@ modules:
   http:
     port: 24000
     max_connections: ~
-    axum_port: ~
-    tonic_port: ~
   query:
     peers: []
-    light_client:
-      num_stake_tables_in_memory: 100
-      decaf: false
-    light_client_db:
-      num_connections: 5
-      num_leaves: 100
-      num_stake_tables: 100
-      lc_path: ~
   submit: false
   status: false
   catchup: false
