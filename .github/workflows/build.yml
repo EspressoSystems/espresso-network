@@ -569,6 +569,11 @@ jobs:
           echo "UPGRADE_TAG=pr-${{ github.event.pull_request.number }}" >> $GITHUB_ENV
           echo "BASE_TAG=20260505" >> $GITHUB_ENV
 
+      - name: Pull docker images
+        run: |
+          set -o pipefail
+          ./binary-upgrade-tests/run.py --pull-only | sed -e 's/^/binary-upgrade: /;'
+
       - name: Run binary upgrade test
         run: |
           set -o pipefail
@@ -590,6 +595,11 @@ jobs:
           echo "UPGRADE_TAG=$UPGRADE_TAG" >> $GITHUB_ENV
           echo "BASE_TAG=20260505" >> $GITHUB_ENV
           echo "UPGRADE_PULL=1" >> $GITHUB_ENV
+
+      - name: Pull docker images
+        run: |
+          set -o pipefail
+          ./binary-upgrade-tests/run.py --pull-only | sed -e 's/^/binary-upgrade: /;'
 
       - name: Run binary upgrade test
         run: |
