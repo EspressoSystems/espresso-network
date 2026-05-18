@@ -89,8 +89,22 @@ where
                     let legacy_table = format!("{state_type}_legacy");
                     let (lq, lsql) =
                         build_legacy_path_query(&legacy_table, missing_paths, created)?;
+                    // Use a SAVEPOINT so that SQLSTATE 42P01 (undefined table) does not
+                    // abort the outer transaction — we roll back to the savepoint instead.
+                    sqlx::query("SAVEPOINT sp_legacy_path")
+                        .execute(self.as_mut())
+                        .await
+                        .map_err(|e| QueryError::Error {
+                            message: format!("SAVEPOINT failed: {e}"),
+                        })?;
                     match lq.query(&lsql).fetch_all(self.as_mut()).await {
                         Ok(legacy_rows) => {
+                            sqlx::query("RELEASE SAVEPOINT sp_legacy_path")
+                                .execute(self.as_mut())
+                                .await
+                                .map_err(|e| QueryError::Error {
+                                    message: format!("RELEASE SAVEPOINT failed: {e}"),
+                                })?;
                             nodes.extend(legacy_rows.into_iter().map(Node::from));
                             // Re-sort leaf-first (longer path arrays first),
                             // matching the original ORDER BY t.path DESC behaviour.
@@ -101,7 +115,13 @@ where
                             });
                         }
                         Err(e) if is_undefined_table(&e) => {
-                            // Legacy table absent (fresh install, tests, or post-contract phase).
+                            // Legacy table absent; roll back to restore the transaction.
+                            sqlx::query("ROLLBACK TO SAVEPOINT sp_legacy_path")
+                                .execute(self.as_mut())
+                                .await
+                                .map_err(|e| QueryError::Error {
+                                    message: format!("ROLLBACK TO SAVEPOINT failed: {e}"),
+                                })?;
                         }
                         Err(e) => {
                             return Err(QueryError::Error {
@@ -153,6 +173,13 @@ where
                     .collect();
 
                 if !missing.is_empty() {
+                    // Use a SAVEPOINT so that SQLSTATE 42P01 does not abort the transaction.
+                    sqlx::query("SAVEPOINT sp_hash_legacy")
+                        .execute(self.as_mut())
+                        .await
+                        .map_err(|e| QueryError::Error {
+                            message: format!("SAVEPOINT failed: {e}"),
+                        })?;
                     match sqlx::query_as(
                         "SELECT id::BIGINT, value FROM hash_legacy WHERE id = ANY($1::BIGINT[])",
                     )
@@ -161,11 +188,23 @@ where
                     .await
                     {
                         Ok(rows) => {
+                            sqlx::query("RELEASE SAVEPOINT sp_hash_legacy")
+                                .execute(self.as_mut())
+                                .await
+                                .map_err(|e| QueryError::Error {
+                                    message: format!("RELEASE SAVEPOINT failed: {e}"),
+                                })?;
                             let legacy: HashMap<i64, Vec<u8>> = rows.into_iter().collect();
                             result.extend(legacy);
                         }
                         Err(e) if is_undefined_table(&e) => {
-                            // hash_legacy absent (fresh install, tests, or post-contract phase).
+                            // hash_legacy absent; roll back to restore the transaction.
+                            sqlx::query("ROLLBACK TO SAVEPOINT sp_hash_legacy")
+                                .execute(self.as_mut())
+                                .await
+                                .map_err(|e| QueryError::Error {
+                                    message: format!("ROLLBACK TO SAVEPOINT failed: {e}"),
+                                })?;
                         }
                         Err(e) => {
                             return Err(QueryError::Error {
