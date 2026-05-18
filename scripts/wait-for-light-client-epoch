@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wait for the LightClient proxy contract to report currentEpoch() >= TARGET_EPOCH.
+# This ensures the state-prover has performed the epoch-root update for the prior
+# epoch before downstream steps (e.g., the LCv3 upgrade) modify the contract.
+#
+# Requires: cast (foundry)
+
+TARGET_EPOCH="${1:-1}"
+LC_ADDR="${ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS:?ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS not set}"
+L1_PROVIDER="${L1_PROVIDER:?L1_PROVIDER not set}"
+POLL_INTERVAL="${POLL_INTERVAL:-5}"
+
+echo "Waiting for LightClient ${LC_ADDR} currentEpoch() >= ${TARGET_EPOCH} via ${L1_PROVIDER}"
+while true; do
+    epoch=$(cast call "$LC_ADDR" 'currentEpoch()(uint64)' --rpc-url "$L1_PROVIDER" 2>/dev/null || true)
+    if [[ "$epoch" =~ ^[0-9]+$ ]] && (( epoch >= TARGET_EPOCH )); then
+        echo "LightClient reached epoch ${epoch}"
+        exit 0
+    fi
+    echo "LightClient epoch=${epoch:-unknown} (waiting for >= ${TARGET_EPOCH}), sleeping ${POLL_INTERVAL}s"
+    sleep "$POLL_INTERVAL"
+done

@@ -86,6 +86,24 @@ services:
       deploy-prover-contracts:
         condition: service_completed_successfully
 
+  # Wait for the prover to push the LC past the first epoch root before upgrading
+  # to V3. Otherwise the LCv2 -> v3 transition can interrupt the epoch-root update
+  # and leave the contract permanently stuck.
+  wait-for-lc-epoch-1:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: /bin/sh
+    command: -c "/scripts/wait-for-light-client-epoch 1"
+    environment:
+      - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS
+      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
+    volumes:
+      - ./scripts:/scripts:ro
+    depends_on:
+      demo-l1-network:
+        condition: service_healthy
+      wait-for-v4:
+        condition: service_completed_successfully
+
   deploy-lcv3-upgrade:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
     command: deploy --upgrade-light-client-v3 --use-mock
@@ -106,7 +124,7 @@ services:
     depends_on:
       demo-l1-network:
         condition: service_healthy
-      wait-for-v4:
+      wait-for-lc-epoch-1:
         condition: service_completed_successfully
 
   deploy-pos-contracts-upgrades:
