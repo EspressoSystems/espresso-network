@@ -89,7 +89,7 @@ fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
 pub struct Options {
     /// Storage path for persistent data.
     #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 
     /// Number of views to retain in consensus storage before data that hasn't been archived is
     /// garbage collected.

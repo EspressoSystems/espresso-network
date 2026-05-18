@@ -15,6 +15,7 @@ use hotshot_query_service_types::{
     availability::{BlockId, LeafId, LeafQueryData},
 };
 use hotshot_types::{data::EpochNumber, light_client::StateVerKey};
+use serde::Serialize;
 use serde_json::Value;
 use sqlx::{
     QueryBuilder, SqlitePool, query, query_as,
@@ -100,7 +101,7 @@ pub trait Storage: Sized + Send + Sync + 'static {
     ) -> impl Send + Future<Output = Result<()>>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientSqliteOptions {
     /// Maximum number of simultaneous DB connections to allow.
