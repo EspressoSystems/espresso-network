@@ -70,11 +70,12 @@ where
         let (query, sql) = build_get_path_query(state_type, traversal_path.clone(), created)?;
         let rows = query.query(&sql).fetch_all(self.as_mut()).await?;
 
-        let mut nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
+        let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
 
         // On postgres, fall back to legacy tables for any traversal-path nodes not yet backfilled.
         #[cfg(not(feature = "embedded-db"))]
-        {
+        let nodes = {
+            let mut nodes = nodes;
             let all_paths = traversal_path_values(&traversal_path, tree_height);
             if nodes.len() < all_paths.len() {
                 let found_paths: HashSet<String> =
@@ -98,7 +99,8 @@ where
                     });
                 }
             }
-        }
+            nodes
+        };
 
         // insert all the hash ids to a hashset which is used to query later
         // HashSet is used to avoid duplicates
@@ -762,6 +764,7 @@ impl Node {
 /// Compute the full set of path JSON values for a traversal path (leaf to root).
 ///
 /// Each element is the path prefix used as a row key in a Merkle-tree table.
+#[cfg(not(feature = "embedded-db"))]
 fn traversal_path_values(traversal_path: &[usize], tree_height: usize) -> Vec<serde_json::Value> {
     let len = tree_height;
     let mut result = Vec::with_capacity(len + 1);
