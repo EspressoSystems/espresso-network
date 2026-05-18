@@ -88,11 +88,12 @@ services:
 
   # Wait for the prover to push the LC past the first epoch root before upgrading
   # to V3. Otherwise the LCv2 -> v3 transition can interrupt the epoch-root update
-  # and leave the contract permanently stuck.
-  wait-for-lc-epoch-1:
+  # and leave the contract permanently stuck. Epochs are 1-indexed (genesis is
+  # epoch 1), so we wait for epoch 2.
+  wait-for-lc-epoch-2:
     image: ghcr.io/foundry-rs/foundry:latest
     entrypoint: /bin/sh
-    command: -c "/scripts/wait-for-light-client-epoch 1"
+    command: -c "/scripts/wait-for-light-client-epoch 2"
     environment:
       - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS
       - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
@@ -124,7 +125,7 @@ services:
     depends_on:
       demo-l1-network:
         condition: service_healthy
-      wait-for-lc-epoch-1:
+      wait-for-lc-epoch-2:
         condition: service_completed_successfully
 
   deploy-pos-contracts-upgrades:
