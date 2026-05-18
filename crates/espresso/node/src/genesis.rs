@@ -1488,4 +1488,63 @@ mod test {
             U256::from(1)
         );
     }
+
+    /// Verify that every BLS / Schnorr public key referenced in
+    /// `data/genesis/demo-da-committees.toml` is derived from `DEV_MNEMONIC` at index
+    /// `DEMO_VALIDATOR_START_INDEX + N`. Otherwise the live demo nodes (which use those
+    /// mnemonic-derived keys) cannot sign for the genesis-defined DA committees, and the chain
+    /// stalls at the first DA-committee epoch transition.
+    #[test]
+    fn demo_da_committees_match_dev_mnemonic() {
+        use std::collections::HashSet;
+
+        use alloy::signers::local::coins_bip39::{English, Mnemonic};
+        use espresso_keyset::{KeySet, KeySetOptions};
+        use hotshot_types::{
+            light_client::StateKeyPair,
+            signature_key::{BLSKeyPair, BLSPubKey, SchnorrPubKey},
+        };
+        use staking_cli::{DEMO_VALIDATOR_START_INDEX, DEV_MNEMONIC};
+
+        let mnemonic = Mnemonic::<English>::new_from_phrase(DEV_MNEMONIC).unwrap();
+        let mut expected_bls: HashSet<BLSPubKey> = HashSet::new();
+        let mut expected_schnorr: HashSet<SchnorrPubKey> = HashSet::new();
+        for val_index in 0..5u64 {
+            let keyset = KeySet::try_from(KeySetOptions {
+                mnemonic: Some(mnemonic.clone()),
+                index: Some(u64::from(DEMO_VALIDATOR_START_INDEX) + val_index),
+                key_file: None,
+                private_staking_key: None,
+                private_state_key: None,
+                private_x25519_key: None,
+            })
+            .unwrap();
+            expected_bls.insert(BLSKeyPair::from(keyset.staking).ver_key());
+            expected_schnorr.insert(StateKeyPair::from_sign_key(keyset.state).ver_key());
+        }
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data/genesis/demo-da-committees.toml");
+        let genesis = Genesis::from_file(&path).unwrap();
+        let da_committees = genesis.da_committees.expect("da_committees in genesis");
+        assert!(!da_committees.is_empty());
+        for committee in &da_committees {
+            for entry in &committee.committee {
+                assert!(
+                    expected_bls.contains(&entry.stake_table_entry.stake_key),
+                    "{path:?} epoch {} references a BLS key not derived from DEV_MNEMONIC at \
+                     indices {DEMO_VALIDATOR_START_INDEX}..{}",
+                    committee.start_epoch,
+                    u64::from(DEMO_VALIDATOR_START_INDEX) + 5,
+                );
+                assert!(
+                    expected_schnorr.contains(&entry.state_ver_key),
+                    "{path:?} epoch {} references a Schnorr key not derived from DEV_MNEMONIC at \
+                     indices {DEMO_VALIDATOR_START_INDEX}..{}",
+                    committee.start_epoch,
+                    u64::from(DEMO_VALIDATOR_START_INDEX) + 5,
+                );
+            }
+        }
+    }
 }
