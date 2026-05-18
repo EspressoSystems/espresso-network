@@ -1345,19 +1345,39 @@ pub(crate) trait RewardMerkleTreeDataSource: Send + Sync + Clone + 'static {
                 },
             };
 
-            // Never garbage collect beyond the previous block or the finalized L1 height.
-            // It is extremely important to retain the previous block, in the event that
-            // the current iteration of the loop needs to be retried.
-            let mut gc_height = height.saturating_sub(1).min(finalized_hotshot_height);
+            // trees at heights strictly less than the gc height are deleted
+            //
+            // keep recent epochs reward trees
+            //   - staking-api-service at startup calls `reward-amounts` at
+            //     `epoch_start - 1`, which needs the previous epoch's last-block
+            //     tree on disk.
+            //   - Per epoch reward (EPOCH_REWARD_VERSION+): `fetch_and_calculate`
+            //     reads the previous epoch's last block tree to compute the next
+            //     epoch's rewards.
+            //
+            // `finalized_hotshot_height`:  Reward claims
+            //   (`reward-claim-input`) target the LightClient L1 finalization
+            //   exactly.
 
-            // For epoch reward versions, also retain the last 4 epochs
-            if version >= versions::EPOCH_REWARD_VERSION
-                && let Some(epoch_height) = node_state.epoch_height
-            {
-                let current_epoch = epoch_from_block_number(height, epoch_height);
-                let gc_epoch = current_epoch.saturating_sub(4);
-                gc_height = gc_height.min(gc_epoch * epoch_height);
-            }
+            let epoch_height = node_state
+                .epoch_height
+                .context("reward tree gc requires an epoch height")?;
+            // EPOCH_REWARD_VERSION (V5)+ only persists a tree at each epoch boundary,
+            // so 5 epochs = 5 trees on disk. Earlier versions persist a tree at
+            // every block, so 1 epoch is already epoch_height trees — keeping more
+            // would be expensive. We only need 1 epoch for both, but the extra
+            // trees are cheap for V5+ so it doesn't make much of a difference.
+            let epochs_to_retain = if version >= versions::EPOCH_REWARD_VERSION {
+                5
+            } else {
+                1
+            };
+            let current_epoch = epoch_from_block_number(height, epoch_height);
+            // First block of the oldest epoch we still want to retain.
+            let epoch_start_block = current_epoch.saturating_sub(epochs_to_retain) * epoch_height;
+
+            let gc_height = epoch_start_block.min(finalized_hotshot_height);
+
             if let Err(err) = self.garbage_collect(gc_height).await {
                 tracing::info!(gc_height, "failed to garbage collect: {err:#}");
             }
