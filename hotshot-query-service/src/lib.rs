@@ -421,6 +421,7 @@ pub mod explorer;
 pub mod fetching;
 pub mod merklized_state;
 pub mod metrics;
+pub mod migration;
 pub mod node;
 mod resolvable;
 pub mod status;

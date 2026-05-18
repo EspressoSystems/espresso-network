@@ -33,12 +33,13 @@ use super::{
     super::transaction::{Transaction, TransactionMode, Write, query_as},
     DecodeError, QueryBuilder,
 };
+#[cfg(feature = "embedded-db")]
+use crate::data_source::storage::sql::build_where_in;
 use crate::{
     QueryError, QueryResult,
     data_source::storage::{
-        MerklizedStateHeightStorage, MerklizedStateStorage,
-        pruning::PrunedHeightStorage,
-        sql::{build_where_in, sqlx::Row},
+        MerklizedStateHeightStorage, MerklizedStateStorage, pruning::PrunedHeightStorage,
+        sql::sqlx::Row,
     },
     merklized_state::{MerklizedState, Snapshot},
 };
@@ -69,7 +70,35 @@ where
         let (query, sql) = build_get_path_query(state_type, traversal_path.clone(), created)?;
         let rows = query.query(&sql).fetch_all(self.as_mut()).await?;
 
-        let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
+        let mut nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
+
+        // On postgres, fall back to legacy tables for any traversal-path nodes not yet backfilled.
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            let all_paths = traversal_path_values(&traversal_path, tree_height);
+            if nodes.len() < all_paths.len() {
+                let found_paths: HashSet<String> =
+                    nodes.iter().map(|n| n.path.to_string()).collect();
+                let missing_paths: Vec<serde_json::Value> = all_paths
+                    .into_iter()
+                    .filter(|p| !found_paths.contains(&p.to_string()))
+                    .collect();
+                if !missing_paths.is_empty() {
+                    let legacy_table = format!("{state_type}_legacy");
+                    let (lq, lsql) =
+                        build_legacy_path_query(&legacy_table, missing_paths, created)?;
+                    let legacy_rows = lq.query(&lsql).fetch_all(self.as_mut()).await?;
+                    nodes.extend(legacy_rows.into_iter().map(Node::from));
+                    // Re-sort leaf-first (longer path arrays first),
+                    // matching the original ORDER BY t.path DESC behaviour.
+                    nodes.sort_by(|a, b| {
+                        let la = a.path.as_array().map(|v| v.len()).unwrap_or(0);
+                        let lb = b.path.as_array().map(|v| v.len()).unwrap_or(0);
+                        lb.cmp(&la)
+                    });
+                }
+            }
+        }
 
         // insert all the hash ids to a hashset which is used to query later
         // HashSet is used to avoid duplicates
@@ -77,9 +106,9 @@ where
         for node in nodes.iter() {
             hash_ids.insert(node.hash_id);
             if let Some(children) = &node.children {
-                let children: Vec<i32> =
+                let children: Vec<i64> =
                     serde_json::from_value(children.clone()).map_err(|e| QueryError::Error {
-                        message: format!("Error deserializing 'children' into Vec<i32>: {e}"),
+                        message: format!("Error deserializing 'children' into Vec<i64>: {e}"),
                     })?;
                 hash_ids.extend(children);
             }
@@ -87,13 +116,54 @@ where
 
         // Find all the hash values and create a hashmap
         // Hashmap will be used to get the hash value of the nodes children and the node itself.
-        let hashes = if !hash_ids.is_empty() {
-            let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
-            query
-                .query_as(&sql)
-                .fetch(self.as_mut())
-                .try_collect::<HashMap<i32, Vec<u8>>>()
-                .await?
+        let hashes: HashMap<i64, Vec<u8>> = if !hash_ids.is_empty() {
+            #[cfg(not(feature = "embedded-db"))]
+            {
+                let hash_ids_arr: Vec<i64> = hash_ids.iter().copied().collect();
+                let mut result: HashMap<i64, Vec<u8>> = sqlx::query_as(
+                    "SELECT id::BIGINT, value FROM hash WHERE id = ANY($1::BIGINT[])",
+                )
+                .bind(&hash_ids_arr)
+                .fetch_all(self.as_mut())
+                .await
+                .map_err(|e| QueryError::Error {
+                    message: format!("hash lookup failed: {e}"),
+                })?
+                .into_iter()
+                .collect();
+
+                let missing: Vec<i64> = hash_ids
+                    .iter()
+                    .filter(|id| !result.contains_key(id))
+                    .copied()
+                    .collect();
+
+                if !missing.is_empty() {
+                    let legacy: HashMap<i64, Vec<u8>> = sqlx::query_as(
+                        "SELECT id::BIGINT, value FROM hash_legacy WHERE id = ANY($1::BIGINT[])",
+                    )
+                    .bind(&missing)
+                    .fetch_all(self.as_mut())
+                    .await
+                    .map_err(|e| QueryError::Error {
+                        message: format!("hash_legacy lookup failed: {e}"),
+                    })?
+                    .into_iter()
+                    .collect();
+                    result.extend(legacy);
+                }
+                result
+            }
+
+            #[cfg(feature = "embedded-db")]
+            {
+                let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
+                query
+                    .query_as(&sql)
+                    .fetch(self.as_mut())
+                    .try_collect::<HashMap<i64, Vec<u8>>>()
+                    .await?
+            }
         } else {
             HashMap::new()
         };
@@ -116,11 +186,11 @@ where
                 match (children, children_bitvec, idx, entry) {
                     // If the row has children then its a branch
                     (Some(children), Some(children_bitvec), None, None) => {
-                        let children: Vec<i32> =
+                        let children: Vec<i64> =
                             serde_json::from_value(children.clone()).map_err(|e| {
                                 QueryError::Error {
                                     message: format!(
-                                        "Error deserializing 'children' into Vec<i32>: {e}"
+                                        "Error deserializing 'children' into Vec<i64>: {e}"
                                     ),
                                 }
                             })?;
@@ -366,16 +436,17 @@ pub(crate) fn build_hash_batch_insert(
 pub(crate) async fn batch_insert_hashes(
     hashes: Vec<Vec<u8>>,
     tx: &mut Transaction<Write>,
-) -> QueryResult<HashMap<Vec<u8>, i32>> {
+) -> QueryResult<HashMap<Vec<u8>, i64>> {
     if hashes.is_empty() {
         return Ok(HashMap::new());
     }
 
-    // Use UNNEST-based batch insert (more efficient and avoids parameter limits)
+    // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
+    // Cast id to BIGINT in RETURNING so the result maps directly to i64.
     let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
-               UPDATE SET value = EXCLUDED.value RETURNING value, id";
+               UPDATE SET value = EXCLUDED.value RETURNING value, id::BIGINT";
 
-    let result: HashMap<Vec<u8>, i32> = sqlx::query_as(sql)
+    let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
         .bind(&hashes)
         .fetch(tx.as_mut())
         .try_collect()
@@ -524,7 +595,7 @@ where
 pub(crate) struct Node {
     pub(crate) path: JsonValue,
     pub(crate) created: i64,
-    pub(crate) hash_id: i32,
+    pub(crate) hash_id: i64,
     pub(crate) children: Option<JsonValue>,
     pub(crate) children_bitvec: Option<BitVec>,
     pub(crate) idx: Option<JsonValue>,
@@ -662,7 +733,7 @@ impl Node {
         let sql = format!(
             r#"
             INSERT INTO "{name}" (path, created, hash_id, children, children_bitvec, idx, entry)
-            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::int[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+            SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bigint[], $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
             ON CONFLICT (path, created) DO UPDATE SET
                 hash_id = EXCLUDED.hash_id,
                 children = EXCLUDED.children,
@@ -686,6 +757,50 @@ impl Node {
 
         Ok(())
     }
+}
+
+/// Compute the full set of path JSON values for a traversal path (leaf to root).
+///
+/// Each element is the path prefix used as a row key in a Merkle-tree table.
+fn traversal_path_values(traversal_path: &[usize], tree_height: usize) -> Vec<serde_json::Value> {
+    let len = tree_height;
+    let mut result = Vec::with_capacity(len + 1);
+    let mut trav = traversal_path.iter().map(|x| *x as i32);
+    for _ in 0..=len {
+        let path: Vec<i32> = trav.clone().rev().collect();
+        result.push(serde_json::Value::from(path));
+        trav.next();
+    }
+    result
+}
+
+/// Build a UNION query over a legacy Merkle-tree table for a specific set of path values.
+///
+/// Selects `hash_id::BIGINT AS hash_id` so the result is compatible with the [`Node`] struct
+/// after the INT → BIGINT migration.  Only compiled for postgres — SQLite has no legacy tables.
+#[cfg(not(feature = "embedded-db"))]
+fn build_legacy_path_query<'q>(
+    legacy_table: &str,
+    paths: Vec<serde_json::Value>,
+    created: i64,
+) -> QueryResult<(QueryBuilder<'q>, String)> {
+    let mut query = QueryBuilder::default();
+    query.bind(created)?; // $1
+    let mut sub_queries = Vec::with_capacity(paths.len());
+
+    for path in paths {
+        let node_path = query.bind(path)?;
+        sub_queries.push(format!(
+            "SELECT path, created, hash_id::BIGINT AS hash_id, children, children_bitvec, idx, \
+             entry FROM (SELECT path, created, hash_id::BIGINT AS hash_id, children, \
+             children_bitvec, idx, entry FROM {legacy_table} WHERE path = {node_path} AND created \
+             <= $1 ORDER BY created DESC LIMIT 1) AS latest_node"
+        ));
+    }
+
+    let mut sql = sub_queries.join(" UNION ");
+    sql = format!("SELECT * FROM ({sql}) AS t ORDER BY t.path DESC");
+    Ok((query, sql))
 }
 
 fn build_get_path_query<'q>(
