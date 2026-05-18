@@ -19,7 +19,7 @@ CREATE TABLE hash (
 -- with rows we backfill from hash_legacy (which preserve their original INT ids).
 SELECT setval(
     pg_get_serial_sequence('hash', 'id'),
-    COALESCE((SELECT MAX(id) FROM hash_legacy), 0)
+    GREATEST(COALESCE((SELECT MAX(id) FROM hash_legacy), 1), 1)
 );
 
 -- Step 4: recreate Merkle-tree tables with BIGINT FK.
