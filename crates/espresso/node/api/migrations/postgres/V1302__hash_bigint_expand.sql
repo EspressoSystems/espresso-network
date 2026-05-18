@@ -9,6 +9,14 @@ ALTER TABLE reward_merkle_tree    RENAME TO reward_merkle_tree_legacy;
 ALTER TABLE reward_merkle_tree_v2 RENAME TO reward_merkle_tree_v2_legacy;
 ALTER TABLE hash                  RENAME TO hash_legacy;
 
+-- Step 1b: rename the indexes that survived the table rename so they don't
+-- collide with the identically-named indexes we create in Step 4.
+-- PostgreSQL does NOT automatically rename indexes when a table is renamed.
+ALTER INDEX fee_merkle_tree_created         RENAME TO fee_merkle_tree_legacy_created;
+ALTER INDEX block_merkle_tree_created       RENAME TO block_merkle_tree_legacy_created;
+ALTER INDEX reward_merkle_tree_created      RENAME TO reward_merkle_tree_legacy_created;
+ALTER INDEX reward_merkle_tree_v2_created   RENAME TO reward_merkle_tree_v2_legacy_created;
+
 -- Step 2: new hash table with BIGSERIAL.
 CREATE TABLE hash (
     id    BIGSERIAL PRIMARY KEY,
