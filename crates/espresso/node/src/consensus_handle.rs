@@ -186,15 +186,16 @@ where
         self.legacy_handle.read().await.decided_leaf().await
     }
 
-    pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
+    pub async fn decided_state(&self) -> Arc<T::ValidatedState> {
         if self.new_protocol().await {
             return self
                 .client_api
                 .decided_state()
                 .await
-                .expect("coordinator channel closed");
+                .expect("coordinator channel closed")
+                .expect("decided state must exist");
         }
-        Some(self.legacy_handle.read().await.decided_state().await)
+        self.legacy_handle.read().await.decided_state().await
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {

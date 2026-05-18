@@ -793,10 +793,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> SubmitDataSource<N, P
         // Fetch full chain config from the validated state, if present.
         // This is necessary because we support chain config upgrades,
         // so the updated chain config is found in the validated state.
-        let cf = handle
-            .decided_state()
-            .await
-            .and_then(|state| state.chain_config.resolve());
+        let cf = handle.decided_state().await.chain_config.resolve();
 
         // Use the chain config from the validated state if available,
         // otherwise, use the node state's chain config
@@ -1114,12 +1111,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> CatchupDataSource for
         &self,
         commitment: Commitment<ChainConfig>,
     ) -> anyhow::Result<ChainConfig> {
-        let state = self
-            .consensus_handle()
-            .await
-            .decided_state()
-            .await
-            .context("decided state not available")?;
+        let state = self.consensus_handle().await.decided_state().await;
         let chain_config = state.chain_config;
 
         if chain_config.commit() == commitment {
@@ -3786,7 +3778,7 @@ mod test {
             .await;
 
         for peer in &network.peers {
-            let state = peer.consensus_handle().decided_state().await.unwrap();
+            let state = peer.consensus_handle().decided_state().await;
 
             assert_eq!(state.chain_config.resolve().unwrap(), chain_config)
         }
@@ -3867,7 +3859,7 @@ mod test {
             .await;
 
         for peer in &network.peers {
-            let state = peer.consensus_handle().decided_state().await.unwrap();
+            let state = peer.consensus_handle().decided_state().await;
 
             assert_eq!(state.chain_config.resolve().unwrap(), cf)
         }
@@ -3994,11 +3986,13 @@ mod test {
             tracing::debug!(?view_number, ?upgrade.new_version_first_view, "upgrade_new_view");
             if view_number > wanted_view {
                 tracing::info!(?view_number, ?upgrade.new_version_first_view, "passed upgrade view");
-                let states =
-                    join_all(network.peers.iter().map(|peer| async {
-                        peer.consensus_handle().decided_state().await.unwrap()
-                    }))
-                    .await;
+                let states = join_all(
+                    network
+                        .peers
+                        .iter()
+                        .map(|peer| async { peer.consensus_handle().decided_state().await }),
+                )
+                .await;
                 let leaves = join_all(
                     network
                         .peers
@@ -4090,7 +4084,7 @@ mod test {
 
         // Get the most recent state, for catchup.
 
-        let state = network.server.decided_state().await.unwrap();
+        let state = network.server.decided_state().await;
         tracing::info!(?decided_view, ?state, "consensus state");
 
         // Fully shut down the API servers.
@@ -4615,7 +4609,7 @@ mod test {
         let network = TestNetwork::new(config, POS_V3).await;
 
         let mut prev_st = None;
-        let state = network.server.decided_state().await.unwrap();
+        let state = network.server.decided_state().await;
         let chain_config = state.chain_config.resolve().expect("resolve chain config");
         let stake_table = chain_config.stake_table_contract.unwrap();
 
@@ -5952,7 +5946,7 @@ mod test {
         let mut retries = 0;
         loop {
             sleep(Duration::from_secs(1)).await;
-            let state = node_0.decided_state().await.unwrap();
+            let state = node_0.decided_state().await;
 
             let leaves = if upgrade.base == EPOCH_VERSION {
                 // Use legacy tree for V3
@@ -6001,7 +5995,7 @@ mod test {
         // shutdown consensus to freeze the state
         node_0.shutdown_consensus().await;
         let decided_leaf = node_0.decided_leaf().await;
-        let state = node_0.decided_state().await.unwrap();
+        let state = node_0.decided_state().await;
         tracing::info!(
             height = decided_leaf.height(),
             ?decided_leaf,
@@ -6148,7 +6142,7 @@ mod test {
         node_0.shutdown_consensus().await;
 
         let instance = node_0.node_state();
-        let state = node_0.decided_state().await.unwrap();
+        let state = node_0.decided_state().await;
         let fee_accounts = state
             .fee_merkle_tree
             .clone()
@@ -7113,7 +7107,7 @@ mod test {
         // wait for 4 epochs
         wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
 
-        let validated_state = network.server.decided_state().await.unwrap();
+        let validated_state = network.server.decided_state().await;
         if upgrade.base == EPOCH_VERSION {
             let v1_tree = &validated_state.reward_merkle_tree_v1;
             assert!(v1_tree.num_leaves() > 0, "v1 reward tree tree is empty");
@@ -7718,7 +7712,7 @@ mod test {
         let url = format!("http://localhost:{api_port}").parse().unwrap();
         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
-        let validated_state = network.server.decided_state().await.unwrap();
+        let validated_state = network.server.decided_state().await;
         let decided_leaf = network.server.decided_leaf().await;
         let height = decided_leaf.height();
 
@@ -8096,7 +8090,6 @@ mod test {
             .server
             .decided_state()
             .await
-            .unwrap()
             .reward_merkle_tree_v2
             .iter()
             .map(|(addr, amt)| (*addr, *amt))
