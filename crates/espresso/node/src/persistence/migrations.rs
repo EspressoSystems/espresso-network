@@ -157,18 +157,6 @@ merkle_tree_backfill!(
     "block_merkle_tree_legacy",
     "block_merkle_tree"
 );
-merkle_tree_backfill!(
-    BackfillRewardMerkleTree,
-    "hash_bigint_backfill_reward_merkle_tree",
-    "reward_merkle_tree_legacy",
-    "reward_merkle_tree"
-);
-merkle_tree_backfill!(
-    BackfillRewardMerkleTreeV2,
-    "hash_bigint_backfill_reward_merkle_tree_v2",
-    "reward_merkle_tree_v2_legacy",
-    "reward_merkle_tree_v2"
-);
 
 // ---------------------------------------------------------------------------
 // Registry constructor
@@ -181,6 +169,4 @@ pub fn hash_bigint_migrations() -> MigrationRegistry {
         .backfill(BackfillHash)
         .backfill(BackfillFeeMerkleTree)
         .backfill(BackfillBlockMerkleTree)
-        .backfill(BackfillRewardMerkleTree)
-        .backfill(BackfillRewardMerkleTreeV2)
 }
