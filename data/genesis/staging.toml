@@ -1,7 +1,7 @@
 base_version = "0.8"
 upgrade_version = "0.8"
 genesis_version = "0.8"
-epoch_height = 3000
+epoch_height = 20000
 drb_difficulty = 5000000000
 drb_upgrade_difficulty = 5000000000
 epoch_start_block = 1
