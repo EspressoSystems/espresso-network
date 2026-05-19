@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::data_source::storage::sql::{Transaction, Write};
-#[cfg(not(feature = "embedded-db"))]
-use crate::data_source::{Transaction as _, VersionedDataSource, storage::sql::SqlStorage};
+use crate::data_source::{
+    Transaction as _, VersionedDataSource,
+    storage::sql::{SqlStorage, Transaction, Write},
+};
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(300);
 
@@ -25,7 +26,7 @@ pub trait DataBackfill: Send + Sync + 'static {
 
     /// Number of batches between progress log lines.
     fn log_frequency(&self) -> usize {
-        1_000
+        10
     }
 
     /// Process one batch starting at `offset`.
@@ -88,7 +89,6 @@ impl MigrationRegistry {
     /// Iterates over all migrations on each pass. Migrations whose prerequisites are not yet
     /// complete are skipped with a warning and retried after [`RETRY_INTERVAL`]. The loop exits
     /// once every migration has been marked complete.
-    #[cfg(not(feature = "embedded-db"))]
     pub async fn run_all_migrations(self, db: SqlStorage) {
         if let Err(e) = self.validate() {
             tracing::error!(
@@ -156,7 +156,6 @@ impl MigrationRegistry {
 
     /// Run all batches for a single migration to completion. Returns `true` if the migration
     /// finished successfully, `false` if it encountered an error.
-    #[cfg(not(feature = "embedded-db"))]
     async fn run_migration(db: &SqlStorage, m: &dyn DataBackfill) -> bool {
         let name = m.name();
 
@@ -194,7 +193,7 @@ impl MigrationRegistry {
 
             if let Err(e) = sqlx::query(
                 "UPDATE deferred_migrations SET last_offset = $1, completed_at = CASE WHEN $2 \
-                 THEN NOW() ELSE completed_at END WHERE name = $3",
+                 THEN CURRENT_TIMESTAMP ELSE completed_at END WHERE name = $3",
             )
             .bind(next_offset)
             .bind(done)
@@ -220,7 +219,7 @@ impl MigrationRegistry {
 
             offset = next.unwrap() as u64;
 
-            if batch_count % m.log_frequency() == 0 {
+            if batch_count.is_multiple_of(m.log_frequency()) {
                 tracing::warn!(
                     name,
                     offset,
@@ -233,7 +232,6 @@ impl MigrationRegistry {
 
     /// Returns `true` if the named migration has been marked complete in the database.
     /// Returns `false` if the row does not exist or `completed_at` is null.
-    #[cfg(not(feature = "embedded-db"))]
     async fn is_complete(db: &SqlStorage, name: &str) -> anyhow::Result<bool> {
         let mut tx = db.read().await?;
         let row: Option<(bool,)> = sqlx::query_as(
@@ -247,13 +245,12 @@ impl MigrationRegistry {
 
     /// Insert a tracking row for `name` if one does not yet exist, then return the stored offset
     /// to resume from.
-    #[cfg(not(feature = "embedded-db"))]
     async fn init_and_get_offset(db: &SqlStorage, name: &str) -> anyhow::Result<u64> {
         let mut tx = db.write().await?;
 
         sqlx::query(
-            "INSERT INTO deferred_migrations (name, started_at, last_offset) VALUES ($1, NOW(), \
-             0) ON CONFLICT (name) DO NOTHING",
+            "INSERT INTO deferred_migrations (name, started_at, last_offset) VALUES ($1, \
+             CURRENT_TIMESTAMP, 0) ON CONFLICT (name) DO NOTHING",
         )
         .bind(name)
         .execute(tx.as_mut())
