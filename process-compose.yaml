@@ -79,11 +79,27 @@ processes:
         condition: process_completed
     availability: *exit-ok
 
+  # Wait for the prover to push the LC past the first epoch root before upgrading
+  # to V3. Otherwise the LCv2 -> v3 transition can interrupt the epoch-root update
+  # and leave the contract permanently stuck. Epochs are 1-indexed (genesis is
+  # epoch 1), so we wait for epoch 2.
+  wait-for-lc-epoch-2:
+    command: scripts/wait-for-light-client-epoch 2
+    namespace: setup
+    environment:
+      - L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
+    depends_on:
+      wait-for-v4:
+        condition: process_completed
+      prover-one-shot:
+        condition: process_started
+    availability: *exit-ok
+
   deploy-lcv3-upgrade:
     command: deploy --upgrade-light-client-v3 --use-mock
     namespace: setup
     depends_on:
-      wait-for-v4:
+      wait-for-lc-epoch-2:
         condition: process_completed
     availability: *exit-ok
 
