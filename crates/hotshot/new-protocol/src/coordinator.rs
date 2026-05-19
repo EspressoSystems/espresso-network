@@ -39,16 +39,16 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
-        Message, MessageType, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest,
-        TransactionMessage, Unchecked, Vote2,
+        self, BlockMessage, BlockPushMessage, Certificate2, CheckpointCertificate, CheckpointVote,
+        ConsensusMessage, Message, MessageType, Proposal, ProposalFetchMessage, ProposalMessage,
+        TimeoutOneHonest, TransactionMessage, Unchecked, Vote2,
     },
     network::Network,
     outbox::Outbox,
     proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
+    vid::{VidDisperseRequest, VidDisperser, VidReconstructError, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -400,6 +400,9 @@ where
                             block.payload.metadata.clone(),
                             block.payload_commitment,
                         );
+                        // Leader has its own payload; skip share-based recover
+                        // and discard any future shares for this view.
+                        self.vid_reconstructor.mark_locally_available(block.view);
                         self.unicast_to_leader(
                             next_view,
                             epoch,
@@ -431,8 +434,16 @@ where
                         );
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
-                    Err(()) => {
-                        return Err(CoordinatorError::unspecified().context("vid reconstruction"))
+                    Err(err) => {
+                        match err {
+                            VidReconstructError::VerifyBlock(view) => {
+                                warn!(%view, "block push verify failed; falling back to share-based recover");
+                            },
+                            VidReconstructError::Reconstruct(view) => {
+                                error!(%view, "share-based VID reconstruction failed");
+                            },
+                        }
+                        continue;
                     }
                 },
                 Some(result) = self.epoch_manager.next() => match result {
@@ -463,6 +474,61 @@ where
 
     pub fn apply_consensus(&mut self, input: ConsensusInput<T>) {
         self.consensus.apply(input, &mut self.outbox)
+    }
+
+    async fn handle_block_push(&mut self, sender: T::SignatureKey, block: BlockPushMessage<T>) {
+        let view = block.view;
+        if view < self.consensus.current_view()
+            || self.vid_reconstructor.reconstructed.contains(&view)
+        {
+            return;
+        }
+        let Some(leader) = self.leader(view, block.epoch) else {
+            warn!(%view, epoch = %block.epoch, "block push: leader lookup failed; dropping");
+            return;
+        };
+        if sender != leader {
+            warn!(%view, epoch = %block.epoch, %sender, "block push: sender is not view leader; dropping");
+            return;
+        }
+        if !block.verify_signature(&leader) {
+            warn!(%view, epoch = %block.epoch, "block push: signature verification failed; dropping");
+            return;
+        }
+        self.vid_reconstructor
+            .spawn_verify_block_task(block, &self.membership_coordinator)
+            .await;
+    }
+
+    pub fn handle_proposal_and_vid_share(
+        &mut self,
+        validated: ValidatedProposal<T>,
+        vid_share: VidDisperseShare2<T>,
+    ) -> Result<ConsensusInput<T>, CoordinatorError> {
+        self.storage.append_vid(vid_share.clone());
+        self.storage
+            .append_proposal(validated.message.proposal.data.clone());
+
+        let m = validated
+            .message
+            .proposal
+            .data
+            .block_header
+            .metadata()
+            .clone();
+        self.vid_reconstructor
+            .handle_vid_share(vid_share.clone(), m);
+
+        // GC for the cache
+        let view = validated.message.proposal.data.view_number();
+        self.cached_vid_shares = self.cached_vid_shares.split_off(&(view + 1));
+        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(view + 1));
+
+        Ok(ConsensusInput::ProposalWithVidShare(
+            validated.sender,
+            validated.message,
+            vid_share,
+        ))
     }
 
     pub fn process_consensus_output(
@@ -549,6 +615,21 @@ where
                         } else {
                             warn!(%err, "network error while sending vid share")
                         }
+                    }
+                }
+            },
+            ConsensusOutput::SendBlockToLeader { next_leader, block } => {
+                let view = block.view;
+                let message = Message {
+                    sender: self.public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::BlockPush(block)),
+                };
+                if let Err(err) = self.network.unicast(view, &next_leader, &message) {
+                    let err = CoordinatorError::from(err).context("block push unicast");
+                    if err.severity == Severity::Critical {
+                        return Err(err);
+                    } else {
+                        warn!(%err, %view, "network error while pushing block to next leader");
                     }
                 }
             },
@@ -746,6 +827,10 @@ where
                 },
                 ConsensusMessage::Checkpoint(checkpoint) => {
                     self.checkpoint_collector.accumulate_vote(checkpoint).await;
+                    None
+                },
+                ConsensusMessage::BlockPush(block) => {
+                    self.handle_block_push(message.sender, block).await;
                     None
                 },
             },
