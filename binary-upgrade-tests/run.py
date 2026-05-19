@@ -193,6 +193,37 @@ class Compose:
         log.error(f"--- docker compose logs --tail {tail} {service} ---")
         self.run("logs", "--tail", str(tail), service, check=False)
 
+    def dump_all_logs(self, dest_dir: Path) -> None:
+        """Per-service logs + ps state + the background `compose up` log."""
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            services = self.services()
+        except subprocess.CalledProcessError:
+            log.warning("compose config --services failed; skipping log dump")
+            return
+        with (dest_dir / "ps.txt").open("wb") as f:
+            subprocess.run(
+                self.base_args + ["ps", "-a"],
+                cwd=REPO_ROOT,
+                env=os.environ.copy(),
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        for service in services:
+            with (dest_dir / f"{service}.log").open("wb") as f:
+                subprocess.run(
+                    self.base_args + ["logs", "--no-color", service],
+                    cwd=REPO_ROOT,
+                    env=os.environ.copy(),
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+        compose_up_log = self.base_dir / "compose-up.log"
+        if compose_up_log.exists():
+            shutil.copy(compose_up_log, dest_dir / "compose-up.log")
+
     def wait_for_catchup(
         self, idx: int, peers: list[Node], timeout: float = 240
     ) -> None:
@@ -693,6 +724,9 @@ def compose_session(config: Config):
     try:
         yield compose
     finally:
+        logs_dir = REPO_ROOT / "tmp" / "compose-logs"
+        log.info(f"Archiving compose logs to {logs_dir}")
+        compose.dump_all_logs(logs_dir)
         if config.keep_running:
             log.info(f"KEEP_RUNNING=1, leaving compose stack up at {base_dir}")
             return

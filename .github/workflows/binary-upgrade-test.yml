@@ -50,3 +50,12 @@ jobs:
           set -o pipefail
           timeout -v 2400 ./binary-upgrade-tests/run.py --scenario ${{ matrix.scenario }} \
             | sed -e "s/^/binary-upgrade(${{ matrix.scenario }}): /;"
+
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@v8
+        with:
+          name: compose-logs-${{ matrix.scenario }}
+          path: tmp/compose-logs/
+          retention-days: 1
+          if-no-files-found: ignore

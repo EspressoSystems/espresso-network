@@ -590,6 +590,15 @@ jobs:
           timeout -v 2400 ./binary-upgrade-tests/run.py --scenario ${{ matrix.scenario }} \
             | sed -e "s/^/binary-upgrade(${{ matrix.scenario }}): /;"
 
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@v8
+        with:
+          name: compose-logs-${{ github.job }}-${{ matrix.scenario }}
+          path: tmp/compose-logs/
+          retention-days: 1
+          if-no-files-found: ignore
+
   binary-upgrade-test-non-pr:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -627,6 +636,15 @@ jobs:
           set -o pipefail
           timeout -v 2400 ./binary-upgrade-tests/run.py --scenario ${{ matrix.scenario }} \
             | sed -e "s/^/binary-upgrade(${{ matrix.scenario }}): /;"
+
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@v8
+        with:
+          name: compose-logs-${{ github.job }}-${{ matrix.scenario }}
+          path: tmp/compose-logs/
+          retention-days: 1
+          if-no-files-found: ignore
 
   binary-upgrade-test:
     needs: [binary-upgrade-test-pr, binary-upgrade-test-non-pr]
