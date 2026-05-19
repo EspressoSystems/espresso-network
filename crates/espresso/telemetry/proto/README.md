@@ -9,9 +9,8 @@ Source: [`prometheus/prometheus`](https://github.com/prometheus/prometheus) tag
 ## Why vendored
 
 The remote-write 1.0 protocol is frozen (Prometheus 2.x baseline; 2.0 is opt-in on receivers that explicitly enable it).
-Vector's `prometheus_remote_write` source speaks 1.0. The previously-used `prometheus_remote_write` Rust crate was
-unmaintained, so we generate types directly from upstream protos via `prost-build` (see `../build.rs`) and own the
-dependency graph.
+Vector's `prometheus_remote_write` source speaks 1.0. We generate types directly from upstream protos via `prost-build`
+(see `../build.rs`) rather than depend on a third-party crate, so we own the dependency graph.
 
 ## Modifications from upstream
 
@@ -26,10 +25,6 @@ Go implementation.
 
 ## Updating
 
-When refreshing from upstream:
-
-1. Pull the latest `prompb/{types,remote}.proto` from the desired tag.
-2. Update the tag reference at the top of this file.
-3. Re-strip the `gogoproto` import + annotations (see "Modifications" above).
-4. Run `cargo build -p espresso-telemetry` to re-generate.
-5. `cargo nextest run -p espresso-telemetry` to confirm the wire format and tests still match.
+Run `scripts/update-prometheus-protos.sh [--tag vX.Y.Z]`. The script fetches the protos, strips the `gogoproto` bits,
+bumps the tag references, and runs `cargo check -p espresso-telemetry`. Follow up with
+`cargo nextest run -p espresso-telemetry` to confirm tests still pass.

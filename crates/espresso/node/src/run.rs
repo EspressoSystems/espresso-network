@@ -27,7 +27,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     // `Registry` deposited into `telemetry::REGISTRY` is `None`. The OTel logs
     // path starts here; the metrics push task is attached later via
     // `TelemetryHandle::attach_metrics_push` once the API setup has run.
-    let mut telemetry_handle = match opt.key_set.clone().try_into() {
+    let (mut telemetry_handle, telemetry_init_error) = match opt.key_set.clone().try_into() {
         Ok(KeySet { staking, .. }) => match telemetry::init(
             &opt.telemetry,
             &staking,
@@ -35,26 +35,17 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             opt.identity.company_name.as_deref(),
             telemetry::registry(),
         ) {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("telemetry init failed: {e:#}; continuing without telemetry");
-                None
-            },
+            Ok(h) => (h, None),
+            Err(e) => (None, Some(e.context("telemetry init failed"))),
         },
-        Err(e) => {
-            // The keyset will fail again below with a proper error path. Skip
-            // telemetry for now and let the main flow surface the error.
-            if opt.telemetry.enable {
-                eprintln!(
-                    "telemetry init skipped: cannot load staking key: {e:#}; node startup will \
-                     fail next"
-                );
-            }
-            None
-        },
+        // The keyset will surface its own error through the main flow below.
+        Err(_) => (None, None),
     };
     let otel_layer = telemetry_handle.as_ref().map(|h| h.tracing_layer());
     opt.logging.init_with_otel(otel_layer);
+    if let Some(e) = telemetry_init_error {
+        tracing::error!("{e:#}; continuing without telemetry");
+    }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut modules = opt.modules();
