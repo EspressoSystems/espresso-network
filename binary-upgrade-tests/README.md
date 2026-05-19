@@ -19,7 +19,7 @@ asserting the network keeps producing and serving blocks.
 The repo's `.env` must exist (`cp .env.docker.example .env` or use the dev shell). Ensure docker is running.
 
     just binary-upgrade-tests::run
-    just binary-upgrade-tests::run --scenario catchup-from-old-fs
+    just binary-upgrade-tests::run --scenario new-from-old-fs
     BASE_TAG=20260505 UPGRADE_TAG=main just binary-upgrade-tests::run
     KEEP_RUNNING=1 just binary-upgrade-tests::run            # leave compose stack up
 
@@ -29,14 +29,16 @@ The repo's `.env` must exist (`cp .env.docker.example .env` or use the dev shell
 
 Pick with `--scenario` (default `vanilla`). CI runs each as a separate matrix job.
 
-| Scenario              | What it adds on top of vanilla                                                                                                                                                                                     |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `vanilla`             | Roll each node 0..4 to UPGRADE one at a time, then bulk-upgrade the rest.                                                                                                                                          |
-| `catchup-from-old-fs` | Roll node 4 (FS-backed) first, wipe its storage, restart on UPGRADE with `ESPRESSO_NODE_CONFIG_PEERS`, wait for it to catch up while peers are still on BASE. Then finish vanilla.                                 |
-| `catchup-from-old-pg` | Same shape but wipes node 1 (postgres-backed) plus its `espresso-node-db-1` data.                                                                                                                                  |
-| `catchup-from-new-fs` | Finish vanilla, then wipe node 4 + restart with `ESPRESSO_NODE_CONFIG_PEERS`, wait for catchup from all-UPGRADE peers.                                                                                             |
-| `catchup-from-new-pg` | Finish vanilla, then wipe node 1 + db-1, restart, wait for catchup.                                                                                                                                                |
-| `first-start`         | Finish vanilla, then start a fresh `espresso-node-5` on BASE_TAG with `ESPRESSO_NODE_CONFIG_PEERS` and no orchestrator URL. Verifies the older binary can deserialize `/v0/config/hotshot` from the newer network. |
+Scenario names read as `<catching-up-tag>-from-<peers-tag>-<storage>`: `new` = UPGRADE_TAG, `old` = BASE_TAG. The matrix
+covers both cross-version directions plus the vanilla rolling upgrade.
+
+| Scenario          | What it adds on top of vanilla                                                                                                                                                                                                    |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vanilla`         | Roll each node 0..4 to UPGRADE one at a time, then bulk-upgrade the rest.                                                                                                                                                         |
+| `new-from-old-fs` | Roll node 4 (FS-backed) to UPGRADE, wipe its storage, restart with `ESPRESSO_NODE_CONFIG_PEERS`, wait for it to catch up while the other 4 nodes are still on BASE. Then finish vanilla. Tests UPGRADE binary against BASE peers. |
+| `new-from-old-pg` | Same shape but wipes node 1 (postgres-backed) plus its `espresso-node-db-1` data.                                                                                                                                                 |
+| `old-from-new-fs` | Finish vanilla, then start a fresh `espresso-node-5` on BASE_TAG (FS-backed) with `ESPRESSO_NODE_CONFIG_PEERS`. Verifies UPGRADE peers can still serve a BASE client (API/wire compatibility).                                    |
+| `old-from-new-pg` | Same shape but node-5 is postgres-backed (own `espresso-node-db-5`).                                                                                                                                                              |
 
 ## Inputs
 

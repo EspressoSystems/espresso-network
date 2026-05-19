@@ -39,11 +39,10 @@ NEW_NODE_API_PORT = 24005
 
 class Scenario(StrEnum):
     VANILLA = "vanilla"
-    CATCHUP_FROM_OLD_FS = "catchup-from-old-fs"
-    CATCHUP_FROM_OLD_PG = "catchup-from-old-pg"
-    CATCHUP_FROM_NEW_FS = "catchup-from-new-fs"
-    CATCHUP_FROM_NEW_PG = "catchup-from-new-pg"
-    FIRST_START = "first-start"
+    NEW_FROM_OLD_FS = "new-from-old-fs"
+    NEW_FROM_OLD_PG = "new-from-old-pg"
+    OLD_FROM_NEW_FS = "old-from-new-fs"
+    OLD_FROM_NEW_PG = "old-from-new-pg"
 
 
 # Services NOT touched by the binary upgrade test:
@@ -75,7 +74,8 @@ REPO_ROOT = Path(
 )
 
 PERSIST_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.persist-storage.yaml"
-NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5.yaml"
+NODE_5_FS_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-fs.yaml"
+NODE_5_PG_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-pg.yaml"
 LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml"
 
 
@@ -391,7 +391,7 @@ class Compose:
             docker_tag=tag,
         )
 
-    def start_new_node_5(self, base_tag: str) -> Node:
+    def start_new_node_5(self, base_tag: str, overlay: Path) -> Node:
         keys = _generate_keys(base_tag)
         os.environ[f"ESPRESSO_NODE_{NEW_NODE_INDEX}_API_PORT"] = str(NEW_NODE_API_PORT)
         os.environ[f"ESPRESSO_NODE_{NEW_NODE_INDEX}_STAKING_PRIVATE_KEY"] = keys[
@@ -404,7 +404,7 @@ class Compose:
             "ESPRESSO_NODE_PRIVATE_X25519_KEY"
         ]
         log.info(f"Starting espresso-node-{NEW_NODE_INDEX} on tag {base_tag}")
-        self.with_overlays(NODE_5_OVERLAY).run(
+        self.with_overlays(overlay).run(
             "up",
             "-d",
             "--no-deps",
@@ -471,12 +471,18 @@ class Compose:
         log.info("Final smoke test")
         self.smoke_test(config.upgrade_tag)
 
-    def catchup_from_old(
+    def new_from_old(
         self,
         config: Config,
         wipe_idx: int,
         wipe: Callable[[int], None],
     ) -> None:
+        """New (UPGRADE) node catches up from old (BASE) peers.
+
+        Rolls just `wipe_idx` to UPGRADE, wipes it, restarts; the remaining
+        4 nodes are still on BASE_TAG when catchup runs. Then finishes the
+        rolling upgrade for the other nodes.
+        """
         self.boot_base_network(config)
 
         log.info(f"Rolling espresso-node-{wipe_idx} to {config.upgrade_tag}")
@@ -499,29 +505,17 @@ class Compose:
         log.info("Final smoke test")
         self.smoke_test(config.upgrade_tag)
 
-    def catchup_from_new(
-        self,
-        config: Config,
-        wipe_idx: int,
-        wipe: Callable[[int], None],
-    ) -> None:
+    def old_from_new(self, config: Config, node_5_overlay: Path) -> None:
+        """Old (BASE) node catches up from new (UPGRADE) peers.
+
+        Finishes the full upgrade, then starts a fresh espresso-node-5 on
+        BASE_TAG. Verifies the upgraded peers can still serve a base-version
+        client (API/wire compatibility).
+        """
         self.boot_base_network(config)
         self.run_full_vanilla_upgrade(config)
 
-        wipe(wipe_idx)
-        self.restart_node_with_config_peer(wipe_idx, config.upgrade_tag)
-
-        peers = [Node.from_index(i) for i in NODE_INDICES if i != wipe_idx]
-        self.wait_for_catchup(wipe_idx, peers)
-
-        log.info("Final smoke test")
-        self.smoke_test(config.upgrade_tag)
-
-    def first_start(self, config: Config) -> None:
-        self.boot_base_network(config)
-        self.run_full_vanilla_upgrade(config)
-
-        self.start_new_node_5(config.base_tag)
+        self.start_new_node_5(config.base_tag, node_5_overlay)
         peers = [Node.from_index(i) for i in NODE_INDICES]
         self.wait_for_catchup(NEW_NODE_INDEX, peers, timeout=300)
 
@@ -766,16 +760,14 @@ def run_scenario(compose: Compose, config: Config, scenario: Scenario) -> None:
     match scenario:
         case Scenario.VANILLA:
             compose.vanilla(config)
-        case Scenario.CATCHUP_FROM_OLD_FS:
-            compose.catchup_from_old(config, WIPE_FS_NODE, compose.wipe_fs_node)
-        case Scenario.CATCHUP_FROM_OLD_PG:
-            compose.catchup_from_old(config, WIPE_PG_NODE, compose.wipe_pg_node)
-        case Scenario.CATCHUP_FROM_NEW_FS:
-            compose.catchup_from_new(config, WIPE_FS_NODE, compose.wipe_fs_node)
-        case Scenario.CATCHUP_FROM_NEW_PG:
-            compose.catchup_from_new(config, WIPE_PG_NODE, compose.wipe_pg_node)
-        case Scenario.FIRST_START:
-            compose.first_start(config)
+        case Scenario.NEW_FROM_OLD_FS:
+            compose.new_from_old(config, WIPE_FS_NODE, compose.wipe_fs_node)
+        case Scenario.NEW_FROM_OLD_PG:
+            compose.new_from_old(config, WIPE_PG_NODE, compose.wipe_pg_node)
+        case Scenario.OLD_FROM_NEW_FS:
+            compose.old_from_new(config, NODE_5_FS_OVERLAY)
+        case Scenario.OLD_FROM_NEW_PG:
+            compose.old_from_new(config, NODE_5_PG_OVERLAY)
 
 
 def main() -> int:
