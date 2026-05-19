@@ -6631,6 +6631,7 @@ dependencies = [
  "futures",
  "hotshot-builder-api",
  "hotshot-contract-adapter",
+ "hotshot-libp2p-networking",
  "hotshot-task",
  "hotshot-types",
  "hotshot-utils",

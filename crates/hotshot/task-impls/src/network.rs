@@ -7,11 +7,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     hash::{DefaultHasher, Hash},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
 };
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
+use hotshot_libp2p_networking::network::log_summary;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -837,7 +838,10 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
             }
             match net.vid_broadcast_message(messages).await {
                 Ok(()) => {},
-                Err(e) => tracing::warn!("Failed to send message from network task: {e:?}"),
+                Err(e) => {
+                    log_summary::NETWORK_SEND_FAILURES.fetch_add(1, Ordering::Relaxed);
+                    tracing::debug!("Failed to send message from network task: {e:?}");
+                },
             }
         });
 
@@ -1547,7 +1551,10 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
 
             match transmit_result {
                 Ok(()) => {},
-                Err(e) => tracing::warn!("Failed to send message task: {e:?}"),
+                Err(e) => {
+                    log_summary::NETWORK_SEND_FAILURES.fetch_add(1, Ordering::Relaxed);
+                    tracing::debug!("Failed to send message task: {e:?}");
+                },
             }
         });
         self.transmit_tasks

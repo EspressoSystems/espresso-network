@@ -6,7 +6,10 @@
 
 /// Task for doing bootstraps at a regular interval
 pub mod bootstrap;
-use std::{collections::HashMap, marker::PhantomData, num::NonZeroUsize, time::Duration};
+use std::{
+    collections::HashMap, marker::PhantomData, num::NonZeroUsize, sync::atomic::Ordering,
+    time::Duration,
+};
 
 /// a local caching layer for the DHT key value pairs
 use futures::{
@@ -42,7 +45,7 @@ lazy_static! {
 }
 
 use super::exponential_backoff::ExponentialBackoff;
-use crate::network::{ClientRequest, NetworkEvent};
+use crate::network::{ClientRequest, NetworkEvent, log_summary};
 
 /// Behaviour wrapping libp2p's kademlia
 /// included:
@@ -184,7 +187,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             // The key already exists in the cache, send the value to all channels
             for chan in chans {
                 if chan.send(entry.value.clone()).is_err() {
-                    warn!("Get DHT: channel closed before get record request result could be sent");
+                    debug!(
+                        "Get DHT: channel closed before get record request result could be sent"
+                    );
                 }
             }
         } else {
@@ -280,7 +285,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     },
                 },
                 Err(err) => {
-                    warn!("Error in Kademlia query: {err:?}");
+                    log_summary::DHT_KAD_QUERY_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    debug!("Error in Kademlia query: {err:?}");
                     false
                 },
             },
@@ -323,7 +329,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     // Send the record to all channels that are still open
                     for n in notify {
                         if n.send(record.value.clone()).is_err() {
-                            warn!(
+                            debug!(
                                 "Get DHT: channel closed before get record request result could \
                                  be sent"
                             );
@@ -339,7 +345,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 // Initiate new query that hits more replicas
                 if retry_count > 0 {
                     let new_retry_count = retry_count - 1;
-                    warn!(
+                    debug!(
                         "Get DHT: Internal disagreement for get dht request {progress:?}! \
                          requerying with more nodes. {new_retry_count:?} retries left"
                     );
@@ -352,7 +358,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                         records: Vec::new(),
                     });
                 }
-                warn!(
+                log_summary::DHT_DISAGREEMENTS_GIVEN_UP.fetch_add(1, Ordering::Relaxed);
+                debug!(
                     "Get DHT: Internal disagreement for get dht request {progress:?}! Giving up \
                      because out of retries. "
                 );
@@ -438,7 +445,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     if let Some(chan) = self.in_progress_get_closest_peers.remove(&query_id) {
                         let _: Result<_, _> = chan.send(());
                     };
-                    warn!("Failed to get closest peers: {e:?}");
+                    log_summary::DHT_CLOSEST_PEERS_FAILURES.fetch_add(1, Ordering::Relaxed);
+                    debug!("Failed to get closest peers: {e:?}");
                 },
             },
             KademliaEvent::OutboundQueryProgressed {

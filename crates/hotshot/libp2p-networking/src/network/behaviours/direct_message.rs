@@ -4,15 +4,15 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::atomic::Ordering};
 
 use libp2p::request_response::{Event, Message, OutboundRequestId, ResponseChannel};
 use libp2p_identity::PeerId;
 use tokio::{spawn, sync::mpsc::UnboundedSender, time::sleep};
-use tracing::{debug, error, warn};
+use tracing::debug;
 
 use super::exponential_backoff::ExponentialBackoff;
-use crate::network::{ClientRequest, NetworkEvent};
+use crate::network::{ClientRequest, NetworkEvent, log_summary};
 
 /// Request to direct message a peert
 #[derive(Debug)]
@@ -58,7 +58,8 @@ impl DMBehaviour {
                 error,
                 connection_id: _,
             } => {
-                error!("Inbound message failure from {:?}: {:?}", peer, error);
+                log_summary::DIRECT_MESSAGE_INBOUND_FAILURES.fetch_add(1, Ordering::Relaxed);
+                debug!("Inbound message failure from {:?}: {:?}", peer, error);
                 None
             },
             Event::OutboundFailure {
@@ -67,7 +68,8 @@ impl DMBehaviour {
                 error,
                 connection_id: _,
             } => {
-                warn!("Outbound message failure to {:?}: {:?}", peer, error);
+                log_summary::DIRECT_MESSAGE_OUTBOUND_FAILURES.fetch_add(1, Ordering::Relaxed);
+                debug!("Outbound message failure to {:?}: {:?}", peer, error);
                 if let Some(mut req) = self.in_progress_rr.remove(&request_id) {
                     if req.retry_count == 0 {
                         return None;
@@ -106,7 +108,7 @@ impl DMBehaviour {
                         debug!("Received direct response {:?}", msg);
                         Some(NetworkEvent::DirectResponse(msg, req.peer_id))
                     } else {
-                        warn!("Received response for unknown request id {:?}", request_id);
+                        debug!("Received response for unknown request id {:?}", request_id);
                         None
                     }
                 },

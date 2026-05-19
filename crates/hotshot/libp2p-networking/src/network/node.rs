@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     num::{NonZeroU32, NonZeroUsize},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
 
@@ -70,10 +70,13 @@ use super::{
     cbor::Cbor,
     gen_transport,
 };
-use crate::network::behaviours::{
-    dht::{DHTBehaviour, DHTProgress, KadPutQuery},
-    direct_message::{DMBehaviour, DMRequest},
-    exponential_backoff::ExponentialBackoff,
+use crate::network::{
+    behaviours::{
+        dht::{DHTBehaviour, DHTProgress, KadPutQuery},
+        direct_message::{DMBehaviour, DMRequest},
+        exponential_backoff::ExponentialBackoff,
+    },
+    log_summary,
 };
 
 /// Maximum size of a message
@@ -676,14 +679,16 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             None
                         },
                         GossipEvent::GossipsubNotSupported { peer_id } => {
-                            warn!("Peer {peer_id:?} does not support gossipsub");
+                            log_summary::GOSSIPSUB_NOT_SUPPORTED.fetch_add(1, Ordering::Relaxed);
+                            debug!("Peer {peer_id:?} does not support gossipsub");
                             None
                         },
                         GossipEvent::SlowPeer {
                             peer_id,
                             failed_messages: _,
                         } => {
-                            warn!("Peer {peer_id:?} is slow");
+                            log_summary::GOSSIPSUB_SLOW_PEER.fetch_add(1, Ordering::Relaxed);
+                            debug!("Peer {peer_id:?} is slow");
                             None
                         },
                     },
@@ -757,7 +762,8 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 peer_id,
                 error,
             } => {
-                warn!("Outgoing connection error to {peer_id:?}: {error:?}");
+                log_summary::DIAL_FAILURES.fetch_add(1, Ordering::Relaxed);
+                debug!("Outgoing connection error to {peer_id:?}: {error:?}");
             },
             SwarmEvent::IncomingConnectionError {
                 connection_id: _,
@@ -766,13 +772,15 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 error,
                 peer_id: _,
             } => {
-                warn!("Incoming connection error: {error:?}");
+                log_summary::INCOMING_CONN_ERRORS.fetch_add(1, Ordering::Relaxed);
+                debug!("Incoming connection error: {error:?}");
             },
             SwarmEvent::ListenerError {
                 listener_id: _,
                 error,
             } => {
-                warn!("Listener error: {error:?}");
+                log_summary::LISTENER_ERRORS.fetch_add(1, Ordering::Relaxed);
+                debug!("Listener error: {error:?}");
             },
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 let my_id = *self.swarm.local_peer_id();
