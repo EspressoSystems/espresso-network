@@ -23,7 +23,7 @@ use alloy::{
     },
     transports::{TransportError, http::Http},
 };
-use anyhow::Result;
+use anyhow::{Context as _, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use espresso_contract_deployer::{HttpProviderWithWallet, build_provider, build_signer};
 use espresso_keyset::{KeySet, KeySetOptions};
@@ -925,6 +925,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
         let st = StakeTableV3::new(stake_table, &token_holder_provider);
         let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
+        tracing::info!(?version, "stake table contract version");
         if matches!(
             version,
             StakeTableContractVersion::V2 | StakeTableContractVersion::V3
@@ -1073,10 +1074,21 @@ pub fn generate_delegator_signer(index: u64) -> PrivateKeySigner {
     PrivateKeySigner::random_with(&mut rng)
 }
 
+/// Read a required environment variable, returning a distinct error for unset and empty values.
+fn dotenv_require(name: &str) -> Result<String> {
+    let value =
+        dotenvy::var(name).with_context(|| format!("environment variable {name} is not set"))?;
+    if value.is_empty() {
+        bail!("environment variable {name} is empty");
+    }
+    Ok(value)
+}
+
 /// Load consensus, state, and x25519 keys for a validator.
 ///
-/// If `mnemonic_phrase` is `Some`, derives all three keys from the mnemonic using `val_index` as
-/// the derivation index. Otherwise reads each key from the corresponding
+/// If `mnemonic_phrase` is `Some`, derives all three keys from the mnemonic at index
+/// `DEMO_VALIDATOR_START_INDEX + val_index`, matching the Ethereum signer account index for the
+/// same validator. Otherwise reads each key from the corresponding
 /// `ESPRESSO_DEMO_NODE_{STAKING,STATE,X25519}_PRIVATE_KEY_{val_index}` environment variable.
 fn load_validator_keys(
     val_index: u16,
@@ -1086,7 +1098,7 @@ fn load_validator_keys(
         let mnemonic = Mnemonic::<English>::new_from_phrase(phrase)?;
         let keyset = KeySet::try_from(KeySetOptions {
             mnemonic: Some(mnemonic),
-            index: Some(val_index as u64),
+            index: Some(u64::from(DEMO_VALIDATOR_START_INDEX) + u64::from(val_index)),
             key_file: None,
             private_staking_key: None,
             private_state_key: None,
@@ -1098,14 +1110,14 @@ fn load_validator_keys(
             x25519::Keypair::from(keyset.x25519),
         ))
     } else {
-        let bls: BLSKeyPair = parse_bls_priv_key(&dotenvy::var(format!(
+        let bls: BLSKeyPair = parse_bls_priv_key(&dotenv_require(&format!(
             "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
         ))?)?
         .into();
-        let state_sign = parse_state_priv_key(&dotenvy::var(format!(
+        let state_sign = parse_state_priv_key(&dotenv_require(&format!(
             "ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"
         ))?)?;
-        let x25519_secret = parse_x25519_priv_key(&dotenvy::var(format!(
+        let x25519_secret = parse_x25519_priv_key(&dotenv_require(&format!(
             "ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"
         ))?)?;
         Ok((
@@ -1114,6 +1126,39 @@ fn load_validator_keys(
             x25519::Keypair::from(x25519_secret),
         ))
     }
+}
+
+/// Load the p2p advertise address for the validator at `val_index`.
+///
+/// Two configuration modes:
+/// - **Base form**: set `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME` and
+///   `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_BASE_PORT`. The address is
+///   `{hostname}:{base_port + val_index}`. Lets you register an arbitrary number of validators
+///   without per-index env vars.
+/// - **Per-validator form**: set `ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{val_index}`
+///   directly. Used by the local demo where each validator has a distinct address in `.env`.
+///
+/// The base form takes precedence when `HOSTNAME` is set.
+fn load_p2p_addr(val_index: u16) -> Result<NetAddr> {
+    if let Ok(hostname) = dotenv_require("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_HOSTNAME") {
+        let base_port_var = "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_BASE_PORT";
+        let base_port: u16 = dotenv_require(base_port_var)?
+            .parse()
+            .with_context(|| format!("{base_port_var} must be a u16"))?;
+        let port = base_port
+            .checked_add(val_index)
+            .with_context(|| format!("{base_port_var} + val_index overflows u16"))?;
+        let addr = format!("{hostname}:{port}");
+        return addr
+            .parse()
+            .with_context(|| format!("invalid p2p address {addr}"));
+    }
+
+    let name = format!("ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{val_index}");
+    let value = dotenv_require(&name)?;
+    value
+        .parse()
+        .with_context(|| format!("invalid p2p address {name}={value}"))
 }
 
 /// Register validators, and delegate to themselves for demo purposes.
@@ -1150,7 +1195,19 @@ pub(crate) async fn stake_for_demo(
     let stake_table_address = config.stake_table_address;
     tracing::info!("stake table address: {}", stake_table_address);
 
-    let mnemonic_env = dotenvy::var("ESPRESSO_NODE_KEY_MNEMONIC").ok();
+    let mnemonic_env = dotenvy::var("ESPRESSO_NODE_KEY_MNEMONIC")
+        .ok()
+        .filter(|v| !v.is_empty());
+    if mnemonic_env.is_some() {
+        tracing::info!(
+            "ESPRESSO_NODE_KEY_MNEMONIC is set: deriving validator consensus keys from mnemonic"
+        );
+    } else {
+        tracing::info!(
+            "ESPRESSO_NODE_KEY_MNEMONIC is not set: reading validator consensus keys from \
+             per-validator ESPRESSO_DEMO_NODE_{{STAKING,STATE,X25519}}_PRIVATE_KEY_N env vars"
+        );
+    }
 
     let mut validator_keys = vec![];
     for val_index in 0..num_validators {
@@ -1160,10 +1217,16 @@ pub(crate) async fn stake_for_demo(
         );
 
         let (bls, state, x25519) = load_validator_keys(val_index, mnemonic_env.as_deref())?;
-        let p2p_addr = dotenvy::var(format!(
-            "ESPRESSO_DEMO_NODE_CLIQUENET_ADVERTISE_ADDRESS_{val_index}"
-        ))?
-        .parse()?;
+        let p2p_addr = load_p2p_addr(val_index)?;
+        tracing::info!(
+            val_index,
+            address = %signer.address(),
+            bls_key = %bls.ver_key(),
+            state_key = %state.ver_key(),
+            x25519_key = %x25519.public_key(),
+            %p2p_addr,
+            "registering validator",
+        );
         validator_keys.push(StakingKeySet {
             signer,
             bls,
@@ -1853,6 +1916,60 @@ mod test {
 
     use super::*;
     use crate::{deploy::TestSystem, info::stake_table_info};
+
+    /// Verify that the per-validator consensus keys in `.env` are exactly what `DEV_MNEMONIC` at
+    /// mnemonic index `DEMO_VALIDATOR_START_INDEX + val_index` produces. Otherwise the demo would
+    /// diverge depending on whether `ESPRESSO_NODE_KEY_MNEMONIC` is set: nodes (using individual
+    /// `.env` keys) would have different consensus keys than the validator records registered
+    /// on-chain by `staking-cli`.
+    #[test]
+    fn dev_mnemonic_matches_env_demo_keys() {
+        for val_index in 0..5u64 {
+            let mnemonic = Mnemonic::<English>::new_from_phrase(crate::DEV_MNEMONIC).unwrap();
+            let keyset = KeySet::try_from(KeySetOptions {
+                mnemonic: Some(mnemonic),
+                index: Some(u64::from(DEMO_VALIDATOR_START_INDEX) + val_index),
+                key_file: None,
+                private_staking_key: None,
+                private_state_key: None,
+                private_x25519_key: None,
+            })
+            .unwrap();
+
+            let env_bls = parse_bls_priv_key(
+                &dotenv_require(&format!(
+                    "ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_{val_index}"
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+            let env_state = parse_state_priv_key(
+                &dotenv_require(&format!("ESPRESSO_DEMO_NODE_STATE_PRIVATE_KEY_{val_index}"))
+                    .unwrap(),
+            )
+            .unwrap();
+            let env_x25519 = parse_x25519_priv_key(
+                &dotenv_require(&format!(
+                    "ESPRESSO_DEMO_NODE_X25519_PRIVATE_KEY_{val_index}"
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+
+            assert_eq!(
+                keyset.staking, env_bls,
+                "staking key mismatch at validator {val_index}"
+            );
+            assert_eq!(
+                keyset.state, env_state,
+                "state key mismatch at validator {val_index}"
+            );
+            assert_eq!(
+                keyset.x25519, env_x25519,
+                "x25519 key mismatch at validator {val_index}"
+            );
+        }
+    }
 
     async fn shared_setup(
         config: DelegationConfig,

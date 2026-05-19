@@ -16,7 +16,7 @@ use hotshot_new_protocol::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     network::Network,
-    state::{StateManager, UpdateLeaf},
+    state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
 use hotshot_types::{
@@ -35,10 +35,15 @@ use versions::version;
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 // vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
 // state and delta only become available one level up, in `Coordinator`.
-fn consensus_event<T: NodeType>(
-    state_manager: &StateManager<T>,
+fn consensus_event<T, N, S>(
+    coordinator: &Coordinator<T, N, S>,
     output: &ConsensusOutput<T>,
-) -> Option<CoordinatorEvent<T>> {
+) -> Option<CoordinatorEvent<T>>
+where
+    T: NodeType,
+    N: Network<T>,
+    S: NewProtocolStorage<T>,
+{
     match output {
         ConsensusOutput::LeafDecided {
             leaves,
@@ -54,10 +59,13 @@ fn consensus_event<T: NodeType>(
                 .iter()
                 .zip(vid_shares.iter())
                 .map(|(leaf, vid_share)| {
-                    let (state, delta) = state_manager.get_state_and_delta(&leaf.view_number());
-                    let state = state.unwrap_or_else(|| {
-                        Arc::new(T::ValidatedState::from_header(leaf.block_header()))
-                    });
+                    let (state, delta) = match coordinator.state(leaf.view_number()) {
+                        Some(s) => (s.state.clone(), s.delta.clone()),
+                        None => {
+                            let s = Arc::new(T::ValidatedState::from_header(leaf.block_header()));
+                            (s, None)
+                        },
+                    };
                     let vid_share = vid_share
                         .as_ref()
                         .map(|share| VidDisperseShare::V2(share.data.clone()));
@@ -83,12 +91,17 @@ fn consensus_event<T: NodeType>(
     }
 }
 
-fn coordinator_event<T: NodeType>(
-    state_manager: &StateManager<T>,
+fn coordinator_event<T, N, S>(
+    coordinator: &Coordinator<T, N, S>,
     output: &CoordinatorOutput<T>,
-) -> Option<CoordinatorEvent<T>> {
+) -> Option<CoordinatorEvent<T>>
+where
+    T: NodeType,
+    N: Network<T>,
+    S: NewProtocolStorage<T>,
+{
     match output {
-        CoordinatorOutput::Consensus(inner) => consensus_event(state_manager, inner),
+        CoordinatorOutput::Consensus(inner) => consensus_event(coordinator, inner),
         CoordinatorOutput::ExternalMessageReceived { sender, data } => {
             Some(CoordinatorEvent::ExternalMessageReceived {
                 sender: sender.clone(),
@@ -208,16 +221,15 @@ where
         self.legacy_handle.read().await.decided_leaf().await
     }
 
-    pub async fn decided_state(&self) -> Arc<T::ValidatedState> {
+    pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
         if self.new_protocol().await {
             return self
                 .client_api
                 .decided_state()
                 .await
-                .expect("coordinator channel closed")
-                .expect("decided state must exist");
+                .expect("coordinator channel closed");
         }
-        self.legacy_handle.read().await.decided_state().await
+        Some(self.legacy_handle.read().await.decided_state().await)
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
@@ -468,7 +480,7 @@ where
             },
         }
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let Some(event) = consensus_event(coord.state_manager(), &output) {
+            if let Some(event) = consensus_event(&coord, &output) {
                 broadcast_event(&tx, event).await;
             }
             if let Err(err) = coord.process_consensus_output(output) {
@@ -481,7 +493,7 @@ where
             }
         }
         while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-            if let Some(event) = coordinator_event(coord.state_manager(), &output) {
+            if let Some(event) = coordinator_event(&coord, &output) {
                 broadcast_event(&tx, event).await;
             }
         }

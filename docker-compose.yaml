@@ -15,7 +15,7 @@ services:
 
   deploy-espresso-contracts:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
+    command: deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1 --upgrade-stake-table-v2 --upgrade-stake-table-v3
     environment:
       - ESPRESSO_ETH_MULTISIG_ADDRESS
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
@@ -92,6 +92,8 @@ services:
     environment:
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
       - ESPRESSO_L1_POLLING_INTERVAL
+      - ESPRESSO_API_NODE_URL=http://espresso-node-0:${ESPRESSO_NODE_0_API_PORT}
+      - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS
       - ESPRESSO_DEPLOYER_ACCOUNT_INDEX
       - ESPRESSO_ETH_MULTISIG_ADDRESS
       - ESPRESSO_OPS_TIMELOCK_ADMIN
@@ -109,7 +111,7 @@ services:
 
   deploy-pos-contracts-upgrades:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
-    command: deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2 --upgrade-stake-table-v2
+    command: deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2
     environment:
       - ESPRESSO_ETH_MULTISIG_ADDRESS
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
@@ -367,6 +369,7 @@ services:
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
+      - LIGHT_CLIENT_DB_PATH=/store/lc
       - ESPRESSO_NODE_POSTGRES_HOST=espresso-node-db-0
       - ESPRESSO_NODE_POSTGRES_USER=root
       - ESPRESSO_NODE_POSTGRES_PASSWORD=password
@@ -427,7 +430,8 @@ services:
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_1_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT
-      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-2:$ESPRESSO_NODE_2_API_PORT
+      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
+      - LIGHT_CLIENT_DB_PATH=/store/lc
       - ESPRESSO_NODE_POSTGRES_HOST=espresso-node-db-1
       - ESPRESSO_NODE_POSTGRES_USER=root
       - ESPRESSO_NODE_POSTGRES_PASSWORD=password
@@ -488,7 +492,7 @@ services:
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_2_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
-      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-3:$ESPRESSO_NODE_3_API_PORT
+      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
       - ESPRESSO_L1_POLLING_INTERVAL
       - ESPRESSO_L1_EVENTS_MAX_BLOCK_RANGE
@@ -542,7 +546,8 @@ services:
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_3_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
-      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT
+      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
+      - LIGHT_CLIENT_DB_PATH=/store/lc
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
       - ESPRESSO_L1_WS_PROVIDER=ws://demo-l1-network:${ESPRESSO_L1_WS_PORT}
       - ESPRESSO_L1_POLLING_INTERVAL
@@ -597,7 +602,7 @@ services:
       - ESPRESSO_NODE_CDN_ENDPOINT=marshal-0:${ESPRESSO_CDN_SERVER_PORT}
       - ESPRESSO_NODE_API_PORT=$ESPRESSO_NODE_4_API_PORT
       - ESPRESSO_NODE_API_MAX_CONNECTIONS
-      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
+      - ESPRESSO_NODE_STATE_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
       - ESPRESSO_NODE_API_PEERS=http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT
       - ESPRESSO_L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
       - ESPRESSO_L1_POLLING_INTERVAL
