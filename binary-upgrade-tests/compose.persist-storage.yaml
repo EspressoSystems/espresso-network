@@ -40,5 +40,8 @@ services:
 
 volumes:
   espresso-node-2-storage:
+    name: espresso-node-2-storage
   espresso-node-3-storage:
+    name: espresso-node-3-storage
   espresso-node-4-storage:
+    name: espresso-node-4-storage
