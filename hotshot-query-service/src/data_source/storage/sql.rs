@@ -1269,7 +1269,7 @@ pub mod testing {
             };
 
             format!(
-                "CREATE TABLE IF NOT EXISTS hash
+                "CREATE TABLE IF NOT EXISTS hash_bigint
             (
                 id {hash_pk},
                 value {binary}  NOT NULL UNIQUE

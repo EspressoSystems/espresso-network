@@ -86,13 +86,13 @@ where
                     .filter(|p| !found_paths.contains(&p.to_string()))
                     .collect();
                 if !missing_paths.is_empty() {
-                    let legacy_table = format!("{state_type}_legacy");
+                    let fallback_table = state_type.strip_suffix("_bigint").unwrap_or(state_type);
                     let (lq, lsql) =
-                        build_legacy_path_query(&legacy_table, missing_paths, created)?;
-                    savepoint(self.as_mut(), "sp_legacy_path").await?;
+                        build_legacy_path_query(fallback_table, missing_paths, created)?;
+                    savepoint(self.as_mut(), "sp_path_fallback").await?;
                     let rows = lq.query(&lsql).fetch_all(self.as_mut()).await;
                     if let Some(legacy_rows) =
-                        savepoint_finish(self.as_mut(), "sp_legacy_path", rows, "legacy merkle path lookup failed").await?
+                        savepoint_finish(self.as_mut(), "sp_path_fallback", rows, "merkle path fallback lookup failed").await?
                     {
                         nodes.extend(legacy_rows.into_iter().map(Node::from));
                         // Re-sort leaf-first (longer path arrays first),
@@ -129,7 +129,7 @@ where
             {
                 let hash_ids_arr: Vec<i64> = hash_ids.iter().copied().collect();
                 let mut result: HashMap<i64, Vec<u8>> = sqlx::query_as(
-                    "SELECT id::BIGINT, value FROM hash WHERE id = ANY($1::BIGINT[])",
+                    "SELECT id::BIGINT, value FROM hash_bigint WHERE id = ANY($1::BIGINT[])",
                 )
                 .bind(&hash_ids_arr)
                 .fetch_all(self.as_mut())
@@ -147,15 +147,15 @@ where
                     .collect();
 
                 if !missing.is_empty() {
-                    savepoint(self.as_mut(), "sp_hash_legacy").await?;
+                    savepoint(self.as_mut(), "sp_hash_fallback").await?;
                     let rows = sqlx::query_as::<_, (i64, Vec<u8>)>(
-                        "SELECT id::BIGINT, value FROM hash_legacy WHERE id = ANY($1::BIGINT[])",
+                        "SELECT id::BIGINT, value FROM hash WHERE id = ANY($1::BIGINT[])",
                     )
                     .bind(&missing)
                     .fetch_all(self.as_mut())
                     .await;
                     if let Some(rows) =
-                        savepoint_finish(self.as_mut(), "sp_hash_legacy", rows, "hash_legacy lookup failed").await?
+                        savepoint_finish(self.as_mut(), "sp_hash_fallback", rows, "hash fallback lookup failed").await?
                     {
                         result.extend(rows);
                     }
@@ -165,7 +165,7 @@ where
 
             #[cfg(feature = "embedded-db")]
             {
-                let (query, sql) = build_where_in("SELECT id, value FROM hash", "id", hash_ids)?;
+                let (query, sql) = build_where_in("SELECT id, value FROM hash_bigint", "id", hash_ids)?;
                 query
                     .query_as(&sql)
                     .fetch(self.as_mut())
@@ -431,7 +431,7 @@ pub(crate) fn build_hash_batch_insert(
         .map(|hash| Ok(format!("({})", query.bind(hash)?)))
         .collect::<QueryResult<Vec<String>>>()?;
     let sql = format!(
-        "INSERT INTO hash(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
+        "INSERT INTO hash_bigint(value) values {} ON CONFLICT (value) DO UPDATE SET value = \
          EXCLUDED.value returning value, id",
         params.join(",")
     );
@@ -451,7 +451,7 @@ pub(crate) async fn batch_insert_hashes(
 
     // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
     // Cast id to BIGINT in RETURNING so the result maps directly to i64.
-    let sql = "INSERT INTO hash(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
+    let sql = "INSERT INTO hash_bigint(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
                UPDATE SET value = EXCLUDED.value RETURNING value, id::BIGINT";
 
     let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
