@@ -422,7 +422,7 @@ where
         self.consensus_handle.state(view).await
     }
 
-    pub async fn decided_state(&self) -> Arc<ValidatedState> {
+    pub async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
         self.consensus_handle.decided_state().await
     }
 
