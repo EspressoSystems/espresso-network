@@ -19,7 +19,6 @@
 use async_trait::async_trait;
 
 use crate::data_source::storage::sql::{Transaction, Write};
-
 #[cfg(not(feature = "embedded-db"))]
 use crate::data_source::{Transaction as _, VersionedDataSource, storage::sql::SqlStorage};
 
@@ -104,7 +103,9 @@ impl MigrationRegistry {
     #[cfg(not(feature = "embedded-db"))]
     pub async fn run(self, db: SqlStorage) {
         if let Err(e) = self.validate() {
-            tracing::error!("deferred migration registry is invalid, skipping all backfills: {e:#}");
+            tracing::error!(
+                "deferred migration registry is invalid, skipping all backfills: {e:#}"
+            );
             return;
         }
         for m in &self.migrations {
@@ -121,17 +122,17 @@ impl MigrationRegistry {
             Ok(None) => {
                 tracing::debug!(name, "deferred migration already complete");
                 return;
-            }
+            },
             Ok(Some(o)) => o,
             Err(e) => {
                 tracing::error!(name, "failed to initialize deferred migration: {e:#}");
                 return;
-            }
+            },
         };
 
         for dep in m.requires() {
             match Self::check_complete(db, dep).await {
-                Ok(true) => {}
+                Ok(true) => {},
                 Ok(false) => {
                     tracing::warn!(
                         name,
@@ -139,11 +140,11 @@ impl MigrationRegistry {
                         "prerequisite deferred migration not complete, skipping"
                     );
                     return;
-                }
+                },
                 Err(e) => {
                     tracing::error!(name, dep, "failed to check prerequisite: {e:#}");
                     return;
-                }
+                },
             }
         }
 
@@ -156,7 +157,7 @@ impl MigrationRegistry {
                 Err(e) => {
                     tracing::error!(name, "failed to open write transaction: {e:#}");
                     return;
-                }
+                },
             };
 
             let next = match m.run_batch(&mut tx, offset).await {
@@ -164,17 +165,15 @@ impl MigrationRegistry {
                 Err(e) => {
                     tracing::error!(name, offset, "deferred migration batch failed: {e:#}");
                     return;
-                }
+                },
             };
 
             let done = next.is_none();
             let next_offset = next.unwrap_or(offset) as i64;
 
             let update = sqlx::query(
-                "UPDATE deferred_migrations \
-                 SET last_offset = $1, \
-                     completed_at = CASE WHEN $2 THEN NOW() ELSE completed_at END \
-                 WHERE name = $3",
+                "UPDATE deferred_migrations SET last_offset = $1, completed_at = CASE WHEN $2 \
+                 THEN NOW() ELSE completed_at END WHERE name = $3",
             )
             .bind(next_offset)
             .bind(done)
@@ -207,16 +206,16 @@ impl MigrationRegistry {
         let mut tx = db.write().await?;
 
         sqlx::query(
-            "INSERT INTO deferred_migrations (name, started_at, last_offset) \
-             VALUES ($1, NOW(), 0) ON CONFLICT (name) DO NOTHING",
+            "INSERT INTO deferred_migrations (name, started_at, last_offset) VALUES ($1, NOW(), \
+             0) ON CONFLICT (name) DO NOTHING",
         )
         .bind(name)
         .execute(tx.as_mut())
         .await?;
 
         let (completed, last_offset): (bool, i64) = sqlx::query_as(
-            "SELECT completed_at IS NOT NULL, COALESCE(last_offset, 0) \
-             FROM deferred_migrations WHERE name = $1",
+            "SELECT completed_at IS NOT NULL, COALESCE(last_offset, 0) FROM deferred_migrations \
+             WHERE name = $1",
         )
         .bind(name)
         .fetch_one(tx.as_mut())
