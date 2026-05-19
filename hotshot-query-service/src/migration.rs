@@ -1,21 +1,3 @@
-// Copyright (c) 2022 Espresso Systems (espressosys.com)
-// This file is part of the HotShot Query Service library.
-//
-// This program is free software: you can redistribute it and/or modify it under the terms of the GNU
-// General Public License as published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
-// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-// General Public License for more details.
-// You should have received a copy of the GNU General Public License along with this program. If not,
-// see <https://www.gnu.org/licenses/>.
-
-//! Background data migration infrastructure.
-//!
-//! A [`DataBackfill`] is a migration that runs asynchronously after node startup, copying rows in
-//! batches while consensus proceeds uninterrupted. Progress is persisted in the
-//! `deferred_migrations` table so that a restart resumes from where it left off.
-
 use async_trait::async_trait;
 
 use crate::data_source::storage::sql::{Transaction, Write};
@@ -25,11 +7,9 @@ use crate::data_source::{Transaction as _, VersionedDataSource, storage::sql::Sq
 /// A background migration that copies or transforms data in batches.
 #[async_trait]
 pub trait DataBackfill: Send + Sync + 'static {
-    /// Globally unique name, persisted in `deferred_migrations`.
     fn name(&self) -> &'static str;
 
     /// Names of other [`DataBackfill`] migrations that must complete before this one starts.
-    /// The runner checks `deferred_migrations` for completion before proceeding.
     fn requires(&self) -> &'static [&'static str] {
         &[]
     }
@@ -42,7 +22,6 @@ pub trait DataBackfill: Send + Sync + 'static {
     /// Process one batch starting at `offset`.
     ///
     /// Returns `Some(next_offset)` to continue, or `None` when all rows have been processed.
-    /// Must be idempotent — may be called again at the same offset after a restart.
     async fn run_batch(
         &self,
         tx: &mut Transaction<Write>,
@@ -82,8 +61,7 @@ impl MigrationRegistry {
             for dep in m.requires() {
                 anyhow::ensure!(
                     seen.contains(dep),
-                    "migration {name} requires {dep} which either does not exist or appears later \
-                     in the registry",
+                    "migration {name} requires {dep} to be run first",
                 );
             }
         }
@@ -96,12 +74,8 @@ impl MigrationRegistry {
     }
 
     /// Run all registered migrations sequentially against `db`.
-    ///
-    /// Designed to be passed to `tokio::spawn`; logs errors rather than propagating them so that
-    /// a failing backfill does not crash the node.  Progress is persisted in the
-    /// `deferred_migrations` table so restarts resume from the last committed offset.
     #[cfg(not(feature = "embedded-db"))]
-    pub async fn run(self, db: SqlStorage) {
+    pub async fn run_all_migrations(self, db: SqlStorage) {
         if let Err(e) = self.validate() {
             tracing::error!(
                 "deferred migration registry is invalid, skipping all backfills: {e:#}"
@@ -109,18 +83,18 @@ impl MigrationRegistry {
             return;
         }
         for m in &self.migrations {
-            Self::run_one(&db, m.as_ref()).await;
+            Self::run_migration(&db, m.as_ref()).await;
         }
     }
 
     /// Run a single backfill migration, resuming from the last persisted offset.
     #[cfg(not(feature = "embedded-db"))]
-    async fn run_one(db: &SqlStorage, m: &dyn DataBackfill) {
+    async fn run_migration(db: &SqlStorage, m: &dyn DataBackfill) {
         let name = m.name();
 
         let offset = match Self::init_or_get_offset(db, name).await {
             Ok(None) => {
-                tracing::debug!(name, "deferred migration already complete");
+                tracing::warn!(name, "deferred migration already complete");
                 return;
             },
             Ok(Some(o)) => o,
@@ -230,7 +204,6 @@ impl MigrationRegistry {
         }
     }
 
-    /// Return `true` iff the named migration exists in `deferred_migrations` and is complete.
     #[cfg(not(feature = "embedded-db"))]
     async fn check_complete(db: &SqlStorage, name: &str) -> anyhow::Result<bool> {
         let mut tx = db.read().await?;
