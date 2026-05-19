@@ -1235,10 +1235,24 @@ impl SequencerPersistence for Persistence {
 
         let max_height: Option<i64> = {
             let mut tx = self.db.read().await?;
-            query_as::<(Option<i64>,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
-                .fetch_one(tx.as_mut())
-                .await?
-                .0
+            let result =
+                query_as::<(Option<i64>,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
+                    .fetch_one(tx.as_mut())
+                    .await;
+            match result {
+                Ok(row) => row.0,
+                // Table was dropped by V1302 — nothing to migrate.
+                Err(sqlx::Error::Database(e))
+                    if e.code().as_deref() == Some("42P01")
+                        || e.message().contains("no such table") =>
+                {
+                    tracing::info!(
+                        "reward_merkle_tree_v2 table does not exist, skipping migration"
+                    );
+                    return Ok(());
+                },
+                Err(e) => return Err(e.into()),
+            }
         };
 
         let max_height = match max_height {
