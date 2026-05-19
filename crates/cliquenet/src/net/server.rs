@@ -248,18 +248,18 @@ impl Server {
                                     .next_slot(self.next_slot.clone())
                                     .inbound(self.ibound.clone())
                                     .messages(party.outbox.clone())
-                                    .connection(conn)
                                     .metrics(self.metrics.clone())
                                     .build();
-                                party.peer = PeerState::Connected(peer.cancel_token());
-                                self.spawn_peer(key, peer);
+                                let cancel = CancellationToken::new();
+                                party.peer = PeerState::Connected(cancel.clone());
+                                self.spawn_peer(key, peer, conn, cancel);
                             }
-                            PeerState::Reconnect(mut peer) => {
+                            PeerState::Reconnect(peer) => {
                                 self.connect_tasks.abort(&conn.key);
                                 let key = conn.key;
-                                peer.set_connection(conn);
-                                party.peer = PeerState::Connected(peer.cancel_token());
-                                self.spawn_peer(key, peer);
+                                let cancel = CancellationToken::new();
+                                party.peer = PeerState::Connected(cancel.clone());
+                                self.spawn_peer(key, peer, conn, cancel);
                             }
                             PeerState::Connected(cancel) => {
                                 if conn.key > self.key {
@@ -324,17 +324,17 @@ impl Server {
                                     .next_slot(self.next_slot.clone())
                                     .inbound(self.ibound.clone())
                                     .messages(party.outbox.clone())
-                                    .connection(conn)
                                     .metrics(self.metrics.clone())
                                     .build();
-                                party.peer = PeerState::Connected(peer.cancel_token());
-                                self.spawn_peer(key, peer);
+                                let cancel = CancellationToken::new();
+                                party.peer = PeerState::Connected(cancel.clone());
+                                self.spawn_peer(key, peer, conn, cancel);
                             }
-                            PeerState::Reconnect(mut peer) => {
+                            PeerState::Reconnect(peer) => {
                                 let key = conn.key;
-                                peer.set_connection(conn);
-                                party.peer = PeerState::Connected(peer.cancel_token());
-                                self.spawn_peer(key, peer);
+                                let cancel = CancellationToken::new();
+                                party.peer = PeerState::Connected(cancel.clone());
+                                self.spawn_peer(key, peer, conn, cancel);
                             }
                             PeerState::Connected(cancel) => {
                                 if conn.key < self.key {
@@ -370,25 +370,25 @@ impl Server {
                 },
 
                 Some(p) = self.peer_tasks.join_next() => match p {
-                    (key, Ok(mut peer)) => {
+                    (key, Ok(peer)) => {
                         if self.ibound.is_closed() {
                             return
                         }
-                        let Some(party) = self.parties.get_mut(peer.public_key()) else {
+                        let Some(party) = self.parties.get_mut(&key) else {
                             debug!(
                                 name = %self.conf.name,
                                 node = %self.key,
-                                peer = %peer.public_key(),
-                                addr = %peer.socket_addr(),
+                                peer = %key,
+                                //addr = %peer.socket_addr(),
                                 "party has been removed"
                             );
                             continue
                         };
                         if let PeerState::Replace(conn) = party.peer.take() {
                             let key = conn.key;
-                            peer.set_connection(conn);
-                            party.peer = PeerState::Connected(peer.cancel_token());
-                            self.spawn_peer(key, peer);
+                            let cancel = CancellationToken::new();
+                            party.peer = PeerState::Connected(cancel.clone());
+                            self.spawn_peer(key, peer, conn, cancel);
                         } else {
                             let addr = party.addr.clone();
                             party.peer = PeerState::Reconnect(peer);
@@ -672,7 +672,7 @@ impl Server {
         self.hello_tasks.abort(&conn.key);
         self.hello_tasks.spawn(
             conn.key,
-            until(self.conf.handshake_timeout, async move {
+            until(self.conf.handshake_timeout, "hello exchange", async move {
                 let theirs = conn.recv_hello().await?;
                 conn.send_hello(ours.clone()).await?;
                 Ok::<_, NetworkError>((ours, conn, theirs))
@@ -683,29 +683,35 @@ impl Server {
             .set(&self.key, "hello_tasks", self.hello_tasks.len());
     }
 
-    fn spawn_peer(&mut self, key: PublicKey, mut peer: Peer) {
+    fn spawn_peer(
+        &mut self,
+        key: PublicKey,
+        mut peer: Peer,
+        conn: Connection,
+        cancel: CancellationToken,
+    ) {
         debug!(
             name = %self.conf.name,
             node = %self.key,
-            peer = %peer.public_key(),
-            addr = %peer.socket_addr(),
+            peer = %conn.key,
+            addr = %conn.addr,
             "spawning peer task"
         );
         let node = self.key;
         let name = self.conf.name.clone();
-        let metrics = self.metrics.clone();
+        //let metrics = self.metrics.clone();
         self.peer_tasks.spawn(key, async move {
-            let Err(err) = peer.start().await;
+            let Err(err) = peer.start(conn, cancel).await;
             if !matches!(err, NetworkError::PeerInterrupt) {
                 warn!(
                     %name,
                     %node,
-                    peer = %peer.public_key(),
-                    addr = %peer.socket_addr(),
+                    //peer = %peer.public_key(),
+                    //addr = %peer.socket_addr(),
                     %err,
                     "peer failure"
                 );
-                metrics.add(peer.public_key(), "errors", 1)
+                //metrics.add(peer.public_key(), "errors", 1)
             }
             peer
         });

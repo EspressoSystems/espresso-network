@@ -13,6 +13,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     runtime::Runtime,
+    task::JoinSet,
     time::sleep,
 };
 
@@ -23,12 +24,12 @@ const GIBI: usize = MEBI * KIBI;
 const SIZES: &[usize] = &[
     1,
     128 * KIBI,
-    512 * KIBI,
-    MEBI,
-    5 * MEBI,
-    10 * MEBI,
-    50 * MEBI,
-    100 * MEBI,
+    //512 * KIBI,
+    //MEBI,
+    //5 * MEBI,
+    //10 * MEBI,
+    //50 * MEBI,
+    //100 * MEBI,
 ];
 
 static DATA: LazyLock<HashMap<usize, Vec<u8>>> = LazyLock::new(|| {
@@ -88,9 +89,9 @@ async fn tcp_echo(srv: &mut TcpStream, clt: &mut TcpStream, data: &[u8]) {
 fn bench_tcp(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let (mut srv, mut clt) = rt.block_on(setup_tcp());
-    let mut group = c.benchmark_group("tcp");
+    let mut group = c.benchmark_group("tcp echo");
     for &n in SIZES {
-        group.throughput(Throughput::Bytes(n as u64));
+        group.throughput(Throughput::Bytes(2 * n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
             let data = &DATA[&n];
             b.iter(|| rt.block_on(tcp_echo(&mut srv, &mut clt, data)))
@@ -165,9 +166,9 @@ fn bench_cliquenet(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let mut echo = rt.block_on(setup_echo());
 
-    let mut group = c.benchmark_group("cliquenet");
+    let mut group = c.benchmark_group("cliquenet echo");
     for &n in SIZES {
-        group.throughput(Throughput::Bytes(n as u64));
+        group.throughput(Throughput::Bytes(2 * n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
             let data = &DATA[&n];
             b.iter(|| {
@@ -182,9 +183,9 @@ fn bench_cliquenet(c: &mut Criterion) {
     }
     group.finish();
 
-    let mut group = c.benchmark_group("cliquenet[no-retry]");
+    let mut group = c.benchmark_group("cliquenet echo (no-retry)");
     for &n in SIZES {
-        group.throughput(Throughput::Bytes(n as u64));
+        group.throughput(Throughput::Bytes(2 * n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
             let data = &DATA[&n];
             b.iter(|| {
@@ -273,89 +274,289 @@ fn bench_bidirectional(c: &mut Criterion) {
 
     let rt = Runtime::new().unwrap();
 
-    let mut group = c.benchmark_group("bidirectional");
+    let mut group = c.benchmark_group("bidirectional echos (10 rounds)");
     for &n in SIZES {
         if n > 10 * MEBI {
             continue;
         }
         let mut bd = rt.block_on(setup_bidir());
-        group.bench_with_input(
-            BenchmarkId::from_parameter(show(n * ROUNDS)),
-            &n,
-            |b, &n| {
-                let data = &DATA[&n];
-                b.iter(|| {
-                    rt.block_on(async {
-                        tokio::join!(
-                            async {
-                                for _ in 0..ROUNDS {
-                                    bd.ctrl_a.unicast(Slot::MIN, bd.pkb, data.clone()).unwrap();
-                                    let (src, recv) = bd.recv_a.receive().await.unwrap();
-                                    assert_eq!(src, bd.pkb);
-                                    assert_eq!(recv.len(), n);
-                                }
-                            },
-                            async {
-                                for _ in 0..ROUNDS {
-                                    bd.ctrl_b.unicast(Slot::MIN, bd.pka, data.clone()).unwrap();
-                                    let (src, recv) = bd.recv_b.receive().await.unwrap();
-                                    assert_eq!(src, bd.pka);
-                                    assert_eq!(recv.len(), n);
-                                }
-                            },
-                        );
-                    });
+        group.throughput(Throughput::Bytes((2 * n * ROUNDS) as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| {
+                rt.block_on(async {
+                    let BiDir {
+                        ctrl_a,
+                        recv_a,
+                        pka,
+                        ctrl_b,
+                        recv_b,
+                        pkb,
+                    } = &mut bd;
+                    let pka = *pka;
+                    let pkb = *pkb;
+                    let s_a = async {
+                        for _ in 0..ROUNDS {
+                            ctrl_a.unicast(Slot::MIN, pkb, data.clone()).unwrap();
+                        }
+                    };
+                    let r_a = async {
+                        for _ in 0..ROUNDS {
+                            let (src, msg) = recv_a.receive().await.unwrap();
+                            assert_eq!(src, pkb);
+                            assert_eq!(msg.len(), n);
+                        }
+                    };
+                    let s_b = async {
+                        for _ in 0..ROUNDS {
+                            ctrl_b.unicast(Slot::MIN, pka, data.clone()).unwrap();
+                        }
+                    };
+                    let r_b = async {
+                        for _ in 0..ROUNDS {
+                            let (src, msg) = recv_b.receive().await.unwrap();
+                            assert_eq!(src, pka);
+                            assert_eq!(msg.len(), n);
+                        }
+                    };
+                    tokio::join!(s_a, r_a, s_b, r_b);
                 });
-            },
-        );
+            });
+        });
     }
     group.finish();
 
-    let mut group = c.benchmark_group("bidirectional[no-retry]");
+    let mut group = c.benchmark_group("bidirectional echos (10 rounds, no-retry)");
     for &n in SIZES {
         if n > 10 * MEBI {
             continue;
         }
         let mut bd = rt.block_on(setup_bidir());
-        group.bench_with_input(
-            BenchmarkId::from_parameter(show(n * ROUNDS)),
-            &n,
-            |b, &n| {
-                let data = &DATA[&n];
-                b.iter(|| {
-                    rt.block_on(async {
-                        tokio::join!(
-                            async {
-                                for _ in 0..ROUNDS {
-                                    let cmd = SendCommand::builder()
-                                        .slot(Slot::MIN)
-                                        .retry(RetryPolicy::NoRetry)
-                                        .action(SendAction::Unicast(bd.pkb, data.clone()))
-                                        .build();
-                                    bd.ctrl_a.send(cmd).unwrap();
-                                    let (src, recv) = bd.recv_a.receive().await.unwrap();
-                                    assert_eq!(src, bd.pkb);
-                                    assert_eq!(recv.len(), n);
-                                }
-                            },
-                            async {
-                                for _ in 0..ROUNDS {
-                                    let cmd = SendCommand::builder()
-                                        .slot(Slot::MIN)
-                                        .retry(RetryPolicy::NoRetry)
-                                        .action(SendAction::Unicast(bd.pka, data.clone()))
-                                        .build();
-                                    bd.ctrl_b.send(cmd).unwrap();
-                                    let (src, recv) = bd.recv_b.receive().await.unwrap();
-                                    assert_eq!(src, bd.pka);
-                                    assert_eq!(recv.len(), n);
-                                }
-                            },
-                        );
-                    });
+        group.throughput(Throughput::Bytes((2 * n * ROUNDS) as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| {
+                rt.block_on(async {
+                    let BiDir {
+                        ctrl_a,
+                        recv_a,
+                        pka,
+                        ctrl_b,
+                        recv_b,
+                        pkb,
+                    } = &mut bd;
+                    let pka = *pka;
+                    let pkb = *pkb;
+                    let s_a = async {
+                        for _ in 0..ROUNDS {
+                            let cmd = SendCommand::builder()
+                                .slot(Slot::MIN)
+                                .retry(RetryPolicy::NoRetry)
+                                .action(SendAction::Unicast(pkb, data.clone()))
+                                .build();
+                            ctrl_a.send(cmd).unwrap();
+                        }
+                    };
+                    let r_a = async {
+                        for _ in 0..ROUNDS {
+                            let (src, msg) = recv_a.receive().await.unwrap();
+                            assert_eq!(src, pkb);
+                            assert_eq!(msg.len(), n);
+                        }
+                    };
+                    let s_b = async {
+                        for _ in 0..ROUNDS {
+                            let cmd = SendCommand::builder()
+                                .slot(Slot::MIN)
+                                .retry(RetryPolicy::NoRetry)
+                                .action(SendAction::Unicast(pka, data.clone()))
+                                .build();
+                            ctrl_b.send(cmd).unwrap();
+                        }
+                    };
+                    let r_b = async {
+                        for _ in 0..ROUNDS {
+                            let (src, msg) = recv_b.receive().await.unwrap();
+                            assert_eq!(src, pka);
+                            assert_eq!(msg.len(), n);
+                        }
+                    };
+                    tokio::join!(s_a, r_a, s_b, r_b);
                 });
-            },
-        );
+            });
+        });
+    }
+    group.finish();
+}
+
+// -- N-node mesh throughput ---------------------------------------------------
+
+struct MeshNode {
+    ctrl: cliquenet::NetworkController,
+    recv: cliquenet::NetworkReceiver,
+    peers: Vec<PublicKey>,
+}
+
+struct Mesh {
+    nodes: Vec<MeshNode>,
+}
+
+async fn setup_mesh(n_nodes: usize) -> Mesh {
+    let keypairs: Vec<Keypair> = (0..n_nodes).map(|_| Keypair::generate().unwrap()).collect();
+    let pks: Vec<PublicKey> = keypairs.iter().map(|k| k.public_key()).collect();
+    let ports: Vec<u16> = (0..n_nodes).map(|_| reserve_port()).collect();
+
+    let mut nets = Vec::with_capacity(n_nodes);
+    for (i, kp) in keypairs.into_iter().enumerate() {
+        let parties: Vec<_> = (0..n_nodes)
+            .filter(|&j| j != i)
+            .map(|j| (pks[j], (Ipv4Addr::LOCALHOST, ports[j]).into()))
+            .collect();
+        let conf = Config::builder()
+            .name("bench")
+            .keypair(kp)
+            .bind((Ipv4Addr::LOCALHOST, ports[i]).into())
+            .parties(parties)
+            .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
+            .receive_timeout(Duration::from_secs(60))
+            .retry_delays(vec![1, 3])
+            .max_retry_delay(Duration::from_secs(5))
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
+            .build();
+        nets.push(Network::create(conf).await.unwrap());
+    }
+
+    sleep(Duration::from_secs(3)).await;
+
+    let nodes = nets
+        .into_iter()
+        .enumerate()
+        .map(|(i, net)| {
+            let (ctrl, recv) = net.split_into();
+            let peers: Vec<PublicKey> = (0..n_nodes).filter(|&j| j != i).map(|j| pks[j]).collect();
+            MeshNode { ctrl, recv, peers }
+        })
+        .collect();
+
+    Mesh { nodes }
+}
+
+fn bench_mesh(c: &mut Criterion) {
+    const ROUNDS: usize = 10;
+    const NODES: usize = 10;
+
+    let rt = Runtime::new().unwrap();
+
+    let mut group = c.benchmark_group("mesh echos (10 nodes, 10 rounds)");
+    for &n in SIZES {
+        // Per iter we move NODES * (NODES - 1) * ROUNDS * n bytes total.
+        // Cap message size to keep iter time bounded.
+        if n > MEBI {
+            continue;
+        }
+        let mut mesh = rt.block_on(setup_mesh(NODES));
+        let total = (NODES * (NODES - 1) * ROUNDS * n) as u64;
+        group.throughput(Throughput::Bytes(total));
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| {
+                rt.block_on(async {
+                    let mut set: JoinSet<MeshNode> = JoinSet::new();
+                    for node in mesh.nodes.drain(..) {
+                        let task_data = data.clone();
+                        set.spawn(async move {
+                            let MeshNode {
+                                mut ctrl,
+                                mut recv,
+                                peers,
+                            } = node;
+                            let n_recv = ROUNDS * peers.len();
+                            {
+                                let send = async {
+                                    for _ in 0..ROUNDS {
+                                        for &peer in &peers {
+                                            ctrl.unicast(Slot::MIN, peer, task_data.clone())
+                                                .unwrap();
+                                        }
+                                    }
+                                };
+                                let receive = async {
+                                    for _ in 0..n_recv {
+                                        let (src, msg) = recv.receive().await.unwrap();
+                                        debug_assert!(peers.contains(&src));
+                                        debug_assert_eq!(msg.len(), n);
+                                    }
+                                };
+                                tokio::join!(send, receive);
+                            }
+                            MeshNode { ctrl, recv, peers }
+                        });
+                    }
+                    while let Some(res) = set.join_next().await {
+                        mesh.nodes.push(res.unwrap());
+                    }
+                });
+            });
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("mesh echos (10 nodes, 10 rounds, no-retry)");
+    for &n in SIZES {
+        if n > MEBI {
+            continue;
+        }
+        let mut mesh = rt.block_on(setup_mesh(NODES));
+        let total = (NODES * (NODES - 1) * ROUNDS * n) as u64;
+        group.throughput(Throughput::Bytes(total));
+        group.bench_with_input(BenchmarkId::from_parameter(show(n)), &n, |b, &n| {
+            let data = &DATA[&n];
+            b.iter(|| {
+                rt.block_on(async {
+                    let mut set: JoinSet<MeshNode> = JoinSet::new();
+                    for node in mesh.nodes.drain(..) {
+                        let task_data = data.clone();
+                        set.spawn(async move {
+                            let MeshNode {
+                                mut ctrl,
+                                mut recv,
+                                peers,
+                            } = node;
+                            let n_recv = ROUNDS * peers.len();
+                            {
+                                let send = async {
+                                    for _ in 0..ROUNDS {
+                                        for &peer in &peers {
+                                            let cmd = SendCommand::builder()
+                                                .slot(Slot::MIN)
+                                                .retry(RetryPolicy::NoRetry)
+                                                .action(SendAction::Unicast(
+                                                    peer,
+                                                    task_data.clone(),
+                                                ))
+                                                .build();
+                                            ctrl.send(cmd).unwrap();
+                                        }
+                                    }
+                                };
+                                let receive = async {
+                                    for _ in 0..n_recv {
+                                        let (src, msg) = recv.receive().await.unwrap();
+                                        debug_assert!(peers.contains(&src));
+                                        debug_assert_eq!(msg.len(), n);
+                                    }
+                                };
+                                tokio::join!(send, receive);
+                            }
+                            MeshNode { ctrl, recv, peers }
+                        });
+                    }
+                    while let Some(res) = set.join_next().await {
+                        mesh.nodes.push(res.unwrap());
+                    }
+                });
+            });
+        });
     }
     group.finish();
 }
@@ -370,5 +571,11 @@ fn show(size: usize) -> String {
     }
 }
 
-criterion_group!(benches, bench_tcp, bench_cliquenet, bench_bidirectional);
+criterion_group!(
+    benches,
+    bench_tcp,
+    bench_cliquenet,
+    bench_bidirectional,
+    bench_mesh
+);
 criterion_main!(benches);

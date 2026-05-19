@@ -4,25 +4,37 @@ mod delay;
 mod tests;
 
 use std::{
-    cmp::min, collections::VecDeque, future::ready, io, mem, net::SocketAddr, num::NonZeroUsize,
-    sync::Arc, time::Duration,
+    cmp::min,
+    future::ready,
+    mem,
+    num::NonZeroUsize,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use bon::bon;
 use bytes::{Bytes, BytesMut};
 use delay::DelayQueue;
-use snow::TransportState;
+use snow::StatelessTransportState;
 use tokio::{
-    select,
-    sync::{OwnedSemaphorePermit, Semaphore, mpsc::UnboundedSender, watch},
+    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
+    select, spawn,
+    sync::{
+        Semaphore,
+        mpsc::{self, UnboundedReceiver, UnboundedSender, error::TrySendError},
+        watch,
+    },
     time::{MissedTickBehavior, interval},
 };
-use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
+use tracing::{error, trace, warn};
 
 use crate::{
     Config, Metrics, PublicKey,
-    connection::Connection,
+    connection::{Connection, recv_frame, send_frame},
     error::{Empty, NetworkError},
     msg::{Ack, FrameType, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, Slot, Trailer},
     net::{PeerMessage, RetryPolicy},
@@ -35,9 +47,6 @@ type Result<T> = std::result::Result<T, NetworkError>;
 
 /// A peer sends and receives messages over a connection with a remote.
 ///
-/// Peers are initialised with a [`Connection`], which can be replaced
-/// later, should it be necessary.
-///
 /// Messages sent are expected to be acknowledged, i.e. the remote needs to
 /// send back an ACK frame. Otherwise the message is resent after some time.
 pub struct Peer {
@@ -46,9 +55,6 @@ pub struct Peer {
 
     /// A budget limits how many message a peer can deliver to the application.
     budget: Budget,
-
-    /// The current TCP+Noise connection.
-    conn: Connection,
 
     /// Messages the application wants to be sent to the remote.
     msgs: Queue<(RetryPolicy, Bytes)>,
@@ -59,19 +65,11 @@ pub struct Peer {
     /// Receive notifications about changes to the GC threshold
     next_slot: watch::Receiver<Slot>,
 
-    /// Our current GC threshold.
-    lower_bound: Slot,
+    /// Our current GC threshold (slot number).
+    lower_bound: Arc<AtomicU64>,
 
     /// The channel over which to deliver inbound messages to the application.
     tx: UnboundedSender<PeerMessage>,
-
-    /// A healthcheck countdown.
-    ///
-    /// When dropped to 0 the connection should be replaced.
-    countdown: Countdown,
-
-    /// Token to interrupt processing.
-    cancel: CancellationToken,
 
     /// The true max. message size.
     ///
@@ -82,6 +80,7 @@ pub struct Peer {
 }
 
 /// A budget limits how many messages a peer can delivery to the application.
+#[derive(Clone)]
 pub struct Budget(Arc<Semaphore>);
 
 impl Budget {
@@ -103,7 +102,6 @@ impl Peer {
         messages: Queue<(RetryPolicy, Bytes)>,
         inbound: UnboundedSender<PeerMessage>,
         next_slot: watch::Receiver<Slot>,
-        connection: Connection,
         metrics: Arc<dyn Metrics>,
     ) -> Self {
         Self {
@@ -111,215 +109,135 @@ impl Peer {
             conf: config.clone(),
             budget: Budget::new(budget),
             next_slot,
-            lower_bound: Slot::MIN,
+            lower_bound: Arc::new(AtomicU64::new(Slot::MIN.into())),
             tx: inbound,
-            conn: connection,
             retry: DelayQueue::new(config),
             msgs: messages,
-            countdown: Countdown::new(),
-            cancel: CancellationToken::new(),
             metrics,
         }
     }
 
-    /// Replace the existing connection.
-    pub fn set_connection(&mut self, c: Connection) {
-        self.conn = c;
-        self.retry.reset();
-        self.cancel = CancellationToken::new()
-    }
-
-    /// Get a token to interrupt processing.
-    pub fn cancel_token(&self) -> CancellationToken {
-        self.cancel.clone()
-    }
-
-    /// Get the peer's public key.
-    pub fn public_key(&self) -> &PublicKey {
-        &self.conn.key
-    }
-
-    /// Get the peer's socket address.
-    pub fn socket_addr(&self) -> &SocketAddr {
-        &self.conn.addr
-    }
-
-    /// Start I/O with a connected peer.
+    /// Start I/O with a peer over the given connection.
     ///
     /// This method continues until an error occurs, after which callers may
     /// want to reconnect and resume peer operation with a new `Connection`.
-    pub async fn start(&mut self) -> Result<Empty> {
-        /// Messages are broken into frames and each frame has a header.
-        ///
-        /// The `ReadState` tracks what we have received from the remote.
-        enum ReadState<'a> {
-            Header {
-                off: usize,
-                buf: [u8; Header::SIZE],
-            },
-            Frame {
-                hdr: Header,
-                off: usize,
-                buf: &'a mut Vec<u8>,
-            },
-        }
-
-        /// This state tracks what we have sent to the remote. We currently
-        /// support either data or ACK frames. The offset and length values
-        /// are relative to the write buffer (see below).
-        enum WriteState {
-            /// No write operation is in progress.
-            Idle,
-            /// An ACK frame is sent.
-            Ack { off: usize, len: usize },
-            /// A data frame is sent.
-            Data { off: usize, len: usize },
-        }
-
-        impl WriteState {
-            fn is_idle(&self) -> bool {
-                matches!(self, Self::Idle)
-            }
-
-            /// Encrypt a single data frame with Noise.
-            fn data_frame(
-                data: &[u8],
-                is_partial: bool,
-                state: &mut TransportState,
-                buf: &mut NoiseBuf,
-            ) -> Result<Self> {
-                let n = state.write_message(data, &mut buf[Header::SIZE..])?;
-                let h = if is_partial {
-                    Header::data(n as u16).partial()
-                } else {
-                    Header::data(n as u16)
-                };
-                buf[..Header::SIZE].copy_from_slice(&h.to_bytes());
-                Ok(Self::Data {
-                    off: 0,
-                    len: n + Header::SIZE,
-                })
-            }
-
-            /// Encrypt a single ACK frame with Noise.
-            fn ack_frame(a: Ack, state: &mut TransportState, buf: &mut NoiseBuf) -> Result<Self> {
-                let n = state.write_message(&a.0, &mut buf[Header::SIZE..])?;
-                let h = Header::ack(n as u16);
-                buf[..Header::SIZE].copy_from_slice(&h.to_bytes());
-                Ok(Self::Ack {
-                    off: 0,
-                    len: n + Header::SIZE,
-                })
-            }
-        }
-
+    pub async fn start(&mut self, conn: Connection, cancel: CancellationToken) -> Result<Empty> {
         // Early check if we already got cancelled which can happen with many
         // simultaneous connects where we need to drop connections.
-        if self.cancel.is_cancelled() {
+        if cancel.is_cancelled() {
             return Err(NetworkError::PeerInterrupt);
         }
 
-        // Noise packages are limited to 64KiB.
+        // ACKs received from remote.
         //
-        // We retain one such buffer for reading and one for writing.
-        let mut rbuf = NoiseBuf::new([0; _]);
-        let mut wbuf = NoiseBuf::new([0; _]);
+        // When receiving an ACK we remove the message from the retry buffer.
+        // The channel is unbounded because we can always remove an entry
+        // quickly.
+        let (ibound_acks_tx, mut ibound_acks_rx) = mpsc::unbounded_channel();
 
-        // A frame buffer for reading before it is decrypted.
-        let mut fbuf = Vec::new();
+        // ACKs to send to the remote.
+        //
+        // When we have received a message we need to send an ACK back.
+        // This channel is bounded. In case we accumulate too many ACKs we
+        // drop the connection as the sender task can not make progress.
+        let (obound_acks_tx, obound_acks_rx) = mpsc::channel(self.conf.peer_budget.get());
 
-        // An incoming message that is assembled from its frames.
-        let mut ibound_msg = BytesMut::new();
+        // Messages to send to the remote.
+        //
+        // These are the plain bytes (plus retry policy) that the sending task
+        // should deliver to the remote.
+        let (message_tx, message_rx) = mpsc::unbounded_channel();
 
-        // An outgoing message. The integer tracks the chunk size as we need
-        // to break the message into frames that fit into a noise package.
-        let mut obound_msg: Option<(RetryPolicy, Bytes, usize)> = None;
+        self.retry.reset();
 
-        // Pending outbound ACK messages. This is appended when we received a
-        // message and picked up and interleaved when sending frames or else
-        // at the start of the loop (see below).
-        let mut obound_acks: VecDeque<Ack> = VecDeque::new();
+        let Connection {
+            key: peer,
+            addr,
+            stream,
+            state,
+            recv_nonce,
+            send_nonce,
+        } = conn;
 
-        // Track write and read states:
-        let mut wstate = WriteState::Idle;
-        let mut rstate = ReadState::Header {
-            off: 0,
-            buf: [0; _],
+        let state = Arc::new(state);
+
+        let (read_half, write_half) = stream.into_split();
+
+        let countdown = Countdown::new();
+
+        let sender = Sender {
+            acks: obound_acks_rx,
+            conf: self.conf.clone(),
+            countdown: countdown.clone(),
+            messages: message_rx,
+            nonce: send_nonce,
+            state: state.clone(),
+            stream: write_half,
         };
 
-        // Each read needs a permit taken from our budget in order to deliver
-        // to the application.
-        let mut read_permit: Option<OwnedSemaphorePermit> = None;
+        let receiver = Receiver {
+            budget: self.budget.clone(),
+            countdown,
+            ibound_acks: ibound_acks_tx,
+            lower_bound: self.lower_bound.clone(),
+            max_message_size: self.max_message_size,
+            messages: self.tx.clone(),
+            nonce: recv_nonce,
+            obound_acks: obound_acks_tx,
+            peer,
+            state,
+            stream: read_half,
+        };
 
-        // Measure time.
-        //
-        // Used to trigger resends of messages that have not been ACKed yet.
+        let mut send_task = AbortOnDropHandle::new(spawn(sender.start()));
+        let mut recv_task = AbortOnDropHandle::new(spawn(receiver.start()));
+
         let mut clock = interval(Duration::from_secs(1));
         clock.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        // Ensure any previously fired countdown is reset.
-        self.countdown.stop();
-
         loop {
-            trace!(
-                name     = %self.conf.name,
-                peer     = %self.conn.key,
-                addr     = %self.conn.addr,
-                writing  = %!wstate.is_idle(),
-                acks     = %obound_acks.len(),
-                retries  = %self.retry.len(),
-                can_read = %read_permit.is_some(),
-                "entering event loop"
-            );
-
             select! {
-                // Wait for the next message if no write is in progress.
+                // Wait for the next message.
                 //
                 // We limit writing if we expect too many ACKs that the remote
                 // has not sent yet. This is to prevent an attack were a
                 // malicious peer never sends ACKs, which would cause our
-                // delay queue to grow unbounded.
-                m = self.msgs.dequeue(), if wstate.is_idle() && self.retry.len() < self.conf.peer_budget.get() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "next outbound message");
+                // retry queue to grow unbounded.
+                m = self.msgs.dequeue(), if self.retry.len() < self.conf.peer_budget.get() => {
+                    trace!(name = %self.conf.name, %peer, %addr, "next outbound message");
                     let (slot, id, (policy, bytes)) = m;
                     if policy.is_retry() {
                         self.retry.add(slot, id, bytes.clone());
                     }
-                    let chunk = min(bytes.len(), MAX_PAYLOAD_SIZE);
-                    wstate = WriteState::data_frame(
-                        &bytes[..chunk],
-                        chunk < bytes.len(),
-                        &mut self.conn.state,
-                        &mut wbuf
-                    )?;
-                    obound_msg = Some((policy, bytes, chunk))
+                    message_tx.send((policy, bytes)).map_err(|_| NetworkError::ChannelClosed)?
                 }
 
-                // Pick up an ACK and send it if possible.
-                () = ready(()), if wstate.is_idle() && !obound_acks.is_empty() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "next outbound ack");
-                    let ack = obound_acks.pop_front().expect("obound_acks is not empty");
-                    wstate = WriteState::ack_frame(ack, &mut self.conn.state, &mut wbuf)?
+                // When an ACK has been received we can remove the message from the retry queue.
+                a = ibound_acks_rx.recv() => {
+                    let Some(ack) = a else {
+                        return Err(NetworkError::ChannelClosed)
+                    };
+                    trace!(name = %self.conf.name, %peer, %addr, ?ack, "ack received");
+                    let (s, i) = ack.into();
+                    self.retry.del(s, i);
                 }
 
-                // If requested, interrupt all I/O processing.
-                //
-                // Once a peer has been interrupted, its connection needs to be
-                // replaced before calling start again.
-                _ = self.cancel.cancelled() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "interrupt");
+                // If requested, interrupt all I/O processing and return.
+                _ = cancel.cancelled() => {
+                    trace!(name = %self.conf.name, %peer, %addr, "interrupt");
+                    recv_task.abort();
+                    send_task.abort();
                     return Err(NetworkError::PeerInterrupt)
                 }
 
                 // Wait for a slot change, signaling GC.
                 r = self.next_slot.changed() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "gc");
+                    trace!(name = %self.conf.name, %peer, %addr, "gc");
                     if r.is_err() {
                         return Err(NetworkError::ChannelClosed)
                     }
                     let s = *self.next_slot.borrow_and_update();
-                    debug_assert!(s > self.lower_bound);
-                    self.lower_bound = s;
+                    self.lower_bound.store(s.into(), Ordering::Relaxed);
                     self.retry.gc(s);
                 }
 
@@ -329,10 +247,10 @@ impl Peer {
                 // - Update metrics
                 t = clock.tick() => {
                     if !self.retry.is_empty() {
-                        trace!(name = %self.conf.name, peer = %self.conn.key, "retry check");
+                        trace!(name = %self.conf.name, %peer, %addr, "retry check");
                         self.retry.check(t);
                     }
-                    self.update_metrics()
+                    self.update_metrics(&peer)
                 }
 
                 // If messages should be re-sent and we can do so, send it:
@@ -340,235 +258,48 @@ impl Peer {
                 // This is separate from the retry check above because the check
                 // scans multiple items and here we just take the next one that
                 // is ready and go with it.
-                () = ready(()), if self.retry.is_ready() && wstate.is_idle() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "resending message");
+                () = ready(()), if self.retry.is_ready() => {
                     let Some(bytes) = self.retry.next() else {
                         continue
                     };
-                    let chunk = min(bytes.len(), MAX_PAYLOAD_SIZE);
-                    wstate = WriteState::data_frame(
-                        &bytes[..chunk],
-                        chunk < bytes.len(),
-                        &mut self.conn.state,
-                        &mut wbuf
-                    )?;
-                    obound_msg = Some((RetryPolicy::Default, bytes, chunk))
+                    trace!(name = %self.conf.name, %peer, %addr, "resending message");
+                    message_tx
+                        .send((RetryPolicy::Default, bytes))
+                        .map_err(|_| NetworkError::ChannelClosed)?
                 }
 
-                // Continue an ongoing write operation.
-                r = self.conn.stream.writable(), if !wstate.is_idle() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "continue writing");
-                    if let Err(e) = r {
-                        return Err(e.into())
+                // Check that our send task has not terminated.
+                r = &mut send_task => match r {
+                    Ok(Err(err)) => {
+                        warn!(name = %self.conf.name, %peer, %addr, %err, "send task error");
+                        recv_task.abort();
+                        return Err(err)
                     }
-                    match &mut wstate {
-                        WriteState::Ack { off, len } => {
-                            match self.conn.stream.try_write(&wbuf[*off..*len]) {
-                                Ok(n) => {
-                                    *off += n;
-                                    if *off < *len {
-                                        continue
-                                    }
-                                    if let Some((policy, bytes, chunk)) = &mut obound_msg {
-                                        if *chunk < bytes.len() {
-                                            let end = min(*chunk + MAX_PAYLOAD_SIZE, bytes.len());
-                                            wstate = WriteState::data_frame(
-                                                &bytes[*chunk..end],
-                                                end < bytes.len(),
-                                                &mut self.conn.state,
-                                                &mut wbuf
-                                            )?;
-                                            *chunk = end;
-                                        } else {
-                                            if policy.is_retry() {
-                                                self.countdown.start(self.conf.receive_timeout)
-                                            }
-                                            obound_msg = None;
-                                            wstate = WriteState::Idle;
-                                        }
-                                    } else {
-                                        wstate = WriteState::Idle;
-                                    }
-                                }
-                                Err(e) => if e.kind() != io::ErrorKind::WouldBlock {
-                                    return Err(e.into())
-                                }
-                            }
+                    Err(err) => {
+                        recv_task.abort();
+                        return if err.is_cancelled() {
+                            Err(NetworkError::Task("cancelled"))
+                        } else {
+                            error!(name = %self.conf.name, %peer, %addr, %err, "send task panic");
+                            Err(NetworkError::Task("send panic"))
                         }
-                        WriteState::Data { off, len } => {
-                            match self.conn.stream.try_write(&wbuf[*off..*len]) {
-                                Ok(n) => {
-                                    *off += n;
-                                    if *off < *len {
-                                        continue
-                                    }
-                                    if let Some(ack) = obound_acks.pop_front() {
-                                        wstate = WriteState::ack_frame(ack, &mut self.conn.state, &mut wbuf)?
-                                    } else if let Some((policy, bytes, chunk)) = &mut obound_msg {
-                                        if *chunk < bytes.len() {
-                                            let end = min(*chunk + MAX_PAYLOAD_SIZE, bytes.len());
-                                            wstate = WriteState::data_frame(
-                                                &bytes[*chunk..end],
-                                                end < bytes.len(),
-                                                &mut self.conn.state,
-                                                &mut wbuf
-                                            )?;
-                                            *chunk = end;
-                                        } else {
-                                            if policy.is_retry() {
-                                                self.countdown.start(self.conf.receive_timeout)
-                                            }
-                                            obound_msg = None;
-                                            wstate = WriteState::Idle;
-                                        }
-                                    } else {
-                                        wstate = WriteState::Idle;
-                                    }
-                                }
-                                Err(e) => if e.kind() != io::ErrorKind::WouldBlock {
-                                    return Err(e.into())
-                                }
-                            }
-                        },
-                        WriteState::Idle => { /* unreachable!() */ }
                     }
-                }
+                },
 
-                // Wait for the healthcheck countdown to finish.
-                //
-                // The countdown is started after writing a message and reset
-                // when we received a frame.
-                () = &mut self.countdown => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "read timeout");
-                    return Err(NetworkError::Timeout)
-                }
-
-                // Await the next read permit.
-                //
-                // If our budget is used up, we need to wait for capacity to become
-                // available before we can continue to read from the socket (and
-                // eventually deliver the message to the application).
-                p = self.budget.0.clone().acquire_owned(), if read_permit.is_none() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "next read permit");
-                    read_permit = Some(p.map_err(|_| NetworkError::BudgetClosed)?);
-                }
-
-                // Continue reading from the socket if possible.
-                //
-                // NB that we require the ACKs that we have appended before to
-                // picked up. This should be very fast as writing interleaves
-                // ACKs in between frames. We do this to exercise backpressure
-                // because if the remote does not or can not read what we write
-                // but keeps sending us data we would accumulate ACKs without
-                // bound.
-                r = self.conn.stream.readable(), if read_permit.is_some() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "continue reading");
-                    if let Err(e) = r {
-                        return Err(e.into())
+                // Check that our receive task has not terminated.
+                r = &mut recv_task => match r {
+                    Ok(Err(err)) => {
+                        warn!(name = %self.conf.name, %peer, %addr, %err, "receive task error");
+                        send_task.abort();
+                        return Err(err)
                     }
-                    if obound_acks.len() > self.conf.peer_budget.get() {
-                        return Err(NetworkError::TooManyPendingAcks(self.conn.key))
-                    }
-                    match &mut rstate {
-                        ReadState::Header { off, buf } => {
-                            match self.conn.stream.try_read(&mut buf[*off..]) {
-                                Ok(0) => {
-                                    let e = io::ErrorKind::UnexpectedEof.into();
-                                    return Err(NetworkError::Io(e))
-                                }
-                                Ok(n) => {
-                                    self.countdown.stop();
-                                    *off += n;
-                                    if *off < buf.len() {
-                                        continue
-                                    }
-                                    let hdr = Header::unvalidated(u32::from_be_bytes(*buf));
-                                    fbuf.resize(hdr.len().into(), 0);
-                                    rstate = ReadState::Frame { hdr, off: 0, buf: &mut fbuf }
-                                }
-                                Err(e) => if e.kind() != io::ErrorKind::WouldBlock {
-                                    return Err(e.into())
-                                }
-                            }
-                        }
-                        ReadState::Frame { hdr, off, buf } => {
-                            match self.conn.stream.try_read(&mut buf[*off..]) {
-                                Ok(0) => {
-                                    let e = io::ErrorKind::UnexpectedEof.into();
-                                    return Err(NetworkError::Io(e))
-                                }
-                                Ok(n) => {
-                                    self.countdown.stop();
-                                    *off += n;
-                                    if *off < buf.len() {
-                                        continue
-                                    }
-                                    match hdr.frame_type() {
-                                        Ok(FrameType::Data) => {
-                                            let n = self.conn.state.read_message(buf, &mut *rbuf)?;
-                                            ibound_msg.extend_from_slice(&rbuf[..n]);
-                                            if ibound_msg.len() > self.max_message_size {
-                                                return Err(NetworkError::MessageTooLarge)
-                                            }
-                                            if !hdr.is_partial() { // message complete
-                                                let mut msg = mem::take(&mut ibound_msg).freeze();
-                                                let Some(t) = Trailer::from_bytes(&mut msg) else {
-                                                    warn!(
-                                                        name = %self.conf.name,
-                                                        node = %self.conf.keypair.public_key(),
-                                                        peer = %self.conn.key,
-                                                        addr = %self.conn.addr,
-                                                        "invalid trailer"
-                                                    );
-                                                    return Err(NetworkError::InvalidTrailer);
-                                                };
-                                                let slot = match t {
-                                                    Trailer::Std { slot, id } => {
-                                                        obound_acks.push_back(Ack::from((slot, id)));
-                                                        Some(slot)
-                                                    }
-                                                    Trailer::NoAck { slot } => Some(slot),
-                                                    Trailer::Unknown => None
-                                                };
-                                                if let Some(s) = slot && s < self.lower_bound {
-                                                    continue
-                                                }
-                                                let p = read_permit.take();
-                                                debug_assert!(p.is_some());
-                                                if self.tx.send((self.conn.key, msg, p)).is_err() {
-                                                    return Err(NetworkError::ChannelClosed)
-                                                }
-                                                trace!(
-                                                    name = %self.conf.name,
-                                                    node = %self.conf.keypair.public_key(),
-                                                    peer = %self.conn.key,
-                                                    addr = %self.conn.addr,
-                                                    "message delivered"
-                                                );
-                                            }
-                                            rstate = ReadState::Header { off: 0, buf: [0; _] };
-                                        }
-                                        Ok(FrameType::Ack) if hdr.is_partial() => {
-                                            return Err(NetworkError::InvalidAck)
-                                        }
-                                        Ok(FrameType::Ack) => {
-                                            let n = self.conn.state.read_message(buf, &mut *rbuf)?;
-                                            let Ok(a) = Ack::try_from(&rbuf[..n]) else {
-                                                return Err(NetworkError::InvalidAck)
-                                            };
-                                            let (s, i) = a.into();
-                                            self.retry.del(s, i);
-                                            rstate = ReadState::Header { off: 0, buf: [0; _] };
-                                        }
-                                        Err(t) => {
-                                            return Err(NetworkError::UnknownFrameType(t))
-                                        }
-                                    }
-                                }
-                                Err(e) => if e.kind() != io::ErrorKind::WouldBlock {
-                                    return Err(e.into())
-                                }
-                            }
+                    Err(err) => {
+                        send_task.abort();
+                        return if err.is_cancelled() {
+                            Err(NetworkError::Task("cancelled"))
+                        } else {
+                            error!(name = %self.conf.name, %peer, %addr, %err, "receive task panic");
+                            Err(NetworkError::Task("receive panic"))
                         }
                     }
                 }
@@ -576,12 +307,172 @@ impl Peer {
         }
     }
 
-    fn update_metrics(&self) {
+    fn update_metrics(&self, key: &PublicKey) {
+        self.metrics.set(key, "outbound_messages", self.msgs.len());
+        self.metrics.set(key, "retrying_messages", self.retry.len());
         self.metrics
-            .set(&self.conn.key, "outbound_messages", self.msgs.len());
-        self.metrics
-            .set(&self.conn.key, "retrying_messages", self.retry.len());
-        self.metrics
-            .set(&self.conn.key, "remaining_budget", self.budget.remaining());
+            .set(key, "remaining_budget", self.budget.remaining());
+    }
+}
+
+struct Sender {
+    conf: Arc<Config>,
+    stream: OwnedWriteHalf,
+    messages: UnboundedReceiver<(RetryPolicy, Bytes)>,
+    acks: mpsc::Receiver<Ack>,
+    state: Arc<StatelessTransportState>,
+    nonce: u64,
+    countdown: Countdown,
+}
+
+impl Sender {
+    async fn start(mut self) -> Result<Empty> {
+        let mut buf = NoiseBuf::new([0; _]);
+        let mut msg = Bytes::new();
+        let mut pol = RetryPolicy::default();
+        loop {
+            select! {
+                Some((p, m)) = self.messages.recv(), if msg.is_empty() => {
+                    msg = m;
+                    pol = p
+                }
+
+                Some(ack) = self.acks.recv() => {
+                    let x = self.nonce();
+                    let n = self.state.write_message(x, &ack.0, &mut buf[Header::SIZE..])?;
+                    let h = Header::ack(n as u16);
+                    send_frame(&mut self.stream, h, &mut buf[..Header::SIZE + n]).await?
+                }
+
+                // We split messages into frames in this separate select branch
+                // to interleave the sending of data frames with ACK frames from
+                // the branch above.
+                () = ready(()), if !msg.is_empty() => {
+                    let b = msg.split_to(min(msg.len(), MAX_PAYLOAD_SIZE));
+                    let x = self.nonce();
+                    let n = self.state.write_message(x, &b, &mut buf[Header::SIZE..])?;
+                    let h = if msg.is_empty() {
+                        Header::data(n as u16)
+                    } else {
+                        Header::data(n as u16).partial()
+                    };
+                    send_frame(&mut self.stream, h, &mut buf[..Header::SIZE + n]).await?;
+                    if msg.is_empty() && pol.is_retry() {
+                        self.countdown.start(self.conf.receive_timeout)
+                    }
+                }
+                else => return Err(NetworkError::ChannelClosed)
+            }
+        }
+    }
+
+    fn nonce(&mut self) -> u64 {
+        let n = self.nonce;
+        self.nonce += 1;
+        n
+    }
+}
+
+struct Receiver {
+    peer: PublicKey,
+    budget: Budget,
+    max_message_size: usize,
+    stream: OwnedReadHalf,
+    messages: UnboundedSender<PeerMessage>,
+    ibound_acks: UnboundedSender<Ack>,
+    obound_acks: mpsc::Sender<Ack>,
+    nonce: u64,
+    state: Arc<StatelessTransportState>,
+    lower_bound: Arc<AtomicU64>,
+    countdown: Countdown,
+}
+
+impl Receiver {
+    async fn start(mut self) -> Result<Empty> {
+        let mut fbuf = NoiseBuf::new([0; _]); // frame buffer (raw data)
+        let mut rbuf = NoiseBuf::new([0; _]); // read buffer (decrypted)
+        let mut msg = BytesMut::new();
+        loop {
+            loop {
+                select! {
+                    h = recv_frame(&mut self.stream, &mut fbuf) => match h {
+                        Ok(h) => {
+                            self.countdown.stop();
+                            match h.frame_type() {
+                                Ok(FrameType::Data) => {
+                                    let x = self.nonce();
+                                    let n = self.state.read_message(x, &fbuf[.. h.len().into()], &mut *rbuf)?;
+                                    msg.extend_from_slice(&rbuf[..n]);
+                                    if msg.len() > self.max_message_size {
+                                        return Err(NetworkError::MessageTooLarge)
+                                    }
+                                    if !h.is_partial() {
+                                        break
+                                    }
+                                }
+                                Ok(FrameType::Ack) => {
+                                    let x = self.nonce();
+                                    let n = self.state.read_message(x, &fbuf[.. h.len().into()], &mut *rbuf)?;
+                                    let Ok(a) = Ack::try_from(&rbuf[..n]) else {
+                                        return Err(NetworkError::InvalidAck)
+                                    };
+                                    self.ibound_acks.send(a).map_err(|_| NetworkError::ChannelClosed)?
+                                }
+                                Err(t) => return Err(NetworkError::UnknownFrameType(t))
+                            }
+                        }
+                        Err(err) => return Err(err.into())
+                    },
+                    () = &mut self.countdown => {
+                        return Err(NetworkError::Timeout("receiving from peer"))
+                    }
+                }
+            }
+
+            let mut msg = mem::take(&mut msg).freeze();
+
+            let Some(t) = Trailer::from_bytes(&mut msg) else {
+                return Err(NetworkError::InvalidTrailer);
+            };
+
+            let slot = match t {
+                Trailer::Std { slot, id } => {
+                    match self.obound_acks.try_send(Ack::from((slot, id))) {
+                        Ok(()) => {},
+                        Err(TrySendError::Full(_)) => {
+                            return Err(NetworkError::TooManyPendingAcks(self.peer));
+                        },
+                        Err(TrySendError::Closed(_)) => return Err(NetworkError::ChannelClosed),
+                    }
+                    Some(slot)
+                },
+                Trailer::NoAck { slot } => Some(slot),
+                Trailer::Unknown => None,
+            };
+
+            if let Some(s) = slot
+                && u64::from(s) < self.lower_bound.load(Ordering::Relaxed)
+            {
+                continue;
+            }
+
+            let permit = self
+                .budget
+                .clone()
+                .0
+                .acquire_owned()
+                .await
+                .map_err(|_| NetworkError::BudgetClosed)?;
+
+            if self.messages.send((self.peer, msg, Some(permit))).is_err() {
+                return Err(NetworkError::ChannelClosed);
+            }
+        }
+    }
+
+    fn nonce(&mut self) -> u64 {
+        let n = self.nonce;
+        self.nonce += 1;
+        n
     }
 }

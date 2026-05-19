@@ -68,8 +68,8 @@ pub enum NetworkError {
     BudgetClosed,
 
     /// An operation timed out.
-    #[error("timeout")]
-    Timeout,
+    #[error("timeout: {0}")]
+    Timeout(&'static str),
 
     /// A peer's I/O processing has been interrupted.
     #[error("peer process interrupted")]
@@ -79,4 +79,7 @@ pub enum NetworkError {
     /// to the remote, meaning we can read fine, but not write properly.
     #[error("too many pending acks for peer {0}")]
     TooManyPendingAcks(PublicKey),
+
+    #[error("task {0}")]
+    Task(&'static str),
 }

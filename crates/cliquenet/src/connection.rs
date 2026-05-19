@@ -8,7 +8,7 @@ use std::{
 };
 
 use rand::RngExt;
-use snow::{Builder, HandshakeState, TransportState, params::NoiseParams};
+use snow::{Builder, HandshakeState, StatelessTransportState, params::NoiseParams};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -34,7 +34,9 @@ pub struct Connection {
     pub key: PublicKey,
     pub addr: SocketAddr,
     pub stream: TcpStream,
-    pub state: TransportState,
+    pub state: StatelessTransportState,
+    pub recv_nonce: u64,
+    pub send_nonce: u64,
 }
 
 type Prologue = Vec<u8>;
@@ -47,7 +49,7 @@ impl Connection {
             warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option")
         }
 
-        until(conf.handshake_timeout, async move {
+        until(conf.handshake_timeout, "accept handshake", async move {
             let (version, prologue) = select_version(&conf, &mut stream, false).await?;
 
             debug!(name = %conf.name, %node, %version, "negotiated version");
@@ -74,6 +76,8 @@ impl Connection {
                     addr,
                     stream,
                     state,
+                    recv_nonce: 0,
+                    send_nonce: 0,
                 })
             } else {
                 warn!(name = %conf.name, %node, %addr, "invalid static key");
@@ -114,7 +118,7 @@ impl Connection {
 
             match try_connect(&conf, &peer, &addr).await {
                 Ok(mut conn) => {
-                    let hello_exchange = until(conf.handshake_timeout, async {
+                    let hello_exchange = until(conf.handshake_timeout, "hello exchange", async {
                         conn.send_hello(Hello::Ok).await?;
                         conn.recv_hello().await
                     });
@@ -154,9 +158,12 @@ impl Connection {
     /// Send a `Hello` frame.
     pub async fn send_hello(&mut self, h: Hello) -> Result<()> {
         let mut b = [0u8; 64];
-        let n = self
-            .state
-            .write_message(h.to_bytes().as_ref(), &mut b[Header::SIZE..])?;
+        let n = self.state.write_message(
+            self.send_nonce,
+            h.to_bytes().as_ref(),
+            &mut b[Header::SIZE..],
+        )?;
+        self.send_nonce += 1;
         let h = Header::data(n as u16);
         send_frame(&mut self.stream, h, &mut b[..Header::SIZE + n]).await?;
         Ok(())
@@ -167,7 +174,10 @@ impl Connection {
         let mut a = [0u8; 64];
         let h = recv_frame(&mut self.stream, &mut a).await?;
         let mut b = [0u8; 64];
-        let n = self.state.read_message(&a[..h.len().into()], &mut b)?;
+        let n = self
+            .state
+            .read_message(self.recv_nonce, &a[..h.len().into()], &mut b)?;
+        self.recv_nonce += 1;
         let h = Hello::from_bytes(&b[..n]).ok_or(NetworkError::InvalidHello)?;
         Ok(h)
     }
@@ -186,7 +196,12 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
             .expect("valid noise params yield valid handshake state")
     };
 
-    let mut stream = until(conf.connect_timeout, TcpStream::connect(addr)).await?;
+    let mut stream = until(
+        conf.connect_timeout,
+        "tcp connect",
+        TcpStream::connect(addr),
+    )
+    .await?;
 
     let node = conf.keypair.public_key();
     let addr = stream.peer_addr()?;
@@ -197,7 +212,7 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
         warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option");
     }
 
-    until(conf.handshake_timeout, async move {
+    until(conf.handshake_timeout, "connect handshake", async move {
         let (version, prologue) = select_version(conf, &mut stream, true).await?;
 
         debug!(name = %conf.name, %node, %peer, %addr, %version, "negotiated version");
@@ -215,6 +230,8 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
                 addr,
                 stream,
                 state,
+                recv_nonce: 0,
+                send_nonce: 0,
             }),
             Some(key) => {
                 warn!(name = %conf.name, %node, %peer, remote = %key, %addr, "static key mismatch");
@@ -229,7 +246,7 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
     .await
 }
 
-fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
+fn remote_static_key(state: &StatelessTransportState) -> Option<PublicKey> {
     let k = state.get_remote_static()?;
     PublicKey::try_from(k).ok()
 }
@@ -293,7 +310,10 @@ async fn select_version(
 }
 
 /// Perform a noise handshake as initiator with the remote party.
-async fn handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<TransportState> {
+async fn handshake(
+    stream: &mut TcpStream,
+    mut hs: HandshakeState,
+) -> Result<StatelessTransportState> {
     let mut a = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
     let n = hs.write_message(&[], &mut a[Header::SIZE..])?;
     let h = Header::data(n as u16);
@@ -304,11 +324,14 @@ async fn handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<Tra
         return Err(NetworkError::InvalidHandshakeMessage);
     }
     hs.read_message(&b[..h.len().into()], &mut a)?;
-    Ok(hs.into_transport_mode()?)
+    Ok(hs.into_stateless_transport_mode()?)
 }
 
 /// Perform a noise handshake as responder with a remote party.
-async fn on_handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<TransportState> {
+async fn on_handshake(
+    stream: &mut TcpStream,
+    mut hs: HandshakeState,
+) -> Result<StatelessTransportState> {
     let mut a = [0u8; MAX_NOISE_HANDSHAKE_SIZE];
     let h = recv_frame(stream, &mut a).await?;
     if !h.is_data() || h.is_partial() {
@@ -319,11 +342,11 @@ async fn on_handshake(stream: &mut TcpStream, mut hs: HandshakeState) -> Result<
     let n = hs.write_message(&[], &mut b[Header::SIZE..])?;
     let h = Header::data(n as u16);
     send_frame(stream, h, &mut b[..Header::SIZE + n]).await?;
-    Ok(hs.into_transport_mode()?)
+    Ok(hs.into_stateless_transport_mode()?)
 }
 
 /// Read a single frame (header + payload) from the remote.
-async fn recv_frame<R, const N: usize>(stream: &mut R, buf: &mut [u8; N]) -> io::Result<Header>
+pub async fn recv_frame<R, const N: usize>(stream: &mut R, buf: &mut [u8; N]) -> io::Result<Header>
 where
     R: AsyncReadExt + Unpin,
 {
@@ -343,7 +366,7 @@ where
 ///
 /// The header is serialised into the first 4 bytes of `msg`. It is the
 /// caller's responsibility to ensure there is room at the beginning.
-async fn send_frame<W>(stream: &mut W, hdr: Header, msg: &mut [u8]) -> io::Result<()>
+pub async fn send_frame<W>(stream: &mut W, hdr: Header, msg: &mut [u8]) -> io::Result<()>
 where
     W: AsyncWriteExt + Unpin,
 {

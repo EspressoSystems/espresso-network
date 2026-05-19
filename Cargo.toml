@@ -475,3 +475,7 @@ opt-level = 3
 inherits = "test"
 strip = true
 debug = "none"
+
+[profile.bench]
+lto = true
+codegen-units = 1

@@ -1,14 +1,20 @@
 use std::{
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
+use parking_lot::Mutex;
 use tokio::time::{Duration, Instant, Sleep, sleep};
 
 /// A countdown timer that can be reset.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Countdown {
+    inner: Arc<Mutex<Inner>>,
+}
+#[derive(Debug)]
+struct Inner {
     // The actual future to await.
     sleep: Pin<Box<Sleep>>,
 
@@ -28,8 +34,10 @@ impl Countdown {
     /// When ready, use `Countdown::start` to begin.
     pub fn new() -> Self {
         Self {
-            sleep: Box::pin(sleep(Duration::from_secs(1))),
-            stopped: true,
+            inner: Arc::new(Mutex::new(Inner {
+                sleep: Box::pin(sleep(Duration::from_secs(1))),
+                stopped: true,
+            })),
         }
     }
 
@@ -37,29 +45,31 @@ impl Countdown {
     ///
     /// Once started, a countdown can not be started again, unless
     /// `Countdown::stop` is invoked first.
-    pub fn start(&mut self, timeout: Duration) {
-        if !self.stopped {
+    pub fn start(&self, timeout: Duration) {
+        let mut inner = self.inner.lock();
+        if !inner.stopped {
             // The countdown is already running.
             return;
         }
-        self.stopped = false;
-        self.sleep.as_mut().reset(Instant::now() + timeout);
+        inner.stopped = false;
+        inner.sleep.as_mut().reset(Instant::now() + timeout);
     }
 
     /// Stop this countdown.
-    pub fn stop(&mut self) {
-        self.stopped = true
+    pub fn stop(&self) {
+        self.inner.lock().stopped = true
     }
 }
 
 impl Future for Countdown {
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.stopped {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut inner = self.inner.lock();
+        if inner.stopped {
             return Poll::Pending;
         }
-        self.as_mut().sleep.as_mut().poll(cx)
+        inner.sleep.as_mut().poll(cx)
     }
 }
 
