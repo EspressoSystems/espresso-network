@@ -662,18 +662,28 @@ def _generate_keys(image_tag: str) -> dict[str, str]:
             "older BASE_TAGs without /bin/keygen are unsupported. "
             f"stderr:\n{result.stderr}"
         )
-    out: dict[str, str] = {}
+    raw: dict[str, str] = {}
     for line in result.stdout.splitlines():
         if "=" not in line or line.startswith("#"):
             continue
         k, _, v = line.partition("=")
-        out[k.strip()] = v.strip()
-    required = (
-        "ESPRESSO_NODE_PRIVATE_STAKING_KEY",
-        "ESPRESSO_NODE_PRIVATE_STATE_KEY",
-        "ESPRESSO_NODE_PRIVATE_X25519_KEY",
-    )
-    missing = [k for k in required if k not in out]
+        raw[k.strip()] = v.strip()
+    # keygen output renamed ESPRESSO_SEQUENCER_* -> ESPRESSO_NODE_* in #4111;
+    # accept either so the helper works across BASE_TAG and UPGRADE_TAG.
+    aliases = {
+        "ESPRESSO_NODE_PRIVATE_STAKING_KEY": "ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY",
+        "ESPRESSO_NODE_PRIVATE_STATE_KEY": "ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY",
+        "ESPRESSO_NODE_PRIVATE_X25519_KEY": "ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY",
+    }
+    out: dict[str, str] = {}
+    missing: list[str] = []
+    for new_name, old_name in aliases.items():
+        if new_name in raw:
+            out[new_name] = raw[new_name]
+        elif old_name in raw:
+            out[new_name] = raw[old_name]
+        else:
+            missing.append(new_name)
     if missing:
         raise RuntimeError(f"keygen did not emit {missing}; stdout:\n{result.stdout}")
     return out
