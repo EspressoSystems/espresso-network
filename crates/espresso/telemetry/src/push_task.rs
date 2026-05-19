@@ -19,18 +19,42 @@ use reqwest::{
 use tokio::{sync::oneshot, time::MissedTickBehavior};
 use url::Url;
 
-use crate::{build_write_request, encode_to_snappy, rate_limit::log_rate_limit_once};
+use crate::{
+    build_write_request, encode_to_snappy,
+    rate_limit::log_rate_limit_once,
+    remote_write::{Label, WriteRequest},
+};
+
+/// Stamp push-time labels (e.g. `service`, `instance`) onto every TimeSeries.
+/// Preserves any label the metric already carries — registry-provided labels
+/// win. Re-sorts each series so the resulting protobuf stays remote-write 1.0
+/// compliant (labels sorted by name).
+fn apply_external_labels(request: &mut WriteRequest, external: &[Label]) {
+    if external.is_empty() {
+        return;
+    }
+    for series in &mut request.timeseries {
+        for label in external {
+            if !series.labels.iter().any(|l| l.name == label.name) {
+                series.labels.push(label.clone());
+            }
+        }
+        series.labels.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+}
 
 /// Spawn the periodic push loop. Owns the HTTP client; reuses it across ticks.
 ///
 /// Runs until `shutdown` resolves. On shutdown drives one final flush, then
 /// returns. If the HTTP client cannot be built (rare; usually only TLS init
 /// failures), logs and returns immediately — the task end is the failure mode.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run(
     registry: Arc<Registry>,
     endpoint: Url,
     jwt: String,
     interval: Duration,
+    external_labels: Vec<Label>,
     rate_limit_warned: Arc<AtomicBool>,
     telemetry_log_filter: Arc<String>,
     mut shutdown: oneshot::Receiver<()>,
@@ -56,10 +80,10 @@ pub(crate) async fn run(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                push_once(&client, &url, &jwt, &registry, &rate_limit_warned, &telemetry_log_filter).await;
+                push_once(&client, &url, &jwt, &registry, &external_labels, &rate_limit_warned, &telemetry_log_filter).await;
             }
             _ = &mut shutdown => {
-                push_once(&client, &url, &jwt, &registry, &rate_limit_warned, &telemetry_log_filter).await;
+                push_once(&client, &url, &jwt, &registry, &external_labels, &rate_limit_warned, &telemetry_log_filter).await;
                 break;
             }
         }
@@ -71,17 +95,19 @@ async fn push_once(
     url: &str,
     jwt: &str,
     registry: &Registry,
+    external_labels: &[Label],
     rate_limit_warned: &AtomicBool,
     telemetry_log_filter: &str,
 ) {
     let families = registry.gather();
-    let request = match build_write_request(&families) {
+    let mut request = match build_write_request(&families) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "telemetry: skipping metrics push: encode failed");
             return;
         },
     };
+    apply_external_labels(&mut request, external_labels);
     let body = match encode_to_snappy(&request) {
         Ok(b) => b,
         Err(e) => {

@@ -41,7 +41,7 @@ use tracing::Subscriber;
 use tracing_subscriber::{EnvFilter, Layer, registry::LookupSpan};
 use url::Url;
 
-use crate::{UnauthenticatedToken, push_task, retry::RetryingLogExporter};
+use crate::{UnauthenticatedToken, push_task, remote_write::Label, retry::RetryingLogExporter};
 
 const DEFAULT_OTLP_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 const SERVICE_NAME: &str = "espresso-node";
@@ -135,6 +135,11 @@ pub struct TelemetryHandle {
     endpoint: String,
     metrics_interval: Duration,
     metrics_push: Option<MetricsPushHandle>,
+    /// External labels stamped onto every pushed TimeSeries (e.g. `service`,
+    /// `instance`). Mirrors the OTel `service.name` / `service.instance.id`
+    /// resource attributes on the logs side so the aggregator can partition
+    /// metrics and logs consistently.
+    metrics_external_labels: Vec<Label>,
     /// Process-wide latch flipped on the first observed HTTP 429 from either
     /// pipeline. Shared with the OTel log retry wrapper and the metrics push
     /// task so a single operator-facing ERROR is logged across all signals.
@@ -190,6 +195,7 @@ impl TelemetryHandle {
         let interval = self.metrics_interval;
         let rate_limit_warned = self.rate_limit_warned.clone();
         let telemetry_log_filter = self.telemetry_log_filter.clone();
+        let external_labels = self.metrics_external_labels.clone();
         let thread = match std::thread::Builder::new()
             .name("espresso-telemetry-metrics".into())
             .spawn(move || {
@@ -211,6 +217,7 @@ impl TelemetryHandle {
                     push_endpoint,
                     jwt,
                     interval,
+                    external_labels,
                     rate_limit_warned,
                     telemetry_log_filter,
                     shutdown_rx,
@@ -336,6 +343,16 @@ pub fn init(
     )?;
 
     let metrics_interval = Duration::from_secs(opts.metrics_interval_secs.max(1));
+    let mut metrics_external_labels = vec![Label {
+        name: "service".to_owned(),
+        value: SERVICE_NAME.to_owned(),
+    }];
+    if let Some(name) = node_name {
+        metrics_external_labels.push(Label {
+            name: "instance".to_owned(),
+            value: name.to_owned(),
+        });
+    }
     let mut handle = TelemetryHandle {
         logger_provider: provider,
         log_filter: opts.log_filter.clone(),
@@ -343,6 +360,7 @@ pub fn init(
         endpoint,
         metrics_interval,
         metrics_push: None,
+        metrics_external_labels,
         rate_limit_warned,
         telemetry_log_filter,
     };
