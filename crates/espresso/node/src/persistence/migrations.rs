@@ -54,11 +54,13 @@ impl DataBackfill for BackfillHash {
         let n = rows.len();
 
         for (id, value) in rows {
-            sqlx::query("INSERT INTO hash_bigint (id, value) VALUES ($1, $2) ON CONFLICT DO NOTHING")
-                .bind(id as i64)
-                .bind(&value)
-                .execute(tx.as_mut())
-                .await?;
+            sqlx::query(
+                "INSERT INTO hash_bigint (id, value) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
+            .bind(id as i64)
+            .bind(&value)
+            .execute(tx.as_mut())
+            .await?;
         }
 
         if n < self.batch_size() {

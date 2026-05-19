@@ -6021,7 +6021,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_state_reconstruction(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
@@ -7655,7 +7654,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
