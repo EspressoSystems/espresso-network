@@ -682,7 +682,7 @@ impl PersistenceOptions for Options {
         {
             let registry = super::migrations::hash_bigint_migrations();
             let db = persistence.db.clone();
-            tokio::spawn(registry.run(db));
+            tokio::spawn(registry.run_all_migrations(db));
         }
 
         Ok(persistence)
