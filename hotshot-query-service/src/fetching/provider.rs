@@ -28,7 +28,7 @@
 //! This module defines an abstract interface [`Provider`], which allows data to be fetched from any
 //! data availability provider, as well as various implementations for different data sources,
 //! including:
-//! * [`QueryServiceProvider`]
+//! * [`TrustedQueryServiceProvider`]
 //!
 //! We also provide combinators for modularly adding functionality to existing fetchers:
 //! * [`AnyProvider`]
@@ -46,7 +46,7 @@ mod query_service;
 mod testing;
 
 pub use any::AnyProvider;
-pub use query_service::QueryServiceProvider;
+pub use query_service::TrustedQueryServiceProvider;
 #[cfg(any(test, feature = "testing"))]
 pub use testing::TestProvider;
 

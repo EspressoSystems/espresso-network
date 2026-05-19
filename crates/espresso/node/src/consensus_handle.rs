@@ -20,11 +20,11 @@ use hotshot_new_protocol::{
     storage::NewProtocolStorage,
 };
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, QuorumProposalWrapper, ViewNumber},
+    data::{EpochNumber, Leaf2, QuorumProposalWrapper, VidDisperseShare, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::Event,
+    event::{Event, LeafInfo},
     message::{Proposal as SignedProposal, UpgradeLock, convert_proposal},
-    new_protocol::{CoordinatorEvent, NewDecideEvent},
+    new_protocol::CoordinatorEvent,
     traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
@@ -32,7 +32,18 @@ use tokio::spawn;
 use tokio_util::task::AbortOnDropHandle;
 use versions::version;
 
-fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<CoordinatorEvent<T>> {
+// TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
+// vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
+// state and delta only become available one level up, in `Coordinator`.
+fn consensus_event<T, N, S>(
+    coordinator: &Coordinator<T, N, S>,
+    output: &ConsensusOutput<T>,
+) -> Option<CoordinatorEvent<T>>
+where
+    T: NodeType,
+    N: Network<T>,
+    S: NewProtocolStorage<T>,
+{
     match output {
         ConsensusOutput::LeafDecided {
             leaves,
@@ -44,12 +55,28 @@ fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Coordinat
                 tracing::error!("coordinator emitted LeafDecided with empty leaves");
                 return None;
             }
-            Some(CoordinatorEvent::NewDecide(NewDecideEvent {
-                leaves: leaves.clone(),
+            let leaf_infos = leaves
+                .iter()
+                .zip(vid_shares.iter())
+                .map(|(leaf, vid_share)| {
+                    let (state, delta) = match coordinator.state(leaf.view_number()) {
+                        Some(s) => (s.state.clone(), s.delta.clone()),
+                        None => {
+                            let s = Arc::new(T::ValidatedState::from_header(leaf.block_header()));
+                            (s, None)
+                        },
+                    };
+                    let vid_share = vid_share
+                        .as_ref()
+                        .map(|share| VidDisperseShare::V2(share.data.clone()));
+                    LeafInfo::new(leaf.clone(), state, delta, vid_share, None)
+                })
+                .collect();
+            Some(CoordinatorEvent::NewDecide {
+                leaf_infos,
                 cert1: cert1.clone(),
                 cert2: cert2.clone(),
-                vid_shares: vid_shares.clone(),
-            }))
+            })
         },
         ConsensusOutput::ViewChanged(view, _epoch) => {
             Some(CoordinatorEvent::ViewChanged { view_number: *view })
@@ -64,9 +91,17 @@ fn consensus_event<T: NodeType>(output: &ConsensusOutput<T>) -> Option<Coordinat
     }
 }
 
-fn coordinator_event<T: NodeType>(output: &CoordinatorOutput<T>) -> Option<CoordinatorEvent<T>> {
+fn coordinator_event<T, N, S>(
+    coordinator: &Coordinator<T, N, S>,
+    output: &CoordinatorOutput<T>,
+) -> Option<CoordinatorEvent<T>>
+where
+    T: NodeType,
+    N: Network<T>,
+    S: NewProtocolStorage<T>,
+{
     match output {
-        CoordinatorOutput::Consensus(inner) => consensus_event(inner),
+        CoordinatorOutput::Consensus(inner) => consensus_event(coordinator, inner),
         CoordinatorOutput::ExternalMessageReceived { sender, data } => {
             Some(CoordinatorEvent::ExternalMessageReceived {
                 sender: sender.clone(),
@@ -186,16 +221,15 @@ where
         self.legacy_handle.read().await.decided_leaf().await
     }
 
-    pub async fn decided_state(&self) -> Arc<T::ValidatedState> {
+    pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
         if self.new_protocol().await {
             return self
                 .client_api
                 .decided_state()
                 .await
-                .expect("coordinator channel closed")
-                .expect("decided state must exist");
+                .expect("coordinator channel closed");
         }
-        self.legacy_handle.read().await.decided_state().await
+        Some(self.legacy_handle.read().await.decided_state().await)
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
@@ -432,9 +466,11 @@ where
     N: Network<T>,
     S: NewProtocolStorage<T>,
 {
+    coord.start();
+
     loop {
         match coord.next_consensus_input().await {
-            Ok(input) => coord.apply_consensus(input).await,
+            Ok(input) => coord.apply_consensus(input),
             Err(err) if err.severity == Severity::Critical => {
                 tracing::error!(%err, "coordinator: critical error");
                 return;
@@ -444,10 +480,10 @@ where
             },
         }
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let Some(event) = consensus_event(&output) {
+            if let Some(event) = consensus_event(&coord, &output) {
                 broadcast_event(&tx, event).await;
             }
-            if let Err(err) = coord.process_consensus_output(output).await {
+            if let Err(err) = coord.process_consensus_output(output) {
                 if err.severity == Severity::Critical {
                     tracing::error!(%err, "coordinator: critical error processing output");
                     return;
@@ -457,7 +493,7 @@ where
             }
         }
         while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-            if let Some(event) = coordinator_event(&output) {
+            if let Some(event) = coordinator_event(&coord, &output) {
                 broadcast_event(&tx, event).await;
             }
         }

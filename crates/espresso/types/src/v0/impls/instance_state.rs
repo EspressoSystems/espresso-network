@@ -3,8 +3,6 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use alloy::primitives::Address;
 use anyhow::{Context, bail};
 use async_lock::Mutex;
-#[cfg(any(test, feature = "testing"))]
-use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_contract_adapter::sol_types::{LightClientV3, StakeTableV3};
 use hotshot_types::{
@@ -25,7 +23,7 @@ use crate::{
     AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
     v0::{
         GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
-        impls::{StakeTableHash, reward::EpochRewardsCalculator},
+        impls::{StakeTableHash, fetch_and_calculate_block_reward, reward::EpochRewardsCalculator},
         traits::StateCatchup,
         v0_3::ChainConfig,
     },
@@ -80,13 +78,12 @@ pub struct NodeState {
 
 impl NodeState {
     pub async fn block_reward(&self, epoch: EpochNumber) -> anyhow::Result<RewardAmount> {
-        EpochCommittees::fetch_and_calculate_block_reward(epoch, self.coordinator.clone()).await
+        fetch_and_calculate_block_reward(self.coordinator.clone(), epoch).await
     }
 
     pub async fn fixed_block_reward(&self) -> anyhow::Result<RewardAmount> {
-        let coordinator = self.coordinator.clone();
-        let membership = coordinator.membership().read().await;
-        membership
+        self.coordinator
+            .membership()
             .fixed_block_reward()
             .context("fixed block reward not found")
     }
@@ -282,13 +279,8 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
-            vec![],
-            Default::default(),
-            None,
-            Fetcher::mock(),
-            0,
-        )));
+        let membership =
+            EpochCommittees::new_stake(vec![], Default::default(), None, Fetcher::mock(), 0);
 
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
@@ -314,13 +306,8 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
-            vec![],
-            Default::default(),
-            None,
-            Fetcher::mock(),
-            0,
-        )));
+        let membership =
+            EpochCommittees::new_stake(vec![], Default::default(), None, Fetcher::mock(), 0);
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 
@@ -344,13 +331,8 @@ impl NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
-            vec![],
-            Default::default(),
-            None,
-            Fetcher::mock(),
-            0,
-        )));
+        let membership =
+            EpochCommittees::new_stake(vec![], Default::default(), None, Fetcher::mock(), 0);
 
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
@@ -439,13 +421,8 @@ impl Default for NodeState {
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
-        let membership = Arc::new(RwLock::new(EpochCommittees::new_stake(
-            vec![],
-            Default::default(),
-            None,
-            Fetcher::mock(),
-            0,
-        )));
+        let membership =
+            EpochCommittees::new_stake(vec![], Default::default(), None, Fetcher::mock(), 0);
         let storage = TestStorage::default();
         let coordinator = EpochMembershipCoordinator::new(membership, 100, &storage);
 

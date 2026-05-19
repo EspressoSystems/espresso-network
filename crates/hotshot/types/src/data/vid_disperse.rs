@@ -25,11 +25,11 @@ use tokio::{task::spawn_blocking, time::Instant};
 
 use super::ns_table::parse_ns_table;
 use crate::{
+    PeerConfig,
     data::{EpochNumber, ViewNumber},
     epoch_membership::{EpochMembership, EpochMembershipCoordinator},
     message::Proposal,
     simple_vote::HasEpoch,
-    stake_table::HSStakeTable,
     traits::{
         BlockPayload,
         block_contents::EncodeBytes,
@@ -111,11 +111,8 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         data_epoch: Option<EpochNumber>,
     ) -> Result<Self> {
         let shares = membership
-            .stake_table_for_epoch(target_epoch)
-            .await?
+            .stake_table_for_epoch(target_epoch)?
             .stake_table()
-            .await
-            .iter()
             .map(|entry| entry.stake_table_entry.public_key())
             .map(|node| (node.clone(), vid_disperse.shares.remove(0)))
             .collect();
@@ -144,10 +141,8 @@ impl<TYPES: NodeType> ADVZDisperse<TYPES> {
         data_epoch: Option<EpochNumber>,
     ) -> Result<(Self, Duration)> {
         let num_nodes = membership
-            .stake_table_for_epoch(target_epoch)
-            .await?
-            .total_nodes()
-            .await;
+            .stake_table_for_epoch(target_epoch)?
+            .total_nodes();
 
         let txns = payload.encode();
 
@@ -343,23 +338,24 @@ struct Weights {
     total_weight: usize,
 }
 
-pub fn vid_total_weight<TYPES: NodeType>(
-    stake_table: &HSStakeTable<TYPES>,
-    epoch: Option<EpochNumber>,
-) -> usize {
+pub fn vid_total_weight<'a, T, I>(stake_table: I, epoch: Option<EpochNumber>) -> usize
+where
+    T: NodeType,
+    I: Iterator<Item = &'a PeerConfig<T>>,
+{
     if epoch.is_none() {
         stake_table
-            .iter()
             .fold(U256::ZERO, |acc, entry| {
                 acc + entry.stake_table_entry.stake()
             })
             .to::<usize>()
     } else {
-        approximate_weights(stake_table).total_weight
+        let stake_table = stake_table.cloned().collect::<Vec<_>>();
+        approximate_weights(&stake_table[..]).total_weight
     }
 }
 
-fn approximate_weights<TYPES: NodeType>(stake_table: &HSStakeTable<TYPES>) -> Weights {
+fn approximate_weights<TYPES: NodeType>(stake_table: &[PeerConfig<TYPES>]) -> Weights {
     let total_stake = stake_table.iter().fold(U256::ZERO, |acc, entry| {
         acc + entry.stake_table_entry.stake()
     });
@@ -421,11 +417,8 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         let payload_byte_len = shares[0].payload_byte_len();
         let shares = membership
             .coordinator
-            .stake_table_for_epoch(target_epoch)
-            .await?
+            .stake_table_for_epoch(target_epoch)?
             .stake_table()
-            .await
-            .iter()
             .map(|entry| entry.stake_table_entry.public_key())
             .zip(shares)
             .map(|(node, share)| (node.clone(), share.clone()))
@@ -457,8 +450,8 @@ impl<TYPES: NodeType> AvidMDisperse<TYPES> {
         data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<(Self, Duration)> {
-        let target_mem = membership.stake_table_for_epoch(target_epoch).await?;
-        let stake_table = target_mem.stake_table().await;
+        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
         let approximate_weights = approximate_weights(&stake_table);
 
         let txns = payload.encode();
@@ -686,11 +679,8 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         let payload_byte_len = common.payload_byte_len();
         let shares = membership
             .coordinator
-            .stake_table_for_epoch(target_epoch)
-            .await?
+            .stake_table_for_epoch(target_epoch)?
             .stake_table()
-            .await
-            .iter()
             .map(|entry| entry.stake_table_entry.public_key())
             .zip(shares)
             .map(|(node, share)| (node.clone(), share.clone()))
@@ -720,8 +710,8 @@ impl<TYPES: NodeType> AvidmGf2Disperse<TYPES> {
         data_epoch: Option<EpochNumber>,
         metadata: &<TYPES::BlockPayload as BlockPayload<TYPES>>::Metadata,
     ) -> Result<(Self, Duration)> {
-        let target_mem = membership.stake_table_for_epoch(target_epoch).await?;
-        let stake_table = target_mem.stake_table().await;
+        let target_mem = membership.stake_table_for_epoch(target_epoch)?;
+        let stake_table: Vec<_> = target_mem.stake_table().cloned().collect();
         let approximate_weights = approximate_weights(&stake_table);
 
         let txns = payload.encode();

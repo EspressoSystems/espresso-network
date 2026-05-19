@@ -31,7 +31,9 @@ use hotshot_types::{
     message::UpgradeLock,
     signature_key::SchnorrPubKey,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, UpgradeCertificate},
-    simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
+    simple_vote::{
+        NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
+    },
     stake_table::{StakeTableEntry, supermajority_threshold},
     traits::{
         block_contents::EncodeBytes,
@@ -46,7 +48,10 @@ use jf_merkle_tree_compat::{
 };
 use rand::RngCore;
 use vbs::version::{StaticVersionType, Version};
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade, version};
+use versions::{
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
+    version,
+};
 
 use crate::{
     client::Client,
@@ -221,7 +226,7 @@ pub async fn custom_epoch_change_leaf_chain(
 ) -> Vec<LeafQueryData<SeqTypes>> {
     custom_leaf_chain(Upgrade::trivial(version), range, |proposal| {
         if is_epoch_transition(proposal.block_header.height(), epoch_height) {
-            let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.clone().into();
+            let data: NextEpochQuorumData2<SeqTypes> = proposal.justify_qc.data.into();
             let commit = data.commit();
             proposal.next_epoch_justify_qc = Some(NextEpochQuorumCertificate2::new(
                 data,
@@ -379,9 +384,23 @@ struct InnerTestClient {
     missing_quorums: HashSet<u64>,
     invalid_quorums: HashSet<u64>,
     mock_block_height: Option<u64>,
+    view_gaps: HashSet<usize>,
+    corrupt_next_epoch_qc: bool,
+    /// `(height, target)`: leaves at heights `>= height` use `target`; earlier use
+    /// `DRB_AND_HEADER_UPGRADE_VERSION`.
+    upgrade: Option<(u64, Version)>,
+    /// `Certificate2` finality proofs for new-protocol leaves, by height.
+    cert2s: HashMap<usize, Certificate2<SeqTypes>>,
 }
 
 impl InnerTestClient {
+    fn version_at(&self, height: u64) -> Version {
+        match self.upgrade {
+            Some((h, target)) if height >= h => target,
+            _ => DRB_AND_HEADER_UPGRADE_VERSION,
+        }
+    }
+
     fn quorum_for_epoch(&mut self, epoch: u64) -> &[(PrivKey, AuthenticatedValidator<PubKey>)] {
         // For testing purposes, we will say that one new node joins the quorum each epoch. The
         // static stake table used before the first epoch with dynamic stake is the same as the
@@ -453,9 +472,10 @@ impl InnerTestClient {
 
         for i in self.leaves.len()..=height {
             let epoch = EpochNumber::new(epoch_from_block_number(i as u64, epoch_height));
-            let view_number = ViewNumber::new(i as u64);
+            let view_offset = self.view_gaps.iter().filter(|&&g| g < i).count() as u64;
+            let view_number = ViewNumber::new(i as u64 + view_offset);
 
-            let upgrade = Upgrade::trivial(DRB_AND_HEADER_UPGRADE_VERSION);
+            let upgrade = Upgrade::trivial(self.version_at(i as u64));
             let node_state = NodeState::mock_v3().with_genesis_version(upgrade.base);
             let (justify_qc, mt) = if i == 0 {
                 (
@@ -492,6 +512,55 @@ impl InnerTestClient {
             {
                 assert!(block_header.set_next_stake_table_hash(self.stake_table_hash(*epoch + 1)));
             }
+            let next_epoch_justify_qc = if i > 0 && is_epoch_transition(i as u64, epoch_height) {
+                let parent_qc = self.leaves[i - 1].qc().clone();
+                let data: NextEpochQuorumData2<SeqTypes> = parent_qc.data.into();
+                let versioned_commit = VersionedVoteData::new_infallible(
+                    data.clone(),
+                    parent_qc.view_number,
+                    &UpgradeLock::<SeqTypes>::new(upgrade),
+                )
+                .commit();
+                let commit_bytes: [u8; 32] = versioned_commit.into();
+
+                let (next_keys, next_validators): (Vec<_>, Vec<_>) =
+                    self.quorum_for_epoch(*epoch + 1).iter().cloned().unzip();
+                let mut next_entries = vec![];
+                let mut next_total = U256::ZERO;
+                for validator in &next_validators {
+                    next_entries.push(StakeTableEntry {
+                        stake_key: validator.stake_table_key,
+                        stake_amount: validator.stake,
+                    });
+                    next_total += validator.stake;
+                }
+                let next_pp =
+                    PubKey::public_parameter(&next_entries, supermajority_threshold(next_total));
+                let sign_bytes: [u8; 32] = if self.corrupt_next_epoch_qc {
+                    [0xCC; 32]
+                } else {
+                    *versioned_commit.as_ref()
+                };
+                let next_sigs = next_keys
+                    .iter()
+                    .map(|key| PubKey::sign(key, &sign_bytes).unwrap())
+                    .collect::<Vec<_>>();
+                let next_signature = PubKey::assemble(
+                    &next_pp,
+                    &std::iter::repeat_n(true, next_keys.len()).collect::<BitVec>(),
+                    &next_sigs,
+                );
+
+                Some(NextEpochQuorumCertificate2::new(
+                    data,
+                    Commitment::from_raw(commit_bytes),
+                    parent_qc.view_number,
+                    Some(next_signature),
+                    Default::default(),
+                ))
+            } else {
+                None
+            };
             let quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
                 proposal: QuorumProposal2::<SeqTypes> {
                     epoch: Some(epoch),
@@ -501,7 +570,7 @@ impl InnerTestClient {
                     upgrade_certificate: None,
                     view_change_evidence: None,
                     next_drb_result: None,
-                    next_epoch_justify_qc: None,
+                    next_epoch_justify_qc,
                     state_cert: None,
                 },
             };
@@ -512,7 +581,7 @@ impl InnerTestClient {
                 block_number: Some(i as u64),
             };
             let quorum_data_comm = VersionedVoteData::new_infallible(
-                quorum_data.clone(),
+                quorum_data,
                 view_number,
                 &UpgradeLock::<SeqTypes>::new(upgrade),
             )
@@ -532,6 +601,39 @@ impl InnerTestClient {
                 assembled,
                 view_number,
             );
+
+            // New-protocol finality uses a `Certificate2` over `Vote2Data` instead of a
+            // HotStuff2 2-chain.
+            if upgrade.base >= NEW_PROTOCOL_VERSION {
+                let vote2_data = Vote2Data {
+                    leaf_commit: leaf.commit(),
+                    epoch,
+                    block_number: i as u64,
+                };
+                let vote2_data_comm = VersionedVoteData::new_infallible(
+                    vote2_data.clone(),
+                    view_number,
+                    &UpgradeLock::<SeqTypes>::new(upgrade),
+                )
+                .commit();
+                let cert2_sigs = quorum
+                    .iter()
+                    .map(|key| PubKey::sign(key, vote2_data_comm.as_ref()).unwrap())
+                    .collect::<Vec<_>>();
+                let cert2_assembled = PubKey::assemble(
+                    &pp,
+                    &std::iter::repeat_n(true, quorum.len()).collect::<BitVec>(),
+                    &cert2_sigs,
+                );
+                let cert2 = Certificate2::<SeqTypes>::create_signed_certificate(
+                    vote2_data_comm,
+                    vote2_data,
+                    cert2_assembled,
+                    view_number,
+                );
+                self.cert2s.insert(i, cert2);
+            }
+
             let leaf = LeafQueryData::new(leaf, qc).unwrap();
             self.leaf_hashes.insert(leaf.hash(), i);
             self.block_hashes.insert(leaf.block_hash(), i);
@@ -573,6 +675,27 @@ impl InnerTestClient {
 }
 
 impl TestClient {
+    pub fn with_epoch_height(epoch_height: u64) -> Self {
+        Self {
+            inner: Default::default(),
+            epoch_height,
+        }
+    }
+
+    pub async fn add_view_gap_after(&self, height: usize) {
+        self.inner.lock().await.view_gaps.insert(height);
+    }
+
+    pub async fn corrupt_next_epoch_qc(&self) {
+        self.inner.lock().await.corrupt_next_epoch_qc = true;
+    }
+
+    /// Upgrade leaves at `height` and above to `target`. Must be set before those leaves are
+    /// generated.
+    pub async fn set_upgrade(&self, height: u64, target: Version) {
+        self.inner.lock().await.upgrade = Some((height, target));
+    }
+
     pub async fn genesis(&self) -> Genesis {
         let mut inner = self.inner.lock().await;
         Genesis {
@@ -701,7 +824,7 @@ impl Client for TestClient {
         let leaf = inner.leaf(height, self.epoch_height).await;
 
         let mut proof = LeafProof::default();
-        proof.push(leaf);
+        proof.push(leaf.clone());
         if let Some(finalized) = finalized {
             ensure!(
                 finalized > (height as u64),
@@ -717,8 +840,31 @@ impl Client for TestClient {
             }
         }
 
-        proof.push(inner.leaf(height + 1, self.epoch_height).await);
-        assert!(proof.push(inner.leaf(height + 2, self.epoch_height).await));
+        // For new-protocol leaves, finality is a single `Certificate2` rather than a QC chain.
+        if leaf.leaf().block_header().version() >= NEW_PROTOCOL_VERSION {
+            let cert2 = inner
+                .cert2s
+                .get(&height)
+                .with_context(|| format!("missing cert2 for new-protocol leaf {height}"))?
+                .clone();
+            proof.add_certificate(Arc::new(cert2), leaf.qc().clone());
+            return Ok(proof);
+        }
+
+        const MAX_PROOF_LEAVES: usize = 16;
+        let mut next = height + 1;
+        loop {
+            let leaf = inner.leaf(next, self.epoch_height).await;
+            next += 1;
+            if proof.push(leaf) {
+                break;
+            }
+            ensure!(
+                next < height + MAX_PROOF_LEAVES,
+                "could not assemble finality proof for leaf {height} within {MAX_PROOF_LEAVES} \
+                 leaves; add a higher bound or fewer view gaps"
+            );
+        }
 
         Ok(proof)
     }

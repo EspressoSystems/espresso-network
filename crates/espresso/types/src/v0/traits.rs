@@ -794,34 +794,73 @@ pub trait SequencerPersistence:
         event: &CoordinatorEvent<SeqTypes>,
         consumer: &(impl EventConsumer + 'static),
     ) {
-        if let CoordinatorEvent::LegacyEvent(hotshot_event) = event
-            && let EventType::Decide {
-                leaf_chain,
-                committing_qc,
-                deciding_qc,
-                ..
-            } = &hotshot_event.event
-        {
-            let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-                return;
-            };
+        match event {
+            CoordinatorEvent::LegacyEvent(hotshot_event) => {
+                if let EventType::Decide {
+                    leaf_chain,
+                    committing_qc,
+                    deciding_qc,
+                    ..
+                } = &hotshot_event.event
+                {
+                    let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
+                        return;
+                    };
 
-            let chain = leaf_chain.iter().zip(
-                std::iter::once((**committing_qc).clone()).chain(
-                    leaf_chain
-                        .iter()
-                        .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
-                ),
-            );
+                    let chain = leaf_chain.iter().zip(
+                        std::iter::once((**committing_qc).clone()).chain(
+                            leaf_chain
+                                .iter()
+                                .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
+                        ),
+                    );
 
-            if let Err(err) = self
-                .append_decided_leaves(leaf.view_number(), chain, deciding_qc.clone(), consumer)
-                .await
-            {
-                tracing::error!(
-                    "failed to save decided leaves, chain may not be up to date: {err:#}"
-                );
-            }
+                    if let Err(err) = self
+                        .append_decided_leaves(
+                            leaf.view_number(),
+                            chain,
+                            deciding_qc.clone(),
+                            consumer,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            "failed to save decided leaves, chain may not be up to date: {err:#}"
+                        );
+                    }
+                }
+            },
+            CoordinatorEvent::NewDecide {
+                leaf_infos, cert1, ..
+            } => {
+                let Some(first) = leaf_infos.first() else {
+                    return;
+                };
+                let view_number = first.leaf.view_number();
+
+                // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
+                // next older leaf.
+                let certifying_qcs = std::iter::once(cert1.clone())
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+                    .take(leaf_infos.len())
+                    .map(CertificatePair::non_epoch_change);
+
+                if let Err(err) = self
+                    .append_decided_leaves(
+                        view_number,
+                        leaf_infos.iter().zip(certifying_qcs),
+                        None,
+                        consumer,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        "failed to save decided leaves from new protocol, chain may not be up to \
+                         date: {err:#}"
+                    );
+                }
+            },
+            _ => {},
         }
     }
 

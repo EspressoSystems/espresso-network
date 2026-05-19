@@ -62,13 +62,13 @@ pub fn build_instance_state(
     );
 
     let coordinator = EpochMembershipCoordinator::new(
-        Arc::new(RwLock::new(EpochCommittees::new_stake(
+        EpochCommittees::new_stake(
             vec![],
             Default::default(),
             None,
             fetcher,
             genesis.epoch_height.unwrap_or_default(),
-        ))),
+        ),
         genesis.epoch_height.unwrap_or_default(),
         &Arc::new(espresso_node::persistence::no_storage::NoStorage),
     );

@@ -36,7 +36,6 @@ use hotshot_types::{
     simple_certificate::QuorumCertificate2,
     storage_metrics::StorageMetricsValue,
     traits::{
-        election::Membership,
         leaf_fetcher_network::ConnectedNetworkLeafFetcher,
         network::ConnectedNetwork,
         node_implementation::{NodeImplementation, NodeType},
@@ -505,7 +504,6 @@ where
 
         // Then start the necessary tasks
         for (node_id, network, memberships, config, storage) in uninitialized_nodes {
-            let memberships = Arc::new(RwLock::new(memberships));
             let public_key = ValidatorConfig::<TYPES>::generated_from_seed_indexed(
                 [0u8; 32],
                 node_id,
@@ -513,11 +511,12 @@ where
                 node_id < config.da_staked_committee_size as u64,
             )
             .public_key;
+            let memberships = Arc::new(memberships);
             let handle = create_test_handle(
                 self.launcher.metadata.clone(),
                 node_id,
                 network.clone(),
-                Arc::clone(&memberships),
+                memberships.clone(),
                 config.clone(),
                 storage.clone(),
             )
@@ -527,7 +526,7 @@ where
             // channel the network task forwards `ExternalMessageReceived`
             // events to. Done after `create_test_handle` returns but before
             // `start_consensus` so no catchup events can be missed.
-            memberships.write().await.set_leaf_fetcher(
+            memberships.set_leaf_fetcher(
                 Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
                     network.clone(),
                 )),
@@ -578,12 +577,11 @@ where
         let internal_chan = async_broadcast::broadcast(EVENT_CHANNEL_SIZE);
         let external_chan = async_broadcast::broadcast(EXTERNAL_EVENT_CHANNEL_SIZE);
 
-        let memberships = Arc::new(RwLock::new(memberships));
         // Install the test leaf fetcher before consensus starts so epoch
         // catchup (`get_epoch_root` / `get_epoch_drb`) has a working network
         // and a receiver wired into the same external channel the network
         // task uses to forward `ExternalMessageReceived` events.
-        memberships.write().await.set_leaf_fetcher(
+        memberships.set_leaf_fetcher(
             Arc::new(ConnectedNetworkLeafFetcher::<TYPES, _>::new(
                 network.clone(),
             )),
@@ -614,7 +612,7 @@ where
     pub async fn add_node_with_config_and_channels(
         node_id: u64,
         network: Network<TYPES, I>,
-        memberships: Arc<RwLock<TYPES::Membership>>,
+        memberships: TYPES::Membership,
         initializer: HotShotInitializer<TYPES>,
         config: HotShotConfig<TYPES>,
         upgrade: versions::Upgrade,
@@ -639,7 +637,7 @@ where
             node_id,
             config,
             upgrade,
-            EpochMembershipCoordinator::new(memberships, epoch_height, &storage.clone()),
+            EpochMembershipCoordinator::new(Arc::new(memberships), epoch_height, &storage.clone()),
             network,
             initializer,
             ConsensusMetricsValue::default(),

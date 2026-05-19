@@ -78,9 +78,8 @@ async fn test_upgrade_task_with_proposal() {
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
         .membership_for_epoch(Some(EpochNumber::new(1)))
-        .await
         .unwrap();
-    let num_storage_nodes = epoch_1_mem.total_nodes().await;
+    let num_storage_nodes = epoch_1_mem.total_nodes();
 
     let mut generator =
         TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);

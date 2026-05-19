@@ -50,9 +50,11 @@ csv = { workspace = true }
 derivative = { workspace = true }
 derive_more = { workspace = true }
 dotenvy = { workspace = true }
+dyn-clone = { workspace = true }
 either = { workspace = true }
 espresso-api = { path = "../api" }
 espresso-contract-deployer = { workspace = true }
+espresso-keyset = { workspace = true }
 espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
 futures = { workspace = true }
@@ -126,12 +128,12 @@ vergen-gitcl = { workspace = true }
 [dev-dependencies]
 escargot = { workspace = true }
 espresso-macros = { workspace = true }
-
 # Enable "testing" feature when running tests
 espresso-node = { path = ".", features = ["testing"] }
 hotshot-example-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 hotshot-testing = { workspace = true }
+insta = { workspace = true }
 light-client = { workspace = true, features = ["testing"] }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }

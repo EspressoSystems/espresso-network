@@ -157,8 +157,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                 if **new_view_number % frequency == 0 {
                     let _ = self
                         .membership_coordinator
-                        .membership_for_epoch(epoch_number.map(|e| e + 1))
-                        .await;
+                        .membership_for_epoch(epoch_number.map(|e| e + 1));
                 }
 
                 if let Err(e) =
@@ -190,10 +189,10 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                     "Stake table for epoch {}:\n\n{:?}",
                     next_epoch,
                     self.membership_coordinator
-                        .stake_table_for_epoch(Some(next_epoch))
-                        .await?
+                        .stake_table_for_epoch(Some(next_epoch))?
                         .stake_table()
-                        .await
+                        .cloned()
+                        .collect::<Vec<_>>()
                 );
             },
             HotShotEvent::ExtendedQcRecv(high_qc, next_epoch_high_qc, _) => {
