@@ -25,10 +25,16 @@
 services:
   espresso-node-0:
     command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- light-client
+    environment:
+      # Required for light-client catchup queries (a98a99f439); without it
+      # the light-client SQLite falls back to :memory: per-connection and
+      # serves empty results, so a wiped peer can't fetch historical leaves.
+      LIGHT_CLIENT_DB_PATH: /store/lc
 
   espresso-node-1:
     command: espresso-node -- storage-sql -- http -- query -- explorer -- light-client
     environment:
+      LIGHT_CLIENT_DB_PATH: /store/lc
       # OLD-name vars only; BASE's .env doesn't define the NEW-name port vars,
       # and the UPGRADE binary aliases OLD->NEW via env_compat on startup.
       ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT
