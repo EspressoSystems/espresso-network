@@ -159,11 +159,11 @@ byteorder = { version = "1" }
 bytes = { version = "1.11.0", features = ["serde"] }
 bytesize = "1.3"
 cbor4ii = { version = "1.0", features = ["serde1"] }
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "lr/keepalive-and-logs", package = "cdn-broker", features = [
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-broker", features = [
     "global-permits",
 ] }
-cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "lr/keepalive-and-logs", package = "cdn-client" }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", branch = "lr/keepalive-and-logs", package = "cdn-marshal" }
+cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-client" }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-marshal" }
 chrono = { version = "0.4", features = ["serde"] }
 circular-buffer = "0.1.9"
 clap = { version = "4.5", features = ["derive", "env", "string"] }

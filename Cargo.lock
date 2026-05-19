@@ -2816,8 +2816,9 @@ dependencies = [
 [[package]]
 name = "cdn-broker"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#0be970e7eca8d66b2cbf6b36a82e7fba84991a7d"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=20260519-keep-alive#56a540d4f226146c38debb7d29edf2703bbe81de"
 dependencies = [
+ "anyhow",
  "cdn-proto",
  "clap 4.6.1",
  "console-subscriber",
@@ -2829,6 +2830,7 @@ dependencies = [
  "portpicker",
  "prometheus",
  "rand 0.8.6",
+ "reqwest 0.12.28",
  "rkyv",
  "tokio",
  "tracing",
@@ -2838,7 +2840,7 @@ dependencies = [
 [[package]]
 name = "cdn-client"
 version = "0.6.2"
-source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#0be970e7eca8d66b2cbf6b36a82e7fba84991a7d"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=20260519-keep-alive#56a540d4f226146c38debb7d29edf2703bbe81de"
 dependencies = [
  "cdn-proto",
  "clap 4.6.1",
@@ -2854,7 +2856,7 @@ dependencies = [
 [[package]]
 name = "cdn-marshal"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#0be970e7eca8d66b2cbf6b36a82e7fba84991a7d"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=20260519-keep-alive#56a540d4f226146c38debb7d29edf2703bbe81de"
 dependencies = [
  "cdn-proto",
  "clap 4.6.1",
@@ -2867,7 +2869,7 @@ dependencies = [
 [[package]]
 name = "cdn-proto"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?branch=lr%2Fkeepalive-and-logs#0be970e7eca8d66b2cbf6b36a82e7fba84991a7d"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=20260519-keep-alive#56a540d4f226146c38debb7d29edf2703bbe81de"
 dependencies = [
  "anyhow",
  "ark-serialize 0.5.0",
