@@ -857,7 +857,11 @@ impl<T: NodeType> Consensus<T> {
             return;
         };
 
-        let Some(header) = self.headers.get(&(view, parent_cert.data().leaf_commit)) else {
+        // Key the header lookup by the proposal's leaf commitment, not the
+        // cert's `leaf_commit` field b/c genesis cert leaf commit != genesis proposals
+        // leaf commitment.
+        let parent_commitment = proposal_commitment(proposal);
+        let Some(header) = self.headers.get(&(view, parent_commitment)) else {
             debug!("no block header");
             return;
         };
