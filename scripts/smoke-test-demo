@@ -11,14 +11,16 @@ error_handler() {
   echo "Failed at line $lineno: msg: $msg"
 }
 
-# Clear renamed vars before sourcing .env so an old-name .env (e.g. the
-# extracted base-tag .env used by binary-upgrade-tests) can populate the
-# values via the fallbacks below, instead of an inherited new-name value
-# from a different .env winning.
-unset ESPRESSO_L1_PORT ESPRESSO_NODE_1_API_PORT ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS
-
-# load env vars in .env
-set -a; source .env; set +a;
+# Load .env with only-if-unset semantics so caller-provided env wins.
+while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+        ''|\#*) continue;;
+    esac
+    key="${line%%=*}"
+    case "$key" in *[!A-Za-z0-9_]*|[0-9]*) continue;; esac
+    [ "${!key+x}" = x ] && continue
+    eval "export $line"
+done < .env
 
 # Backward compat for renamed env vars
 if [ -z "${ESPRESSO_L1_PORT:-}" ] && [ -n "${ESPRESSO_SEQUENCER_L1_PORT:-}" ]; then

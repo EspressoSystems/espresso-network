@@ -327,14 +327,22 @@ def dump_diagnostics(compose: Compose) -> None:
 
 
 def smoke_test(tag: str, compose: Compose) -> None:
-    # cwd=base_dir so `source .env` in the script picks up base_tag's .env;
-    # deployed contract addresses match it, not REPO_ROOT/.env which may
-    # have shifted if main changed deploy ordering.
+    # cwd=base_dir so the script's only-if-unset .env loader picks up the
+    # extracted base-tag .env. Scrub ESPRESSO_*/ESP_* from the subprocess
+    # env: REPO_ROOT/.env (loaded into os.environ by load_project_env)
+    # carries main's renamed vars, which would otherwise override
+    # base-tag values and point the smoke test at the wrong addresses.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("ESPRESSO_", "ESP_"))
+    }
+    env["DOCKER_TAG"] = tag
     try:
         subprocess.run(
             ["timeout", "600", str(REPO_ROOT / "scripts" / "smoke-test-demo")],
             cwd=compose.base_dir,
-            env=os.environ | {"DOCKER_TAG": tag},
+            env=env,
             check=True,
         )
     except subprocess.CalledProcessError:
