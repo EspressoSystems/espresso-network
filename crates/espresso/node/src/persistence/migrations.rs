@@ -12,8 +12,9 @@
 
 //! Background DataBackfill migrations for the espresso node.
 //!
-//! All migrations here are postgres-only: they back-fill data from the `*_legacy` tables created
-//! by migration V1302 into the new BIGINT-keyed tables.
+//! All migrations here are postgres-only: they back-fill data from the original tables (`hash`,
+//! `fee_merkle_tree`, `block_merkle_tree`) — kept intact by migration V1302 as read fallbacks —
+//! into the new BIGINT-keyed tables.
 
 use async_trait::async_trait;
 use hotshot_query_service::{
@@ -41,7 +42,7 @@ impl DataBackfill for BackfillHash {
         offset: u64,
     ) -> anyhow::Result<Option<u64>> {
         let rows: Vec<(i32, Vec<u8>)> =
-            sqlx::query_as("SELECT id, value FROM hash_legacy ORDER BY id LIMIT $1 OFFSET $2")
+            sqlx::query_as("SELECT id, value FROM hash ORDER BY id LIMIT $1 OFFSET $2")
                 .bind(self.batch_size() as i64)
                 .bind(offset as i64)
                 .fetch_all(tx.as_mut())
@@ -53,7 +54,7 @@ impl DataBackfill for BackfillHash {
         let n = rows.len();
 
         for (id, value) in rows {
-            sqlx::query("INSERT INTO hash (id, value) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            sqlx::query("INSERT INTO hash_bigint (id, value) VALUES ($1, $2) ON CONFLICT DO NOTHING")
                 .bind(id as i64)
                 .bind(&value)
                 .execute(tx.as_mut())
@@ -148,14 +149,14 @@ macro_rules! merkle_tree_backfill {
 merkle_tree_backfill!(
     BackfillFeeMerkleTree,
     "hash_bigint_backfill_fee_merkle_tree",
-    "fee_merkle_tree_legacy",
-    "fee_merkle_tree"
+    "fee_merkle_tree",
+    "fee_merkle_tree_bigint"
 );
 merkle_tree_backfill!(
     BackfillBlockMerkleTree,
     "hash_bigint_backfill_block_merkle_tree",
-    "block_merkle_tree_legacy",
-    "block_merkle_tree"
+    "block_merkle_tree",
+    "block_merkle_tree_bigint"
 );
 
 // ---------------------------------------------------------------------------
