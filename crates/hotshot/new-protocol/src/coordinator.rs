@@ -855,7 +855,11 @@ where
             StateManagerOutput::Header {
                 response,
                 header: Some(hdr),
-            } => Some(ConsensusInput::HeaderCreated(response.view, hdr)),
+            } => Some(ConsensusInput::HeaderCreated(
+                response.view,
+                proposal_commitment(&response.parent_proposal),
+                hdr,
+            )),
             StateManagerOutput::Header {
                 response,
                 header: None,

@@ -93,7 +93,7 @@ pub enum ConsensusInput<T: NodeType> {
         state_cert: LightClientStateUpdateCertificateV2<T>,
     },
     EpochChange(EpochChangeMessage<T>),
-    HeaderCreated(ViewNumber, T::BlockHeader),
+    HeaderCreated(ViewNumber, Commitment<Leaf2<T>>, T::BlockHeader),
     ProposalWithVidShare(
         T::SignatureKey,
         ProposalMessage<T, Validated>,
@@ -156,7 +156,7 @@ pub struct Consensus<T: NodeType> {
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
     locked_cert: Option<Certificate1<T>>,
-    headers: BTreeMap<ViewNumber, T::BlockHeader>,
+    headers: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), T::BlockHeader>,
     leaves: BTreeMap<ViewNumber, Leaf2<T>>,
     last_decided_view: ViewNumber,
     last_decided_leaf: Leaf2<T>,
@@ -454,8 +454,8 @@ impl<T: NodeType> Consensus<T> {
                     .insert(state_response.view, state_response.commitment);
                 Protocol::Continue
             },
-            ConsensusInput::HeaderCreated(view, header) => {
-                self.headers.insert(view, header);
+            ConsensusInput::HeaderCreated(view, commitment, header) => {
+                self.headers.insert((view, commitment), header);
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
@@ -581,7 +581,8 @@ impl<T: NodeType> Consensus<T> {
         self.pending_certs1 = self.pending_certs1.split_off(&view);
         self.pending_certs2 = self.pending_certs2.split_off(&view);
         self.timeout_certs = self.timeout_certs.split_off(&view);
-        self.headers = self.headers.split_off(&view);
+        self.headers
+            .retain(|(header_view, _), _| *header_view >= view);
         self.leaves = self.leaves.split_off(&view);
         self.proposals = self.proposals.split_off(&view);
         self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -979,7 +980,7 @@ impl<T: NodeType> Consensus<T> {
             return;
         };
 
-        let Some(header) = self.headers.get(&view) else {
+        let Some(header) = self.headers.get(&(view, parent_cert.data().leaf_commit)) else {
             debug!("no block header");
             return;
         };
@@ -1618,7 +1619,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
             ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),
-            ConsensusInput::HeaderCreated(view, _) => *view,
+            ConsensusInput::HeaderCreated(view, ..) => *view,
             ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
