@@ -91,8 +91,13 @@ where
                         build_legacy_path_query(fallback_table, missing_paths, created)?;
                     savepoint(self.as_mut(), "sp_path_fallback").await?;
                     let rows = lq.query(&lsql).fetch_all(self.as_mut()).await;
-                    if let Some(legacy_rows) =
-                        savepoint_finish(self.as_mut(), "sp_path_fallback", rows, "merkle path fallback lookup failed").await?
+                    if let Some(legacy_rows) = savepoint_finish(
+                        self.as_mut(),
+                        "sp_path_fallback",
+                        rows,
+                        "merkle path fallback lookup failed",
+                    )
+                    .await?
                     {
                         nodes.extend(legacy_rows.into_iter().map(Node::from));
                         // Re-sort leaf-first (longer path arrays first),
@@ -154,8 +159,13 @@ where
                     .bind(&missing)
                     .fetch_all(self.as_mut())
                     .await;
-                    if let Some(rows) =
-                        savepoint_finish(self.as_mut(), "sp_hash_fallback", rows, "hash fallback lookup failed").await?
+                    if let Some(rows) = savepoint_finish(
+                        self.as_mut(),
+                        "sp_hash_fallback",
+                        rows,
+                        "hash fallback lookup failed",
+                    )
+                    .await?
                     {
                         result.extend(rows);
                     }
@@ -165,7 +175,8 @@ where
 
             #[cfg(feature = "embedded-db")]
             {
-                let (query, sql) = build_where_in("SELECT id, value FROM hash_bigint", "id", hash_ids)?;
+                let (query, sql) =
+                    build_where_in("SELECT id, value FROM hash_bigint", "id", hash_ids)?;
                 query
                     .query_as(&sql)
                     .fetch(self.as_mut())
@@ -451,8 +462,8 @@ pub(crate) async fn batch_insert_hashes(
 
     // Use UNNEST-based batch insert (more efficient and avoids parameter limits).
     // Cast id to BIGINT in RETURNING so the result maps directly to i64.
-    let sql = "INSERT INTO hash_bigint(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT (value) DO \
-               UPDATE SET value = EXCLUDED.value RETURNING value, id::BIGINT";
+    let sql = "INSERT INTO hash_bigint(value) SELECT * FROM UNNEST($1::bytea[]) ON CONFLICT \
+               (value) DO UPDATE SET value = EXCLUDED.value RETURNING value, id::BIGINT";
 
     let result: HashMap<Vec<u8>, i64> = sqlx::query_as(sql)
         .bind(&hashes)
@@ -781,10 +792,7 @@ fn is_undefined_table(e: &sqlx::Error) -> bool {
 
 /// Set a named savepoint on `conn`.
 #[cfg(not(feature = "embedded-db"))]
-async fn savepoint(
-    conn: &mut sqlx::postgres::PgConnection,
-    sp: &'static str,
-) -> QueryResult<()> {
+async fn savepoint(conn: &mut sqlx::postgres::PgConnection, sp: &'static str) -> QueryResult<()> {
     sqlx::query(&format!("SAVEPOINT {sp}"))
         .execute(conn)
         .await
@@ -815,7 +823,7 @@ async fn savepoint_finish<T>(
                     message: format!("RELEASE SAVEPOINT {sp} failed: {e}"),
                 })?;
             Ok(Some(r))
-        }
+        },
         Err(e) if is_undefined_table(&e) => {
             sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp}"))
                 .execute(conn)
@@ -824,7 +832,7 @@ async fn savepoint_finish<T>(
                     message: format!("ROLLBACK TO SAVEPOINT {sp} failed: {e}"),
                 })?;
             Ok(None)
-        }
+        },
         Err(e) => Err(QueryError::Error {
             message: format!("{context}: {e}"),
         }),
