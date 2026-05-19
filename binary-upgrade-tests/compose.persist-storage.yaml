@@ -1,19 +1,39 @@
 # Compose override for the binary upgrade test.
 #
-# The 20260505 compose runs nodes 2, 3, 4 without any persistent storage:
-# - node-2: command "espresso-node -- http" (no storage module at all)
-# - node-3, 4: include "-- storage-fs" but write to ephemeral container layer
+# Two unrelated fixes for BASE composes that pre-date current main:
 #
-# When such a node is recreated for the binary roll, it has no cached config
-# and the orchestrator returns 403 ("Network has been started manually, no
-# longer registering new keys"), so the new container can't join. This
-# override adds a named docker volume + STORAGE_PATH (both old and new env
-# names) so each node persists its config across recreation. For node-2 we
-# also add "-- storage-fs" to the command so the binary actually persists.
+# 1. Persistent storage on nodes 2, 3, 4. The 20260505 compose runs them
+#    without it (node-2 has no storage module; nodes 3, 4 use storage-fs but
+#    write to the ephemeral container layer). When a node is recreated for
+#    the binary roll, it has no cached config and the orchestrator returns
+#    403 ("Network has been started manually, no longer registering new
+#    keys"), so the new container can't join. Named volumes + STORAGE_PATH
+#    (old and new env names) keep config across recreation. For node-2 we
+#    also add "-- storage-fs" to the command.
 #
-# Nodes 0, 1 already have postgres-backed storage and are not modified here.
+# 2. Light-client server module on nodes 0, 1 and rewired peer URLs.
+#    The upgraded binary's query-module fetcher hits `/light-client/leaf/N`
+#    via ESPRESSO_NODE_API_PEERS; the leaf-chain catchup path hits
+#    `STATE_PEERS`. Neither endpoint exists on non-archival peers, so in the
+#    BASE ring topology (0->1->4->...) the post-roll fetcher 404s during the
+#    upgrade window. Backport b9702a786f's hub topology (all non-archival
+#    nodes catch up via 0 and 1) and enable the light-client module on the
+#    archival pair so the query fetcher actually finds the route.
+#
+# Nodes 0, 1 already have postgres-backed storage; only env + command edits.
 
 services:
+  espresso-node-0:
+    command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- light-client
+
+  espresso-node-1:
+    command: espresso-node -- storage-sql -- http -- query -- explorer -- light-client
+    environment:
+      # OLD-name vars only; BASE's .env doesn't define the NEW-name port vars,
+      # and the UPGRADE binary aliases OLD->NEW via env_compat on startup.
+      ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT
+      ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT
+
   # Add `status` (only requires `http`) so roll_node can poll node 2's block
   # height; it has no `query` module to expose /node/block-height.
   espresso-node-2:
@@ -21,6 +41,7 @@ services:
     environment:
       ESPRESSO_SEQUENCER_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
     volumes:
       - espresso-node-2-storage:/var/lib/espresso
 
@@ -28,6 +49,8 @@ services:
     environment:
       ESPRESSO_SEQUENCER_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
     volumes:
       - espresso-node-3-storage:/var/lib/espresso
 
@@ -35,6 +58,8 @@ services:
     environment:
       ESPRESSO_SEQUENCER_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
     volumes:
       - espresso-node-4-storage:/var/lib/espresso
 
