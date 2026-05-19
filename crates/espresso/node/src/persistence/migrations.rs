@@ -16,15 +16,13 @@
 //! `fee_merkle_tree`, `block_merkle_tree`) — kept intact by migration V1302 as read fallbacks —
 //! into the new BIGINT-keyed tables.
 
+#[cfg(not(feature = "embedded-db"))]
 use async_trait::async_trait;
+#[cfg(not(feature = "embedded-db"))]
 use hotshot_query_service::{
     data_source::storage::sql::{Transaction, Write},
     migration::{DataBackfill, MigrationRegistry},
 };
-
-// ---------------------------------------------------------------------------
-// hash table backfill
-// ---------------------------------------------------------------------------
 
 #[cfg(not(feature = "embedded-db"))]
 pub struct BackfillHash;

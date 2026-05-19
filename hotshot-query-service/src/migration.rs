@@ -1,8 +1,12 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 
 use crate::data_source::storage::sql::{Transaction, Write};
 #[cfg(not(feature = "embedded-db"))]
 use crate::data_source::{Transaction as _, VersionedDataSource, storage::sql::SqlStorage};
+
+const RETRY_INTERVAL: Duration = Duration::from_secs(300);
 
 /// A background migration that copies or transforms data in batches.
 #[async_trait]
@@ -16,6 +20,11 @@ pub trait DataBackfill: Send + Sync + 'static {
 
     /// Number of rows to process per batch.
     fn batch_size(&self) -> usize {
+        1_000
+    }
+
+    /// Number of batches between progress log lines.
+    fn log_frequency(&self) -> usize {
         1_000
     }
 
@@ -61,7 +70,8 @@ impl MigrationRegistry {
             for dep in m.requires() {
                 anyhow::ensure!(
                     seen.contains(dep),
-                    "migration {name} requires {dep} to be run first",
+                    "migration {name} requires {dep} which either does not exist or appears later \
+                     in the registry",
                 );
             }
         }
@@ -73,7 +83,11 @@ impl MigrationRegistry {
         self.migrations.iter().map(|b| b.as_ref())
     }
 
-    /// Run all registered migrations sequentially against `db`.
+    /// Drive all registered migrations to completion.
+    ///
+    /// Iterates over all migrations on each pass. Migrations whose prerequisites are not yet
+    /// complete are skipped with a warning and retried after [`RETRY_INTERVAL`]. The loop exits
+    /// once every migration has been marked complete.
     #[cfg(not(feature = "embedded-db"))]
     pub async fn run_all_migrations(self, db: SqlStorage) {
         if let Err(e) = self.validate() {
@@ -82,70 +96,103 @@ impl MigrationRegistry {
             );
             return;
         }
-        for m in &self.migrations {
-            Self::run_migration(&db, m.as_ref()).await;
+
+        loop {
+            let mut pending = 0usize;
+
+            for m in &self.migrations {
+                let name = m.name();
+
+                // Skip migrations that have already been marked complete.
+                match Self::is_complete(&db, name).await {
+                    Ok(true) => continue,
+                    Ok(false) => {},
+                    Err(e) => {
+                        tracing::error!(name, "failed to check migration status: {e:#}");
+                        pending += 1;
+                        continue;
+                    },
+                }
+
+                // Defer if any prerequisite is not yet complete.
+                let mut deps_ready = true;
+                for dep in m.requires() {
+                    match Self::is_complete(&db, dep).await {
+                        Ok(true) => {},
+                        Ok(false) => {
+                            tracing::warn!(
+                                name,
+                                dep,
+                                "prerequisite not yet complete, will retry after \
+                                 {RETRY_INTERVAL:?}"
+                            );
+                            deps_ready = false;
+                        },
+                        Err(e) => {
+                            tracing::error!(name, dep, "failed to check prerequisite: {e:#}");
+                            deps_ready = false;
+                        },
+                    }
+                }
+                if !deps_ready {
+                    pending += 1;
+                    continue;
+                }
+
+                // Run all batches for this migration.
+                if !Self::run_migration(&db, m.as_ref()).await {
+                    pending += 1;
+                }
+            }
+
+            if pending == 0 {
+                tracing::warn!("all deferred migrations complete");
+                break;
+            }
+
+            tokio::time::sleep(RETRY_INTERVAL).await;
         }
     }
 
-    /// Run a single backfill migration, resuming from the last persisted offset.
+    /// Run all batches for a single migration to completion. Returns `true` if the migration
+    /// finished successfully, `false` if it encountered an error.
     #[cfg(not(feature = "embedded-db"))]
-    async fn run_migration(db: &SqlStorage, m: &dyn DataBackfill) {
+    async fn run_migration(db: &SqlStorage, m: &dyn DataBackfill) -> bool {
         let name = m.name();
 
-        let offset = match Self::init_or_get_offset(db, name).await {
-            Ok(None) => {
-                tracing::warn!(name, "deferred migration already complete");
-                return;
-            },
-            Ok(Some(o)) => o,
+        let mut offset = match Self::init_and_get_offset(db, name).await {
+            Ok(o) => o,
             Err(e) => {
-                tracing::error!(name, "failed to initialize deferred migration: {e:#}");
-                return;
+                tracing::error!(name, "failed to initialize migration: {e:#}");
+                return false;
             },
         };
 
-        for dep in m.requires() {
-            match Self::check_complete(db, dep).await {
-                Ok(true) => {},
-                Ok(false) => {
-                    tracing::warn!(
-                        name,
-                        dep,
-                        "prerequisite deferred migration not complete, skipping"
-                    );
-                    return;
-                },
-                Err(e) => {
-                    tracing::error!(name, dep, "failed to check prerequisite: {e:#}");
-                    return;
-                },
-            }
-        }
+        tracing::warn!(name, offset, "starting deferred migration");
 
-        tracing::info!(name, offset, "starting deferred migration");
-        let mut offset = offset;
+        let mut batch_count: usize = 0;
 
         loop {
             let mut tx = match db.write().await {
                 Ok(tx) => tx,
                 Err(e) => {
-                    tracing::error!(name, "failed to open write transaction: {e:#}");
-                    return;
+                    tracing::error!(name, offset, "failed to open write transaction: {e:#}");
+                    return false;
                 },
             };
 
             let next = match m.run_batch(&mut tx, offset).await {
                 Ok(next) => next,
                 Err(e) => {
-                    tracing::error!(name, offset, "deferred migration batch failed: {e:#}");
-                    return;
+                    tracing::error!(name, offset, "migration batch failed: {e:#}");
+                    return false;
                 },
             };
 
             let done = next.is_none();
             let next_offset = next.unwrap_or(offset) as i64;
 
-            let update = sqlx::query(
+            if let Err(e) = sqlx::query(
                 "UPDATE deferred_migrations SET last_offset = $1, completed_at = CASE WHEN $2 \
                  THEN NOW() ELSE completed_at END WHERE name = $3",
             )
@@ -153,30 +200,55 @@ impl MigrationRegistry {
             .bind(done)
             .bind(name)
             .execute(tx.as_mut())
-            .await;
-
-            if let Err(e) = update {
+            .await
+            {
                 tracing::error!(name, "failed to persist migration progress: {e:#}");
-                return;
+                return false;
             }
 
             if let Err(e) = tx.commit().await {
                 tracing::error!(name, "failed to commit migration batch: {e:#}");
-                return;
+                return false;
             }
 
+            batch_count += 1;
+
             if done {
-                tracing::info!(name, "deferred migration complete");
-                break;
+                tracing::warn!(name, batches = batch_count, "deferred migration complete");
+                return true;
             }
+
             offset = next.unwrap() as u64;
+
+            if batch_count % m.log_frequency() == 0 {
+                tracing::warn!(
+                    name,
+                    offset,
+                    batches = batch_count,
+                    "deferred migration progress"
+                );
+            }
         }
     }
 
-    /// Insert a row into `deferred_migrations` if one does not already exist, then return the
-    /// current offset.  Returns `None` if the migration is already marked complete.
+    /// Returns `true` if the named migration has been marked complete in the database.
+    /// Returns `false` if the row does not exist or `completed_at` is null.
     #[cfg(not(feature = "embedded-db"))]
-    async fn init_or_get_offset(db: &SqlStorage, name: &str) -> anyhow::Result<Option<u64>> {
+    async fn is_complete(db: &SqlStorage, name: &str) -> anyhow::Result<bool> {
+        let mut tx = db.read().await?;
+        let row: Option<(bool,)> = sqlx::query_as(
+            "SELECT completed_at IS NOT NULL FROM deferred_migrations WHERE name = $1",
+        )
+        .bind(name)
+        .fetch_optional(tx.as_mut())
+        .await?;
+        Ok(row.map(|(b,)| b).unwrap_or(false))
+    }
+
+    /// Insert a tracking row for `name` if one does not yet exist, then return the stored offset
+    /// to resume from.
+    #[cfg(not(feature = "embedded-db"))]
+    async fn init_and_get_offset(db: &SqlStorage, name: &str) -> anyhow::Result<u64> {
         let mut tx = db.write().await?;
 
         sqlx::query(
@@ -187,9 +259,8 @@ impl MigrationRegistry {
         .execute(tx.as_mut())
         .await?;
 
-        let (completed, last_offset): (bool, i64) = sqlx::query_as(
-            "SELECT completed_at IS NOT NULL, COALESCE(last_offset, 0) FROM deferred_migrations \
-             WHERE name = $1",
+        let (last_offset,): (i64,) = sqlx::query_as(
+            "SELECT COALESCE(last_offset, 0) FROM deferred_migrations WHERE name = $1",
         )
         .bind(name)
         .fetch_one(tx.as_mut())
@@ -197,23 +268,7 @@ impl MigrationRegistry {
 
         tx.commit().await?;
 
-        if completed {
-            Ok(None)
-        } else {
-            Ok(Some(last_offset as u64))
-        }
-    }
-
-    #[cfg(not(feature = "embedded-db"))]
-    async fn check_complete(db: &SqlStorage, name: &str) -> anyhow::Result<bool> {
-        let mut tx = db.read().await?;
-        let row: Option<(bool,)> = sqlx::query_as(
-            "SELECT completed_at IS NOT NULL FROM deferred_migrations WHERE name = $1",
-        )
-        .bind(name)
-        .fetch_optional(tx.as_mut())
-        .await?;
-        Ok(row.map(|(b,)| b).unwrap_or(false))
+        Ok(last_offset as u64)
     }
 }
 
