@@ -281,6 +281,122 @@ class Compose:
         )
         return Node.from_index(NEW_NODE_INDEX)
 
+    def smoke_test(self, tag: str) -> None:
+        # cwd=base_dir so `source .env` in the script picks up base_tag's .env;
+        # deployed contract addresses match it, not REPO_ROOT/.env which may
+        # have shifted if main changed deploy ordering.
+        subprocess.run(
+            ["timeout", "600", str(REPO_ROOT / "scripts" / "smoke-test-demo")],
+            cwd=self.base_dir,
+            env=os.environ | {"DOCKER_TAG": tag},
+            check=True,
+        )
+
+    def boot_base_network(self, config: Config) -> None:
+        self.run("down", "-v", check=False, capture=True)
+
+        log.info(f"Starting network on {config.base_tag}")
+        # `compose up -d` blocks on `depends_on: service_completed_successfully`,
+        # but `deploy-lcv3-upgrade` retries forever and `prover-one-shot` has a
+        # broken healthcheck, so a synchronous call would never return. Run in
+        # the background and let the smoke test below verify readiness end to
+        # end. The compose stack is torn down on context exit regardless.
+        compose_up_log = self.base_dir / "compose-up.log"
+        with compose_up_log.open("wb") as f:
+            subprocess.Popen(
+                self.base_args + ["up", "-d"],
+                cwd=REPO_ROOT,
+                env=os.environ | {"DOCKER_TAG": config.base_tag},
+                stdout=f,
+                stderr=subprocess.STDOUT,
+            )
+        log.info(f"compose up -d running in background; log at {compose_up_log}")
+
+        log.info("Initial smoke test")
+        self.smoke_test(config.base_tag)
+
+    def run_full_vanilla_upgrade(self, config: Config) -> None:
+        self.roll_all_nodes(config.upgrade_tag)
+
+        log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
+        self.bulk_upgrade_remaining(config.upgrade_tag)
+
+        log.info(f"Asserting all espresso-network images run tag {config.upgrade_tag}")
+        self.assert_all_espresso_images(config.upgrade_tag)
+
+    def scenario_vanilla(self, config: Config) -> None:
+        self.boot_base_network(config)
+        self.run_full_vanilla_upgrade(config)
+
+        log.info("Final smoke test")
+        self.smoke_test(config.upgrade_tag)
+
+    def _catchup_from_old(
+        self,
+        config: Config,
+        wipe_idx: int,
+        wipe: Callable[[int], None],
+    ) -> None:
+        self.boot_base_network(config)
+
+        log.info(f"Rolling espresso-node-{wipe_idx} to {config.upgrade_tag}")
+        self.roll_node(wipe_idx, config.upgrade_tag)
+
+        wipe(wipe_idx)
+        self.restart_node_with_config_peer(wipe_idx, config.upgrade_tag)
+
+        peers = [Node.from_index(i) for i in NODE_INDICES if i != wipe_idx]
+        wait_for_catchup(wipe_idx, peers)
+
+        self.roll_all_nodes(config.upgrade_tag, skip=(wipe_idx,))
+
+        log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
+        self.bulk_upgrade_remaining(config.upgrade_tag)
+
+        log.info(f"Asserting all espresso-network images run tag {config.upgrade_tag}")
+        self.assert_all_espresso_images(config.upgrade_tag)
+
+        log.info("Final smoke test")
+        self.smoke_test(config.upgrade_tag)
+
+    def scenario_catchup_from_old_fs(self, config: Config) -> None:
+        self._catchup_from_old(config, WIPE_FS_NODE, self.wipe_fs_node)
+
+    def scenario_catchup_from_old_pg(self, config: Config) -> None:
+        self._catchup_from_old(config, WIPE_PG_NODE, self.wipe_pg_node)
+
+    def _catchup_from_new(
+        self,
+        config: Config,
+        wipe_idx: int,
+        wipe: Callable[[int], None],
+    ) -> None:
+        self.boot_base_network(config)
+        self.run_full_vanilla_upgrade(config)
+
+        wipe(wipe_idx)
+        self.restart_node_with_config_peer(wipe_idx, config.upgrade_tag)
+
+        peers = [Node.from_index(i) for i in NODE_INDICES if i != wipe_idx]
+        wait_for_catchup(wipe_idx, peers)
+
+        log.info("Final smoke test")
+        self.smoke_test(config.upgrade_tag)
+
+    def scenario_catchup_from_new_fs(self, config: Config) -> None:
+        self._catchup_from_new(config, WIPE_FS_NODE, self.wipe_fs_node)
+
+    def scenario_catchup_from_new_pg(self, config: Config) -> None:
+        self._catchup_from_new(config, WIPE_PG_NODE, self.wipe_pg_node)
+
+    def scenario_first_start(self, config: Config) -> None:
+        self.boot_base_network(config)
+        self.run_full_vanilla_upgrade(config)
+
+        self.start_new_node_5(config.base_tag)
+        peers = [Node.from_index(i) for i in NODE_INDICES]
+        wait_for_catchup(NEW_NODE_INDEX, peers, timeout=300)
+
 
 def _http_status_and_body(url: str, timeout: float = 5.0) -> tuple[int, str]:
     try:
@@ -480,18 +596,6 @@ def load_project_env() -> None:
             os.environ.setdefault(k, v)
 
 
-def smoke_test(tag: str, base_dir: Path) -> None:
-    # cwd=base_dir so `source .env` in the script picks up base_tag's .env;
-    # deployed contract addresses match it, not REPO_ROOT/.env which may
-    # have shifted if main changed deploy ordering.
-    subprocess.run(
-        ["timeout", "600", str(REPO_ROOT / "scripts" / "smoke-test-demo")],
-        cwd=base_dir,
-        env=os.environ | {"DOCKER_TAG": tag},
-        check=True,
-    )
-
-
 @contextmanager
 def compose_session(config: Config):
     base_dir = Path(tempfile.mkdtemp(prefix="espresso-binary-upgrade-test."))
@@ -511,128 +615,13 @@ def compose_session(config: Config):
         shutil.rmtree(base_dir, ignore_errors=True)
 
 
-def boot_base_network(compose: Compose, config: Config) -> None:
-    compose.run("down", "-v", check=False, capture=True)
-
-    log.info(f"Starting network on {config.base_tag}")
-    # `compose up -d` blocks on `depends_on: service_completed_successfully`,
-    # but `deploy-lcv3-upgrade` retries forever and `prover-one-shot` has a
-    # broken healthcheck, so a synchronous call would never return. Run in
-    # the background and let the smoke test below verify readiness end to
-    # end. The compose stack is torn down on context exit regardless.
-    compose_up_log = compose.base_dir / "compose-up.log"
-    with compose_up_log.open("wb") as f:
-        subprocess.Popen(
-            compose.base_args + ["up", "-d"],
-            cwd=REPO_ROOT,
-            env=os.environ | {"DOCKER_TAG": config.base_tag},
-            stdout=f,
-            stderr=subprocess.STDOUT,
-        )
-    log.info(f"compose up -d running in background; log at {compose_up_log}")
-
-    log.info("Initial smoke test")
-    smoke_test(config.base_tag, compose.base_dir)
-
-
-def run_full_vanilla_upgrade(compose: Compose, config: Config) -> None:
-    compose.roll_all_nodes(config.upgrade_tag)
-
-    log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
-    compose.bulk_upgrade_remaining(config.upgrade_tag)
-
-    log.info(f"Asserting all espresso-network images run tag {config.upgrade_tag}")
-    compose.assert_all_espresso_images(config.upgrade_tag)
-
-
-def scenario_vanilla(compose: Compose, config: Config) -> None:
-    boot_base_network(compose, config)
-    run_full_vanilla_upgrade(compose, config)
-
-    log.info("Final smoke test")
-    smoke_test(config.upgrade_tag, compose.base_dir)
-
-
-def _catchup_from_old(
-    compose: Compose,
-    config: Config,
-    wipe_idx: int,
-    wipe: Callable[[int], None],
-) -> None:
-    boot_base_network(compose, config)
-
-    log.info(f"Rolling espresso-node-{wipe_idx} to {config.upgrade_tag}")
-    compose.roll_node(wipe_idx, config.upgrade_tag)
-
-    wipe(wipe_idx)
-    compose.restart_node_with_config_peer(wipe_idx, config.upgrade_tag)
-
-    peers = [Node.from_index(i) for i in NODE_INDICES if i != wipe_idx]
-    wait_for_catchup(wipe_idx, peers)
-
-    compose.roll_all_nodes(config.upgrade_tag, skip=(wipe_idx,))
-
-    log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
-    compose.bulk_upgrade_remaining(config.upgrade_tag)
-
-    log.info(f"Asserting all espresso-network images run tag {config.upgrade_tag}")
-    compose.assert_all_espresso_images(config.upgrade_tag)
-
-    log.info("Final smoke test")
-    smoke_test(config.upgrade_tag, compose.base_dir)
-
-
-def scenario_catchup_from_old_fs(compose: Compose, config: Config) -> None:
-    _catchup_from_old(compose, config, WIPE_FS_NODE, compose.wipe_fs_node)
-
-
-def scenario_catchup_from_old_pg(compose: Compose, config: Config) -> None:
-    _catchup_from_old(compose, config, WIPE_PG_NODE, compose.wipe_pg_node)
-
-
-def _catchup_from_new(
-    compose: Compose,
-    config: Config,
-    wipe_idx: int,
-    wipe: Callable[[int], None],
-) -> None:
-    boot_base_network(compose, config)
-    run_full_vanilla_upgrade(compose, config)
-
-    wipe(wipe_idx)
-    compose.restart_node_with_config_peer(wipe_idx, config.upgrade_tag)
-
-    peers = [Node.from_index(i) for i in NODE_INDICES if i != wipe_idx]
-    wait_for_catchup(wipe_idx, peers)
-
-    log.info("Final smoke test")
-    smoke_test(config.upgrade_tag, compose.base_dir)
-
-
-def scenario_catchup_from_new_fs(compose: Compose, config: Config) -> None:
-    _catchup_from_new(compose, config, WIPE_FS_NODE, compose.wipe_fs_node)
-
-
-def scenario_catchup_from_new_pg(compose: Compose, config: Config) -> None:
-    _catchup_from_new(compose, config, WIPE_PG_NODE, compose.wipe_pg_node)
-
-
-def scenario_first_start(compose: Compose, config: Config) -> None:
-    boot_base_network(compose, config)
-    run_full_vanilla_upgrade(compose, config)
-
-    compose.start_new_node_5(config.base_tag)
-    peers = [Node.from_index(i) for i in NODE_INDICES]
-    wait_for_catchup(NEW_NODE_INDEX, peers, timeout=300)
-
-
 SCENARIO_DISPATCH: dict[str, Callable[[Compose, Config], None]] = {
-    "vanilla": scenario_vanilla,
-    "catchup-from-old-fs": scenario_catchup_from_old_fs,
-    "catchup-from-old-pg": scenario_catchup_from_old_pg,
-    "catchup-from-new-fs": scenario_catchup_from_new_fs,
-    "catchup-from-new-pg": scenario_catchup_from_new_pg,
-    "first-start": scenario_first_start,
+    "vanilla": Compose.scenario_vanilla,
+    "catchup-from-old-fs": Compose.scenario_catchup_from_old_fs,
+    "catchup-from-old-pg": Compose.scenario_catchup_from_old_pg,
+    "catchup-from-new-fs": Compose.scenario_catchup_from_new_fs,
+    "catchup-from-new-pg": Compose.scenario_catchup_from_new_pg,
+    "first-start": Compose.scenario_first_start,
 }
 
 SCENARIOS = tuple(SCENARIO_DISPATCH.keys())
