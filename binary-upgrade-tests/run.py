@@ -305,16 +305,41 @@ def load_project_env() -> None:
             os.environ.setdefault(k, v)
 
 
-def smoke_test(tag: str, base_dir: Path) -> None:
+DIAGNOSTIC_SERVICES = (
+    "deploy-espresso-contracts",
+    "deploy-prover-contracts",
+    "deploy-lcv3-upgrade",
+    "deploy-pos-contracts-upgrades",
+    "state-relay-server",
+    "prover-one-shot",
+    "espresso-node-0",
+    "orchestrator",
+)
+
+
+def dump_diagnostics(compose: Compose) -> None:
+    log.info("Dumping diagnostic compose logs after smoke-test failure")
+    for service in DIAGNOSTIC_SERVICES:
+        log.info(f"--- {service} logs (tail 200) ---")
+        compose.run(
+            "logs", "--no-color", "--tail=200", service, check=False, capture=False,
+        )
+
+
+def smoke_test(tag: str, compose: Compose) -> None:
     # cwd=base_dir so `source .env` in the script picks up base_tag's .env;
     # deployed contract addresses match it, not REPO_ROOT/.env which may
     # have shifted if main changed deploy ordering.
-    subprocess.run(
-        ["timeout", "600", str(REPO_ROOT / "scripts" / "smoke-test-demo")],
-        cwd=base_dir,
-        env=os.environ | {"DOCKER_TAG": tag},
-        check=True,
-    )
+    try:
+        subprocess.run(
+            ["timeout", "600", str(REPO_ROOT / "scripts" / "smoke-test-demo")],
+            cwd=compose.base_dir,
+            env=os.environ | {"DOCKER_TAG": tag},
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        dump_diagnostics(compose)
+        raise
 
 
 @contextmanager
@@ -398,7 +423,7 @@ def main() -> int:
         log.info(f"compose up -d running in background; log at {compose_up_log}")
 
         log.info("Initial smoke test")
-        smoke_test(config.base_tag, compose.base_dir)
+        smoke_test(config.base_tag, compose)
 
         for n in NODE_INDICES:
             log.info(f"Rolling espresso-node-{n} to {config.upgrade_tag}")
@@ -411,7 +436,7 @@ def main() -> int:
         assert_all_espresso_images(compose, config.upgrade_tag)
 
         log.info("Final smoke test")
-        smoke_test(config.upgrade_tag, compose.base_dir)
+        smoke_test(config.upgrade_tag, compose)
 
         log.info("Binary upgrade test complete")
     return 0
