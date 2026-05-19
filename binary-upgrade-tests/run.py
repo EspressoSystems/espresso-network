@@ -189,6 +189,26 @@ class Compose:
     def container_id(self, service: str) -> str:
         return self.run("ps", "-q", service, capture=True).stdout.strip()
 
+    def dump_service_logs(self, service: str, tail: int = 1000) -> None:
+        log.error(f"--- docker compose logs --tail {tail} {service} ---")
+        self.run("logs", "--tail", str(tail), service, check=False)
+
+    def wait_for_catchup(
+        self, idx: int, peers: list[Node], timeout: float = 240
+    ) -> None:
+        heights = [p.storage_height() for p in peers if p.has_query]
+        heights = [h for h in heights if h is not None]
+        if not heights:
+            raise RuntimeError("No peer reported a storage height")
+        target = max(heights) + 2
+        node = Node.from_index(idx)
+        log.info(f"Waiting for {node} to catch up to height {target}")
+        try:
+            node.wait_until_at_height(target, height_timeout=timeout)
+        except TimeoutError:
+            self.dump_service_logs(str(node))
+            raise
+
     def upgraded_services(self) -> list[str]:
         return [s for s in self.services() if s not in NOUPGRADE_SERVICES]
 
@@ -259,7 +279,11 @@ class Compose:
         )
 
         for node in nodes:
-            node.wait_until_at_height(target)
+            try:
+                node.wait_until_at_height(target)
+            except TimeoutError:
+                self.dump_service_logs(str(node))
+                raise
 
     def roll_all_nodes(self, upgrade_tag: str, skip: tuple[int, ...] = ()) -> None:
         for n in NODE_INDICES:
@@ -295,11 +319,15 @@ class Compose:
         self.stop_and_remove_service(db_service)
         log.info(f"Restarting fresh {db_service}")
         self.run("up", "-d", "--no-deps", db_service)
-        poll_until(
-            lambda: _db_container_healthy(db_service),
-            f"{db_service} healthy",
-            timeout=60,
-        )
+        try:
+            poll_until(
+                lambda: _db_container_healthy(db_service),
+                f"{db_service} healthy",
+                timeout=60,
+            )
+        except TimeoutError:
+            self.dump_service_logs(db_service)
+            raise
 
     def restart_node_with_config_peer(self, idx: int, tag: str) -> None:
         # The CONFIG_PEERS overlay applies only to this single `up`; if the same
@@ -427,7 +455,7 @@ class Compose:
         self.restart_node_with_config_peer(wipe_idx, config.upgrade_tag)
 
         peers = [Node.from_index(i) for i in NODE_INDICES if i != wipe_idx]
-        wait_for_catchup(wipe_idx, peers)
+        self.wait_for_catchup(wipe_idx, peers)
 
         self.roll_all_nodes(config.upgrade_tag, skip=(wipe_idx,))
 
@@ -453,7 +481,7 @@ class Compose:
         self.restart_node_with_config_peer(wipe_idx, config.upgrade_tag)
 
         peers = [Node.from_index(i) for i in NODE_INDICES if i != wipe_idx]
-        wait_for_catchup(wipe_idx, peers)
+        self.wait_for_catchup(wipe_idx, peers)
 
         log.info("Final smoke test")
         self.smoke_test(config.upgrade_tag)
@@ -464,7 +492,7 @@ class Compose:
 
         self.start_new_node_5(config.base_tag)
         peers = [Node.from_index(i) for i in NODE_INDICES]
-        wait_for_catchup(NEW_NODE_INDEX, peers, timeout=300)
+        self.wait_for_catchup(NEW_NODE_INDEX, peers, timeout=300)
 
 
 def _http_status_and_body(url: str, timeout: float = 5.0) -> tuple[int, str]:
@@ -584,17 +612,6 @@ def _db_container_healthy(service: str) -> bool:
         check=False,
     )
     return health.stdout.strip() == "healthy"
-
-
-def wait_for_catchup(idx: int, peers: list[Node], timeout: float = 240) -> None:
-    heights = [p.storage_height() for p in peers if p.has_query]
-    heights = [h for h in heights if h is not None]
-    if not heights:
-        raise RuntimeError("No peer reported a storage height")
-    target = max(heights) + 2
-    node = Node.from_index(idx)
-    log.info(f"Waiting for {node} to catch up to height {target}")
-    node.wait_until_at_height(target, height_timeout=timeout)
 
 
 def _generate_keys(image_tag: str) -> dict[str, str]:
