@@ -11,6 +11,12 @@ error_handler() {
   echo "Failed at line $lineno: msg: $msg"
 }
 
+# Clear renamed vars before sourcing .env so an old-name .env (e.g. the
+# extracted base-tag .env used by binary-upgrade-tests) can populate the
+# values via the fallbacks below, instead of an inherited new-name value
+# from a different .env winning.
+unset ESPRESSO_L1_PORT ESPRESSO_NODE_1_API_PORT ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS
+
 # load env vars in .env
 set -a; source .env; set +a;
 
