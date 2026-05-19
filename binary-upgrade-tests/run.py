@@ -192,10 +192,26 @@ class Compose:
     def upgraded_services(self) -> list[str]:
         return [s for s in self.services() if s not in NOUPGRADE_SERVICES]
 
-    def pull(self, *tags: str) -> None:
+    def pull(self, *tags: str, retries: int = 4, backoff: float = 10.0) -> None:
+        # ghcr.io occasionally returns "context deadline exceeded" on manifest
+        # HEADs when many parallel CI jobs pull at once. `--policy missing`
+        # makes retries cheap: already-pulled images are skipped.
         for tag in tags:
             log.info(f"Pulling images (DOCKER_TAG={tag})")
-            self.run("pull", "--policy", "missing", docker_tag=tag)
+            for attempt in range(1, retries + 1):
+                result = self.run(
+                    "pull", "--policy", "missing", docker_tag=tag, check=False
+                )
+                if result.returncode == 0:
+                    break
+                if attempt == retries:
+                    raise RuntimeError(
+                        f"compose pull failed after {retries} attempts for tag={tag}"
+                    )
+                log.warning(
+                    f"compose pull attempt {attempt}/{retries} for tag={tag} failed; retrying in {backoff:g}s"
+                )
+                time.sleep(backoff)
 
     def assert_all_espresso_images(self, expected_tag: str) -> None:
         bad: list[str] = []
