@@ -10,8 +10,9 @@
 //! network (dial timeouts, auth handshake failures from random scanners, DHT
 //! disagreements, etc.). They have been demoted to `debug!`. To preserve
 //! aggregate visibility, sites that demote a log increment a process-global
-//! counter here. A background task emits a single `warn!` summary line every
-//! `SUMMARY_INTERVAL`, listing only non-zero counters.
+//! counter here. A background task emits a single `warn!` event every
+//! `SUMMARY_INTERVAL`, with each counter as a named tracing field so Datadog
+//! and other structured backends can index and filter by counter directly.
 //!
 //! Counters are process-global because the summary itself is process-global;
 //! threading an `Arc` through every libp2p call site would be far more
@@ -25,10 +26,8 @@ use std::{
 use tokio::time::interval;
 use tracing::warn;
 
-/// How often the summary task wakes up and emits an aggregated line.
+/// How often the summary task wakes up and emits an aggregated event.
 pub const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
-
-// --- Counters -------------------------------------------------------------
 
 pub static DIAL_FAILURES: AtomicU64 = AtomicU64::new(0);
 pub static INCOMING_CONN_ERRORS: AtomicU64 = AtomicU64::new(0);
@@ -47,59 +46,117 @@ pub static DIRECT_MESSAGE_OUTBOUND_FAILURES: AtomicU64 = AtomicU64::new(0);
 pub static GOSSIP_PUBLISH_FAILURES: AtomicU64 = AtomicU64::new(0);
 pub static NETWORK_SEND_FAILURES: AtomicU64 = AtomicU64::new(0);
 
-/// All counters, sorted alphabetically by name for stable summary output.
-const COUNTERS: &[(&str, &AtomicU64)] = &[
-    ("auth_failures", &AUTH_FAILURES),
-    ("auth_handshake_timeouts", &AUTH_HANDSHAKE_TIMEOUTS),
-    ("dht_closest_peers_failures", &DHT_CLOSEST_PEERS_FAILURES),
-    ("dht_disagreements_given_up", &DHT_DISAGREEMENTS_GIVEN_UP),
-    ("dht_kad_query_errors", &DHT_KAD_QUERY_ERRORS),
-    ("dht_lookup_failures", &DHT_LOOKUP_FAILURES),
-    (
-        "direct_message_inbound_failures",
-        &DIRECT_MESSAGE_INBOUND_FAILURES,
-    ),
-    (
-        "direct_message_outbound_failures",
-        &DIRECT_MESSAGE_OUTBOUND_FAILURES,
-    ),
-    ("dial_failures", &DIAL_FAILURES),
-    ("gossip_publish_failures", &GOSSIP_PUBLISH_FAILURES),
-    ("gossipsub_not_supported", &GOSSIPSUB_NOT_SUPPORTED),
-    ("gossipsub_slow_peer", &GOSSIPSUB_SLOW_PEER),
-    ("incoming_conn_errors", &INCOMING_CONN_ERRORS),
-    ("listener_errors", &LISTENER_ERRORS),
-    ("network_send_failures", &NETWORK_SEND_FAILURES),
-    ("verify_failures", &VERIFY_FAILURES),
-];
-
-/// Atomically read each counter and reset it to zero, returning `(name, value)`
-/// pairs in `COUNTERS` order (alphabetical).
-fn snapshot_and_reset() -> Vec<(&'static str, u64)> {
-    COUNTERS
-        .iter()
-        .map(|(name, counter)| (*name, counter.swap(0, Ordering::Relaxed)))
-        .collect()
+/// Drained values for all counters at one point in time. Field names match
+/// the counter names; structured backends index them as named attributes.
+#[derive(Default, Debug)]
+struct Snapshot {
+    auth_failures: u64,
+    auth_handshake_timeouts: u64,
+    dht_closest_peers_failures: u64,
+    dht_disagreements_given_up: u64,
+    dht_kad_query_errors: u64,
+    dht_lookup_failures: u64,
+    dial_failures: u64,
+    direct_message_inbound_failures: u64,
+    direct_message_outbound_failures: u64,
+    gossip_publish_failures: u64,
+    gossipsub_not_supported: u64,
+    gossipsub_slow_peer: u64,
+    incoming_conn_errors: u64,
+    listener_errors: u64,
+    network_send_failures: u64,
+    verify_failures: u64,
 }
 
-/// Format a snapshot into a single summary line. Returns `None` if every
-/// counter is zero. Output is `libp2p last 60s: name1=v1 name2=v2 ...` with
-/// only non-zero counters, in input order (alphabetical by counter name).
-fn format_summary(snapshot: &[(&str, u64)]) -> Option<String> {
-    let parts: Vec<String> = snapshot
-        .iter()
-        .filter(|(_, value)| *value != 0)
-        .map(|(name, value)| format!("{name}={value}"))
-        .collect();
-    if parts.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "libp2p last {}s: {}",
-            SUMMARY_INTERVAL.as_secs(),
-            parts.join(" ")
-        ))
+impl Snapshot {
+    /// Drain every counter to zero and return their values.
+    fn drain() -> Self {
+        Self {
+            auth_failures: AUTH_FAILURES.swap(0, Ordering::Relaxed),
+            auth_handshake_timeouts: AUTH_HANDSHAKE_TIMEOUTS.swap(0, Ordering::Relaxed),
+            dht_closest_peers_failures: DHT_CLOSEST_PEERS_FAILURES.swap(0, Ordering::Relaxed),
+            dht_disagreements_given_up: DHT_DISAGREEMENTS_GIVEN_UP.swap(0, Ordering::Relaxed),
+            dht_kad_query_errors: DHT_KAD_QUERY_ERRORS.swap(0, Ordering::Relaxed),
+            dht_lookup_failures: DHT_LOOKUP_FAILURES.swap(0, Ordering::Relaxed),
+            dial_failures: DIAL_FAILURES.swap(0, Ordering::Relaxed),
+            direct_message_inbound_failures: DIRECT_MESSAGE_INBOUND_FAILURES
+                .swap(0, Ordering::Relaxed),
+            direct_message_outbound_failures: DIRECT_MESSAGE_OUTBOUND_FAILURES
+                .swap(0, Ordering::Relaxed),
+            gossip_publish_failures: GOSSIP_PUBLISH_FAILURES.swap(0, Ordering::Relaxed),
+            gossipsub_not_supported: GOSSIPSUB_NOT_SUPPORTED.swap(0, Ordering::Relaxed),
+            gossipsub_slow_peer: GOSSIPSUB_SLOW_PEER.swap(0, Ordering::Relaxed),
+            incoming_conn_errors: INCOMING_CONN_ERRORS.swap(0, Ordering::Relaxed),
+            listener_errors: LISTENER_ERRORS.swap(0, Ordering::Relaxed),
+            network_send_failures: NETWORK_SEND_FAILURES.swap(0, Ordering::Relaxed),
+            verify_failures: VERIFY_FAILURES.swap(0, Ordering::Relaxed),
+        }
     }
+
+    fn any_nonzero(&self) -> bool {
+        let Self {
+            auth_failures,
+            auth_handshake_timeouts,
+            dht_closest_peers_failures,
+            dht_disagreements_given_up,
+            dht_kad_query_errors,
+            dht_lookup_failures,
+            dial_failures,
+            direct_message_inbound_failures,
+            direct_message_outbound_failures,
+            gossip_publish_failures,
+            gossipsub_not_supported,
+            gossipsub_slow_peer,
+            incoming_conn_errors,
+            listener_errors,
+            network_send_failures,
+            verify_failures,
+        } = self;
+        *auth_failures
+            | *auth_handshake_timeouts
+            | *dht_closest_peers_failures
+            | *dht_disagreements_given_up
+            | *dht_kad_query_errors
+            | *dht_lookup_failures
+            | *dial_failures
+            | *direct_message_inbound_failures
+            | *direct_message_outbound_failures
+            | *gossip_publish_failures
+            | *gossipsub_not_supported
+            | *gossipsub_slow_peer
+            | *incoming_conn_errors
+            | *listener_errors
+            | *network_send_failures
+            | *verify_failures
+            != 0
+    }
+}
+
+fn emit_summary() {
+    let s = Snapshot::drain();
+    if !s.any_nonzero() {
+        return;
+    }
+    warn!(
+        auth_failures = s.auth_failures,
+        auth_handshake_timeouts = s.auth_handshake_timeouts,
+        dht_closest_peers_failures = s.dht_closest_peers_failures,
+        dht_disagreements_given_up = s.dht_disagreements_given_up,
+        dht_kad_query_errors = s.dht_kad_query_errors,
+        dht_lookup_failures = s.dht_lookup_failures,
+        dial_failures = s.dial_failures,
+        direct_message_inbound_failures = s.direct_message_inbound_failures,
+        direct_message_outbound_failures = s.direct_message_outbound_failures,
+        gossip_publish_failures = s.gossip_publish_failures,
+        gossipsub_not_supported = s.gossipsub_not_supported,
+        gossipsub_slow_peer = s.gossipsub_slow_peer,
+        incoming_conn_errors = s.incoming_conn_errors,
+        listener_errors = s.listener_errors,
+        network_send_failures = s.network_send_failures,
+        verify_failures = s.verify_failures,
+        interval_seconds = SUMMARY_INTERVAL.as_secs(),
+        "libp2p summary"
+    );
 }
 
 /// Tracks whether the summary task has been spawned. Used to make
@@ -124,10 +181,7 @@ pub fn spawn_summary_task() -> bool {
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            let snapshot = snapshot_and_reset();
-            if let Some(line) = format_summary(&snapshot) {
-                warn!("{line}");
-            }
+            emit_summary();
         }
     });
     true
@@ -140,9 +194,10 @@ mod tests {
         thread,
     };
 
+    use tracing_test::traced_test;
+
     use super::{
-        AUTH_FAILURES, COUNTERS, DHT_LOOKUP_FAILURES, DIAL_FAILURES, SPAWNED, format_summary,
-        snapshot_and_reset, spawn_summary_task,
+        AUTH_FAILURES, DIAL_FAILURES, SPAWNED, Snapshot, emit_summary, spawn_summary_task,
     };
 
     /// Process-wide lock to serialize tests in this module. All test functions
@@ -157,90 +212,69 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Reset every counter to zero. Tests share process-global state, so we
-    /// always reset before doing anything observable.
+    /// Reset every counter to zero by draining and discarding.
     fn reset_all_counters() {
-        for (_, counter) in COUNTERS {
-            counter.store(0, Ordering::Relaxed);
-        }
+        let _ = Snapshot::drain();
     }
 
     #[test]
+    #[traced_test]
     // TEST:log-summary-emits-when-counters-nonzero-ok (REQ:log-summary-emits-when-counters-nonzero)
-    fn emits_summary_when_any_counter_nonzero() {
-        let _guard = test_lock();
+    fn emits_named_fields_when_any_counter_nonzero() {
+        let _g = test_lock();
         reset_all_counters();
         DIAL_FAILURES.store(3, Ordering::Relaxed);
-        let snapshot = snapshot_and_reset();
-        let line = format_summary(&snapshot).expect("expected a summary line");
-        assert!(line.contains("dial_failures=3"), "got: {line}");
-        assert!(line.starts_with("libp2p last 60s:"), "got: {line}");
+        AUTH_FAILURES.store(5, Ordering::Relaxed);
+        emit_summary();
+        assert!(logs_contain("libp2p summary"));
+        assert!(logs_contain("dial_failures=3"));
+        assert!(logs_contain("auth_failures=5"));
+        // Zero-valued counters must still be present as fields so structured
+        // backends can filter on them.
+        assert!(logs_contain("verify_failures=0"));
+        assert!(logs_contain("interval_seconds=60"));
     }
 
     #[test]
+    #[traced_test]
     // TEST:log-summary-silent-when-idle-ok (REQ:log-summary-silent-when-idle)
     fn silent_when_all_counters_zero() {
-        let _guard = test_lock();
+        let _g = test_lock();
         reset_all_counters();
-        let snapshot = snapshot_and_reset();
-        assert!(format_summary(&snapshot).is_none());
+        emit_summary();
+        assert!(!logs_contain("libp2p summary"));
     }
 
     #[test]
     // TEST:log-summary-counters-reset-each-tick-ok (REQ:log-summary-counters-reset-each-tick)
-    fn counters_reset_after_snapshot() {
-        let _guard = test_lock();
+    fn counters_reset_after_drain() {
+        let _g = test_lock();
         reset_all_counters();
         AUTH_FAILURES.store(7, Ordering::Relaxed);
-        let snapshot_a = snapshot_and_reset();
-        assert!(
-            snapshot_a
-                .iter()
-                .any(|(name, value)| *name == "auth_failures" && *value == 7)
-        );
-        let snapshot_b = snapshot_and_reset();
-        assert!(snapshot_b.iter().all(|(_, value)| *value == 0));
-    }
-
-    #[test]
-    // TEST:log-summary-format-stable-ok (REQ:log-summary-format-stable)
-    fn format_lists_only_nonzero_counters_in_alphabetical_order() {
-        let _guard = test_lock();
-        reset_all_counters();
-        // Pick a non-alphabetically-first counter and a later one to verify
-        // ordering follows counter name, not insertion order.
-        DHT_LOOKUP_FAILURES.store(2, Ordering::Relaxed);
-        AUTH_FAILURES.store(5, Ordering::Relaxed);
-        let snapshot = snapshot_and_reset();
-        let line = format_summary(&snapshot).expect("expected a summary line");
-        let body = line
-            .strip_prefix("libp2p last 60s: ")
-            .expect("unexpected prefix");
-        assert_eq!(body, "auth_failures=5 dht_lookup_failures=2", "got: {line}");
+        let snapshot_a = Snapshot::drain();
+        assert_eq!(snapshot_a.auth_failures, 7);
+        let snapshot_b = Snapshot::drain();
+        assert_eq!(snapshot_b.auth_failures, 0);
+        assert!(!snapshot_b.any_nonzero());
     }
 
     #[test]
     // TEST:log-summary-counter-overflow-ok (EDGE:log-summary-counter-overflow)
     fn counter_at_max_wraps_without_panic() {
-        let _guard = test_lock();
+        let _g = test_lock();
         reset_all_counters();
         DIAL_FAILURES.store(u64::MAX, Ordering::Relaxed);
         // Wrapping fetch_add on u64 is defined (wraps to 0). We just want to
-        // confirm no panic and the snapshot returns whatever the swap saw.
+        // confirm no panic and the drain returns whatever the swap saw.
         DIAL_FAILURES.fetch_add(1, Ordering::Relaxed);
-        let snapshot = snapshot_and_reset();
-        let value = snapshot
-            .iter()
-            .find_map(|(name, value)| (*name == "dial_failures").then_some(*value))
-            .expect("dial_failures missing");
-        // After overflow the value is 0; assert behavior matches the swap.
-        assert_eq!(value, 0);
+        let snapshot = Snapshot::drain();
+        assert_eq!(snapshot.dial_failures, 0);
     }
 
     #[test]
     // TEST:log-summary-concurrent-increment-ok (EDGE:log-summary-concurrent-increment)
     fn concurrent_increments_are_not_lost() {
-        let _guard = test_lock();
+        let _g = test_lock();
         reset_all_counters();
         const THREADS: usize = 8;
         const PER_THREAD: u64 = 1_000;
@@ -256,22 +290,18 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
-        let snapshot = snapshot_and_reset();
-        let value = snapshot
-            .iter()
-            .find_map(|(name, value)| (*name == "dial_failures").then_some(*value))
-            .expect("dial_failures missing");
-        assert_eq!(value, THREADS as u64 * PER_THREAD);
+        let snapshot = Snapshot::drain();
+        assert_eq!(snapshot.dial_failures, THREADS as u64 * PER_THREAD);
     }
 
     #[test]
     // TEST:log-summary-spawn-idempotent-ok (EDGE:log-summary-spawn-once)
     fn spawn_summary_task_is_idempotent() {
-        let _guard = test_lock();
+        let _g = test_lock();
         // The SPAWNED flag is process-global. Reset it here so this test is
         // independent of test ordering. We do not actually need the task to
         // run, only to verify the spawn gate.
-        SPAWNED.store(false, Ordering::Release);
+        SPAWNED.store(false, Ordering::Relaxed);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
@@ -284,7 +314,6 @@ mod tests {
             assert!(!second, "second call should be a no-op");
             assert!(!third, "third call should be a no-op");
         });
-        // Reset for any later tests that touch the flag.
-        SPAWNED.store(false, Ordering::Release);
+        SPAWNED.store(false, Ordering::Relaxed);
     }
 }
