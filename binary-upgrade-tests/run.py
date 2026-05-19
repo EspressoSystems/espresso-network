@@ -75,6 +75,7 @@ REPO_ROOT = Path(
 
 PERSIST_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.persist-storage.yaml"
 NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5.yaml"
+LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml"
 
 
 YYYYMMDD_TAG_PATTERN = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
@@ -147,6 +148,11 @@ class Compose:
             "-f", str(self.base_dir / "docker-compose.yaml"),
             "-f", str(PERSIST_OVERLAY),
         ]  # fmt: skip
+        if (
+            "wait-for-lc-epoch"
+            not in (self.base_dir / "docker-compose.yaml").read_text()
+        ):
+            args += ["-f", str(LC_GATING_OVERLAY)]
         for overlay in self.extra_overlays:
             args += ["-f", str(overlay)]
         return args
