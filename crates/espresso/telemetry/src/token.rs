@@ -36,6 +36,8 @@ pub enum TokenVerifyError {
     FutureTimestamp,
     #[error("token expired: age {age}s exceeds max {max_age}s")]
     Expired { age: u64, max_age: u64 },
+    #[error("system clock error: {0}")]
+    SystemClock(String),
 }
 
 /// JWT header for BLS-BN254 tokens.
@@ -119,7 +121,7 @@ impl UnauthenticatedToken {
     ) -> anyhow::Result<Self> {
         let pubkey = VerKey::from(signing_key);
         let pubkey_str = TaggedBase64::from(&pubkey).to_string();
-        let iat = now_unix_secs();
+        let iat = now_unix_secs()?;
 
         let header = Header {
             alg: "BLS-BN254".to_string(),
@@ -219,7 +221,7 @@ impl UnauthenticatedToken {
         )
         .map_err(|_| TokenVerifyError::InvalidSignature)?;
 
-        let now = now_unix_secs();
+        let now = now_unix_secs().map_err(|e| TokenVerifyError::SystemClock(e.to_string()))?;
         if self.payload.iat > now + 60 {
             return Err(TokenVerifyError::FutureTimestamp);
         }
@@ -257,11 +259,11 @@ pub fn load_bls_signing_key(path: &Path) -> anyhow::Result<SignKey> {
     parse_bls_signing_key(key_str)
 }
 
-fn now_unix_secs() -> u64 {
-    SystemTime::now()
+fn now_unix_secs() -> anyhow::Result<u64> {
+    let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system clock before unix epoch")
-        .as_secs()
+        .map_err(|e| anyhow::anyhow!("system clock is before UNIX_EPOCH: {e}"))?;
+    Ok(d.as_secs())
 }
 
 #[cfg(test)]
@@ -349,7 +351,7 @@ mod tests {
     #[test]
     fn verify_future_dated_token() {
         let sk = gen_signing_key();
-        let jwt = sign_jwt(&sk, now_unix_secs() + 10000);
+        let jwt = sign_jwt(&sk, now_unix_secs().unwrap() + 10000);
         let err = UnauthenticatedToken::parse(&jwt)
             .unwrap()
             .verify(86400)

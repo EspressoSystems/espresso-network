@@ -45,6 +45,7 @@ use crate::{UnauthenticatedToken, push_task, retry::RetryingLogExporter};
 
 const DEFAULT_OTLP_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 const SERVICE_NAME: &str = "espresso-node";
+const LOGGER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Global handoff for the prometheus `Registry` populated by HotShot.
 ///
@@ -236,9 +237,13 @@ impl TelemetryHandle {
     /// `push_task::run` final flush is bounded by the inner reqwest 10s
     /// timeout.
     ///
-    /// `SdkLoggerProvider::shutdown` is documented as deadlock-prone when
-    /// called from a tokio current-thread runtime, so it's offloaded to a
-    /// fresh OS thread.
+    /// `SdkLoggerProvider::shutdown` forwards to `BatchLogProcessor::shutdown`,
+    /// which the upstream rustdoc warns is deadlock-prone when called from a
+    /// tokio current-thread runtime's main thread (see
+    /// <https://docs.rs/opentelemetry_sdk/0.32.0/opentelemetry_sdk/logs/struct.BatchLogProcessor.html>).
+    /// It's therefore offloaded to a fresh OS thread. If the call deadlocks,
+    /// the thread is detached after [`LOGGER_SHUTDOWN_TIMEOUT`] so process
+    /// exit isn't blocked.
     pub fn shutdown(self) {
         if let Some(MetricsPushHandle { shutdown, thread }) = self.metrics_push {
             let _ = shutdown.send(());
@@ -247,17 +252,22 @@ impl TelemetryHandle {
             }
         }
         let provider = self.logger_provider;
-        let join = std::thread::Builder::new()
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
+        let spawned = std::thread::Builder::new()
             .name("espresso-telemetry-shutdown".into())
             .spawn(move || {
                 if let Err(e) = provider.shutdown() {
                     tracing::warn!(error = %e, "telemetry: logger provider shutdown error");
                 }
+                let _ = done_tx.send(());
             });
-        match join {
-            Ok(j) => {
-                if j.join().is_err() {
-                    tracing::warn!("telemetry: logger provider shutdown thread panicked");
+        match spawned {
+            Ok(_) => {
+                if done_rx.recv_timeout(LOGGER_SHUTDOWN_TIMEOUT).is_err() {
+                    tracing::warn!(
+                        timeout_secs = LOGGER_SHUTDOWN_TIMEOUT.as_secs(),
+                        "telemetry: logger provider shutdown timed out; detaching thread",
+                    );
                 }
             },
             Err(e) => tracing::warn!(error = %e, "telemetry: cannot spawn shutdown thread"),
