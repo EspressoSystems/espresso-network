@@ -578,7 +578,6 @@ jobs:
       - name: Set upgrade tag
         run: |
           echo "UPGRADE_TAG=pr-${{ github.event.pull_request.number }}" >> $GITHUB_ENV
-          echo "BASE_TAG=20260505" >> $GITHUB_ENV
 
       - name: Pull docker images
         run: |
@@ -616,7 +615,6 @@ jobs:
         run: |
           UPGRADE_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
           echo "UPGRADE_TAG=$UPGRADE_TAG" >> $GITHUB_ENV
-          echo "BASE_TAG=20260505" >> $GITHUB_ENV
           echo "UPGRADE_PULL=1" >> $GITHUB_ENV
 
       - name: Pull docker images

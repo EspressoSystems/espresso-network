@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       base_tag:
-        description: "Base docker tag to start from (must exist in ghcr.io)"
+        description: "Base docker tag to start from (empty = latest YYYYMMDD tag)"
         required: false
-        default: "20260505"
+        default: ""
       upgrade_tag:
         description: "Upgrade docker tag to roll to (must exist in ghcr.io)"
         required: false

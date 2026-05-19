@@ -40,12 +40,12 @@ Pick with `--scenario` (default `vanilla`). CI runs each as a separate matrix jo
 
 ## Inputs
 
-| env          | default  |
-| ------------ | -------- |
-| BASE_TAG     | 20260505 |
-| UPGRADE_TAG  | main     |
-| KEEP_RUNNING | 0        |
-| UPGRADE_PULL | 0        |
+| env          | default                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------- |
+| BASE_TAG     | latest YYYYMMDD tag in the repo, or the previous one when HEAD is itself on a YYYYMMDD release tag |
+| UPGRADE_TAG  | main                                                                                               |
+| KEEP_RUNNING | 0                                                                                                  |
+| UPGRADE_PULL | 0                                                                                                  |
 
 ## CI
 

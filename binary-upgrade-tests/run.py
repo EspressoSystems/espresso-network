@@ -77,6 +77,45 @@ PERSIST_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.persist-storage.
 NODE_5_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5.yaml"
 
 
+YYYYMMDD_TAG_PATTERN = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
+
+
+def yyyymmdd_tags() -> list[str]:
+    out = subprocess.check_output(
+        ["git", "tag", "-l", YYYYMMDD_TAG_PATTERN], cwd=REPO_ROOT, text=True
+    )
+    return sorted(out.strip().splitlines())
+
+
+def default_base_tag() -> str:
+    """Pick the YYYYMMDD tag to upgrade from.
+
+    On a tagged release build (HEAD points at a YYYYMMDD tag), use the
+    previous tag so we test the new release against the prior one. Otherwise
+    use the latest YYYYMMDD tag.
+    """
+    tags = yyyymmdd_tags()
+    if not tags:
+        raise RuntimeError(
+            f"No tags matching {YYYYMMDD_TAG_PATTERN}; run with --tags fetched."
+        )
+    head_tag = subprocess.run(
+        ["git", "describe", "--tags", "--exact-match"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    if head_tag in tags:
+        idx = tags.index(head_tag)
+        if idx == 0:
+            raise RuntimeError(
+                f"HEAD is at {head_tag}, the oldest YYYYMMDD tag; no previous to upgrade from."
+            )
+        return tags[idx - 1]
+    return tags[-1]
+
+
 @dataclass(frozen=True)
 class Config:
     base_tag: str
@@ -87,7 +126,7 @@ class Config:
     @classmethod
     def from_env(cls) -> Config:
         return cls(
-            base_tag=os.environ.get("BASE_TAG", "20260505"),
+            base_tag=os.environ.get("BASE_TAG") or default_base_tag(),
             upgrade_tag=os.environ.get("UPGRADE_TAG", "main"),
             keep_running=os.environ.get("KEEP_RUNNING") == "1",
             upgrade_pull=os.environ.get("UPGRADE_PULL") == "1",
@@ -660,6 +699,7 @@ def main() -> int:
         return 1
 
     config = Config.from_env()
+    log.info(f"BASE_TAG={config.base_tag} UPGRADE_TAG={config.upgrade_tag}")
     os.environ.setdefault(
         "ESPRESSO_SEQUENCER_GENESIS_FILE", "genesis/demo-drb-header.toml"
     )
