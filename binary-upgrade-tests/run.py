@@ -24,6 +24,7 @@ import urllib.request
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 log = logging.getLogger("binary-upgrade-test")
@@ -34,6 +35,16 @@ WIPE_FS_NODE = 4
 WIPE_PG_NODE = 1
 NEW_NODE_INDEX = 5
 NEW_NODE_API_PORT = 24005
+
+
+class Scenario(StrEnum):
+    VANILLA = "vanilla"
+    CATCHUP_FROM_OLD_FS = "catchup-from-old-fs"
+    CATCHUP_FROM_OLD_PG = "catchup-from-old-pg"
+    CATCHUP_FROM_NEW_FS = "catchup-from-new-fs"
+    CATCHUP_FROM_NEW_PG = "catchup-from-new-pg"
+    FIRST_START = "first-start"
+
 
 # Services NOT touched by the binary upgrade test:
 #   - one-shots that already ran in phase 1 (deploy-*, fund-builder,
@@ -324,14 +335,14 @@ class Compose:
         log.info(f"Asserting all espresso-network images run tag {config.upgrade_tag}")
         self.assert_all_espresso_images(config.upgrade_tag)
 
-    def scenario_vanilla(self, config: Config) -> None:
+    def vanilla(self, config: Config) -> None:
         self.boot_base_network(config)
         self.run_full_vanilla_upgrade(config)
 
         log.info("Final smoke test")
         self.smoke_test(config.upgrade_tag)
 
-    def _catchup_from_old(
+    def catchup_from_old(
         self,
         config: Config,
         wipe_idx: int,
@@ -359,13 +370,7 @@ class Compose:
         log.info("Final smoke test")
         self.smoke_test(config.upgrade_tag)
 
-    def scenario_catchup_from_old_fs(self, config: Config) -> None:
-        self._catchup_from_old(config, WIPE_FS_NODE, self.wipe_fs_node)
-
-    def scenario_catchup_from_old_pg(self, config: Config) -> None:
-        self._catchup_from_old(config, WIPE_PG_NODE, self.wipe_pg_node)
-
-    def _catchup_from_new(
+    def catchup_from_new(
         self,
         config: Config,
         wipe_idx: int,
@@ -383,13 +388,7 @@ class Compose:
         log.info("Final smoke test")
         self.smoke_test(config.upgrade_tag)
 
-    def scenario_catchup_from_new_fs(self, config: Config) -> None:
-        self._catchup_from_new(config, WIPE_FS_NODE, self.wipe_fs_node)
-
-    def scenario_catchup_from_new_pg(self, config: Config) -> None:
-        self._catchup_from_new(config, WIPE_PG_NODE, self.wipe_pg_node)
-
-    def scenario_first_start(self, config: Config) -> None:
+    def first_start(self, config: Config) -> None:
         self.boot_base_network(config)
         self.run_full_vanilla_upgrade(config)
 
@@ -615,25 +614,14 @@ def compose_session(config: Config):
         shutil.rmtree(base_dir, ignore_errors=True)
 
 
-SCENARIO_DISPATCH: dict[str, Callable[[Compose, Config], None]] = {
-    "vanilla": Compose.scenario_vanilla,
-    "catchup-from-old-fs": Compose.scenario_catchup_from_old_fs,
-    "catchup-from-old-pg": Compose.scenario_catchup_from_old_pg,
-    "catchup-from-new-fs": Compose.scenario_catchup_from_new_fs,
-    "catchup-from-new-pg": Compose.scenario_catchup_from_new_pg,
-    "first-start": Compose.scenario_first_start,
-}
-
-SCENARIOS = tuple(SCENARIO_DISPATCH.keys())
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Binary upgrade test driver")
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument(
         "--scenario",
-        choices=SCENARIOS,
-        default="vanilla",
+        type=Scenario,
+        choices=list(Scenario),
+        default=Scenario.VANILLA,
     )
     parser.add_argument(
         "--pull-only",
@@ -641,6 +629,22 @@ def parse_args() -> argparse.Namespace:
         help="Pull base and (if UPGRADE_PULL=1) upgrade images, then exit.",
     )
     return parser.parse_args()
+
+
+def run_scenario(compose: Compose, config: Config, scenario: Scenario) -> None:
+    match scenario:
+        case Scenario.VANILLA:
+            compose.vanilla(config)
+        case Scenario.CATCHUP_FROM_OLD_FS:
+            compose.catchup_from_old(config, WIPE_FS_NODE, compose.wipe_fs_node)
+        case Scenario.CATCHUP_FROM_OLD_PG:
+            compose.catchup_from_old(config, WIPE_PG_NODE, compose.wipe_pg_node)
+        case Scenario.CATCHUP_FROM_NEW_FS:
+            compose.catchup_from_new(config, WIPE_FS_NODE, compose.wipe_fs_node)
+        case Scenario.CATCHUP_FROM_NEW_PG:
+            compose.catchup_from_new(config, WIPE_PG_NODE, compose.wipe_pg_node)
+        case Scenario.FIRST_START:
+            compose.first_start(config)
 
 
 def main() -> int:
@@ -662,8 +666,6 @@ def main() -> int:
     os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", "genesis/demo-drb-header.toml")
     load_project_env()
 
-    scenario = SCENARIO_DISPATCH[args.scenario]
-
     with compose_session(config) as compose:
         tags = (config.base_tag,)
         if config.upgrade_pull:
@@ -675,7 +677,7 @@ def main() -> int:
             return 0
 
         log.info(f"Running scenario: {args.scenario}")
-        scenario(compose, config)
+        run_scenario(compose, config, args.scenario)
         log.info("Binary upgrade test complete")
     return 0
 
