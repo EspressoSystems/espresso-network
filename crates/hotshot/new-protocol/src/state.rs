@@ -90,7 +90,7 @@ pub struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
     validated_states: BTreeMap<ViewNumber, StateEntry<T>>,
     state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, ViewNumber)>,
-    header_requests: HashMap<ViewNumber, AbortHandle>,
+    header_requests: HashMap<Commitment<Leaf2<T>>, AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
     upgrade_lock: UpgradeLock<T>,
     tasks: JoinSet<Completed<T>>,
@@ -213,11 +213,10 @@ impl<T: NodeType> StateManager<T> {
     }
 
     pub fn request_header(&mut self, request: HeaderRequest<T>) {
-        if self.header_requests.contains_key(&request.view) {
+        let parent_commitment = proposal_commitment(&request.parent_proposal);
+        if self.header_requests.contains_key(&parent_commitment) {
             return;
         }
-
-        let parent_commitment = proposal_commitment(&request.parent_proposal);
 
         if self.state_requests.contains_key(&parent_commitment) {
             self.pending_requests
@@ -285,7 +284,7 @@ impl<T: NodeType> StateManager<T> {
             }
         });
 
-        self.header_requests.insert(view, handle);
+        self.header_requests.insert(parent_commitment, handle);
     }
 
     /// Provide an externally-obtained validated state.
@@ -337,7 +336,11 @@ impl<T: NodeType> StateManager<T> {
                         }
                     },
                     Completed::Header { response, header } => {
-                        if self.header_requests.remove(&response.view).is_none() {
+                        if self
+                            .header_requests
+                            .remove(&proposal_commitment(&response.parent_proposal))
+                            .is_none()
+                        {
                             continue;
                         }
                         return Some(StateManagerOutput::Header { response, header });
