@@ -112,7 +112,7 @@ class Node:
             raise RuntimeError(f"Env var {var} not set")
         return cls(index=index, api_url=f"http://localhost:{port}")
 
-    def scrape_metrics(self, timeout: float = 2.0) -> tuple[str, list[tuple[str, float]]]:
+    def scrape_metrics(self, timeout: float = 2.0) -> list[tuple[str, float]]:
         with urllib.request.urlopen(
             f"{self.api_url}/v0/status/metrics", timeout=timeout
         ) as resp:
@@ -128,7 +128,7 @@ class Node:
             if name not in METRIC_NAMES:
                 continue
             out.append((name, float(m.group(2))))
-        return body, out
+        return out
 
 
 def load_project_env() -> None:
@@ -184,23 +184,12 @@ def _collect_docker_stats(ts: int) -> list[dict]:
     return out
 
 
-_NODE_DIAGNOSED: set[int] = set()
-
-
-def _collect_node_metrics(ts: int, node: Node, output_dir: Path) -> list[dict]:
+def _collect_node_metrics(ts: int, node: Node) -> list[dict]:
     try:
-        body, scraped = node.scrape_metrics()
+        scraped = node.scrape_metrics()
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-        if node.index not in _NODE_DIAGNOSED:
-            _NODE_DIAGNOSED.add(node.index)
-            log.info(f"{node} first metrics scrape failed: {e}")
+        log.debug(f"{node} metrics scrape failed at ts={ts}: {e}")
         return []
-    if node.index not in _NODE_DIAGNOSED:
-        _NODE_DIAGNOSED.add(node.index)
-        log.info(f"{node} first scrape: {len(body)} bytes, {len(scraped)} process_* matched")
-        dump = output_dir / f"raw-metrics-{node}.txt"
-        dump.write_text(body)
-        log.info(f"saved first raw response to {dump}")
     return [
         {"ts": ts, "node": node.api_url, "metric": name, "value": value}
         for name, value in scraped
@@ -212,14 +201,11 @@ def sample_once(
     nodes: list[Node],
     docker_path: Path,
     metrics_path: Path,
-    output_dir: Path,
     executor: ThreadPoolExecutor,
 ) -> int:
     """Take one concurrent sample. Returns total rows written."""
     docker_fut = executor.submit(_collect_docker_stats, ts)
-    node_futs = [
-        executor.submit(_collect_node_metrics, ts, n, output_dir) for n in nodes
-    ]
+    node_futs = [executor.submit(_collect_node_metrics, ts, n) for n in nodes]
 
     docker_rows = docker_fut.result()
     node_rows: list[dict] = []
@@ -262,9 +248,7 @@ def run_sampling(config: Config, nodes: list[Node]) -> tuple[Path, Path]:
                 break
 
             ts = int(now)
-            sample_once(
-                ts, nodes, docker_path, metrics_path, config.output_dir, executor
-            )
+            sample_once(ts, nodes, docker_path, metrics_path, executor)
             samples += 1
 
             if now >= next_progress:
