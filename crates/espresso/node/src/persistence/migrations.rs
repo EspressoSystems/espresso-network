@@ -1,15 +1,13 @@
-#[cfg(not(feature = "embedded-db"))]
+#![cfg(not(feature = "embedded-db"))]
+
 use async_trait::async_trait;
-#[cfg(not(feature = "embedded-db"))]
 use hotshot_query_service::{
     data_source::storage::sql::{Transaction, Write},
     migration::{DataBackfill, MigrationRegistry},
 };
 
-#[cfg(not(feature = "embedded-db"))]
 pub struct BackfillHash;
 
-#[cfg(not(feature = "embedded-db"))]
 #[async_trait]
 impl DataBackfill for BackfillHash {
     fn name(&self) -> &'static str {
@@ -53,10 +51,8 @@ impl DataBackfill for BackfillHash {
 
 macro_rules! merkle_tree_backfill {
     ($struct_name:ident, $migration_name:literal, $legacy_table:literal, $new_table:literal) => {
-        #[cfg(not(feature = "embedded-db"))]
         pub struct $struct_name;
 
-        #[cfg(not(feature = "embedded-db"))]
         #[async_trait]
         impl DataBackfill for $struct_name {
             fn name(&self) -> &'static str {
@@ -137,7 +133,6 @@ merkle_tree_backfill!(
     "block_merkle_tree_bigint"
 );
 
-#[cfg(not(feature = "embedded-db"))]
 pub fn hash_bigint_migrations() -> MigrationRegistry {
     MigrationRegistry::new()
         .backfill(BackfillHash)
