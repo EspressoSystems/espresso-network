@@ -639,7 +639,7 @@ jobs:
       OUTPUT_DIR: ./soak-samples
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.1.0
       - uses: taiki-e/install-action@just
 
       - name: Download docker image artifacts
@@ -710,7 +710,7 @@ jobs:
       OUTPUT_DIR: ./soak-samples
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.1.0
       - uses: taiki-e/install-action@just
 
       - name: Set docker tag
