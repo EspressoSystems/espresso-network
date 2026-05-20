@@ -70,7 +70,7 @@ class RenderSummaryTests(unittest.TestCase):
             {
                 "ts": base_ts + i,
                 "node": f"http://localhost:{24000 + j}",
-                "metric": "process_resident_memory_bytes",
+                "metric": "consensus_process_resident_memory_bytes",
                 "value": (100 + j * 50 + i) * 1024 * 1024,
             }
             for i in range(5)

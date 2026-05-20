@@ -37,8 +37,10 @@ log = logging.getLogger("memory-soak")
 NODE_INDICES = (0, 1, 2, 3, 4)
 PROGRESS_INTERVAL = 30
 MERMAID_MAX_POINTS = 30
+METRIC_PREFIX = "consensus_"
 METRIC_NAMES = frozenset(
-    (
+    METRIC_PREFIX + n
+    for n in (
         "process_resident_memory_bytes",
         "process_virtual_memory_bytes",
         "process_open_fds",
@@ -66,7 +68,7 @@ _MEM_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+)\s*$")
 _NODE_PORT_RE = re.compile(r":(\d+)(?:/|$)")
 _ESPRESSO_NODE_RE = re.compile(r"espresso-node-(\d+)")
 _METRIC_LINE_RE = re.compile(
-    r"^(process_[a-z_]+)(?:\{[^}]*\})?\s+(-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)\s*$"
+    r"^(consensus_process_[a-z_]+)(?:\{[^}]*\})?\s+(-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)\s*$"
 )
 
 
@@ -119,7 +121,7 @@ class Node:
             body = resp.read().decode()
         out: list[tuple[str, float]] = []
         for line in body.splitlines():
-            if not line.startswith("process_"):
+            if not line.startswith(METRIC_PREFIX):
                 continue
             m = _METRIC_LINE_RE.match(line)
             if not m:
@@ -395,11 +397,11 @@ def filter_espresso_nodes(
 
 
 def per_node_process_rss(node_metrics: list[dict]) -> dict[str, float]:
-    """Map espresso-node-N -> max process_resident_memory_bytes."""
+    """Map espresso-node-N -> max consensus_process_resident_memory_bytes."""
     by_container: dict[str, float] = {}
     for m in node_metrics:
         try:
-            if m["metric"] != "process_resident_memory_bytes":
+            if m["metric"] != METRIC_PREFIX + "process_resident_memory_bytes":
                 continue
             url = m["node"]
             val = float(m["value"])

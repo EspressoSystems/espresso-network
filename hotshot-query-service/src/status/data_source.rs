@@ -66,7 +66,7 @@ pub trait UpdateStatusData {
 
 impl<T: StatusDataSource> UpdateStatusData for T {
     fn populate_metrics(&self) -> Box<dyn Metrics> {
-        Box::new(self.metrics().clone())
+        self.metrics().subgroup("consensus".into())
     }
 }
 
