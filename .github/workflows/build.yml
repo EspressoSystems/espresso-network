@@ -632,8 +632,6 @@ jobs:
     env:
       DOCKER_TAG: pr-${{ github.event.pull_request.number }}
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
-      DELEGATION_CONFIG: multiple-delegators
-      NUM_DELEGATORS_PER_VALIDATOR: 100
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
@@ -651,28 +649,19 @@ jobs:
             docker load --input $file
           done
 
-      - name: Pull remaining docker images
-        run: docker compose pull --policy missing
-
       - name: Start demo + smoke test
-        run: |
-          just demo --pull never &
-          set -o pipefail
-          timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+        run: just soak::up
 
       - name: Sample
-        run: python3 crates/process-metrics/scripts/soak.py sample
+        run: just soak::sample
 
       - name: Render summary + chart
         if: always()
-        run: uv run crates/process-metrics/scripts/soak.py render
+        run: just soak::render
 
       - name: Dump compose logs
         if: always()
-        run: |
-          mkdir -p ./soak-logs
-          docker compose logs --no-color > ./soak-logs/compose.log 2>&1 || true
-          docker compose ps > ./soak-logs/compose-ps.txt 2>&1 || true
+        run: just soak::logs
 
       - name: Upload soak samples
         if: always()
@@ -700,8 +689,6 @@ jobs:
         genesis: [demo-drb-header, demo-epoch-reward]
     env:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
-      DELEGATION_CONFIG: multiple-delegators
-      NUM_DELEGATORS_PER_VALIDATOR: 100
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
@@ -710,28 +697,19 @@ jobs:
       - name: Set docker tag
         run: echo "DOCKER_TAG=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> $GITHUB_ENV
 
-      - name: Pull docker images
-        run: docker compose pull --policy missing
-
       - name: Start demo + smoke test
-        run: |
-          just demo --pull never &
-          set -o pipefail
-          timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+        run: just soak::up
 
       - name: Sample
-        run: python3 crates/process-metrics/scripts/soak.py sample
+        run: just soak::sample
 
       - name: Render summary + chart
         if: always()
-        run: uv run crates/process-metrics/scripts/soak.py render
+        run: just soak::render
 
       - name: Dump compose logs
         if: always()
-        run: |
-          mkdir -p ./soak-logs
-          docker compose logs --no-color > ./soak-logs/compose.log 2>&1 || true
-          docker compose ps > ./soak-logs/compose-ps.txt 2>&1 || true
+        run: just soak::logs
 
       - name: Upload soak samples
         if: always()
