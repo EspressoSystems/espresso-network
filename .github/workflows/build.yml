@@ -631,10 +631,17 @@ jobs:
         genesis:
           - { name: drb-header, file: genesis/demo-drb-header.toml }
           - { name: epoch-reward, file: genesis/demo-epoch-reward.toml }
+    env:
+      DOCKER_TAG: pr-${{ github.event.pull_request.number }}
+      ESPRESSO_NODE_GENESIS_FILE: ${{ matrix.genesis.file }}
+      GENESIS_LABEL: ${{ matrix.genesis.name }}
+      DURATION_SECONDS: "300"
+      OUTPUT_DIR: ./soak-samples
     steps:
       - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
 
-      - name: Download artifacts
+      - name: Download docker image artifacts
         uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/docker-images
@@ -646,14 +653,23 @@ jobs:
             docker load --input $file
           done
 
+      - name: Start demo
+        run: docker compose up -d &
+
+      - name: Smoke test (gates readiness)
+        run: |
+          set -o pipefail
+          timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
       - name: Run memory soak
-        env:
-          DOCKER_TAG: pr-${{ github.event.pull_request.number }}
-          ESPRESSO_NODE_GENESIS_FILE: ${{ matrix.genesis.file }}
-          GENESIS_LABEL: ${{ matrix.genesis.name }}
-          DURATION_SECONDS: "300"
-          OUTPUT_DIR: ./soak-samples
-        run: python3 crates/process-metrics/scripts/soak.py
+        run: uv run crates/process-metrics/scripts/soak.py
+
+      - name: Dump compose logs
+        if: always()
+        run: |
+          mkdir -p ./soak-logs
+          docker compose logs --no-color > ./soak-logs/compose.log 2>&1 || true
+          docker compose ps > ./soak-logs/compose-ps.txt 2>&1 || true
 
       - name: Upload soak samples
         if: always()
@@ -662,6 +678,14 @@ jobs:
           name: memory-soak-${{ matrix.genesis.name }}
           path: ./soak-samples
           retention-days: 90
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis.name }}-logs
+          path: ./soak-logs
+          retention-days: 1
 
   memory-soak-non-pr:
     if: github.event_name != 'pull_request'
@@ -673,19 +697,38 @@ jobs:
         genesis:
           - { name: drb-header, file: genesis/demo-drb-header.toml }
           - { name: epoch-reward, file: genesis/demo-epoch-reward.toml }
+    env:
+      ESPRESSO_NODE_GENESIS_FILE: ${{ matrix.genesis.file }}
+      GENESIS_LABEL: ${{ matrix.genesis.name }}
+      DURATION_SECONDS: "300"
+      OUTPUT_DIR: ./soak-samples
     steps:
       - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
 
       - name: Set docker tag
         run: echo "DOCKER_TAG=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> $GITHUB_ENV
 
+      - name: Pull docker images
+        run: docker compose pull --policy missing
+
+      - name: Start demo
+        run: docker compose up -d &
+
+      - name: Smoke test (gates readiness)
+        run: |
+          set -o pipefail
+          timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
       - name: Run memory soak
-        env:
-          ESPRESSO_NODE_GENESIS_FILE: ${{ matrix.genesis.file }}
-          GENESIS_LABEL: ${{ matrix.genesis.name }}
-          DURATION_SECONDS: "300"
-          OUTPUT_DIR: ./soak-samples
-        run: python3 crates/process-metrics/scripts/soak.py
+        run: uv run crates/process-metrics/scripts/soak.py
+
+      - name: Dump compose logs
+        if: always()
+        run: |
+          mkdir -p ./soak-logs
+          docker compose logs --no-color > ./soak-logs/compose.log 2>&1 || true
+          docker compose ps > ./soak-logs/compose-ps.txt 2>&1 || true
 
       - name: Upload soak samples
         if: always()
@@ -694,6 +737,14 @@ jobs:
           name: memory-soak-${{ matrix.genesis.name }}
           path: ./soak-samples
           retention-days: 90
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis.name }}-logs
+          path: ./soak-logs
+          retention-days: 1
 
   memory-soak:
     needs: [memory-soak-pr, memory-soak-non-pr]

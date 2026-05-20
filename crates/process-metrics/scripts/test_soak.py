@@ -66,7 +66,7 @@ class RenderSummaryTests(unittest.TestCase):
         ]
         _write_jsonl(self.metrics, metric_rows)
 
-        out = render_summary(self.docker, self.metrics, "drb-header", 4)
+        out = render_summary(self.docker, self.metrics, "drb-header", 4, self.tmp)
 
         self.assertIn("## Memory soak: drb-header", out)
         self.assertIn("**Peak total memory:", out)
@@ -88,7 +88,7 @@ class RenderSummaryTests(unittest.TestCase):
         ]
         _write_jsonl(self.docker, rows)
 
-        out = render_summary(self.docker, self.metrics, "sparse", 4)
+        out = render_summary(self.docker, self.metrics, "sparse", 4, self.tmp)
         self.assertIn("espresso-node-0", out)
         self.assertIn("espresso-node-1", out)
         self.assertIn("**Total (per-ts sum)**", out)
@@ -103,7 +103,7 @@ class RenderSummaryTests(unittest.TestCase):
         _write_jsonl(self.docker, rows)
         self.assertFalse(self.metrics.exists())
 
-        out = render_summary(self.docker, self.metrics, "no-metrics", 2)
+        out = render_summary(self.docker, self.metrics, "no-metrics", 2, self.tmp)
         self.assertIn("| Service", out)
         self.assertNotIn("### Node RSS cross-check", out)
 

@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
-"""Memory soak orchestration: boot compose, sample container + node metrics,
-render a markdown summary."""
+"""Memory soak sampling: sample container + node metrics, render a markdown
+summary with a memory-over-time chart.
+
+The CI workflow is responsible for `docker compose up` and gating readiness via
+`scripts/smoke-test-demo`; this script only samples and renders.
+"""
+
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "matplotlib>=3.9",
+# ]
+# ///
 
 from __future__ import annotations
 
@@ -17,7 +28,6 @@ import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,6 +37,7 @@ log = logging.getLogger("memory-soak")
 
 NODE_INDICES = (0, 1, 2, 3, 4)
 PROGRESS_INTERVAL = 30
+MERMAID_MAX_POINTS = 30
 METRIC_NAMES = frozenset(
     (
         "process_resident_memory_bytes",
@@ -67,7 +78,6 @@ class Config:
     genesis_label: str
     output_dir: Path
     github_step_summary: Path | None
-    skip_compose_up: bool
 
     @classmethod
     def from_env(cls) -> Config:
@@ -83,62 +93,7 @@ class Config:
             genesis_label=os.environ.get("GENESIS_LABEL", default_label),
             output_dir=Path(os.environ.get("OUTPUT_DIR", "./soak-samples")),
             github_step_summary=Path(gss) if gss else None,
-            skip_compose_up=os.environ.get("SKIP_COMPOSE_UP") == "1",
         )
-
-
-@dataclass(frozen=True)
-class Compose:
-    docker_tag: str
-
-    @property
-    def base_args(self) -> list[str]:
-        return [
-            "docker", "compose",
-            "--project-directory", str(REPO_ROOT),
-            "--env-file", str(REPO_ROOT / ".env"),
-            "-f", str(REPO_ROOT / "docker-compose.yaml"),
-        ]  # fmt: skip
-
-    def run(
-        self,
-        *args: str,
-        check: bool = True,
-        capture: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        env = os.environ | {"DOCKER_TAG": self.docker_tag}
-        return subprocess.run(
-            self.base_args + list(args),
-            cwd=REPO_ROOT,
-            env=env,
-            check=check,
-            capture_output=capture,
-            text=True,
-        )
-
-    def pull(self) -> None:
-        self.run("pull", "--policy", "missing")
-
-    def up(self, log_path: Path) -> None:
-        """Fire and forget `compose up -d`.
-
-        `up -d` blocks on `service_completed_successfully` deps and fails if any
-        of them exit nonzero (e.g. wait-for-lc-epoch-2 in alpine without bash).
-        Readiness is verified separately by polling node HTTP endpoints.
-        """
-        env = os.environ | {"DOCKER_TAG": self.docker_tag}
-        with log_path.open("wb") as f:
-            subprocess.Popen(
-                self.base_args + ["up", "-d"],
-                cwd=REPO_ROOT,
-                env=env,
-                stdout=f,
-                stderr=subprocess.STDOUT,
-            )
-
-    def services(self) -> list[str]:
-        out = self.run("config", "--services", capture=True).stdout
-        return [s for s in out.splitlines() if s]
 
 
 @dataclass(frozen=True)
@@ -157,18 +112,6 @@ class Node:
             raise RuntimeError(f"Env var {var} not set")
         return cls(index=index, api_url=f"http://localhost:{port}")
 
-    def ready(self) -> bool:
-        try:
-            with urllib.request.urlopen(
-                f"{self.api_url}/v0/status/block-height", timeout=2.0
-            ) as resp:
-                return resp.status == 200
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
-            return False
-
-    def wait_ready(self, timeout: float = 300.0) -> None:
-        poll_until(self.ready, f"{self} /v0/status/block-height", timeout)
-
     def scrape_metrics(self, timeout: float = 2.0) -> list[tuple[str, float]]:
         with urllib.request.urlopen(
             f"{self.api_url}/v0/status/metrics", timeout=timeout
@@ -186,21 +129,6 @@ class Node:
                 continue
             out.append((name, float(m.group(2))))
         return out
-
-
-def poll_until(
-    check: Callable[[], bool],
-    desc: str,
-    timeout: float,
-    interval: float = 2.0,
-) -> None:
-    deadline = time.monotonic() + timeout
-    while True:
-        if check():
-            return
-        if time.monotonic() > deadline:
-            raise TimeoutError(f"Timed out after {timeout:g}s waiting for {desc}")
-        time.sleep(interval)
 
 
 def load_project_env() -> None:
@@ -544,11 +472,105 @@ def render_crosscheck(
     return "\n".join(lines)
 
 
+def _build_series(
+    by_name: dict[str, list[dict]],
+) -> tuple[list[str], dict[str, list[tuple[int, float]]], int]:
+    """Return (sorted_names, name -> [(rel_seconds, rss_mb)], min_ts).
+
+    rss is converted to SI megabytes; timestamps are relative to the earliest
+    sample across all services.
+    """
+    all_ts = [s["ts"] for samples in by_name.values() for s in samples]
+    if not all_ts:
+        return [], {}, 0
+    min_ts = min(all_ts)
+    series: dict[str, list[tuple[int, float]]] = {}
+    for name, samples in by_name.items():
+        if not samples:
+            continue
+        points = sorted(
+            ((int(s["ts"]) - min_ts, s["rss"] / 1_000_000) for s in samples),
+            key=lambda p: p[0],
+        )
+        series[name] = points
+    return sorted(series.keys()), series, min_ts
+
+
+def render_rss_png(by_name: dict[str, list[dict]], label: str, out_path: Path) -> bool:
+    """Render an RSS-over-time PNG. Returns True if a chart was written."""
+    names, series, _ = _build_series(by_name)
+    if not names:
+        return False
+
+    try:
+        import matplotlib
+    except ImportError as e:
+        log.debug(f"matplotlib not installed; skipping PNG chart: {e}")
+        return False
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(12, 6), dpi=100)
+    for name in names:
+        xs = [p[0] for p in series[name]]
+        ys = [p[1] for p in series[name]]
+        ax.plot(xs, ys, label=name, linewidth=1.2)
+    ax.set_title(f"Memory soak: {label} (RSS over time)")
+    ax.set_xlabel("seconds")
+    ax.set_ylabel("RSS (MB)")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best", fontsize="small")
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    return True
+
+
+def _subsample(points: list[tuple[int, float]], max_n: int) -> list[tuple[int, float]]:
+    if len(points) <= max_n:
+        return points
+    step = len(points) / max_n
+    out: list[tuple[int, float]] = []
+    for i in range(max_n):
+        out.append(points[int(i * step)])
+    # ensure last point preserved
+    if out[-1] != points[-1]:
+        out[-1] = points[-1]
+    return out
+
+
+def render_mermaid_chart(by_name: dict[str, list[dict]]) -> str:
+    names, series, _ = _build_series(by_name)
+    if not names:
+        return ""
+
+    subsampled = {name: _subsample(series[name], MERMAID_MAX_POINTS) for name in names}
+    max_x = max(pts[-1][0] for pts in subsampled.values())
+    all_ys = [y for pts in subsampled.values() for _, y in pts]
+    y_max = max(all_ys) if all_ys else 0.0
+    y_top = max(1.0, y_max * 1.1)
+
+    lines = [
+        "```mermaid",
+        "xychart-beta",
+        '    title "RSS over time (MB)"',
+        f'    x-axis "seconds" 0 --> {max_x}',
+        f'    y-axis "MB" 0 --> {y_top:.0f}',
+    ]
+    for name in names:
+        ys = [f"{y:.1f}" for _, y in subsampled[name]]
+        lines.append(f'    line "{name}" [{", ".join(ys)}]')
+    lines.append("```")
+    return "\n".join(lines)
+
+
 def render_summary(
     docker_path: Path,
     metrics_path: Path,
     label: str,
     duration_seconds: int | None,
+    output_dir: Path,
 ) -> str:
     if not docker_path.exists():
         raise FileNotFoundError(f"missing required file: {docker_path}")
@@ -561,6 +583,11 @@ def render_summary(
     if duration_seconds is None:
         duration_seconds = (max(all_ts) - min(all_ts)) if all_ts else 0
 
+    header = f"## Memory soak: {label} ({duration_seconds}s, {n_samples} samples)"
+
+    if not by_name:
+        return f"{header}\n\n**No data collected.**\n"
+
     peak = compute_peak_total(by_name)
     if peak is None:
         peak_str = "**Peak total memory: n/a**"
@@ -570,12 +597,16 @@ def render_summary(
         peak_str = f"**Peak total memory: {human_bytes(peak_val)}** (at {iso})"
 
     parts = [
-        f"## Memory soak: {label} ({duration_seconds}s, {n_samples} samples)",
+        header,
         "",
         peak_str,
         "",
         render_service_table(by_name),
     ]
+
+    mermaid = render_mermaid_chart(by_name)
+    if mermaid:
+        parts.extend(["", "### Memory over time", "", mermaid])
 
     if metrics_path.exists():
         metric_rows = load_jsonl(metrics_path)
@@ -583,6 +614,17 @@ def render_summary(
             cross = render_crosscheck(by_name, metric_rows)
             if cross:
                 parts.append(cross)
+
+    png_path = output_dir / "rss-over-time.png"
+    try:
+        wrote_png = render_rss_png(by_name, label, png_path)
+    except Exception as e:
+        log.warning(f"failed to render PNG chart: {e}")
+        wrote_png = False
+    if wrote_png:
+        parts.extend(
+            ["", f"Full-resolution chart in artifact: `{png_path.name}`"]
+        )
 
     return "\n".join(parts) + "\n"
 
@@ -596,27 +638,15 @@ def run_soak(config: Config) -> None:
     os.environ.setdefault("ESPRESSO_SEQUENCER_GENESIS_FILE", config.genesis_file)
     load_project_env()
 
-    compose = Compose(docker_tag=config.docker_tag)
-    if not config.skip_compose_up:
-        log.info(f"docker compose pull (tag={config.docker_tag})")
-        compose.pull()
-        up_log = config.output_dir / "compose-up.log"
-        config.output_dir.mkdir(parents=True, exist_ok=True)
-        log.info(f"docker compose up -d (tag={config.docker_tag}); log at {up_log}")
-        compose.up(up_log)
-    else:
-        log.info("SKIP_COMPOSE_UP=1; assuming compose stack is already running")
-
     nodes = [Node.from_index(i) for i in NODE_INDICES]
-    log.info(f"Waiting for {len(nodes)} nodes to become ready")
-    for n in nodes:
-        n.wait_ready()
-        log.info(f"{n} ready")
-
     docker_path, metrics_path = run_sampling(config, nodes)
 
     summary = render_summary(
-        docker_path, metrics_path, config.genesis_label, config.duration_seconds
+        docker_path,
+        metrics_path,
+        config.genesis_label,
+        config.duration_seconds,
+        config.output_dir,
     )
     sys.stdout.write(summary)
 
