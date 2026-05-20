@@ -189,9 +189,45 @@ class Compose:
     def container_id(self, service: str) -> str:
         return self.run("ps", "-q", service, capture=True).stdout.strip()
 
+    def find_container(self, service: str) -> str | None:
+        """Find a container by service name via `docker ps`, no compose project required.
+
+        Works for services added via overlay that `docker compose ps -q` can't see.
+        """
+        out = subprocess.run(
+            ["docker", "ps", "-a", "--filter", f"name={service}", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        for name in out.splitlines():
+            if name.endswith(f"-{service}-1"):
+                return name
+        return None
+
+    def container_status(self, service: str) -> str | None:
+        """Returns docker container State.Status (running, exited, ...) or None."""
+        name = self.find_container(service)
+        if not name:
+            return None
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Status}}", name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.stdout.strip() or None
+
     def dump_service_logs(self, service: str, tail: int = 1000) -> None:
-        log.error(f"--- docker compose logs --tail {tail} {service} ---")
-        self.run("logs", "--tail", str(tail), service, check=False)
+        """Dump logs via `docker logs` so overlay-added services work too."""
+        name = self.find_container(service)
+        if not name:
+            log.error(f"--- no container found for service {service} ---")
+            return
+        log.error(f"--- docker logs --tail {tail} {name} ---")
+        subprocess.run(
+            ["docker", "logs", "--tail", str(tail), name], check=False
+        )
 
     def dump_all_logs(self, dest_dir: Path) -> None:
         """Per-service logs + ps state + the background `compose up` log."""
@@ -235,8 +271,12 @@ class Compose:
         node = Node.from_index(idx)
         log.info(f"Waiting for {node} to catch up to height {target}")
         try:
-            node.wait_until_at_height(target, height_timeout=timeout)
-        except TimeoutError:
+            node.wait_until_at_height(
+                target,
+                height_timeout=timeout,
+                container_status=lambda: self.container_status(str(node)),
+            )
+        except (TimeoutError, RuntimeError):
             self.dump_service_logs(str(node))
             raise
 
@@ -531,17 +571,36 @@ def _http_status_and_body(url: str, timeout: float = 5.0) -> tuple[int, str]:
 
 
 def _height_at(api_url: str, path: str) -> int | None:
-    code, body = _http_status_and_body(f"{api_url}{path}")
-    return int(body) if code == 200 and body.isdigit() else None
+    url = f"{api_url}{path}"
+    code, body = _http_status_and_body(url)
+    height = int(body) if code == 200 and body.isdigit() else None
+    if height is None:
+        snippet = body[:120].replace("\n", " ")
+        log.info(f"poll {url} -> status={code} body={snippet!r}")
+    else:
+        log.info(f"poll {url} -> {height}")
+    return height
 
 
 def poll_until(
-    check: Callable[[], bool], desc: str, timeout: float, interval: float = 2.0
+    check: Callable[[], bool],
+    desc: str,
+    timeout: float,
+    interval: float = 2.0,
+    abort: Callable[[], str | None] | None = None,
 ) -> None:
+    """Poll `check` until it returns True or `timeout` elapses.
+
+    `abort`, if given, is called each iteration; returning a non-None string
+    fails fast with that reason (used to bail out when the target container
+    exits during a wait).
+    """
     deadline = time.monotonic() + timeout
     while True:
         if check():
             return
+        if abort is not None and (reason := abort()) is not None:
+            raise RuntimeError(f"Aborted waiting for {desc}: {reason}")
         if time.monotonic() > deadline:
             raise TimeoutError(f"Timed out after {timeout:g}s waiting for {desc}")
         time.sleep(interval)
@@ -583,7 +642,11 @@ class Node:
         return code == 200
 
     def wait_until_at_height(
-        self, target: int, height_timeout: float = 120, leaf_timeout: float = 30
+        self,
+        target: int,
+        height_timeout: float = 120,
+        leaf_timeout: float = 30,
+        container_status: Callable[[], str | None] | None = None,
     ) -> None:
         if self.has_query:
             name, getter = "storage_height", self.storage_height
@@ -597,7 +660,16 @@ class Node:
                 return True
             return False
 
-        poll_until(height_ok, f"{self} {name} >= {target}", height_timeout)
+        abort = None
+        if container_status is not None:
+
+            def abort() -> str | None:
+                status = container_status()
+                if status not in (None, "running", "created", "restarting"):
+                    return f"{self} container status is {status}"
+                return None
+
+        poll_until(height_ok, f"{self} {name} >= {target}", height_timeout, abort=abort)
 
         if self.has_query:
             idx = target - 1
@@ -608,7 +680,9 @@ class Node:
                     return True
                 return False
 
-            poll_until(leaf_ok, f"{self} availability/leaf/{idx}", leaf_timeout)
+            poll_until(
+                leaf_ok, f"{self} availability/leaf/{idx}", leaf_timeout, abort=abort
+            )
 
 
 def fs_volume_name(idx: int) -> str:
