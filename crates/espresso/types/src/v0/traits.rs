@@ -555,8 +555,6 @@ pub trait MembershipPersistence: Send + Sync + 'static {
 pub trait SequencerPersistence:
     Sized + Send + Sync + Clone + 'static + DhtPersistentStorage + MembershipPersistence
 {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()>;
-
     /// Use this storage as a state catchup backend, if supported.
     fn into_catchup_provider(
         self,
@@ -906,9 +904,6 @@ pub trait SequencerPersistence:
         self.migrate_vid_shares().await?;
         self.migrate_quorum_proposals().await?;
         self.migrate_quorum_certificates().await?;
-        self.migrate_reward_merkle_tree_v2()
-            .await
-            .context("failed to migrate reward merkle tree v2")?;
         self.migrate_x25519_keys().await?;
         tracing::warn!("consensus storage has been migrated to new types");
 
