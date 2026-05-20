@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::U256;
 use committable::Commitment;
 use espresso_node::{
     SequencerApiVersion,
@@ -12,28 +12,12 @@ use espresso_node::{
     },
     testing::{TestConfig, TestConfigBuilder},
 };
-use espresso_types::{
-    FeeAccount, FeeAmount, Header, SeqTypes,
-    v0_3::RewardAmount,
-    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
-};
+use espresso_types::{FeeAccount, FeeAmount, Header, SeqTypes};
 use futures::{StreamExt, TryStreamExt};
 use hotshot_query_service::{
-    availability::BlockQueryData,
-    data_source::{
-        Transaction, VersionedDataSource,
-        sql::Config,
-        storage::sql::{
-            SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write, testing::TmpDb,
-        },
-    },
-    merklized_state::{MerklizedState, UpdateStateData},
-    types::HeightIndexed,
+    availability::BlockQueryData, merklized_state::MerklizedState, types::HeightIndexed,
 };
-use jf_merkle_tree_compat::{
-    LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
-    prelude::{MerkleProof, Sha3Node},
-};
+use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
 use surf_disco::Client;
 use test_utils::reserve_tcp_port;
 use tide_disco::error::ServerError;
