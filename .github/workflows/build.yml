@@ -620,3 +620,92 @@ jobs:
             echo "No jobs passed. Failing."
             exit 1
           fi
+
+  memory-soak-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd]
+    strategy:
+      fail-fast: false
+      matrix:
+        genesis:
+          - { name: drb-header, file: genesis/demo-drb-header.toml }
+          - { name: epoch-reward, file: genesis/demo-epoch-reward.toml }
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/docker-images
+          pattern: "*-docker-image"
+
+      - name: Load docker images
+        run: |
+          for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
+            docker load --input $file
+          done
+
+      - name: Run memory soak
+        env:
+          DOCKER_TAG: pr-${{ github.event.pull_request.number }}
+          ESPRESSO_NODE_GENESIS_FILE: ${{ matrix.genesis.file }}
+          GENESIS_LABEL: ${{ matrix.genesis.name }}
+          DURATION_SECONDS: "300"
+          OUTPUT_DIR: ./soak-samples
+        run: python3 crates/process-metrics/scripts/soak.py
+
+      - name: Upload soak samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis.name }}
+          path: ./soak-samples
+          retention-days: 90
+
+  memory-soak-non-pr:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    strategy:
+      fail-fast: false
+      matrix:
+        genesis:
+          - { name: drb-header, file: genesis/demo-drb-header.toml }
+          - { name: epoch-reward, file: genesis/demo-epoch-reward.toml }
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set docker tag
+        run: echo "DOCKER_TAG=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> $GITHUB_ENV
+
+      - name: Run memory soak
+        env:
+          ESPRESSO_NODE_GENESIS_FILE: ${{ matrix.genesis.file }}
+          GENESIS_LABEL: ${{ matrix.genesis.name }}
+          DURATION_SECONDS: "300"
+          OUTPUT_DIR: ./soak-samples
+        run: python3 crates/process-metrics/scripts/soak.py
+
+      - name: Upload soak samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis.name }}
+          path: ./soak-samples
+          retention-days: 90
+
+  memory-soak:
+    needs: [memory-soak-pr, memory-soak-non-pr]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Aggregate memory soak results
+        run: |
+          echo "All results: ${{ toJson(needs) }}"
+          if ${{ contains(needs.*.result, 'success') }}; then
+            echo "At least one job passed. Ok."
+          else
+            echo "No jobs passed. Failing."
+            exit 1
+          fi

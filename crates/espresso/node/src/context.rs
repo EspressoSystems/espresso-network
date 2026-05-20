@@ -34,6 +34,7 @@ use hotshot_types::{
     traits::{metrics::Metrics, network::ConnectedNetwork},
 };
 use parking_lot::Mutex;
+use process_metrics::ProcessMetrics;
 use request_response::RequestResponseConfig;
 use tokio::{spawn, sync::mpsc::channel, task::JoinHandle};
 use tracing::{Instrument, Level};
@@ -342,6 +343,9 @@ where
             network_config,
             validator_config,
         };
+
+        ctx.tasks
+            .spawn("process_metrics", ProcessMetrics::new(metrics).run());
 
         // Spawn proposal fetching tasks.
         proposal_fetcher_cfg.spawn(

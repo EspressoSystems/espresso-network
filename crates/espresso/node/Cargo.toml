@@ -85,6 +85,7 @@ moka = { workspace = true }
 num_enum = { workspace = true }
 parking_lot = { workspace = true }
 priority-queue = { workspace = true }
+process-metrics = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
