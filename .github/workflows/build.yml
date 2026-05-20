@@ -663,8 +663,12 @@ jobs:
           set -o pipefail
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
 
-      - name: Run memory soak
-        run: uv run crates/process-metrics/scripts/soak.py
+      - name: Sample memory and CPU
+        run: python3 crates/process-metrics/scripts/soak.py sample
+
+      - name: Render summary + chart
+        if: always()
+        run: uv run crates/process-metrics/scripts/soak.py render
 
       - name: Dump compose logs
         if: always()
@@ -721,8 +725,12 @@ jobs:
           set -o pipefail
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
 
-      - name: Run memory soak
-        run: uv run crates/process-metrics/scripts/soak.py
+      - name: Sample memory and CPU
+        run: python3 crates/process-metrics/scripts/soak.py sample
+
+      - name: Render summary + chart
+        if: always()
+        run: uv run crates/process-metrics/scripts/soak.py render
 
       - name: Dump compose logs
         if: always()

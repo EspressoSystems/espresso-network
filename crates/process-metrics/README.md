@@ -58,11 +58,24 @@ for samples, 1 day for compose logs.
 | `OUTPUT_DIR`                 | `./soak-samples`               | Where JSONL + summary.md + PNG land.      |
 | `GITHUB_STEP_SUMMARY`        | (set by GH Actions)            | If set, summary is appended here too.     |
 
-### Run locally
+### Subcommands
+
+- `soak.py sample` — collect data; stdlib only, runs with plain `python3`.
+- `soak.py render` — read JSONL, write `summary.md` + `rss-over-time.png` + append to `$GITHUB_STEP_SUMMARY`; needs
+  matplotlib (via uv inline deps).
+
+Splitting lets the chart be re-rendered locally against saved samples without re-running the soak.
+
+### Run locally (NixOS or otherwise)
+
+The flake's `LD_LIBRARY_PATH` shellHook makes uv-installed wheels work on NixOS.
 
 ```bash
 docker compose up -d
 scripts/smoke-test-demo
-DURATION_SECONDS=30 uv run crates/process-metrics/scripts/soak.py
+
+DURATION_SECONDS=30 python3 crates/process-metrics/scripts/soak.py sample
+uv run crates/process-metrics/scripts/soak.py render   # re-runnable on saved data
+
 python3 -m unittest crates/process-metrics/scripts/test_soak.py
 ```

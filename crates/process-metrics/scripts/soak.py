@@ -629,17 +629,37 @@ def render_summary(
     return "\n".join(parts) + "\n"
 
 
-# ---------- Orchestration ----------
+# ---------- Subcommands ----------
 
 
-def run_soak(config: Config) -> None:
+def cmd_sample(config: Config) -> int:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", config.genesis_file)
     os.environ.setdefault("ESPRESSO_SEQUENCER_GENESIS_FILE", config.genesis_file)
+
+    if not (REPO_ROOT / ".env").exists():
+        log.error(".env not found. Copy .env.docker.example to .env first.")
+        return 1
     load_project_env()
 
     nodes = [Node.from_index(i) for i in NODE_INDICES]
     docker_path, metrics_path = run_sampling(config, nodes)
+    log.info(
+        f"sample done docker-rows={_line_count(docker_path)} "
+        f"metric-rows={_line_count(metrics_path)} output={config.output_dir}"
+    )
+    return 0
+
+
+def cmd_render(config: Config) -> int:
+    docker_path = config.output_dir / "docker-stats.jsonl"
+    metrics_path = config.output_dir / "node-metrics.jsonl"
+
+    if not docker_path.exists():
+        log.error(f"missing {docker_path}; run `soak.py sample` first")
+        return 2
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
 
     summary = render_summary(
         docker_path,
@@ -658,11 +678,23 @@ def run_soak(config: Config) -> None:
         with config.github_step_summary.open("a") as f:
             f.write(summary)
         log.info(f"appended summary to {config.github_step_summary}")
+    return 0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--log-level", default="INFO")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    sample_p = subparsers.add_parser(
+        "sample", help="sample docker stats + node /metrics into OUTPUT_DIR"
+    )
+    sample_p.add_argument("--log-level", default="INFO")
+
+    render_p = subparsers.add_parser(
+        "render", help="render summary.md + rss-over-time.png from OUTPUT_DIR"
+    )
+    render_p.add_argument("--log-level", default="INFO")
+
     return parser.parse_args()
 
 
@@ -674,13 +706,13 @@ def main() -> int:
         stream=sys.stderr,
     )
 
-    if not (REPO_ROOT / ".env").exists():
-        log.error(".env not found. Copy .env.docker.example to .env first.")
-        return 1
-
     config = Config.from_env()
-    run_soak(config)
-    return 0
+    if args.command == "sample":
+        return cmd_sample(config)
+    if args.command == "render":
+        return cmd_render(config)
+    log.error(f"unknown command: {args.command}")
+    return 2
 
 
 if __name__ == "__main__":
