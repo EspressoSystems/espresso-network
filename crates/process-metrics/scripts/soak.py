@@ -119,8 +119,22 @@ class Compose:
     def pull(self) -> None:
         self.run("pull", "--policy", "missing")
 
-    def up(self) -> None:
-        self.run("up", "-d")
+    def up(self, log_path: Path) -> None:
+        """Fire and forget `compose up -d`.
+
+        `up -d` blocks on `service_completed_successfully` deps and fails if any
+        of them exit nonzero (e.g. wait-for-lc-epoch-2 in alpine without bash).
+        Readiness is verified separately by polling node HTTP endpoints.
+        """
+        env = os.environ | {"DOCKER_TAG": self.docker_tag}
+        with log_path.open("wb") as f:
+            subprocess.Popen(
+                self.base_args + ["up", "-d"],
+                cwd=REPO_ROOT,
+                env=env,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+            )
 
     def services(self) -> list[str]:
         out = self.run("config", "--services", capture=True).stdout
@@ -586,8 +600,10 @@ def run_soak(config: Config) -> None:
     if not config.skip_compose_up:
         log.info(f"docker compose pull (tag={config.docker_tag})")
         compose.pull()
-        log.info(f"docker compose up -d (tag={config.docker_tag})")
-        compose.up()
+        up_log = config.output_dir / "compose-up.log"
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+        log.info(f"docker compose up -d (tag={config.docker_tag}); log at {up_log}")
+        compose.up(up_log)
     else:
         log.info("SKIP_COMPOSE_UP=1; assuming compose stack is already running")
 
