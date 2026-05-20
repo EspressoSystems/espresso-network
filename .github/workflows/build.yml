@@ -754,18 +754,3 @@ jobs:
           name: memory-soak-${{ matrix.genesis.name }}-logs
           path: ./soak-logs
           retention-days: 1
-
-  memory-soak:
-    needs: [memory-soak-pr, memory-soak-non-pr]
-    runs-on: ubuntu-latest
-    if: ${{ always() && !cancelled() }}
-    steps:
-      - name: Aggregate memory soak results
-        run: |
-          echo "All results: ${{ toJson(needs) }}"
-          if ${{ contains(needs.*.result, 'success') }}; then
-            echo "At least one job passed. Ok."
-          else
-            echo "No jobs passed. Failing."
-            exit 1
-          fi
