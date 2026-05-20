@@ -232,6 +232,11 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         match coordinator.next_consensus_input().await {
             Ok(input) => {
                 metrics.on_input(&input);
+                if let ConsensusInput::BlockReconstructed(view, _) = &input
+                    && let Some(ts) = coordinator.vid_reconstructor().threshold_reached_ns(*view)
+                {
+                    metrics.on_vid_threshold(**view, ts);
+                }
                 coordinator.apply_consensus(input);
             },
             Err(err)

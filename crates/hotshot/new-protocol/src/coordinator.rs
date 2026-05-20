@@ -768,6 +768,10 @@ where
         self.consensus.current_view()
     }
 
+    pub fn vid_reconstructor(&self) -> &VidReconstructor<T> {
+        &self.vid_reconstructor
+    }
+
     pub fn state(&self, v: ViewNumber) -> Option<&StateEntry<T>> {
         self.state_manager.get_state(v)
     }
