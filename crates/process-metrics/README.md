@@ -45,8 +45,9 @@ calls these recipes.
 | `soak.py`      | Sample, render summary + chart. Stdlib + matplotlib (via uv inline). |
 | `test_soak.py` | Unit tests for `render_summary`. Run with `just soak::test`.         |
 
-Matrix over the 2 genesis files (drb-header V0.4, epoch-reward V0.5). 300s per matrix entry. Artifact retention: 90 days
-for samples, 1 day for compose logs.
+Matrix over the 2 genesis files (drb-header V0.4, epoch-reward V0.5). CI runs 3600s per matrix entry (overridden via
+`DURATION_SECONDS` in the workflow env); local default is 300s. Artifact retention: 90 days for samples, 1 day for
+compose logs.
 
 ### Env vars
 

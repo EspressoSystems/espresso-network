@@ -624,6 +624,7 @@ jobs:
   memory-soak-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     needs: [build-dockers-amd]
     strategy:
       fail-fast: false
@@ -632,6 +633,7 @@ jobs:
     env:
       DOCKER_TAG: pr-${{ github.event.pull_request.number }}
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
+      DURATION_SECONDS: 3600
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
@@ -682,6 +684,7 @@ jobs:
   memory-soak-non-pr:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     needs: [build-dockers-amd, create-multiplatform-docker-image]
     strategy:
       fail-fast: false
@@ -689,6 +692,7 @@ jobs:
         genesis: [demo-drb-header, demo-epoch-reward]
     env:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
+      DURATION_SECONDS: 3600
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
