@@ -1044,11 +1044,10 @@ impl<T: NodeType> Consensus<T> {
         }
         self.last_decided_view = new_decided_view;
         self.last_decided_leaf = last_decided_leaf;
-        let cert1 = self
-            .certs
-            .get(&view)
-            .cloned()
-            .expect("cert1 must exist if cert2 exists");
+        let Some(cert1) = self.certs.get(&view).cloned() else {
+            debug!(%view, "cert1 missing");
+            return;
+        };
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert1,
