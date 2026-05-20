@@ -30,11 +30,13 @@ services:
       # the light-client SQLite falls back to :memory: per-connection and
       # serves empty results, so a wiped peer can't fetch historical leaves.
       LIGHT_CLIENT_DB_PATH: /store/lc
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
 
   espresso-node-1:
     command: espresso-node -- storage-sql -- http -- query -- explorer -- light-client
     environment:
       LIGHT_CLIENT_DB_PATH: /store/lc
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
       # OLD-name vars only; BASE's .env doesn't define the NEW-name port vars,
       # and the UPGRADE binary aliases OLD->NEW via env_compat on startup.
       # Multiple peers: with a single peer (node-0), the wiped node-1 chases a
@@ -54,6 +56,7 @@ services:
       ESPRESSO_SEQUENCER_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
     volumes:
       - espresso-node-2-storage:/var/lib/espresso
 
@@ -63,6 +66,7 @@ services:
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
       ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
     volumes:
       - espresso-node-3-storage:/var/lib/espresso
 
@@ -72,6 +76,7 @@ services:
       ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
       ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
       ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
     volumes:
       - espresso-node-4-storage:/var/lib/espresso
 
