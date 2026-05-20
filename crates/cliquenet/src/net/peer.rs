@@ -458,8 +458,8 @@ impl Receiver {
 
             let permit = self
                 .budget
-                .clone()
                 .0
+                .clone()
                 .acquire_owned()
                 .await
                 .map_err(|_| NetworkError::BudgetClosed)?;

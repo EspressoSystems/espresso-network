@@ -699,19 +699,20 @@ impl Server {
         );
         let node = self.key;
         let name = self.conf.name.clone();
-        //let metrics = self.metrics.clone();
+        let metrics = self.metrics.clone();
         self.peer_tasks.spawn(key, async move {
+            let _addr = conn.addr;
             let Err(err) = peer.start(conn, cancel).await;
             if !matches!(err, NetworkError::PeerInterrupt) {
                 warn!(
                     %name,
                     %node,
-                    //peer = %peer.public_key(),
-                    //addr = %peer.socket_addr(),
+                    peer = %key,
+                    addr = %_addr,
                     %err,
                     "peer failure"
                 );
-                //metrics.add(peer.public_key(), "errors", 1)
+                metrics.add(&key, "errors", 1)
             }
             peer
         });

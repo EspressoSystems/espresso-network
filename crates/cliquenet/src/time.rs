@@ -2,7 +2,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::Arc,
-    task::{Context, Poll},
+    task::{Context, Poll, Waker},
 };
 
 use parking_lot::Mutex;
@@ -20,6 +20,9 @@ struct Inner {
 
     // Is this countdown running?
     stopped: bool,
+
+    /// Waker to call when a stopped `Countdown` should be polled again.
+    waker: Option<Waker>,
 }
 
 impl Default for Countdown {
@@ -37,6 +40,7 @@ impl Countdown {
             inner: Arc::new(Mutex::new(Inner {
                 sleep: Box::pin(sleep(Duration::from_secs(1))),
                 stopped: true,
+                waker: None,
             })),
         }
     }
@@ -46,13 +50,21 @@ impl Countdown {
     /// Once started, a countdown can not be started again, unless
     /// `Countdown::stop` is invoked first.
     pub fn start(&self, timeout: Duration) {
-        let mut inner = self.inner.lock();
-        if !inner.stopped {
-            // The countdown is already running.
-            return;
+        // Take the waker and drop the lock before calling `wake`
+        // to avoid holding it across scheduling.
+        let waker = {
+            let mut inner = self.inner.lock();
+            if !inner.stopped {
+                // The countdown is already running.
+                return;
+            }
+            inner.stopped = false;
+            inner.sleep.as_mut().reset(Instant::now() + timeout);
+            inner.waker.take()
+        };
+        if let Some(w) = waker {
+            w.wake();
         }
-        inner.stopped = false;
-        inner.sleep.as_mut().reset(Instant::now() + timeout);
     }
 
     /// Stop this countdown.
@@ -67,8 +79,16 @@ impl Future for Countdown {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut inner = self.inner.lock();
         if inner.stopped {
+            if let Some(w) = inner.waker.as_mut() {
+                if !w.will_wake(cx.waker()) {
+                    w.clone_from(cx.waker())
+                }
+            } else {
+                inner.waker = Some(cx.waker().clone())
+            }
             return Poll::Pending;
         }
+        debug_assert!(inner.waker.is_none());
         inner.sleep.as_mut().poll(cx)
     }
 }
