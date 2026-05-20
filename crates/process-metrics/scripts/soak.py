@@ -21,7 +21,6 @@ import logging
 import os
 import re
 import shlex
-import statistics
 import subprocess
 import sys
 import time
@@ -65,6 +64,7 @@ _MEM_UNIT_BYTES = {
 }
 _MEM_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+)\s*$")
 _NODE_PORT_RE = re.compile(r":(\d+)(?:/|$)")
+_ESPRESSO_NODE_RE = re.compile(r"espresso-node-(\d+)")
 _METRIC_LINE_RE = re.compile(
     r"^(process_[a-z_]+)(?:\{[^}]*\})?\s+(-?[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?)\s*$"
 )
@@ -316,14 +316,6 @@ def human_bytes(b: float) -> str:
     return f"{v:.0f} TB" if v == int(v) else f"{v:.2f} TB"
 
 
-def p99(values: list[float]) -> float:
-    if not values:
-        raise ValueError("p99 of empty list")
-    if len(values) < 2:
-        return max(values)
-    return statistics.quantiles(values, n=100)[98]
-
-
 def load_jsonl(path: Path) -> list[dict]:
     out: list[dict] = []
     with path.open() as f:
@@ -349,6 +341,8 @@ def group_docker_stats(rows: list[dict]) -> dict[str, list[dict]]:
         except (KeyError, ValueError) as e:
             log.warning(f"skipping unparsable docker-stats row: {e}")
             continue
+        if not name:
+            continue
         by_name[name].append({"ts": ts, "rss": rss, "cpu": cpu})
     return by_name
 
@@ -364,41 +358,6 @@ def compute_peak_total(by_name: dict[str, list[dict]]) -> tuple[float, int] | No
     return peak_val, peak_ts
 
 
-def render_service_table(by_name: dict[str, list[dict]]) -> str:
-    lines = [
-        "| Service | Min RSS | Avg RSS | Max RSS | p99 RSS | Avg CPU% | Max CPU% |",
-        "|---------|---------|---------|---------|---------|----------|----------|",
-    ]
-    has_rows = False
-    for name in sorted(by_name.keys()):
-        samples = by_name[name]
-        if not samples:
-            lines.append(f"| {name} | n/a | n/a | n/a | n/a | n/a | n/a |")
-            continue
-        has_rows = True
-        rss = [s["rss"] for s in samples]
-        cpu = [s["cpu"] for s in samples]
-        lines.append(
-            f"| {name} | {human_bytes(min(rss))} | {human_bytes(statistics.fmean(rss))} | "
-            f"{human_bytes(max(rss))} | {human_bytes(p99(rss))} | "
-            f"{statistics.fmean(cpu):.1f} | {max(cpu):.1f} |"
-        )
-
-    if has_rows:
-        totals: dict[int, float] = defaultdict(float)
-        for samples in by_name.values():
-            for s in samples:
-                totals[s["ts"]] += s["rss"]
-        ts_totals = list(totals.values())
-        lines.append(
-            f"| **Total (per-ts sum)** | {human_bytes(min(ts_totals))} | "
-            f"{human_bytes(statistics.fmean(ts_totals))} | {human_bytes(max(ts_totals))} | "
-            f"{human_bytes(p99(ts_totals))} | | |"
-        )
-
-    return "\n".join(lines)
-
-
 def node_url_to_container(url: str) -> str | None:
     m = _NODE_PORT_RE.search(url)
     if not m:
@@ -409,11 +368,35 @@ def node_url_to_container(url: str) -> str | None:
     return f"espresso-node-{idx}"
 
 
-def render_crosscheck(
+def short_node_name(raw: str) -> str | None:
+    """Return canonical `espresso-node-N` for any docker name containing it.
+
+    Returns None if `raw` is empty or doesn't match an espresso-node container.
+    """
+    if not raw:
+        return None
+    m = _ESPRESSO_NODE_RE.search(raw)
+    if not m:
+        return None
+    return f"espresso-node-{m.group(1)}"
+
+
+def filter_espresso_nodes(
     by_name: dict[str, list[dict]],
-    node_metrics: list[dict],
-) -> str:
-    per_node_rss: dict[str, float] = defaultdict(float)
+) -> dict[str, list[dict]]:
+    """Filter and rename docker rows to espresso-node-N keys only."""
+    out: dict[str, list[dict]] = defaultdict(list)
+    for name, samples in by_name.items():
+        short = short_node_name(name)
+        if short is None:
+            continue
+        out[short].extend(samples)
+    return dict(out)
+
+
+def per_node_process_rss(node_metrics: list[dict]) -> dict[str, float]:
+    """Map espresso-node-N -> max process_resident_memory_bytes."""
+    by_container: dict[str, float] = {}
     for m in node_metrics:
         try:
             if m["metric"] != "process_resident_memory_bytes":
@@ -423,51 +406,54 @@ def render_crosscheck(
         except (KeyError, ValueError, TypeError) as e:
             log.warning(f"skipping unparsable metric row: {e}")
             continue
-        if val > per_node_rss[url]:
-            per_node_rss[url] = val
+        container = node_url_to_container(url)
+        if container is None:
+            continue
+        if val > by_container.get(container, 0.0):
+            by_container[container] = val
+    return by_container
 
-    if not per_node_rss:
-        return ""
 
-    docker_max: dict[str, float] = {}
-    for name, samples in by_name.items():
-        if samples:
-            docker_max[name] = max(s["rss"] for s in samples)
+def render_service_table(
+    nodes_by_name: dict[str, list[dict]],
+    process_rss_max: dict[str, float],
+) -> str:
+    """Render the espresso-node-only summary table.
 
-    url_to_container: dict[str, str] = {}
-    for url in per_node_rss:
-        c = node_url_to_container(url)
-        if c is not None:
-            url_to_container[url] = c
-
+    Columns: Service, Max RSS (docker), Max RSS (process gauge), Max CPU%.
+    """
     lines = [
-        "",
-        "### Node RSS cross-check (docker stats vs in-process gauge)",
-        "",
-        "| Node | docker stats max RSS | process_resident_memory_bytes max | diff |",
-        "|------|----------------------|-----------------------------------|------|",
+        "| Service | Max RSS (docker) | Max RSS (process gauge) | Max CPU% |",
+        "|---------|------------------|-------------------------|----------|",
     ]
-    rows_by_container: dict[str, tuple[str, float | None, float | None]] = {}
-    for url, container in url_to_container.items():
-        d = docker_max.get(container)
-        p = per_node_rss.get(url)
-        rows_by_container[container] = (url, d, p)
-
-    for c in docker_max:
-        if c.startswith("espresso-node-") and c not in rows_by_container:
-            rows_by_container[c] = (c, docker_max[c], None)
-
-    for container in sorted(rows_by_container.keys()):
-        _url, d, p = rows_by_container[container]
-        d_str = human_bytes(d) if d is not None else "n/a"
-        p_str = human_bytes(p) if p is not None else "n/a"
-        if d is None or p is None:
-            diff_str = "n/a"
+    docker_total = 0.0
+    gauge_total = 0.0
+    gauge_count = 0
+    for name in sorted(nodes_by_name.keys()):
+        samples = nodes_by_name[name]
+        if not samples:
+            lines.append(f"| {name} | n/a | n/a | n/a |")
+            continue
+        rss = [s["rss"] for s in samples]
+        cpu = [s["cpu"] for s in samples]
+        d_max = max(rss)
+        docker_total += d_max
+        gauge = process_rss_max.get(name)
+        if gauge is not None:
+            gauge_total += gauge
+            gauge_count += 1
+            gauge_str = human_bytes(gauge)
         else:
-            diff = p - d
-            sign = "+" if diff >= 0 else "-"
-            diff_str = f"{sign}{human_bytes(abs(diff))}"
-        lines.append(f"| {container} | {d_str} | {p_str} | {diff_str} |")
+            gauge_str = "n/a"
+        lines.append(
+            f"| {name} | {human_bytes(d_max)} | {gauge_str} | {max(cpu):.1f} |"
+        )
+
+    if nodes_by_name:
+        gauge_total_str = human_bytes(gauge_total) if gauge_count > 0 else "n/a"
+        lines.append(
+            f"| **Total (sum)** | {human_bytes(docker_total)} | {gauge_total_str} | |"
+        )
 
     return "\n".join(lines)
 
@@ -497,7 +483,10 @@ def _build_series(
 
 
 def render_rss_png(by_name: dict[str, list[dict]], label: str, out_path: Path) -> bool:
-    """Render an RSS-over-time PNG. Returns True if a chart was written."""
+    """Render an RSS-over-time PNG for espresso-node containers.
+
+    Returns True if a chart was written.
+    """
     names, series, _ = _build_series(by_name)
     if not names:
         return False
@@ -515,12 +504,24 @@ def render_rss_png(by_name: dict[str, list[dict]], label: str, out_path: Path) -
     for name in names:
         xs = [p[0] for p in series[name]]
         ys = [p[1] for p in series[name]]
-        ax.plot(xs, ys, label=name, linewidth=1.2)
+        (line,) = ax.plot(xs, ys, linewidth=1.2)
+        ax.annotate(
+            name,
+            xy=(xs[-1], ys[-1]),
+            xytext=(4, 0),
+            textcoords="offset points",
+            color=line.get_color(),
+            fontsize="x-small",
+            va="center",
+            ha="left",
+        )
     ax.set_title(f"Memory soak: {label} (RSS over time)")
     ax.set_xlabel("seconds")
     ax.set_ylabel("RSS (MB)")
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize="small")
+    # Pad the right side so end-of-line annotations don't clip.
+    xmin, xmax = ax.get_xlim()
+    ax.set_xlim(xmin, xmax + (xmax - xmin) * 0.08)
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
@@ -590,41 +591,43 @@ def render_summary(
 
     peak = compute_peak_total(by_name)
     if peak is None:
-        peak_str = "**Peak total memory: n/a**"
+        peak_str = "**Peak total memory (all containers): n/a**"
     else:
         peak_val, peak_ts = peak
         iso = datetime.fromtimestamp(peak_ts, tz=timezone.utc).isoformat()
-        peak_str = f"**Peak total memory: {human_bytes(peak_val)}** (at {iso})"
+        peak_str = (
+            f"**Peak total memory (all containers): {human_bytes(peak_val)}** "
+            f"(at {iso})"
+        )
+
+    nodes_by_name = filter_espresso_nodes(by_name)
+
+    process_rss_max: dict[str, float] = {}
+    if metrics_path.exists():
+        metric_rows = load_jsonl(metrics_path)
+        if metric_rows:
+            process_rss_max = per_node_process_rss(metric_rows)
 
     parts = [
         header,
         "",
         peak_str,
         "",
-        render_service_table(by_name),
+        render_service_table(nodes_by_name, process_rss_max),
     ]
 
-    mermaid = render_mermaid_chart(by_name)
+    mermaid = render_mermaid_chart(nodes_by_name)
     if mermaid:
         parts.extend(["", "### Memory over time", "", mermaid])
 
-    if metrics_path.exists():
-        metric_rows = load_jsonl(metrics_path)
-        if metric_rows:
-            cross = render_crosscheck(by_name, metric_rows)
-            if cross:
-                parts.append(cross)
-
     png_path = output_dir / "rss-over-time.png"
     try:
-        wrote_png = render_rss_png(by_name, label, png_path)
+        wrote_png = render_rss_png(nodes_by_name, label, png_path)
     except Exception as e:
         log.warning(f"failed to render PNG chart: {e}")
         wrote_png = False
     if wrote_png:
-        parts.extend(
-            ["", f"Full-resolution chart in artifact: `{png_path.name}`"]
-        )
+        parts.extend(["", f"Full-resolution chart in artifact: `{png_path.name}`"])
 
     return "\n".join(parts) + "\n"
 
@@ -665,7 +668,7 @@ def cmd_render(config: Config) -> int:
         docker_path,
         metrics_path,
         config.genesis_label,
-        config.duration_seconds,
+        None,
         config.output_dir,
     )
     sys.stdout.write(summary)

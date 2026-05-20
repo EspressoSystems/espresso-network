@@ -46,14 +46,26 @@ class RenderSummaryTests(unittest.TestCase):
 
     def test_REQ_soak_summary_format_ok(self) -> None:
         """REQ:soak-summary-format-ok"""
-        services = ["espresso-node-0", "espresso-node-1", "espresso-node-2"]
+        # Docker names mirror docker-compose: <project>-<service>-<idx>.
+        services = [
+            "espresso-network-espresso-node-0-1",
+            "espresso-network-espresso-node-1-1",
+            "espresso-network-espresso-node-2-1",
+        ]
         base_ts = 1_779_259_000
         rows = [
             _mk_docker_row(base_ts + i, name, 100 + j * 50 + i, 10.0 + j)
             for i in range(5)
             for j, name in enumerate(services)
         ]
+        # Add an unrelated container and a phantom empty-Name row.
+        rows.extend(
+            _mk_docker_row(base_ts + i, "espresso-network-keydb-1", 5 + i, 1.0)
+            for i in range(5)
+        )
+        rows.extend(_mk_docker_row(base_ts + i, "", 0, 0.0) for i in range(5))
         _write_jsonl(self.docker, rows)
+        # Process gauge only for nodes 0 and 1.
         metric_rows = [
             {
                 "ts": base_ts + i,
@@ -62,28 +74,42 @@ class RenderSummaryTests(unittest.TestCase):
                 "value": (100 + j * 50 + i) * 1024 * 1024,
             }
             for i in range(5)
-            for j in range(3)
+            for j in range(2)
         ]
         _write_jsonl(self.metrics, metric_rows)
 
         out = render_summary(self.docker, self.metrics, "drb-header", 4, self.tmp)
 
         self.assertIn("## Memory soak: drb-header", out)
-        self.assertIn("**Peak total memory:", out)
+        self.assertIn("**Peak total memory (all containers):", out)
         self.assertIn("| Service", out)
-        for name in services:
+        self.assertIn("Max RSS (docker)", out)
+        self.assertIn("Max RSS (process gauge)", out)
+        # Espresso-node rows present with short names.
+        for name in ("espresso-node-0", "espresso-node-1", "espresso-node-2"):
             self.assertIn(name, out)
-        self.assertIn("**Total (per-ts sum)**", out)
-        self.assertIn("### Node RSS cross-check", out)
+        # Non-node containers and empty-name phantoms are filtered out.
+        self.assertNotIn("keydb", out)
+        # Node 2 has no process gauge data.
+        self.assertRegex(out, r"\|\s*espresso-node-2\s*\|[^|]*\|\s*n/a\s*\|")
+        self.assertIn("**Total (sum)**", out)
+        # No legacy headings/columns.
+        self.assertNotIn("Node RSS cross-check", out)
+        self.assertNotIn("p99 RSS", out)
+        self.assertNotIn("Total (per-ts sum)", out)
 
     def test_EDGE_soak_summary_sparse_rows(self) -> None:
         """EDGE:soak-summary-empty-rows — one container died early."""
         base_ts = 1_779_259_000
         rows = [
-            _mk_docker_row(base_ts + i, "espresso-node-0", 100 + i, 10.0)
+            _mk_docker_row(
+                base_ts + i, "espresso-network-espresso-node-0-1", 100 + i, 10.0
+            )
             for i in range(5)
         ] + [
-            _mk_docker_row(base_ts + i, "espresso-node-1", 200 + i, 20.0)
+            _mk_docker_row(
+                base_ts + i, "espresso-network-espresso-node-1-1", 200 + i, 20.0
+            )
             for i in range(2)
         ]
         _write_jsonl(self.docker, rows)
@@ -91,13 +117,15 @@ class RenderSummaryTests(unittest.TestCase):
         out = render_summary(self.docker, self.metrics, "sparse", 4, self.tmp)
         self.assertIn("espresso-node-0", out)
         self.assertIn("espresso-node-1", out)
-        self.assertIn("**Total (per-ts sum)**", out)
+        self.assertIn("**Total (sum)**", out)
 
     def test_EDGE_soak_summary_no_node_metrics(self) -> None:
         """EDGE:soak-summary-no-node-metrics — metrics file missing."""
         base_ts = 1_779_259_000
         rows = [
-            _mk_docker_row(base_ts + i, "espresso-node-0", 100 + i, 10.0)
+            _mk_docker_row(
+                base_ts + i, "espresso-network-espresso-node-0-1", 100 + i, 10.0
+            )
             for i in range(3)
         ]
         _write_jsonl(self.docker, rows)
@@ -105,7 +133,9 @@ class RenderSummaryTests(unittest.TestCase):
 
         out = render_summary(self.docker, self.metrics, "no-metrics", 2, self.tmp)
         self.assertIn("| Service", out)
-        self.assertNotIn("### Node RSS cross-check", out)
+        self.assertNotIn("Node RSS cross-check", out)
+        # Process gauge column shows n/a with no metrics file.
+        self.assertRegex(out, r"\|\s*espresso-node-0\s*\|[^|]*\|\s*n/a\s*\|")
 
 
 if __name__ == "__main__":
