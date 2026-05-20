@@ -1,21 +1,3 @@
-// Copyright (c) 2022 Espresso Systems (espressosys.com)
-// This file is part of the Espresso Sequencer.
-//
-// This program is free software: you can redistribute it and/or modify it under the terms of the
-// GNU General Public License as published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
-// even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-// General Public License for more details.
-// You should have received a copy of the GNU General Public License along with this program. If not,
-// see <https://www.gnu.org/licenses/>.
-
-//! Background DataBackfill migrations for the espresso node.
-//!
-//! All migrations here are postgres-only: they back-fill data from the original tables (`hash`,
-//! `fee_merkle_tree`, `block_merkle_tree`) — kept intact by migration V1302 as read fallbacks —
-//! into the new BIGINT-keyed tables.
-
 #[cfg(not(feature = "embedded-db"))]
 use async_trait::async_trait;
 #[cfg(not(feature = "embedded-db"))]
@@ -68,10 +50,6 @@ impl DataBackfill for BackfillHash {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Merkle-tree table backfills (macro-generated)
-// ---------------------------------------------------------------------------
 
 macro_rules! merkle_tree_backfill {
     ($struct_name:ident, $migration_name:literal, $legacy_table:literal, $new_table:literal) => {
@@ -159,11 +137,6 @@ merkle_tree_backfill!(
     "block_merkle_tree_bigint"
 );
 
-// ---------------------------------------------------------------------------
-// Registry constructor
-// ---------------------------------------------------------------------------
-
-/// Build the [`MigrationRegistry`] for the hash INT → BIGINT backfill.
 #[cfg(not(feature = "embedded-db"))]
 pub fn hash_bigint_migrations() -> MigrationRegistry {
     MigrationRegistry::new()
