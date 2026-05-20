@@ -31,15 +31,20 @@ impl DataBackfill for BackfillHash {
         }
         let n = rows.len();
 
-        for (id, value) in rows {
-            sqlx::query(
-                "INSERT INTO hash_bigint (id, value) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            )
-            .bind(id as i64)
-            .bind(&value)
-            .execute(tx.as_mut())
-            .await?;
-        }
+        let (ids, values): (Vec<i64>, Vec<Vec<u8>>) = rows
+            .into_iter()
+            .map(|(id, value)| (id as i64, value))
+            .unzip();
+
+        sqlx::query(
+            "INSERT INTO hash_bigint (id, value)
+             SELECT * FROM UNNEST($1::bigint[], $2::bytea[])
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(&ids)
+        .bind(&values)
+        .execute(tx.as_mut())
+        .await?;
 
         if n < self.batch_size() {
             Ok(None)
@@ -92,23 +97,41 @@ macro_rules! merkle_tree_backfill {
                 }
                 let n = rows.len();
 
+                let mut paths = Vec::with_capacity(n);
+                let mut createds = Vec::with_capacity(n);
+                let mut hash_ids = Vec::with_capacity(n);
+                let mut childrens = Vec::with_capacity(n);
+                let mut children_bitvecs = Vec::with_capacity(n);
+                let mut idxs = Vec::with_capacity(n);
+                let mut entries = Vec::with_capacity(n);
+
                 for (path, created, hash_id, children, children_bitvec, idx, entry) in rows {
-                    sqlx::query(concat!(
-                        "INSERT INTO ",
-                        $new_table,
-                        " (path, created, hash_id, children, children_bitvec, idx, entry) VALUES \
-                         ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING"
-                    ))
-                    .bind(&path)
-                    .bind(created)
-                    .bind(hash_id)
-                    .bind(&children)
-                    .bind(&children_bitvec)
-                    .bind(&idx)
-                    .bind(&entry)
-                    .execute(tx.as_mut())
-                    .await?;
+                    paths.push(path);
+                    createds.push(created);
+                    hash_ids.push(hash_id);
+                    childrens.push(children);
+                    children_bitvecs.push(children_bitvec);
+                    idxs.push(idx);
+                    entries.push(entry);
                 }
+
+                sqlx::query(concat!(
+                    "INSERT INTO ",
+                    $new_table,
+                    " (path, created, hash_id, children, children_bitvec, idx, entry)
+                     SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bigint[], \
+                     $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
+                     ON CONFLICT DO NOTHING"
+                ))
+                .bind(&paths)
+                .bind(&createds)
+                .bind(&hash_ids)
+                .bind(&childrens)
+                .bind(&children_bitvecs)
+                .bind(&idxs)
+                .bind(&entries)
+                .execute(tx.as_mut())
+                .await?;
 
                 if n < self.batch_size() {
                     Ok(None)
