@@ -190,10 +190,7 @@ class Compose:
         return self.run("ps", "-q", service, capture=True).stdout.strip()
 
     def find_container(self, service: str) -> str | None:
-        """Find a container by service name via `docker ps`, no compose project required.
-
-        Works for services added via overlay that `docker compose ps -q` can't see.
-        """
+        """Find a container by service name via `docker ps` (sees overlay-added services)."""
         out = subprocess.run(
             ["docker", "ps", "-a", "--filter", f"name={service}", "--format", "{{.Names}}"],
             capture_output=True,
@@ -206,7 +203,7 @@ class Compose:
         return None
 
     def container_status(self, service: str) -> str | None:
-        """Returns docker container State.Status (running, exited, ...) or None."""
+        """docker State.Status: running, exited, ... or None if no container."""
         name = self.find_container(service)
         if not name:
             return None
@@ -219,7 +216,6 @@ class Compose:
         return result.stdout.strip() or None
 
     def dump_service_logs(self, service: str, tail: int = 1000) -> None:
-        """Dump logs via `docker logs` so overlay-added services work too."""
         name = self.find_container(service)
         if not name:
             log.error(f"--- no container found for service {service} ---")
@@ -589,12 +585,7 @@ def poll_until(
     interval: float = 2.0,
     abort: Callable[[], str | None] | None = None,
 ) -> None:
-    """Poll `check` until it returns True or `timeout` elapses.
-
-    `abort`, if given, is called each iteration; returning a non-None string
-    fails fast with that reason (used to bail out when the target container
-    exits during a wait).
-    """
+    """Poll `check` until True or `timeout`. `abort` returning a string fails fast."""
     deadline = time.monotonic() + timeout
     while True:
         if check():

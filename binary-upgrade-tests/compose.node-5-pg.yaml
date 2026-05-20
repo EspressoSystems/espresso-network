@@ -4,9 +4,7 @@ services:
     ports:
       - "24005:24005"
     command: espresso-node -- storage-sql -- http -- config -- query
-    # node-5 always starts on BASE_TAG (old binary); use ESPRESSO_SEQUENCER_*
-    # so it works directly. The new binary's env_compat layer reads these as
-    # a fallback, so the same compose works for both binaries.
+    # OLD-name vars: node-5 always starts on BASE_TAG; UPGRADE picks them up via env_compat.
     environment:
       - ESPRESSO_SEQUENCER_EMBEDDED_DB=false
       - LIGHT_CLIENT_DB_PATH=/store/lc

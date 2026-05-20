@@ -1,34 +1,17 @@
-# Compose override for the binary upgrade test.
-#
-# Two unrelated fixes for BASE composes that pre-date current main:
-#
-# 1. Persistent storage on nodes 2, 3, 4. The 20260505 compose runs them
-#    without it (node-2 has no storage module; nodes 3, 4 use storage-fs but
-#    write to the ephemeral container layer). When a node is recreated for
-#    the binary roll, it has no cached config and the orchestrator returns
-#    403 ("Network has been started manually, no longer registering new
-#    keys"), so the new container can't join. Named volumes + STORAGE_PATH
-#    (old and new env names) keep config across recreation. For node-2 we
-#    also add "-- storage-fs" to the command.
-#
-# 2. Light-client server module on nodes 0, 1 and rewired peer URLs.
-#    The upgraded binary's query-module fetcher hits `/light-client/leaf/N`
-#    via ESPRESSO_NODE_API_PEERS; the leaf-chain catchup path hits
-#    `STATE_PEERS`. Neither endpoint exists on non-archival peers, so in the
-#    BASE ring topology (0->1->4->...) the post-roll fetcher 404s during the
-#    upgrade window. Backport b9702a786f's hub topology (all non-archival
-#    nodes catch up via 0 and 1) and enable the light-client module on the
-#    archival pair so the query fetcher actually finds the route.
-#
-# Nodes 0, 1 already have postgres-backed storage; only env + command edits.
+# Backports onto BASE composes that pre-date current main:
+# 1. Persistent storage on nodes 2, 3, 4 so recreated containers keep their
+#    orchestrator-cached config (avoids 403 "no longer registering new keys").
+# 2. Hub topology (all non-archival peers catch up via 0, 1) + light-client
+#    module on the archival pair, since UPGRADE's query fetcher hits
+#    /light-client/leaf/N which doesn't exist on non-archival peers
+#    (backport of b9702a786f).
 
 services:
   espresso-node-0:
     command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- light-client
     environment:
-      # Required for light-client catchup queries (a98a99f439); without it
-      # the light-client SQLite falls back to :memory: per-connection and
-      # serves empty results, so a wiped peer can't fetch historical leaves.
+      # Without this the light-client SQLite is :memory: per connection and
+      # serves empty results, so wiped peers can't fetch historical leaves.
       LIGHT_CLIENT_DB_PATH: /store/lc
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
 
@@ -37,14 +20,10 @@ services:
     environment:
       LIGHT_CLIENT_DB_PATH: /store/lc
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
-      # OLD-name vars only; BASE's .env doesn't define the NEW-name port vars,
-      # and the UPGRADE binary aliases OLD->NEW via env_compat on startup.
-      # Multiple peers: with a single peer (node-0), the wiped node-1 chases a
-      # moving target. node-0 is often the proposer so its indexer lags consensus
-      # by a small but steady gap; each catchup request asks for the latest
-      # consensus head's parent, which node-0 hasn't written yet, and by retry
-      # time the head has moved on. Including non-proposing query peers (3, 4)
-      # gives the catchup a faster-indexing fallback so it converges.
+      # OLD-name vars; UPGRADE aliases OLD->NEW via env_compat.
+      # Multiple peers: node-0 (often the proposer) lags consensus slightly,
+      # so a single-peer catchup chases a moving target. Including 3, 4 gives
+      # the wiped node a faster-indexing fallback so it converges.
       ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT,http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT
       ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT,http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT
 
