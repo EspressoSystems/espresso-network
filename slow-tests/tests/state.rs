@@ -14,9 +14,7 @@ use espresso_node::{
 };
 use espresso_types::{FeeAccount, FeeAmount, Header, SeqTypes};
 use futures::{StreamExt, TryStreamExt};
-use hotshot_query_service::{
-    availability::BlockQueryData, merklized_state::MerklizedState, types::HeightIndexed,
-};
+use hotshot_query_service::{availability::BlockQueryData, types::HeightIndexed};
 use jf_merkle_tree_compat::prelude::{MerkleProof, Sha3Node};
 use surf_disco::Client;
 use test_utils::reserve_tcp_port;
