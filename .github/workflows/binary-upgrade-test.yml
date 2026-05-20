@@ -20,11 +20,10 @@ jobs:
       matrix:
         scenario:
           - vanilla
-          - catchup-from-old-fs
-          - catchup-from-old-pg
-          - catchup-from-new-fs
-          - catchup-from-new-pg
-          - first-start
+          - new-from-old-fs
+          - new-from-old-pg
+          - old-from-new-fs
+          - old-from-new-pg
     name: binary-upgrade-test (${{ matrix.scenario }})
     steps:
       - uses: actions/checkout@v6
