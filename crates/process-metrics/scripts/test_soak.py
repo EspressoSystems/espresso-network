@@ -93,6 +93,15 @@ class RenderSummaryTests(unittest.TestCase):
         # Node 2 has no process gauge data.
         self.assertRegex(out, r"\|\s*espresso-node-2\s*\|[^|]*\|\s*n/a\s*\|")
         self.assertIn("**Total (sum)**", out)
+        # Mermaid chart has a deterministic palette and a flowchart legend
+        # whose node fills come from the same palette.
+        self.assertIn("plotColorPalette", out)
+        self.assertIn("flowchart LR", out)
+        for i, name in enumerate(
+            ("espresso-node-0", "espresso-node-1", "espresso-node-2")
+        ):
+            self.assertRegex(out, rf'n{i}\["{name}"\]')
+            self.assertRegex(out, rf"style n{i} fill:#[0-9a-fA-F]+")
         # No legacy headings/columns.
         self.assertNotIn("Node RSS cross-check", out)
         self.assertNotIn("p99 RSS", out)

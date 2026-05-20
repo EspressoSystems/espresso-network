@@ -38,6 +38,14 @@ NODE_INDICES = (0, 1, 2, 3, 4)
 PROGRESS_INTERVAL = 30
 MERMAID_MAX_POINTS = 30
 METRIC_PREFIX = "consensus_"
+# matplotlib tab10 first 5 — used for Mermaid + PNG so legend colors match.
+PLOT_PALETTE = (
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+)
 METRIC_NAMES = frozenset(
     METRIC_PREFIX + n
     for n in (
@@ -503,20 +511,22 @@ def render_rss_png(by_name: dict[str, list[dict]], label: str, out_path: Path) -
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(12, 6), dpi=100)
-    for name in names:
+    for i, name in enumerate(names):
         xs = [p[0] for p in series[name]]
         ys = [p[1] for p in series[name]]
-        (line,) = ax.plot(xs, ys, linewidth=1.2)
+        color = PLOT_PALETTE[i % len(PLOT_PALETTE)]
+        ax.plot(xs, ys, linewidth=1.2, color=color, label=name)
         ax.annotate(
             name,
             xy=(xs[-1], ys[-1]),
             xytext=(4, 0),
             textcoords="offset points",
-            color=line.get_color(),
+            color=color,
             fontsize="x-small",
             va="center",
             ha="left",
         )
+    ax.legend(loc="upper left", fontsize="x-small", framealpha=0.85)
     ax.set_title(f"Memory soak: {label} (RSS over time)")
     ax.set_xlabel("seconds")
     ax.set_ylabel("RSS (MB)")
@@ -554,8 +564,12 @@ def render_mermaid_chart(by_name: dict[str, list[dict]]) -> str:
     y_max = max(all_ys) if all_ys else 0.0
     y_top = max(1.0, y_max * 1.1)
 
-    lines = [
+    palette = ", ".join(PLOT_PALETTE[: len(names)])
+    init = f'%%{{init: {{"themeVariables": {{"xyChart": {{"plotColorPalette": "{palette}"}}}}}}}}%%'
+
+    chart = [
         "```mermaid",
+        init,
         "xychart-beta",
         '    title "RSS over time (MB)"',
         f'    x-axis "seconds" 0 --> {max_x}',
@@ -563,9 +577,20 @@ def render_mermaid_chart(by_name: dict[str, list[dict]]) -> str:
     ]
     for name in names:
         ys = [f"{y:.1f}" for _, y in subsampled[name]]
-        lines.append(f'    line "{name}" [{", ".join(ys)}]')
-    lines.append("```")
-    return "\n".join(lines)
+        chart.append(f'    line "{name}" [{", ".join(ys)}]')
+    chart.append("```")
+
+    # xychart-beta has no native legend; render one as a flowchart whose node
+    # fills come from the same palette so colors match line-for-line.
+    legend: list[str] = ["", "```mermaid", "flowchart LR"]
+    for i, name in enumerate(names):
+        color = PLOT_PALETTE[i % len(PLOT_PALETTE)]
+        node_id = f"n{i}"
+        legend.append(f'    {node_id}["{name}"]')
+        legend.append(f"    style {node_id} fill:{color},color:#fff,stroke:{color}")
+    legend.append("```")
+
+    return "\n".join(chart + legend)
 
 
 def render_summary(
