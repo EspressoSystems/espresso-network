@@ -227,6 +227,13 @@ impl Peer {
                     trace!(name = %self.conf.name, %peer, %addr, "interrupt");
                     recv_task.abort();
                     send_task.abort();
+                    // Before returning we remove retry entries corresponding
+                    // to received ACKs. We do not want to send the messages
+                    // again since the remote has received it already.
+                    while let Ok(ack) = ibound_acks_rx.try_recv() {
+                        let (s, i) = ack.into();
+                        self.retry.del(s, i);
+                    }
                     return Err(NetworkError::PeerInterrupt)
                 }
 
