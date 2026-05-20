@@ -632,6 +632,8 @@ jobs:
     env:
       DOCKER_TAG: pr-${{ github.event.pull_request.number }}
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
+      DELEGATION_CONFIG: multiple-delegators
+      NUM_DELEGATORS_PER_VALIDATOR: 100
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
@@ -698,6 +700,8 @@ jobs:
         genesis: [demo-drb-header, demo-epoch-reward]
     env:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
+      DELEGATION_CONFIG: multiple-delegators
+      NUM_DELEGATORS_PER_VALIDATOR: 100
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
