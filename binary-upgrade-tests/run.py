@@ -270,6 +270,7 @@ class Compose:
             node.wait_until_at_height(
                 target,
                 height_timeout=timeout,
+                leaf_timeout=timeout,
                 container_status=lambda: self.container_status(str(node)),
             )
         except (TimeoutError, RuntimeError):
@@ -443,7 +444,6 @@ class Compose:
         self.with_overlays(overlay).run(
             "up",
             "-d",
-            "--no-deps",
             f"espresso-node-{NEW_NODE_INDEX}",
             docker_tag=base_tag,
         )
