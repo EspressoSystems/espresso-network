@@ -17,12 +17,14 @@ impl DataBackfill for BackfillHash {
     async fn run_batch(
         &self,
         tx: &mut Transaction<Write>,
+        // Reused as last-seen id (keyset cursor), not a row count.
+        // Initial value 0 is safe because auto-increment ids start at 1.
         offset: u64,
     ) -> anyhow::Result<Option<u64>> {
         let rows: Vec<(i32, Vec<u8>)> =
-            sqlx::query_as("SELECT id, value FROM hash ORDER BY id LIMIT $1 OFFSET $2")
-                .bind(self.batch_size() as i64)
+            sqlx::query_as("SELECT id, value FROM hash WHERE id > $1 ORDER BY id LIMIT $2")
                 .bind(offset as i64)
+                .bind(self.batch_size() as i64)
                 .fetch_all(tx.as_mut())
                 .await?;
 
@@ -30,6 +32,7 @@ impl DataBackfill for BackfillHash {
             return Ok(None);
         }
         let n = rows.len();
+        let last_id = rows.last().expect("non-empty").0 as u64;
 
         let (ids, values): (Vec<i64>, Vec<Vec<u8>>) = rows
             .into_iter()
@@ -49,7 +52,7 @@ impl DataBackfill for BackfillHash {
         if n < self.batch_size() {
             Ok(None)
         } else {
-            Ok(Some(offset + n as u64))
+            Ok(Some(last_id))
         }
     }
 }
@@ -71,8 +74,11 @@ macro_rules! merkle_tree_backfill {
             async fn run_batch(
                 &self,
                 tx: &mut Transaction<Write>,
+                // Cursor: the start of the `created` (block height) range for this batch.
+                // Each batch covers [offset, offset + batch_size), using the index on `created`.
                 offset: u64,
             ) -> anyhow::Result<Option<u64>> {
+                let batch_size = self.batch_size() as i64;
                 let rows: Vec<(
                     serde_json::Value,
                     i64,
@@ -85,10 +91,10 @@ macro_rules! merkle_tree_backfill {
                     "SELECT path, created, hash_id::BIGINT, children, children_bitvec, idx, entry \
                      FROM ",
                     $legacy_table,
-                    " ORDER BY path, created LIMIT $1 OFFSET $2"
+                    " WHERE created >= $1 AND created < $2 ORDER BY created, path"
                 ))
-                .bind(self.batch_size() as i64)
                 .bind(offset as i64)
+                .bind(offset as i64 + batch_size)
                 .fetch_all(tx.as_mut())
                 .await?;
 
@@ -133,11 +139,7 @@ macro_rules! merkle_tree_backfill {
                 .execute(tx.as_mut())
                 .await?;
 
-                if n < self.batch_size() {
-                    Ok(None)
-                } else {
-                    Ok(Some(offset + n as u64))
-                }
+                Ok(Some(offset + self.batch_size() as u64))
             }
         }
     };
