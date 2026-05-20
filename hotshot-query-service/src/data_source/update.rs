@@ -281,7 +281,25 @@ where
                             )),
                             Some(VidShare::V2(share.share.clone())),
                         ),
-                        Some(_) | None => (None, None),
+                        Some(_) => (None, None),
+                        None => {
+                            if leaf.view_number().u64() == 0 {
+                                // HotShot does not run VID in consensus for the genesis block. In
+                                // this case, the block payload is guaranteed to always be empty, so
+                                // VID isn't really necessary. But for consistency, we will still
+                                // store the VID dispersal data, computing it ourselves based on the
+                                // well-known genesis VID commitment.
+                                match genesis_vid(leaf) {
+                                    Ok((common, share)) => (Some(common), Some(share)),
+                                    Err(err) => {
+                                        tracing::warn!("failed to compute genesis VID: {err:#}");
+                                        (None, None)
+                                    },
+                                }
+                            } else {
+                                (None, None)
+                            }
+                        },
                     };
 
                     if vid_common.is_none() {
