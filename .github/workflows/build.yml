@@ -640,6 +640,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8
+      - uses: taiki-e/install-action@just
 
       - name: Download docker image artifacts
         uses: actions/download-artifact@v8
@@ -653,11 +654,12 @@ jobs:
             docker load --input $file
           done
 
-      - name: Start demo
-        run: docker compose up -d &
+      - name: Pull remaining docker images
+        run: docker compose pull --policy missing
 
-      - name: Smoke test (gates readiness)
+      - name: Start demo + smoke test
         run: |
+          just demo --pull never &
           set -o pipefail
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
 
@@ -705,6 +707,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8
+      - uses: taiki-e/install-action@just
 
       - name: Set docker tag
         run: echo "DOCKER_TAG=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> $GITHUB_ENV
@@ -712,11 +715,9 @@ jobs:
       - name: Pull docker images
         run: docker compose pull --policy missing
 
-      - name: Start demo
-        run: docker compose up -d &
-
-      - name: Smoke test (gates readiness)
+      - name: Start demo + smoke test
         run: |
+          just demo --pull never &
           set -o pipefail
           timeout -v 600 scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
 
