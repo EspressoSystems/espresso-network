@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["httpx", "rich"]
+# ///
 """Binary upgrade test driver.
 
 Boots docker-compose using docker-compose.yaml + .env from the BASE_TAG git
@@ -19,13 +22,15 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
+
+import httpx
+from rich.logging import RichHandler
 
 log = logging.getLogger("binary-upgrade-test")
 
@@ -262,27 +267,6 @@ class Compose:
         if compose_up_log.exists():
             shutil.copy(compose_up_log, dest_dir / "compose-up.log")
 
-    def wait_for_catchup(
-        self, idx: int, peers: list[Node], timeout: float = 240
-    ) -> None:
-        heights = [p.storage_height() for p in peers if p.has_query]
-        heights = [h for h in heights if h is not None]
-        if not heights:
-            raise RuntimeError("No peer reported a storage height")
-        target = max(heights) + 2
-        node = Node.from_index(idx)
-        log.info(f"Waiting for {node} to catch up to height {target}")
-        try:
-            node.wait_until_at_height(
-                target,
-                height_timeout=timeout,
-                leaf_timeout=timeout,
-                container_status=lambda: self.container_status(str(node)),
-            )
-        except (TimeoutError, RuntimeError):
-            self.dump_service_logs(str(node))
-            raise
-
     def upgraded_services(self) -> list[str]:
         return [s for s in self.services() if s not in NOUPGRADE_SERVICES]
 
@@ -329,43 +313,6 @@ class Compose:
         if bad:
             raise RuntimeError(f"Wrong tag on services: {', '.join(bad)}")
 
-    def roll_node(self, n: int, upgrade_tag: str) -> None:
-        nodes = [Node.from_index(i) for i in NODE_INDICES]
-        ref = nodes[1] if n == 0 else nodes[0]
-        initial = ref.storage_height()
-        if initial is None:
-            raise RuntimeError(f"Could not read reference height from {ref}")
-        target = initial + 2
-
-        log.info(
-            f"Recreating {nodes[n]} with tag={upgrade_tag}; waiting for all nodes to reach height {target}"
-        )
-        # No --wait: the new image's baked-in healthcheck reads ESPRESSO_NODE_API_PORT
-        # but the old compose only sets ESPRESSO_SEQUENCER_API_PORT. The polling
-        # below verifies consensus liveness directly.
-        self.run(
-            "up",
-            "-d",
-            "--no-deps",
-            "--force-recreate",
-            str(nodes[n]),
-            docker_tag=upgrade_tag,
-        )
-
-        for node in nodes:
-            try:
-                node.wait_until_at_height(target)
-            except TimeoutError:
-                self.dump_service_logs(str(node))
-                raise
-
-    def roll_all_nodes(self, upgrade_tag: str, skip: tuple[int, ...] = ()) -> None:
-        for n in NODE_INDICES:
-            if n in skip:
-                continue
-            log.info(f"Rolling espresso-node-{n} to {upgrade_tag}")
-            self.roll_node(n, upgrade_tag)
-
     def bulk_upgrade_remaining(self, upgrade_tag: str) -> None:
         node_services = tuple(f"espresso-node-{i}" for i in NODE_INDICES)
         services = [s for s in self.upgraded_services() if s not in node_services]
@@ -403,48 +350,6 @@ class Compose:
             self.dump_service_logs(db_service)
             raise
 
-    def restart_node_with_config_peer(self, idx: int, tag: str) -> None:
-        # The CONFIG_PEERS overlay applies only to this single `up`; if the same
-        # node were rolled again afterwards without this overlay, it would lose
-        # the env var. Scenarios that call this never re-roll the wiped node.
-        peer_idx = 1 if idx == 0 else 0
-        peer_port_var = f"ESPRESSO_NODE_{peer_idx}_API_PORT"
-        peer_port = os.environ.get(peer_port_var)
-        if not peer_port:
-            raise RuntimeError(f"Env var {peer_port_var} not set")
-        peer_url = f"http://espresso-node-{peer_idx}:{peer_port}"
-
-        overlay = self.base_dir / f"restart-node-{idx}.yaml"
-        overlay.write_text(
-            f"""services:
-  espresso-node-{idx}:
-    environment:
-      ESPRESSO_NODE_CONFIG_PEERS: {peer_url}
-"""
-        )
-        log.info(
-            f"Restarting espresso-node-{idx} with ESPRESSO_NODE_CONFIG_PEERS={peer_url} on tag {tag}"
-        )
-        self.with_overlays(overlay).run(
-            "up",
-            "-d",
-            "--no-deps",
-            "--force-recreate",
-            f"espresso-node-{idx}",
-            docker_tag=tag,
-        )
-
-    def start_new_node_5(self, base_tag: str, overlay: Path) -> Node:
-        os.environ[f"ESPRESSO_NODE_{NEW_NODE_INDEX}_API_PORT"] = str(NEW_NODE_API_PORT)
-        log.info(f"Starting espresso-node-{NEW_NODE_INDEX} on tag {base_tag}")
-        self.with_overlays(overlay).run(
-            "up",
-            "-d",
-            f"espresso-node-{NEW_NODE_INDEX}",
-            docker_tag=base_tag,
-        )
-        return Node.from_index(NEW_NODE_INDEX)
-
     def smoke_test(self, tag: str) -> None:
         # cwd=base_dir so the script's only-if-unset .env loader picks up the
         # extracted base-tag .env. Scrub ESPRESSO_*/ESP_* from the subprocess
@@ -464,114 +369,13 @@ class Compose:
             check=True,
         )
 
-    def boot_base_network(self, config: Config) -> None:
-        self.run("down", "-v", check=False, capture=True)
 
-        log.info(f"Starting network on {config.base_tag}")
-        # `compose up -d` blocks on `depends_on: service_completed_successfully`,
-        # but `deploy-lcv3-upgrade` retries forever and `prover-one-shot` has a
-        # broken healthcheck, so a synchronous call would never return. Run in
-        # the background and let the smoke test below verify readiness end to
-        # end. The compose stack is torn down on context exit regardless.
-        compose_up_log = self.base_dir / "compose-up.log"
-        with compose_up_log.open("wb") as f:
-            subprocess.Popen(
-                self.base_args + ["up", "-d"],
-                cwd=REPO_ROOT,
-                env=os.environ | {"DOCKER_TAG": config.base_tag},
-                stdout=f,
-                stderr=subprocess.STDOUT,
-            )
-        log.info(f"compose up -d running in background; log at {compose_up_log}")
-
-        log.info("Initial smoke test")
-        self.smoke_test(config.base_tag)
-
-    def run_full_vanilla_upgrade(self, config: Config) -> None:
-        self.roll_all_nodes(config.upgrade_tag)
-
-        log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
-        self.bulk_upgrade_remaining(config.upgrade_tag)
-
-        log.info(f"Asserting all espresso-network images run tag {config.upgrade_tag}")
-        self.assert_all_espresso_images(config.upgrade_tag)
-
-    def vanilla(self, config: Config) -> None:
-        self.boot_base_network(config)
-        self.run_full_vanilla_upgrade(config)
-
-        log.info("Final smoke test")
-        self.smoke_test(config.upgrade_tag)
-
-    def new_from_old(
-        self,
-        config: Config,
-        wipe_idx: int,
-        wipe: Callable[[int], None],
-    ) -> None:
-        """New (UPGRADE) node catches up from old (BASE) peers.
-
-        Rolls just `wipe_idx` to UPGRADE, wipes it, restarts; the remaining
-        4 nodes are still on BASE_TAG when catchup runs. Then finishes the
-        rolling upgrade for the other nodes.
-        """
-        self.boot_base_network(config)
-
-        log.info(f"Rolling espresso-node-{wipe_idx} to {config.upgrade_tag}")
-        self.roll_node(wipe_idx, config.upgrade_tag)
-
-        wipe(wipe_idx)
-        self.restart_node_with_config_peer(wipe_idx, config.upgrade_tag)
-
-        peers = [Node.from_index(i) for i in NODE_INDICES if i != wipe_idx]
-        self.wait_for_catchup(wipe_idx, peers)
-
-        self.roll_all_nodes(config.upgrade_tag, skip=(wipe_idx,))
-
-        log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
-        self.bulk_upgrade_remaining(config.upgrade_tag)
-
-        log.info(f"Asserting all espresso-network images run tag {config.upgrade_tag}")
-        self.assert_all_espresso_images(config.upgrade_tag)
-
-        log.info("Final smoke test")
-        self.smoke_test(config.upgrade_tag)
-
-    def old_from_new(self, config: Config, node_5_overlay: Path) -> None:
-        """Old (BASE) node catches up from new (UPGRADE) peers.
-
-        Finishes the full upgrade, then starts a fresh espresso-node-5 on
-        BASE_TAG. Verifies the upgraded peers can still serve a base-version
-        client (API/wire compatibility).
-        """
-        self.boot_base_network(config)
-        self.run_full_vanilla_upgrade(config)
-
-        self.start_new_node_5(config.base_tag, node_5_overlay)
-        peers = [Node.from_index(i) for i in NODE_INDICES]
-        self.wait_for_catchup(NEW_NODE_INDEX, peers, timeout=300)
-
-
-def _http_status_and_body(url: str, timeout: float = 5.0) -> tuple[int, str]:
+def _get(url: str, timeout: float = 5.0) -> tuple[int, str]:
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return resp.status, resp.read().decode().strip()
-    except urllib.error.HTTPError as e:
-        return e.code, ""
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+        r = httpx.get(url, timeout=timeout)
+        return r.status_code, r.text.strip()
+    except httpx.RequestError:
         return 0, ""
-
-
-def _height_at(api_url: str, path: str) -> int | None:
-    url = f"{api_url}{path}"
-    code, body = _http_status_and_body(url)
-    height = int(body) if code == 200 and body.isdigit() else None
-    if height is None:
-        snippet = body[:120].replace("\n", " ")
-        log.info(f"poll {url} -> status={code} body={snippet!r}")
-    else:
-        log.info(f"poll {url} -> {height}")
-    return height
 
 
 def poll_until(
@@ -618,89 +422,123 @@ class Node:
 
     def storage_height(self) -> int | None:
         """/node/block-height — proves consensus advanced AND indexer DB kept up."""
-        return _height_at(self.api_url, "/node/block-height")
+        code, body = _get(f"{self.api_url}/node/block-height")
+        h = int(body) if code == 200 and body.isdigit() else None
+        if h is None:
+            log.debug(f"poll {self}/node/block-height -> {code} {body[:80]!r}")
+        else:
+            log.debug(f"poll {self}/node/block-height -> {h}")
+        return h
 
     def consensus_height(self) -> int | None:
         """/status/block-height — proves consensus advanced only."""
-        return _height_at(self.api_url, "/status/block-height")
+        code, body = _get(f"{self.api_url}/status/block-height")
+        h = int(body) if code == 200 and body.isdigit() else None
+        if h is None:
+            log.debug(f"poll {self}/status/block-height -> {code} {body[:80]!r}")
+        else:
+            log.debug(f"poll {self}/status/block-height -> {h}")
+        return h
 
     def leaf_available(self, index: int) -> bool:
-        code, _ = _http_status_and_body(f"{self.api_url}/availability/leaf/{index}")
+        code, _ = _get(f"{self.api_url}/availability/leaf/{index}")
         return code == 200
 
-    def wait_until_at_height(
+    def wait_consensus(
         self,
         target: int,
-        height_timeout: float = 120,
-        leaf_timeout: float = 30,
+        timeout: float,
         container_status: Callable[[], str | None] | None = None,
     ) -> None:
-        name = "storage_height" if self.has_query else "consensus_height"
+        last_h: int | None = None
 
-        last_cons: list[int | None] = [None]
-        last_stor: list[int | None] = [None]
+        def check() -> bool:
+            nonlocal last_h
+            h = self.consensus_height()
+            if h is not None:
+                last_h = h
+            return h is not None and h >= target
 
-        def height_ok() -> bool:
-            if self.has_query:
-                last_stor[0] = self.storage_height()
-                last_cons[0] = self.consensus_height()
-                h = last_stor[0]
-            else:
-                last_cons[0] = self.consensus_height()
-                h = last_cons[0]
-            if h is not None and h >= target:
-                log.info(f"{self} {name} {h} >= {target}")
+        abort = _make_abort(self, container_status)
+        try:
+            poll_until(check, f"{self} consensus >= {target}", timeout, abort=abort)
+        except TimeoutError:
+            secs = int(timeout)
+            if last_h is None or last_h < 5:
+                raise TimeoutError(f"{self} did not join consensus after {secs}s")
+            raise TimeoutError(
+                f"{self} consensus stalled after {secs}s (height={last_h}, target={target})"
+            )
+
+    def wait_storage(
+        self,
+        target: int,
+        timeout: float,
+        container_status: Callable[[], str | None] | None = None,
+    ) -> None:
+        assert self.has_query, f"{self} does not have query API"
+        last_cons: int | None = None
+        last_stor: int | None = None
+
+        def check() -> bool:
+            nonlocal last_cons, last_stor
+            c = self.consensus_height()
+            s = self.storage_height()
+            if c is not None:
+                last_cons = c
+            if s is not None:
+                last_stor = s
+            return s is not None and s >= target
+
+        abort = _make_abort(self, container_status)
+        try:
+            poll_until(check, f"{self} storage >= {target}", timeout, abort=abort)
+        except TimeoutError:
+            secs = int(timeout)
+            if last_cons is None or last_cons < 5:
+                raise TimeoutError(f"{self} did not join consensus after {secs}s")
+            if last_stor is not None and last_cons - last_stor > 5:
+                raise TimeoutError(
+                    f"{self} storage not catching up after {secs}s"
+                    f" (consensus={last_cons}, storage={last_stor})"
+                )
+            raise TimeoutError(
+                f"{self} storage stalled after {secs}s (storage={last_stor}, target={target})"
+            )
+
+        # leaf availability check
+        idx = target - 1
+        leaf_timeout = 30.0
+        stor_at_leaf = last_stor
+
+        def leaf_ok() -> bool:
+            if self.leaf_available(idx):
+                log.info(f"{self} availability/leaf/{idx} ok")
                 return True
             return False
 
-        abort = None
-        if container_status is not None:
-
-            def abort() -> str | None:
-                status = container_status()
-                if status not in (None, "running", "created", "restarting"):
-                    return f"{self} container status is {status}"
-                return None
-
         try:
-            poll_until(
-                height_ok, f"{self} {name} >= {target}", height_timeout, abort=abort
-            )
+            poll_until(leaf_ok, f"{self} leaf/{idx}", leaf_timeout, abort=abort)
         except TimeoutError:
-            cons = last_cons[0]
-            stor = last_stor[0]
-            secs = int(height_timeout)
-            if cons is None or cons < 5:
-                msg = f"{self} did not join consensus after {secs}s"
-            elif self.has_query and stor is not None and cons - stor > 5:
-                msg = f"{self} storage not catching up after {secs}s (consensus={cons}, storage={stor})"
-            else:
-                h = stor if self.has_query else cons
-                msg = f"{self} progress stalled after {secs}s ({name}={h}, target={target})"
-            raise TimeoutError(msg)
+            raise TimeoutError(
+                f"{self} leaf/{idx} not available after {int(leaf_timeout)}s"
+                f" (storage_height={stor_at_leaf})"
+            )
 
-        if self.has_query:
-            idx = target - 1
-            storage_height = last_stor[0]
 
-            def leaf_ok() -> bool:
-                if self.leaf_available(idx):
-                    log.info(f"{self} availability/leaf/{idx} ok")
-                    return True
-                return False
+def _make_abort(
+    node: Node, container_status: Callable[[], str | None] | None
+) -> Callable[[], str | None] | None:
+    if container_status is None:
+        return None
 
-            try:
-                poll_until(
-                    leaf_ok,
-                    f"{self} availability/leaf/{idx}",
-                    leaf_timeout,
-                    abort=abort,
-                )
-            except TimeoutError:
-                raise TimeoutError(
-                    f"{self} leaf/{idx} not available after {int(leaf_timeout)}s"
-                    f" (storage_height={storage_height})"
-                )
+    def abort() -> str | None:
+        status = container_status()
+        if status not in (None, "running", "created", "restarting"):
+            return f"{node} container status is {status}"
+        return None
+
+    return abort
 
 
 def fs_volume_name(idx: int) -> str:
@@ -787,6 +625,304 @@ def compose_session(config: Config):
         shutil.rmtree(base_dir, ignore_errors=True)
 
 
+# ---------------------------------------------------------------------------
+# Action types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Boot:
+    pass
+
+
+@dataclass(frozen=True)
+class Roll:
+    idx: int
+
+
+@dataclass(frozen=True)
+class Wipe:
+    idx: int
+    backend: Literal["fs", "pg"]
+
+
+@dataclass(frozen=True)
+class Restart:
+    idx: int
+    tag_source: Literal["base", "upgrade"] = "upgrade"
+
+
+@dataclass(frozen=True)
+class JoinNode:
+    idx: int
+    overlay: Path
+    tag_source: Literal["base", "upgrade"] = "base"
+
+
+@dataclass(frozen=True)
+class WaitStorage:
+    idx: int
+    peer_idxs: tuple[int, ...]
+    timeout: float = 240.0
+
+
+@dataclass(frozen=True)
+class BulkUpgrade:
+    pass
+
+
+@dataclass(frozen=True)
+class AssertImages:
+    pass
+
+
+@dataclass(frozen=True)
+class SmokeTest:
+    tag_source: Literal["base", "upgrade"] = "upgrade"
+
+
+Action = (
+    Boot
+    | Roll
+    | Wipe
+    | Restart
+    | JoinNode
+    | WaitStorage
+    | BulkUpgrade
+    | AssertImages
+    | SmokeTest
+)
+
+# ---------------------------------------------------------------------------
+# Scenarios
+# ---------------------------------------------------------------------------
+
+SCENARIOS: dict[Scenario, list[Action]] = {
+    Scenario.VANILLA: [
+        Boot(),
+        SmokeTest(tag_source="base"),
+        Roll(0),
+        Roll(1),
+        Roll(2),
+        Roll(3),
+        Roll(4),
+        BulkUpgrade(),
+        AssertImages(),
+        SmokeTest(),
+    ],
+    Scenario.NEW_FROM_OLD_FS: [
+        Boot(),
+        SmokeTest(tag_source="base"),
+        Roll(WIPE_FS_NODE),
+        Wipe(WIPE_FS_NODE, backend="fs"),
+        Restart(WIPE_FS_NODE),
+        WaitStorage(WIPE_FS_NODE, peer_idxs=(0, 1, 2, 3)),
+        Roll(0),
+        Roll(1),
+        Roll(2),
+        Roll(3),
+        BulkUpgrade(),
+        AssertImages(),
+        SmokeTest(),
+    ],
+    Scenario.NEW_FROM_OLD_PG: [
+        Boot(),
+        SmokeTest(tag_source="base"),
+        Roll(WIPE_PG_NODE),
+        Wipe(WIPE_PG_NODE, backend="pg"),
+        Restart(WIPE_PG_NODE),
+        WaitStorage(WIPE_PG_NODE, peer_idxs=(0, 2, 3, 4)),
+        Roll(0),
+        Roll(2),
+        Roll(3),
+        Roll(4),
+        BulkUpgrade(),
+        AssertImages(),
+        SmokeTest(),
+    ],
+    Scenario.OLD_FROM_NEW_FS: [
+        Boot(),
+        SmokeTest(tag_source="base"),
+        Roll(0),
+        Roll(1),
+        Roll(2),
+        Roll(3),
+        Roll(4),
+        BulkUpgrade(),
+        AssertImages(),
+        JoinNode(NEW_NODE_INDEX, overlay=NODE_5_FS_OVERLAY),
+        WaitStorage(NEW_NODE_INDEX, peer_idxs=NODE_INDICES, timeout=300.0),
+    ],
+    Scenario.OLD_FROM_NEW_PG: [
+        Boot(),
+        SmokeTest(tag_source="base"),
+        Roll(0),
+        Roll(1),
+        Roll(2),
+        Roll(3),
+        Roll(4),
+        BulkUpgrade(),
+        AssertImages(),
+        JoinNode(NEW_NODE_INDEX, overlay=NODE_5_PG_OVERLAY),
+        WaitStorage(NEW_NODE_INDEX, peer_idxs=NODE_INDICES, timeout=300.0),
+    ],
+}
+
+# ---------------------------------------------------------------------------
+# Action implementations
+# ---------------------------------------------------------------------------
+
+
+def _boot(compose: Compose, config: Config) -> None:
+    compose.run("down", "-v", check=False, capture=True)
+    log.info(f"Starting network on {config.base_tag}")
+    # `compose up -d` blocks on `depends_on: service_completed_successfully`,
+    # but `deploy-lcv3-upgrade` retries forever and `prover-one-shot` has a
+    # broken healthcheck, so a synchronous call would never return. Run in
+    # the background; the smoke test that follows verifies readiness end-to-end.
+    compose_up_log = compose.base_dir / "compose-up.log"
+    with compose_up_log.open("wb") as f:
+        subprocess.Popen(
+            compose.base_args + ["up", "-d"],
+            cwd=REPO_ROOT,
+            env=os.environ | {"DOCKER_TAG": config.base_tag},
+            stdout=f,
+            stderr=subprocess.STDOUT,
+        )
+    log.info(f"compose up -d running in background; log at {compose_up_log}")
+
+
+def _roll(compose: Compose, idx: int, upgrade_tag: str) -> None:
+    nodes = [Node.from_index(i) for i in NODE_INDICES]
+    ref = nodes[1] if idx == 0 else nodes[0]
+    initial: int | None = None
+    for _ in range(5):
+        initial = ref.storage_height()
+        if initial is not None:
+            break
+        time.sleep(2)
+    if initial is None:
+        raise RuntimeError(f"Could not read reference height from {ref}")
+    target = initial + 2
+
+    log.info(
+        f"Rolling espresso-node-{idx} to {upgrade_tag}; waiting for all nodes to reach height {target}"
+    )
+    compose.run(
+        "up",
+        "-d",
+        "--no-deps",
+        "--force-recreate",
+        f"espresso-node-{idx}",
+        docker_tag=upgrade_tag,
+    )
+
+    for node in nodes:
+        try:
+            node.wait_consensus(target, timeout=120)
+        except TimeoutError:
+            compose.dump_service_logs(str(node))
+            raise
+
+
+def _restart_with_config_peer(compose: Compose, idx: int, tag: str) -> None:
+    peer_idx = 1 if idx == 0 else 0
+    peer_port_var = f"ESPRESSO_NODE_{peer_idx}_API_PORT"
+    peer_port = os.environ.get(peer_port_var)
+    if not peer_port:
+        raise RuntimeError(f"Env var {peer_port_var} not set")
+    peer_url = f"http://espresso-node-{peer_idx}:{peer_port}"
+    overlay = compose.base_dir / f"restart-node-{idx}.yaml"
+    overlay.write_text(
+        f"services:\n  espresso-node-{idx}:\n    environment:\n      ESPRESSO_NODE_CONFIG_PEERS: {peer_url}\n"
+    )
+    log.info(
+        f"Restarting espresso-node-{idx} with ESPRESSO_NODE_CONFIG_PEERS={peer_url} on tag {tag}"
+    )
+    compose.with_overlays(overlay).run(
+        "up",
+        "-d",
+        "--no-deps",
+        "--force-recreate",
+        f"espresso-node-{idx}",
+        docker_tag=tag,
+    )
+
+
+def _wait_storage(
+    compose: Compose, idx: int, peer_idxs: tuple[int, ...], timeout: float
+) -> None:
+    peers = [n for i in peer_idxs if (n := Node.from_index(i)).has_query]
+    heights = [h for p in peers if (h := p.storage_height()) is not None]
+    if not heights:
+        raise RuntimeError("No peer reported a storage height")
+    target = max(heights) + 2
+    node = Node.from_index(idx)
+    log.info(f"Waiting for {node} to catch up to storage height {target}")
+    try:
+        node.wait_storage(
+            target,
+            timeout,
+            container_status=lambda: compose.container_status(str(node)),
+        )
+    except (TimeoutError, RuntimeError):
+        compose.dump_service_logs(str(node))
+        raise
+
+
+def _execute(action: Action, compose: Compose, config: Config) -> None:
+    match action:
+        case Boot():
+            _boot(compose, config)
+
+        case Roll(idx=idx):
+            _roll(compose, idx, config.upgrade_tag)
+
+        case Wipe(idx=idx, backend="fs"):
+            compose.wipe_fs_node(idx)
+
+        case Wipe(idx=idx, backend="pg"):
+            compose.wipe_pg_node(idx)
+
+        case Restart(idx=idx, tag_source=src):
+            tag = config.base_tag if src == "base" else config.upgrade_tag
+            _restart_with_config_peer(compose, idx, tag)
+
+        case JoinNode(idx=idx, overlay=overlay, tag_source=src):
+            tag = config.base_tag if src == "base" else config.upgrade_tag
+            os.environ[f"ESPRESSO_NODE_{idx}_API_PORT"] = str(NEW_NODE_API_PORT)
+            log.info(f"Starting espresso-node-{idx} on tag {tag}")
+            compose.with_overlays(overlay).run(
+                "up", "-d", f"espresso-node-{idx}", docker_tag=tag
+            )
+
+        case WaitStorage(idx=idx, peer_idxs=peer_idxs, timeout=timeout):
+            _wait_storage(compose, idx, peer_idxs, timeout)
+
+        case BulkUpgrade():
+            log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
+            compose.bulk_upgrade_remaining(config.upgrade_tag)
+
+        case AssertImages():
+            log.info(
+                f"Asserting all espresso-network images run tag {config.upgrade_tag}"
+            )
+            compose.assert_all_espresso_images(config.upgrade_tag)
+
+        case SmokeTest(tag_source=src):
+            tag = config.base_tag if src == "base" else config.upgrade_tag
+            log.info(f"Smoke test (tag={tag})")
+            compose.smoke_test(tag)
+
+        case _:
+            raise ValueError(f"Unknown action: {action}")
+
+
+def run_scenario(actions: list[Action], compose: Compose, config: Config) -> None:
+    for action in actions:
+        _execute(action, compose, config)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Binary upgrade test driver")
     parser.add_argument("--log-level", default="INFO")
@@ -804,28 +940,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_scenario(compose: Compose, config: Config, scenario: Scenario) -> None:
-    match scenario:
-        case Scenario.VANILLA:
-            compose.vanilla(config)
-        case Scenario.NEW_FROM_OLD_FS:
-            compose.new_from_old(config, WIPE_FS_NODE, compose.wipe_fs_node)
-        case Scenario.NEW_FROM_OLD_PG:
-            compose.new_from_old(config, WIPE_PG_NODE, compose.wipe_pg_node)
-        case Scenario.OLD_FROM_NEW_FS:
-            compose.old_from_new(config, NODE_5_FS_OVERLAY)
-        case Scenario.OLD_FROM_NEW_PG:
-            compose.old_from_new(config, NODE_5_PG_OVERLAY)
-        case _:
-            raise ValueError(f"Unknown scenario: {scenario}")
-
-
 def main() -> int:
     args = parse_args()
     logging.basicConfig(
+        handlers=[RichHandler(show_path=False)],
         level=args.log_level,
-        format="%(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
+        format="%(message)s",
     )
 
     if not (REPO_ROOT / ".env").exists():
@@ -851,7 +971,7 @@ def main() -> int:
             return 0
 
         log.info(f"Running scenario: {args.scenario}")
-        run_scenario(compose, config, args.scenario)
+        run_scenario(SCENARIOS[args.scenario], compose, config)
         log.info("Binary upgrade test complete")
     return 0
 
