@@ -7,7 +7,7 @@ use hotshot_example_types::{
 };
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
-    traits::signature_key::SignatureKey,
+    traits::{metrics::NoMetrics, signature_key::SignatureKey},
 };
 
 use super::utils::mock_membership_with_num_nodes;
@@ -86,6 +86,7 @@ impl TestHarness {
             upgrade_lock.clone(),
             genesis_leaf.clone(),
             epoch_height,
+            100,
         );
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
@@ -119,6 +120,7 @@ impl TestHarness {
             addr,
             vec![],
             upgrade_lock.clone(),
+            Box::new(NoMetrics),
         )
         .await
         .expect("cliquenet creation should succeed");

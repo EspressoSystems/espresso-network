@@ -24,7 +24,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use tokio::{select, sync::oneshot};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
@@ -118,6 +118,7 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         storage: S,
+        garbage_collection_interval: u64,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -128,6 +129,7 @@ where
             upgrade_lock.clone(),
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
+            garbage_collection_interval,
         );
 
         let genesis_cert1 = initializer.high_qc.clone();
@@ -354,15 +356,14 @@ where
                 },
                 Some(item) = self.proposal_validator.next() => match item {
                     Ok(validated) => {
-                        // Refresh the network's peer set when a proposal is validated
-                        // on_epoch_change should return immediately if the epoch is not new
+                        // Refresh the network's peer set when a proposal is validated.
                         let epoch = validated.message.proposal.data.epoch;
                         if let Err(err) = self
                             .network
-                            .on_epoch_change(epoch, &self.membership_coordinator)
+                            .apply_epoch(epoch, &self.membership_coordinator)
                             .await
                         {
-                            error!(%epoch, %err, "network on_epoch_change failed");
+                            error!(%epoch, %err, "network apply_epoch failed");
                         }
 
                         let view = validated.message.proposal.data.view_number();
@@ -825,7 +826,11 @@ where
             StateManagerOutput::Header {
                 response,
                 header: Some(hdr),
-            } => Some(ConsensusInput::HeaderCreated(response.view, hdr)),
+            } => Some(ConsensusInput::HeaderCreated(
+                response.view,
+                proposal_commitment(&response.parent_proposal),
+                hdr,
+            )),
             StateManagerOutput::Header {
                 response,
                 header: None,
@@ -994,6 +999,7 @@ where
     }
 
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        info!(node = %self.node_id, %view, "garbage collecting");
         self.consensus.gc(view, epoch);
         self.checkpoint_collector.gc(view, epoch);
         let _ = self.network.gc(view); // TODO

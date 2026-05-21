@@ -15,7 +15,7 @@ use tokio_util::{sync::CancellationToken, task::JoinMap};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    Config, PublicKey, Role,
+    Config, Metrics, PublicKey, Role,
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
@@ -38,6 +38,7 @@ pub struct Server {
     hello_tasks: JoinMap<PublicKey, Result<(Hello, Connection, Hello), NetworkError>>,
     connect_tasks: JoinMap<PublicKey, Connection>,
     peer_tasks: JoinMap<PublicKey, Peer>,
+    metrics: Arc<dyn Metrics>,
 }
 
 struct Party {
@@ -90,6 +91,7 @@ impl Server {
         tx: UnboundedSender<PeerMessage>,
         rx: UnboundedReceiver<Command>,
         sx: watch::Receiver<Slot>,
+        metrics: Arc<dyn Metrics>,
     ) -> JoinHandle<()> {
         let our_key = conf.keypair.public_key();
         let parties = conf
@@ -116,6 +118,7 @@ impl Server {
             msgid: MsgId::new(0),
             next_slot: sx,
             lower_bound: Slot::MIN,
+            metrics,
         };
 
         spawn(this.run(listener))
@@ -246,6 +249,7 @@ impl Server {
                                     .inbound(self.ibound.clone())
                                     .messages(party.outbox.clone())
                                     .connection(conn)
+                                    .metrics(self.metrics.clone())
                                     .build();
                                 party.peer = PeerState::Connected(peer.cancel_token());
                                 self.spawn_peer(key, peer);
@@ -259,7 +263,7 @@ impl Server {
                             }
                             PeerState::Connected(cancel) => {
                                 if conn.key > self.key {
-                                    debug!(
+                                    info!(
                                         name = %self.conf.name,
                                         node = %self.key,
                                         peer = %conn.key,
@@ -321,6 +325,7 @@ impl Server {
                                     .inbound(self.ibound.clone())
                                     .messages(party.outbox.clone())
                                     .connection(conn)
+                                    .metrics(self.metrics.clone())
                                     .build();
                                 party.peer = PeerState::Connected(peer.cancel_token());
                                 self.spawn_peer(key, peer);
@@ -333,7 +338,7 @@ impl Server {
                             }
                             PeerState::Connected(cancel) => {
                                 if conn.key < self.key {
-                                    debug!(
+                                    info!(
                                         name = %self.conf.name,
                                         node = %self.key,
                                         peer = %conn.key,
@@ -418,13 +423,14 @@ impl Server {
                     let s = *self.next_slot.borrow_and_update();
                     debug_assert!(s > self.lower_bound); // ensured by controller
                     self.lower_bound = s;
+                    self.metrics.set(&self.key, "lower_bound", u64::from(s) as usize);
                     for party in self.parties.values() {
                         party.outbox.gc(s)
                     }
                 }
 
                 cmd = self.obound.recv() => {
-                    self.conf.metrics.set(&self.key, "channel_size", self.obound.len());
+                    self.metrics.set(&self.key, "channel_size", self.obound.len());
                     match cmd {
                         Some(Command::Peer(PeerCommand::Add(role, parties))) => {
                             for (k, a) in parties {
@@ -454,6 +460,13 @@ impl Server {
                                     }
                                     continue
                                 }
+                                info!(
+                                    name = %self.conf.name,
+                                    node = %self.key,
+                                    peer = %k,
+                                    addr = %a,
+                                    "adding new peer"
+                                );
                                 self.parties.insert(k, Party::new(role, a.clone()));
                                 self.spawn_connect(k, a)
                             }
@@ -487,6 +500,13 @@ impl Server {
                                     continue
                                 }
                                 if let Some(p) = self.parties.get_mut(k) {
+                                    info!(
+                                        name = %self.conf.name,
+                                        node = %self.key,
+                                        peer = %k,
+                                        %role,
+                                        "assigning role to peer"
+                                    );
                                     p.role = role
                                 } else {
                                     warn!(
@@ -625,9 +645,8 @@ impl Server {
         );
         let conn = Connection::connect(self.conf.clone(), key, addr);
         self.connect_tasks.spawn(key, conn);
-        self.conf.metrics.add(&key, "connect_attempts", 1);
-        self.conf
-            .metrics
+        self.metrics.add(&key, "connect_attempts", 1);
+        self.metrics
             .set(&self.key, "connect_tasks", self.connect_tasks.len());
     }
 
@@ -635,8 +654,7 @@ impl Server {
         debug!(name = %self.conf.name, node = %self.key, "spawning accept task");
         let conn = Connection::accept(self.conf.clone(), stream);
         self.accept_tasks.spawn(conn);
-        self.conf
-            .metrics
+        self.metrics
             .set(&self.key, "accept_tasks", self.accept_tasks.len());
     }
 
@@ -651,7 +669,7 @@ impl Server {
 
         let duration = self.conf.handshake_timeout;
 
-        self.conf.metrics.add(&conn.key, "hellos", 1);
+        self.metrics.add(&conn.key, "hellos", 1);
         self.hello_tasks.abort(&conn.key);
         self.hello_tasks.spawn(conn.key, async move {
             let future = async {
@@ -664,8 +682,7 @@ impl Server {
                 Err(_) => Err(NetworkError::Timeout),
             }
         });
-        self.conf
-            .metrics
+        self.metrics
             .set(&self.key, "hello_tasks", self.hello_tasks.len());
     }
 
@@ -679,7 +696,7 @@ impl Server {
         );
         let node = self.key;
         let name = self.conf.name.clone();
-        let conf = self.conf.clone();
+        let metrics = self.metrics.clone();
         self.peer_tasks.spawn(key, async move {
             let Err(err) = peer.start().await;
             if !matches!(err, NetworkError::PeerInterrupt) {
@@ -691,12 +708,11 @@ impl Server {
                     %err,
                     "peer failure"
                 );
-                conf.metrics.add(peer.public_key(), "errors", 1)
+                metrics.add(peer.public_key(), "errors", 1)
             }
             peer
         });
-        self.conf
-            .metrics
+        self.metrics
             .set(&self.key, "peer_tasks", self.peer_tasks.len());
     }
 

@@ -37,20 +37,28 @@ pub fn display_stake_table(
     let mut stake_table = stake_table.clone();
     stake_table.sort_by_key(|a| a.stake);
 
+    let shorten = |s: String| {
+        if compact {
+            let end = s.chars().map(|c| c.len_utf8()).take(40).sum();
+            format!("{}..", &s[..end])
+        } else {
+            s
+        }
+    };
     for validator in stake_table.iter() {
         let comm: Commission = validator.commission.try_into()?;
-        let bls_key = validator.stake_table_key.to_string();
-        let key_str = if compact {
-            let end = bls_key.chars().map(|c| c.len_utf8()).take(40).sum();
-            format!("{}..", &bls_key[..end])
-        } else {
-            bls_key.to_string()
-        };
+        let key_str = shorten(validator.stake_table_key.to_string());
         output_success(format!(
             "Validator {}: {key_str} comm={comm} stake={} ESP",
             validator.account,
             format_ether(validator.stake),
         ));
+        if let Some(x25519) = &validator.x25519_key {
+            output_success(format!(" - {}", shorten(x25519.to_string())));
+        }
+        if let Some(p2p_addr) = &validator.p2p_addr {
+            output_success(format!(" - p2p_addr={p2p_addr}"));
+        }
 
         if validator.delegators.is_empty() {
             output_success(" - No delegators");

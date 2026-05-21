@@ -300,12 +300,12 @@ where
             )
             .await
             .context("failed to save and gc reward merkle tree v2")?;
-
-        storage
-            .persist_reward_proofs(instance, block_number, version)
-            .await
-            .context("failed to persist reward proofs")?;
     }
+
+    storage
+        .persist_reward_proofs(instance, block_number, version)
+        .await
+        .context("failed to persist reward proofs")?;
 
     tracing::debug!("storing state update");
     let mut tx = storage
