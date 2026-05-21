@@ -523,9 +523,16 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = proposal.view_number();
+        let proposer = KeyPrefix::from(&sender);
+        let block_number = proposal.proposal.data.block_header.block_number();
+        let qc_view = proposal.proposal.data.justify_qc.view_number();
 
         if !self.wants_proposal_for_view(&view) {
-            warn!(%view, "proposal too old");
+            warn!(
+                %view, %proposer, block = %block_number,
+                epoch = %proposal.proposal.data.epoch, %qc_view,
+                "proposal too old"
+            );
             return Protocol::Abort;
         }
 
@@ -534,28 +541,42 @@ impl<T: NodeType> Consensus<T> {
         let epoch = proposal.epoch;
         // QC can be for a different epoch
         let Some(qc_epoch) = proposal.justify_qc.epoch() else {
-            warn!(%view, "proposal has no epoch number");
+            warn!(
+                %view, %proposer, block = %block_number, %epoch, %qc_view,
+                "proposal has no epoch number"
+            );
             return Protocol::Abort;
         };
-        let block_number = proposal.block_header.block_number();
 
         if !self.is_safe(&proposal) {
-            debug!("proposal not safe");
+            warn!(
+                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                "proposal not safe"
+            );
             return Protocol::Abort;
         }
 
         // if the previous block is the last block of the epoch, this proposal is the first proposal of the new epoch
         if is_last_block(block_number.saturating_sub(1), *self.epoch_height) {
             let Some(cert2) = &proposal.next_epoch_justify_qc else {
-                warn!(%epoch, "no next epoch justify QC");
+                warn!(
+                    %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                    "no next epoch justify QC"
+                );
                 return Protocol::Abort;
             };
             if cert2.data.leaf_commit != proposal.justify_qc.data().leaf_commit {
-                warn!(%epoch, "next epoch justify QC does not match proposal");
+                warn!(
+                    %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                    "next epoch justify QC does not match proposal"
+                );
                 return Protocol::Abort;
             }
             if !self.verify_cert(cert2, qc_epoch) {
-                warn!(%epoch, "next epoch justify QC not verified");
+                warn!(
+                    %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                    "next epoch justify QC not verified"
+                );
                 return Protocol::Abort;
             }
         }
@@ -586,7 +607,10 @@ impl<T: NodeType> Consensus<T> {
                     .next_drb_result
                     .is_none_or(|proposed_drb| drb != &proposed_drb)
                 {
-                    warn!(%epoch, "DRB result does not match proposal");
+                    warn!(
+                        %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                        "DRB result does not match proposal"
+                    );
                     return Protocol::Abort;
                 }
             } else {
