@@ -541,3 +541,82 @@ jobs:
             echo "No jobs passed. Failing."
             exit 1
           fi
+
+  binary-upgrade-test-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+      - uses: taiki-e/install-action@just
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/docker-images
+          pattern: "*-docker-image"
+
+      - name: Load docker images
+        run: |
+          for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
+            docker load --input $file
+          done
+
+      - name: Set upgrade tag
+        run: |
+          echo "UPGRADE_TAG=pr-${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          echo "BASE_TAG=20260505" >> $GITHUB_ENV
+
+      - name: Pull docker images
+        run: |
+          set -o pipefail
+          ./binary-upgrade-tests/run.py --pull-only | sed -e 's/^/binary-upgrade: /;'
+
+      - name: Run binary upgrade test
+        run: |
+          set -o pipefail
+          timeout -v 1800 ./binary-upgrade-tests/run.py | sed -e 's/^/binary-upgrade: /;'
+
+  binary-upgrade-test-non-pr:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+      - uses: taiki-e/install-action@just
+
+      - name: Set upgrade tag
+        run: |
+          UPGRADE_TAG=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          echo "UPGRADE_TAG=$UPGRADE_TAG" >> $GITHUB_ENV
+          echo "BASE_TAG=20260505" >> $GITHUB_ENV
+          echo "UPGRADE_PULL=1" >> $GITHUB_ENV
+
+      - name: Pull docker images
+        run: |
+          set -o pipefail
+          ./binary-upgrade-tests/run.py --pull-only | sed -e 's/^/binary-upgrade: /;'
+
+      - name: Run binary upgrade test
+        run: |
+          set -o pipefail
+          timeout -v 1800 ./binary-upgrade-tests/run.py | sed -e 's/^/binary-upgrade: /;'
+
+  binary-upgrade-test:
+    needs: [binary-upgrade-test-pr, binary-upgrade-test-non-pr]
+    runs-on: ubuntu-latest
+    if: ${{ always() && !cancelled() }}
+    steps:
+      - name: Aggregate binary upgrade test results
+        run: |
+          echo "All results: ${{ toJson(needs) }}"
+          if ${{ contains(needs.*.result, 'success') }}; then
+            echo "At least one job passed. Ok."
+          else
+            echo "No jobs passed. Failing."
+            exit 1
+          fi
