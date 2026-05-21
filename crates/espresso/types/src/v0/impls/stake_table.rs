@@ -1933,7 +1933,9 @@ mod tests {
     use hotshot_types::signature_key::BLSKeyPair;
     use pretty_assertions::assert_matches;
     use rstest::rstest;
-    use versions::{CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+    use versions::{
+        CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION,
+    };
 
     use super::*;
     use crate::{L1ClientOptions, v0::impls::testing::*};
@@ -3607,7 +3609,11 @@ mod tests {
         let mut map = RegisteredValidatorMap::new();
         map.insert(v.account, v.clone());
 
-        for protocol_version in [EPOCH_VERSION, DRB_AND_HEADER_UPGRADE_VERSION] {
+        for protocol_version in [
+            EPOCH_VERSION,
+            DRB_AND_HEADER_UPGRADE_VERSION,
+            EPOCH_REWARD_VERSION,
+        ] {
             let active = select_active_validator_set(&map, protocol_version).unwrap();
             assert!(
                 active.contains_key(&v.account),
