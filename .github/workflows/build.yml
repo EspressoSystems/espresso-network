@@ -561,6 +561,7 @@ jobs:
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
+      - uses: astral-sh/setup-uv
 
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -617,6 +618,7 @@ jobs:
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
+      - uses: astral-sh/setup-uv
 
       - name: Set upgrade tag
         run: |
