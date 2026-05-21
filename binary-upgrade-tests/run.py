@@ -548,7 +548,7 @@ class Node:
         timeout: float,
         container_status: Callable[[], str | None] | None = None,
     ) -> None:
-        abort = _make_abort(self, container_status)
+        abort = _abort_if_exited(self, container_status)
         deadline = time.monotonic() + timeout
         last_h: int | None = None
         while True:
@@ -576,7 +576,7 @@ class Node:
         container_status: Callable[[], str | None] | None = None,
     ) -> None:
         assert self.has_query, f"{self} does not have query API"
-        abort = _make_abort(self, container_status)
+        abort = _abort_if_exited(self, container_status)
         deadline = time.monotonic() + timeout
         last_cons: int | None = None
         last_stor: int | None = None
@@ -621,7 +621,7 @@ class Node:
             time.sleep(2.0)
 
 
-def _make_abort(
+def _abort_if_exited(
     node: Node, container_status: Callable[[], str | None] | None
 ) -> Callable[[], str | None] | None:
     if container_status is None:
