@@ -177,6 +177,7 @@ impl LightClientSqliteOptions {
             },
             None => {
                 let mut builder = Builder::new();
+                builder.prefix("espresso-lc-");
                 #[cfg(unix)]
                 builder.permissions(Permissions::from_mode(0o700));
                 let dir = builder.tempdir().context(
@@ -597,15 +598,13 @@ mod test {
     async fn test_default_storage_survives_idle_reap() {
         use std::time::Duration;
 
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("lc.db");
-        let db = LightClientSqliteOptions {
-            lc_path: Some(path.clone()),
-            ..Default::default()
-        }
-        .connect()
-        .await
-        .unwrap();
+        let db = SqliteStorage::default().await.unwrap();
+        let path = db
+            ._tmp
+            .as_ref()
+            .expect("default storage must own a tempdir")
+            .path()
+            .join("lc.db");
 
         let opt = SqliteConnectOptions::new()
             .filename(&path)
@@ -624,9 +623,11 @@ mod test {
             .unwrap();
         assert_eq!(height, 0);
 
-        while pool.size() > 0 {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while pool.size() > 0 && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        assert_eq!(pool.size(), 0, "pool did not reap idle connections in time");
 
         let (height,): (i64,) = sqlx::query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
             .fetch_one(&pool)
