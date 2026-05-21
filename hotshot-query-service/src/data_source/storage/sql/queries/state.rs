@@ -75,37 +75,33 @@ where
         // On postgres, fall back to legacy tables for any traversal-path nodes not yet backfilled.
         #[cfg(not(feature = "embedded-db"))]
         let nodes = {
-            let mut nodes = nodes;
-            let all_paths = traversal_path_values(&traversal_path, tree_height);
-            if nodes.len() < all_paths.len() {
-                let found_paths: HashSet<String> =
-                    nodes.iter().map(|n| n.path.to_string()).collect();
-                let missing_paths: Vec<serde_json::Value> = all_paths
+            let found: HashSet<String> = nodes.iter().map(|n| n.path.to_string()).collect();
+            let missing: Vec<serde_json::Value> =
+                traversal_path_values(&traversal_path, tree_height)
                     .into_iter()
-                    .filter(|p| !found_paths.contains(&p.to_string()))
+                    .filter(|p| !found.contains(&p.to_string()))
                     .collect();
-                if !missing_paths.is_empty() {
-                    let fallback_table = state_type.strip_suffix("_bigint").unwrap_or(state_type);
-                    let (lq, lsql) =
-                        build_legacy_path_query(fallback_table, missing_paths, created)?;
-                    let legacy_rows = lq
-                        .query(&lsql)
-                        .fetch_all(self.as_mut())
-                        .await
-                        .map_err(|e| QueryError::Error {
-                            message: format!("merkle path fallback lookup failed: {e}"),
-                        })?;
-                    nodes.extend(legacy_rows.into_iter().map(Node::from));
-                    // Re-sort leaf-first (longer path arrays first),
-                    // matching the original ORDER BY t.path DESC behaviour.
-                    nodes.sort_by(|a, b| {
-                        let la = a.path.as_array().map(|v| v.len()).unwrap_or(0);
-                        let lb = b.path.as_array().map(|v| v.len()).unwrap_or(0);
-                        lb.cmp(&la)
-                    });
-                }
+
+            if missing.is_empty() {
+                nodes
+            } else {
+                let legacy_table = state_type.strip_suffix("_bigint").unwrap_or(state_type);
+                let (lq, lsql) = build_legacy_path_query(legacy_table, missing, created)?;
+                let legacy_rows = lq
+                    .query(&lsql)
+                    .fetch_all(self.as_mut())
+                    .await
+                    .map_err(|e| QueryError::Error {
+                        message: format!("merkle path fallback lookup failed: {e}"),
+                    })?;
+                let mut nodes = nodes;
+                nodes.extend(legacy_rows.into_iter().map(Node::from));
+                // Sort leaf-first (longer paths first).
+                nodes.sort_by_key(|n| {
+                    std::cmp::Reverse(n.path.as_array().map(|v| v.len()).unwrap_or(0))
+                });
+                nodes
             }
-            nodes
         };
 
         // insert all the hash ids to a hashset which is used to query later
@@ -765,7 +761,6 @@ impl Node {
         Ok(())
     }
 }
-
 
 /// Compute the full set of path JSON values for a traversal path (leaf to root).
 ///
