@@ -18,7 +18,7 @@
 <a href=#18 id=18 data-nosnippet>18</a>    time::{MissedTickBehavior, interval},
 <a href=#19 id=19 data-nosnippet>19</a>};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>tokio_util::sync::CancellationToken;
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>tracing::{trace, warn};
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>tracing::{info, trace, warn};
 <a href=#22 id=22 data-nosnippet>22</a>
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>crate::{
 <a href=#24 id=24 data-nosnippet>24</a>    Config, Metrics, PublicKey,
@@ -307,7 +307,7 @@
 <a href=#307 id=307 data-nosnippet>307</a>                // Once a peer has been interrupted, its connection needs to be
 <a href=#308 id=308 data-nosnippet>308</a>                // replaced before calling start again.
 <a href=#309 id=309 data-nosnippet>309</a>                </span><span class="kw">_ </span>= <span class="self">self</span>.cancel.cancelled() =&gt; {
-<a href=#310 id=310 data-nosnippet>310</a>                    <span class="macro">trace!</span>(name = %<span class="self">self</span>.conf.name, peer = %<span class="self">self</span>.conn.key, <span class="string">"interrupt"</span>);
+<a href=#310 id=310 data-nosnippet>310</a>                    <span class="macro">info!</span>(name = %<span class="self">self</span>.conf.name, peer = %<span class="self">self</span>.conn.key, <span class="string">"peer interrupt"</span>);
 <a href=#311 id=311 data-nosnippet>311</a>                    <span class="kw">return </span><span class="prelude-val">Err</span>(NetworkError::PeerInterrupt)
 <a href=#312 id=312 data-nosnippet>312</a>                }
 <a href=#313 id=313 data-nosnippet>313</a>

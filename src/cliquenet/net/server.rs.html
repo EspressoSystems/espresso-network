@@ -263,7 +263,7 @@
 <a href=#263 id=263 data-nosnippet>263</a>                            }
 <a href=#264 id=264 data-nosnippet>264</a>                            PeerState::Connected(cancel) =&gt; {
 <a href=#265 id=265 data-nosnippet>265</a>                                <span class="kw">if </span>conn.key &gt; <span class="self">self</span>.key {
-<a href=#266 id=266 data-nosnippet>266</a>                                    <span class="macro">debug!</span>(
+<a href=#266 id=266 data-nosnippet>266</a>                                    <span class="macro">info!</span>(
 <a href=#267 id=267 data-nosnippet>267</a>                                        name = %<span class="self">self</span>.conf.name,
 <a href=#268 id=268 data-nosnippet>268</a>                                        node = %<span class="self">self</span>.key,
 <a href=#269 id=269 data-nosnippet>269</a>                                        peer = %conn.key,
@@ -338,7 +338,7 @@
 <a href=#338 id=338 data-nosnippet>338</a>                            }
 <a href=#339 id=339 data-nosnippet>339</a>                            PeerState::Connected(cancel) =&gt; {
 <a href=#340 id=340 data-nosnippet>340</a>                                <span class="kw">if </span>conn.key &lt; <span class="self">self</span>.key {
-<a href=#341 id=341 data-nosnippet>341</a>                                    <span class="macro">debug!</span>(
+<a href=#341 id=341 data-nosnippet>341</a>                                    <span class="macro">info!</span>(
 <a href=#342 id=342 data-nosnippet>342</a>                                        name = %<span class="self">self</span>.conf.name,
 <a href=#343 id=343 data-nosnippet>343</a>                                        node = %<span class="self">self</span>.key,
 <a href=#344 id=344 data-nosnippet>344</a>                                        peer = %conn.key,
