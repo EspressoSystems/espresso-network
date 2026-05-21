@@ -468,7 +468,7 @@ class Compose:
 
 def _get(url: str, timeout: float = 5.0) -> tuple[int, str]:
     try:
-        r = httpx.get(url, timeout=timeout)
+        r = httpx.get(url, timeout=timeout, follow_redirects=True)
         return r.status_code, r.text.strip()
     except httpx.RequestError:
         return 0, ""
