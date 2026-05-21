@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 use cliquenet::x25519::{InvalidKeypair, InvalidPublicKey, InvalidSecretKey};
 use rand::{Rng, SeedableRng};
@@ -195,6 +195,14 @@ impl TryFrom<PublicKey> for TaggedBase64 {
 
     fn try_from(k: PublicKey) -> Result<Self, Self::Error> {
         TaggedBase64::new(X25519_PUBLIC_KEY, &k.as_bytes()[..])
+    }
+}
+
+impl FromStr for PublicKey {
+    type Err = Tb64Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s.parse::<TaggedBase64>()?)
     }
 }
 

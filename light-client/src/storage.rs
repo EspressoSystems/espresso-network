@@ -14,7 +14,7 @@ use hotshot_query_service_types::{
     HeightIndexed,
     availability::{BlockId, LeafId, LeafQueryData},
 };
-use hotshot_types::{data::EpochNumber, light_client::StateVerKey};
+use hotshot_types::{data::EpochNumber, light_client::StateVerKey, x25519};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{
@@ -442,6 +442,16 @@ impl Storage for SqliteStorage {
                 .await
                 .context(format!("loading Schnorr keys for epoch {epoch}"))?;
 
+        let used_x25519_keys =
+            query_as::<_, (String,)>("SELECT key FROM stake_table_x25519_key WHERE epoch <= $1")
+                .bind(epoch)
+                .fetch(tx.as_mut())
+                .map_err(anyhow::Error::new)
+                .and_then(|(s,)| async move { Ok(x25519::PublicKey::from_str(&s)?) })
+                .try_collect()
+                .await
+                .context(format!("loading x25519 keys for epoch {epoch}"))?;
+
         Ok(Some((
             EpochNumber::new(epoch as u64),
             StakeTableState::new(
@@ -449,6 +459,7 @@ impl Storage for SqliteStorage {
                 validator_exits,
                 used_bls_keys,
                 used_schnorr_keys,
+                used_x25519_keys,
             ),
             epoch_root_protocol_version,
             next_epoch_root_protocol_version,
@@ -525,6 +536,23 @@ impl Storage for SqliteStorage {
             .context(format!(
                 "inserting newly used Schnorr keys for epoch {epoch}"
             ))?;
+
+        // Insert only newly used x25519 keys.
+        if !stake_table.used_x25519_keys().is_empty() {
+            QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
+                .push_values(stake_table.used_x25519_keys(), |mut q, key| {
+                    q.push_bind(epoch).push_bind(key.to_string());
+                })
+                // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                // when this key was added to the state.
+                .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
+                .build()
+                .execute(tx.as_mut())
+                .await
+                .context(format!(
+                    "inserting newly used x25519 keys for epoch {epoch}"
+                ))?;
+        }
 
         // Insert only the new validator exits.
         if !stake_table.validator_exits().is_empty() {
@@ -1035,6 +1063,8 @@ mod test {
     fn random_stake_table() -> StakeTableState {
         let validator = random_validator();
         let candidate: RegisteredValidator<PubKey> = validator.clone().into();
+        let x25519_key =
+            x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
         StakeTableState::new(
             [(candidate.account, candidate.clone())]
                 .into_iter()
@@ -1042,6 +1072,7 @@ mod test {
             [Address::random()].into_iter().collect(),
             [candidate.stake_table_key].into_iter().collect(),
             [candidate.state_ver_key].into_iter().collect(),
+            [x25519_key].into_iter().collect(),
         )
     }
 
@@ -1050,6 +1081,8 @@ mod test {
         let new_validator = random_validator();
         let new_candidate: RegisteredValidator<PubKey> = new_validator.clone().into();
         let new_exit = Address::random();
+        let new_x25519 =
+            x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
         StakeTableState::new(
             state
                 .validators()
@@ -1073,6 +1106,12 @@ mod test {
                 .used_schnorr_keys()
                 .iter()
                 .chain([&new_candidate.state_ver_key])
+                .cloned()
+                .collect(),
+            state
+                .used_x25519_keys()
+                .iter()
+                .chain([&new_x25519])
                 .cloned()
                 .collect(),
         )
