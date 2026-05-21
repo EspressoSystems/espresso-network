@@ -337,24 +337,21 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 }
             }
             // disagreement => query more nodes
-            else {
-                // there is some internal disagreement or not enough nodes returned
-                // Initiate new query that hits more replicas
-                if retry_count > 0 {
-                    let new_retry_count = retry_count - 1;
-                    debug!(
-                        "Get DHT: Internal disagreement for get dht request {progress:?}! \
-                         requerying with more nodes. {new_retry_count:?} retries left"
-                    );
-                    self.retry_get(KadGetQuery {
-                        backoff,
-                        progress: DHTProgress::NotStarted,
-                        notify,
-                        key,
-                        retry_count: new_retry_count,
-                        records: Vec::new(),
-                    });
-                }
+            else if retry_count > 0 {
+                let new_retry_count = retry_count - 1;
+                debug!(
+                    "Get DHT: Internal disagreement for get dht request {progress:?}! requerying \
+                     with more nodes. {new_retry_count:?} retries left"
+                );
+                self.retry_get(KadGetQuery {
+                    backoff,
+                    progress: DHTProgress::NotStarted,
+                    notify,
+                    key,
+                    retry_count: new_retry_count,
+                    records: Vec::new(),
+                });
+            } else {
                 LogEvent::DhtDisagreementGivenUp.record();
                 debug!(
                     "Get DHT: Internal disagreement for get dht request {progress:?}! Giving up \

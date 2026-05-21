@@ -69,7 +69,7 @@ static SPAWNED: AtomicBool = AtomicBool::new(false);
 
 pub fn spawn_summary_task() {
     if SPAWNED
-        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
     {
         return;
