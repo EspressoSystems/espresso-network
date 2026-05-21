@@ -1263,7 +1263,7 @@ pub mod testing {
                 (
                     "BIT(8)",
                     "BYTEA",
-                    "SERIAL PRIMARY KEY",
+                    "BIGSERIAL PRIMARY KEY",
                     "(data->>'test_merkle_tree_root')",
                 )
             };
@@ -1283,7 +1283,7 @@ pub mod testing {
             (
                 path JSONB NOT NULL,
                 created BIGINT NOT NULL,
-                hash_id INT NOT NULL,
+                hash_id BIGINT NOT NULL,
                 children JSONB,
                 children_bitvec {bit_vec},
                 idx JSONB,
