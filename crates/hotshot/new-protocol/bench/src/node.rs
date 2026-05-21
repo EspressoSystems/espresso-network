@@ -15,6 +15,7 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
+    leader_trace::LeaderTracerHandle,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -34,7 +35,10 @@ use hotshot_types::{
 use tracing::{error, info, warn};
 use versions::{CLIQUENET_VERSION, Upgrade};
 
-use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
+use crate::{
+    config::NodeConfig, leader_trace::CsvLeaderTracer, membership::make_membership,
+    metrics::MetricsCollector,
+};
 
 type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
 
@@ -46,10 +50,34 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let (membership, client) = make_membership(cfg.total_nodes, public_key).await;
     let network = create_network(cfg.node_id, &public_key, &private_key, &cfg).await?;
 
-    let coordinator =
-        build_coordinator(public_key, private_key, membership, network, client, &cfg).await;
+    // Per-node leader-event tracer. Production binaries leave this `None`; the
+    // bench wires it through `Consensus::set_tracer` so every leader-duty call
+    // site emits a wall-clock-ns stamp to disk for offline reconstruction.
+    let trace_path = leader_trace_path(&cfg);
+    let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, trace_path));
 
-    run_instrumented(coordinator, &cfg).await
+    let coordinator = build_coordinator(
+        public_key,
+        private_key,
+        membership,
+        network,
+        client,
+        &cfg,
+        tracer.clone() as LeaderTracerHandle,
+    )
+    .await;
+
+    let result = run_instrumented(coordinator, &cfg).await;
+    if let Err(err) = tracer.flush() {
+        warn!(%err, "failed to flush leader trace");
+    }
+    result
+}
+
+fn leader_trace_path(cfg: &NodeConfig) -> PathBuf {
+    let out = PathBuf::from(&cfg.output_file);
+    let dir = out.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    dir.join(format!("leader_trace_node{}.csv", cfg.node_id))
 }
 
 async fn create_network(
@@ -106,6 +134,7 @@ async fn build_coordinator(
     network: Cliquenet<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     cfg: &NodeConfig,
+    tracer: LeaderTracerHandle,
 ) -> BenchCoordinator {
     let instance = Arc::new(TestInstanceState::default());
     let epoch_height = u64::MAX;
@@ -131,6 +160,7 @@ async fn build_coordinator(
         genesis_leaf.clone(),
         epoch_height,
     );
+    consensus.set_tracer(Some(tracer.clone()));
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -143,7 +173,8 @@ async fn build_coordinator(
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
     let vid_disperser = VidDisperser::new(membership.clone());
-    let vid_reconstructor = VidReconstructor::new();
+    let mut vid_reconstructor = VidReconstructor::new();
+    vid_reconstructor.set_tracer(Some(tracer.clone()));
 
     let block_config = BlockBuilderConfig::default();
     let block_builder = BlockBuilder::new(

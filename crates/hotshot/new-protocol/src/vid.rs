@@ -154,6 +154,7 @@ pub struct VidReconstructor<T: NodeType> {
     /// to start. Subtract this from `block_reconstructed_ns` to isolate recover CPU time
     /// from share-collection time. Cleared by `gc`.
     threshold_reached_ns: BTreeMap<ViewNumber, i128>,
+    pub(crate) tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
 impl<T: NodeType> VidReconstructor<T> {
@@ -165,6 +166,7 @@ impl<T: NodeType> VidReconstructor<T> {
             calculations: BTreeMap::new(),
             block_verifications: BTreeMap::new(),
             threshold_reached_ns: BTreeMap::new(),
+            tracer: None,
         }
     }
 
@@ -173,6 +175,10 @@ impl<T: NodeType> VidReconstructor<T> {
     /// triggered `try_reconstruct`.
     pub fn threshold_reached_ns(&self, view: ViewNumber) -> Option<i128> {
         self.threshold_reached_ns.get(&view).copied()
+    }
+
+    pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
+        self.tracer = tracer;
     }
 
     pub(crate) fn handle_vid_share<M>(&mut self, share: VidDisperseShare2<T>, metadata: M)
@@ -291,12 +297,28 @@ impl<T: NodeType> VidReconstructor<T> {
                 .map(|d| d.as_nanos() as i128)
                 .unwrap_or(0)
         });
+        crate::trace_leader_event!(
+            self.tracer,
+            view,
+            crate::leader_trace::LeaderEvent::ThresholdShareReachedVMinus1
+        );
+        let tracer = self.tracer.clone();
         let task = self.tasks.spawn_blocking(move || {
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1Start
+            );
             let Ok(result) = AvidmGf2Scheme::recover(&common, &shares) else {
                 return Err(VidReconstructError::Reconstruct(view));
             };
             let payload = T::BlockPayload::from_bytes(&result, &metadata);
             let tx_commitments = payload.transaction_commitments(&metadata);
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1End
+            );
             Ok(VidReconstructOutput {
                 view,
                 epoch,
@@ -345,7 +367,13 @@ impl<T: NodeType> VidReconstructor<T> {
         };
         let total_weight = vid_total_weight(membership.stake_table(), Some(block.epoch));
         let epoch = block.epoch;
+        let tracer = self.tracer.clone();
         let task = self.tasks.spawn_blocking(move || {
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::VerifyBlockVMinus1Start
+            );
             let payload_bytes = block.payload.encode();
             let metadata_bytes = block.metadata.encode();
             let Ok(param) = init_avidm_gf2_param(total_weight) else {
@@ -364,6 +392,11 @@ impl<T: NodeType> VidReconstructor<T> {
                 return Err(VidReconstructError::VerifyBlock(view));
             }
             let tx_commitments = block.payload.transaction_commitments(&block.metadata);
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::VerifyBlockVMinus1End
+            );
             Ok(VidReconstructOutput {
                 view,
                 epoch,
