@@ -69,7 +69,7 @@ class RenderSummaryTests(unittest.TestCase):
         metric_rows = [
             {
                 "ts": base_ts + i,
-                "node": f"http://localhost:{24000 + j}",
+                "node": f"espresso-node-{j}",
                 "metric": "consensus_process_resident_memory_bytes",
                 "value": (100 + j * 50 + i) * 1024 * 1024,
             }

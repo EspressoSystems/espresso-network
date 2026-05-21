@@ -31,7 +31,6 @@ sample *args:
     set -euo pipefail
     cd {{repo_root}}
     export DURATION_SECONDS={{duration}}
-    export ESPRESSO_NODE_GENESIS_FILE={{genesis}}
     export OUTPUT_DIR={{output}}
     uv run {{script_dir}}/soak.py sample {{args}}
 

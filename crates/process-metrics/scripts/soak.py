@@ -26,7 +26,6 @@ import os
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -46,19 +45,17 @@ log = logging.getLogger("memory-soak")
 NODE_INDICES = (0, 1, 2, 3, 4)
 PROGRESS_INTERVAL = 30
 MERMAID_MAX_POINTS = 30
-METRIC_PREFIX = "consensus_"
-NODE_BASE_PORT = 24000
+RSS_METRIC = "consensus_process_resident_memory_bytes"
 MEM_UNIT_SCALE = {"KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
 # matplotlib tab10 first 5 - used for Mermaid + PNG so legend colors match.
 PLOT_PALETTE = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd")
 METRIC_NAMES = frozenset(
-    f"{METRIC_PREFIX}process_{s}"
-    for s in (
-        "resident_memory_bytes",
-        "virtual_memory_bytes",
-        "open_fds",
-        "threads",
-        "uptime_seconds",
+    (
+        RSS_METRIC,
+        "consensus_process_virtual_memory_bytes",
+        "consensus_process_open_fds",
+        "consensus_process_threads",
+        "consensus_process_uptime_seconds",
     )
 )
 
@@ -72,12 +69,14 @@ REPO_ROOT = Path(
 
 def scrape_node(idx: int, port: int) -> list[dict]:
     """Scrape one node's /v0/status/metrics endpoint."""
-    url = f"http://localhost:{port}"
+    name = f"espresso-node-{idx}"
     try:
-        with urllib.request.urlopen(f"{url}/v0/status/metrics", timeout=2.0) as resp:
+        with urllib.request.urlopen(
+            f"http://localhost:{port}/v0/status/metrics", timeout=2.0
+        ) as resp:
             body = resp.read().decode()
-    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
-        log.debug(f"espresso-node-{idx} scrape failed: {e}")
+    except OSError as e:
+        log.debug(f"{name} scrape failed: {e}")
         return []
     out: list[dict] = []
     for family in text_string_to_metric_families(body):
@@ -85,7 +84,7 @@ def scrape_node(idx: int, port: int) -> list[dict]:
             continue
         for sample in family.samples:
             if sample.name == family.name:
-                out.append({"node": url, "metric": sample.name, "value": sample.value})
+                out.append({"node": name, "metric": sample.name, "value": sample.value})
     return out
 
 
@@ -155,7 +154,7 @@ def run_sampling(output_dir: Path, duration_seconds: int) -> None:
 # ---------- Summary rendering ----------
 
 
-def _load_docker(path: Path) -> pd.DataFrame:
+def _load_docker_metrics(path: Path) -> pd.DataFrame:
     """Load docker-stats.jsonl, parse MemUsage, filter to espresso-node-N."""
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame()
@@ -172,23 +171,6 @@ def _load_docker(path: Path) -> pd.DataFrame:
     return df[["ts", "Name", "rss", "cpu"]]
 
 
-def _process_rss_max(metrics_path: Path) -> dict[str, float]:
-    """Map espresso-node-N -> max consensus_process_resident_memory_bytes."""
-    if not metrics_path.exists() or metrics_path.stat().st_size == 0:
-        return {}
-    df = pd.read_json(metrics_path, lines=True)
-    df = df[df["metric"] == METRIC_PREFIX + "process_resident_memory_bytes"]
-    if df.empty:
-        return {}
-    port = df["node"].str.extract(r":(\d+)", expand=False).astype(int)
-    df = df.assign(name="espresso-node-" + (port - NODE_BASE_PORT).astype(str))
-    return df.groupby("name")["value"].max().to_dict()
-
-
-def _hb(b: float) -> str:
-    return humanize.naturalsize(b, binary=False)
-
-
 def _render_table(df: pd.DataFrame, process_rss_max: dict[str, float]) -> str:
     lines = [
         "| Service | Max RSS (docker) | Max RSS (process gauge) | Max CPU% |",
@@ -198,40 +180,29 @@ def _render_table(df: pd.DataFrame, process_rss_max: dict[str, float]) -> str:
         return "\n".join(lines)
 
     agg = df.groupby("Name").agg(rss=("rss", "max"), cpu=("cpu", "max")).sort_index()
-    docker_total = agg["rss"].sum()
     gauges = [process_rss_max.get(n) for n in agg.index]
     for (name, row), gauge in zip(agg.iterrows(), gauges):
-        gauge_str = "n/a" if gauge is None else _hb(gauge)
-        lines.append(f"| {name} | {_hb(row.rss)} | {gauge_str} | {row.cpu:.1f} |")
+        gauge_str = "n/a" if gauge is None else humanize.naturalsize(gauge)
+        lines.append(
+            f"| {name} | {humanize.naturalsize(row.rss)} | {gauge_str} | {row.cpu:.1f} |"
+        )
     present = [g for g in gauges if g is not None]
-    gauge_total = _hb(sum(present)) if present else "n/a"
-    lines.append(f"| **Total (sum)** | {_hb(docker_total)} | {gauge_total} | |")
+    gauge_total = humanize.naturalsize(sum(present)) if present else "n/a"
+    docker_total = humanize.naturalsize(agg["rss"].sum())
+    lines.append(f"| **Total (sum)** | {docker_total} | {gauge_total} | |")
     return "\n".join(lines)
 
 
-def _series_mb(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Map name -> DataFrame[seconds, rss_mb] sorted by seconds (relative to min ts)."""
-    if df.empty:
-        return {}
-    df = df.assign(seconds=df["ts"] - df["ts"].min(), rss_mb=df["rss"] / 1_000_000)
-    return {
-        n: g[["seconds", "rss_mb"]].sort_values("seconds").reset_index(drop=True)
-        for n, g in df.groupby("Name")
-    }
-
-
 def _render_png(df: pd.DataFrame, label: str, out_path: Path) -> bool:
-    series = _series_mb(df)
-    if not series:
+    if df.empty:
         return False
     fig, ax = plt.subplots(figsize=(12, 6), dpi=100)
-    for i, name in enumerate(sorted(series)):
-        s = series[name]
+    for i, (name, g) in enumerate(df.groupby("Name", sort=True)):
         color = PLOT_PALETTE[i % len(PLOT_PALETTE)]
-        ax.plot(s["seconds"], s["rss_mb"], linewidth=1.2, color=color, label=name)
+        ax.plot(g["seconds"], g["rss_mb"], linewidth=1.2, color=color, label=name)
         ax.annotate(
             name,
-            xy=(s["seconds"].iloc[-1], s["rss_mb"].iloc[-1]),
+            xy=(g["seconds"].iloc[-1], g["rss_mb"].iloc[-1]),
             xytext=(4, 0),
             textcoords="offset points",
             color=color,
@@ -253,20 +224,27 @@ def _render_png(df: pd.DataFrame, label: str, out_path: Path) -> bool:
     return True
 
 
-def _subsample(s: pd.DataFrame, n: int) -> pd.DataFrame:
+def _bucket_max(s: pd.DataFrame, n: int) -> pd.DataFrame:
+    """Bin `s` into `n` equal-width time buckets, keep max rss per bucket."""
     if len(s) <= n:
         return s
-    idx = [int(i * len(s) / n) for i in range(n)]
-    idx[-1] = len(s) - 1
-    return s.iloc[idx].reset_index(drop=True)
+    bucket = pd.cut(s["seconds"], bins=n, labels=False, include_lowest=True)
+    return (
+        s.groupby(bucket, as_index=False)
+        .agg(seconds=("seconds", "max"), rss_mb=("rss_mb", "max"))
+        .sort_values("seconds")
+        .reset_index(drop=True)
+    )
 
 
 def _render_mermaid(df: pd.DataFrame) -> str:
-    series = _series_mb(df)
-    if not series:
+    if df.empty:
         return ""
-    names = sorted(series)
-    sub = {n: _subsample(series[n], MERMAID_MAX_POINTS) for n in names}
+    sub = {
+        name: _bucket_max(g, MERMAID_MAX_POINTS)
+        for name, g in df.groupby("Name", sort=True)
+    }
+    names = list(sub)
     max_x = max(int(s["seconds"].iloc[-1]) for s in sub.values())
     y_top = max(1.0, max(s["rss_mb"].max() for s in sub.values()) * 1.1)
     palette = ", ".join(PLOT_PALETTE[: len(names)])
@@ -309,7 +287,7 @@ def render_summary(
     if not docker_path.exists():
         raise FileNotFoundError(f"missing required file: {docker_path}")
 
-    df = _load_docker(docker_path)
+    df = _load_docker_metrics(docker_path)
     n_samples = df.shape[0]
     if duration_seconds is None:
         duration_seconds = int(df["ts"].max() - df["ts"].min()) if not df.empty else 0
@@ -318,16 +296,25 @@ def render_summary(
     if df.empty:
         return f"{header}\n\n**No data collected.**\n"
 
-    process_rss_max = _process_rss_max(metrics_path)
+    process_rss_max: dict[str, float] = {}
+    if metrics_path.exists() and metrics_path.stat().st_size > 0:
+        m = pd.read_json(metrics_path, lines=True)
+        m = m[m["metric"] == RSS_METRIC]
+        if not m.empty:
+            process_rss_max = m.groupby("node")["value"].max().to_dict()
 
     parts = [header, "", _render_table(df, process_rss_max)]
-    mermaid = _render_mermaid(df)
+
+    chart_df = df.assign(
+        seconds=df["ts"] - df["ts"].min(), rss_mb=df["rss"] / 1_000_000
+    ).sort_values(["Name", "seconds"])
+    mermaid = _render_mermaid(chart_df)
     if mermaid:
         parts.extend(["", "### Memory over time", "", mermaid])
 
     png_path = output_dir / "rss-over-time.png"
     try:
-        wrote_png = _render_png(df, label, png_path)
+        wrote_png = _render_png(chart_df, label, png_path)
     except Exception as e:
         log.warning(f"failed to render PNG chart: {e}")
         wrote_png = False
@@ -368,29 +355,19 @@ def cli(log_level: str) -> None:
 @cli.command(context_settings=_CTX)
 @opt("--duration-seconds", envvar="DURATION_SECONDS", default=300)
 @opt(
-    "--genesis-file",
-    envvar="ESPRESSO_NODE_GENESIS_FILE",
-    default="genesis/demo-drb-header.toml",
-    help="set into env so .env interpolation works",
-)
-@opt(
     "--output-dir",
     envvar="OUTPUT_DIR",
     default=Path("./soak-samples"),
     type=PathOpt,
 )
-def sample(duration_seconds: int, genesis_file: str, output_dir: Path) -> None:
+def sample(duration_seconds: int, output_dir: Path) -> None:
     """Scrape docker stats + each node's /v0/status/metrics into JSONL."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", genesis_file)
-    os.environ.setdefault("ESPRESSO_SEQUENCER_GENESIS_FILE", genesis_file)
-
     env_path = REPO_ROOT / ".env"
     if not env_path.exists():
         log.error(".env not found. Copy .env.docker.example to .env first.")
         sys.exit(1)
     load_dotenv(env_path, override=False)
-
     run_sampling(output_dir, duration_seconds)
 
 
