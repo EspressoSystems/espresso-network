@@ -24,7 +24,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use tokio::{select, sync::oneshot};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
@@ -999,6 +999,7 @@ where
     }
 
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        info!(node = %self.node_id, %view, "garbage collecting");
         self.consensus.gc(view, epoch);
         self.checkpoint_collector.gc(view, epoch);
         let _ = self.network.gc(view); // TODO
