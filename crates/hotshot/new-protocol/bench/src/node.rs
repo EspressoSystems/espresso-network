@@ -15,6 +15,7 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
+    helpers::proposal_commitment,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
@@ -130,6 +131,7 @@ async fn build_coordinator(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
+        100,
     );
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
@@ -264,7 +266,11 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     block.metadata,
                     version,
                 );
-                let header_input = ConsensusInput::HeaderCreated(req.view, header);
+                let header_input = ConsensusInput::HeaderCreated(
+                    req.view,
+                    proposal_commitment(&req.parent_proposal),
+                    header,
+                );
                 metrics.on_input(&header_input);
                 coordinator.apply_consensus(header_input);
                 let block_input = ConsensusInput::BlockBuilt {

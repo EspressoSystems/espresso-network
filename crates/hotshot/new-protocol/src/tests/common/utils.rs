@@ -882,6 +882,7 @@ impl ConsensusHarness {
             test_upgrade_lock(),
             genesis_leaf,
             epoch_height,
+            100,
         );
         Self {
             consensus,
@@ -925,8 +926,10 @@ impl ConsensusHarness {
                     mock_block.metadata,
                     TEST_VERSIONS.test.base,
                 );
-                self.consensus
-                    .apply(ConsensusInput::HeaderCreated(req.view, header), outbox);
+                self.consensus.apply(
+                    ConsensusInput::HeaderCreated(req.view, parent_leaf.commit(), header),
+                    outbox,
+                );
                 self.consensus.apply(
                     ConsensusInput::BlockBuilt {
                         view: req.view,

@@ -317,6 +317,37 @@ async fn test_duplicate_state_request_ignored() {
     );
 }
 
+/// Two header requests with the same parent but different views must both
+/// run.  This is the common case after consecutive timeouts where the
+/// `locked_cert` doesn't change: a leader for view N+1 and view N+2 both
+/// build proposals against the same parent.
+#[tokio::test]
+async fn test_header_requests_same_parent_different_views() {
+    let mut manager = new_manager().await;
+    let test_data = TestData::new(4).await;
+
+    // Complete state for view 1 so it can be used as parent.
+    manager.request_state(make_state_request(&test_data.views[0]));
+    manager.next().await.expect("view 1 should complete");
+
+    // Two header requests sharing the same parent (view 1) but targeting
+    // different views.  Both must produce headers; neither may be deduped.
+    let req_a = make_header_request(&test_data.views[0], test_data.views[1].view_number);
+    let req_b = make_header_request(&test_data.views[0], test_data.views[2].view_number);
+    manager.request_header(req_a);
+    manager.request_header(req_b);
+
+    let mut outputs = Vec::new();
+    for _ in 0..2 {
+        outputs.push(manager.next().await.expect("should produce output"));
+    }
+    assert_eq!(
+        count_header_created(&outputs),
+        2,
+        "Both header requests should complete — same parent, different views"
+    );
+}
+
 /// State and header requests for different views can be interleaved.
 #[tokio::test]
 async fn test_interleaved_state_and_header_requests() {
