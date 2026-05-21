@@ -394,6 +394,9 @@ impl Receiver {
                                     }
                                 }
                                 Ok(FrameType::Ack) => {
+                                    if h.is_partial() {
+                                        return Err(NetworkError::InvalidAck)
+                                    }
                                     let x = self.nonce();
                                     let n = self.state.read_message(x, &fbuf[.. h.len().into()], &mut *rbuf)?;
                                     let Ok(ack) = Ack::try_from(&rbuf[..n]) else {

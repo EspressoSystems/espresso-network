@@ -379,7 +379,6 @@ impl Server {
                                 name = %self.conf.name,
                                 node = %self.key,
                                 peer = %key,
-                                //addr = %peer.socket_addr(),
                                 "party has been removed"
                             );
                             continue
@@ -701,17 +700,10 @@ impl Server {
         let name = self.conf.name.clone();
         let metrics = self.metrics.clone();
         self.peer_tasks.spawn(key, async move {
-            let _addr = conn.addr;
+            let addr = conn.addr;
             let Err(err) = peer.start(conn, cancel).await;
             if !matches!(err, NetworkError::PeerInterrupt) {
-                warn!(
-                    %name,
-                    %node,
-                    peer = %key,
-                    addr = %_addr,
-                    %err,
-                    "peer failure"
-                );
+                warn!(%name, %node, peer = %key, %addr, %err, "peer failure");
                 metrics.add(&key, "errors", 1)
             }
             peer
