@@ -55,7 +55,7 @@ Use the type system to guide reviewers and the compiler.
 - Typestate for multi-step protocols (e.g., `Proposal<Unverified>` -> `Proposal<Verified>`); the compiler enforces
   ordering, not runtime asserts.
 - Smart constructors return `Result`; keep raw constructors private so every instance is valid by construction.
-- Push partiality (`panic`, `unwrap`, `Result`) to module edges; interior functions stay total.
+Push partiality (panic, unwrap) and error handling (Result) to module edges; interior functions stay total.
 
 ## Architecture details
 
