@@ -18,7 +18,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 use crate::{
     Config, Metrics, PublicKey,
@@ -307,7 +307,7 @@ impl Peer {
                 // Once a peer has been interrupted, its connection needs to be
                 // replaced before calling start again.
                 _ = self.cancel.cancelled() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "interrupt");
+                    info!(name = %self.conf.name, peer = %self.conn.key, "peer interrupt");
                     return Err(NetworkError::PeerInterrupt)
                 }
 

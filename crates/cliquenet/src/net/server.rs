@@ -263,7 +263,7 @@ impl Server {
                             }
                             PeerState::Connected(cancel) => {
                                 if conn.key > self.key {
-                                    debug!(
+                                    info!(
                                         name = %self.conf.name,
                                         node = %self.key,
                                         peer = %conn.key,
@@ -338,7 +338,7 @@ impl Server {
                             }
                             PeerState::Connected(cancel) => {
                                 if conn.key < self.key {
-                                    debug!(
+                                    info!(
                                         name = %self.conf.name,
                                         node = %self.key,
                                         peer = %conn.key,
