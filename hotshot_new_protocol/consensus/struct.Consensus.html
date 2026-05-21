@@ -43,6 +43,7 @@ arrived.  They are retried when new epoch data becomes available.</p>
     upgrade_lock: <a class="struct" href="../../hotshot_types/message/struct.UpgradeLock.html" title="struct hotshot_types::message::UpgradeLock">UpgradeLock</a>&lt;T&gt;,
     genesis_leaf: <a class="struct" href="../../hotshot_types/data/struct.Leaf2.html" title="struct hotshot_types::data::Leaf2">Leaf2</a>&lt;T&gt;,
     epoch_height: B,
+    garbage_collection_interval: B,
 ) -&gt; Self<div class="where">where
     B: <a class="trait" href="https://doc.rust-lang.org/1.95.0/core/convert/trait.Into.html" title="trait core::convert::Into">Into</a>&lt;<a class="struct" href="../../hotshot_types/data/struct.BlockNumber.html" title="struct hotshot_types::data::BlockNumber">BlockNumber</a>&gt;,</div></h4></section><details class="toggle method-toggle" open><summary><section id="method.seed_genesis" class="method"><a class="src rightside" href="../../src/hotshot_new_protocol/consensus.rs.html#247-254">Source</a><h4 class="code-header">pub fn <a href="#method.seed_genesis" class="fn">seed_genesis</a>(
     &amp;mut self,
