@@ -192,7 +192,15 @@ class Compose:
     def find_container(self, service: str) -> str | None:
         """Find a container by service name via `docker ps` (sees overlay-added services)."""
         out = subprocess.run(
-            ["docker", "ps", "-a", "--filter", f"name={service}", "--format", "{{.Names}}"],
+            [
+                "docker",
+                "ps",
+                "-a",
+                "--filter",
+                f"name={service}",
+                "--format",
+                "{{.Names}}",
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -221,9 +229,7 @@ class Compose:
             log.error(f"--- no container found for service {service} ---")
             return
         log.error(f"--- docker logs --tail {tail} {name} ---")
-        subprocess.run(
-            ["docker", "logs", "--tail", str(tail), name], check=False
-        )
+        subprocess.run(["docker", "logs", "--tail", str(tail), name], check=False)
 
     def dump_all_logs(self, dest_dir: Path) -> None:
         """Per-service logs + ps state + the background `compose up` log."""
@@ -622,6 +628,15 @@ class Node:
         code, _ = _http_status_and_body(f"{self.api_url}/availability/leaf/{index}")
         return code == 200
 
+    def diagnose(self) -> str:
+        cons = self.consensus_height()
+        stor = self.storage_height()
+        if cons is None or (cons < 5):
+            return f"did not join consensus (consensus={cons})"
+        if stor is not None and cons - stor > 5:
+            return f"storage not catching up (consensus={cons}, storage={stor})"
+        return f"progress stalled at consensus={cons}, storage={stor}"
+
     def wait_until_at_height(
         self,
         target: int,
@@ -650,7 +665,12 @@ class Node:
                     return f"{self} container status is {status}"
                 return None
 
-        poll_until(height_ok, f"{self} {name} >= {target}", height_timeout, abort=abort)
+        try:
+            poll_until(
+                height_ok, f"{self} {name} >= {target}", height_timeout, abort=abort
+            )
+        except TimeoutError as e:
+            raise TimeoutError(f"{e}: {self.diagnose()}") from e
 
         if self.has_query:
             idx = target - 1
@@ -661,9 +681,19 @@ class Node:
                     return True
                 return False
 
-            poll_until(
-                leaf_ok, f"{self} availability/leaf/{idx}", leaf_timeout, abort=abort
-            )
+            try:
+                poll_until(
+                    leaf_ok,
+                    f"{self} availability/leaf/{idx}",
+                    leaf_timeout,
+                    abort=abort,
+                )
+            except TimeoutError as e:
+                stor = self.storage_height()
+                cons = self.consensus_height()
+                raise TimeoutError(
+                    f"{e}: leaf not served by query API (storage_height={stor}, consensus={cons})"
+                ) from e
 
 
 def fs_volume_name(idx: int) -> str:
@@ -781,6 +811,7 @@ def run_scenario(compose: Compose, config: Config, scenario: Scenario) -> None:
             compose.old_from_new(config, NODE_5_PG_OVERLAY)
         case _:
             raise ValueError(f"Unknown scenario: {scenario}")
+
 
 def main() -> int:
     args = parse_args()
