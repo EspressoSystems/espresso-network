@@ -107,7 +107,7 @@ class UpgradeSupportServices:
 
 
 @dataclass(frozen=True)
-class AssertImages:
+class AssertImagesUpgraded:
     pass
 
 
@@ -116,7 +116,9 @@ class SmokeTest:
     tag_source: Literal["base", "upgrade"] = "upgrade"
 
 
-Action = Roll | Wipe | JoinNode | UpgradeSupportServices | AssertImages | SmokeTest
+Action = (
+    Roll | Wipe | JoinNode | UpgradeSupportServices | AssertImagesUpgraded | SmokeTest
+)
 
 # ---------------------------------------------------------------------------
 # Scenarios
@@ -131,7 +133,7 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(3),
         Roll(4),
         UpgradeSupportServices(),
-        AssertImages(),
+        AssertImagesUpgraded(),
         SmokeTest(),
     ],
     "new-from-old-fs": [
@@ -143,7 +145,7 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(2),
         Roll(3),
         UpgradeSupportServices(),
-        AssertImages(),
+        AssertImagesUpgraded(),
         SmokeTest(),
     ],
     "new-from-old-pg": [
@@ -155,7 +157,7 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(3),
         Roll(4),
         UpgradeSupportServices(),
-        AssertImages(),
+        AssertImagesUpgraded(),
         SmokeTest(),
     ],
     "old-from-new-fs": [
@@ -166,7 +168,7 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(3),
         Roll(4),
         UpgradeSupportServices(),
-        AssertImages(),
+        AssertImagesUpgraded(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_FS_OVERLAY),
     ],
     "old-from-new-pg": [
@@ -177,7 +179,7 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(3),
         Roll(4),
         UpgradeSupportServices(),
-        AssertImages(),
+        AssertImagesUpgraded(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_PG_OVERLAY),
     ],
 }
@@ -847,7 +849,7 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
             log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
             compose.bulk_upgrade_remaining(config.upgrade_tag)
 
-        case AssertImages():
+        case AssertImagesUpgraded():
             log.info(
                 f"Asserting all espresso-network images run tag {config.upgrade_tag}"
             )
