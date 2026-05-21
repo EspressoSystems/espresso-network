@@ -118,6 +118,7 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         storage: S,
+        garbage_collection_interval: u64,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -128,6 +129,7 @@ where
             upgrade_lock.clone(),
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
+            garbage_collection_interval,
         );
 
         let genesis_cert1 = initializer.high_qc.clone();

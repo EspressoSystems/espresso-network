@@ -117,6 +117,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
+        new_protocol_consensus_gc_interval: u64,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -214,6 +215,7 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
+            .garbage_collection_interval(new_protocol_consensus_gc_interval)
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();

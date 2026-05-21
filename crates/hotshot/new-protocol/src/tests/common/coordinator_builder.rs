@@ -77,6 +77,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
+        100,
     );
 
     let vid_disperser = VidDisperser::new(membership.clone());

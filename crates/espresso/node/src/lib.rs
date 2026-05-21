@@ -133,6 +133,8 @@ pub struct NetworkParams {
     /// Per-step timeout for the startup stake-table catchup walk
     /// (`bootstrap_epoch_window`).
     pub bootstrap_epoch_catchup_timeout: Duration,
+    /// Number of blocks between new-protocol consensus garbage collection passes.
+    pub new_protocol_consensus_gc_interval: u64,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -828,6 +830,7 @@ where
         event_consumer,
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
+        network_params.new_protocol_consensus_gc_interval,
     )
     .await?;
 
@@ -1657,6 +1660,7 @@ pub mod testing {
                 event_consumer,
                 Default::default(),
                 Duration::from_secs(2),
+                100,
             )
             .await
             .unwrap()
