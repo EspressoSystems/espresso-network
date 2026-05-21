@@ -368,15 +368,28 @@ impl<T: NodeType> Consensus<T> {
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
-                warn!(view = %state_response.view, "apply: state validation failed");
-                if let Some(proposal) = self.proposals.get(&state_response.view)
-                    && proposal_commitment(proposal) != state_response.commitment
-                {
-                    return;
+                let view = state_response.view;
+                let stored_proposal = self.proposals.get(&view);
+                if let Some(proposal) = stored_proposal {
+                    let matches = proposal_commitment(proposal) == state_response.commitment;
+                    warn!(
+                        %view,
+                        block = %proposal.block_header.block_number(),
+                        epoch = %proposal.epoch,
+                        qc_view = %proposal.justify_qc.view_number(),
+                        qc_epoch = ?proposal.justify_qc.epoch(),
+                        commitment_matches = matches,
+                        "apply: state validation failed"
+                    );
+                    if !matches {
+                        return;
+                    }
+                } else {
+                    warn!(%view, "apply: state validation failed (no stored proposal)");
                 }
-                self.proposals.remove(&state_response.view);
-                self.leaves.remove(&state_response.view);
-                self.vid_shares.remove(&state_response.view);
+                self.proposals.remove(&view);
+                self.leaves.remove(&view);
+                self.vid_shares.remove(&view);
                 return;
             },
             ConsensusInput::Timeout(view, epoch) => {
@@ -1126,16 +1139,23 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let Some(cert2) = self.certs2.get(&view) else {
-            debug!("cert2 not available");
+            debug!(%view, "cert2 not available");
             return;
         };
         let Some(proposal) = self.proposals.get(&view) else {
-            debug!("proposal not available");
+            debug!(%view, "proposal not available");
             return;
         };
+        let block = proposal.block_header.block_number();
+        let epoch = proposal.epoch;
+        let qc_view = proposal.justify_qc.view_number();
+        let qc_epoch = proposal.justify_qc.epoch();
         let proposal_commit = proposal_commitment(proposal);
         if cert2.data.leaf_commit != proposal_commit {
-            debug!("cert2 commitment does not match proposal commitment");
+            debug!(
+                %view, %block, %epoch, %qc_view, ?qc_epoch,
+                "cert2 commitment does not match proposal commitment"
+            );
             return;
         }
         // Handle Epoch Change by broadcasting the epoch change message if we have
@@ -1286,34 +1306,41 @@ impl<T: NodeType> Consensus<T> {
         }
 
         let Some(state_commitment) = self.states_verified.get(&view) else {
-            debug!("state commitment not available");
+            debug!(%view, "state commitment not available");
             return;
         };
         let Some(proposal) = self.proposals.get(&view) else {
-            debug!("proposal not available");
+            debug!(%view, "proposal not available");
             return;
         };
         let Some(vid_share) = self.vid_shares.get(&view) else {
-            debug!("vid share not available");
+            debug!(%view, "vid share not available");
             return;
         };
+
+        let block_number = proposal.block_header.block_number();
+        let epoch = proposal.epoch;
+        let qc_view = proposal.justify_qc.view_number();
+        let qc_epoch = proposal.justify_qc.epoch();
 
         // Don't vote for epoch-transition proposals until we can verify
         // the attached DRB result.  Same guard as `maybe_propose`:
         // transitions in epoch >= 2 must carry `next_drb_result`.
-        let block_number = proposal.block_header.block_number();
         if proposal.epoch > EpochNumber::genesis()
             && is_epoch_transition(block_number, *self.epoch_height)
         {
             let Some(drb) = self.drb_results.get(&(proposal.epoch + 1)) else {
-                debug!("DRB result not yet available, deferring vote");
+                debug!(%view, block = %block_number, %epoch, "DRB result not yet available, deferring vote");
                 return;
             };
             if proposal
                 .next_drb_result
                 .is_none_or(|proposed_drb| drb != &proposed_drb)
             {
-                warn!("DRB result does not match proposal, refusing to vote");
+                warn!(
+                    %view, block = %block_number, %epoch, %qc_view, ?qc_epoch,
+                    "DRB result does not match proposal, refusing to vote"
+                );
                 return;
             }
         }
@@ -1335,30 +1362,40 @@ impl<T: NodeType> Consensus<T> {
         {
             // Verify we have the block for the QC on this commitment
             let Some(block_commitment) = self.blocks_reconstructed.get(&parent_view) else {
-                debug!(%parent_view, "block commitment not available");
+                debug!(%view, %parent_view, "block commitment not available");
                 return;
             };
             let Some(prev_proposal) = self.proposals.get(&parent_view) else {
-                debug!(%parent_view, "proposal not available");
+                debug!(%view, %parent_view, "proposal not available");
                 return;
             };
+            let parent_block = prev_proposal.block_header.block_number();
+            let parent_epoch = prev_proposal.epoch;
             let VidCommitment::V2(prev_block_commitment) =
                 prev_proposal.block_header.payload_commitment()
             else {
                 warn! {
-                    %view,
-                    %parent_view,
+                    %view, block = %block_number, %epoch,
+                    %parent_view, %parent_block, %parent_epoch,
                     "prev. proposal payload commitment is not a V2 VID commitment"
                 }
                 return;
             };
             if block_commitment != &prev_block_commitment {
-                debug!(%parent_view, "parent block commitment does not match prev. block commitment");
+                debug!(
+                    %view, block = %block_number, %epoch,
+                    %parent_view, %parent_block, %parent_epoch,
+                    "parent block commitment does not match prev. block commitment"
+                );
                 return;
             }
 
             if proposal.justify_qc.data().leaf_commit != proposal_commitment(prev_proposal) {
-                debug!(%parent_view, "justify qc commitment does not match proposal commitment");
+                debug!(
+                    %view, block = %block_number, %epoch,
+                    %parent_view, %parent_block, %parent_epoch,
+                    "justify qc commitment does not match proposal commitment"
+                );
                 return;
             }
         }
@@ -1367,7 +1404,10 @@ impl<T: NodeType> Consensus<T> {
 
         // Verify the state commitment matches the proposal
         if state_commitment != &proposal_commit {
-            debug!("state commitment does not match proposal commitment");
+            debug!(
+                %view, block = %block_number, %epoch, %qc_view, ?qc_epoch,
+                "state commitment does not match proposal commitment"
+            );
             return;
         }
 
@@ -1421,35 +1461,47 @@ impl<T: NodeType> Consensus<T> {
             return;
         }
         let Some(reconstructed_block_commitment) = self.blocks_reconstructed.get(&view) else {
-            debug!("reconstructed block commitment not available");
+            debug!(%view, "reconstructed block commitment not available");
             return;
         };
         let Some(cert1) = self.certs.get(&view) else {
-            debug!("cert1 not available");
+            debug!(%view, "cert1 not available");
             return;
         };
         let Some(proposal) = self.proposals.get(&view) else {
-            debug!("proposal not available");
+            debug!(%view, "proposal not available");
             return;
         };
         let proposal_epoch = proposal.epoch;
+        let block = proposal.block_header.block_number();
+        let qc_view = proposal.justify_qc.view_number();
+        let qc_epoch = proposal.justify_qc.epoch();
 
         let proposal_commit = proposal_commitment(proposal);
 
         // The certificate must match the proposal
         if cert1.data.leaf_commit != proposal_commit {
-            warn!(%view, "cert1 commitment does not match proposal commitment");
+            warn!(
+                %view, %block, epoch = %proposal_epoch, %qc_view, ?qc_epoch,
+                "cert1 commitment does not match proposal commitment"
+            );
             return;
         }
         // The proposal block commitment must match the reconstructed block commitment
         let VidCommitment::V2(proposal_block_commitment) =
             proposal.block_header.payload_commitment()
         else {
-            warn!(%view, "proposal payload commitment is not a V2 VID commitment");
+            warn!(
+                %view, %block, epoch = %proposal_epoch, %qc_view, ?qc_epoch,
+                "proposal payload commitment is not a V2 VID commitment"
+            );
             return;
         };
         if &proposal_block_commitment != reconstructed_block_commitment {
-            warn!(%view, "proposal commitment does not match reconstructed block commitment");
+            warn!(
+                %view, %block, epoch = %proposal_epoch, %qc_view, ?qc_epoch,
+                "proposal commitment does not match reconstructed block commitment"
+            );
             return;
         }
 
