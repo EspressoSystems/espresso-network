@@ -7854,7 +7854,7 @@ mod test {
                         let url = format!("http://localhost:{api_port}").parse().unwrap();
                         let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
-                        let validated_state = network.server.decided_state().await;
+                        let validated_state = network.server.decided_state().await.unwrap();
                         let decided_leaf = network.server.decided_leaf().await;
                         let height = decided_leaf.height();
 
@@ -7942,7 +7942,7 @@ mod test {
                             let url = format!("http://localhost:{api_port}").parse().unwrap();
                             let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
 
-                            let validated_state = network.server.decided_state().await;
+                            let validated_state = network.server.decided_state().await.unwrap();
                             let decided_leaf = network.server.decided_leaf().await;
                             let height = decided_leaf.height();
 
