@@ -18,6 +18,7 @@ use std::{
 use bon::bon;
 use bytes::{Bytes, BytesMut};
 use delay::DelayQueue;
+use parking_lot::Mutex;
 use snow::StatelessTransportState;
 use tokio::{
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
@@ -60,7 +61,7 @@ pub struct Peer {
     msgs: Queue<(RetryPolicy, Bytes)>,
 
     /// Messages waiting to be retried if no ACK has been received.
-    retry: DelayQueue,
+    retry: Arc<Mutex<DelayQueue>>,
 
     /// Receive notifications about changes to the GC threshold
     next_slot: watch::Receiver<Slot>,
@@ -111,7 +112,7 @@ impl Peer {
             next_slot,
             lower_bound: Arc::new(AtomicU64::new(Slot::MIN.into())),
             tx: inbound,
-            retry: DelayQueue::new(config),
+            retry: Arc::new(Mutex::new(DelayQueue::new(config))),
             msgs: messages,
             metrics,
         }
@@ -128,27 +129,20 @@ impl Peer {
             return Err(NetworkError::PeerInterrupt);
         }
 
-        // ACKs received from remote.
-        //
-        // When receiving an ACK we remove the message from the retry buffer.
-        // The channel is unbounded because we can always remove an entry
-        // quickly.
-        let (ibound_acks_tx, mut ibound_acks_rx) = mpsc::unbounded_channel();
-
-        // ACKs to send to the remote.
-        //
-        // When we have received a message we need to send an ACK back.
-        // This channel is bounded. In case we accumulate too many ACKs we
-        // drop the connection as the sender task can not make progress.
-        let (obound_acks_tx, obound_acks_rx) = mpsc::channel(self.conf.peer_budget.get());
-
         // Messages to send to the remote.
         //
         // These are the plain bytes (plus retry policy) that the sending task
         // should deliver to the remote.
         let (message_tx, message_rx) = mpsc::unbounded_channel();
 
-        self.retry.reset();
+        // ACKs to send to the remote.
+        //
+        // When we have received a message we need to send an ACK back.
+        // This channel is bounded. In case we accumulate too many ACKs we
+        // drop the connection as the sender task can not make enough progress.
+        let (obound_acks_tx, obound_acks_rx) = mpsc::channel(self.conf.peer_budget.get());
+
+        self.retry.lock().reset();
 
         let Connection {
             key: peer,
@@ -178,7 +172,7 @@ impl Peer {
         let receiver = Receiver {
             budget: self.budget.clone(),
             countdown,
-            ibound_acks: ibound_acks_tx,
+            retry: self.retry.clone(),
             lower_bound: self.lower_bound.clone(),
             max_message_size: self.max_message_size,
             messages: self.tx.clone(),
@@ -203,23 +197,13 @@ impl Peer {
                 // has not sent yet. This is to prevent an attack were a
                 // malicious peer never sends ACKs, which would cause our
                 // retry queue to grow unbounded.
-                m = self.msgs.dequeue(), if self.retry.len() < self.conf.peer_budget.get() => {
+                m = self.msgs.dequeue(), if self.retry.lock().len() < self.conf.peer_budget.get() => {
                     trace!(name = %self.conf.name, %peer, %addr, "next outbound message");
                     let (slot, id, (policy, bytes)) = m;
                     if policy.is_retry() {
-                        self.retry.add(slot, id, bytes.clone());
+                        self.retry.lock().add(slot, id, bytes.clone());
                     }
                     message_tx.send((policy, bytes)).map_err(|_| NetworkError::ChannelClosed)?
-                }
-
-                // When an ACK has been received we can remove the message from the retry queue.
-                a = ibound_acks_rx.recv() => {
-                    let Some(ack) = a else {
-                        return Err(NetworkError::ChannelClosed)
-                    };
-                    trace!(name = %self.conf.name, %peer, %addr, ?ack, "ack received");
-                    let (s, i) = ack.into();
-                    self.retry.del(s, i);
                 }
 
                 // If requested, interrupt all I/O processing and return.
@@ -227,13 +211,6 @@ impl Peer {
                     trace!(name = %self.conf.name, %peer, %addr, "interrupt");
                     recv_task.abort();
                     send_task.abort();
-                    // Before returning we remove retry entries corresponding
-                    // to received ACKs. We do not want to send the messages
-                    // again since the remote has received it already.
-                    while let Ok(ack) = ibound_acks_rx.try_recv() {
-                        let (s, i) = ack.into();
-                        self.retry.del(s, i);
-                    }
                     return Err(NetworkError::PeerInterrupt)
                 }
 
@@ -245,7 +222,7 @@ impl Peer {
                     }
                     let s = *self.next_slot.borrow_and_update();
                     self.lower_bound.store(s.into(), Ordering::Relaxed);
-                    self.retry.gc(s);
+                    self.retry.lock().gc(s);
                 }
 
                 // Periodic maintenance:
@@ -253,10 +230,8 @@ impl Peer {
                 // - Retry messages
                 // - Update metrics
                 t = clock.tick() => {
-                    if !self.retry.is_empty() {
-                        trace!(name = %self.conf.name, %peer, %addr, "retry check");
-                        self.retry.check(t);
-                    }
+                    trace!(name = %self.conf.name, %peer, %addr, "retry check");
+                    self.retry.lock().check(t);
                     self.update_metrics(&peer)
                 }
 
@@ -265,8 +240,8 @@ impl Peer {
                 // This is separate from the retry check above because the check
                 // scans multiple items and here we just take the next one that
                 // is ready and go with it.
-                () = ready(()), if self.retry.is_ready() => {
-                    let Some(bytes) = self.retry.next() else {
+                () = ready(()), if self.retry.lock().is_ready() => {
+                    let Some(bytes) = self.retry.lock().next() else {
                         continue
                     };
                     trace!(name = %self.conf.name, %peer, %addr, "resending message");
@@ -316,7 +291,8 @@ impl Peer {
 
     fn update_metrics(&self, key: &PublicKey) {
         self.metrics.set(key, "outbound_messages", self.msgs.len());
-        self.metrics.set(key, "retrying_messages", self.retry.len());
+        self.metrics
+            .set(key, "retrying_messages", self.retry.lock().len());
         self.metrics
             .set(key, "remaining_budget", self.budget.remaining());
     }
@@ -386,9 +362,9 @@ struct Receiver {
     max_message_size: usize,
     stream: OwnedReadHalf,
     messages: UnboundedSender<PeerMessage>,
-    ibound_acks: UnboundedSender<Ack>,
     obound_acks: mpsc::Sender<Ack>,
     nonce: u64,
+    retry: Arc<Mutex<DelayQueue>>,
     state: Arc<StatelessTransportState>,
     lower_bound: Arc<AtomicU64>,
     countdown: Countdown,
@@ -420,10 +396,11 @@ impl Receiver {
                                 Ok(FrameType::Ack) => {
                                     let x = self.nonce();
                                     let n = self.state.read_message(x, &fbuf[.. h.len().into()], &mut *rbuf)?;
-                                    let Ok(a) = Ack::try_from(&rbuf[..n]) else {
+                                    let Ok(ack) = Ack::try_from(&rbuf[..n]) else {
                                         return Err(NetworkError::InvalidAck)
                                     };
-                                    self.ibound_acks.send(a).map_err(|_| NetworkError::ChannelClosed)?
+                                    let (s, i) = ack.into();
+                                    self.retry.lock().del(s, i);
                                 }
                                 Err(t) => return Err(NetworkError::UnknownFrameType(t))
                             }
