@@ -39,7 +39,7 @@ Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 ### Commits and PRs
 
 - Subject: imperative, scoped, under 70 chars (`feat(stake-table): ...`).
-- Body bullets: why, alternatives considered, follow-ups deliberately out of scope.
+- When work is ready, suggest an updated PR description capturing the final changeset.
 - Tell the reviewer where to focus.
 - Link the regression test or `reference` test when touching serializable types.
 - When work is ready suggest updated PR descriptions capturing the final changeset.
