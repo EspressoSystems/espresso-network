@@ -46,7 +46,7 @@ processes:
       ESPRESSO_FEE_CONTRACT_PROXY_ADDRESS
       ESP_TOKEN_PROXY_ADDRESS
       ESPRESSO_STAKE_TABLE_PROXY_ADDRESS
-      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1
+      && deploy --deploy-ops-timelock --deploy-safe-exit-timelock --deploy-fee-v1 --deploy-esp-token-v1 --deploy-stake-table-v1 --upgrade-stake-table-v2 --upgrade-stake-table-v3
     namespace: setup
     depends_on:
       demo-l1-network:
@@ -79,21 +79,35 @@ processes:
         condition: process_completed
     availability: *exit-ok
 
+  # Wait for the prover to push the LC past the first epoch root before upgrading
+  # to V3. Otherwise the LCv2 -> v3 transition can interrupt the epoch-root update
+  # and leave the contract permanently stuck. Epochs are 1-indexed (genesis is
+  # epoch 1), so we wait for epoch 2.
+  wait-for-lc-epoch-2:
+    command: scripts/wait-for-light-client-epoch 2
+    namespace: setup
+    environment:
+      - L1_PROVIDER=http://localhost:${ESPRESSO_L1_PORT}
+    depends_on:
+      wait-for-v4:
+        condition: process_completed
+      prover-one-shot:
+        condition: process_started
+    availability: *exit-ok
+
   deploy-lcv3-upgrade:
     command: deploy --upgrade-light-client-v3 --use-mock
     namespace: setup
     depends_on:
-      wait-for-v4:
+      wait-for-lc-epoch-2:
         condition: process_completed
     availability: *exit-ok
 
-  # - Reward claims needs the LC to be deployed.
-  # - The stake table upgrade could be done earlier but this way we get some extra
-  #   testing of the contract upgrade while the network is running.
+  # Reward claims needs the LC to be deployed.
   deploy-pos-contracts-upgrades:
     command:
       unset ESPRESSO_REWARD_CLAIM_PROXY_ADDRESS
-      && deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2 --upgrade-stake-table-v2
+      && deploy --deploy-reward-claim-v1 --upgrade-esp-token-v2
     namespace: setup
     depends_on:
       demo-l1-network:
@@ -283,7 +297,7 @@ processes:
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_1}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
-      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_2_API_PORT}
+      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq1-lc
       - ESPRESSO_NODE_POSTGRES_HOST=localhost
       - ESPRESSO_NODE_POSTGRES_PORT=${ESPRESSO_NODE_1_DB_PORT}
@@ -344,7 +358,7 @@ processes:
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_2}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_2}
-      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_3_API_PORT}
+      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq2-lc
@@ -399,7 +413,7 @@ processes:
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_3}
       - ESPRESSO_NODE_CLIQUENET_BIND_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
       - ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS=127.0.0.1:${ESPRESSO_DEMO_NODE_CLIQUENET_PORT_3}
-      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_4_API_PORT}
+      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_STORAGE_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3
       - LIGHT_CLIENT_DB_PATH=${ESPRESSO_BASE_STORAGE_PATH}/seq3-lc
@@ -451,7 +465,7 @@ processes:
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_4_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_4_AXUM_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_4_TONIC_PORT}
-      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
+      - ESPRESSO_NODE_STATE_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT},http://localhost:${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_API_PEERS=http://localhost:${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_LIBP2P_BIND_ADDRESS=0.0.0.0:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_4}
       - ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS=localhost:${ESPRESSO_DEMO_NODE_LIBP2P_PORT_4}

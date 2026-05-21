@@ -854,6 +854,7 @@ impl ConsensusHarness {
             test_upgrade_lock(),
             genesis_leaf,
             epoch_height,
+            100,
         );
         Self {
             consensus,

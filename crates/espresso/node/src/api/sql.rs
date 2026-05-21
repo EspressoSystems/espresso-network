@@ -503,14 +503,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         version: Version,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            // For V4 (per-block rewards), only persist proofs every 30th block.
-            // For V5+ (epoch rewards), this is only called at epoch boundaries.
+            // Only attempt to persist proofs every 30th block.
             //
             // In tests, we persist proofs at every block height so
             // reward claim tests can query proofs at arbitrary heights. This can be
             // removed once all reward claim tests are updated
             if !cfg!(any(test, feature = "testing"))
-                && version < EPOCH_REWARD_VERSION
                 && !(height + node_state.node_id).is_multiple_of(30)
             {
                 return Ok(());
