@@ -93,21 +93,22 @@ where
                     let param = query.bind(path)?;
                     sub_queries.push(format!(
                         "SELECT path, created, hash_id::BIGINT AS hash_id, children, \
-                         children_bitvec, idx, entry FROM {legacy_table} \
-                         WHERE path = {param} AND created <= $1 ORDER BY created DESC LIMIT 1"
+                         children_bitvec, idx, entry FROM {legacy_table} WHERE path = {param} AND \
+                         created <= $1 ORDER BY created DESC LIMIT 1"
                     ));
                 }
                 let sql = format!(
                     "SELECT * FROM ({}) AS t ORDER BY t.path DESC",
                     sub_queries.join(" UNION ")
                 );
-                let legacy_rows = query
-                    .query(&sql)
-                    .fetch_all(self.as_mut())
-                    .await
-                    .map_err(|e| QueryError::Error {
-                        message: format!("merkle path fallback lookup failed: {e}"),
-                    })?;
+                let legacy_rows =
+                    query
+                        .query(&sql)
+                        .fetch_all(self.as_mut())
+                        .await
+                        .map_err(|e| QueryError::Error {
+                            message: format!("merkle path fallback lookup failed: {e}"),
+                        })?;
                 let mut nodes = nodes;
                 nodes.extend(legacy_rows.into_iter().map(Node::from));
                 // Sort leaf-first (longer paths first).
@@ -791,7 +792,6 @@ fn traversal_path_values(traversal_path: &[usize], tree_height: usize) -> Vec<se
     }
     result
 }
-
 
 fn build_get_path_query<'q>(
     table: &'static str,
