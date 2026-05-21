@@ -91,10 +91,12 @@ where
                 let mut sub_queries = Vec::with_capacity(missing.len());
                 for path in missing {
                     let param = query.bind(path)?;
+                    // Parentheses are required: UNION operands cannot contain ORDER BY/LIMIT
+                    // without them.
                     sub_queries.push(format!(
-                        "SELECT path, created, hash_id::BIGINT AS hash_id, children, \
+                        "(SELECT path, created, hash_id::BIGINT AS hash_id, children, \
                          children_bitvec, idx, entry FROM {legacy_table} WHERE path = {param} AND \
-                         created <= $1 ORDER BY created DESC LIMIT 1"
+                         created <= $1 ORDER BY created DESC LIMIT 1)"
                     ));
                 }
                 let sql = format!(
