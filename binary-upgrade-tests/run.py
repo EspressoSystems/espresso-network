@@ -628,15 +628,6 @@ class Node:
         code, _ = _http_status_and_body(f"{self.api_url}/availability/leaf/{index}")
         return code == 200
 
-    def diagnose(self) -> str:
-        cons = self.consensus_height()
-        stor = self.storage_height()
-        if cons is None or (cons < 5):
-            return f"did not join consensus (consensus={cons})"
-        if stor is not None and cons - stor > 5:
-            return f"storage not catching up (consensus={cons}, storage={stor})"
-        return f"progress stalled at consensus={cons}, storage={stor}"
-
     def wait_until_at_height(
         self,
         target: int,
@@ -644,13 +635,19 @@ class Node:
         leaf_timeout: float = 30,
         container_status: Callable[[], str | None] | None = None,
     ) -> None:
-        if self.has_query:
-            name, getter = "storage_height", self.storage_height
-        else:
-            name, getter = "consensus_height", self.consensus_height
+        name = "storage_height" if self.has_query else "consensus_height"
+
+        last_cons: list[int | None] = [None]
+        last_stor: list[int | None] = [None]
 
         def height_ok() -> bool:
-            h = getter()
+            if self.has_query:
+                last_stor[0] = self.storage_height()
+                last_cons[0] = self.consensus_height()
+                h = last_stor[0]
+            else:
+                last_cons[0] = self.consensus_height()
+                h = last_cons[0]
             if h is not None and h >= target:
                 log.info(f"{self} {name} {h} >= {target}")
                 return True
@@ -669,11 +666,22 @@ class Node:
             poll_until(
                 height_ok, f"{self} {name} >= {target}", height_timeout, abort=abort
             )
-        except TimeoutError as e:
-            raise TimeoutError(f"{e}: {self.diagnose()}") from e
+        except TimeoutError:
+            cons = last_cons[0]
+            stor = last_stor[0]
+            secs = int(height_timeout)
+            if cons is None or cons < 5:
+                msg = f"{self} did not join consensus after {secs}s"
+            elif self.has_query and stor is not None and cons - stor > 5:
+                msg = f"{self} storage not catching up after {secs}s (consensus={cons}, storage={stor})"
+            else:
+                h = stor if self.has_query else cons
+                msg = f"{self} progress stalled after {secs}s ({name}={h}, target={target})"
+            raise TimeoutError(msg)
 
         if self.has_query:
             idx = target - 1
+            storage_height = last_stor[0]
 
             def leaf_ok() -> bool:
                 if self.leaf_available(idx):
@@ -688,12 +696,11 @@ class Node:
                     leaf_timeout,
                     abort=abort,
                 )
-            except TimeoutError as e:
-                stor = self.storage_height()
-                cons = self.consensus_height()
+            except TimeoutError:
                 raise TimeoutError(
-                    f"{e}: leaf not served by query API (storage_height={stor}, consensus={cons})"
-                ) from e
+                    f"{self} leaf/{idx} not available after {int(leaf_timeout)}s"
+                    f" (storage_height={storage_height})"
+                )
 
 
 def fs_volume_name(idx: int) -> str:
