@@ -70,7 +70,7 @@ class RenderSummaryTests(unittest.TestCase):
             {
                 "ts": base_ts + i,
                 "node": f"espresso-node-{j}",
-                "metric": "consensus_process_resident_memory_bytes",
+                "metric": "process_resident_memory_bytes",
                 "value": (100 + j * 50 + i) * 1024 * 1024,
             }
             for i in range(5)

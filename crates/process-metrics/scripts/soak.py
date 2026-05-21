@@ -45,17 +45,17 @@ log = logging.getLogger("memory-soak")
 NODE_INDICES = (0, 1, 2, 3, 4)
 PROGRESS_INTERVAL = 30
 MERMAID_MAX_POINTS = 30
-RSS_METRIC = "consensus_process_resident_memory_bytes"
+RSS_METRIC = "process_resident_memory_bytes"
 MEM_UNIT_SCALE = {"KiB": 1024, "MiB": 1024**2, "GiB": 1024**3, "TiB": 1024**4}
 # matplotlib tab10 first 5 - used for Mermaid + PNG so legend colors match.
 PLOT_PALETTE = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd")
 METRIC_NAMES = frozenset(
     (
         RSS_METRIC,
-        "consensus_process_virtual_memory_bytes",
-        "consensus_process_open_fds",
-        "consensus_process_threads",
-        "consensus_process_uptime_seconds",
+        "process_virtual_memory_bytes",
+        "process_open_fds",
+        "process_threads",
+        "process_uptime_seconds",
     )
 )
 
