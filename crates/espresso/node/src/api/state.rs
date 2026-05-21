@@ -5,7 +5,7 @@
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use espresso_api::error::AvailabilityError;
+use espresso_api::{error::AvailabilityError, v1::HotShotAvailabilityApi};
 use espresso_types::{
     NamespaceId, NamespaceProofQueryData, NsProof,
     v0::sparse_mt::KeccakNode,
@@ -20,7 +20,14 @@ use espresso_types::{
 use futures::StreamExt as _;
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
 use hotshot_new_protocol::message::Certificate2;
-use hotshot_query_service::availability::{AvailabilityDataSource, Limits as HsLimits};
+use hotshot_query_service::{
+    Header as HsHeader,
+    availability::{
+        AvailabilityDataSource, BlockQueryData, BlockSummaryQueryData, LeafQueryData,
+        Limits as HsLimits, PayloadQueryData, TransactionQueryData, TransactionWithProofQueryData,
+        VidCommonQueryData,
+    },
+};
 use jf_merkle_tree_compat::prelude::{
     MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
 };
@@ -1526,26 +1533,19 @@ fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> 
 }
 
 #[async_trait]
-impl<D> espresso_api::v1::HotShotAvailabilityApi for NodeApiStateImpl<D>
+impl<D> HotShotAvailabilityApi for NodeApiStateImpl<D>
 where
     D: std::ops::Deref + Clone + Send + Sync + 'static,
-    D::Target: hotshot_query_service::availability::AvailabilityDataSource<espresso_types::SeqTypes>
-        + Send
-        + Sync,
+    D::Target: AvailabilityDataSource<espresso_types::SeqTypes> + Send + Sync,
 {
-    type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
-    type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
-    type Header = hotshot_query_service::Header<espresso_types::SeqTypes>;
-    type Payload = hotshot_query_service::availability::PayloadQueryData<espresso_types::SeqTypes>;
-    type VidCommon =
-        hotshot_query_service::availability::VidCommonQueryData<espresso_types::SeqTypes>;
-    type Transaction =
-        hotshot_query_service::availability::TransactionQueryData<espresso_types::SeqTypes>;
-    type TransactionWithProof = hotshot_query_service::availability::TransactionWithProofQueryData<
-        espresso_types::SeqTypes,
-    >;
-    type BlockSummary =
-        hotshot_query_service::availability::BlockSummaryQueryData<espresso_types::SeqTypes>;
+    type Leaf = LeafQueryData<espresso_types::SeqTypes>;
+    type Block = BlockQueryData<espresso_types::SeqTypes>;
+    type Header = HsHeader<espresso_types::SeqTypes>;
+    type Payload = PayloadQueryData<espresso_types::SeqTypes>;
+    type VidCommon = VidCommonQueryData<espresso_types::SeqTypes>;
+    type Transaction = TransactionQueryData<espresso_types::SeqTypes>;
+    type TransactionWithProof = TransactionWithProofQueryData<espresso_types::SeqTypes>;
+    type BlockSummary = BlockSummaryQueryData<espresso_types::SeqTypes>;
     type Limits = HsLimits;
     type Cert2 = Certificate2<espresso_types::SeqTypes>;
 
