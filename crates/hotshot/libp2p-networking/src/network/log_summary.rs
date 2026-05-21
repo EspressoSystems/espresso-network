@@ -1,18 +1,3 @@
-// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
-// This file is part of the HotShot repository.
-
-// You should have received a copy of the MIT License
-// along with the HotShot repository. If not, see <https://mit-license.org/>.
-
-//! Periodic aggregated summary of suppressed libp2p log noise.
-//!
-//! Many libp2p event-flow logs (dial timeouts, auth failures, DHT
-//! disagreements) are not individually actionable. They have been demoted to
-//! `debug!`; sites that demote bump a process-global counter here. A
-//! background task emits one compact `info!` heartbeat per `SUMMARY_INTERVAL`
-//! listing only the non-zero counters. Chartable metrics belong in
-//! `Libp2pMetricsValue` (Prometheus), not here.
-
 use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
@@ -52,8 +37,6 @@ counters! {
     VERIFY_FAILURES,
 }
 
-/// Drain every counter; format the non-zero ones as `name=value` tokens.
-/// Counter names are lowercased so the summary reads as identifiers.
 fn drain_and_format() -> Option<String> {
     let parts: Vec<String> = COUNTERS
         .iter()
@@ -73,14 +56,12 @@ fn emit_summary() {
 
 static SPAWNED: AtomicBool = AtomicBool::new(false);
 
-/// Spawn the periodic summary task. Idempotent; subsequent calls return
-/// `false`.
-pub fn spawn_summary_task() -> bool {
+pub fn spawn_summary_task() {
     if SPAWNED
         .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
         .is_err()
     {
-        return false;
+        return;
     }
     tokio::spawn(async move {
         let mut ticker = interval(SUMMARY_INTERVAL);
@@ -90,7 +71,6 @@ pub fn spawn_summary_task() -> bool {
             emit_summary();
         }
     });
-    true
 }
 
 #[cfg(test)]
@@ -129,8 +109,6 @@ mod tests {
         assert!(logs_contain("auth_failures=5"));
         assert!(logs_contain("dial_failures=3"));
         assert!(!logs_contain("verify_failures"));
-
-        // Draining the line zeroes the counters.
         assert!(drain_and_format().is_none());
     }
 
