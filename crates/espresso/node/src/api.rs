@@ -7654,6 +7654,37 @@ mod test {
         Ok(())
     }
 
+    /// Assert both tide-disco and the Axum endpoint return the same HTTP error status code.
+    async fn compare_error_endpoints(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+        expected_status: u16,
+    ) -> anyhow::Result<()> {
+        let tide_status = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .status()
+            .as_u16();
+        let axum_status = http
+            .get(format!("http://localhost:{axum_port}/v1/{path}"))
+            .send()
+            .await?
+            .status()
+            .as_u16();
+        assert_eq!(
+            tide_status, expected_status,
+            "v1/{path}: tide should return {expected_status}, got {tide_status}"
+        );
+        assert_eq!(
+            axum_status, expected_status,
+            "v1/{path}: axum should return {expected_status}, got {axum_status}"
+        );
+        Ok(())
+    }
+
     /// Connect to both tide-disco and axum WebSocket endpoints, collect up to 10 messages each,
     /// and assert that at least 2 messages appear in both streams.
     async fn compare_ws_endpoints(api_port: u16, axum_port: u16, path: &str) -> anyhow::Result<()> {
@@ -8426,6 +8457,48 @@ mod test {
                                         "availability/stream/blocks/{avail_block}/namespace/\
                                          {avail_ns}"
                                     ),
+                                )
+                                .await?;
+
+                                // Error equivalence: both tide-disco and Axum must return the same
+                                // HTTP status codes for common failure cases that clients encounter.
+
+                                // Requesting a leaf far ahead of the chain tip times out and returns
+                                // 404 Not Found from both servers.
+                                compare_error_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    "availability/leaf/999999",
+                                    404,
+                                )
+                                .await?;
+
+                                // Requesting a block range that exceeds the per-request limit
+                                // returns 400 Bad Request from both servers.
+                                compare_error_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!(
+                                        "availability/block/{avail_block}/{}",
+                                        avail_block + 200
+                                    ),
+                                    400,
+                                )
+                                .await?;
+
+                                // Requesting a namespace proof range that exceeds the limit also
+                                // returns 400 Bad Request from both servers.
+                                compare_error_endpoints(
+                                    &http,
+                                    api_port,
+                                    axum_port,
+                                    &format!(
+                                        "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                                        avail_block + 200
+                                    ),
+                                    400,
                                 )
                                 .await?;
                             }

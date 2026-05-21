@@ -26,7 +26,10 @@ use serialization_api::v2::{
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 
-use crate::{error::ApiError, handlers, v1, v2};
+use crate::{
+    error::{ApiError, AvailabilityError},
+    handlers, v1, v2,
+};
 
 /// API error response
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -36,8 +39,9 @@ struct ErrorResponse {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -46,6 +50,20 @@ impl IntoResponse for ApiError {
         });
 
         (status, body).into_response()
+    }
+}
+
+/// Classify an `anyhow::Error` from an availability handler into the appropriate `ApiError`
+/// variant. Errors produced via [`AvailabilityError`] in the state implementation carry semantic
+/// meaning; everything else falls back to a 500 Internal Server Error.
+fn classify_availability_error(err: anyhow::Error) -> ApiError {
+    let is_not_found = err
+        .downcast_ref::<AvailabilityError>()
+        .map(|e| matches!(e, AvailabilityError::NotFound(_)));
+    match is_not_found {
+        Some(true) => ApiError::NotFound(err),
+        Some(false) => ApiError::BadRequest(err),
+        None => ApiError::Internal(err),
     }
 }
 
@@ -248,7 +266,7 @@ where
                 .get_namespace_proof(v1::availability::BlockId::Height(height), namespace)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/hash/{hash}/namespace/{namespace}
@@ -258,7 +276,7 @@ where
                 .get_namespace_proof(v1::availability::BlockId::Hash(hash), namespace)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/payload-hash/{payload-hash}/namespace/{namespace}
@@ -271,7 +289,7 @@ where
                 )
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/{from}/{until}/namespace/{namespace}
@@ -281,7 +299,7 @@ where
                 .get_namespace_proof_range(from, until, namespace)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_incorrect_encoding_proof =
@@ -293,7 +311,7 @@ where
                 )
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_state_cert_v1 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
@@ -301,7 +319,7 @@ where
             .get_state_cert(epoch)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_state_cert_v2 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
@@ -309,7 +327,7 @@ where
             .get_state_cert_v2(epoch)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     // HotShot availability API handlers
@@ -319,21 +337,21 @@ where
             .get_leaf(v1::LeafId::Height(height))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_leaf_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_leaf(v1::LeafId::Hash(hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_leaf_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
         state
             .get_leaf_range(from, until)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_header_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
@@ -341,28 +359,28 @@ where
             .get_header(v1::BlockId::Height(height))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_header_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_header(v1::BlockId::Hash(hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_header_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
         state
             .get_header(v1::BlockId::PayloadHash(payload_hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_header_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
         state
             .get_header_range(from, until)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_block_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
@@ -370,28 +388,28 @@ where
             .get_block(v1::BlockId::Height(height))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_block_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_block(v1::BlockId::Hash(hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_block_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
         state
             .get_block(v1::BlockId::PayloadHash(payload_hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_block_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
         state
             .get_block_range(from, until)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_payload_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
@@ -399,28 +417,28 @@ where
             .get_payload(v1::PayloadId::Height(height))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_payload_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_payload(v1::PayloadId::Hash(hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_payload_by_block_hash = |State(state): State<S>, Path(block_hash): Path<String>| async move {
         state
             .get_payload(v1::PayloadId::BlockHash(block_hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_payload_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
         state
             .get_payload_range(from, until)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_vid_common_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
@@ -428,14 +446,14 @@ where
             .get_vid_common(v1::BlockId::Height(height))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_vid_common_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_vid_common(v1::BlockId::Hash(hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_vid_common_by_payload_hash =
         |State(state): State<S>, Path(payload_hash): Path<String>| async move {
@@ -443,7 +461,7 @@ where
                 .get_vid_common(v1::BlockId::PayloadHash(payload_hash))
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
     let get_vid_common_range =
         |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
@@ -451,7 +469,7 @@ where
                 .get_vid_common_range(from, until)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_transaction_by_position =
@@ -460,14 +478,14 @@ where
                 .get_transaction_by_position(height, index)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
     let get_transaction_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_transaction_by_hash(hash)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_transaction_proof_by_position =
         |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
@@ -475,14 +493,14 @@ where
                 .get_transaction_proof_by_position(height, index)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
     let get_transaction_proof_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_transaction_proof_by_hash(hash)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_block_summary_by_height = |State(state): State<S>, Path(height): Path<usize>| async move {
@@ -490,7 +508,7 @@ where
             .get_block_summary(height)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let get_block_summary_range =
         |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
@@ -498,7 +516,7 @@ where
                 .get_block_summary_range(from, until)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_limits = |State(state): State<S>| async move {

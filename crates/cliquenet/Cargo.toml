@@ -14,15 +14,15 @@ bytes           = { workspace = true }
 ed25519-compact = { workspace = true }
 parking_lot     = { workspace = true }
 rand            = "0.10.0"
-
-# optional:
-serde           = { workspace = true, features = ["derive"], optional = true }
-serde_bytes     = { workspace = true, optional = true }
 snow            = { workspace = true }
 thiserror       = { workspace = true }
 tokio           = { workspace = true, features = ["macros", "net", "rt", "time"] }
 tokio-util      = { workspace = true, features = ["join-map"] }
 tracing         = { workspace = true }
+
+# optional:
+serde           = { workspace = true, features = ["derive"], optional = true }
+serde_bytes     = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion  = { workspace = true }

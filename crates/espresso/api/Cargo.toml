@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 aide = { workspace = true }
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }

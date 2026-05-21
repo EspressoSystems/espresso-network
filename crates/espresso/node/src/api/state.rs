@@ -5,8 +5,9 @@
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
+use espresso_api::error::AvailabilityError;
 use espresso_types::{
-    NsProof,
+    NamespaceId, NamespaceProofQueryData, NsProof,
     v0::sparse_mt::KeccakNode,
     v0_3::RewardAmount as InternalRewardAmount,
     v0_4::{
@@ -16,8 +17,10 @@ use espresso_types::{
     },
     v0_6::RewardClaimError,
 };
+use futures::StreamExt as _;
 use hotshot_contract_adapter::reward::RewardClaimInput as InternalRewardClaimInput;
-use hotshot_query_service::availability::AvailabilityDataSource;
+use hotshot_new_protocol::message::Certificate2;
+use hotshot_query_service::availability::{AvailabilityDataSource, Limits as HsLimits};
 use jf_merkle_tree_compat::prelude::{
     MerkleNode as InternalMerkleNode, MerkleProof as InternalMerkleProof,
 };
@@ -1226,21 +1229,19 @@ where
 
         // Validate range
         if until <= from {
-            return Err(anyhow::anyhow!(
+            return Err(bad_request(format!(
                 "invalid range: until ({}) must be greater than from ({})",
-                until,
-                from
-            ));
+                until, from
+            )));
         }
 
         let range_size = until - from;
         const MAX_RANGE: u64 = 100;
         if range_size > MAX_RANGE {
-            return Err(anyhow::anyhow!(
+            return Err(range_exceeded(format!(
                 "range too large: {} blocks (max {})",
-                range_size,
-                MAX_RANGE
-            ));
+                range_size, MAX_RANGE
+            )));
         }
 
         // Fetch blocks and VID common data for the range
@@ -1307,9 +1308,6 @@ where
         from: usize,
         namespace: u32,
     ) -> anyhow::Result<futures::stream::BoxStream<'static, Self::NamespaceProofQueryData>> {
-        use espresso_types::{NamespaceId, NamespaceProofQueryData, NsProof};
-        use futures::StreamExt as _;
-
         let ns_id = NamespaceId::from(namespace);
         let ds = self.data_source.clone();
         let blocks = (*ds).subscribe_blocks(from).await;
@@ -1506,9 +1504,23 @@ where
 // v1::HotShotAvailabilityApi implementation
 // ============================================================================
 
+fn not_found(msg: impl Into<String>) -> anyhow::Error {
+    AvailabilityError::NotFound(msg.into()).into()
+}
+
+fn bad_request(msg: impl Into<String>) -> anyhow::Error {
+    AvailabilityError::BadRequest(msg.into()).into()
+}
+
+fn range_exceeded(msg: impl Into<String>) -> anyhow::Error {
+    AvailabilityError::RangeExceeded(msg.into()).into()
+}
+
 fn enforce_range(from: usize, until: usize, limit: usize) -> anyhow::Result<()> {
     if until.saturating_sub(from) > limit {
-        anyhow::bail!("range {from}..{until} exceeds limit {limit}");
+        return Err(range_exceeded(format!(
+            "range {from}..{until} exceeds limit {limit}"
+        )));
     }
     Ok(())
 }
@@ -1534,8 +1546,8 @@ where
     >;
     type BlockSummary =
         hotshot_query_service::availability::BlockSummaryQueryData<espresso_types::SeqTypes>;
-    type Limits = hotshot_query_service::availability::Limits;
-    type Cert2 = hotshot_new_protocol::message::Certificate2<espresso_types::SeqTypes>;
+    type Limits = HsLimits;
+    type Cert2 = Certificate2<espresso_types::SeqTypes>;
 
     async fn get_leaf(
         &self,
@@ -1547,17 +1559,16 @@ where
 
         let hs_id = match id {
             espresso_api::v1::availability::LeafId::Height(h) => HsLeafId::Number(h as usize),
-            espresso_api::v1::availability::LeafId::Hash(h) => HsLeafId::Hash(
-                h.parse()
-                    .map_err(|_| anyhow::anyhow!("invalid leaf hash"))?,
-            ),
+            espresso_api::v1::availability::LeafId::Hash(h) => {
+                HsLeafId::Hash(h.parse().map_err(|_| bad_request("invalid leaf hash"))?)
+            },
         };
         let ds = &*self.data_source;
         ds.get_leaf(hs_id)
             .await
             .with_timeout(Duration::from_millis(500))
             .await
-            .ok_or_else(|| anyhow::anyhow!("leaf not found"))
+            .ok_or_else(|| not_found("leaf not found"))
     }
 
     async fn get_leaf_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Leaf>> {
@@ -1576,7 +1587,7 @@ where
             let item = fetch
                 .with_timeout(timeout)
                 .await
-                .ok_or_else(|| anyhow::anyhow!("leaf {} not found", i))?;
+                .ok_or_else(|| not_found(format!("leaf {} not found", i)))?;
             results.push(item);
             i += 1;
         }
@@ -1595,7 +1606,7 @@ where
             .await
             .with_timeout(Duration::from_millis(500))
             .await
-            .ok_or_else(|| anyhow::anyhow!("header not found for {}", hs_id))
+            .ok_or_else(|| not_found(format!("header not found for {}", hs_id)))
     }
 
     async fn get_header_range(
@@ -1618,7 +1629,7 @@ where
             let item = fetch
                 .with_timeout(timeout)
                 .await
-                .ok_or_else(|| anyhow::anyhow!("header {} not found", i))?;
+                .ok_or_else(|| not_found(format!("header {} not found", i)))?;
             results.push(item);
             i += 1;
         }
@@ -1637,7 +1648,7 @@ where
             .await
             .with_timeout(Duration::from_millis(500))
             .await
-            .ok_or_else(|| anyhow::anyhow!("block not found for {}", hs_id))
+            .ok_or_else(|| not_found(format!("block not found for {}", hs_id)))
     }
 
     async fn get_block_range(&self, from: usize, until: usize) -> anyhow::Result<Vec<Self::Block>> {
@@ -1656,7 +1667,7 @@ where
             let item = fetch
                 .with_timeout(timeout)
                 .await
-                .ok_or_else(|| anyhow::anyhow!("block {} not found", i))?;
+                .ok_or_else(|| not_found(format!("block {} not found", i)))?;
             results.push(item);
             i += 1;
         }
@@ -1675,7 +1686,7 @@ where
             .await
             .with_timeout(Duration::from_millis(500))
             .await
-            .ok_or_else(|| anyhow::anyhow!("payload not found for {}", hs_id))
+            .ok_or_else(|| not_found(format!("payload not found for {}", hs_id)))
     }
 
     async fn get_payload_range(
@@ -1698,7 +1709,7 @@ where
             let item = fetch
                 .with_timeout(timeout)
                 .await
-                .ok_or_else(|| anyhow::anyhow!("payload {} not found", i))?;
+                .ok_or_else(|| not_found(format!("payload {} not found", i)))?;
             results.push(item);
             i += 1;
         }
@@ -1717,7 +1728,7 @@ where
             .await
             .with_timeout(Duration::from_millis(500))
             .await
-            .ok_or_else(|| anyhow::anyhow!("VID common not found for {}", hs_id))
+            .ok_or_else(|| not_found(format!("VID common not found for {}", hs_id)))
     }
 
     async fn get_vid_common_range(
@@ -1740,7 +1751,7 @@ where
             let item = fetch
                 .with_timeout(timeout)
                 .await
-                .ok_or_else(|| anyhow::anyhow!("VID common {} not found", i))?;
+                .ok_or_else(|| not_found(format!("VID common {} not found", i)))?;
             results.push(item);
             i += 1;
         }
@@ -1764,21 +1775,20 @@ where
             .await
             .with_timeout(Duration::from_millis(500))
             .await
-            .ok_or_else(|| anyhow::anyhow!("block {} not found", height))?;
+            .ok_or_else(|| not_found(format!("block {} not found", height)))?;
 
         let idx = block
             .payload()
             .nth(block.metadata(), index as usize)
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "transaction index {} out of bounds in block {}",
-                    index,
-                    height
-                )
+                    index, height
+                ))
             })?;
         let tx = block
             .transaction(&idx)
-            .ok_or_else(|| anyhow::anyhow!("transaction not found at index {}", index))?;
+            .ok_or_else(|| not_found(format!("transaction not found at index {}", index)))?;
         TransactionQueryData::new(tx, &block, &idx, index)
             .ok_or_else(|| anyhow::anyhow!("failed to build transaction query data"))
     }
@@ -1791,13 +1801,13 @@ where
             espresso_types::SeqTypes,
         > = hash
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid transaction hash: {}", hash))?;
+            .map_err(|_| bad_request(format!("invalid transaction hash: {}", hash)))?;
         let bwt = ds
             .get_block_containing_transaction(tx_hash)
             .await
             .with_timeout(Duration::from_millis(500))
             .await
-            .ok_or_else(|| anyhow::anyhow!("transaction not found"))?;
+            .ok_or_else(|| not_found("transaction not found"))?;
         Ok(bwt.transaction)
     }
 
@@ -1825,23 +1835,22 @@ where
             vid_fetch.with_timeout(timeout)
         );
 
-        let block = block.ok_or_else(|| anyhow::anyhow!("block {} not found", height))?;
+        let block = block.ok_or_else(|| not_found(format!("block {} not found", height)))?;
         let vid =
-            vid.ok_or_else(|| anyhow::anyhow!("VID common not found for block {}", height))?;
+            vid.ok_or_else(|| not_found(format!("VID common not found for block {}", height)))?;
 
         let idx = block
             .payload()
             .nth(block.metadata(), index as usize)
             .ok_or_else(|| {
-                anyhow::anyhow!(
+                not_found(format!(
                     "transaction index {} out of bounds in block {}",
-                    index,
-                    height
-                )
+                    index, height
+                ))
             })?;
         let tx = block
             .transaction(&idx)
-            .ok_or_else(|| anyhow::anyhow!("transaction not found at index {}", index))?;
+            .ok_or_else(|| not_found(format!("transaction not found at index {}", index)))?;
         let tx_data = TransactionQueryData::new(tx, &block, &idx, index)
             .ok_or_else(|| anyhow::anyhow!("failed to build transaction query data"))?;
         let proof = block
@@ -1868,13 +1877,13 @@ where
             espresso_types::SeqTypes,
         > = hash
             .parse()
-            .map_err(|_| anyhow::anyhow!("invalid transaction hash: {}", hash))?;
+            .map_err(|_| bad_request(format!("invalid transaction hash: {}", hash)))?;
         let bwt = ds
             .get_block_containing_transaction(tx_hash)
             .await
             .with_timeout(timeout)
             .await
-            .ok_or_else(|| anyhow::anyhow!("transaction not found"))?;
+            .ok_or_else(|| not_found("transaction not found"))?;
 
         let vid = ds
             .get_vid_common(HsBlockId::Number(bwt.block.height() as usize))
@@ -1882,7 +1891,10 @@ where
             .with_timeout(timeout)
             .await
             .ok_or_else(|| {
-                anyhow::anyhow!("VID common not found for block {}", bwt.block.height())
+                not_found(format!(
+                    "VID common not found for block {}",
+                    bwt.block.height()
+                ))
             })?;
 
         let proof = bwt
@@ -1903,7 +1915,7 @@ where
             .await
             .with_timeout(Duration::from_millis(500))
             .await
-            .ok_or_else(|| anyhow::anyhow!("block {} not found", height))?;
+            .ok_or_else(|| not_found(format!("block {} not found", height)))?;
         Ok(BlockSummaryQueryData::from(block))
     }
 
@@ -1928,7 +1940,7 @@ where
             let block = fetch
                 .with_timeout(timeout)
                 .await
-                .ok_or_else(|| anyhow::anyhow!("block {} not found", i))?;
+                .ok_or_else(|| not_found(format!("block {} not found", i)))?;
             results.push(BlockSummaryQueryData::from(block));
             i += 1;
         }
@@ -1936,7 +1948,7 @@ where
     }
 
     async fn get_limits(&self) -> anyhow::Result<Self::Limits> {
-        Ok(hotshot_query_service::availability::Limits {
+        Ok(HsLimits {
             small_object_range_limit: 500,
             large_object_range_limit: 100,
         })
@@ -2038,13 +2050,13 @@ fn block_id_to_hs(
         espresso_api::v1::availability::BlockId::Hash(h) => {
             let hash = h
                 .parse()
-                .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
+                .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
             Ok(HsBlockId::Hash(hash))
         },
         espresso_api::v1::availability::BlockId::PayloadHash(h) => {
             let payload_hash = h
                 .parse()
-                .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
+                .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
             Ok(HsBlockId::PayloadHash(payload_hash))
         },
     }
@@ -2059,13 +2071,13 @@ fn payload_id_to_hs(
         espresso_api::v1::availability::PayloadId::Hash(h) => {
             let payload_hash = h
                 .parse()
-                .map_err(|_| anyhow::anyhow!("invalid payload hash: {}", h))?;
+                .map_err(|_| bad_request(format!("invalid payload hash: {}", h)))?;
             Ok(HsBlockId::PayloadHash(payload_hash))
         },
         espresso_api::v1::availability::PayloadId::BlockHash(h) => {
             let hash = h
                 .parse()
-                .map_err(|_| anyhow::anyhow!("invalid block hash: {}", h))?;
+                .map_err(|_| bad_request(format!("invalid block hash: {}", h)))?;
             Ok(HsBlockId::Hash(hash))
         },
     }
