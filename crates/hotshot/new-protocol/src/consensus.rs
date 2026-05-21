@@ -885,15 +885,14 @@ impl<T: NodeType> Consensus<T> {
         // built over.  For view 1 we fall back to the proposal's commit.
         let parent_commitment = if parent_view == ViewNumber::genesis() {
             proposal_commitment(proposal)
+        } else if proposal_commitment(proposal) != parent_cert.data.leaf_commit {
+            warn!(
+                %parent_view,
+                "stored proposal at parent_view does not match parent cert's leaf_commit; \
+                 refusing to propose with mismatched parent"
+            );
+            return;
         } else {
-            if proposal_commitment(proposal) != parent_cert.data.leaf_commit {
-                warn!(
-                    %parent_view,
-                    "stored proposal at parent_view does not match parent cert's leaf_commit; \
-                     refusing to propose with mismatched parent"
-                );
-                return;
-            }
             parent_cert.data.leaf_commit
         };
         let Some(header) = self.headers.get(&(view, parent_commitment)) else {

@@ -169,11 +169,6 @@ impl<T: NodeType> StateManager<T> {
             return;
         };
 
-        if parent_entry.leaf.commit() != request.parent_commitment {
-            error!(%request.parent_commitment, "parent leaf commitment mismatch");
-            return;
-        }
-
         let instance = self.instance.clone();
         let header = request.proposal.block_header.clone();
         let view = request.view;
@@ -437,9 +432,7 @@ impl<T: NodeType> StateManager<T> {
     pub(crate) fn validated_contains_view(&self, v: ViewNumber) -> bool {
         self.validated_states
             .iter()
-            .filter(|(_, entry)| entry.leaf.view_number() == v)
-            .count()
-            > 0
+            .any(|(_, entry)| entry.leaf.view_number() == v)
     }
 
     #[cfg(test)]
