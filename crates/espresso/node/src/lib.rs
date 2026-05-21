@@ -19,7 +19,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, marker::PhantomData, num::NonZeroU64, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -134,7 +134,7 @@ pub struct NetworkParams {
     /// (`bootstrap_epoch_window`).
     pub bootstrap_epoch_catchup_timeout: Duration,
     /// Number of blocks between new-protocol consensus garbage collection passes.
-    pub new_protocol_consensus_gc_interval: u64,
+    pub new_protocol_consensus_gc_interval: NonZeroU64,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -1660,7 +1660,7 @@ pub mod testing {
                 event_consumer,
                 Default::default(),
                 Duration::from_secs(2),
-                100,
+                NonZeroU64::new(100).unwrap(),
             )
             .await
             .unwrap()

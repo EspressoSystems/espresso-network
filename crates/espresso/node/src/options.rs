@@ -6,6 +6,7 @@ use std::{
     collections::HashSet,
     fmt::{self, Formatter},
     iter::once,
+    num::NonZeroU64,
     path::PathBuf,
     time::Duration,
 };
@@ -350,7 +351,7 @@ pub struct Options {
         env = "ESPRESSO_NODE_NEW_PROTOCOL_CONSENSUS_GC_INTERVAL",
         default_value = "100"
     )]
-    pub new_protocol_consensus_gc_interval: u64,
+    pub new_protocol_consensus_gc_interval: NonZeroU64,
 
     #[clap(flatten)]
     pub logging: logging::Config,
@@ -690,7 +691,7 @@ pub struct PublicNodeConfig {
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
-    pub new_protocol_consensus_gc_interval: u64,
+    pub new_protocol_consensus_gc_interval: NonZeroU64,
     pub catchup_backoff: BackoffParams,
     pub proposal_fetcher: ProposalFetcherConfig,
     pub libp2p: Libp2pTuning,
