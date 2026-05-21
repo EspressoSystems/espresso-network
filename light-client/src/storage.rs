@@ -1,9 +1,6 @@
-use std::{
-    future::Future,
-    path::PathBuf,
-    str::FromStr,
-    sync::atomic::{AtomicU64, Ordering},
-};
+#[cfg(unix)]
+use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+use std::{future::Future, path::PathBuf, str::FromStr, sync::Arc};
 
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
@@ -21,6 +18,7 @@ use sqlx::{
     QueryBuilder, SqlitePool, query, query_as,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use tempfile::{Builder, TempDir};
 use vbs::version::Version;
 
 /// Different ways to ask the database for a leaf.
@@ -145,8 +143,9 @@ pub struct LightClientSqliteOptions {
 
     /// Path at which the light client database is persisted.
     ///
-    /// If not present, the database will exist only in memory and will be destroyed when the
-    /// [`SqlitePersistence`] object is dropped
+    /// If not present, the database is created in a temporary directory that is removed when the
+    /// storage is dropped. Set this in production so cached leaves and stake tables survive
+    /// restarts.
     #[cfg_attr(
         feature = "clap",
         clap(long = "light-client-db-path", env = "LIGHT_CLIENT_DB_PATH")
@@ -165,45 +164,33 @@ impl Default for LightClientSqliteOptions {
     }
 }
 
-enum LightClientDb {
-    InMemory,
-    File(PathBuf),
-}
-
-impl LightClientDb {
-    /// Resolve to a SQLite connection URI, creating the parent directory for file-backed DBs.
-    ///
-    /// The in-memory variant uses a shared-cache URI with a fresh per-call name so every
-    /// pool connection sees the same database; a bare `:memory:` would give each connection
-    /// its own private DB and the schema migration would be invisible to all but one.
-    fn into_uri(self) -> Result<String> {
-        match self {
-            Self::InMemory => {
-                static COUNTER: AtomicU64 = AtomicU64::new(0);
-                let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-                Ok(format!("file:lc-mem-{id}?mode=memory&cache=shared"))
-            },
-            Self::File(p) => {
+impl LightClientSqliteOptions {
+    /// Create or connect to a database with the given options.
+    pub async fn connect(self) -> Result<SqliteStorage> {
+        let (path, _tmp) = match self.lc_path {
+            Some(p) => {
                 if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
                     std::fs::create_dir_all(parent)
                         .with_context(|| format!("creating parent directory {parent:?}"))?;
                 }
-                p.into_os_string()
-                    .into_string()
-                    .map_err(|s| anyhow::anyhow!("invalid file path: {s:?}"))
+                (p, None)
             },
-        }
-    }
-}
+            None => {
+                let mut builder = Builder::new();
+                #[cfg(unix)]
+                builder.permissions(Permissions::from_mode(0o700));
+                let dir = builder.tempdir().context(
+                    "creating temporary directory for light client database; set \
+                     LIGHT_CLIENT_DB_PATH to use a persistent location",
+                )?;
+                let path = dir.path().join("lc.db");
+                (path, Some(Arc::new(dir)))
+            },
+        };
 
-impl LightClientSqliteOptions {
-    /// Create or connect to a database with the given options.
-    pub async fn connect(self) -> Result<SqliteStorage> {
-        let db = self
-            .lc_path
-            .map(LightClientDb::File)
-            .unwrap_or(LightClientDb::InMemory);
-        let opt = SqliteConnectOptions::from_str(&db.into_uri()?)?.create_if_missing(true);
+        let opt = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
             .connect_with(opt)
@@ -214,6 +201,7 @@ impl LightClientSqliteOptions {
             pool,
             num_leaves: self.num_leaves,
             num_stake_tables: self.num_stake_tables,
+            _tmp,
         })
     }
 }
@@ -224,6 +212,7 @@ pub struct SqliteStorage {
     pool: SqlitePool,
     num_leaves: u32,
     num_stake_tables: u32,
+    _tmp: Option<Arc<TempDir>>,
 }
 
 impl Storage for SqliteStorage {
@@ -578,6 +567,9 @@ impl Storage for SqliteStorage {
 
 #[cfg(test)]
 mod test {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
     use versions::{CLIQUENET_VERSION, EPOCH_VERSION};
@@ -587,29 +579,75 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_in_memory_uri_shares_state_across_connections() {
-        use sqlx::ConnectOptions;
+    async fn test_default_storage_survives_connection_churn() {
+        let db = SqliteStorage::default().await.unwrap();
 
-        let uri = LightClientDb::InMemory.into_uri().unwrap();
-        let mut a = SqliteConnectOptions::from_str(&uri)
-            .unwrap()
-            .connect()
-            .await
-            .unwrap();
-        sqlx::query("CREATE TABLE regression (x INTEGER)")
-            .execute(&mut a)
+        {
+            let conn = db.pool.acquire().await.unwrap();
+            drop(conn);
+        }
+
+        let leaf = leaf_chain(0..1, EPOCH_VERSION).await.remove(0);
+        db.insert_leaf(leaf).await.unwrap();
+        assert_eq!(db.block_height().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_default_storage_survives_idle_reap() {
+        use std::time::Duration;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("lc.db");
+        let db = LightClientSqliteOptions {
+            lc_path: Some(path.clone()),
+            ..Default::default()
+        }
+        .connect()
+        .await
+        .unwrap();
+
+        let opt = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(false);
+        let pool = SqlitePoolOptions::default()
+            .max_connections(5)
+            .min_connections(0)
+            .idle_timeout(Some(Duration::from_millis(50)))
+            .connect_with(opt)
             .await
             .unwrap();
 
-        let mut b = SqliteConnectOptions::from_str(&uri)
-            .unwrap()
-            .connect()
+        let (height,): (i64,) = sqlx::query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
+            .fetch_one(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO regression VALUES (42)")
-            .execute(&mut b)
+        assert_eq!(height, 0);
+
+        while pool.size() > 0 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        let (height,): (i64,) = sqlx::query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
+            .fetch_one(&pool)
             .await
-            .expect("second connection must see schema from first (shared cache)");
+            .expect("schema must survive the pool reaping idle connections");
+        assert_eq!(height, 0);
+
+        drop(db);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_default_storage_tempdir_is_owner_only() {
+        let db = SqliteStorage::default().await.unwrap();
+        let dir = db
+            ._tmp
+            .as_ref()
+            .expect("default storage must own a tempdir");
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "tempdir must be owner-only, got {mode:o}");
     }
 
     #[tokio::test]
