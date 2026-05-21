@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 aide = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
@@ -17,6 +16,7 @@ schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serialization-api = { path = "../../serialization/api" }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
