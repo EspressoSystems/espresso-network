@@ -270,3 +270,248 @@ impl Default for MigrationRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A minimal DataBackfill that runs `total` batches (one unit of work each) then stops.
+    struct CountBatches {
+        name: &'static str,
+        total: u64,
+        deps: &'static [&'static str],
+    }
+
+    impl CountBatches {
+        fn new(name: &'static str, total: u64) -> Self {
+            Self {
+                name,
+                total,
+                deps: &[],
+            }
+        }
+
+        fn with_deps(name: &'static str, total: u64, deps: &'static [&'static str]) -> Self {
+            Self { name, total, deps }
+        }
+    }
+
+    #[async_trait]
+    impl DataBackfill for CountBatches {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn requires(&self) -> &'static [&'static str] {
+            self.deps
+        }
+
+        fn batch_size(&self) -> usize {
+            1
+        }
+
+        async fn run_batch(
+            &self,
+            _tx: &mut Transaction<Write>,
+            offset: u64,
+        ) -> anyhow::Result<Option<u64>> {
+            Ok((offset < self.total).then_some(offset + 1))
+        }
+    }
+
+    // --- validate() unit tests (no database required) ---
+
+    #[test]
+    fn validate_empty() {
+        MigrationRegistry::new().validate().unwrap();
+    }
+
+    #[test]
+    fn validate_single() {
+        MigrationRegistry::new()
+            .backfill(CountBatches::new("a", 1))
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn validate_duplicate_name() {
+        let err = MigrationRegistry::new()
+            .backfill(CountBatches::new("foo", 1))
+            .backfill(CountBatches::new("foo", 1))
+            .validate()
+            .unwrap_err();
+        assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn validate_unknown_dep() {
+        let err = MigrationRegistry::new()
+            .backfill(CountBatches::with_deps("bar", 1, &["nonexistent"]))
+            .validate()
+            .unwrap_err();
+        assert!(err.to_string().contains("nonexistent"));
+    }
+
+    #[test]
+    fn validate_dep_must_precede() {
+        // "a" depends on "b" but "b" comes after "a" in the registry.
+        let err = MigrationRegistry::new()
+            .backfill(CountBatches::with_deps("a", 1, &["b"]))
+            .backfill(CountBatches::new("b", 1))
+            .validate()
+            .unwrap_err();
+        assert!(err.to_string().contains("b"));
+    }
+
+    #[test]
+    fn validate_valid_dependency_chain() {
+        MigrationRegistry::new()
+            .backfill(CountBatches::new("a", 1))
+            .backfill(CountBatches::with_deps("b", 1, &["a"]))
+            .backfill(CountBatches::with_deps("c", 1, &["a", "b"]))
+            .validate()
+            .unwrap();
+    }
+
+    // --- Integration tests (require a real postgres database) ---
+
+    #[cfg(not(feature = "embedded-db"))]
+    mod db_tests {
+        use super::*;
+        use crate::data_source::storage::sql::{
+            Migration, SqlStorage, StorageConnectionType, testing::TmpDb,
+        };
+
+        // The deferred_migrations table lives in espresso-node's migrations; for tests within
+        // this crate we inject it as an extra migration.
+        const CREATE_DEFERRED_MIGRATIONS: &str = "
+            CREATE TABLE IF NOT EXISTS deferred_migrations (
+                name         TEXT        PRIMARY KEY,
+                started_at   TIMESTAMPTZ NOT NULL,
+                completed_at TIMESTAMPTZ,
+                last_offset  BIGINT
+            );
+        ";
+
+        async fn setup() -> (TmpDb, SqlStorage) {
+            let db = TmpDb::init().await;
+            let storage = SqlStorage::connect(
+                db.config().migrations(vec![
+                    Migration::unapplied(
+                        "V9990__deferred_migrations.sql",
+                        CREATE_DEFERRED_MIGRATIONS,
+                    )
+                    .unwrap(),
+                ]),
+                StorageConnectionType::Query,
+            )
+            .await
+            .unwrap();
+            (db, storage)
+        }
+
+        async fn is_complete(storage: &SqlStorage, name: &str) -> bool {
+            let mut tx = storage.read().await.unwrap();
+            let row: Option<(bool,)> = sqlx::query_as(
+                "SELECT completed_at IS NOT NULL FROM deferred_migrations WHERE name = $1",
+            )
+            .bind(name)
+            .fetch_optional(tx.as_mut())
+            .await
+            .unwrap();
+            row.map(|(b,)| b).unwrap_or(false)
+        }
+
+        async fn last_offset(storage: &SqlStorage, name: &str) -> Option<i64> {
+            let mut tx = storage.read().await.unwrap();
+            let row: Option<(i64,)> =
+                sqlx::query_as("SELECT last_offset FROM deferred_migrations WHERE name = $1")
+                    .bind(name)
+                    .fetch_optional(tx.as_mut())
+                    .await
+                    .unwrap();
+            row.map(|(o,)| o)
+        }
+
+        #[test_log::test(tokio::test(flavor = "multi_thread"))]
+        async fn migration_runs_to_completion() {
+            let (_db, storage) = setup().await;
+
+            MigrationRegistry::new()
+                .backfill(CountBatches::new("m", 5))
+                .run_all_migrations(storage.clone())
+                .await;
+
+            assert!(is_complete(&storage, "m").await);
+            assert_eq!(last_offset(&storage, "m").await, Some(5));
+        }
+
+        #[test_log::test(tokio::test(flavor = "multi_thread"))]
+        async fn migration_resumes_from_checkpoint() {
+            let (_db, storage) = setup().await;
+
+            // Seed partial progress: already at offset 3 of 5.
+            let mut tx = storage.write().await.unwrap();
+            sqlx::query(
+                "INSERT INTO deferred_migrations (name, started_at, last_offset) VALUES ($1, \
+                 CURRENT_TIMESTAMP, $2)",
+            )
+            .bind("m")
+            .bind(3i64)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+
+            MigrationRegistry::new()
+                .backfill(CountBatches::new("m", 5))
+                .run_all_migrations(storage.clone())
+                .await;
+
+            assert!(is_complete(&storage, "m").await);
+            assert_eq!(last_offset(&storage, "m").await, Some(5));
+        }
+
+        #[test_log::test(tokio::test(flavor = "multi_thread"))]
+        async fn completed_migration_is_skipped() {
+            let (_db, storage) = setup().await;
+
+            // Pre-mark the migration as complete at offset 99.
+            let mut tx = storage.write().await.unwrap();
+            sqlx::query(
+                "INSERT INTO deferred_migrations (name, started_at, completed_at, last_offset) \
+                 VALUES ($1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $2)",
+            )
+            .bind("m")
+            .bind(99i64)
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+
+            // Run a migration with total=0 — if it ran, it would reset the offset.
+            MigrationRegistry::new()
+                .backfill(CountBatches::new("m", 0))
+                .run_all_migrations(storage.clone())
+                .await;
+
+            // Offset must not have changed.
+            assert_eq!(last_offset(&storage, "m").await, Some(99));
+        }
+
+        #[test_log::test(tokio::test(flavor = "multi_thread"))]
+        async fn dependency_ordering_respected() {
+            let (_db, storage) = setup().await;
+
+            MigrationRegistry::new()
+                .backfill(CountBatches::new("first", 3))
+                .backfill(CountBatches::with_deps("second", 3, &["first"]))
+                .run_all_migrations(storage.clone())
+                .await;
+
+            assert!(is_complete(&storage, "first").await);
+            assert!(is_complete(&storage, "second").await);
+        }
+    }
+}
