@@ -345,7 +345,7 @@ mod tests {
 
     /// Verify that a certificate's data commitment matches `expected_data` and that
     /// the aggregate signature is valid against the stake table.
-    async fn verify_cert<C, D>(cert: &C, expected_data: &D, membership: &EpochMembership<TestTypes>)
+    fn verify_cert<C, D>(cert: &C, expected_data: &D, membership: &EpochMembership<TestTypes>)
     where
         D: Committable,
         C: Certificate<TestTypes, D, Voteable = D>,
@@ -391,7 +391,7 @@ mod tests {
 
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &expected_data, &epoch_membership).await;
+        verify_cert(&cert, &expected_data, &epoch_membership);
     }
 
     /// Sending votes for multiple views produces a valid certificate for each view,
@@ -432,7 +432,7 @@ mod tests {
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         for cert in &certs {
-            verify_cert(cert, &expected_data, &epoch_membership).await;
+            verify_cert(cert, &expected_data, &epoch_membership);
         }
     }
 
@@ -456,7 +456,7 @@ mod tests {
 
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &expected_data, &epoch_membership).await;
+        verify_cert(&cert, &expected_data, &epoch_membership);
     }
 
     /// Sending votes for multiple views in parallel produces valid certificates for each,
@@ -491,7 +491,7 @@ mod tests {
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
         for cert in &certs {
-            verify_cert(cert, &expected_data, &epoch_membership).await;
+            verify_cert(cert, &expected_data, &epoch_membership);
         }
     }
 
@@ -604,7 +604,7 @@ mod tests {
         assert_no_certs(&mut task).await;
         let membership = mock_membership();
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
-        verify_cert(&cert, &vote_2_data(), &epoch_membership).await;
+        verify_cert(&cert, &vote_2_data(), &epoch_membership);
     }
 
     /// Channel closed before threshold means no certificate is produced.
