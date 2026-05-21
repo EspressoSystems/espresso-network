@@ -64,6 +64,9 @@ pub enum LeaderEvent {
     Cert1VMinus1InputDispatched,
     Vote2VMinus1Signed,
     Vote2VMinus1Queued,
+    // Phase 6b - cert2 formation (the QC2 round) and finality.
+    Cert2VMinus1InputDispatched,
+    LeafDecided,
 
     // Phase 7 - build + sign V's proposal.
     MaybeProposeEntered,
@@ -113,6 +116,8 @@ impl LeaderEvent {
             Cert1VMinus1InputDispatched => "cert1_v_minus_1_input_dispatched",
             Vote2VMinus1Signed => "vote2_v_minus_1_signed",
             Vote2VMinus1Queued => "vote2_v_minus_1_queued",
+            Cert2VMinus1InputDispatched => "cert2_v_minus_1_input_dispatched",
+            LeafDecided => "leaf_decided",
             MaybeProposeEntered => "maybe_propose_entered",
             Leaf2CommitComputed => "leaf2_commit_computed",
             ProposalSigned => "proposal_signed",

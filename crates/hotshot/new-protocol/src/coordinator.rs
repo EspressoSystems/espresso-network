@@ -332,6 +332,12 @@ where
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
+                    let v = *cert2.view_number();
+                    crate::trace_leader_event!(
+                        self.consensus.tracer,
+                        v,
+                        crate::leader_trace::LeaderEvent::Cert2VMinus1InputDispatched
+                    );
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
@@ -843,6 +849,14 @@ where
 
     pub fn vid_reconstructor(&self) -> &VidReconstructor<T> {
         &self.vid_reconstructor
+    }
+
+    /// Tell the VID reconstructor that this node already has `view`'s payload
+    /// locally (because it built it). Mirrors the call in the production
+    /// `block_builder.next()` arm so leaders don't waste CPU running
+    /// `AvidmGf2::recover` on a block they just built.
+    pub fn mark_block_locally_available(&mut self, view: ViewNumber) {
+        self.vid_reconstructor.mark_locally_available(view);
     }
 
     pub fn state(&self, v: ViewNumber) -> Option<&StateEntry<T>> {

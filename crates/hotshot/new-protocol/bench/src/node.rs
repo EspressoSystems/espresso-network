@@ -311,6 +311,11 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);
+                // Production goes through `coordinator.rs`'s `block_builder.next()`
+                // arm which calls `mark_locally_available`. The bench synthesizes
+                // `BlockBuilt` directly above, so do the same call here to keep
+                // the self-recover-skip semantics consistent.
+                coordinator.mark_block_locally_available(req.view);
                 continue; // skip process_consensus_output for this one
             }
 

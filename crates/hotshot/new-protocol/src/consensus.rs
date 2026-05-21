@@ -1205,6 +1205,11 @@ impl<T: NodeType> Consensus<T> {
             .get(&view)
             .cloned()
             .expect("cert1 must exist if cert2 exists");
+        crate::trace_leader_event!(
+            self.tracer,
+            view,
+            crate::leader_trace::LeaderEvent::LeafDecided
+        );
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert1,
