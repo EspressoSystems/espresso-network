@@ -39,7 +39,7 @@ use espresso_node::{
         self,
         cdn::{TestingDef, WrappedSignatureKey},
     },
-    options::{Modules, Options},
+    options::{Modules, Options, PublicNodeConfig},
     run::init_with_storage,
     testing::{staking_priv_keys, wait_for_decide_on_handle},
 };
@@ -383,6 +383,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     self.modules.clone(),
                     self.opt.clone(),
                     S::persistence_options(&self.storage),
+                    PublicNodeConfig::new(&self.opt, &self.modules),
                 )
                 .await
                 {

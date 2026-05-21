@@ -12,6 +12,7 @@ use crate::{
     addr::NetAddr,
     connection::Connection,
     error::NetworkError,
+    metrics::NoMetrics,
     msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{RetryPolicy, peer::Peer},
     queue::Queue,
@@ -83,6 +84,7 @@ fn make_peer(
         .inbound(tx)
         .next_slot(slot_rx)
         .connection(conn)
+        .metrics(Arc::new(NoMetrics))
         .build();
     (peer, rx, outbox, slot_tx)
 }
@@ -354,6 +356,7 @@ async fn receive_timeout() {
         .inbound(tx)
         .next_slot(slot_rx)
         .connection(conn_a)
+        .metrics(Arc::new(NoMetrics))
         .build();
 
     let slot = Slot::new(1);
@@ -444,6 +447,7 @@ async fn channel_closed() {
         .inbound(tx_b)
         .next_slot(slot_rx)
         .connection(conn_b)
+        .metrics(Arc::new(NoMetrics))
         .build();
     drop(rx_b);
 
@@ -485,6 +489,7 @@ async fn connection_reset() {
         .inbound(tx)
         .next_slot(slot_rx)
         .connection(conn_a)
+        .metrics(Arc::new(NoMetrics))
         .build();
 
     drop(conn_b);
@@ -799,6 +804,7 @@ async fn retry_after_reconnect() {
         .inbound(tx_a)
         .next_slot(slot_rx)
         .connection(conn_a1)
+        .metrics(Arc::new(NoMetrics))
         .build();
 
     let slot = Slot::new(1);

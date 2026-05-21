@@ -106,8 +106,8 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                 Some(LeafInfo { leaf, .. }) => leaf,
                 None => return,
             },
-            CoordinatorEvent::NewDecide(decide) => match decide.leaves.first() {
-                Some(leaf) => leaf,
+            CoordinatorEvent::NewDecide { leaf_infos, .. } => match leaf_infos.first() {
+                Some(info) => &info.leaf,
                 None => return,
             },
             _ => return,
@@ -133,7 +133,6 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         .membership_coordinator()
                         .await
                         .stake_table_for_epoch(option_state_epoch)
-                        .await
                     else {
                         tracing::error!(
                             "Failed to get membership for epoch: {:?}",
@@ -141,7 +140,7 @@ impl<ApiVer: StaticVersionType> StateSigner<ApiVer> {
                         );
                         return;
                     };
-                    let stake_table = membership.stake_table().await;
+                    let stake_table = HSStakeTable::from_iter(membership.stake_table());
                     match stake_table.commitment(self.stake_table_capacity) {
                         Ok(stake_table_state) => {
                             self.should_vote = should_vote(&stake_table, &self.ver_key);

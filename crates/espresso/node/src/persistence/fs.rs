@@ -89,7 +89,7 @@ fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
 pub struct Options {
     /// Storage path for persistent data.
     #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 
     /// Number of views to retain in consensus storage before data that hasn't been archived is
     /// garbage collected.
@@ -283,6 +283,24 @@ impl Inner {
         self.path.join("decided_cert2")
     }
 
+    /// cert2 is only persisted for the view that is directly finalized
+    /// (the newest leaf in a decided chain). Ancestor views finalized
+    /// indirectly have no cert2 file on disk
+    /// for those, this returns `Ok(None)`
+    fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        let file_path = self
+            .decided_cert2_dir_path()
+            .join(view.u64().to_string())
+            .with_extension("bin");
+        if !file_path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&file_path).context("read cert2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize cert2")?,
+        ))
+    }
+
     fn update_migration(&mut self) -> anyhow::Result<()> {
         let path = self.migration();
         let bytes = bincode::serialize(&self.migrated)?;
@@ -449,10 +467,11 @@ impl Inner {
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
             // Include the VID share if available.
-            let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
-            if vid_share.is_none() {
+            let vid_proposal = self.load_vid_share(v)?;
+            if vid_proposal.is_none() {
                 tracing::debug!(?v, "VID share not available at decide");
             }
+            let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
 
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
@@ -497,12 +516,23 @@ impl Inner {
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            let deciding_qc = deciding_qc
-                .as_ref()
-                .filter(|qc| qc.view_number() == cert.view_number() + 1)
-                .cloned();
-            consumer
-                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
+            let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
+                let cert2 = self.load_cert2(view)?;
+                // One event per view. cert2 is only stored for the
+                // directly finalized view
+                // ancestors get `cert2: None`,
+                // which is what update() expects for indirectly decided leaves.
+                CoordinatorEvent::NewDecide {
+                    leaf_infos: vec![leaf],
+                    cert1: cert.qc().clone(),
+                    cert2,
+                }
+            } else {
+                let deciding_qc = deciding_qc
+                    .as_ref()
+                    .filter(|qc| qc.view_number() == cert.view_number() + 1)
+                    .cloned();
+                CoordinatorEvent::LegacyEvent(Event {
                     view_number: view,
                     event: EventType::Decide {
                         committing_qc: Arc::new(cert),
@@ -510,8 +540,9 @@ impl Inner {
                         leaf_chain: Arc::new(vec![leaf]),
                         block_size: None,
                     },
-                }))
-                .await?;
+                })
+            };
+            consumer.handle_event(&event).await?;
 
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {

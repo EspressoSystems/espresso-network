@@ -58,6 +58,8 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           commit-message: "chore: update deployment info"
+          author: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          committer: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
           title: "chore: update deployment info"
           body: |
             Automated update of deployment info from on-chain data.

@@ -51,7 +51,7 @@ pub struct SuccessThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for SuccessThreshold {
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
-        membership.success_threshold().await
+        membership.success_threshold()
     }
 }
 
@@ -61,7 +61,7 @@ pub struct OneHonestThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for OneHonestThreshold {
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
-        membership.failure_threshold().await
+        membership.failure_threshold()
     }
 }
 
@@ -71,7 +71,7 @@ pub struct UpgradeThreshold {}
 
 impl<TYPES: NodeType> Threshold<TYPES> for UpgradeThreshold {
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
-        membership.upgrade_threshold().await
+        membership.upgrade_threshold()
     }
 }
 
@@ -207,19 +207,19 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData>
         membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
     ) -> Option<PeerConfig<TYPES>> {
-        membership.da_stake(pub_key).await
+        membership.da_stake(pub_key)
     }
 
     /// Proxy's to `Membership.da_stake_table`
     async fn stake_table(membership: &EpochMembership<TYPES>) -> HSStakeTable<TYPES> {
-        membership.da_stake_table().await
+        membership.da_stake_table().collect()
     }
     /// Proxy's to `Membership.da_total_nodes`
     async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
-        membership.da_total_nodes().await
+        membership.da_total_nodes()
     }
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
-        membership.da_success_threshold().await
+        membership.da_success_threshold()
     }
     fn data(&self) -> &Self::Voteable {
         &self.data
@@ -287,19 +287,19 @@ impl<TYPES: NodeType, THRESHOLD: Threshold<TYPES>> Certificate<TYPES, DaData2>
         membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
     ) -> Option<PeerConfig<TYPES>> {
-        membership.da_stake(pub_key).await
+        membership.da_stake(pub_key)
     }
 
     /// Proxy's to `Membership.da_stake_table`
     async fn stake_table(membership: &EpochMembership<TYPES>) -> HSStakeTable<TYPES> {
-        membership.da_stake_table().await
+        membership.da_stake_table().collect()
     }
     /// Proxy's to `Membership.da_total_nodes`
     async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
-        membership.da_total_nodes().await
+        membership.da_total_nodes()
     }
     async fn threshold(membership: &EpochMembership<TYPES>) -> U256 {
-        membership.da_success_threshold().await
+        membership.da_success_threshold()
     }
     fn data(&self) -> &Self::Voteable {
         &self.data
@@ -373,16 +373,16 @@ impl<
         membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
     ) -> Option<PeerConfig<TYPES>> {
-        membership.stake(pub_key).await
+        membership.stake(pub_key)
     }
 
     async fn stake_table(membership: &EpochMembership<TYPES>) -> HSStakeTable<TYPES> {
-        membership.stake_table().await
+        membership.stake_table().collect()
     }
 
     /// Proxy's to `Membership.total_nodes`
     async fn total_nodes(membership: &EpochMembership<TYPES>) -> usize {
-        membership.total_nodes().await
+        membership.total_nodes()
     }
 
     fn data(&self) -> &Self::Voteable {
@@ -444,11 +444,11 @@ impl<TYPES: NodeType> UpgradeCertificate<TYPES> {
     ) -> Result<()> {
         ensure!(epoch == membership.epoch(), "Epochs don't match!");
         if let Some(cert) = upgrade_certificate {
-            let membership_stake_table = membership.stake_table().await;
-            let membership_upgrade_threshold = membership.upgrade_threshold().await;
+            let membership_stake_table = membership.stake_table();
+            let membership_upgrade_threshold = membership.upgrade_threshold();
 
             cert.is_valid_cert(
-                &StakeTableEntries::<TYPES>::from(membership_stake_table).0,
+                &StakeTableEntries::from_iter(membership_stake_table).0,
                 membership_upgrade_threshold,
                 upgrade_lock,
             )

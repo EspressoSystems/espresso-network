@@ -288,7 +288,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> VoteDependencyHand
             let Ok(current_epoch_membership) = self
                 .membership_coordinator
                 .stake_table_for_epoch(current_epoch)
-                .await
             else {
                 bail!(warn!(
                     "Couldn't acquire current epoch membership. Do not vote!"
@@ -297,7 +296,6 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> VoteDependencyHand
             let Ok(next_epoch_membership) = self
                 .membership_coordinator
                 .stake_table_for_epoch(next_epoch)
-                .await
             else {
                 bail!(warn!(
                     "Couldn't acquire next epoch membership. Do not vote!"
@@ -305,8 +303,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> VoteDependencyHand
             };
 
             // If we belong to both epochs, we require VID shares from both epochs.
-            if current_epoch_membership.has_stake(&self.public_key).await
-                && next_epoch_membership.has_stake(&self.public_key).await
+            if current_epoch_membership.has_stake(&self.public_key)
+                && next_epoch_membership.has_stake(&self.public_key)
             {
                 let other_target_epoch = if vid_share.data.target_epoch() == current_epoch {
                     maybe_current_epoch_vid_share = Some(vid_share.clone());
@@ -380,8 +378,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> VoteDependencyHand
         // and must therefore perform the full DRB catchup.
         let epoch_membership = self
             .membership_coordinator
-            .membership_for_epoch(cur_epoch)
-            .await?;
+            .membership_for_epoch(cur_epoch)?;
 
         let duration = now.elapsed();
         tracing::info!("membership_for_epoch time: {duration:?}");
@@ -401,7 +398,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> VoteDependencyHand
             .await;
         }
 
-        let leader = epoch_membership.leader(self.view_number).await;
+        let leader = epoch_membership.leader(self.view_number);
         if let (Ok(leader_key), Some(cur_epoch)) = (leader, cur_epoch) {
             self.consensus
                 .write()
@@ -705,13 +702,14 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumVoteTaskState<TYPES, I
 
                 let cert_epoch = cert.data.epoch;
 
-                let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch).await?;
-                let membership_da_stake_table = epoch_membership.da_stake_table().await;
-                let membership_da_success_threshold = epoch_membership.da_success_threshold().await;
+                let epoch_membership = self.membership.stake_table_for_epoch(cert_epoch)?;
+                let membership_da_stake_table =
+                    StakeTableEntries::from_iter(epoch_membership.da_stake_table()).0;
+                let membership_da_success_threshold = epoch_membership.da_success_threshold();
 
                 // Validate the DAC.
                 cert.is_valid_cert(
-                    &StakeTableEntries::<TYPES>::from(membership_da_stake_table).0,
+                    &membership_da_stake_table,
                     membership_da_success_threshold,
                     &self.upgrade_lock,
                 )
@@ -759,26 +757,18 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumVoteTaskState<TYPES, I
 
                 let vid_epoch = share.data.epoch();
                 let target_epoch = share.data.target_epoch();
-                let membership_reader = self.membership.membership_for_epoch(vid_epoch).await?;
+                let membership_reader = self.membership.membership_for_epoch(vid_epoch)?;
                 // ensure that the VID share was sent by a DA member OR the view leader
                 ensure!(
                     membership_reader
                         .da_committee_members(view)
-                        .await
-                        .contains(sender)
-                        || *sender == membership_reader.leader(view).await?,
+                        .any(|k| k == sender)
+                        || *sender == membership_reader.leader(view)?,
                     "VID share was not sent by a DA member or the view leader."
                 );
 
-                let total_weight = vid_total_weight::<TYPES>(
-                    &self
-                        .membership
-                        .membership_for_epoch(target_epoch)
-                        .await?
-                        .stake_table()
-                        .await,
-                    target_epoch,
-                );
+                let membership = self.membership.membership_for_epoch(target_epoch)?;
+                let total_weight = vid_total_weight(membership.stake_table(), target_epoch);
 
                 if !share.data.verify(total_weight) {
                     bail!("Failed to verify VID share");

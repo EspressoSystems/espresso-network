@@ -19,7 +19,10 @@ use committable::Committable;
 use futures::future::Future;
 use hotshot::types::EventType;
 use hotshot_types::{
-    data::{Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ns_table::parse_ns_table},
+    data::{
+        Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ViewNumber,
+        ns_table::parse_ns_table,
+    },
     event::LeafInfo,
     new_protocol::CoordinatorEvent,
     traits::{
@@ -182,7 +185,7 @@ where
                             Some(VidShare::V2(share.share.clone())),
                         ),
                         None => {
-                            if leaf2.view_number().u64() == 0 {
+                            if leaf2.view_number() == ViewNumber::genesis() {
                                 // HotShot does not run VID in consensus for the genesis block. In
                                 // this case, the block payload is guaranteed to always be empty, so
                                 // VID isn't really necessary. But for consistency, we will still
@@ -219,49 +222,38 @@ where
                     }
                 }
             },
-            CoordinatorEvent::NewDecide(decide) => {
-                let Some(leaf) = decide.leaves.first() else {
+            CoordinatorEvent::NewDecide {
+                leaf_infos,
+                cert1,
+                cert2,
+            } => {
+                let Some(first) = leaf_infos.first() else {
                     tracing::error!("new decide event contained no leaves");
                     return Ok(());
                 };
+                let first_leaf = &first.leaf;
 
-                if decide.vid_shares.len() != decide.leaves.len() {
-                    tracing::error!(
-                        height = leaf.height(),
-                        leaf_count = decide.leaves.len(),
-                        vid_share_count = decide.vid_shares.len(),
-                        "invalid new decide event: leaf/VID share count mismatch"
-                    );
-                    return Err(leaf.height());
-                }
-
-                if let Some(cert2) = &decide.cert2
-                    && cert2.data.leaf_commit != Committable::commit(leaf)
+                if let Some(cert2) = cert2
+                    && cert2.data.leaf_commit != Committable::commit(first_leaf)
                 {
                     tracing::error!(
-                        height = leaf.height(),
+                        height = first_leaf.height(),
                         cert2_leaf = %cert2.data.leaf_commit,
-                        newest_leaf = %Committable::commit(leaf),
+                        newest_leaf = %Committable::commit(first_leaf),
                         "new decide event cert2 does not certify the newest leaf"
                     );
-                    return Err(leaf.height());
+                    return Err(first_leaf.height());
                 }
 
                 // `cert1` certifies the newest leaf; each newer leaf's justify_qc
                 // certifies the next older leaf.
-                let certifying_qcs = once(decide.cert1.clone())
-                    .chain(decide.leaves.iter().map(|leaf| leaf.justify_qc()))
-                    .take(decide.leaves.len())
+                let certifying_qcs = once(cert1.clone())
+                    .chain(leaf_infos.iter().map(|info| info.leaf.justify_qc()))
+                    .take(leaf_infos.len())
                     .collect::<Vec<_>>();
 
-                for (index, ((leaf, vid_share), qc)) in decide
-                    .leaves
-                    .iter()
-                    .zip(&decide.vid_shares)
-                    .zip(certifying_qcs)
-                    .enumerate()
-                    .rev()
-                {
+                for (index, (info, qc)) in leaf_infos.iter().zip(certifying_qcs).enumerate().rev() {
+                    let leaf = &info.leaf;
                     let height = leaf.block_header().block_number();
 
                     let leaf_data = match LeafQueryData::new(leaf.clone(), qc) {
@@ -284,15 +276,33 @@ where
                     }
 
                     // Extract VID common data from the new protocol's VidDisperseShare2.
-                    let (vid_common, vid_share) = match vid_share {
-                        Some(share) => (
+                    let (vid_common, vid_share) = match &info.vid_share {
+                        Some(VidDisperseShare::V2(share)) => (
                             Some(VidCommonQueryData::new(
                                 leaf.block_header().clone(),
-                                VidCommon::V2(share.data.common.clone()),
+                                VidCommon::V2(share.common.clone()),
                             )),
-                            Some(VidShare::V2(share.data.share.clone())),
+                            Some(VidShare::V2(share.share.clone())),
                         ),
-                        None => (None, None),
+                        Some(_) => (None, None),
+                        None => {
+                            if leaf.view_number() == ViewNumber::genesis() {
+                                // HotShot does not run VID in consensus for the genesis block. In
+                                // this case, the block payload is guaranteed to always be empty, so
+                                // VID isn't really necessary. But for consistency, we will still
+                                // store the VID dispersal data, computing it ourselves based on the
+                                // well-known genesis VID commitment.
+                                match genesis_vid(leaf) {
+                                    Ok((common, share)) => (Some(common), Some(share)),
+                                    Err(err) => {
+                                        tracing::warn!("failed to compute genesis VID: {err:#}");
+                                        (None, None)
+                                    },
+                                }
+                            } else {
+                                (None, None)
+                            }
+                        },
                     };
 
                     if vid_common.is_none() {
@@ -306,7 +316,7 @@ where
                     // `cert2` finalizes that leaf directly
                     // older leaves in the batch are finalized using indirect rule
                     if index == 0
-                        && let Some(cert2) = &decide.cert2
+                        && let Some(cert2) = &cert2
                     {
                         info = info.with_cert2(cert2.clone());
                     }

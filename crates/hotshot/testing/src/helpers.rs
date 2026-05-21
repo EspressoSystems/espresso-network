@@ -8,7 +8,6 @@
 use std::{collections::BTreeMap, fmt::Debug, hash::Hash, marker::PhantomData, sync::Arc};
 
 use async_broadcast::{Receiver, Sender};
-use async_lock::RwLock;
 use bitvec::bitvec;
 use committable::Committable;
 use hotshot::{
@@ -18,6 +17,7 @@ use hotshot::{
 };
 use hotshot_example_types::{
     block_types::TestTransaction,
+    membership::TestableMembership,
     node_types::TestTypes,
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
@@ -36,7 +36,7 @@ use hotshot_types::{
     simple_vote::{DaData2, DaVote2, SimpleVote, VersionedVoteData},
     stake_table::StakeTableEntries,
     storage_metrics::StorageMetricsValue,
-    traits::{EncodeBytes, election::Membership, node_implementation::NodeType},
+    traits::{EncodeBytes, node_implementation::NodeType},
     utils::{View, ViewInner, option_epoch_from_block_number},
     vote::{Certificate, HasViewNumber, Vote},
 };
@@ -65,7 +65,7 @@ pub async fn build_system_handle<
     Arc<TestNodeKeyMap>,
 )
 where
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
 {
     let builder: TestDescription<TYPES, I> = TestDescription::default_multiple_rounds();
 
@@ -91,7 +91,7 @@ pub async fn build_system_handle_from_launcher<
     Arc<TestNodeKeyMap>,
 )
 where
-    <TYPES as NodeType>::Membership: Membership<TYPES>,
+    <TYPES as NodeType>::Membership: TestableMembership<TYPES>,
 {
     let network = (launcher.resource_generators.channel_generator)(node_id).await;
     let storage = (launcher.resource_generators.storage)(node_id);
@@ -128,15 +128,18 @@ where
     let public_key = validator_config.public_key.clone();
     let state_private_key = validator_config.state_private_key.clone();
 
-    let memberships = Arc::new(RwLock::new(TYPES::Membership::new(
+    let memberships = TYPES::Membership::new(
         hotshot_config.known_nodes_with_stake.clone(),
         hotshot_config.known_da_nodes.clone(),
         public_key.clone(),
         launcher.metadata.test_config.epoch_height,
-    )));
+    );
 
-    let coordinator =
-        EpochMembershipCoordinator::new(memberships, hotshot_config.epoch_height, &storage);
+    let coordinator = EpochMembershipCoordinator::new(
+        Arc::new(memberships),
+        hotshot_config.epoch_height,
+        &storage,
+    );
     let node_key_map = launcher.metadata.build_node_key_map();
 
     let (c, s, r) = SystemContext::init(
@@ -292,7 +295,7 @@ pub async fn da_payload_commitment<TYPES: NodeType>(
     vid_commitment(
         &encoded_transactions,
         &metadata.encode(),
-        membership.total_nodes().await,
+        membership.total_nodes(),
         version,
     )
 }
@@ -305,7 +308,7 @@ pub async fn build_payload_commitment<TYPES: NodeType>(
     // Make some empty encoded transactions, we just care about having a commitment handy for the
     // later calls. We need the VID commitment to be able to propose later.
     let encoded_transactions = Vec::new();
-    let num_storage_nodes = membership.committee_members(view).await.len();
+    let num_storage_nodes = membership.committee_members(view).len();
     vid_commitment(&encoded_transactions, &[], num_storage_nodes, version)
 }
 
@@ -375,7 +378,7 @@ pub async fn build_da_certificate<TYPES: NodeType>(
     let da_payload_commitment = vid_commitment(
         &encoded_transactions,
         &metadata.encode(),
-        membership.total_nodes().await,
+        membership.total_nodes(),
         upgrade_lock.version_infallible(view_number),
     );
 
@@ -384,11 +387,7 @@ pub async fn build_da_certificate<TYPES: NodeType>(
             Some(vid_commitment(
                 &encoded_transactions,
                 &metadata.encode(),
-                membership
-                    .next_epoch_stake_table()
-                    .await?
-                    .total_nodes()
-                    .await,
+                membership.next_epoch_stake_table()?.total_nodes(),
                 upgrade_lock.version_infallible(view_number),
             ))
         } else {
