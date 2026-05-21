@@ -1,41 +1,28 @@
-# Solidity guidance for agents
-
-Read [`../../AGENTS.md`](../../AGENTS.md) first for overview and cross-cutting rules.
+# Solidity
 
 ## Critical rules
 
-**NEVER:**
-
-- Modify V1 contract storage layout. V2 inherits V1; changing V1 storage breaks upgrades.
-
 **MUST:**
 
-- Emit events for all state changes external systems need to track.
-- Run `forge fmt` before committing.
+- Run `forge fmt` before committing
+- Emit events for all state changes external systems track
+- After ABI changes: `just gen-bindings`
+
+**NEVER:**
+
+- Modify V1 contract storage layout (V2 inherits V1; breaks upgrades). Storage is append-only across versions.
 
 ## Commands
 
 ```bash
-forge fmt
 forge test                            # unit tests
-just sol-test                         # full Solidity suite (unit, fuzz, invariant)
+just sol-test                         # full suite (unit, fuzz, invariant)
 just gen-bindings                     # regenerate Rust bindings after ABI changes
 ```
 
-## Code style
+## Project conventions
 
-- Use `forge fmt` (default rules) before committing.
 - Use `vm.expectEmit()` without arguments where possible in tests.
-- Upgradeable contracts: VN extends V(N-1). Never modify earlier storage; only append.
-- Emit events for every externally-observable state change.
-
-## Type and API design
-
-- Make storage layout explicit and append-only across versions.
-- Custom errors over `require(..., "string")` (cheaper and clearer at the bytecode level).
-- Use enums for state machines, not magic numbers.
-- Mark constants and immutables; don't waste storage slots on values that never change.
-- Restrict access with modifiers built from typed roles, not raw addresses.
 
 ## Key contracts (`contracts/src/`)
 
@@ -48,19 +35,11 @@ just gen-bindings                     # regenerate Rust bindings after ABI chang
 
 ## Version compatibility
 
-Contract ABIs are supersets across versions: V3 includes all V2 types, V2 includes all V1 types.
+ABIs are supersets across versions: V3 includes V2 includes V1.
 
-- **Runtime code** (contract calls, event decoding from Rust): always use the latest version's bindings (e.g.,
-  `StakeTableV3`).
-- **V1/V2 bindings**: only used in deploy/upgrade code.
-
-After changing a contract:
-
-1. `forge fmt`
-2. `just sol-test`
-3. `just gen-bindings` (regenerates Rust bindings)
-4. If storage layout changed, confirm V(N-1) layout is unchanged before merging.
+- Runtime code (contract calls, event decoding from Rust): use the latest bindings (`StakeTableV3`).
+- V1/V2 bindings: only for deploy/upgrade code.
 
 ## Upgrades
 
-See [`../smart-contract-upgrades.md`](../smart-contract-upgrades.md) for the upgrade process and proxy pattern details.
+See `doc/smart-contract-upgrades.md`.

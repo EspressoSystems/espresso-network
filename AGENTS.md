@@ -13,11 +13,8 @@ Espresso Network is a confirmation layer for Ethereum rollups, providing fast fi
 
 ## Where to look
 
-- **Working on Rust code** -> [`doc/agents/rust.md`](doc/agents/rust.md): commands, code style, type-driven design,
-  architecture details, testing, storage, APIs, debugging.
-- **Working on contracts** -> [`doc/agents/solidity.md`](doc/agents/solidity.md): forge commands, code style, contract
-  list, upgrade patterns.
-- **Cross-cutting rules** (everyone): read this file.
+- `doc/agents/rust.md`
+- `doc/agents/solidity.md`
 
 ## Writing Reviewable Code
 
@@ -44,9 +41,6 @@ Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 - Link the regression test or `reference` test when touching serializable types.
 - When work is ready suggest updated PR descriptions capturing the final changeset.
 
-Language-specific reviewability rules (type-driven design, etc.) live in [`doc/agents/rust.md`](doc/agents/rust.md) and
-[`doc/agents/solidity.md`](doc/agents/solidity.md).
-
 ## Architecture
 
 ### HotShot vs Espresso Network
@@ -56,9 +50,6 @@ Language-specific reviewability rules (type-driven design, etc.) live in [`doc/a
 - **Espresso Network** (`crates/espresso/node/`, `crates/espresso/types/`): application built on HotShot. Implements
   `NodeType` via `SeqTypes` in `crates/espresso/types/src/v0/mod.rs`. Handles L1 integration, namespaces, fees, rollup
   logic.
-
-Rust implementation details: see [`doc/agents/rust.md`](doc/agents/rust.md). Contracts: see
-[`doc/agents/solidity.md`](doc/agents/solidity.md).
 
 ### Transaction and block flow
 
@@ -71,7 +62,7 @@ Rust implementation details: see [`doc/agents/rust.md`](doc/agents/rust.md). Con
 
 ### L1 integration
 
-Uses **only finalized L1 blocks** to avoid reorgs.
+Uses **finalized L1 blocks** to avoid reorgs.
 
 - Headers carry `l1_finalized` referencing latest finalized L1 block. Proposal validation enforces non-decreasing.
 - Data read from L1: fee deposits (FeeContract), stake table events (ValidatorRegistered, Delegated, etc.).
@@ -110,8 +101,8 @@ operation. **Mainnet currently runs V0_4.**
 - V0_7, `Vid2UpgradeVersion`: VID2 / AvidmGf2 proofs (planned)
 
 **Fast finality** (post-V0_5, see `crates/hotshot/new-protocol/` and `doc/stake-table-fast-finality.md`): replaces CDN +
-libp2p networking with [`cliquenet`](crates/cliquenet/) (fully-connected mesh, x25519-encrypted). Validators register
-`x25519_key` and `p2p_addr` on the StakeTable contract for peer discovery.
+libp2p networking with `crates/cliquenet/` (fully-connected mesh, x25519-encrypted). Validators register `x25519_key`
+and `p2p_addr` on the StakeTable contract for peer discovery.
 
 ### Consensus upgrades
 
@@ -141,10 +132,13 @@ Useful paths (append to either base URL):
 - `/v0/config/hotshot` - HotShot config including `libp2p_config.bootstrap_nodes`
 - `/catchup/{height}/...` - state proofs (schema: `crates/espresso/node/api/catchup.toml`)
 
+## Logs
+
+See ./nix/pup/README.md
+
 ## Key files
 
 - `justfile` - build/test/deploy commands
-- `Cargo.toml` - workspace definition
 - `data/genesis/*.toml` - genesis configurations
 - `data/v1/`, `data/v2/`, etc. - reference serialization test vectors
 - `doc/upgrades.md` - upgrade mechanism
