@@ -1,18 +1,3 @@
-// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
-// This file is part of the HotShot repository.
-
-// You should have received a copy of the MIT License
-// along with the HotShot repository. If not, see <https://mit-license.org/>.
-
-//! Periodic aggregated summary of suppressed libp2p log noise.
-//!
-//! Many libp2p event-flow logs (dial timeouts, auth failures, DHT
-//! disagreements) are not individually actionable. They have been demoted to
-//! `debug!`; sites that demote call [`record`] to bump a process-global
-//! counter here. A background task emits one compact `info!` heartbeat per
-//! `SUMMARY_INTERVAL` listing only the non-zero counters. Chartable metrics
-//! belong in `Libp2pMetricsValue` (Prometheus), not here.
-
 use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
