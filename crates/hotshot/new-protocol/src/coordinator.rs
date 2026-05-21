@@ -646,38 +646,40 @@ where
                 );
             },
             ConsensusOutput::SendVidShares(vid_shares) => {
+                // Fan-out the N share unicasts on a dedicated blocking task so
+                // the coordinator's main tokio task can continue.
+                let sender = self.network.sender(); // cheap clone
+                let public_key = self.public_key.clone();
+                let tracer = self.consensus.tracer.clone();
                 let trace_view: u64 = vid_shares
                     .first()
                     .map(|s| *s.data.view_number())
                     .unwrap_or(0);
-                crate::trace_leader_event!(
-                    self.consensus.tracer,
-                    trace_view,
-                    crate::leader_trace::LeaderEvent::VidSharesUnicastStart
-                );
-                for share in vid_shares {
-                    let recipient = share.data.recipient_key.clone();
-                    let message = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(ConsensusMessage::VidShare(share)),
-                    };
-                    if let Err(err) =
-                        self.network
-                            .unicast(message.view_number(), &recipient, &message)
-                    {
-                        let err = CoordinatorError::from(err).context("vid share unicast");
-                        if err.severity == Severity::Critical {
-                            return Err(err);
-                        } else {
-                            warn!(%err, "network error while sending vid share")
+                tokio::task::spawn_blocking(move || {
+                    crate::trace_leader_event!(
+                        tracer,
+                        trace_view,
+                        crate::leader_trace::LeaderEvent::VidSharesUnicastStart
+                    );
+                    for share in vid_shares {
+                        let recipient = share.data.recipient_key.clone();
+                        let view = share.data.view_number();
+                        let message = Message {
+                            sender: public_key.clone(),
+                            message_type: MessageType::Consensus(ConsensusMessage::VidShare(share)),
+                        };
+                        if let Err(err) = crate::network::NetworkSender::unicast(
+                            &sender, view, &recipient, &message,
+                        ) {
+                            warn!(%err, "network error while sending vid share");
                         }
                     }
-                }
-                crate::trace_leader_event!(
-                    self.consensus.tracer,
-                    trace_view,
-                    crate::leader_trace::LeaderEvent::VidSharesUnicastEnd
-                );
+                    crate::trace_leader_event!(
+                        tracer,
+                        trace_view,
+                        crate::leader_trace::LeaderEvent::VidSharesUnicastEnd
+                    );
+                });
             },
             ConsensusOutput::SendBlockToLeader { next_leader, block } => {
                 let view = block.view;

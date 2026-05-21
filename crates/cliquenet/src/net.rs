@@ -199,10 +199,88 @@ impl NetworkReceiver {
     }
 }
 
+/// Clone-able send-only handle. Hand out via `NetworkController::cmd_sender()`
+/// so background tasks can drive unicast/broadcast/multicast without exclusive
+/// access to the controller.
+#[derive(Clone)]
+pub struct CmdSender {
+    conf: Arc<Config>,
+    node: PublicKey,
+    tx: UnboundedSender<Command>,
+}
+
+impl CmdSender {
+    pub fn unicast(&self, s: Slot, to: PublicKey, msg: Vec<u8>) -> Result<(), NetworkError> {
+        self.length_check(&msg)?;
+        let cmd = SendCommand::builder()
+            .slot(s)
+            .action(SendAction::Unicast(to, msg))
+            .build();
+        self.tx
+            .send(Command::Send(cmd))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    pub fn broadcast(&self, s: Slot, msg: Vec<u8>) -> Result<(), NetworkError> {
+        self.length_check(&msg)?;
+        let cmd = SendCommand::builder()
+            .slot(s)
+            .action(SendAction::Broadcast(msg))
+            .build();
+        self.tx
+            .send(Command::Send(cmd))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    pub fn multicast<P>(&self, s: Slot, to: P, msg: Vec<u8>) -> Result<(), NetworkError>
+    where
+        P: IntoIterator<Item = PublicKey>,
+    {
+        self.length_check(&msg)?;
+        let cmd = SendCommand::builder()
+            .slot(s)
+            .action(SendAction::Multicast(to.into_iter().collect(), msg))
+            .build();
+        self.tx
+            .send(Command::Send(cmd))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    pub fn send(&self, cmd: SendCommand) -> Result<(), NetworkError> {
+        self.length_check(msg_bytes(&cmd))?;
+        self.tx
+            .send(Command::Send(cmd))
+            .map_err(|_| NetworkError::ChannelClosed)
+    }
+
+    fn length_check(&self, msg: &[u8]) -> Result<(), NetworkError> {
+        if msg.len() > self.conf.max_message_size.get() {
+            warn!(
+                name = %self.conf.name,
+                node = %self.node,
+                len  = %msg.len(),
+                max  = %self.conf.max_message_size,
+                "message too large to send"
+            );
+            return Err(NetworkError::MessageTooLarge);
+        }
+        Ok(())
+    }
+}
+
 impl NetworkController {
     /// Iterate over all parties.
     pub fn parties(&self) -> impl Iterator<Item = (&PublicKey, &Role)> {
         self.parties.iter()
+    }
+
+    /// Return a Clone-able send-only handle.
+    pub fn cmd_sender(&self) -> CmdSender {
+        CmdSender {
+            conf: self.conf.clone(),
+            node: self.node,
+            tx: self.tx.clone(),
+        }
     }
 
     /// Send a message to a party, identified by the given public key.

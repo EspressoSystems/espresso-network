@@ -10,8 +10,28 @@ use crate::message::{Message, Unchecked, Validated};
 
 type Result<T> = std::result::Result<T, NetworkError>;
 
+/// Clone-able send-only handle to a `Network<T>`.
+///
+/// Designed for handing into spawned background tasks (e.g. `spawn_blocking`)
+/// so they can drive sends without holding `&mut self` on the network. Only
+/// covers unicast — broadcast/multicast can be added if needed.
+pub trait NetworkSender<T: NodeType>: Send + Sync + 'static {
+    fn unicast(
+        &self,
+        v: ViewNumber,
+        to: &T::SignatureKey,
+        m: &Message<T, Validated>,
+    ) -> Result<()>;
+}
+
 pub trait Network<T: NodeType> {
     type PeerData;
+    /// Clone-able send-only handle. Cheap to clone; intended for spawned tasks.
+    type Sender: NetworkSender<T> + Clone + 'static;
+
+    /// Snapshot a send-only handle. The handle borrows nothing from the
+    /// `Network`; safe to move into spawned tasks.
+    fn sender(&self) -> Self::Sender;
 
     fn broadcast(&mut self, v: ViewNumber, m: &Message<T, Validated>) -> Result<()>;
 
