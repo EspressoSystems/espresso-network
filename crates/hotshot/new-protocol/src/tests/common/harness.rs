@@ -89,6 +89,7 @@ impl TestHarness {
             upgrade_lock.clone(),
             genesis_leaf.clone(),
             epoch_height,
+            100,
         );
 
         let vid_disperse_task = VidDisperser::new(membership.clone());
