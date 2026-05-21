@@ -4,7 +4,7 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::{collections::HashMap, sync::atomic::Ordering};
+use std::collections::HashMap;
 
 use libp2p::request_response::{Event, Message, OutboundRequestId, ResponseChannel};
 use libp2p_identity::PeerId;
@@ -12,7 +12,7 @@ use tokio::{spawn, sync::mpsc::UnboundedSender, time::sleep};
 use tracing::debug;
 
 use super::exponential_backoff::ExponentialBackoff;
-use crate::network::{ClientRequest, NetworkEvent, log_summary};
+use crate::network::{ClientRequest, NetworkEvent, log_summary::LogEvent};
 
 /// Request to direct message a peert
 #[derive(Debug)]
@@ -58,7 +58,7 @@ impl DMBehaviour {
                 error,
                 connection_id: _,
             } => {
-                log_summary::DIRECT_MESSAGE_INBOUND_FAILURES.fetch_add(1, Ordering::Relaxed);
+                LogEvent::DirectMessageInboundFailure.record();
                 debug!("Inbound message failure from {:?}: {:?}", peer, error);
                 None
             },
@@ -68,7 +68,7 @@ impl DMBehaviour {
                 error,
                 connection_id: _,
             } => {
-                log_summary::DIRECT_MESSAGE_OUTBOUND_FAILURES.fetch_add(1, Ordering::Relaxed);
+                LogEvent::DirectMessageOutboundFailure.record();
                 debug!("Outbound message failure to {:?}: {:?}", peer, error);
                 if let Some(mut req) = self.in_progress_rr.remove(&request_id) {
                     if req.retry_count == 0 {

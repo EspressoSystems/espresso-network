@@ -6,10 +6,7 @@
 
 /// Task for doing bootstraps at a regular interval
 pub mod bootstrap;
-use std::{
-    collections::HashMap, marker::PhantomData, num::NonZeroUsize, sync::atomic::Ordering,
-    time::Duration,
-};
+use std::{collections::HashMap, marker::PhantomData, num::NonZeroUsize, time::Duration};
 
 /// a local caching layer for the DHT key value pairs
 use futures::{
@@ -45,7 +42,7 @@ lazy_static! {
 }
 
 use super::exponential_backoff::ExponentialBackoff;
-use crate::network::{ClientRequest, NetworkEvent, log_summary};
+use crate::network::{ClientRequest, NetworkEvent, log_summary::LogEvent};
 
 /// Behaviour wrapping libp2p's kademlia
 /// included:
@@ -285,7 +282,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     },
                 },
                 Err(err) => {
-                    log_summary::DHT_KAD_QUERY_ERRORS.fetch_add(1, Ordering::Relaxed);
+                    LogEvent::DhtKadQueryError.record();
                     debug!("Error in Kademlia query: {err:?}");
                     false
                 },
@@ -358,7 +355,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                         records: Vec::new(),
                     });
                 }
-                log_summary::DHT_DISAGREEMENTS_GIVEN_UP.fetch_add(1, Ordering::Relaxed);
+                LogEvent::DhtDisagreementGivenUp.record();
                 debug!(
                     "Get DHT: Internal disagreement for get dht request {progress:?}! Giving up \
                      because out of retries. "
@@ -445,7 +442,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     if let Some(chan) = self.in_progress_get_closest_peers.remove(&query_id) {
                         let _: Result<_, _> = chan.send(());
                     };
-                    log_summary::DHT_CLOSEST_PEERS_FAILURES.fetch_add(1, Ordering::Relaxed);
+                    LogEvent::DhtClosestPeersFailure.record();
                     debug!("Failed to get closest peers: {e:?}");
                 },
             },

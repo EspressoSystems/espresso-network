@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     iter,
     num::{NonZeroU32, NonZeroUsize},
-    sync::{Arc, atomic::Ordering},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -76,7 +76,7 @@ use crate::network::{
         direct_message::{DMBehaviour, DMRequest},
         exponential_backoff::ExponentialBackoff,
     },
-    log_summary,
+    log_summary::LogEvent,
 };
 
 /// Maximum size of a message
@@ -679,7 +679,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             None
                         },
                         GossipEvent::GossipsubNotSupported { peer_id } => {
-                            log_summary::GOSSIPSUB_NOT_SUPPORTED.fetch_add(1, Ordering::Relaxed);
+                            LogEvent::GossipsubNotSupported.record();
                             debug!("Peer {peer_id:?} does not support gossipsub");
                             None
                         },
@@ -687,7 +687,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             peer_id,
                             failed_messages: _,
                         } => {
-                            log_summary::GOSSIPSUB_SLOW_PEER.fetch_add(1, Ordering::Relaxed);
+                            LogEvent::GossipsubSlowPeer.record();
                             debug!("Peer {peer_id:?} is slow");
                             None
                         },
@@ -762,7 +762,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 peer_id,
                 error,
             } => {
-                log_summary::DIAL_FAILURES.fetch_add(1, Ordering::Relaxed);
+                LogEvent::DialFailure.record();
                 debug!("Outgoing connection error to {peer_id:?}: {error:?}");
             },
             SwarmEvent::IncomingConnectionError {
@@ -772,14 +772,14 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 error,
                 peer_id: _,
             } => {
-                log_summary::INCOMING_CONN_ERRORS.fetch_add(1, Ordering::Relaxed);
+                LogEvent::IncomingConnError.record();
                 debug!("Incoming connection error: {error:?}");
             },
             SwarmEvent::ListenerError {
                 listener_id: _,
                 error,
             } => {
-                log_summary::LISTENER_ERRORS.fetch_add(1, Ordering::Relaxed);
+                LogEvent::ListenerError.record();
                 debug!("Listener error: {error:?}");
             },
             SwarmEvent::ExternalAddrConfirmed { address } => {

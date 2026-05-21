@@ -39,7 +39,8 @@ use hotshot_libp2p_networking::{
             record::{Namespace, RecordKey, RecordValue},
             store::persistent::DhtPersistentStorage,
         },
-        log_summary, spawn_network_node,
+        log_summary::LogEvent,
+        spawn_network_node,
         transport::construct_auth_message,
     },
     reexport::Multiaddr,
@@ -609,7 +610,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 if latest_seen_view.load(Ordering::Relaxed) + THRESHOLD <= *view_number {
                     // look up
                     if let Err(err) = handle.lookup_node(&pk, dht_timeout).await {
-                        log_summary::DHT_LOOKUP_FAILURES.fetch_add(1, Ordering::Relaxed);
+                        LogEvent::DhtLookupFailure.record();
                         debug!("Failed to perform lookup for key {pk}: {err}");
                     };
                 }

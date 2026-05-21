@@ -1,3 +1,18 @@
+// Copyright (c) 2021-2024 Espresso Systems (espressosys.com)
+// This file is part of the HotShot repository.
+
+// You should have received a copy of the MIT License
+// along with the HotShot repository. If not, see <https://mit-license.org/>.
+
+//! Periodic aggregated summary of suppressed libp2p log noise.
+//!
+//! Many libp2p event-flow logs (dial timeouts, auth failures, DHT
+//! disagreements) are not individually actionable. They have been demoted to
+//! `debug!`; sites that demote call [`record`] to bump a process-global
+//! counter here. A background task emits one compact `info!` heartbeat per
+//! `SUMMARY_INTERVAL` listing only the non-zero counters. Chartable metrics
+//! belong in `Libp2pMetricsValue` (Prometheus), not here.
+
 use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::Duration,
@@ -8,41 +23,52 @@ use tracing::info;
 
 pub const SUMMARY_INTERVAL: Duration = Duration::from_secs(60);
 
-macro_rules! counters {
-    ($($name:ident),* $(,)?) => {
-        $(pub static $name: AtomicU64 = AtomicU64::new(0);)*
+macro_rules! events {
+    ($($variant:ident => $name:literal),* $(,)?) => {
+        #[derive(Clone, Copy)]
+        #[repr(usize)]
+        pub enum LogEvent {
+            $($variant),*
+        }
 
-        const COUNTERS: &[(&str, &AtomicU64)] = &[
-            $((stringify!($name), &$name),)*
-        ];
+        const NAMES: &[&str] = &[$($name),*];
+        static COUNTERS: [AtomicU64; NAMES.len()] =
+            [const { AtomicU64::new(0) }; NAMES.len()];
     };
 }
 
-counters! {
-    AUTH_FAILURES,
-    AUTH_HANDSHAKE_TIMEOUTS,
-    DHT_CLOSEST_PEERS_FAILURES,
-    DHT_DISAGREEMENTS_GIVEN_UP,
-    DHT_KAD_QUERY_ERRORS,
-    DHT_LOOKUP_FAILURES,
-    DIAL_FAILURES,
-    DIRECT_MESSAGE_INBOUND_FAILURES,
-    DIRECT_MESSAGE_OUTBOUND_FAILURES,
-    GOSSIP_PUBLISH_FAILURES,
-    GOSSIPSUB_NOT_SUPPORTED,
-    GOSSIPSUB_SLOW_PEER,
-    INCOMING_CONN_ERRORS,
-    LISTENER_ERRORS,
-    NETWORK_SEND_FAILURES,
-    VERIFY_FAILURES,
+events! {
+    AuthFailure => "auth_failures",
+    AuthHandshakeTimeout => "auth_handshake_timeouts",
+    DhtClosestPeersFailure => "dht_closest_peers_failures",
+    DhtDisagreementGivenUp => "dht_disagreements_given_up",
+    DhtKadQueryError => "dht_kad_query_errors",
+    DhtLookupFailure => "dht_lookup_failures",
+    DialFailure => "dial_failures",
+    DirectMessageInboundFailure => "direct_message_inbound_failures",
+    DirectMessageOutboundFailure => "direct_message_outbound_failures",
+    GossipPublishFailure => "gossip_publish_failures",
+    GossipsubNotSupported => "gossipsub_not_supported",
+    GossipsubSlowPeer => "gossipsub_slow_peer",
+    IncomingConnError => "incoming_conn_errors",
+    ListenerError => "listener_errors",
+    NetworkSendFailure => "network_send_failures",
+    VerifyFailure => "verify_failures",
+}
+
+impl LogEvent {
+    pub fn record(self) {
+        COUNTERS[self as usize].fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 fn drain_and_format() -> Option<String> {
     let parts: Vec<String> = COUNTERS
         .iter()
-        .filter_map(|(name, counter)| {
+        .zip(NAMES.iter())
+        .filter_map(|(counter, name)| {
             let value = counter.swap(0, Ordering::Relaxed);
-            (value != 0).then(|| format!("{}={value}", name.to_ascii_lowercase()))
+            (value != 0).then(|| format!("{name}={value}"))
         })
         .collect();
     (!parts.is_empty()).then(|| parts.join(" "))
@@ -79,7 +105,7 @@ mod tests {
 
     use tracing_test::traced_test;
 
-    use super::{AUTH_FAILURES, COUNTERS, DIAL_FAILURES, drain_and_format, emit_summary};
+    use super::{COUNTERS, LogEvent, drain_and_format, emit_summary};
 
     fn test_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -89,7 +115,7 @@ mod tests {
     }
 
     fn reset() {
-        for (_, c) in COUNTERS {
+        for c in COUNTERS.iter() {
             c.store(0, Ordering::Relaxed);
         }
     }
@@ -102,8 +128,12 @@ mod tests {
         emit_summary();
         assert!(!logs_contain("libp2p"));
 
-        DIAL_FAILURES.store(3, Ordering::Relaxed);
-        AUTH_FAILURES.store(5, Ordering::Relaxed);
+        for _ in 0..3 {
+            LogEvent::DialFailure.record();
+        }
+        for _ in 0..5 {
+            LogEvent::AuthFailure.record();
+        }
         emit_summary();
         assert!(logs_contain("libp2p 60s summary:"));
         assert!(logs_contain("auth_failures=5"));
@@ -122,7 +152,7 @@ mod tests {
             for _ in 0..THREADS {
                 s.spawn(|| {
                     for _ in 0..PER_THREAD {
-                        DIAL_FAILURES.fetch_add(1, Ordering::Relaxed);
+                        LogEvent::DialFailure.record();
                     }
                 });
             }

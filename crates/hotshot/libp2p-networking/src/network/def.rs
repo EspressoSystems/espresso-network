@@ -4,8 +4,6 @@
 // You should have received a copy of the MIT License
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
-use std::sync::atomic::Ordering;
-
 use hotshot_types::traits::signature_key::SignatureKey;
 use libp2p::{
     Multiaddr, autonat,
@@ -24,7 +22,8 @@ use super::{
         persistent::{DhtPersistentStorage, PersistentStore},
         validated::ValidatedStore,
     },
-    cbor, log_summary,
+    cbor,
+    log_summary::LogEvent,
 };
 
 /// Overarching network behaviour performing:
@@ -100,7 +99,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> NetworkDef<K, D> {
     /// Publish a given gossip
     pub fn publish_gossip(&mut self, topic: IdentTopic, contents: Vec<u8>) {
         if let Err(e) = self.gossipsub.publish(topic, contents) {
-            log_summary::GOSSIP_PUBLISH_FAILURES.fetch_add(1, Ordering::Relaxed);
+            LogEvent::GossipPublishFailure.record();
             tracing::debug!("Failed to publish gossip message. Error: {:?}", e);
         }
     }
