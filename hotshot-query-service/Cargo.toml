@@ -130,5 +130,9 @@ test-log = { workspace = true }
 name = "simple-server"
 required-features = ["sql-data-source", "testing"]
 
+[[example]]
+name = "migration_traits"
+required-features = ["sql-data-source", "testing"]
+
 [lints]
 workspace = true
