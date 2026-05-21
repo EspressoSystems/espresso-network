@@ -25,7 +25,6 @@ import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -40,14 +39,6 @@ WIPE_FS_NODE = 4
 WIPE_PG_NODE = 1
 NEW_NODE_INDEX = 5
 NEW_NODE_API_PORT = 24005
-
-
-class Scenario(StrEnum):
-    VANILLA = "vanilla"
-    NEW_FROM_OLD_FS = "new-from-old-fs"
-    NEW_FROM_OLD_PG = "new-from-old-pg"
-    OLD_FROM_NEW_FS = "old-from-new-fs"
-    OLD_FROM_NEW_PG = "old-from-new-pg"
 
 
 # Services NOT touched by the binary upgrade test:
@@ -130,8 +121,8 @@ Action = Roll | Wipe | JoinNode | UpgradeSupportServices | AssertImages | SmokeT
 # Scenarios
 # ---------------------------------------------------------------------------
 
-SCENARIOS: dict[Scenario, list[Action]] = {
-    Scenario.VANILLA: [
+SCENARIOS: dict[str, list[Action]] = {
+    "vanilla": [
         SmokeTest(tag_source="base"),
         Roll(0),
         Roll(1),
@@ -142,7 +133,7 @@ SCENARIOS: dict[Scenario, list[Action]] = {
         AssertImages(),
         SmokeTest(),
     ],
-    Scenario.NEW_FROM_OLD_FS: [
+    "new-from-old-fs": [
         SmokeTest(tag_source="base"),
         Roll(WIPE_FS_NODE),
         Wipe(WIPE_FS_NODE, backend="fs"),
@@ -154,7 +145,7 @@ SCENARIOS: dict[Scenario, list[Action]] = {
         AssertImages(),
         SmokeTest(),
     ],
-    Scenario.NEW_FROM_OLD_PG: [
+    "new-from-old-pg": [
         SmokeTest(tag_source="base"),
         Roll(WIPE_PG_NODE),
         Wipe(WIPE_PG_NODE, backend="pg"),
@@ -166,7 +157,7 @@ SCENARIOS: dict[Scenario, list[Action]] = {
         AssertImages(),
         SmokeTest(),
     ],
-    Scenario.OLD_FROM_NEW_FS: [
+    "old-from-new-fs": [
         SmokeTest(tag_source="base"),
         Roll(0),
         Roll(1),
@@ -177,7 +168,7 @@ SCENARIOS: dict[Scenario, list[Action]] = {
         AssertImages(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_FS_OVERLAY),
     ],
-    Scenario.OLD_FROM_NEW_PG: [
+    "old-from-new-pg": [
         SmokeTest(tag_source="base"),
         Roll(0),
         Roll(1),
@@ -881,9 +872,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument(
         "--scenario",
-        type=Scenario,
-        choices=list(Scenario),
-        default=Scenario.VANILLA,
+        choices=list(SCENARIOS),
+        default="vanilla",
     )
     parser.add_argument(
         "--pull-only",
