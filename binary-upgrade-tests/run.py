@@ -86,6 +86,110 @@ LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml
 
 YYYYMMDD_TAG_PATTERN = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
 
+# ---------------------------------------------------------------------------
+# Action types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Roll:
+    idx: int
+
+
+@dataclass(frozen=True)
+class Wipe:
+    idx: int
+    backend: Literal["fs", "pg"]
+
+
+@dataclass(frozen=True)
+class JoinNode:
+    idx: int
+    overlay: Path
+    timeout: float = 300.0
+
+
+@dataclass(frozen=True)
+class UpgradeSupportServices:
+    pass
+
+
+@dataclass(frozen=True)
+class AssertImages:
+    pass
+
+
+@dataclass(frozen=True)
+class SmokeTest:
+    tag_source: Literal["base", "upgrade"] = "upgrade"
+
+
+Action = Roll | Wipe | JoinNode | UpgradeSupportServices | AssertImages | SmokeTest
+
+# ---------------------------------------------------------------------------
+# Scenarios
+# ---------------------------------------------------------------------------
+
+SCENARIOS: dict[Scenario, list[Action]] = {
+    Scenario.VANILLA: [
+        SmokeTest(tag_source="base"),
+        Roll(0),
+        Roll(1),
+        Roll(2),
+        Roll(3),
+        Roll(4),
+        UpgradeSupportServices(),
+        AssertImages(),
+        SmokeTest(),
+    ],
+    Scenario.NEW_FROM_OLD_FS: [
+        SmokeTest(tag_source="base"),
+        Roll(WIPE_FS_NODE),
+        Wipe(WIPE_FS_NODE, backend="fs"),
+        Roll(0),
+        Roll(1),
+        Roll(2),
+        Roll(3),
+        UpgradeSupportServices(),
+        AssertImages(),
+        SmokeTest(),
+    ],
+    Scenario.NEW_FROM_OLD_PG: [
+        SmokeTest(tag_source="base"),
+        Roll(WIPE_PG_NODE),
+        Wipe(WIPE_PG_NODE, backend="pg"),
+        Roll(0),
+        Roll(2),
+        Roll(3),
+        Roll(4),
+        UpgradeSupportServices(),
+        AssertImages(),
+        SmokeTest(),
+    ],
+    Scenario.OLD_FROM_NEW_FS: [
+        SmokeTest(tag_source="base"),
+        Roll(0),
+        Roll(1),
+        Roll(2),
+        Roll(3),
+        Roll(4),
+        UpgradeSupportServices(),
+        AssertImages(),
+        JoinNode(NEW_NODE_INDEX, overlay=NODE_5_FS_OVERLAY),
+    ],
+    Scenario.OLD_FROM_NEW_PG: [
+        SmokeTest(tag_source="base"),
+        Roll(0),
+        Roll(1),
+        Roll(2),
+        Roll(3),
+        Roll(4),
+        UpgradeSupportServices(),
+        AssertImages(),
+        JoinNode(NEW_NODE_INDEX, overlay=NODE_5_PG_OVERLAY),
+    ],
+}
+
 
 def yyyymmdd_tags() -> list[str]:
     out = subprocess.check_output(
@@ -626,154 +730,11 @@ def compose_session(config: Config):
 
 
 # ---------------------------------------------------------------------------
-# Action types
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Boot:
-    pass
-
-
-@dataclass(frozen=True)
-class Roll:
-    idx: int
-
-
-@dataclass(frozen=True)
-class Wipe:
-    idx: int
-    backend: Literal["fs", "pg"]
-
-
-@dataclass(frozen=True)
-class Restart:
-    idx: int
-    tag_source: Literal["base", "upgrade"] = "upgrade"
-
-
-@dataclass(frozen=True)
-class JoinNode:
-    idx: int
-    overlay: Path
-    tag_source: Literal["base", "upgrade"] = "base"
-
-
-@dataclass(frozen=True)
-class WaitStorage:
-    idx: int
-    peer_idxs: tuple[int, ...]
-    timeout: float = 240.0
-
-
-@dataclass(frozen=True)
-class BulkUpgrade:
-    pass
-
-
-@dataclass(frozen=True)
-class AssertImages:
-    pass
-
-
-@dataclass(frozen=True)
-class SmokeTest:
-    tag_source: Literal["base", "upgrade"] = "upgrade"
-
-
-Action = (
-    Boot
-    | Roll
-    | Wipe
-    | Restart
-    | JoinNode
-    | WaitStorage
-    | BulkUpgrade
-    | AssertImages
-    | SmokeTest
-)
-
-# ---------------------------------------------------------------------------
-# Scenarios
-# ---------------------------------------------------------------------------
-
-SCENARIOS: dict[Scenario, list[Action]] = {
-    Scenario.VANILLA: [
-        Boot(),
-        SmokeTest(tag_source="base"),
-        Roll(0),
-        Roll(1),
-        Roll(2),
-        Roll(3),
-        Roll(4),
-        BulkUpgrade(),
-        AssertImages(),
-        SmokeTest(),
-    ],
-    Scenario.NEW_FROM_OLD_FS: [
-        Boot(),
-        SmokeTest(tag_source="base"),
-        Roll(WIPE_FS_NODE),
-        Wipe(WIPE_FS_NODE, backend="fs"),
-        Restart(WIPE_FS_NODE),
-        WaitStorage(WIPE_FS_NODE, peer_idxs=(0, 1, 2, 3)),
-        Roll(0),
-        Roll(1),
-        Roll(2),
-        Roll(3),
-        BulkUpgrade(),
-        AssertImages(),
-        SmokeTest(),
-    ],
-    Scenario.NEW_FROM_OLD_PG: [
-        Boot(),
-        SmokeTest(tag_source="base"),
-        Roll(WIPE_PG_NODE),
-        Wipe(WIPE_PG_NODE, backend="pg"),
-        Restart(WIPE_PG_NODE),
-        WaitStorage(WIPE_PG_NODE, peer_idxs=(0, 2, 3, 4)),
-        Roll(0),
-        Roll(2),
-        Roll(3),
-        Roll(4),
-        BulkUpgrade(),
-        AssertImages(),
-        SmokeTest(),
-    ],
-    Scenario.OLD_FROM_NEW_FS: [
-        Boot(),
-        SmokeTest(tag_source="base"),
-        Roll(0),
-        Roll(1),
-        Roll(2),
-        Roll(3),
-        Roll(4),
-        BulkUpgrade(),
-        AssertImages(),
-        JoinNode(NEW_NODE_INDEX, overlay=NODE_5_FS_OVERLAY),
-        WaitStorage(NEW_NODE_INDEX, peer_idxs=NODE_INDICES, timeout=300.0),
-    ],
-    Scenario.OLD_FROM_NEW_PG: [
-        Boot(),
-        SmokeTest(tag_source="base"),
-        Roll(0),
-        Roll(1),
-        Roll(2),
-        Roll(3),
-        Roll(4),
-        BulkUpgrade(),
-        AssertImages(),
-        JoinNode(NEW_NODE_INDEX, overlay=NODE_5_PG_OVERLAY),
-        WaitStorage(NEW_NODE_INDEX, peer_idxs=NODE_INDICES, timeout=300.0),
-    ],
-}
-
-# ---------------------------------------------------------------------------
 # Action implementations
 # ---------------------------------------------------------------------------
 
 
-def _boot(compose: Compose, config: Config) -> None:
+def _boot_network(compose: Compose, config: Config) -> None:
     compose.run("down", "-v", check=False, capture=True)
     log.info(f"Starting network on {config.base_tag}")
     # `compose up -d` blocks on `depends_on: service_completed_successfully`,
@@ -849,9 +810,8 @@ def _restart_with_config_peer(compose: Compose, idx: int, tag: str) -> None:
     )
 
 
-def _wait_storage(
-    compose: Compose, idx: int, peer_idxs: tuple[int, ...], timeout: float
-) -> None:
+def _wait_storage(compose: Compose, idx: int, timeout: float) -> None:
+    peer_idxs = tuple(i for i in NODE_INDICES if i != idx)
     peers = [n for i in peer_idxs if (n := Node.from_index(i)).has_query]
     heights = [h for p in peers if (h := p.storage_height()) is not None]
     if not heights:
@@ -872,34 +832,26 @@ def _wait_storage(
 
 def _execute(action: Action, compose: Compose, config: Config) -> None:
     match action:
-        case Boot():
-            _boot(compose, config)
-
         case Roll(idx=idx):
             _roll(compose, idx, config.upgrade_tag)
 
-        case Wipe(idx=idx, backend="fs"):
-            compose.wipe_fs_node(idx)
+        case Wipe(idx=idx, backend=backend):
+            if backend == "fs":
+                compose.wipe_fs_node(idx)
+            else:
+                compose.wipe_pg_node(idx)
+            _restart_with_config_peer(compose, idx, config.upgrade_tag)
+            _wait_storage(compose, idx, timeout=240.0)
 
-        case Wipe(idx=idx, backend="pg"):
-            compose.wipe_pg_node(idx)
-
-        case Restart(idx=idx, tag_source=src):
-            tag = config.base_tag if src == "base" else config.upgrade_tag
-            _restart_with_config_peer(compose, idx, tag)
-
-        case JoinNode(idx=idx, overlay=overlay, tag_source=src):
-            tag = config.base_tag if src == "base" else config.upgrade_tag
+        case JoinNode(idx=idx, overlay=overlay, timeout=timeout):
             os.environ[f"ESPRESSO_NODE_{idx}_API_PORT"] = str(NEW_NODE_API_PORT)
-            log.info(f"Starting espresso-node-{idx} on tag {tag}")
+            log.info(f"Starting espresso-node-{idx} on tag {config.base_tag}")
             compose.with_overlays(overlay).run(
-                "up", "-d", f"espresso-node-{idx}", docker_tag=tag
+                "up", "-d", f"espresso-node-{idx}", docker_tag=config.base_tag
             )
+            _wait_storage(compose, idx, timeout=timeout)
 
-        case WaitStorage(idx=idx, peer_idxs=peer_idxs, timeout=timeout):
-            _wait_storage(compose, idx, peer_idxs, timeout)
-
-        case BulkUpgrade():
+        case UpgradeSupportServices():
             log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
             compose.bulk_upgrade_remaining(config.upgrade_tag)
 
@@ -919,6 +871,7 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
 
 
 def run_scenario(actions: list[Action], compose: Compose, config: Config) -> None:
+    _boot_network(compose, config)
     for action in actions:
         _execute(action, compose, config)
 
