@@ -57,7 +57,7 @@ impl MetricsCollector {
         let ts = Self::now_ns();
         match input {
             // Leader: block building pipeline
-            ConsensusInput::HeaderCreated(view, _) => {
+            ConsensusInput::HeaderCreated(view, ..) => {
                 let v = **view;
                 self.view_mut(v).header_created_ns = Some(ts);
             },
