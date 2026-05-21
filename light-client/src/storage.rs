@@ -1059,6 +1059,31 @@ mod test {
         assert_eq!(loaded_next_version, EPOCH_VERSION);
     }
 
+    /// Regression: storage previously dropped `used_x25519_keys` on round trip,
+    /// so a reloaded `StakeTableState::commit()` diverged from the proposer's
+    /// hash once any V3 events had been applied.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_x25519_keys_round_trip() {
+        use committable::Committable;
+
+        let db = SqliteStorage::default().await.unwrap();
+        let epoch = EpochNumber::new(1);
+        let state = random_stake_table();
+        assert!(
+            !state.used_x25519_keys().is_empty(),
+            "random_stake_table must populate used_x25519_keys for this test to be meaningful"
+        );
+
+        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, CLIQUENET_VERSION)
+            .await
+            .unwrap();
+        let (_, loaded, ..) = db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
+
+        assert_eq!(loaded.used_x25519_keys(), state.used_x25519_keys());
+        assert_eq!(loaded.commit(), state.commit());
+    }
+
     /// Make a stake table state with all fields populated.
     fn random_stake_table() -> StakeTableState {
         let validator = random_validator();
