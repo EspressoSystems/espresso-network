@@ -548,25 +548,26 @@ class Node:
         timeout: float,
         container_status: Callable[[], str | None] | None = None,
     ) -> None:
+        abort = _make_abort(self, container_status)
+        deadline = time.monotonic() + timeout
         last_h: int | None = None
-
-        def check() -> bool:
-            nonlocal last_h
+        while True:
             h = self.consensus_height()
             if h is not None:
                 last_h = h
-            return h is not None and h >= target
-
-        abort = _make_abort(self, container_status)
-        try:
-            poll_until(check, f"{self} consensus >= {target}", timeout, abort=abort)
-        except TimeoutError:
-            secs = int(timeout)
-            if last_h is None or last_h < 5:
-                raise TimeoutError(f"{self} did not join consensus after {secs}s")
-            raise TimeoutError(
-                f"{self} consensus stalled after {secs}s (height={last_h}, target={target})"
-            )
+                if h >= target:
+                    return
+            if abort and (msg := abort()):
+                raise RuntimeError(f"Aborted waiting for {self} consensus: {msg}")
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(2.0)
+        secs = int(timeout)
+        if last_h is None or last_h < 5:
+            raise TimeoutError(f"{self} did not join consensus after {secs}s")
+        raise TimeoutError(
+            f"{self} consensus stalled after {secs}s (height={last_h}, target={target})"
+        )
 
     def wait_storage(
         self,
@@ -575,53 +576,49 @@ class Node:
         container_status: Callable[[], str | None] | None = None,
     ) -> None:
         assert self.has_query, f"{self} does not have query API"
+        abort = _make_abort(self, container_status)
+        deadline = time.monotonic() + timeout
         last_cons: int | None = None
         last_stor: int | None = None
-
-        def check() -> bool:
-            nonlocal last_cons, last_stor
+        while True:
             c = self.consensus_height()
             s = self.storage_height()
             if c is not None:
                 last_cons = c
             if s is not None:
                 last_stor = s
-            return s is not None and s >= target
-
-        abort = _make_abort(self, container_status)
-        try:
-            poll_until(check, f"{self} storage >= {target}", timeout, abort=abort)
-        except TimeoutError:
-            secs = int(timeout)
-            if last_cons is None or last_cons < 5:
-                raise TimeoutError(f"{self} did not join consensus after {secs}s")
-            if last_stor is not None and last_cons - last_stor > 5:
+            if s is not None and s >= target:
+                break
+            if abort and (msg := abort()):
+                raise RuntimeError(f"Aborted waiting for {self} storage: {msg}")
+            if time.monotonic() >= deadline:
+                secs = int(timeout)
+                if last_cons is None or last_cons < 5:
+                    raise TimeoutError(f"{self} did not join consensus after {secs}s")
+                if last_stor is not None and last_cons - last_stor > 5:
+                    raise TimeoutError(
+                        f"{self} storage not catching up after {secs}s"
+                        f" (consensus={last_cons}, storage={last_stor})"
+                    )
                 raise TimeoutError(
-                    f"{self} storage not catching up after {secs}s"
-                    f" (consensus={last_cons}, storage={last_stor})"
+                    f"{self} storage stalled after {secs}s (storage={last_stor}, target={target})"
                 )
-            raise TimeoutError(
-                f"{self} storage stalled after {secs}s (storage={last_stor}, target={target})"
-            )
+            time.sleep(2.0)
 
-        # leaf availability check
-        idx = target - 1
-        leaf_timeout = 30.0
-        stor_at_leaf = last_stor
-
-        def leaf_ok() -> bool:
-            if self.leaf_available(idx):
-                log.info(f"{self} availability/leaf/{idx} ok")
-                return True
-            return False
-
-        try:
-            poll_until(leaf_ok, f"{self} leaf/{idx}", leaf_timeout, abort=abort)
-        except TimeoutError:
-            raise TimeoutError(
-                f"{self} leaf/{idx} not available after {int(leaf_timeout)}s"
-                f" (storage_height={stor_at_leaf})"
-            )
+        leaf_idx = target - 1
+        leaf_deadline = time.monotonic() + 30.0
+        while True:
+            if self.leaf_available(leaf_idx):
+                log.info(f"{self} availability/leaf/{leaf_idx} ok")
+                return
+            if abort and (msg := abort()):
+                raise RuntimeError(f"Aborted waiting for {self} leaf/{leaf_idx}: {msg}")
+            if time.monotonic() >= leaf_deadline:
+                raise TimeoutError(
+                    f"{self} leaf/{leaf_idx} not available after 30s"
+                    f" (storage_height={last_stor})"
+                )
+            time.sleep(2.0)
 
 
 def _make_abort(
