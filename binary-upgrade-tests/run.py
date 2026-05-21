@@ -430,18 +430,22 @@ class Compose:
 
     def start_new_node_5(self, base_tag: str, overlay: Path) -> Node:
         keys = _generate_keys(base_tag)
+        # Port goes into os.environ so Node.from_index(NEW_NODE_INDEX) can build the URL.
         os.environ[f"ESPRESSO_NODE_{NEW_NODE_INDEX}_API_PORT"] = str(NEW_NODE_API_PORT)
-        os.environ[f"ESPRESSO_NODE_{NEW_NODE_INDEX}_STAKING_PRIVATE_KEY"] = keys[
-            "ESPRESSO_NODE_PRIVATE_STAKING_KEY"
-        ]
-        os.environ[f"ESPRESSO_NODE_{NEW_NODE_INDEX}_STATE_PRIVATE_KEY"] = keys[
-            "ESPRESSO_NODE_PRIVATE_STATE_KEY"
-        ]
-        os.environ[f"ESPRESSO_NODE_{NEW_NODE_INDEX}_X25519_PRIVATE_KEY"] = keys[
-            "ESPRESSO_NODE_PRIVATE_X25519_KEY"
-        ]
+        # Write keys directly into a per-run overlay using the SEQUENCER_ names that
+        # BASE_TAG reads natively, avoiding intermediary ESPRESSO_NODE_5_* env vars.
+        keys_overlay = self.base_dir / f"node-{NEW_NODE_INDEX}-keys.yaml"
+        keys_overlay.write_text(
+            f"""services:
+  espresso-node-{NEW_NODE_INDEX}:
+    environment:
+      ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY: {keys["ESPRESSO_NODE_PRIVATE_STAKING_KEY"]}
+      ESPRESSO_SEQUENCER_PRIVATE_STATE_KEY: {keys["ESPRESSO_NODE_PRIVATE_STATE_KEY"]}
+      ESPRESSO_SEQUENCER_PRIVATE_X25519_KEY: {keys["ESPRESSO_NODE_PRIVATE_X25519_KEY"]}
+"""
+        )
         log.info(f"Starting espresso-node-{NEW_NODE_INDEX} on tag {base_tag}")
-        self.with_overlays(overlay).run(
+        self.with_overlays(overlay, keys_overlay).run(
             "up",
             "-d",
             f"espresso-node-{NEW_NODE_INDEX}",
