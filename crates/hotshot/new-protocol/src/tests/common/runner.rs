@@ -268,7 +268,7 @@ impl TestRunner {
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
             let (membership, storage, client, external_events_tx) =
-                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key).await;
+                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key);
 
             let coord = build_test_coordinator(
                 i as u64,
@@ -364,7 +364,6 @@ impl TestRunner {
                                         self.epoch_height,
                                         k,
                                     )
-                                    .await
                                 };
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
