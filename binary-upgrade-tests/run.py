@@ -833,7 +833,8 @@ def run_scenario(compose: Compose, config: Config, scenario: Scenario) -> None:
             compose.old_from_new(config, NODE_5_FS_OVERLAY)
         case Scenario.OLD_FROM_NEW_PG:
             compose.old_from_new(config, NODE_5_PG_OVERLAY)
-
+        case _:
+            raise ValueError(f"Unknown scenario: {scenario}")
 
 def main() -> int:
     args = parse_args()
