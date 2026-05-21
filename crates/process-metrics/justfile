@@ -26,23 +26,23 @@ up:
     timeout -v {{smoke_timeout}} scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
 
 # Sample docker stats + each node's /v0/status/metrics into $output for $duration seconds.
-sample:
+sample *args:
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{repo_root}}
     export DURATION_SECONDS={{duration}}
     export ESPRESSO_NODE_GENESIS_FILE={{genesis}}
     export OUTPUT_DIR={{output}}
-    python3 {{script_dir}}/soak.py sample
+    uv run {{script_dir}}/soak.py sample {{args}}
 
 # Render summary.md + rss-over-time.png + Mermaid chart from $output.
-render:
+render *args:
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{repo_root}}
     export ESPRESSO_NODE_GENESIS_FILE={{genesis}}
     export OUTPUT_DIR={{output}}
-    uv run {{script_dir}}/soak.py render
+    uv run {{script_dir}}/soak.py render {{args}}
 
 # Dump compose logs and ps for triage.
 logs:
@@ -54,19 +54,20 @@ logs:
     docker compose ps > {{logs_dir}}/compose-ps.txt 2>&1 || true
 
 # Tear down compose stack and volumes.
-down:
+down *args:
     #!/usr/bin/env bash
-    cd {{repo_root}} && docker compose down -v
+    cd {{repo_root}} && docker compose down -v {{args}}
 
 # End-to-end: up -> sample -> render. Does not auto-down (mirrors `just demo`).
 run: up sample render
 
 # Unit tests for render_summary.
-test:
+test *args:
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{script_dir}}
-    python3 -m unittest test_soak
+    uv run --with click --with humanize --with matplotlib --with pandas --with prometheus-client --with python-dotenv \
+        python3 -m unittest {{ if args == "" { "test_soak" } else { args } }}
 
 # Format Python sources with ruff.
 fmt *args:

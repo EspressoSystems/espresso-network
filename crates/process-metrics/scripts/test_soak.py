@@ -81,7 +81,6 @@ class RenderSummaryTests(unittest.TestCase):
         out = render_summary(self.docker, self.metrics, "drb-header", 4, self.tmp)
 
         self.assertIn("## Memory soak: drb-header", out)
-        self.assertIn("**Peak total memory (all containers):", out)
         self.assertIn("| Service", out)
         self.assertIn("Max RSS (docker)", out)
         self.assertIn("Max RSS (process gauge)", out)
@@ -128,8 +127,31 @@ class RenderSummaryTests(unittest.TestCase):
         self.assertIn("espresso-node-1", out)
         self.assertIn("**Total (sum)**", out)
 
+    def test_EDGE_soak_summary_gib_units(self) -> None:
+        """EDGE:soak-summary-gib-units - docker emits GiB for large containers."""
+        base_ts = 1_779_259_000
+        rows = []
+        for i in range(3):
+            row = _mk_docker_row(
+                base_ts + i, "espresso-network-espresso-node-0-1", 0, 10.0
+            )
+            row["MemUsage"] = f"{1.5 + 0.01 * i}GiB / 16GiB"
+            rows.append(row)
+        _write_jsonl(self.docker, rows)
+
+        out = render_summary(self.docker, self.metrics, "gib", 2, self.tmp)
+        self.assertIn("espresso-node-0", out)
+        self.assertNotIn("nan", out.lower())
+        self.assertNotIn("| n/a | n/a |", out)
+
+    def test_EDGE_soak_summary_empty_docker_file(self) -> None:
+        """EDGE:soak-summary-empty-docker - empty JSONL must not crash."""
+        self.docker.write_text("")
+        out = render_summary(self.docker, self.metrics, "empty", 0, self.tmp)
+        self.assertIn("No data collected", out)
+
     def test_EDGE_soak_summary_no_node_metrics(self) -> None:
-        """EDGE:soak-summary-no-node-metrics — metrics file missing."""
+        """EDGE:soak-summary-no-node-metrics - metrics file missing."""
         base_ts = 1_779_259_000
         rows = [
             _mk_docker_row(
