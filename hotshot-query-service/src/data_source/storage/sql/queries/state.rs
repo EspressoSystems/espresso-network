@@ -73,7 +73,6 @@ where
         let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
 
         // On postgres, fall back to legacy tables for any traversal-path nodes not yet backfilled.
-        // The legacy table only exists during the migration window; if it is absent we skip silently.
         #[cfg(not(feature = "embedded-db"))]
         let nodes = {
             let mut nodes = nodes;
@@ -89,25 +88,21 @@ where
                     let fallback_table = state_type.strip_suffix("_bigint").unwrap_or(state_type);
                     let (lq, lsql) =
                         build_legacy_path_query(fallback_table, missing_paths, created)?;
-                    savepoint(self.as_mut(), "sp_path_fallback").await?;
-                    let rows = lq.query(&lsql).fetch_all(self.as_mut()).await;
-                    if let Some(legacy_rows) = savepoint_finish(
-                        self.as_mut(),
-                        "sp_path_fallback",
-                        rows,
-                        "merkle path fallback lookup failed",
-                    )
-                    .await?
-                    {
-                        nodes.extend(legacy_rows.into_iter().map(Node::from));
-                        // Re-sort leaf-first (longer path arrays first),
-                        // matching the original ORDER BY t.path DESC behaviour.
-                        nodes.sort_by(|a, b| {
-                            let la = a.path.as_array().map(|v| v.len()).unwrap_or(0);
-                            let lb = b.path.as_array().map(|v| v.len()).unwrap_or(0);
-                            lb.cmp(&la)
-                        });
-                    }
+                    let legacy_rows = lq
+                        .query(&lsql)
+                        .fetch_all(self.as_mut())
+                        .await
+                        .map_err(|e| QueryError::Error {
+                            message: format!("merkle path fallback lookup failed: {e}"),
+                        })?;
+                    nodes.extend(legacy_rows.into_iter().map(Node::from));
+                    // Re-sort leaf-first (longer path arrays first),
+                    // matching the original ORDER BY t.path DESC behaviour.
+                    nodes.sort_by(|a, b| {
+                        let la = a.path.as_array().map(|v| v.len()).unwrap_or(0);
+                        let lb = b.path.as_array().map(|v| v.len()).unwrap_or(0);
+                        lb.cmp(&la)
+                    });
                 }
             }
             nodes
@@ -152,23 +147,16 @@ where
                     .collect();
 
                 if !missing.is_empty() {
-                    savepoint(self.as_mut(), "sp_hash_fallback").await?;
-                    let rows = sqlx::query_as::<_, (i64, Vec<u8>)>(
+                    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
                         "SELECT id::BIGINT, value FROM hash WHERE id = ANY($1::BIGINT[])",
                     )
                     .bind(&missing)
                     .fetch_all(self.as_mut())
-                    .await;
-                    if let Some(rows) = savepoint_finish(
-                        self.as_mut(),
-                        "sp_hash_fallback",
-                        rows,
-                        "hash fallback lookup failed",
-                    )
-                    .await?
-                    {
-                        result.extend(rows);
-                    }
+                    .await
+                    .map_err(|e| QueryError::Error {
+                        message: format!("hash fallback lookup failed: {e}"),
+                    })?;
+                    result.extend(rows);
                 }
                 result
             }
@@ -778,66 +766,6 @@ impl Node {
     }
 }
 
-/// Returns `true` if `e` is a PostgreSQL "undefined table" error (SQLSTATE 42P01).
-///
-/// Used to detect that a legacy table has not been created yet (fresh install, tests)
-/// or has already been dropped (post-contract phase), so callers can skip the fallback.
-#[cfg(not(feature = "embedded-db"))]
-fn is_undefined_table(e: &sqlx::Error) -> bool {
-    matches!(
-        e,
-        sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("42P01")
-    )
-}
-
-/// Set a named savepoint on `conn`.
-#[cfg(not(feature = "embedded-db"))]
-async fn savepoint(conn: &mut sqlx::postgres::PgConnection, sp: &'static str) -> QueryResult<()> {
-    sqlx::query(&format!("SAVEPOINT {sp}"))
-        .execute(conn)
-        .await
-        .map(|_| ())
-        .map_err(|e| QueryError::Error {
-            message: format!("SAVEPOINT {sp} failed: {e}"),
-        })
-}
-
-/// RELEASE or ROLLBACK a savepoint based on a query result.
-///
-/// Returns `Ok(Some(rows))` on success, `Ok(None)` if the table was absent (SQLSTATE 42P01),
-/// or `Err` on any other error.  On 42P01 the savepoint is rolled back so the outer
-/// transaction remains usable.
-#[cfg(not(feature = "embedded-db"))]
-async fn savepoint_finish<T>(
-    conn: &mut sqlx::postgres::PgConnection,
-    sp: &'static str,
-    result: sqlx::Result<T>,
-    context: &'static str,
-) -> QueryResult<Option<T>> {
-    match result {
-        Ok(r) => {
-            sqlx::query(&format!("RELEASE SAVEPOINT {sp}"))
-                .execute(conn)
-                .await
-                .map_err(|e| QueryError::Error {
-                    message: format!("RELEASE SAVEPOINT {sp} failed: {e}"),
-                })?;
-            Ok(Some(r))
-        },
-        Err(e) if is_undefined_table(&e) => {
-            sqlx::query(&format!("ROLLBACK TO SAVEPOINT {sp}"))
-                .execute(conn)
-                .await
-                .map_err(|e| QueryError::Error {
-                    message: format!("ROLLBACK TO SAVEPOINT {sp} failed: {e}"),
-                })?;
-            Ok(None)
-        },
-        Err(e) => Err(QueryError::Error {
-            message: format!("{context}: {e}"),
-        }),
-    }
-}
 
 /// Compute the full set of path JSON values for a traversal path (leaf to root).
 ///
