@@ -188,15 +188,12 @@ impl MigrationRegistry {
                 },
             };
 
-            let done = next.is_none();
-            let next_offset = next.unwrap_or(offset) as i64;
-
             if let Err(e) = sqlx::query(
                 "UPDATE deferred_migrations SET last_offset = $1, completed_at = CASE WHEN $2 \
                  THEN CURRENT_TIMESTAMP ELSE completed_at END WHERE name = $3",
             )
-            .bind(next_offset)
-            .bind(done)
+            .bind(next.unwrap_or(offset) as i64)
+            .bind(next.is_none())
             .bind(name)
             .execute(tx.as_mut())
             .await
@@ -212,12 +209,11 @@ impl MigrationRegistry {
 
             batch_count += 1;
 
-            if done {
+            let Some(next_offset) = next else {
                 tracing::warn!(name, batches = batch_count, "deferred migration complete");
                 return true;
-            }
-
-            offset = next.unwrap() as u64;
+            };
+            offset = next_offset;
 
             if batch_count.is_multiple_of(m.log_frequency()) {
                 tracing::warn!(

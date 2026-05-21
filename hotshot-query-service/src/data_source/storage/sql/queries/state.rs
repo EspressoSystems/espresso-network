@@ -86,9 +86,23 @@ where
                 nodes
             } else {
                 let legacy_table = state_type.strip_suffix("_bigint").unwrap_or(state_type);
-                let (lq, lsql) = build_legacy_path_query(legacy_table, missing, created)?;
-                let legacy_rows = lq
-                    .query(&lsql)
+                let mut query = QueryBuilder::default();
+                query.bind(created)?;
+                let mut sub_queries = Vec::with_capacity(missing.len());
+                for path in missing {
+                    let param = query.bind(path)?;
+                    sub_queries.push(format!(
+                        "SELECT path, created, hash_id::BIGINT AS hash_id, children, \
+                         children_bitvec, idx, entry FROM {legacy_table} \
+                         WHERE path = {param} AND created <= $1 ORDER BY created DESC LIMIT 1"
+                    ));
+                }
+                let sql = format!(
+                    "SELECT * FROM ({}) AS t ORDER BY t.path DESC",
+                    sub_queries.join(" UNION ")
+                );
+                let legacy_rows = query
+                    .query(&sql)
                     .fetch_all(self.as_mut())
                     .await
                     .map_err(|e| QueryError::Error {
@@ -778,34 +792,6 @@ fn traversal_path_values(traversal_path: &[usize], tree_height: usize) -> Vec<se
     result
 }
 
-/// Build a UNION query over a legacy Merkle-tree table for a specific set of path values.
-///
-/// Selects `hash_id::BIGINT AS hash_id` so the result is compatible with the [`Node`] struct
-/// after the INT → BIGINT migration.  Only compiled for postgres — SQLite has no legacy tables.
-#[cfg(not(feature = "embedded-db"))]
-fn build_legacy_path_query<'q>(
-    legacy_table: &str,
-    paths: Vec<serde_json::Value>,
-    created: i64,
-) -> QueryResult<(QueryBuilder<'q>, String)> {
-    let mut query = QueryBuilder::default();
-    query.bind(created)?; // $1
-    let mut sub_queries = Vec::with_capacity(paths.len());
-
-    for path in paths {
-        let node_path = query.bind(path)?;
-        sub_queries.push(format!(
-            "SELECT path, created, hash_id::BIGINT AS hash_id, children, children_bitvec, idx, \
-             entry FROM (SELECT path, created, hash_id::BIGINT AS hash_id, children, \
-             children_bitvec, idx, entry FROM {legacy_table} WHERE path = {node_path} AND created \
-             <= $1 ORDER BY created DESC LIMIT 1) AS latest_node"
-        ));
-    }
-
-    let mut sql = sub_queries.join(" UNION ");
-    sql = format!("SELECT * FROM ({sql}) AS t ORDER BY t.path DESC");
-    Ok((query, sql))
-}
 
 fn build_get_path_query<'q>(
     table: &'static str,
