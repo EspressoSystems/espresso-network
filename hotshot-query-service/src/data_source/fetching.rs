@@ -858,6 +858,15 @@ where
 
         Ok(())
     }
+
+    async fn store_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        // Write to storage and notify any pending fetchers waiting on this height. Idempotent: if
+        // the block was already stored (e.g. by a decide event that arrived with the payload), the
+        // upsert path inside `insert_block` short-circuits and the notify is a cheap no-op.
+        self.fetcher.store(&block).await;
+        block.notify(&self.fetcher.notifiers).await;
+        Ok(())
+    }
 }
 
 impl<Types, S, P> VersionedDataSource for FetchingDataSource<Types, S, P>

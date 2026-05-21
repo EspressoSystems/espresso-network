@@ -328,6 +328,10 @@ where
     async fn append(&self, info: BlockInfo<Types>) -> anyhow::Result<()> {
         self.data_source.append(info).await
     }
+
+    async fn store_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        self.data_source.store_payload(block).await
+    }
 }
 
 #[async_trait]

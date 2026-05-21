@@ -293,4 +293,17 @@ impl<Types: NodeType> BlockInfo<Types> {
 pub trait UpdateAvailabilityData<Types: NodeType> {
     /// Append information about a new block to the database.
     fn append(&self, info: BlockInfo<Types>) -> impl Send + Future<Output = anyhow::Result<()>>;
+
+    /// Store a payload that was reconstructed after the corresponding view was decided.
+    ///
+    /// Decide events in the new protocol may arrive before VID reconstruction has produced the
+    /// block payload. When the payload eventually becomes available the data source uses this
+    /// method to fill it in, notifying any pending fetchers. Implementations that don't track
+    /// blocks (e.g. metrics-only) may leave the default no-op.
+    fn store_payload(
+        &self,
+        _block: BlockQueryData<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async { Ok(()) }
+    }
 }

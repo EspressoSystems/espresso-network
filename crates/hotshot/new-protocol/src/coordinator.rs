@@ -425,10 +425,26 @@ where
                         self.storage.append_da(
                             out.view,
                             out.epoch,
-                            out.payload,
-                            out.metadata,
+                            out.payload.clone(),
+                            out.metadata.clone(),
                             VidCommitment::V2(out.payload_commitment),
                         );
+                        // Surface the reconstructed payload so downstream consumers
+                        // (e.g. the query service) can fill it in if `LeafDecided`
+                        // already fired for this view without a payload attached.
+                        if let Some(proposal) = self.consensus.proposal_at(out.view) {
+                            self.outbox.push_back(ConsensusOutput::PayloadAvailable {
+                                view: out.view,
+                                header: proposal.block_header.clone(),
+                                payload: out.payload,
+                            });
+                        } else {
+                            tracing::debug!(
+                                view = %out.view,
+                                "no proposal available when emitting PayloadAvailable; \
+                                 skipping emit",
+                            );
+                        }
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
                     Err(()) => {
@@ -644,6 +660,10 @@ where
                     self.epoch_manager.request_drb_result(next_epoch);
                     self.epoch_manager.request_drb_result(next_epoch + 1);
                 }
+            },
+            ConsensusOutput::PayloadAvailable { .. } => {
+                // Pure passthrough: the consumer wraps this into a CoordinatorEvent
+                // (see `consensus_event` in the Espresso consensus_handle).
             },
         }
         Ok(())
