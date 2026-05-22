@@ -663,14 +663,24 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     }
 
     /// Supply a DRB result obtained from an external source (e.g. a decided
-    /// leaf carrying `next_drb_result`). Adds the result to membership and
-    /// cancels any in-flight local computation for `epoch`.
+    /// leaf carrying `next_drb_result`). Adds the result to membership,
+    /// persists it to storage, and cancels any in-flight local computation
+    /// for `epoch`.
     pub fn supply_drb(&self, epoch: EpochNumber, drb: DrbResult) {
         self.membership.add_drb_result(epoch, drb);
         let maybe_token = self.drb_cancel_map.lock().remove(&epoch);
         if let Some(token) = maybe_token {
             token.cancel();
         }
+        let store_drb_result_fn = self.store_drb_result_fn.clone();
+        tokio::spawn(async move {
+            tracing::info!(
+                "Writing externally supplied drb result to storage for epoch {epoch}: {drb:?}"
+            );
+            if let Err(e) = store_drb_result_fn(epoch, drb).await {
+                tracing::warn!("Failed to add externally supplied drb result to storage: {e}");
+            }
+        });
     }
 
     /// Remove per-epoch DRB bookkeeping after a computation finishes or is
