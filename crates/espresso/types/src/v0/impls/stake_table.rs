@@ -263,13 +263,14 @@ impl StakeTableState {
         validator_exits: HashSet<Address>,
         used_bls_keys: HashSet<BLSPubKey>,
         used_schnorr_keys: HashSet<SchnorrPubKey>,
+        used_x25519_keys: HashSet<x25519::PublicKey>,
     ) -> Self {
         Self {
             validators,
             validator_exits,
             used_bls_keys,
             used_schnorr_keys,
-            used_x25519_keys: HashSet::new(),
+            used_x25519_keys,
         }
     }
 

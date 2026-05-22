@@ -1,9 +1,6 @@
-use std::{
-    future::Future,
-    path::PathBuf,
-    str::FromStr,
-    sync::atomic::{AtomicU64, Ordering},
-};
+#[cfg(unix)]
+use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+use std::{future::Future, path::PathBuf, str::FromStr, sync::Arc};
 
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
@@ -14,13 +11,14 @@ use hotshot_query_service_types::{
     HeightIndexed,
     availability::{BlockId, LeafId, LeafQueryData},
 };
-use hotshot_types::{data::EpochNumber, light_client::StateVerKey};
+use hotshot_types::{data::EpochNumber, light_client::StateVerKey, x25519};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{
     QueryBuilder, SqlitePool, query, query_as,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
+use tempfile::{Builder, TempDir};
 use vbs::version::Version;
 
 /// Different ways to ask the database for a leaf.
@@ -145,8 +143,9 @@ pub struct LightClientSqliteOptions {
 
     /// Path at which the light client database is persisted.
     ///
-    /// If not present, the database will exist only in memory and will be destroyed when the
-    /// [`SqlitePersistence`] object is dropped
+    /// If not present, the database is created in a temporary directory that is removed when the
+    /// storage is dropped. Set this in production so cached leaves and stake tables survive
+    /// restarts.
     #[cfg_attr(
         feature = "clap",
         clap(long = "light-client-db-path", env = "LIGHT_CLIENT_DB_PATH")
@@ -165,45 +164,34 @@ impl Default for LightClientSqliteOptions {
     }
 }
 
-enum LightClientDb {
-    InMemory,
-    File(PathBuf),
-}
-
-impl LightClientDb {
-    /// Resolve to a SQLite connection URI, creating the parent directory for file-backed DBs.
-    ///
-    /// The in-memory variant uses a shared-cache URI with a fresh per-call name so every
-    /// pool connection sees the same database; a bare `:memory:` would give each connection
-    /// its own private DB and the schema migration would be invisible to all but one.
-    fn into_uri(self) -> Result<String> {
-        match self {
-            Self::InMemory => {
-                static COUNTER: AtomicU64 = AtomicU64::new(0);
-                let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-                Ok(format!("file:lc-mem-{id}?mode=memory&cache=shared"))
-            },
-            Self::File(p) => {
+impl LightClientSqliteOptions {
+    /// Create or connect to a database with the given options.
+    pub async fn connect(self) -> Result<SqliteStorage> {
+        let (path, _tmp) = match self.lc_path {
+            Some(p) => {
                 if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
                     std::fs::create_dir_all(parent)
                         .with_context(|| format!("creating parent directory {parent:?}"))?;
                 }
-                p.into_os_string()
-                    .into_string()
-                    .map_err(|s| anyhow::anyhow!("invalid file path: {s:?}"))
+                (p, None)
             },
-        }
-    }
-}
+            None => {
+                let mut builder = Builder::new();
+                builder.prefix("espresso-lc-");
+                #[cfg(unix)]
+                builder.permissions(Permissions::from_mode(0o700));
+                let dir = builder.tempdir().context(
+                    "creating temporary directory for light client database; set \
+                     LIGHT_CLIENT_DB_PATH to use a persistent location",
+                )?;
+                let path = dir.path().join("lc.db");
+                (path, Some(Arc::new(dir)))
+            },
+        };
 
-impl LightClientSqliteOptions {
-    /// Create or connect to a database with the given options.
-    pub async fn connect(self) -> Result<SqliteStorage> {
-        let db = self
-            .lc_path
-            .map(LightClientDb::File)
-            .unwrap_or(LightClientDb::InMemory);
-        let opt = SqliteConnectOptions::from_str(&db.into_uri()?)?.create_if_missing(true);
+        let opt = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true);
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
             .connect_with(opt)
@@ -214,6 +202,7 @@ impl LightClientSqliteOptions {
             pool,
             num_leaves: self.num_leaves,
             num_stake_tables: self.num_stake_tables,
+            _tmp,
         })
     }
 }
@@ -224,6 +213,7 @@ pub struct SqliteStorage {
     pool: SqlitePool,
     num_leaves: u32,
     num_stake_tables: u32,
+    _tmp: Option<Arc<TempDir>>,
 }
 
 impl Storage for SqliteStorage {
@@ -442,6 +432,16 @@ impl Storage for SqliteStorage {
                 .await
                 .context(format!("loading Schnorr keys for epoch {epoch}"))?;
 
+        let used_x25519_keys =
+            query_as::<_, (String,)>("SELECT key FROM stake_table_x25519_key WHERE epoch <= $1")
+                .bind(epoch)
+                .fetch(tx.as_mut())
+                .map_err(anyhow::Error::new)
+                .and_then(|(s,)| async move { Ok(x25519::PublicKey::from_str(&s)?) })
+                .try_collect()
+                .await
+                .context(format!("loading x25519 keys for epoch {epoch}"))?;
+
         Ok(Some((
             EpochNumber::new(epoch as u64),
             StakeTableState::new(
@@ -449,6 +449,7 @@ impl Storage for SqliteStorage {
                 validator_exits,
                 used_bls_keys,
                 used_schnorr_keys,
+                used_x25519_keys,
             ),
             epoch_root_protocol_version,
             next_epoch_root_protocol_version,
@@ -526,6 +527,23 @@ impl Storage for SqliteStorage {
                 "inserting newly used Schnorr keys for epoch {epoch}"
             ))?;
 
+        // Insert only newly used x25519 keys.
+        if !stake_table.used_x25519_keys().is_empty() {
+            QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
+                .push_values(stake_table.used_x25519_keys(), |mut q, key| {
+                    q.push_bind(epoch).push_bind(key.to_string());
+                })
+                // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                // when this key was added to the state.
+                .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
+                .build()
+                .execute(tx.as_mut())
+                .await
+                .context(format!(
+                    "inserting newly used x25519 keys for epoch {epoch}"
+                ))?;
+        }
+
         // Insert only the new validator exits.
         if !stake_table.validator_exits().is_empty() {
             QueryBuilder::new("INSERT INTO stake_table_exit (epoch, address) ")
@@ -578,6 +596,9 @@ impl Storage for SqliteStorage {
 
 #[cfg(test)]
 mod test {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
     use versions::{CLIQUENET_VERSION, EPOCH_VERSION};
@@ -587,29 +608,75 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_in_memory_uri_shares_state_across_connections() {
-        use sqlx::ConnectOptions;
+    async fn test_default_storage_survives_connection_churn() {
+        let db = SqliteStorage::default().await.unwrap();
 
-        let uri = LightClientDb::InMemory.into_uri().unwrap();
-        let mut a = SqliteConnectOptions::from_str(&uri)
-            .unwrap()
-            .connect()
-            .await
-            .unwrap();
-        sqlx::query("CREATE TABLE regression (x INTEGER)")
-            .execute(&mut a)
+        {
+            let conn = db.pool.acquire().await.unwrap();
+            drop(conn);
+        }
+
+        let leaf = leaf_chain(0..1, EPOCH_VERSION).await.remove(0);
+        db.insert_leaf(leaf).await.unwrap();
+        assert_eq!(db.block_height().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_default_storage_survives_idle_reap() {
+        use std::time::Duration;
+
+        let db = SqliteStorage::default().await.unwrap();
+        let path = db
+            ._tmp
+            .as_ref()
+            .expect("default storage must own a tempdir")
+            .path()
+            .join("lc.db");
+
+        let opt = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(false);
+        let pool = SqlitePoolOptions::default()
+            .max_connections(5)
+            .min_connections(0)
+            .idle_timeout(Some(Duration::from_millis(50)))
+            .connect_with(opt)
             .await
             .unwrap();
 
-        let mut b = SqliteConnectOptions::from_str(&uri)
-            .unwrap()
-            .connect()
+        let (height,): (i64,) = sqlx::query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
+            .fetch_one(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO regression VALUES (42)")
-            .execute(&mut b)
+        assert_eq!(height, 0);
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while pool.size() > 0 && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(pool.size(), 0, "pool did not reap idle connections in time");
+
+        let (height,): (i64,) = sqlx::query_as("SELECT COALESCE(max(height) + 1, 0) FROM leaf")
+            .fetch_one(&pool)
             .await
-            .expect("second connection must see schema from first (shared cache)");
+            .expect("schema must survive the pool reaping idle connections");
+        assert_eq!(height, 0);
+
+        drop(db);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_default_storage_tempdir_is_owner_only() {
+        let db = SqliteStorage::default().await.unwrap();
+        let dir = db
+            ._tmp
+            .as_ref()
+            .expect("default storage must own a tempdir");
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "tempdir must be owner-only, got {mode:o}");
     }
 
     #[tokio::test]
@@ -1031,10 +1098,37 @@ mod test {
         assert_eq!(loaded_next_version, EPOCH_VERSION);
     }
 
+    /// Regression: storage previously dropped `used_x25519_keys` on round trip,
+    /// so a reloaded `StakeTableState::commit()` diverged from the proposer's
+    /// hash once any V3 events had been applied.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_x25519_keys_round_trip() {
+        use committable::Committable;
+
+        let db = SqliteStorage::default().await.unwrap();
+        let epoch = EpochNumber::new(1);
+        let state = random_stake_table();
+        assert!(
+            !state.used_x25519_keys().is_empty(),
+            "random_stake_table must populate used_x25519_keys for this test to be meaningful"
+        );
+
+        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, CLIQUENET_VERSION)
+            .await
+            .unwrap();
+        let (_, loaded, ..) = db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
+
+        assert_eq!(loaded.used_x25519_keys(), state.used_x25519_keys());
+        assert_eq!(loaded.commit(), state.commit());
+    }
+
     /// Make a stake table state with all fields populated.
     fn random_stake_table() -> StakeTableState {
         let validator = random_validator();
         let candidate: RegisteredValidator<PubKey> = validator.clone().into();
+        let x25519_key =
+            x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
         StakeTableState::new(
             [(candidate.account, candidate.clone())]
                 .into_iter()
@@ -1042,6 +1136,7 @@ mod test {
             [Address::random()].into_iter().collect(),
             [candidate.stake_table_key].into_iter().collect(),
             [candidate.state_ver_key].into_iter().collect(),
+            [x25519_key].into_iter().collect(),
         )
     }
 
@@ -1050,6 +1145,8 @@ mod test {
         let new_validator = random_validator();
         let new_candidate: RegisteredValidator<PubKey> = new_validator.clone().into();
         let new_exit = Address::random();
+        let new_x25519 =
+            x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
         StakeTableState::new(
             state
                 .validators()
@@ -1073,6 +1170,12 @@ mod test {
                 .used_schnorr_keys()
                 .iter()
                 .chain([&new_candidate.state_ver_key])
+                .cloned()
+                .collect(),
+            state
+                .used_x25519_keys()
+                .iter()
+                .chain([&new_x25519])
                 .cloned()
                 .collect(),
         )
