@@ -41,10 +41,10 @@ fn small_config() -> BlockBuilderConfig {
     }
 }
 
-async fn builder() -> BlockBuilder<TestTypes> {
+fn builder() -> BlockBuilder<TestTypes> {
     BlockBuilder::new(
         Arc::new(TestInstanceState::default()),
-        mock_membership().await,
+        mock_membership(),
         small_config(),
         test_upgrade_lock(),
     )
@@ -52,7 +52,7 @@ async fn builder() -> BlockBuilder<TestTypes> {
 
 #[tokio::test]
 async fn test_retry_buffer() {
-    let mut b = builder().await;
+    let mut b = builder();
     let t1 = tx(1);
     let t2 = tx(2);
     b.on_submit_transaction(t1.clone());
@@ -75,7 +75,7 @@ async fn test_retry_buffer() {
 
 #[tokio::test]
 async fn test_leader_buffer_drain() {
-    let mut b = builder().await;
+    let mut b = builder();
     b.on_transactions(tx_msg(view(1), vec![tx(1), tx(2)]));
     let (mut txns, manifest) = b.drain(view(1), epoch());
     txns.sort_by_key(|t| t.bytes().clone());
@@ -99,7 +99,7 @@ async fn test_leader_buffer_drain() {
 async fn test_dedup_window() {
     let mut b = BlockBuilder::new(
         Arc::new(TestInstanceState::default()),
-        mock_membership().await,
+        mock_membership(),
         BlockBuilderConfig {
             dedup_window_size: 2,
             ..small_config()
