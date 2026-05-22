@@ -754,6 +754,17 @@ where
                     .map_err(|err| Error::internal(format!("failed to get table sizes: {err:#}")))
             }
             .boxed()
+        })?
+        .at("get_migration_status", |_req, state| {
+            async move {
+                state
+                    .read(|state| state.get_migration_status().boxed())
+                    .await
+                    .map_err(|err| {
+                        Error::internal(format!("failed to get migration status: {err:#}"))
+                    })
+            }
+            .boxed()
         })?;
 
     Ok(api)
