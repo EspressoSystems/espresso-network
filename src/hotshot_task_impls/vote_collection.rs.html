@@ -127,7 +127,7 @@
 <a href=#127 id=127 data-nosnippet>127</a>            <span class="string">"No accumulator to handle vote with. This shouldn't happen."
 <a href=#128 id=128 data-nosnippet>128</a>        </span>))<span class="question-mark">?</span>;
 <a href=#129 id=129 data-nosnippet>129</a>
-<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">match </span>accumulator.accumulate(vote, <span class="self">self</span>.membership.clone()).<span class="kw">await </span>{
+<a href=#130 id=130 data-nosnippet>130</a>        <span class="kw">match </span>accumulator.accumulate(vote, <span class="self">self</span>.membership.clone()) {
 <a href=#131 id=131 data-nosnippet>131</a>            <span class="prelude-val">None </span>=&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
 <a href=#132 id=132 data-nosnippet>132</a>            <span class="prelude-val">Some</span>(cert) =&gt; {
 <a href=#133 id=133 data-nosnippet>133</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Certificate Formed! {cert:?}"</span>);
@@ -695,121 +695,119 @@
 <a href=#695 id=695 data-nosnippet>695</a>        </span>))<span class="question-mark">?</span>;
 <a href=#696 id=696 data-nosnippet>696</a>
 <a href=#697 id=697 data-nosnippet>697</a>        <span class="kw">match </span>(
-<a href=#698 id=698 data-nosnippet>698</a>            accumulator.accumulate(vote, <span class="self">self</span>.membership.clone()).<span class="kw">await</span>,
-<a href=#699 id=699 data-nosnippet>699</a>            state_vote_accumulator
-<a href=#700 id=700 data-nosnippet>700</a>                .accumulate(<span class="kw-2">&amp;</span>vote.signing_key(), state_vote, <span class="kw-2">&amp;</span><span class="self">self</span>.membership)
-<a href=#701 id=701 data-nosnippet>701</a>                .<span class="kw">await</span>,
-<a href=#702 id=702 data-nosnippet>702</a>        ) {
-<a href=#703 id=703 data-nosnippet>703</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
-<a href=#704 id=704 data-nosnippet>704</a>            (<span class="prelude-val">Some</span>(cert), <span class="prelude-val">Some</span>(state_cert)) =&gt; {
-<a href=#705 id=705 data-nosnippet>705</a>                <span class="kw">let </span>root_qc = EpochRootQuorumCertificateV2 {
-<a href=#706 id=706 data-nosnippet>706</a>                    qc: cert,
-<a href=#707 id=707 data-nosnippet>707</a>                    state_cert,
-<a href=#708 id=708 data-nosnippet>708</a>                };
+<a href=#698 id=698 data-nosnippet>698</a>            accumulator.accumulate(vote, <span class="self">self</span>.membership.clone()),
+<a href=#699 id=699 data-nosnippet>699</a>            state_vote_accumulator.accumulate(<span class="kw-2">&amp;</span>vote.signing_key(), state_vote, <span class="kw-2">&amp;</span><span class="self">self</span>.membership),
+<a href=#700 id=700 data-nosnippet>700</a>        ) {
+<a href=#701 id=701 data-nosnippet>701</a>            (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>) =&gt; <span class="prelude-val">Ok</span>(<span class="prelude-val">None</span>),
+<a href=#702 id=702 data-nosnippet>702</a>            (<span class="prelude-val">Some</span>(cert), <span class="prelude-val">Some</span>(state_cert)) =&gt; {
+<a href=#703 id=703 data-nosnippet>703</a>                <span class="kw">let </span>root_qc = EpochRootQuorumCertificateV2 {
+<a href=#704 id=704 data-nosnippet>704</a>                    qc: cert,
+<a href=#705 id=705 data-nosnippet>705</a>                    state_cert,
+<a href=#706 id=706 data-nosnippet>706</a>                };
+<a href=#707 id=707 data-nosnippet>707</a>
+<a href=#708 id=708 data-nosnippet>708</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Certificate Formed! {root_qc:?}"</span>);
 <a href=#709 id=709 data-nosnippet>709</a>
-<a href=#710 id=710 data-nosnippet>710</a>                <span class="macro">tracing::debug!</span>(<span class="string">"Certificate Formed! {root_qc:?}"</span>);
-<a href=#711 id=711 data-nosnippet>711</a>
-<a href=#712 id=712 data-nosnippet>712</a>                broadcast_event(
-<a href=#713 id=713 data-nosnippet>713</a>                    Arc::new(HotShotEvent::EpochRootQcFormed(root_qc.clone())),
-<a href=#714 id=714 data-nosnippet>714</a>                    event_stream,
-<a href=#715 id=715 data-nosnippet>715</a>                )
-<a href=#716 id=716 data-nosnippet>716</a>                .<span class="kw">await</span>;
-<a href=#717 id=717 data-nosnippet>717</a>                <span class="self">self</span>.accumulator = <span class="prelude-val">None</span>;
-<a href=#718 id=718 data-nosnippet>718</a>
-<a href=#719 id=719 data-nosnippet>719</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(root_qc))
-<a href=#720 id=720 data-nosnippet>720</a>            },
-<a href=#721 id=721 data-nosnippet>721</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">error!</span>(
-<a href=#722 id=722 data-nosnippet>722</a>                <span class="string">"Only one certificate formed for the epoch root, this should not happen."
-<a href=#723 id=723 data-nosnippet>723</a>            </span>)),
-<a href=#724 id=724 data-nosnippet>724</a>        }
-<a href=#725 id=725 data-nosnippet>725</a>    }
-<a href=#726 id=726 data-nosnippet>726</a>}
-<a href=#727 id=727 data-nosnippet>727</a>
-<a href=#728 id=728 data-nosnippet>728</a><span class="kw">async fn </span>create_epoch_root_vote_collection_task_state&lt;TYPES: NodeType&gt;(
-<a href=#729 id=729 data-nosnippet>729</a>    info: <span class="kw-2">&amp;</span>AccumulatorInfo&lt;TYPES&gt;,
-<a href=#730 id=730 data-nosnippet>730</a>    event: Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;,
-<a href=#731 id=731 data-nosnippet>731</a>    sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;&gt;,
-<a href=#732 id=732 data-nosnippet>732</a>    upgrade_lock: UpgradeLock&lt;TYPES&gt;,
-<a href=#733 id=733 data-nosnippet>733</a>) -&gt; <span class="prelude-ty">Result</span>&lt;EpochRootVoteCollectionTaskState&lt;TYPES&gt;&gt; {
-<a href=#734 id=734 data-nosnippet>734</a>    <span class="kw">let </span>new_accumulator = VoteAccumulator::&lt;TYPES, QuorumVote2&lt;TYPES&gt;, QuorumCertificate2&lt;TYPES&gt;&gt; {
-<a href=#735 id=735 data-nosnippet>735</a>        vote_outcomes: HashMap::new(),
-<a href=#736 id=736 data-nosnippet>736</a>        signers: HashMap::new(),
-<a href=#737 id=737 data-nosnippet>737</a>        phantom: PhantomData,
-<a href=#738 id=738 data-nosnippet>738</a>        upgrade_lock: upgrade_lock.clone(),
-<a href=#739 id=739 data-nosnippet>739</a>    };
-<a href=#740 id=740 data-nosnippet>740</a>    <span class="kw">let </span>state_vote_accumulator = LightClientStateUpdateVoteAccumulator {
-<a href=#741 id=741 data-nosnippet>741</a>        vote_outcomes: HashMap::new(),
-<a href=#742 id=742 data-nosnippet>742</a>        upgrade_lock,
-<a href=#743 id=743 data-nosnippet>743</a>    };
-<a href=#744 id=744 data-nosnippet>744</a>
-<a href=#745 id=745 data-nosnippet>745</a>    <span class="kw">let </span><span class="kw-2">mut </span>state = EpochRootVoteCollectionTaskState::&lt;TYPES&gt; {
-<a href=#746 id=746 data-nosnippet>746</a>        membership: info.membership.clone(),
-<a href=#747 id=747 data-nosnippet>747</a>        public_key: info.public_key.clone(),
-<a href=#748 id=748 data-nosnippet>748</a>        accumulator: <span class="prelude-val">Some</span>(new_accumulator),
-<a href=#749 id=749 data-nosnippet>749</a>        state_vote_accumulator: <span class="prelude-val">Some</span>(state_vote_accumulator),
-<a href=#750 id=750 data-nosnippet>750</a>        view: info.view,
-<a href=#751 id=751 data-nosnippet>751</a>        epoch: info.membership.epoch(),
-<a href=#752 id=752 data-nosnippet>752</a>        id: info.id,
-<a href=#753 id=753 data-nosnippet>753</a>    };
+<a href=#710 id=710 data-nosnippet>710</a>                broadcast_event(
+<a href=#711 id=711 data-nosnippet>711</a>                    Arc::new(HotShotEvent::EpochRootQcFormed(root_qc.clone())),
+<a href=#712 id=712 data-nosnippet>712</a>                    event_stream,
+<a href=#713 id=713 data-nosnippet>713</a>                )
+<a href=#714 id=714 data-nosnippet>714</a>                .<span class="kw">await</span>;
+<a href=#715 id=715 data-nosnippet>715</a>                <span class="self">self</span>.accumulator = <span class="prelude-val">None</span>;
+<a href=#716 id=716 data-nosnippet>716</a>
+<a href=#717 id=717 data-nosnippet>717</a>                <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(root_qc))
+<a href=#718 id=718 data-nosnippet>718</a>            },
+<a href=#719 id=719 data-nosnippet>719</a>            <span class="kw">_ </span>=&gt; <span class="prelude-val">Err</span>(<span class="macro">error!</span>(
+<a href=#720 id=720 data-nosnippet>720</a>                <span class="string">"Only one certificate formed for the epoch root, this should not happen."
+<a href=#721 id=721 data-nosnippet>721</a>            </span>)),
+<a href=#722 id=722 data-nosnippet>722</a>        }
+<a href=#723 id=723 data-nosnippet>723</a>    }
+<a href=#724 id=724 data-nosnippet>724</a>}
+<a href=#725 id=725 data-nosnippet>725</a>
+<a href=#726 id=726 data-nosnippet>726</a><span class="kw">async fn </span>create_epoch_root_vote_collection_task_state&lt;TYPES: NodeType&gt;(
+<a href=#727 id=727 data-nosnippet>727</a>    info: <span class="kw-2">&amp;</span>AccumulatorInfo&lt;TYPES&gt;,
+<a href=#728 id=728 data-nosnippet>728</a>    event: Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;,
+<a href=#729 id=729 data-nosnippet>729</a>    sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;&gt;,
+<a href=#730 id=730 data-nosnippet>730</a>    upgrade_lock: UpgradeLock&lt;TYPES&gt;,
+<a href=#731 id=731 data-nosnippet>731</a>) -&gt; <span class="prelude-ty">Result</span>&lt;EpochRootVoteCollectionTaskState&lt;TYPES&gt;&gt; {
+<a href=#732 id=732 data-nosnippet>732</a>    <span class="kw">let </span>new_accumulator = VoteAccumulator::&lt;TYPES, QuorumVote2&lt;TYPES&gt;, QuorumCertificate2&lt;TYPES&gt;&gt; {
+<a href=#733 id=733 data-nosnippet>733</a>        vote_outcomes: HashMap::new(),
+<a href=#734 id=734 data-nosnippet>734</a>        signers: HashMap::new(),
+<a href=#735 id=735 data-nosnippet>735</a>        phantom: PhantomData,
+<a href=#736 id=736 data-nosnippet>736</a>        upgrade_lock: upgrade_lock.clone(),
+<a href=#737 id=737 data-nosnippet>737</a>    };
+<a href=#738 id=738 data-nosnippet>738</a>    <span class="kw">let </span>state_vote_accumulator = LightClientStateUpdateVoteAccumulator {
+<a href=#739 id=739 data-nosnippet>739</a>        vote_outcomes: HashMap::new(),
+<a href=#740 id=740 data-nosnippet>740</a>        upgrade_lock,
+<a href=#741 id=741 data-nosnippet>741</a>    };
+<a href=#742 id=742 data-nosnippet>742</a>
+<a href=#743 id=743 data-nosnippet>743</a>    <span class="kw">let </span><span class="kw-2">mut </span>state = EpochRootVoteCollectionTaskState::&lt;TYPES&gt; {
+<a href=#744 id=744 data-nosnippet>744</a>        membership: info.membership.clone(),
+<a href=#745 id=745 data-nosnippet>745</a>        public_key: info.public_key.clone(),
+<a href=#746 id=746 data-nosnippet>746</a>        accumulator: <span class="prelude-val">Some</span>(new_accumulator),
+<a href=#747 id=747 data-nosnippet>747</a>        state_vote_accumulator: <span class="prelude-val">Some</span>(state_vote_accumulator),
+<a href=#748 id=748 data-nosnippet>748</a>        view: info.view,
+<a href=#749 id=749 data-nosnippet>749</a>        epoch: info.membership.epoch(),
+<a href=#750 id=750 data-nosnippet>750</a>        id: info.id,
+<a href=#751 id=751 data-nosnippet>751</a>    };
+<a href=#752 id=752 data-nosnippet>752</a>
+<a href=#753 id=753 data-nosnippet>753</a>    state.handle_vote_event(Arc::clone(<span class="kw-2">&amp;</span>event), sender).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#754 id=754 data-nosnippet>754</a>
-<a href=#755 id=755 data-nosnippet>755</a>    state.handle_vote_event(Arc::clone(<span class="kw-2">&amp;</span>event), sender).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#756 id=756 data-nosnippet>756</a>
-<a href=#757 id=757 data-nosnippet>757</a>    <span class="prelude-val">Ok</span>(state)
-<a href=#758 id=758 data-nosnippet>758</a>}
-<a href=#759 id=759 data-nosnippet>759</a>
-<a href=#760 id=760 data-nosnippet>760</a><span class="doccomment">/// A helper function that handles quorum vote collection for epoch root
-<a href=#761 id=761 data-nosnippet>761</a>///
-<a href=#762 id=762 data-nosnippet>762</a>/// # Errors
-<a href=#763 id=763 data-nosnippet>763</a>/// If we fail to handle the vote
-<a href=#764 id=764 data-nosnippet>764</a></span><span class="attr">#[allow(clippy::too_many_arguments)]
-<a href=#765 id=765 data-nosnippet>765</a></span><span class="kw">pub async fn </span>handle_epoch_root_vote&lt;TYPES: NodeType&gt;(
-<a href=#766 id=766 data-nosnippet>766</a>    collectors: <span class="kw-2">&amp;mut </span>EpochRootVoteCollectorsMap&lt;TYPES&gt;,
-<a href=#767 id=767 data-nosnippet>767</a>    vote: <span class="kw-2">&amp;</span>EpochRootQuorumVote2&lt;TYPES&gt;,
-<a href=#768 id=768 data-nosnippet>768</a>    public_key: TYPES::SignatureKey,
-<a href=#769 id=769 data-nosnippet>769</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
-<a href=#770 id=770 data-nosnippet>770</a>    id: u64,
-<a href=#771 id=771 data-nosnippet>771</a>    event: <span class="kw-2">&amp;</span>Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;,
-<a href=#772 id=772 data-nosnippet>772</a>    event_stream: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;&gt;,
-<a href=#773 id=773 data-nosnippet>773</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
-<a href=#774 id=774 data-nosnippet>774</a>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#775 id=775 data-nosnippet>775</a>    <span class="kw">match </span>collectors.entry(vote.view_number()) {
-<a href=#776 id=776 data-nosnippet>776</a>        Entry::Vacant(entry) =&gt; {
-<a href=#777 id=777 data-nosnippet>777</a>            <span class="macro">tracing::debug!</span>(
-<a href=#778 id=778 data-nosnippet>778</a>                <span class="string">"Starting epoch root quorum vote handle for view {:?}"</span>,
-<a href=#779 id=779 data-nosnippet>779</a>                vote.view_number()
-<a href=#780 id=780 data-nosnippet>780</a>            );
-<a href=#781 id=781 data-nosnippet>781</a>            <span class="kw">let </span>info = AccumulatorInfo {
-<a href=#782 id=782 data-nosnippet>782</a>                public_key,
-<a href=#783 id=783 data-nosnippet>783</a>                membership: membership.clone(),
-<a href=#784 id=784 data-nosnippet>784</a>                view: vote.view_number(),
-<a href=#785 id=785 data-nosnippet>785</a>                id,
-<a href=#786 id=786 data-nosnippet>786</a>            };
-<a href=#787 id=787 data-nosnippet>787</a>            <span class="kw">let </span>collector = create_epoch_root_vote_collection_task_state(
-<a href=#788 id=788 data-nosnippet>788</a>                <span class="kw-2">&amp;</span>info,
-<a href=#789 id=789 data-nosnippet>789</a>                Arc::clone(event),
-<a href=#790 id=790 data-nosnippet>790</a>                event_stream,
-<a href=#791 id=791 data-nosnippet>791</a>                upgrade_lock.clone(),
-<a href=#792 id=792 data-nosnippet>792</a>            )
-<a href=#793 id=793 data-nosnippet>793</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#755 id=755 data-nosnippet>755</a>    <span class="prelude-val">Ok</span>(state)
+<a href=#756 id=756 data-nosnippet>756</a>}
+<a href=#757 id=757 data-nosnippet>757</a>
+<a href=#758 id=758 data-nosnippet>758</a><span class="doccomment">/// A helper function that handles quorum vote collection for epoch root
+<a href=#759 id=759 data-nosnippet>759</a>///
+<a href=#760 id=760 data-nosnippet>760</a>/// # Errors
+<a href=#761 id=761 data-nosnippet>761</a>/// If we fail to handle the vote
+<a href=#762 id=762 data-nosnippet>762</a></span><span class="attr">#[allow(clippy::too_many_arguments)]
+<a href=#763 id=763 data-nosnippet>763</a></span><span class="kw">pub async fn </span>handle_epoch_root_vote&lt;TYPES: NodeType&gt;(
+<a href=#764 id=764 data-nosnippet>764</a>    collectors: <span class="kw-2">&amp;mut </span>EpochRootVoteCollectorsMap&lt;TYPES&gt;,
+<a href=#765 id=765 data-nosnippet>765</a>    vote: <span class="kw-2">&amp;</span>EpochRootQuorumVote2&lt;TYPES&gt;,
+<a href=#766 id=766 data-nosnippet>766</a>    public_key: TYPES::SignatureKey,
+<a href=#767 id=767 data-nosnippet>767</a>    membership: <span class="kw-2">&amp;</span>EpochMembership&lt;TYPES&gt;,
+<a href=#768 id=768 data-nosnippet>768</a>    id: u64,
+<a href=#769 id=769 data-nosnippet>769</a>    event: <span class="kw-2">&amp;</span>Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;,
+<a href=#770 id=770 data-nosnippet>770</a>    event_stream: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;HotShotEvent&lt;TYPES&gt;&gt;&gt;,
+<a href=#771 id=771 data-nosnippet>771</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;TYPES&gt;,
+<a href=#772 id=772 data-nosnippet>772</a>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#773 id=773 data-nosnippet>773</a>    <span class="kw">match </span>collectors.entry(vote.view_number()) {
+<a href=#774 id=774 data-nosnippet>774</a>        Entry::Vacant(entry) =&gt; {
+<a href=#775 id=775 data-nosnippet>775</a>            <span class="macro">tracing::debug!</span>(
+<a href=#776 id=776 data-nosnippet>776</a>                <span class="string">"Starting epoch root quorum vote handle for view {:?}"</span>,
+<a href=#777 id=777 data-nosnippet>777</a>                vote.view_number()
+<a href=#778 id=778 data-nosnippet>778</a>            );
+<a href=#779 id=779 data-nosnippet>779</a>            <span class="kw">let </span>info = AccumulatorInfo {
+<a href=#780 id=780 data-nosnippet>780</a>                public_key,
+<a href=#781 id=781 data-nosnippet>781</a>                membership: membership.clone(),
+<a href=#782 id=782 data-nosnippet>782</a>                view: vote.view_number(),
+<a href=#783 id=783 data-nosnippet>783</a>                id,
+<a href=#784 id=784 data-nosnippet>784</a>            };
+<a href=#785 id=785 data-nosnippet>785</a>            <span class="kw">let </span>collector = create_epoch_root_vote_collection_task_state(
+<a href=#786 id=786 data-nosnippet>786</a>                <span class="kw-2">&amp;</span>info,
+<a href=#787 id=787 data-nosnippet>787</a>                Arc::clone(event),
+<a href=#788 id=788 data-nosnippet>788</a>                event_stream,
+<a href=#789 id=789 data-nosnippet>789</a>                upgrade_lock.clone(),
+<a href=#790 id=790 data-nosnippet>790</a>            )
+<a href=#791 id=791 data-nosnippet>791</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#792 id=792 data-nosnippet>792</a>
+<a href=#793 id=793 data-nosnippet>793</a>            entry.insert(collector);
 <a href=#794 id=794 data-nosnippet>794</a>
-<a href=#795 id=795 data-nosnippet>795</a>            entry.insert(collector);
-<a href=#796 id=796 data-nosnippet>796</a>
-<a href=#797 id=797 data-nosnippet>797</a>            <span class="prelude-val">Ok</span>(())
-<a href=#798 id=798 data-nosnippet>798</a>        },
-<a href=#799 id=799 data-nosnippet>799</a>        Entry::Occupied(<span class="kw-2">mut </span>entry) =&gt; {
-<a href=#800 id=800 data-nosnippet>800</a>            <span class="comment">// handle the vote, and garbage collect if the vote collector is finished
-<a href=#801 id=801 data-nosnippet>801</a>            </span><span class="kw">if </span>entry
-<a href=#802 id=802 data-nosnippet>802</a>                .get_mut()
-<a href=#803 id=803 data-nosnippet>803</a>                .handle_vote_event(Arc::clone(event), event_stream)
-<a href=#804 id=804 data-nosnippet>804</a>                .<span class="kw">await</span><span class="question-mark">?
-<a href=#805 id=805 data-nosnippet>805</a>                </span>.is_some()
-<a href=#806 id=806 data-nosnippet>806</a>            {
-<a href=#807 id=807 data-nosnippet>807</a>                entry.remove();
-<a href=#808 id=808 data-nosnippet>808</a>                <span class="kw-2">*</span>collectors = collectors.split_off(<span class="kw-2">&amp;</span>vote.view_number());
-<a href=#809 id=809 data-nosnippet>809</a>            }
-<a href=#810 id=810 data-nosnippet>810</a>
-<a href=#811 id=811 data-nosnippet>811</a>            <span class="prelude-val">Ok</span>(())
-<a href=#812 id=812 data-nosnippet>812</a>        },
-<a href=#813 id=813 data-nosnippet>813</a>    }
-<a href=#814 id=814 data-nosnippet>814</a>}
+<a href=#795 id=795 data-nosnippet>795</a>            <span class="prelude-val">Ok</span>(())
+<a href=#796 id=796 data-nosnippet>796</a>        },
+<a href=#797 id=797 data-nosnippet>797</a>        Entry::Occupied(<span class="kw-2">mut </span>entry) =&gt; {
+<a href=#798 id=798 data-nosnippet>798</a>            <span class="comment">// handle the vote, and garbage collect if the vote collector is finished
+<a href=#799 id=799 data-nosnippet>799</a>            </span><span class="kw">if </span>entry
+<a href=#800 id=800 data-nosnippet>800</a>                .get_mut()
+<a href=#801 id=801 data-nosnippet>801</a>                .handle_vote_event(Arc::clone(event), event_stream)
+<a href=#802 id=802 data-nosnippet>802</a>                .<span class="kw">await</span><span class="question-mark">?
+<a href=#803 id=803 data-nosnippet>803</a>                </span>.is_some()
+<a href=#804 id=804 data-nosnippet>804</a>            {
+<a href=#805 id=805 data-nosnippet>805</a>                entry.remove();
+<a href=#806 id=806 data-nosnippet>806</a>                <span class="kw-2">*</span>collectors = collectors.split_off(<span class="kw-2">&amp;</span>vote.view_number());
+<a href=#807 id=807 data-nosnippet>807</a>            }
+<a href=#808 id=808 data-nosnippet>808</a>
+<a href=#809 id=809 data-nosnippet>809</a>            <span class="prelude-val">Ok</span>(())
+<a href=#810 id=810 data-nosnippet>810</a>        },
+<a href=#811 id=811 data-nosnippet>811</a>    }
+<a href=#812 id=812 data-nosnippet>812</a>}
 </code></pre></div></section></main></body></html>

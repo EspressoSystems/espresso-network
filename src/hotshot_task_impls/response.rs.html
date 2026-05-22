@@ -162,11 +162,11 @@
 <a href=#162 id=162 data-nosnippet>162</a>
 <a href=#163 id=163 data-nosnippet>163</a>        <span class="comment">// Epochs for which vid shares are required
 <a href=#164 id=164 data-nosnippet>164</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>target_epochs = <span class="macro">vec!</span>[];
-<a href=#165 id=165 data-nosnippet>165</a>        <span class="kw">if </span><span class="self">self</span>.valid_sender(sender, cur_epoch).<span class="kw">await </span>{
+<a href=#165 id=165 data-nosnippet>165</a>        <span class="kw">if </span><span class="self">self</span>.valid_sender(sender, cur_epoch) {
 <a href=#166 id=166 data-nosnippet>166</a>            <span class="comment">// The sender belongs to the current epoch.
 <a href=#167 id=167 data-nosnippet>167</a>            </span>target_epochs.push(cur_epoch);
 <a href=#168 id=168 data-nosnippet>168</a>        }
-<a href=#169 id=169 data-nosnippet>169</a>        <span class="kw">if </span>is_transition_block &amp;&amp; <span class="self">self</span>.valid_sender(sender, next_epoch).<span class="kw">await </span>{
+<a href=#169 id=169 data-nosnippet>169</a>        <span class="kw">if </span>is_transition_block &amp;&amp; <span class="self">self</span>.valid_sender(sender, next_epoch) {
 <a href=#170 id=170 data-nosnippet>170</a>            <span class="comment">// It's the last block in epoch and the sender belongs to the next epoch.
 <a href=#171 id=171 data-nosnippet>171</a>            </span>target_epochs.push(next_epoch);
 <a href=#172 id=172 data-nosnippet>172</a>        }
@@ -236,7 +236,7 @@
 <a href=#236 id=236 data-nosnippet>236</a>    }
 <a href=#237 id=237 data-nosnippet>237</a>
 <a href=#238 id=238 data-nosnippet>238</a>    <span class="doccomment">/// Makes sure the sender is allowed to send a request in the given epoch.
-<a href=#239 id=239 data-nosnippet>239</a>    </span><span class="kw">async fn </span>valid_sender(<span class="kw-2">&amp;</span><span class="self">self</span>, sender: <span class="kw-2">&amp;</span>TYPES::SignatureKey, epoch: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;) -&gt; bool {
+<a href=#239 id=239 data-nosnippet>239</a>    </span><span class="kw">fn </span>valid_sender(<span class="kw-2">&amp;</span><span class="self">self</span>, sender: <span class="kw-2">&amp;</span>TYPES::SignatureKey, epoch: <span class="prelude-ty">Option</span>&lt;EpochNumber&gt;) -&gt; bool {
 <a href=#240 id=240 data-nosnippet>240</a>        <span class="kw">let </span><span class="prelude-val">Ok</span>(memb) = <span class="self">self</span>.membership.stake_table_for_epoch(epoch) <span class="kw">else </span>{
 <a href=#241 id=241 data-nosnippet>241</a>            <span class="kw">return </span><span class="bool-val">false</span>;
 <a href=#242 id=242 data-nosnippet>242</a>        };

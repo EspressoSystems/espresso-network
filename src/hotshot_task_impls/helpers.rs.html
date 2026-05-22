@@ -1113,7 +1113,7 @@
 <a href=#1113 id=1113 data-nosnippet>1113</a>
 <a href=#1114 id=1114 data-nosnippet>1114</a>    <span class="comment">// Validate the proposal's signature. This should also catch if the leaf_commitment does not equal our calculated parent commitment
 <a href=#1115 id=1115 data-nosnippet>1115</a>    </span><span class="kw">let </span><span class="kw-2">mut </span>membership = validation_info.membership.clone();
-<a href=#1116 id=1116 data-nosnippet>1116</a>    proposal.validate_signature(<span class="kw-2">&amp;</span>membership).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#1116 id=1116 data-nosnippet>1116</a>    proposal.validate_signature(<span class="kw-2">&amp;</span>membership)<span class="question-mark">?</span>;
 <a href=#1117 id=1117 data-nosnippet>1117</a>
 <a href=#1118 id=1118 data-nosnippet>1118</a>    <span class="comment">// Verify a timeout certificate OR a view sync certificate exists and is valid.
 <a href=#1119 id=1119 data-nosnippet>1119</a>    </span><span class="kw">if </span>proposal.data.justify_qc().view_number() != view_number - <span class="number">1 </span>{

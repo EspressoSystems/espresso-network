@@ -439,7 +439,7 @@
 <a href=#439 id=439 data-nosnippet>439</a>
 <a href=#440 id=440 data-nosnippet>440</a>    <span class="doccomment">/// Update the latest proposed view number.
 <a href=#441 id=441 data-nosnippet>441</a>    </span><span class="attr">#[instrument(skip_all, fields(id = <span class="self">self</span>.id, latest_proposed_view = <span class="kw-2">*</span><span class="self">self</span>.latest_proposed_view), name = <span class="string">"Update latest proposed view"</span>, level = <span class="string">"error"</span>)]
-<a href=#442 id=442 data-nosnippet>442</a>    </span><span class="kw">async fn </span>update_latest_proposed_view(<span class="kw-2">&amp;mut </span><span class="self">self</span>, new_view: ViewNumber) -&gt; bool {
+<a href=#442 id=442 data-nosnippet>442</a>    </span><span class="kw">fn </span>update_latest_proposed_view(<span class="kw-2">&amp;mut </span><span class="self">self</span>, new_view: ViewNumber) -&gt; bool {
 <a href=#443 id=443 data-nosnippet>443</a>        <span class="kw">if </span><span class="kw-2">*</span><span class="self">self</span>.latest_proposed_view &lt; <span class="kw-2">*</span>new_view {
 <a href=#444 id=444 data-nosnippet>444</a>            <span class="macro">tracing::debug!</span>(
 <a href=#445 id=445 data-nosnippet>445</a>                <span class="string">"Updating latest proposed view from {} to {}"</span>,
@@ -645,7 +645,7 @@
 <a href=#645 id=645 data-nosnippet>645</a>            HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) =&gt; {
 <a href=#646 id=646 data-nosnippet>646</a>                <span class="kw">let </span>view_number = proposal.data.view_number();
 <a href=#647 id=647 data-nosnippet>647</a>                <span class="comment">// All nodes get the latest proposed view as a proxy of `cur_view` of old.
-<a href=#648 id=648 data-nosnippet>648</a>                </span><span class="kw">if </span>!<span class="self">self</span>.update_latest_proposed_view(view_number).<span class="kw">await </span>{
+<a href=#648 id=648 data-nosnippet>648</a>                </span><span class="kw">if </span>!<span class="self">self</span>.update_latest_proposed_view(view_number) {
 <a href=#649 id=649 data-nosnippet>649</a>                    <span class="macro">tracing::trace!</span>(<span class="string">"Failed to update latest proposed view"</span>);
 <a href=#650 id=650 data-nosnippet>650</a>                }
 <a href=#651 id=651 data-nosnippet>651</a>
@@ -663,7 +663,7 @@
 <a href=#663 id=663 data-nosnippet>663</a>                <span class="kw">let </span>view = proposal.data.view_number();
 <a href=#664 id=664 data-nosnippet>664</a>
 <a href=#665 id=665 data-nosnippet>665</a>                <span class="macro">ensure!</span>(
-<a href=#666 id=666 data-nosnippet>666</a>                    <span class="self">self</span>.update_latest_proposed_view(view).<span class="kw">await</span>,
+<a href=#666 id=666 data-nosnippet>666</a>                    <span class="self">self</span>.update_latest_proposed_view(view),
 <a href=#667 id=667 data-nosnippet>667</a>                    <span class="string">"Failed to update latest proposed view"
 <a href=#668 id=668 data-nosnippet>668</a>                </span>);
 <a href=#669 id=669 data-nosnippet>669</a>            },
