@@ -879,6 +879,10 @@ where
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
         self.inner().get_table_sizes().await
     }
+
+    async fn get_migration_status(&self) -> anyhow::Result<Vec<data_source::MigrationStatus>> {
+        self.inner().get_migration_status().await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
