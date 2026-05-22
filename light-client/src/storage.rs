@@ -14,7 +14,7 @@ use hotshot_query_service_types::{
     HeightIndexed,
     availability::{BlockId, LeafId, LeafQueryData},
 };
-use hotshot_types::{data::EpochNumber, light_client::StateVerKey};
+use hotshot_types::{data::EpochNumber, light_client::StateVerKey, x25519};
 use serde_json::Value;
 use sqlx::{
     QueryBuilder, SqlitePool, query, query_as,
@@ -77,26 +77,32 @@ pub trait Storage: Sized + Send + Sync + 'static {
 
     /// Get the stake table for the latest epoch which is not later than `epoch`.
     ///
-    /// If such a stake table is available in the database, returns the ordered entries, the
-    /// epoch number of the stake table that was loaded, and the protocol version in effect when
-    /// that stake table was cached.
+    /// If such a stake table is available in the database, returns the loaded epoch number, the
+    /// stake table state, the protocol version of the epoch root header under whose rules that
+    /// stake table's active set was selected, and the protocol version of the epoch root header
+    /// in the next epoch (used to seed iter 1 of a catchup that resumes from this row).
     fn stake_table_lower_bound(
         &self,
         epoch: EpochNumber,
-    ) -> impl Send + Future<Output = Result<Option<(EpochNumber, StakeTableState, Version)>>>;
+    ) -> impl Send + Future<Output = Result<Option<(EpochNumber, StakeTableState, Version, Version)>>>;
 
     /// Add a stake table to the cache.
     ///
-    /// `protocol_version` is the protocol version in effect at the epoch root header, used so
-    /// that future cache hits can apply the correct active-set selection rules without
-    /// re-fetching the root.
+    /// `epoch_root_protocol_version` is the protocol version of the epoch root header in epoch
+    /// `e-2` (the snapshot point), used so that future cache hits can apply the same active-set
+    /// selection rules without re-fetching the root.
+    ///
+    /// `next_epoch_root_protocol_version` is the protocol version of the epoch root header in
+    /// epoch `e-1` (the snapshot point for `e+1`), used so that a future catchup resuming from
+    /// this row can seed iter 1's filter version without re-fetching that root.
     ///
     /// This may result in an older stake table being removed.
     fn insert_stake_table(
         &self,
         epoch: EpochNumber,
         stake_table: &StakeTableState,
-        protocol_version: Version,
+        epoch_root_protocol_version: Version,
+        next_epoch_root_protocol_version: Version,
     ) -> impl Send + Future<Output = Result<()>>;
 }
 
@@ -361,23 +367,35 @@ impl Storage for SqliteStorage {
     async fn stake_table_lower_bound(
         &self,
         epoch: EpochNumber,
-    ) -> Result<Option<(EpochNumber, StakeTableState, Version)>> {
+    ) -> Result<Option<(EpochNumber, StakeTableState, Version, Version)>> {
         let mut tx = self.pool.begin().await?;
 
-        let Some((epoch, protocol_version)) = query_as::<_, (i64, String)>(
-            "SELECT epoch, protocol_version FROM stake_table_epoch WHERE epoch <= $1 ORDER BY \
-             epoch DESC LIMIT 1",
-        )
-        .bind(*epoch as i64)
-        .fetch_optional(tx.as_mut())
-        .await
-        .context("loading epoch lower bound")?
+        let Some((epoch, epoch_root_protocol_version, next_epoch_root_protocol_version)) =
+            query_as::<_, (i64, String, String)>(
+                "SELECT epoch, epoch_root_protocol_version, next_epoch_root_protocol_version FROM \
+                 stake_table_epoch WHERE epoch <= $1 ORDER BY epoch DESC LIMIT 1",
+            )
+            .bind(*epoch as i64)
+            .fetch_optional(tx.as_mut())
+            .await
+            .context("loading epoch lower bound")?
         else {
             return Ok(None);
         };
-        let protocol_version = versions::parse_version(&protocol_version).with_context(|| {
-            format!("parsing stored protocol version {protocol_version:?} for epoch {epoch}")
-        })?;
+        let epoch_root_protocol_version = versions::parse_version(&epoch_root_protocol_version)
+            .with_context(|| {
+                format!(
+                    "parsing stored epoch root protocol version {epoch_root_protocol_version:?} \
+                     for epoch {epoch}"
+                )
+            })?;
+        let next_epoch_root_protocol_version =
+            versions::parse_version(&next_epoch_root_protocol_version).with_context(|| {
+                format!(
+                    "parsing stored next epoch root protocol version \
+                     {next_epoch_root_protocol_version:?} for epoch {epoch}"
+                )
+            })?;
 
         let validators = query_as::<_, (Value,)>(
             "SELECT data FROM stake_table_validator WHERE epoch = $1 ORDER BY idx",
@@ -423,6 +441,16 @@ impl Storage for SqliteStorage {
                 .await
                 .context(format!("loading Schnorr keys for epoch {epoch}"))?;
 
+        let used_x25519_keys =
+            query_as::<_, (String,)>("SELECT key FROM stake_table_x25519_key WHERE epoch <= $1")
+                .bind(epoch)
+                .fetch(tx.as_mut())
+                .map_err(anyhow::Error::new)
+                .and_then(|(s,)| async move { Ok(x25519::PublicKey::from_str(&s)?) })
+                .try_collect()
+                .await
+                .context(format!("loading x25519 keys for epoch {epoch}"))?;
+
         Ok(Some((
             EpochNumber::new(epoch as u64),
             StakeTableState::new(
@@ -430,8 +458,10 @@ impl Storage for SqliteStorage {
                 validator_exits,
                 used_bls_keys,
                 used_schnorr_keys,
+                used_x25519_keys,
             ),
-            protocol_version,
+            epoch_root_protocol_version,
+            next_epoch_root_protocol_version,
         )))
     }
 
@@ -439,22 +469,28 @@ impl Storage for SqliteStorage {
         &self,
         epoch: EpochNumber,
         stake_table: &StakeTableState,
-        protocol_version: Version,
+        epoch_root_protocol_version: Version,
+        next_epoch_root_protocol_version: Version,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
-        // Record that the stake table for this epoch is available, along with the protocol
-        // version in effect when it was selected.
+        // Record that the stake table for this epoch is available, along with the versions of
+        // the epoch root headers in epochs `e-2` and `e-1` (snapshot points for `e` and `e+1`).
         let epoch = i64::try_from(*epoch).context("epoch overflow")?;
-        let protocol_version_str = protocol_version.to_string();
-        query("INSERT INTO stake_table_epoch (epoch, protocol_version) VALUES ($1, $2)")
-            .bind(epoch)
-            .bind(&protocol_version_str)
-            .execute(tx.as_mut())
-            .await
-            .context(format!(
-                "recording stake table availability for epoch {epoch}"
-            ))?;
+        let epoch_root_protocol_version_str = epoch_root_protocol_version.to_string();
+        let next_epoch_root_protocol_version_str = next_epoch_root_protocol_version.to_string();
+        query(
+            "INSERT INTO stake_table_epoch (epoch, epoch_root_protocol_version, \
+             next_epoch_root_protocol_version) VALUES ($1, $2, $3)",
+        )
+        .bind(epoch)
+        .bind(&epoch_root_protocol_version_str)
+        .bind(&next_epoch_root_protocol_version_str)
+        .execute(tx.as_mut())
+        .await
+        .context(format!(
+            "recording stake table availability for epoch {epoch}"
+        ))?;
 
         // Insert validators for the new stake table.
         let validators = stake_table
@@ -499,6 +535,23 @@ impl Storage for SqliteStorage {
             .context(format!(
                 "inserting newly used Schnorr keys for epoch {epoch}"
             ))?;
+
+        // Insert only newly used x25519 keys.
+        if !stake_table.used_x25519_keys().is_empty() {
+            QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
+                .push_values(stake_table.used_x25519_keys(), |mut q, key| {
+                    q.push_bind(epoch).push_bind(key.to_string());
+                })
+                // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                // when this key was added to the state.
+                .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
+                .build()
+                .execute(tx.as_mut())
+                .await
+                .context(format!(
+                    "inserting newly used x25519 keys for epoch {epoch}"
+                ))?;
+        }
 
         // Insert only the new validator exits.
         if !stake_table.validator_exits().is_empty() {
@@ -834,12 +887,12 @@ mod test {
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
-        db.insert_stake_table(epoch, &state, EPOCH_VERSION)
+        db.insert_stake_table(epoch, &state, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
         assert_eq!(
             db.stake_table_lower_bound(epoch).await.unwrap().unwrap(),
-            (epoch, state, EPOCH_VERSION)
+            (epoch, state, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
@@ -850,7 +903,7 @@ mod test {
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
-        db.insert_stake_table(epoch, &state, EPOCH_VERSION)
+        db.insert_stake_table(epoch, &state, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
         assert_eq!(
@@ -858,7 +911,7 @@ mod test {
                 .await
                 .unwrap()
                 .unwrap(),
-            (epoch, state, EPOCH_VERSION)
+            (epoch, state, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
@@ -869,10 +922,10 @@ mod test {
 
         let state1 = random_stake_table();
         let state2 = chain_stake_table(&state1);
-        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
 
@@ -881,7 +934,7 @@ mod test {
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(2), state2, EPOCH_VERSION)
+            (EpochNumber::new(2), state2, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
@@ -889,9 +942,14 @@ mod test {
     #[test_log::test]
     async fn test_stake_table_lower_bound_not_found() {
         let db = SqliteStorage::default().await.unwrap();
-        db.insert_stake_table(EpochNumber::new(2), &random_stake_table(), EPOCH_VERSION)
-            .await
-            .unwrap();
+        db.insert_stake_table(
+            EpochNumber::new(2),
+            &random_stake_table(),
+            EPOCH_VERSION,
+            EPOCH_VERSION,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             db.stake_table_lower_bound(EpochNumber::new(1))
                 .await
@@ -914,13 +972,13 @@ mod test {
         let state1 = random_stake_table();
         let state2 = chain_stake_table(&state1);
         let state3 = chain_stake_table(&state2);
-        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        db.insert_stake_table(EpochNumber::new(3), &state3, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(3), &state3, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
 
@@ -929,21 +987,26 @@ mod test {
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(1), state1.clone(), EPOCH_VERSION)
+            (
+                EpochNumber::new(1),
+                state1.clone(),
+                EPOCH_VERSION,
+                EPOCH_VERSION
+            )
         );
         assert_eq!(
             db.stake_table_lower_bound(EpochNumber::new(2))
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(1), state1, EPOCH_VERSION)
+            (EpochNumber::new(1), state1, EPOCH_VERSION, EPOCH_VERSION)
         );
         assert_eq!(
             db.stake_table_lower_bound(EpochNumber::new(3))
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(3), state3, EPOCH_VERSION)
+            (EpochNumber::new(3), state3, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
@@ -954,10 +1017,10 @@ mod test {
 
         let state1 = random_stake_table();
         let state2 = chain_stake_table(&state1);
-        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(2), &state2, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION)
+        db.insert_stake_table(EpochNumber::new(1), &state1, EPOCH_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
 
@@ -966,38 +1029,66 @@ mod test {
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(1), state1, EPOCH_VERSION)
+            (EpochNumber::new(1), state1, EPOCH_VERSION, EPOCH_VERSION)
         );
         assert_eq!(
             db.stake_table_lower_bound(EpochNumber::new(2))
                 .await
                 .unwrap()
                 .unwrap(),
-            (EpochNumber::new(2), state2, EPOCH_VERSION)
+            (EpochNumber::new(2), state2, EPOCH_VERSION, EPOCH_VERSION)
         );
     }
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_stake_table_protocol_version_roundtrip() {
+    async fn test_stake_table_epoch_root_protocol_version_roundtrip() {
         let db = SqliteStorage::default().await.unwrap();
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
-        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION)
+        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
-        let (loaded_epoch, loaded_state, loaded_protocol_version) =
+        let (loaded_epoch, loaded_state, loaded_version, loaded_next_version) =
             db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
         assert_eq!(loaded_epoch, epoch);
         assert_eq!(loaded_state, state);
-        assert_eq!(loaded_protocol_version, CLIQUENET_VERSION);
+        assert_eq!(loaded_version, CLIQUENET_VERSION);
+        assert_eq!(loaded_next_version, EPOCH_VERSION);
+    }
+
+    /// Regression: storage previously dropped `used_x25519_keys` on round trip,
+    /// so a reloaded `StakeTableState::commit()` diverged from the proposer's
+    /// hash once any V3 events had been applied.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_stake_table_x25519_keys_round_trip() {
+        use committable::Committable;
+
+        let db = SqliteStorage::default().await.unwrap();
+        let epoch = EpochNumber::new(1);
+        let state = random_stake_table();
+        assert!(
+            !state.used_x25519_keys().is_empty(),
+            "random_stake_table must populate used_x25519_keys for this test to be meaningful"
+        );
+
+        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, CLIQUENET_VERSION)
+            .await
+            .unwrap();
+        let (_, loaded, ..) = db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
+
+        assert_eq!(loaded.used_x25519_keys(), state.used_x25519_keys());
+        assert_eq!(loaded.commit(), state.commit());
     }
 
     /// Make a stake table state with all fields populated.
     fn random_stake_table() -> StakeTableState {
         let validator = random_validator();
         let candidate: RegisteredValidator<PubKey> = validator.clone().into();
+        let x25519_key =
+            x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
         StakeTableState::new(
             [(candidate.account, candidate.clone())]
                 .into_iter()
@@ -1005,6 +1096,7 @@ mod test {
             [Address::random()].into_iter().collect(),
             [candidate.stake_table_key].into_iter().collect(),
             [candidate.state_ver_key].into_iter().collect(),
+            [x25519_key].into_iter().collect(),
         )
     }
 
@@ -1013,6 +1105,8 @@ mod test {
         let new_validator = random_validator();
         let new_candidate: RegisteredValidator<PubKey> = new_validator.clone().into();
         let new_exit = Address::random();
+        let new_x25519 =
+            x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
         StakeTableState::new(
             state
                 .validators()
@@ -1036,6 +1130,12 @@ mod test {
                 .used_schnorr_keys()
                 .iter()
                 .chain([&new_candidate.state_ver_key])
+                .cloned()
+                .collect(),
+            state
+                .used_x25519_keys()
+                .iter()
+                .chain([&new_x25519])
                 .cloned()
                 .collect(),
         )
