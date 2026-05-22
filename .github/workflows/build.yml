@@ -233,15 +233,20 @@ jobs:
       #   - On main: push to the registry and fetch from the registry to run the demo test.
       - name: Build docker image and export to file (on PRs)
         if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@v6
+        uses: nick-fields/retry@v4
+        env:
+          LABELS: ${{ steps.metadata.outputs.labels }}
+          TAGS: ${{ steps.metadata.outputs.tags }}
         with:
-          context: .
-          file: ./docker/${{ matrix.service }}.Dockerfile
-          labels: ${{ steps.metadata.outputs.labels }}
-          # Note the tag is used later to run the demo test
-          tags: ${{ steps.metadata.outputs.tags }}
-          platforms: linux/amd64
-          outputs: type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/${{ matrix.service }}.Dockerfile \
+              --platform linux/amd64 \
+              --output type=docker,dest=${{ runner.temp }}/${{ matrix.service }}.tar \
+              .
 
       - name: Upload docker image artifact (on PRs)
         if: github.event_name == 'pull_request'
@@ -254,15 +259,20 @@ jobs:
 
       - name: Build and push docker (non-PR)
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v6
-        id: build
+        uses: nick-fields/retry@v4
+        env:
+          LABELS: ${{ steps.metadata.outputs.labels }}
         with:
-          context: .
-          file: ./docker/${{ matrix.service }}.Dockerfile
-          labels: ${{ steps.metadata.outputs.labels }}
-          # Note: the final multiarch image will receive the tag
-          platforms: linux/amd64
-          outputs: type=image,name=ghcr.io/espressosystems/espresso-network/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/${{ matrix.service }}.Dockerfile \
+              --platform linux/amd64 \
+              --output type=image,name=ghcr.io/espressosystems/espresso-network/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true \
+              --metadata-file ${{ runner.temp }}/metadata.json \
+              .
 
       - name: Export docker image digest
         if: github.event_name != 'pull_request'
@@ -271,7 +281,7 @@ jobs:
           set -x
           digest_dir="${{ runner.temp }}/digests"
           mkdir -p "${digest_dir}"
-          digest="${{ steps.build.outputs.digest }}"
+          digest=$(jq -r '."containerimage.digest"' "${{ runner.temp }}/metadata.json")
           touch "${digest_dir}/${digest#sha256:}"
           ls -lah "${digest_dir}"
 
@@ -346,15 +356,20 @@ jobs:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
 
       - name: Build and push docker
-        uses: docker/build-push-action@v6
-        id: build
+        uses: nick-fields/retry@v4
+        env:
+          LABELS: ${{ steps.metadata.outputs.labels }}
         with:
-          context: .
-          file: ./docker/${{ matrix.service }}.Dockerfile
-          labels: ${{ steps.metadata.outputs.labels }}
-          # Note: the final multiarch image will receive the tag
-          platforms: linux/arm64
-          outputs: type=image,name=ghcr.io/espressosystems/espresso-network/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/${{ matrix.service }}.Dockerfile \
+              --platform linux/arm64 \
+              --output type=image,name=ghcr.io/espressosystems/espresso-network/${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true \
+              --metadata-file ${{ runner.temp }}/metadata.json \
+              .
 
       - name: Export docker image digest
         shell: bash
@@ -362,7 +377,7 @@ jobs:
           set -x
           digest_dir="${{ runner.temp }}/digests"
           mkdir -p "${digest_dir}"
-          digest="${{ steps.build.outputs.digest }}"
+          digest=$(jq -r '."containerimage.digest"' "${{ runner.temp }}/metadata.json")
           touch "${digest_dir}/${digest#sha256:}"
           ls -lah "${digest_dir}"
 
@@ -473,15 +488,20 @@ jobs:
       # Consumers should migrate to ghcr.io/espressosystems/espresso-network/espresso-node.
       - name: Build and push legacy sequencer image with old binary names
         if: matrix.service == 'espresso-node'
-        uses: docker/build-push-action@v6
+        uses: nick-fields/retry@v4
+        env:
+          TAGS: ghcr.io/espressosystems/espresso-sequencer/sequencer:${{ steps.meta.outputs.version }}
         with:
-          context: .
-          file: ./docker/espresso-node-legacy.Dockerfile
-          build-args: |
-            BASE_IMAGE=ghcr.io/espressosystems/espresso-network/espresso-node:${{ steps.meta.outputs.version }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ghcr.io/espressosystems/espresso-sequencer/sequencer:${{ steps.meta.outputs.version }}
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/espresso-node-legacy.Dockerfile \
+              --build-arg BASE_IMAGE=ghcr.io/espressosystems/espresso-network/espresso-node:${{ steps.meta.outputs.version }} \
+              --platform linux/amd64,linux/arm64 \
+              --push \
+              .
 
   test-demo-pr:
     if: github.event_name == 'pull_request'
