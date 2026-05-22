@@ -15,25 +15,16 @@ target_branch="$2"
 git config user.name 'github-actions[bot]'
 git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-merged=$(gh pr view "${pr_number}" --json merged -q .merged)
-if [[ "${merged}" != "true" ]]; then
+meta=$(gh pr view "${pr_number}" --json merged,title,mergeCommit \
+  -q '{merged,title,sha:.mergeCommit.oid}')
+if [[ "$(jq -r '.merged' <<<"${meta}")" != "true" ]]; then
   echo "PR #${pr_number} is not merged; refusing to backport" >&2
   exit 1
 fi
-
-meta=$(gh pr view "${pr_number}" \
-  --json title,mergeCommit,author \
-  -q '{title,sha:.mergeCommit.oid,login:.author.login}')
 title=$(jq -r '.title' <<<"${meta}")
 sha=$(jq -r '.sha' <<<"${meta}")
-login=$(jq -r '.login' <<<"${meta}")
 
-if [[ -z "${sha}" || "${sha}" == "null" ]]; then
-  echo "Could not determine merge commit SHA for PR #${pr_number}" >&2
-  exit 1
-fi
-
-echo "backporting PR #${pr_number} (${sha}) by @${login} to ${target_branch}"
+echo "backporting PR #${pr_number} (${sha}) to ${target_branch}"
 
 git fetch origin "${target_branch}"
 
@@ -52,16 +43,8 @@ if [[ "${cherry_status}" -ne 0 ]]; then
   fi
 
   git add -- "${conflicted[@]}"
-
-  commit_msg=$(
-    cat <<EOF
-backport: cherry-pick #${pr_number} to ${target_branch}
-
-Cherry-picked from commit ${sha}.
-Conflict markers committed for follow-up resolution.
-EOF
-  )
-  git commit -m "${commit_msg}"
+  git commit -m "backport: cherry-pick #${pr_number} to ${target_branch}" \
+             -m "Cherry-picked from ${sha}; conflict markers committed for resolution."
 fi
 
 git push -u origin "${branch}"
