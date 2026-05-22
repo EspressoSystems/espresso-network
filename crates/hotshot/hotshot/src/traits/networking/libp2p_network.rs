@@ -39,6 +39,7 @@ use hotshot_libp2p_networking::{
             record::{Namespace, RecordKey, RecordValue},
             store::persistent::DhtPersistentStorage,
         },
+        log_summary::LogEvent,
         spawn_network_node,
         transport::construct_auth_message,
     },
@@ -74,7 +75,7 @@ use tokio::{
     },
     time::sleep,
 };
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{BroadcastDelay, EpochMembershipCoordinator};
 
@@ -609,7 +610,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 if latest_seen_view.load(Ordering::Relaxed) + THRESHOLD <= *view_number {
                     // look up
                     if let Err(err) = handle.lookup_node(&pk, dht_timeout).await {
-                        warn!("Failed to perform lookup for key {pk}: {err}");
+                        LogEvent::DhtLookupFailure.record();
+                        debug!("Failed to perform lookup for key {pk}: {err}");
                     };
                 }
             }
