@@ -1168,11 +1168,51 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             Ok(table_sizes)
         }
     }
+
+    async fn get_migration_status(
+        &self,
+    ) -> anyhow::Result<Vec<super::data_source::MigrationStatus>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch migration status")?;
+
+        let rows: Vec<(
+            String,
+            chrono::DateTime<chrono::Utc>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<i64>,
+        )> = sqlx::query_as(
+            "SELECT name, started_at, completed_at, last_offset FROM deferred_migrations ORDER BY \
+             started_at",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .context("failed to query deferred_migrations")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, started_at, completed_at, last_offset)| {
+                super::data_source::MigrationStatus {
+                    name,
+                    started_at,
+                    completed_at,
+                    last_offset,
+                }
+            })
+            .collect())
+    }
 }
 
 impl super::data_source::DatabaseMetadataSource for DataSource {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
         self.as_ref().get_table_sizes().await
+    }
+
+    async fn get_migration_status(
+        &self,
+    ) -> anyhow::Result<Vec<super::data_source::MigrationStatus>> {
+        self.as_ref().get_migration_status().await
     }
 }
 
