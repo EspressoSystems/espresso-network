@@ -88,7 +88,7 @@ pub struct StateEntry<T: NodeType> {
 
 pub struct StateManager<T: NodeType> {
     instance: Arc<T::InstanceState>,
-    validated_states: BTreeMap<ViewNumber, StateEntry<T>>,
+    validated_states: BTreeMap<Commitment<Leaf2<T>>, StateEntry<T>>,
     state_requests: HashMap<Commitment<Leaf2<T>>, (AbortHandle, ViewNumber)>,
     header_requests: HashMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
     pending_requests: HashMap<Commitment<Leaf2<T>>, Vec<Pending<T>>>,
@@ -127,14 +127,18 @@ impl<T: NodeType> StateManager<T> {
 
     /// Get the validated state for a given view.
     pub fn get_state(&self, view: ViewNumber) -> Option<&StateEntry<T>> {
-        self.validated_states.get(&view)
+        self.validated_states
+            .iter()
+            .find(|(_, entry)| entry.leaf.view_number() == view)
+            .map(|(_, entry)| entry)
     }
 
     /// Get the leaf for a given view
     pub fn get_leaf(&self, view: ViewNumber) -> Option<Leaf2<T>> {
         self.validated_states
-            .get(&view)
-            .map(|entry| entry.leaf.clone())
+            .iter()
+            .find(|(_, entry)| entry.leaf.view_number() == view)
+            .map(|(_, entry)| entry.leaf.clone())
     }
 
     pub fn seed_state(&mut self, view: ViewNumber, state: Arc<T::ValidatedState>, leaf: Leaf2<T>) {
@@ -155,7 +159,11 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
 
-        let Some(parent_entry) = self.validated_states.get(&request.parent_view).cloned() else {
+        let Some(parent_entry) = self
+            .validated_states
+            .get(&request.parent_commitment)
+            .cloned()
+        else {
             self.insert_empty_state(request.proposal);
             self.start_pending(commitment);
             return;
@@ -229,8 +237,7 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
 
-        let parent_view = request.parent_proposal.view_number();
-        let Some(parent_entry) = self.validated_states.get(&parent_view).cloned() else {
+        let Some(parent_entry) = self.validated_states.get(&parent_commitment).cloned() else {
             // Parent state not available yet (e.g. its proposal is still
             // being validated).  Queue the request so it is retried once
             // the state for the parent view is inserted.
@@ -361,7 +368,8 @@ impl<T: NodeType> StateManager<T> {
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        self.validated_states = self.validated_states.split_off(&view_number);
+        self.validated_states
+            .retain(|_, entry| entry.leaf.view_number() >= view_number);
         for (task, view) in self.state_requests.values() {
             if *view < view_number {
                 task.abort();
@@ -396,7 +404,7 @@ impl<T: NodeType> StateManager<T> {
         delta: Option<Delta<T>>,
         leaf: Leaf2<T>,
     ) {
-        if let Some(existing) = self.validated_states.get(&view)
+        if let Some(existing) = self.validated_states.get(&leaf.commit())
             && existing.delta.is_some()
             && delta.is_none()
         {
@@ -407,7 +415,7 @@ impl<T: NodeType> StateManager<T> {
             return;
         }
         self.validated_states
-            .insert(view, StateEntry { state, delta, leaf });
+            .insert(leaf.commit(), StateEntry { state, delta, leaf });
     }
 
     fn insert_empty_state(&mut self, proposal: Proposal<T>) {
@@ -422,7 +430,9 @@ impl<T: NodeType> StateManager<T> {
 
     #[cfg(test)]
     pub(crate) fn validated_contains_view(&self, v: ViewNumber) -> bool {
-        self.validated_states.contains_key(&v)
+        self.validated_states
+            .iter()
+            .any(|(_, entry)| entry.leaf.view_number() == v)
     }
 
     #[cfg(test)]
