@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use alloy::primitives::U256;
 use committable::{Commitment, Committable};
 use hotshot::types::SignatureKey;
 use hotshot_types::{
@@ -8,14 +9,22 @@ use hotshot_types::{
     message::UpgradeLock,
     simple_vote::{HasEpoch, VersionedVoteData},
     stake_table::StakeTableEntries,
-    traits::node_implementation::NodeType,
+    traits::{node_implementation::NodeType, signature_key::StakeTableEntryType},
     vote::{Certificate, Vote, VoteAccumulator},
 };
 use tokio::{
     sync::mpsc::{self},
     task::{AbortHandle, JoinSet},
 };
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
+
+/// Accumulated stake / threshold for a single view.  Used by diagnostics
+/// (e.g. timeout logging) to show how close a view came to forming a cert.
+#[derive(Clone, Copy, Debug)]
+pub struct VoteStats {
+    pub stake: U256,
+    pub threshold: U256,
+}
 
 pub struct VoteCollector<T: NodeType, V, C> {
     // NOTE: `tasks` is declared before `accumulators` so that on drop the
@@ -30,6 +39,10 @@ pub struct VoteCollector<T: NodeType, V, C> {
     upgrade_lock: UpgradeLock<T>,
     /// Votes received before their epoch membership was available.
     pending_votes: Vec<V>,
+    /// Unique signers observed per view.  Used only by `stats()` to compute
+    /// accumulated stake on demand (e.g. when diagnosing a timeout); the
+    /// real dedup for cert formation happens in the accumulator task.
+    signers: BTreeMap<ViewNumber, HashSet<T::SignatureKey>>,
 }
 
 impl<T, V, C> VoteCollector<T, V, C>
@@ -51,7 +64,32 @@ where
             upgrade_lock,
             tasks: JoinSet::new(),
             pending_votes: Vec::new(),
+            signers: BTreeMap::new(),
         }
+    }
+
+    /// Compute the accumulated stake (sum across unique signers we've routed
+    /// to the accumulator for `view`) and the cert threshold in `epoch`.
+    /// Looks up each signer's stake on demand — only intended for rare paths
+    /// like timeout diagnostics.  Returns `None` if no votes have been seen
+    /// for `view` or `epoch`'s stake table is unavailable.
+    pub async fn stats(&self, view: ViewNumber, epoch: EpochNumber) -> Option<VoteStats> {
+        let signers = self.signers.get(&view)?;
+        if signers.is_empty() {
+            return None;
+        }
+        let membership = self
+            .epoch_membership_coordinator
+            .membership_for_epoch(Some(epoch))
+            .ok()?;
+        let threshold = C::threshold(&membership).await;
+        let mut stake = U256::ZERO;
+        for signer in signers {
+            if let Some(peer) = C::stake_table_entry(&membership, signer).await {
+                stake += peer.stake_table_entry.stake();
+            }
+        }
+        Some(VoteStats { stake, threshold })
     }
 
     pub async fn next(&mut self) -> Option<C> {
@@ -85,6 +123,14 @@ where
             self.pending_votes.push(vote);
             return;
         };
+
+        // Track unique signer keys (cheap HashSet insert).  Stake is
+        // computed on demand in `stats()` — see the rationale on `signers`.
+        self.signers
+            .entry(view)
+            .or_default()
+            .insert(vote.signing_key());
+
         let (tx, _abort_handle) = self.accumulators.entry(view).or_insert_with(|| {
             let (tx, rx) = mpsc::channel(100);
             let accumulator = VoteAccumulator::new(self.upgrade_lock.clone());
@@ -123,7 +169,7 @@ where
         Some(m)
     }
 
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all, fields(view = %_view))]
     async fn run_per_view(
         _view: ViewNumber,
         mut rx: mpsc::Receiver<V>,
@@ -143,6 +189,11 @@ where
                     &upgrade_lock,
                 ) {
                     Ok(()) => {
+                        info!(
+                            view = %cert.view_number(),
+                            cert = std::any::type_name::<C>(),
+                            "certificate formed"
+                        );
                         return cert;
                     },
                     Err(e) => {
@@ -165,6 +216,11 @@ where
                             if let Some(cert) =
                                 accumulator.accumulate(vote, membership.clone()).await
                             {
+                                info!(
+                                    view = %cert.view_number(),
+                                    cert = std::any::type_name::<C>(),
+                                    "certificate formed (after recovery)"
+                                );
                                 return cert;
                             }
                         }
@@ -185,6 +241,7 @@ where
         self.accumulators = keep;
         self.membership_cache = self.membership_cache.split_off(&epoch);
         self.pending_votes.retain(|v| v.view_number() >= view);
+        self.signers = self.signers.split_off(&view);
     }
 }
 
