@@ -199,10 +199,10 @@ def _render_png(df: pd.DataFrame, label: str, out_path: Path) -> bool:
     fig, ax = plt.subplots(figsize=(12, 6), dpi=100)
     for i, (name, g) in enumerate(df.groupby("Name", sort=True)):
         color = PLOT_PALETTE[i % len(PLOT_PALETTE)]
-        ax.plot(g["seconds"], g["rss_mb"], linewidth=1.2, color=color, label=name)
+        ax.plot(g["seconds"], g["rss_mib"], linewidth=1.2, color=color, label=name)
         ax.annotate(
             name,
-            xy=(g["seconds"].iloc[-1], g["rss_mb"].iloc[-1]),
+            xy=(g["seconds"].iloc[-1], g["rss_mib"].iloc[-1]),
             xytext=(4, 0),
             textcoords="offset points",
             color=color,
@@ -213,7 +213,7 @@ def _render_png(df: pd.DataFrame, label: str, out_path: Path) -> bool:
     ax.set(
         title=f"Memory soak: {label} (RSS over time)",
         xlabel="seconds",
-        ylabel="RSS (MB)",
+        ylabel="RSS (MiB)",
     )
     ax.grid(True, alpha=0.3)
     xmin, xmax = ax.get_xlim()
@@ -231,7 +231,7 @@ def _bucket_max(s: pd.DataFrame, n: int) -> pd.DataFrame:
     bucket = pd.cut(s["seconds"], bins=n, labels=False, include_lowest=True)
     return (
         s.groupby(bucket, as_index=False)
-        .agg(seconds=("seconds", "max"), rss_mb=("rss_mb", "max"))
+        .agg(seconds=("seconds", "max"), rss_mib=("rss_mib", "max"))
         .sort_values("seconds")
         .reset_index(drop=True)
     )
@@ -246,18 +246,18 @@ def _render_mermaid(df: pd.DataFrame) -> str:
     }
     names = list(sub)
     max_x = max(int(s["seconds"].iloc[-1]) for s in sub.values())
-    y_top = max(1.0, max(s["rss_mb"].max() for s in sub.values()) * 1.1)
+    y_top = max(1.0, max(s["rss_mib"].max() for s in sub.values()) * 1.1)
     palette = ", ".join(PLOT_PALETTE[: len(names)])
 
     chart = [
         "```mermaid",
         f'%%{{init: {{"themeVariables": {{"xyChart": {{"plotColorPalette": "{palette}"}}}}}}}}%%',
         "xychart-beta",
-        '    title "RSS over time (MB)"',
+        '    title "RSS over time (MiB)"',
         f'    x-axis "seconds" 0 --> {max_x}',
-        f'    y-axis "MB" 0 --> {y_top:.0f}',
+        f'    y-axis "MiB" 0 --> {y_top:.0f}',
         *(
-            f'    line "{n}" [{", ".join(f"{y:.1f}" for y in sub[n]["rss_mb"])}]'
+            f'    line "{n}" [{", ".join(f"{y:.1f}" for y in sub[n]["rss_mib"])}]'
             for n in names
         ),
         "```",
@@ -306,7 +306,7 @@ def render_summary(
     parts = [header, "", _render_table(df, process_rss_max)]
 
     chart_df = df.assign(
-        seconds=df["ts"] - df["ts"].min(), rss_mb=df["rss"] / 1_000_000
+        seconds=df["ts"] - df["ts"].min(), rss_mib=df["rss"] / (1024**2)
     ).sort_values(["Name", "seconds"])
     mermaid = _render_mermaid(chart_df)
     if mermaid:
