@@ -46,6 +46,16 @@ CREATE TABLE stake_table_schnorr_key (
 );
 CREATE INDEX stake_table_schnorr_key_epoch ON stake_table_schnorr_key (epoch);
 
+-- This table tracks used x25519 keys for each stake table.
+--
+-- It is cumulative, meaning each key is only added once, with the epoch number where it is first
+-- used, but it belongs to the `used_x25519_keys` set in each stake table after that epoch as well.
+CREATE TABLE stake_table_x25519_key (
+    key   TEXT   PRIMARY KEY,
+    epoch BIGINT NOT NULL
+);
+CREATE INDEX stake_table_x25519_key_epoch ON stake_table_x25519_key (epoch);
+
 -- This table tracks exiting validators for each stake table.
 --
 -- It is cumulative, meaning each address is only added once, with the epoch number where it first

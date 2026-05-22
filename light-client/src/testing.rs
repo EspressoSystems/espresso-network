@@ -431,6 +431,7 @@ impl InnerTestClient {
             Default::default(),
             used_bls_keys,
             used_schnorr_keys,
+            HashSet::default(),
         );
         state.commit()
     }
