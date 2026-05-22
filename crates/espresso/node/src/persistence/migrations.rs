@@ -79,63 +79,56 @@ macro_rules! merkle_tree_backfill {
                 offset: u64,
             ) -> anyhow::Result<Option<u64>> {
                 let batch_size = self.batch_size() as i64;
-                let rows: Vec<(
-                    serde_json::Value,
-                    i64,
-                    i64,
-                    Option<serde_json::Value>,
-                    Option<sqlx::types::BitVec>,
-                    Option<serde_json::Value>,
-                    Option<serde_json::Value>,
-                )> = sqlx::query_as(concat!(
-                    "SELECT path, created, hash_id::BIGINT, children, children_bitvec, idx, entry \
-                     FROM ",
+
+                // Check if there is any work left in this window. If not, return None to
+                // signal completion.
+                let any: Option<(i64,)> = sqlx::query_as(concat!(
+                    "SELECT created FROM ",
                     $legacy_table,
-                    " WHERE created >= $1 AND created < $2 ORDER BY created, path"
+                    " WHERE created >= $1 AND created < $2 LIMIT 1"
                 ))
                 .bind(offset as i64)
                 .bind(offset as i64 + batch_size)
-                .fetch_all(tx.as_mut())
+                .fetch_optional(tx.as_mut())
                 .await?;
-
-                if rows.is_empty() {
+                if any.is_none() {
                     return Ok(None);
                 }
-                let n = rows.len();
 
-                let mut paths = Vec::with_capacity(n);
-                let mut createds = Vec::with_capacity(n);
-                let mut hash_ids = Vec::with_capacity(n);
-                let mut childrens = Vec::with_capacity(n);
-                let mut children_bitvecs = Vec::with_capacity(n);
-                let mut idxs = Vec::with_capacity(n);
-                let mut entries = Vec::with_capacity(n);
-
-                for (path, created, hash_id, children, children_bitvec, idx, entry) in rows {
-                    paths.push(path);
-                    createds.push(created);
-                    hash_ids.push(hash_id);
-                    childrens.push(children);
-                    children_bitvecs.push(children_bitvec);
-                    idxs.push(idx);
-                    entries.push(entry);
-                }
-
+                // Move rows from legacy into the new _bigint table, translating both
+                // `hash_id` and every element of `children` from legacy hash ids into
+                // hash_bigint ids by joining on the hash `value`. This removes any
+                // dependency on `BackfillHash` having preserved the original ids.
                 sqlx::query(concat!(
                     "INSERT INTO ",
                     $new_table,
                     " (path, created, hash_id, children, children_bitvec, idx, entry)
-                     SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bigint[], \
-                     $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
-                     ON CONFLICT DO NOTHING"
+                     SELECT
+                         fmt.path,
+                         fmt.created,
+                         hb.id,
+                         CASE WHEN fmt.children IS NULL THEN NULL
+                              ELSE COALESCE((
+                                  SELECT jsonb_agg(chb.id ORDER BY ord)
+                                  FROM jsonb_array_elements_text(fmt.children)
+                                       WITH ORDINALITY AS arr(child_id, ord)
+                                  JOIN hash ch ON ch.id = arr.child_id::INT
+                                  JOIN hash_bigint chb ON chb.value = ch.value
+                              ), '[]'::jsonb)
+                         END,
+                         fmt.children_bitvec,
+                         fmt.idx,
+                         fmt.entry
+                     FROM ",
+                    $legacy_table,
+                    " fmt
+                     JOIN hash h ON h.id = fmt.hash_id
+                     JOIN hash_bigint hb ON hb.value = h.value
+                     WHERE fmt.created >= $1 AND fmt.created < $2
+                     ON CONFLICT (path, created) DO NOTHING"
                 ))
-                .bind(&paths)
-                .bind(&createds)
-                .bind(&hash_ids)
-                .bind(&childrens)
-                .bind(&children_bitvecs)
-                .bind(&idxs)
-                .bind(&entries)
+                .bind(offset as i64)
+                .bind(offset as i64 + batch_size)
                 .execute(tx.as_mut())
                 .await?;
 
@@ -384,5 +377,18 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(n_orphans, 0, "fee_merkle_tree_bigint has dangling hash_id");
+
+        let (n_orphan_children,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ( SELECT child_id FROM fee_merkle_tree_bigint fmt, \
+             jsonb_array_elements_text(fmt.children) AS arr(child_id) WHERE fmt.children IS NOT \
+             NULL ) c LEFT JOIN hash_bigint hb ON hb.id = c.child_id::BIGINT WHERE hb.id IS NULL",
+        )
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        assert_eq!(
+            n_orphan_children, 0,
+            "fee_merkle_tree_bigint.children has dangling hash_id"
+        );
     }
 }
