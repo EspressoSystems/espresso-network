@@ -48,6 +48,7 @@ local_catchup_timeout:
 bootstrap_epoch_catchup_timeout:
   secs: 30
   nanos: 0
+new_protocol_consensus_gc_interval: 100
 catchup_backoff:
   factor: 4
   base:
