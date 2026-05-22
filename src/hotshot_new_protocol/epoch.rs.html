@@ -8,7 +8,7 @@
 <a href=#8 id=8 data-nosnippet>8</a>    drb::DrbResult,
 <a href=#9 id=9 data-nosnippet>9</a>    epoch_membership::EpochMembershipCoordinator,
 <a href=#10 id=10 data-nosnippet>10</a>    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-<a href=#11 id=11 data-nosnippet>11</a>    utils::is_epoch_root,
+<a href=#11 id=11 data-nosnippet>11</a>    utils::{is_epoch_root, is_transition_block},
 <a href=#12 id=12 data-nosnippet>12</a>};
 <a href=#13 id=13 data-nosnippet>13</a><span class="kw">use </span>hotshot_utils::anytrace;
 <a href=#14 id=14 data-nosnippet>14</a><span class="kw">use </span>tokio::task::{AbortHandle, JoinSet};
@@ -101,68 +101,81 @@
 <a href=#101 id=101 data-nosnippet>101</a>            };
 <a href=#102 id=102 data-nosnippet>102</a>            <span class="self">self</span>.request_drb_result(epoch + <span class="number">2</span>);
 <a href=#103 id=103 data-nosnippet>103</a>        }
-<a href=#104 id=104 data-nosnippet>104</a>    }
-<a href=#105 id=105 data-nosnippet>105</a>
-<a href=#106 id=106 data-nosnippet>106</a>    <span class="kw">pub fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: EpochNumber) {
-<a href=#107 id=107 data-nosnippet>107</a>        <span class="kw">let </span><span class="kw-2">mut </span>tmp = <span class="self">self</span>.handles.split_off(<span class="kw-2">&amp;</span>epoch);
-<a href=#108 id=108 data-nosnippet>108</a>        swap(<span class="kw-2">&amp;mut </span>tmp, <span class="kw-2">&amp;mut </span><span class="self">self</span>.handles);
-<a href=#109 id=109 data-nosnippet>109</a>        <span class="kw">for </span>handle <span class="kw">in </span>tmp.into_values().flatten() {
-<a href=#110 id=110 data-nosnippet>110</a>            handle.abort();
-<a href=#111 id=111 data-nosnippet>111</a>        }
-<a href=#112 id=112 data-nosnippet>112</a>        <span class="comment">// Drop tracking entries for epochs we no longer care about.  Keeps
-<a href=#113 id=113 data-nosnippet>113</a>        // `completed_drb_requests` bounded while the protocol runs.
-<a href=#114 id=114 data-nosnippet>114</a>        </span><span class="self">self</span>.pending_drb_requests = <span class="self">self</span>.pending_drb_requests.split_off(<span class="kw-2">&amp;</span>epoch);
-<a href=#115 id=115 data-nosnippet>115</a>        <span class="self">self</span>.completed_drb_requests = <span class="self">self</span>.completed_drb_requests.split_off(<span class="kw-2">&amp;</span>epoch);
-<a href=#116 id=116 data-nosnippet>116</a>    }
-<a href=#117 id=117 data-nosnippet>117</a>
-<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">pub fn </span>request_drb_result(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: EpochNumber) {
-<a href=#119 id=119 data-nosnippet>119</a>        <span class="comment">// Already computed — caller can read the DRB from membership.
-<a href=#120 id=120 data-nosnippet>120</a>        </span><span class="kw">if </span><span class="self">self</span>.completed_drb_requests.contains(<span class="kw-2">&amp;</span>epoch) {
-<a href=#121 id=121 data-nosnippet>121</a>            <span class="kw">return</span>;
-<a href=#122 id=122 data-nosnippet>122</a>        }
-<a href=#123 id=123 data-nosnippet>123</a>        <span class="comment">// In-flight task will deliver the result; avoid spawning a duplicate.
-<a href=#124 id=124 data-nosnippet>124</a>        </span><span class="kw">if </span><span class="self">self</span>.pending_drb_requests.contains(<span class="kw-2">&amp;</span>epoch) {
-<a href=#125 id=125 data-nosnippet>125</a>            <span class="kw">return</span>;
-<a href=#126 id=126 data-nosnippet>126</a>        }
-<a href=#127 id=127 data-nosnippet>127</a>        <span class="self">self</span>.pending_drb_requests.insert(epoch);
-<a href=#128 id=128 data-nosnippet>128</a>        <span class="kw">let </span>membership_coordinator = <span class="self">self</span>.membership_coordinator.clone();
-<a href=#129 id=129 data-nosnippet>129</a>        <span class="kw">let </span>handles = <span class="self">self</span>.handles.entry(epoch).or_default();
+<a href=#104 id=104 data-nosnippet>104</a>
+<a href=#105 id=105 data-nosnippet>105</a>        <span class="comment">// If this is the transition block of an epoch feed the DRB result to the coordinator.
+<a href=#106 id=106 data-nosnippet>106</a>        </span><span class="kw">if </span>is_transition_block(block_number, <span class="kw-2">*</span><span class="self">self</span>.epoch_height)
+<a href=#107 id=107 data-nosnippet>107</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(epoch) = leaf.epoch(<span class="kw-2">*</span><span class="self">self</span>.epoch_height)
+<a href=#108 id=108 data-nosnippet>108</a>            &amp;&amp; <span class="kw">let </span><span class="prelude-val">Some</span>(drb) = leaf.next_drb_result
+<a href=#109 id=109 data-nosnippet>109</a>        {
+<a href=#110 id=110 data-nosnippet>110</a>            <span class="kw">let </span>target_epoch = epoch + <span class="number">1</span>;
+<a href=#111 id=111 data-nosnippet>111</a>            <span class="kw">if </span>!<span class="self">self</span>.completed_drb_requests.contains(<span class="kw-2">&amp;</span>target_epoch) {
+<a href=#112 id=112 data-nosnippet>112</a>                <span class="self">self</span>.membership_coordinator.supply_drb(target_epoch, drb);
+<a href=#113 id=113 data-nosnippet>113</a>                <span class="self">self</span>.completed_drb_requests.insert(target_epoch);
+<a href=#114 id=114 data-nosnippet>114</a>                <span class="self">self</span>.pending_drb_requests.remove(<span class="kw-2">&amp;</span>target_epoch);
+<a href=#115 id=115 data-nosnippet>115</a>            }
+<a href=#116 id=116 data-nosnippet>116</a>        }
+<a href=#117 id=117 data-nosnippet>117</a>    }
+<a href=#118 id=118 data-nosnippet>118</a>
+<a href=#119 id=119 data-nosnippet>119</a>    <span class="kw">pub fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: EpochNumber) {
+<a href=#120 id=120 data-nosnippet>120</a>        <span class="kw">let </span><span class="kw-2">mut </span>tmp = <span class="self">self</span>.handles.split_off(<span class="kw-2">&amp;</span>epoch);
+<a href=#121 id=121 data-nosnippet>121</a>        swap(<span class="kw-2">&amp;mut </span>tmp, <span class="kw-2">&amp;mut </span><span class="self">self</span>.handles);
+<a href=#122 id=122 data-nosnippet>122</a>        <span class="kw">for </span>handle <span class="kw">in </span>tmp.into_values().flatten() {
+<a href=#123 id=123 data-nosnippet>123</a>            handle.abort();
+<a href=#124 id=124 data-nosnippet>124</a>        }
+<a href=#125 id=125 data-nosnippet>125</a>        <span class="comment">// Drop tracking entries for epochs we no longer care about.  Keeps
+<a href=#126 id=126 data-nosnippet>126</a>        // `completed_drb_requests` bounded while the protocol runs.
+<a href=#127 id=127 data-nosnippet>127</a>        </span><span class="self">self</span>.pending_drb_requests = <span class="self">self</span>.pending_drb_requests.split_off(<span class="kw-2">&amp;</span>epoch);
+<a href=#128 id=128 data-nosnippet>128</a>        <span class="self">self</span>.completed_drb_requests = <span class="self">self</span>.completed_drb_requests.split_off(<span class="kw-2">&amp;</span>epoch);
+<a href=#129 id=129 data-nosnippet>129</a>    }
 <a href=#130 id=130 data-nosnippet>130</a>
-<a href=#131 id=131 data-nosnippet>131</a>        handles.push(<span class="self">self</span>.tasks.spawn(<span class="kw">async move </span>{
-<a href=#132 id=132 data-nosnippet>132</a>            <span class="kw">let </span>result = <span class="kw">async </span>{
-<a href=#133 id=133 data-nosnippet>133</a>                <span class="comment">// Kick the membership coordinator.  If the stake table is
-<a href=#134 id=134 data-nosnippet>134</a>                // already ready, this returns it immediately; otherwise it
-<a href=#135 id=135 data-nosnippet>135</a>                // spawns a catchup task and returns a "catchup in progress"
-<a href=#136 id=136 data-nosnippet>136</a>                // error.  Either way, `wait_for_catchup` resolves once the
-<a href=#137 id=137 data-nosnippet>137</a>                // stake table + DRB are both in place.
-<a href=#138 id=138 data-nosnippet>138</a>                </span><span class="kw">let </span>membership = <span class="kw">match </span>membership_coordinator.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)) {
-<a href=#139 id=139 data-nosnippet>139</a>                    <span class="prelude-val">Ok</span>(m) =&gt; m,
-<a href=#140 id=140 data-nosnippet>140</a>                    <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; membership_coordinator
-<a href=#141 id=141 data-nosnippet>141</a>                        .wait_for_catchup(epoch)
-<a href=#142 id=142 data-nosnippet>142</a>                        .<span class="kw">await
-<a href=#143 id=143 data-nosnippet>143</a>                        </span>.map_err(EpochManagerError::DrbLookup)<span class="question-mark">?</span>,
-<a href=#144 id=144 data-nosnippet>144</a>                };
-<a href=#145 id=145 data-nosnippet>145</a>                <span class="kw">let </span>drb = membership
-<a href=#146 id=146 data-nosnippet>146</a>                    .get_epoch_drb()
-<a href=#147 id=147 data-nosnippet>147</a>                    .<span class="kw">await
-<a href=#148 id=148 data-nosnippet>148</a>                    </span>.map_err(EpochManagerError::DrbLookup)<span class="question-mark">?</span>;
-<a href=#149 id=149 data-nosnippet>149</a>                <span class="prelude-val">Ok</span>(EpochRootResult::DrbResult(epoch, drb))
-<a href=#150 id=150 data-nosnippet>150</a>            }
-<a href=#151 id=151 data-nosnippet>151</a>            .<span class="kw">await</span>;
-<a href=#152 id=152 data-nosnippet>152</a>            (epoch, result)
-<a href=#153 id=153 data-nosnippet>153</a>        }));
-<a href=#154 id=154 data-nosnippet>154</a>    }
-<a href=#155 id=155 data-nosnippet>155</a>}
-<a href=#156 id=156 data-nosnippet>156</a>
-<a href=#157 id=157 data-nosnippet>157</a><span class="attr">#[derive(Debug, thiserror::Error)]
-<a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">pub enum </span>EpochManagerError {
-<a href=#159 id=159 data-nosnippet>159</a>    <span class="attr">#[error(<span class="string">"failed to add epoch root: {0}"</span>)]
-<a href=#160 id=160 data-nosnippet>160</a>    </span>EpochRoot(<span class="attr">#[source] </span>anyhow::Error),
-<a href=#161 id=161 data-nosnippet>161</a>
-<a href=#162 id=162 data-nosnippet>162</a>    <span class="attr">#[error(<span class="string">"failed to compute drb: {0}"</span>)]
-<a href=#163 id=163 data-nosnippet>163</a>    </span>DrbCompute(<span class="attr">#[source] </span>anytrace::Error),
-<a href=#164 id=164 data-nosnippet>164</a>
-<a href=#165 id=165 data-nosnippet>165</a>    <span class="attr">#[error(<span class="string">"failed to get drb: {0}"</span>)]
-<a href=#166 id=166 data-nosnippet>166</a>    </span>DrbLookup(<span class="attr">#[source] </span>anytrace::Error),
-<a href=#167 id=167 data-nosnippet>167</a>}
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="kw">pub fn </span>request_drb_result(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: EpochNumber) {
+<a href=#132 id=132 data-nosnippet>132</a>        <span class="comment">// Already computed — caller can read the DRB from membership.
+<a href=#133 id=133 data-nosnippet>133</a>        </span><span class="kw">if </span><span class="self">self</span>.completed_drb_requests.contains(<span class="kw-2">&amp;</span>epoch) {
+<a href=#134 id=134 data-nosnippet>134</a>            <span class="kw">return</span>;
+<a href=#135 id=135 data-nosnippet>135</a>        }
+<a href=#136 id=136 data-nosnippet>136</a>        <span class="comment">// In-flight task will deliver the result; avoid spawning a duplicate.
+<a href=#137 id=137 data-nosnippet>137</a>        </span><span class="kw">if </span><span class="self">self</span>.pending_drb_requests.contains(<span class="kw-2">&amp;</span>epoch) {
+<a href=#138 id=138 data-nosnippet>138</a>            <span class="kw">return</span>;
+<a href=#139 id=139 data-nosnippet>139</a>        }
+<a href=#140 id=140 data-nosnippet>140</a>        <span class="self">self</span>.pending_drb_requests.insert(epoch);
+<a href=#141 id=141 data-nosnippet>141</a>        <span class="kw">let </span>membership_coordinator = <span class="self">self</span>.membership_coordinator.clone();
+<a href=#142 id=142 data-nosnippet>142</a>        <span class="kw">let </span>handles = <span class="self">self</span>.handles.entry(epoch).or_default();
+<a href=#143 id=143 data-nosnippet>143</a>
+<a href=#144 id=144 data-nosnippet>144</a>        handles.push(<span class="self">self</span>.tasks.spawn(<span class="kw">async move </span>{
+<a href=#145 id=145 data-nosnippet>145</a>            <span class="kw">let </span>result = <span class="kw">async </span>{
+<a href=#146 id=146 data-nosnippet>146</a>                <span class="comment">// Kick the membership coordinator.  If the stake table is
+<a href=#147 id=147 data-nosnippet>147</a>                // already ready, this returns it immediately; otherwise it
+<a href=#148 id=148 data-nosnippet>148</a>                // spawns a catchup task and returns a "catchup in progress"
+<a href=#149 id=149 data-nosnippet>149</a>                // error.  Either way, `wait_for_catchup` resolves once the
+<a href=#150 id=150 data-nosnippet>150</a>                // stake table + DRB are both in place.
+<a href=#151 id=151 data-nosnippet>151</a>                </span><span class="kw">let </span>membership = <span class="kw">match </span>membership_coordinator.membership_for_epoch(<span class="prelude-val">Some</span>(epoch)) {
+<a href=#152 id=152 data-nosnippet>152</a>                    <span class="prelude-val">Ok</span>(m) =&gt; m,
+<a href=#153 id=153 data-nosnippet>153</a>                    <span class="prelude-val">Err</span>(<span class="kw">_</span>) =&gt; membership_coordinator
+<a href=#154 id=154 data-nosnippet>154</a>                        .wait_for_catchup(epoch)
+<a href=#155 id=155 data-nosnippet>155</a>                        .<span class="kw">await
+<a href=#156 id=156 data-nosnippet>156</a>                        </span>.map_err(EpochManagerError::DrbLookup)<span class="question-mark">?</span>,
+<a href=#157 id=157 data-nosnippet>157</a>                };
+<a href=#158 id=158 data-nosnippet>158</a>                <span class="kw">let </span>drb = membership
+<a href=#159 id=159 data-nosnippet>159</a>                    .get_epoch_drb()
+<a href=#160 id=160 data-nosnippet>160</a>                    .<span class="kw">await
+<a href=#161 id=161 data-nosnippet>161</a>                    </span>.map_err(EpochManagerError::DrbLookup)<span class="question-mark">?</span>;
+<a href=#162 id=162 data-nosnippet>162</a>                <span class="prelude-val">Ok</span>(EpochRootResult::DrbResult(epoch, drb))
+<a href=#163 id=163 data-nosnippet>163</a>            }
+<a href=#164 id=164 data-nosnippet>164</a>            .<span class="kw">await</span>;
+<a href=#165 id=165 data-nosnippet>165</a>            (epoch, result)
+<a href=#166 id=166 data-nosnippet>166</a>        }));
+<a href=#167 id=167 data-nosnippet>167</a>    }
+<a href=#168 id=168 data-nosnippet>168</a>}
+<a href=#169 id=169 data-nosnippet>169</a>
+<a href=#170 id=170 data-nosnippet>170</a><span class="attr">#[derive(Debug, thiserror::Error)]
+<a href=#171 id=171 data-nosnippet>171</a></span><span class="kw">pub enum </span>EpochManagerError {
+<a href=#172 id=172 data-nosnippet>172</a>    <span class="attr">#[error(<span class="string">"failed to add epoch root: {0}"</span>)]
+<a href=#173 id=173 data-nosnippet>173</a>    </span>EpochRoot(<span class="attr">#[source] </span>anyhow::Error),
+<a href=#174 id=174 data-nosnippet>174</a>
+<a href=#175 id=175 data-nosnippet>175</a>    <span class="attr">#[error(<span class="string">"failed to compute drb: {0}"</span>)]
+<a href=#176 id=176 data-nosnippet>176</a>    </span>DrbCompute(<span class="attr">#[source] </span>anytrace::Error),
+<a href=#177 id=177 data-nosnippet>177</a>
+<a href=#178 id=178 data-nosnippet>178</a>    <span class="attr">#[error(<span class="string">"failed to get drb: {0}"</span>)]
+<a href=#179 id=179 data-nosnippet>179</a>    </span>DrbLookup(<span class="attr">#[source] </span>anytrace::Error),
+<a href=#180 id=180 data-nosnippet>180</a>}
 </code></pre></div></section></main></body></html>
