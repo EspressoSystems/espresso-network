@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["NAMES","SUMMARY_INTERVAL"],"enum":["LogEvent"],"fn":["drain_and_format","emit_summary","spawn_summary_task"],"macro":["events"],"static":["COUNTERS","SPAWNED"]};

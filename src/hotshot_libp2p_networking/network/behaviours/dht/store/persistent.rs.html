@@ -243,9 +243,9 @@
 <a href=#243 id=243 data-nosnippet>243</a>            semaphore: Arc::new(Semaphore::new(<span class="number">1</span>)),
 <a href=#244 id=244 data-nosnippet>244</a>        };
 <a href=#245 id=245 data-nosnippet>245</a>
-<a href=#246 id=246 data-nosnippet>246</a>        <span class="comment">// Try to restore the DHT from the persistent store. If it fails, warn and start with an empty store
+<a href=#246 id=246 data-nosnippet>246</a>        <span class="comment">// Try to restore the DHT from the persistent store. If it fails, log and start with an empty store
 <a href=#247 id=247 data-nosnippet>247</a>        </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = store.restore_from_persistent_storage().<span class="kw">await </span>{
-<a href=#248 id=248 data-nosnippet>248</a>            <span class="macro">warn!</span>(
+<a href=#248 id=248 data-nosnippet>248</a>            <span class="macro">debug!</span>(
 <a href=#249 id=249 data-nosnippet>249</a>                <span class="string">"Failed to restore DHT from persistent storage: {err}. Starting with empty store"</span>,
 <a href=#250 id=250 data-nosnippet>250</a>            );
 <a href=#251 id=251 data-nosnippet>251</a>        }
@@ -258,9 +258,9 @@
 <a href=#258 id=258 data-nosnippet>258</a>    ///
 <a href=#259 id=259 data-nosnippet>259</a>    /// Returns `true` if the DHT was saved, `false` otherwise.
 <a href=#260 id=260 data-nosnippet>260</a>    </span><span class="kw">fn </span>try_save_to_persistent_storage(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; bool {
-<a href=#261 id=261 data-nosnippet>261</a>        <span class="comment">// Try to acquire the semaphore, warning if another save operation is already in progress
+<a href=#261 id=261 data-nosnippet>261</a>        <span class="comment">// Try to acquire the semaphore; if another save operation is already in progress, skip.
 <a href=#262 id=262 data-nosnippet>262</a>        </span><span class="kw">let </span><span class="prelude-val">Ok</span>(permit) = Arc::clone(<span class="kw-2">&amp;</span><span class="self">self</span>.semaphore).try_acquire_owned() <span class="kw">else </span>{
-<a href=#263 id=263 data-nosnippet>263</a>            <span class="macro">warn!</span>(
+<a href=#263 id=263 data-nosnippet>263</a>            <span class="macro">debug!</span>(
 <a href=#264 id=264 data-nosnippet>264</a>                <span class="string">"Skipping DHT save to persistent storage - another save operation is already in \
 <a href=#265 id=265 data-nosnippet>265</a>                 progress"
 <a href=#266 id=266 data-nosnippet>266</a>            </span>);
