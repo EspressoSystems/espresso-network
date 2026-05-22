@@ -1176,12 +1176,14 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             .await
             .context("opening transaction to fetch migration status")?;
 
-        let rows: Vec<(
+        type MigrationStatusRow = (
             String,
             chrono::DateTime<chrono::Utc>,
             Option<chrono::DateTime<chrono::Utc>>,
             Option<i64>,
-        )> = sqlx::query_as(
+        );
+
+        let rows: Vec<MigrationStatusRow> = sqlx::query_as(
             "SELECT name, started_at, completed_at, last_offset FROM deferred_migrations ORDER BY \
              started_at",
         )
