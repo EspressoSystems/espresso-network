@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{env, time::Duration};
 
 use async_trait::async_trait;
 
@@ -172,7 +172,13 @@ impl MigrationRegistry {
             },
         };
 
-        tracing::warn!(name, offset, "starting deferred migration");
+        let delay = env::var("ESPRESSO_NODE_BACKFILL_BATCH_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| m.batch_delay());
+
+        tracing::warn!(name, offset, ?delay, "starting deferred migration");
 
         let mut batch_count: usize = 0;
 
@@ -220,7 +226,6 @@ impl MigrationRegistry {
             };
             offset = next_offset;
 
-            let delay = m.batch_delay();
             if !delay.is_zero() {
                 tokio::time::sleep(delay).await;
             }
