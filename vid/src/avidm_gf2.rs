@@ -59,7 +59,6 @@ pub struct AvidmGf2Share {
     /// Range of this share in the encoded payload.
     range: Range<usize>,
     /// Actual share content.
-    #[serde(with = "canonical")]
     payload: Vec<Vec<u8>>,
     /// Merkle proof of the content.
     #[serde(with = "canonical")]
