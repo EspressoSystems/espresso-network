@@ -219,7 +219,7 @@ operation.
 | V0_3    | `EpochVersion`                                                  | PoS: stake_table_contract, reward_merkle_tree, AvidM VID proofs            |
 | V0_4    | `DrbAndHeaderUpgradeVersion`                                    | Header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2 |
 | V0_5    | `EpochRewardVersion`                                            | Epoch reward / DRB fix                                                     |
-| V0_6    | `DaUpgradeVersion` / `Vid2UpgradeVersion` / `CLIQUENET_VERSION` | DA upgrade + VID2 (AvidmGf2) proofs + cliquenet (bundled at 0.6)           |
+| V0_6    | `DaUpgradeVersion` / `Vid2UpgradeVersion` / `CLIQUENET_VERSION` / `NEW_PROTOCOL_VERSION` | DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6) |
 
 ## Consensus Upgrades
 
