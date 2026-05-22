@@ -37,6 +37,13 @@ jobs:
         with:
           tool: mergiraf
 
+      - name: Register mergiraf as merge driver
+        run: |
+          git config --global merge.mergiraf.name mergiraf
+          git config --global merge.mergiraf.driver 'mergiraf merge --git %O %A %B -s %S -x %X -y %Y -p %P'
+          mkdir -p ~/.config/git
+          echo '* merge=mergiraf' > ~/.config/git/attributes
+
       - name: Cherry-pick via workflow_dispatch
         id: dispatch_backport
         if: github.event_name == 'workflow_dispatch'
@@ -55,19 +62,38 @@ jobs:
         with:
           experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
 
-      - name: Finalize backport PRs
+      - name: Detect remaining conflicts
+        id: resolve
         if: |
           steps.backport.outputs.created_pull_numbers != '' ||
           steps.dispatch_backport.outputs.created_pull_numbers != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr_numbers="${{ steps.backport.outputs.created_pull_numbers }} ${{ steps.dispatch_backport.outputs.created_pull_numbers }}"
+          needs_claude=""
+          for pr in $pr_numbers; do
+            branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
+            git fetch origin "$branch"
+            if git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
+              needs_claude="$needs_claude $pr"
+            else
+              gh pr ready "$pr" || true
+            fi
+          done
+          echo "needs_claude=$needs_claude" >> "$GITHUB_OUTPUT"
+
+      - name: Claude conflict resolution
+        if: steps.resolve.outputs.needs_claude != ''
         timeout-minutes: 30
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
-            Finalize these draft backport PRs:
-            ${{ steps.backport.outputs.created_pull_numbers }} ${{ steps.dispatch_backport.outputs.created_pull_numbers }}
+            Mergiraf left conflict markers in these backport PRs:
+            ${{ steps.resolve.outputs.needs_claude }}
 
-            For each PR: check it out, resolve any conflict markers (try `mergiraf solve <file>` first), run `just fmt`, commit and push, then `gh pr ready <pr>`.
-
-            Keep mergiraf-resolved commits separate from your manual resolutions for a clear audit trail.
+            For each PR: check it out, resolve the markers, run `just fmt`, commit, push, then `gh pr ready <pr>`.
           claude_args: "--model claude-opus-4-6"
