@@ -38,6 +38,7 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 hotshot-example-types = { workspace = true }
+tracing-test = { workspace = true }
 
 [lints]
 workspace = true

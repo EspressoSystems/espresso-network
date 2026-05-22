@@ -1486,7 +1486,16 @@ mod test {
         used_schnorr.insert(complete.state_ver_key.clone());
         used_schnorr.insert(incomplete.state_ver_key.clone());
 
-        let state = StakeTableState::new(validators, Default::default(), used_bls, used_schnorr);
+        let mut used_x25519 = HashSet::default();
+        used_x25519.insert(complete.x25519_key.unwrap());
+
+        let state = StakeTableState::new(
+            validators,
+            Default::default(),
+            used_bls,
+            used_schnorr,
+            used_x25519,
+        );
 
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
         db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, CLIQUENET_VERSION)

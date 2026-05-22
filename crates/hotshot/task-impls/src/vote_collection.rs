@@ -127,7 +127,7 @@ impl<
             "No accumulator to handle vote with. This shouldn't happen."
         ))?;
 
-        match accumulator.accumulate(vote, self.membership.clone()).await {
+        match accumulator.accumulate(vote, self.membership.clone()) {
             None => Ok(None),
             Some(cert) => {
                 tracing::debug!("Certificate Formed! {cert:?}");
@@ -695,10 +695,8 @@ impl<TYPES: NodeType> EpochRootVoteCollectionTaskState<TYPES> {
         ))?;
 
         match (
-            accumulator.accumulate(vote, self.membership.clone()).await,
-            state_vote_accumulator
-                .accumulate(&vote.signing_key(), state_vote, &self.membership)
-                .await,
+            accumulator.accumulate(vote, self.membership.clone()),
+            state_vote_accumulator.accumulate(&vote.signing_key(), state_vote, &self.membership),
         ) {
             (None, None) => Ok(None),
             (Some(cert), Some(state_cert)) => {
