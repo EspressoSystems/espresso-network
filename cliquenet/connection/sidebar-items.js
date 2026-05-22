@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["MAX_NOISE_HANDSHAKE_SIZE"],"fn":["handshake","on_handshake","recv_frame","remote_static_key","send_frame"],"static":["NOISE_PARAMS"],"struct":["Connection"],"type":["Result"]};
+window.SIDEBAR_ITEMS = {"constant":["MAX_NOISE_HANDSHAKE_SIZE"],"fn":["handshake","on_handshake","recv_frame","remote_static_key","select_version","send_frame","try_connect"],"struct":["Connection"],"type":["Prologue","Result"]};
