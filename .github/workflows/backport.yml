@@ -59,6 +59,7 @@ jobs:
         if: |
           steps.backport.outputs.created_pull_numbers != '' ||
           steps.dispatch_backport.outputs.created_pull_numbers != ''
+        timeout-minutes: 30
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
