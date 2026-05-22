@@ -263,7 +263,7 @@ impl TestData {
         crate::logging::init_test_logging();
         let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
         let (membership, _storage, _client) =
-            mock_membership_with_num_nodes(num_nodes, epoch_height, public_key).await;
+            mock_membership_with_num_nodes(num_nodes, epoch_height, public_key);
         let keys = key_map_with_num_nodes(num_nodes as u64);
         let node_key_map = Arc::new(keys.clone());
         let upgrade = TEST_VERSIONS.vid2;
@@ -389,8 +389,7 @@ impl TestData {
                 view_number,
                 &leader_public_key,
                 leader_private_key,
-            )
-            .await;
+            );
             let cert2 = build_cert2(
                 leaf_commit,
                 epoch,
@@ -399,8 +398,7 @@ impl TestData {
                 view_number,
                 &leader_public_key,
                 leader_private_key,
-            )
-            .await;
+            );
 
             // Propagate the rebuilt cert1 so the next view's justify_qc is
             // consistent with our updated commitment.
@@ -447,8 +445,7 @@ impl TestData {
                 &epoch_membership,
                 &leader_public_key,
                 leader_private_key,
-            )
-            .await;
+            );
 
             let stake_table_state = epoch_membership
                 .next_epoch_stake_table()
@@ -478,13 +475,13 @@ impl TestData {
     }
 }
 
-pub async fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
+pub fn mock_membership() -> EpochMembershipCoordinator<TestTypes> {
     let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
-    let (coordinator, ..) = mock_membership_with_num_nodes(10, 10, public_key).await;
+    let (coordinator, ..) = mock_membership_with_num_nodes(10, 10, public_key);
     coordinator
 }
 
-pub async fn mock_membership_with_num_nodes(
+pub fn mock_membership_with_num_nodes(
     num_nodes: usize,
     epoch_height: u64,
     public_key: BLSPubKey,
@@ -494,7 +491,7 @@ pub async fn mock_membership_with_num_nodes(
     CoordinatorClient<TestTypes>,
 ) {
     let (coord, storage, client, _external_events_tx) =
-        mock_membership_with_client(num_nodes, epoch_height, public_key).await;
+        mock_membership_with_client(num_nodes, epoch_height, public_key);
     (coord, storage, client)
 }
 
@@ -513,7 +510,7 @@ pub async fn mock_membership_with_num_nodes(
 /// [`Sender`] is the tx half of the external-events channel feeding the
 /// membership's `Leaf2Fetcher`; pass it into `build_test_coordinator` so
 /// the coordinator forwards `ExternalMessageReceived` events to it.
-pub async fn mock_membership_with_client(
+pub fn mock_membership_with_client(
     num_nodes: usize,
     epoch_height: u64,
     public_key: BLSPubKey,
@@ -530,8 +527,7 @@ pub async fn mock_membership_with_client(
         epoch_height,
         leaf_fetcher_network,
         public_key,
-    )
-    .await;
+    );
     (coord, storage, client, external_events_tx)
 }
 
@@ -543,7 +539,7 @@ pub async fn mock_membership_with_client(
 /// Creates and installs the external-events channel internally; the
 /// returned [`Sender`] is the tx half — hand it to the coordinator so it
 /// forwards `ExternalMessageReceived` events to the fetcher.
-pub async fn mock_membership_with_leaf_fetcher_network(
+pub fn mock_membership_with_leaf_fetcher_network(
     num_nodes: usize,
     epoch_height: u64,
     leaf_fetcher_network: Arc<
@@ -810,7 +806,7 @@ impl ConsensusHarness {
             [0u8; 32], node_index,
         );
         let state_private_key = state_key_pair.sign_key_ref().clone();
-        let membership = mock_membership().await;
+        let membership = mock_membership();
         let instance = Arc::new(TestInstanceState::default());
         let genesis_leaf = Leaf2::<TestTypes>::genesis(
             &TestValidatedState::default(),
@@ -953,7 +949,7 @@ impl ConsensusHarness {
     }
 }
 
-pub(crate) async fn build_cert1(
+pub(crate) fn build_cert1(
     leaf_commit: Commitment<Leaf2<TestTypes>>,
     epoch: EpochNumber,
     block_number: u64,
@@ -980,10 +976,9 @@ pub(crate) async fn build_cert1(
         private_key,
         &test_upgrade_lock::<TestTypes>(),
     )
-    .await
 }
 
-pub(crate) async fn build_cert2(
+pub(crate) fn build_cert2(
     leaf_commit: Commitment<Leaf2<TestTypes>>,
     epoch: EpochNumber,
     block_number: u64,
@@ -1005,10 +1000,9 @@ pub(crate) async fn build_cert2(
         private_key,
         &test_upgrade_lock::<TestTypes>(),
     )
-    .await
 }
 
-async fn build_timeout_cert(
+fn build_timeout_cert(
     view_number: ViewNumber,
     epoch: EpochNumber,
     epoch_membership: &hotshot_types::epoch_membership::EpochMembership<TestTypes>,
@@ -1027,5 +1021,4 @@ async fn build_timeout_cert(
         private_key,
         &test_upgrade_lock::<TestTypes>(),
     )
-    .await
 }

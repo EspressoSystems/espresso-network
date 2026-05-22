@@ -282,8 +282,12 @@ where
                         let epoch = validated.message.proposal.data.epoch;
                         if let Err(err) = self
                             .network
+<<<<<<< HEAD
                             .on_epoch_change(epoch, &self.membership_coordinator)
                             .await
+=======
+                            .apply_epoch(epoch, &self.membership_coordinator)
+>>>>>>> 8fa3bf3d57 (Remove unnecessary async/await. (#4343))
                         {
                             error!(%epoch, %err, "network on_epoch_change failed");
                         }

@@ -1772,10 +1772,9 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
 }
 
 impl<TYPES: NodeType> Leaf<TYPES> {
-    #[allow(clippy::unused_async)]
     /// Calculate the leaf commitment,
     /// which is gated on the version to include the block header.
-    pub async fn commit(&self, _upgrade_lock: &UpgradeLock<TYPES>) -> Commitment<Self> {
+    pub fn commit(&self, _upgrade_lock: &UpgradeLock<TYPES>) -> Commitment<Self> {
         <Self as Committable>::commit(self)
     }
 }
@@ -1863,8 +1862,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         let data = QuorumData {
             leaf_commit: Leaf::genesis(validated_state, instance_state, upgrade.base)
                 .await
-                .commit(&upgrade_lock)
-                .await,
+                .commit(&upgrade_lock),
         };
 
         let versioned_data =

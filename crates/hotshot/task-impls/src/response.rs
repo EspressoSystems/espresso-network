@@ -162,11 +162,11 @@ impl<TYPES: NodeType> NetworkResponseState<TYPES> {
 
         // Epochs for which vid shares are required
         let mut target_epochs = vec![];
-        if self.valid_sender(sender, cur_epoch).await {
+        if self.valid_sender(sender, cur_epoch) {
             // The sender belongs to the current epoch.
             target_epochs.push(cur_epoch);
         }
-        if is_transition_block && self.valid_sender(sender, next_epoch).await {
+        if is_transition_block && self.valid_sender(sender, next_epoch) {
             // It's the last block in epoch and the sender belongs to the next epoch.
             target_epochs.push(next_epoch);
         }
@@ -236,8 +236,13 @@ impl<TYPES: NodeType> NetworkResponseState<TYPES> {
     }
 
     /// Makes sure the sender is allowed to send a request in the given epoch.
+<<<<<<< HEAD
     async fn valid_sender(&self, sender: &TYPES::SignatureKey, epoch: Option<EpochNumber>) -> bool {
         let Ok(memb) = self.membership.stake_table_for_epoch(epoch).await else {
+=======
+    fn valid_sender(&self, sender: &TYPES::SignatureKey, epoch: Option<EpochNumber>) -> bool {
+        let Ok(memb) = self.membership.stake_table_for_epoch(epoch) else {
+>>>>>>> 8fa3bf3d57 (Remove unnecessary async/await. (#4343))
             return false;
         };
         memb.has_stake(sender).await

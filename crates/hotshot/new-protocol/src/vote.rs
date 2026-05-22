@@ -39,16 +39,13 @@ where
     C: Certificate<T, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
 {
     #[instrument(level = "debug", skip_all)]
-    pub fn new(
-        epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-        upgrade_lock: UpgradeLock<T>,
-    ) -> Self {
+    pub fn new(emc: EpochMembershipCoordinator<T>, lock: UpgradeLock<T>) -> Self {
         Self {
             accumulators: BTreeMap::new(),
             completed_certificates: BTreeSet::new(),
-            epoch_membership_coordinator,
+            epoch_membership_coordinator: emc,
             membership_cache: BTreeMap::new(),
-            upgrade_lock,
+            upgrade_lock: lock,
             tasks: JoinSet::new(),
             pending_votes: Vec::new(),
         }
@@ -80,7 +77,7 @@ where
         if self.completed_certificates.contains(&view) {
             return;
         }
-        let Some(membership) = self.resolve_membership(&vote).await else {
+        let Some(membership) = self.resolve_membership(&vote) else {
             // Epoch membership not yet available — buffer for later retry.
             self.pending_votes.push(vote);
             return;
@@ -110,7 +107,7 @@ where
         }
     }
 
-    async fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {
+    fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {
         let epoch = vote.epoch()?;
         if let Some(m) = self.membership_cache.get(&epoch) {
             return Some(m.clone());
@@ -135,9 +132,9 @@ where
         let mut votes = Vec::new();
 
         while let Some(vote) = rx.recv().await {
-            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()).await {
-                let stake_table = C::stake_table(&membership).await;
-                let threshold = C::threshold(&membership).await;
+            if let Some(cert) = accumulator.accumulate(&vote, membership.clone()) {
+                let stake_table = C::stake_table(&membership);
+                let threshold = C::threshold(&membership);
                 match cert.is_valid_cert(
                     &StakeTableEntries::<T>::from(stake_table).0,
                     threshold,
@@ -163,9 +160,7 @@ where
                         for vote in &votes {
                             // after recovering the good votes, try to accumulate them again, but this time
                             // we know the cert if good if we can form it
-                            if let Some(cert) =
-                                accumulator.accumulate(vote, membership.clone()).await
-                            {
+                            if let Some(cert) = accumulator.accumulate(vote, membership.clone()) {
                                 return cert;
                             }
                         }
@@ -296,21 +291,21 @@ mod tests {
     /// - vote sender
     /// - cert notification channel (receives (view, cert) when a certificate is formed)
     /// - task JoinHandle (abort this to clean up)
-    async fn setup_cert1_task()
+    fn setup_cert1_task()
     -> VoteCollector<TestTypes, QuorumVote2<TestTypes>, Certificate1<TestTypes>> {
-        setup_task::<QuorumVote2<TestTypes>, Certificate1<TestTypes>>().await
+        setup_task::<QuorumVote2<TestTypes>, Certificate1<TestTypes>>()
     }
-    async fn setup_cert2_task()
-    -> VoteCollector<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>> {
-        setup_task::<Vote2<TestTypes>, Certificate2<TestTypes>>().await
+
+    fn setup_cert2_task() -> VoteCollector<TestTypes, Vote2<TestTypes>, Certificate2<TestTypes>> {
+        setup_task::<Vote2<TestTypes>, Certificate2<TestTypes>>()
     }
 
     /// Spawn a VoteCollectionTask for Certificate2.
-    async fn setup_task<
+    fn setup_task<
         V: Vote<TestTypes> + HasEpoch + Send + Sync + 'static,
         C: Certificate<TestTypes, V::Commitment, Voteable = V::Commitment> + Send + Sync + 'static,
     >() -> VoteCollector<TestTypes, V, C> {
-        let membership = mock_membership().await;
+        let membership = mock_membership();
         VoteCollector::<TestTypes, V, C>::new(membership, test_upgrade_lock())
     }
 
@@ -351,7 +346,7 @@ mod tests {
 
     /// Verify that a certificate's data commitment matches `expected_data` and that
     /// the aggregate signature is valid against the stake table.
-    async fn verify_cert<C, D>(cert: &C, expected_data: &D, membership: &EpochMembership<TestTypes>)
+    fn verify_cert<C, D>(cert: &C, expected_data: &D, membership: &EpochMembership<TestTypes>)
     where
         D: Committable,
         C: Certificate<TestTypes, D, Voteable = D>,
@@ -364,9 +359,9 @@ mod tests {
         );
 
         // Aggregate signature must be valid against the stake table.
-        let stake_table = C::stake_table(membership).await;
+        let stake_table = C::stake_table(membership);
         let stake_table_entries = StakeTableEntries::<TestTypes>::from(stake_table).0;
-        let threshold = C::threshold(membership).await;
+        let threshold = C::threshold(membership);
         cert.is_valid_cert(&stake_table_entries, threshold, &test_upgrade_lock())
             .expect("Certificate signature validation failed");
     }
@@ -377,7 +372,7 @@ mod tests {
     /// whose data commitment matches the votes.
     #[tokio::test]
     async fn test_cert1_single_view_happy_path() {
-        let mut task = setup_cert1_task().await;
+        let mut task = setup_cert1_task();
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
         let expected_data = QuorumData2 {
@@ -395,16 +390,22 @@ mod tests {
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
 
+<<<<<<< HEAD
         let membership = mock_membership().await;
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
         verify_cert(&cert, &expected_data, &epoch_membership).await;
+=======
+        let membership = mock_membership();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+        verify_cert(&cert, &expected_data, &epoch_membership);
+>>>>>>> 8fa3bf3d57 (Remove unnecessary async/await. (#4343))
     }
 
     /// Sending votes for multiple views produces a valid certificate for each view,
     /// each with data commitment matching the votes.
     #[tokio::test]
     async fn test_cert1_multiple_views_parallel() {
-        let mut task = setup_cert1_task().await;
+        let mut task = setup_cert1_task();
         let epoch = EpochNumber::genesis();
         let expected_data = QuorumData2 {
             leaf_commit: committable::RawCommitmentBuilder::new("FakeLeaf")
@@ -435,10 +436,15 @@ mod tests {
         cert_views.sort();
         assert_eq!(cert_views, views.to_vec());
 
+<<<<<<< HEAD
         let membership = mock_membership().await;
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
+=======
+        let membership = mock_membership();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+>>>>>>> 8fa3bf3d57 (Remove unnecessary async/await. (#4343))
         for cert in &certs {
-            verify_cert(cert, &expected_data, &epoch_membership).await;
+            verify_cert(cert, &expected_data, &epoch_membership);
         }
     }
 
@@ -448,7 +454,7 @@ mod tests {
     /// whose data commitment matches the votes.
     #[tokio::test]
     async fn test_cert2_single_view_happy_path() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
         let expected_data = vote_2_data();
@@ -460,16 +466,22 @@ mod tests {
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_eq!(cert.view_number(), view);
 
+<<<<<<< HEAD
         let membership = mock_membership().await;
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
         verify_cert(&cert, &expected_data, &epoch_membership).await;
+=======
+        let membership = mock_membership();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+        verify_cert(&cert, &expected_data, &epoch_membership);
+>>>>>>> 8fa3bf3d57 (Remove unnecessary async/await. (#4343))
     }
 
     /// Sending votes for multiple views in parallel produces valid certificates for each,
     /// each with data commitment matching the votes.
     #[tokio::test]
     async fn test_cert2_multiple_views_parallel() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let epoch = EpochNumber::genesis();
         let expected_data = vote_2_data();
 
@@ -494,10 +506,15 @@ mod tests {
         cert_views.sort();
         assert_eq!(cert_views, views.to_vec());
 
+<<<<<<< HEAD
         let membership = mock_membership().await;
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
+=======
+        let membership = mock_membership();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+>>>>>>> 8fa3bf3d57 (Remove unnecessary async/await. (#4343))
         for cert in &certs {
-            verify_cert(cert, &expected_data, &epoch_membership).await;
+            verify_cert(cert, &expected_data, &epoch_membership);
         }
     }
 
@@ -506,7 +523,7 @@ mod tests {
     /// Fewer than threshold votes do not produce a certificate.
     #[tokio::test]
     async fn test_cert1_below_threshold_no_certificate() {
-        let mut task = setup_cert1_task().await;
+        let mut task = setup_cert1_task();
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
 
@@ -520,7 +537,7 @@ mod tests {
     /// Duplicate votes from the same signer do not count toward threshold.
     #[tokio::test]
     async fn test_cert1_duplicate_votes_ignored() {
-        let mut task = setup_cert1_task().await;
+        let mut task = setup_cert1_task();
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
 
@@ -541,7 +558,7 @@ mod tests {
     /// Fewer than threshold Vote2s do not produce a Certificate2.
     #[tokio::test]
     async fn test_cert2_below_threshold_no_certificate() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let view = ViewNumber::new(1);
 
         for i in 0..(THRESHOLD - 1) {
@@ -554,7 +571,7 @@ mod tests {
     /// Duplicate Vote2s from the same signer do not count toward threshold.
     #[tokio::test]
     async fn test_cert2_duplicate_votes_ignored() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let view = ViewNumber::new(1);
 
         // Send 6 unique votes (below threshold of 7)
@@ -572,7 +589,7 @@ mod tests {
     /// Votes with invalid signatures are rejected and do not count.
     #[tokio::test]
     async fn test_cert2_invalid_signature_rejected() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let view = ViewNumber::new(1);
 
         // Send 6 valid votes (below threshold)
@@ -590,7 +607,7 @@ mod tests {
     /// Votes with invalid signatures are rejected and do not count.
     #[tokio::test]
     async fn test_cert2_invalid_signature_recovery() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let view = ViewNumber::new(1);
         let epoch = EpochNumber::genesis();
 
@@ -608,15 +625,21 @@ mod tests {
 
         let cert = timeout(CERT_TIMEOUT, task.next()).await.unwrap().unwrap();
         assert_no_certs(&mut task).await;
+<<<<<<< HEAD
         let membership = mock_membership().await;
         let epoch_membership = membership.membership_for_epoch(Some(epoch)).await.unwrap();
         verify_cert(&cert, &vote_2_data(), &epoch_membership).await;
+=======
+        let membership = mock_membership();
+        let epoch_membership = membership.membership_for_epoch(Some(epoch)).unwrap();
+        verify_cert(&cert, &vote_2_data(), &epoch_membership);
+>>>>>>> 8fa3bf3d57 (Remove unnecessary async/await. (#4343))
     }
 
     /// Channel closed before threshold means no certificate is produced.
     #[tokio::test]
     async fn test_cert2_channel_closed_early() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let view = ViewNumber::new(1);
 
         for i in 0..3 {
@@ -630,7 +653,7 @@ mod tests {
     /// Only the view that reaches threshold gets a certificate; others don't.
     #[tokio::test]
     async fn test_cert2_partial_views_only_complete_one_certifies() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
 
         let complete_view = ViewNumber::new(1);
         let partial_view = ViewNumber::new(2);
@@ -654,7 +677,7 @@ mod tests {
     /// Extra votes beyond threshold for the same view do not produce a second certificate.
     #[tokio::test]
     async fn test_cert2_extra_votes_after_threshold_no_duplicate_cert() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let view = ViewNumber::new(1);
 
         // Send all 10 votes (more than threshold of 7)
@@ -673,7 +696,7 @@ mod tests {
     /// Votes for different data commitments on the same view do not combine.
     #[tokio::test]
     async fn test_cert2_conflicting_data_same_view_no_certificate() {
-        let mut task = setup_cert2_task().await;
+        let mut task = setup_cert2_task();
         let view = ViewNumber::new(1);
 
         // Send 6 votes for one leaf commitment

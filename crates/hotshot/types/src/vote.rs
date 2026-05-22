@@ -8,7 +8,6 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    future::Future,
     marker::PhantomData,
 };
 
@@ -86,29 +85,29 @@ pub trait Certificate<TYPES: NodeType, T>: HasViewNumber {
         threshold: U256,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()>;
+
     /// Get the list of signers given a certificate.
     fn signers(
         &self,
         stake_table: &[<TYPES::SignatureKey as SignatureKey>::StakeTableEntry],
         threshold: U256,
     ) -> Result<Vec<<TYPES::SignatureKey as SignatureKey>::VerificationKeyType>>;
+
     /// Returns the amount of stake needed to create this certificate
     // TODO: Make this a static ratio of the total stake of `Membership`
-    fn threshold(membership: &EpochMembership<TYPES>) -> impl Future<Output = U256> + Send;
+    fn threshold(membership: &EpochMembership<TYPES>) -> U256;
 
     /// Get  Stake Table from Membership implementation.
-    fn stake_table(
-        membership: &EpochMembership<TYPES>,
-    ) -> impl Future<Output = HSStakeTable<TYPES>> + Send;
+    fn stake_table(membership: &EpochMembership<TYPES>) -> HSStakeTable<TYPES>;
 
     /// Get Total Nodes from Membership implementation.
-    fn total_nodes(membership: &EpochMembership<TYPES>) -> impl Future<Output = usize> + Send;
+    fn total_nodes(membership: &EpochMembership<TYPES>) -> usize;
 
     /// Get  `StakeTableEntry` from Membership implementation.
     fn stake_table_entry(
         membership: &EpochMembership<TYPES>,
         pub_key: &TYPES::SignatureKey,
-    ) -> impl Future<Output = Option<PeerConfig<TYPES>>> + Send;
+    ) -> Option<PeerConfig<TYPES>>;
 
     /// Get the commitment which was voted on
     fn data(&self) -> &Self::Voteable;
@@ -170,11 +169,7 @@ impl<
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
-    pub async fn accumulate(
-        &mut self,
-        vote: &VOTE,
-        membership: EpochMembership<TYPES>,
-    ) -> Option<CERT> {
+    pub fn accumulate(&mut self, vote: &VOTE, membership: EpochMembership<TYPES>) -> Option<CERT> {
         let key = vote.signing_key();
 
         let vote_commitment = match VersionedVoteData::new(
@@ -196,10 +191,10 @@ impl<
             return None;
         }
 
-        let stake_table_entry = CERT::stake_table_entry(&membership, &key).await?;
-        let stake_table = CERT::stake_table(&membership).await;
-        let total_nodes = CERT::total_nodes(&membership).await;
-        let threshold = CERT::threshold(&membership).await;
+        let stake_table_entry = CERT::stake_table_entry(&membership, &key)?;
+        let stake_table = CERT::stake_table(&membership);
+        let total_nodes = CERT::total_nodes(&membership);
+        let threshold = CERT::threshold(&membership);
 
         let vote_node_id = stake_table
             .iter()
@@ -285,7 +280,7 @@ impl<TYPES: NodeType> LightClientStateUpdateVoteAccumulator<TYPES> {
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
-    pub async fn accumulate(
+    pub fn accumulate(
         &mut self,
         key: &TYPES::SignatureKey,
         vote: &LightClientStateUpdateVote2<TYPES>,
