@@ -220,7 +220,7 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     ///
     /// We keep validators that were in `e-1` but not in `e` for one additional
     /// epoch and eagerly connect to new validators of `e+1`.
-    async fn apply_epoch(
+    fn apply_epoch(
         &mut self,
         epoch: EpochNumber,
         coord: &EpochMembershipCoordinator<T>,
