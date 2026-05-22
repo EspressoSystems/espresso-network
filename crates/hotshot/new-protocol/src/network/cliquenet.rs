@@ -1,10 +1,9 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 pub use cliquenet::Config as CliquenetConfig;
-use cliquenet::{NetAddr, NetworkError as CliquenetError, Role, Slot, x25519::PublicKey};
+use cliquenet::{
+    NetAddr, NetworkError as CliquenetError, Role, Slot, noise::Protocol, x25519::PublicKey,
+};
 use hotshot_types::{
     PeerConnectInfo,
     data::{EpochNumber, ViewNumber},
@@ -57,6 +56,7 @@ impl<T: NodeType> Cliquenet<T> {
                     .values()
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
@@ -65,7 +65,7 @@ impl<T: NodeType> Cliquenet<T> {
     pub(crate) async fn create_with_config<P>(
         signing_key: T::SignatureKey,
         upgrade_lock: UpgradeLock<T>,
-        mut config: cliquenet::Config,
+        config: cliquenet::Config,
         parties: P,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -73,9 +73,8 @@ impl<T: NodeType> Cliquenet<T> {
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
     {
         let public_key = config.public_key();
-        assert!(config.metrics.is_none());
-        config.metrics = Some(Arc::new(CliquenetMetrics::new(metrics)));
-        let network = cliquenet::Network::create(config)
+        let metrics = CliquenetMetrics::new(metrics);
+        let network = cliquenet::Network::create(config.with_metrics(metrics))
             .await
             .map_err(to_network_error)?;
 

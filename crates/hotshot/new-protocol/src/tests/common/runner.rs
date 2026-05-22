@@ -6,6 +6,7 @@ use std::{
 
 use async_broadcast::Sender;
 use bon::Builder;
+use cliquenet::noise::Protocol;
 use committable::Committable;
 use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
@@ -543,6 +544,7 @@ async fn create_network(
                 .iter()
                 .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
         )
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let met = Box::new(NoMetrics);
