@@ -15,9 +15,9 @@ target_branch="$2"
 git config user.name 'github-actions[bot]'
 git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
-meta=$(gh pr view "${pr_number}" --json merged,title,mergeCommit \
-  -q '{merged,title,sha:.mergeCommit.oid}')
-if [[ "$(jq -r '.merged' <<<"${meta}")" != "true" ]]; then
+meta=$(gh pr view "${pr_number}" --json state,title,mergeCommit \
+  -q '{state,title,sha:.mergeCommit.oid}')
+if [[ "$(jq -r '.state' <<<"${meta}")" != "MERGED" ]]; then
   echo "PR #${pr_number} is not merged; refusing to backport" >&2
   exit 1
 fi
