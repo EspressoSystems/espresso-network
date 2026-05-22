@@ -99,7 +99,7 @@ pub struct UpgradeTaskState<TYPES: NodeType> {
 
 impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
     /// Check if we have decided on an upgrade certificate
-    async fn upgraded(&self) -> bool {
+    fn upgraded(&self) -> bool {
         self.upgrade_lock.decided_upgrade_cert().is_some()
     }
 
@@ -119,7 +119,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
 
                 // Skip voting if the version has already been upgraded.
                 ensure!(
-                    !self.upgraded().await,
+                    !self.upgraded(),
                     info!("Already upgraded to {upgrade:?}; not voting.")
                 );
 
@@ -371,7 +371,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     && view < self.stop_proposing_view
                     && time >= self.start_proposing_time
                     && time < self.stop_proposing_time
-                    && !self.upgraded().await
+                    && !self.upgraded()
                     && epoch_upgrade_checks
                     && leader == self.public_key
                 {

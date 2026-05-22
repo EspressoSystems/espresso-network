@@ -97,7 +97,7 @@ impl<R: Request, K: SignatureKey> RequestMessage<R, K> {
     ///
     /// # Panics
     /// - If time is not monotonic
-    pub async fn validate(&self, incoming_request_ttl: Duration) -> Result<()> {
+    pub fn validate(&self, incoming_request_ttl: Duration) -> Result<()> {
         // Make sure the request is not too old
         if self
             .timestamp_unix_seconds
@@ -123,7 +123,7 @@ impl<R: Request, K: SignatureKey> RequestMessage<R, K> {
         }
 
         // Call the request's application-specific validation function
-        self.request.validate().await
+        self.request.validate()
     }
 }
 
@@ -292,7 +292,6 @@ fn read_to_end<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
     use hotshot_types::signature_key::BLSPubKey;
     use rand::Rng;
 
@@ -309,19 +308,18 @@ mod tests {
     }
 
     /// A testing implementation of the [`Request`] trait for [`Vec<u8>`]
-    #[async_trait]
     impl Request for Vec<u8> {
         type Response = Vec<u8>;
 
-        async fn validate(&self) -> Result<()> {
+        fn validate(&self) -> Result<()> {
             Ok(())
         }
     }
 
     /// Tests that properly signed requests are validated correctly and that invalid requests
     /// (bad timestamp/signature) are rejected
-    #[tokio::test]
-    async fn test_request_validation() {
+    #[test]
+    fn test_request_validation() {
         // Create some RNG
         let mut rng = rand::thread_rng();
 
@@ -367,7 +365,7 @@ mod tests {
             };
 
             // Validate the request
-            assert_eq!(request.validate(request_ttl).await.is_ok(), should_be_valid);
+            assert_eq!(request.validate(request_ttl).is_ok(), should_be_valid);
         }
     }
 
