@@ -222,7 +222,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{matrix.service}}
@@ -350,7 +350,7 @@ jobs:
             password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate ${{ matrix.service }} docker metadata
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         id: metadata
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
@@ -449,7 +449,7 @@ jobs:
 
       - name: Docker meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/espressosystems/espresso-network/${{ matrix.service }}
 

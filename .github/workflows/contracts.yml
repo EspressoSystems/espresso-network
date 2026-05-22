@@ -34,7 +34,7 @@ jobs:
         uses: cachix/install-nix-action@v31
 
       - name: Enable Cachix
-        uses: cachix/cachix-action@v16
+        uses: cachix/cachix-action@v17
         # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
         continue-on-error: true
         with:
@@ -100,7 +100,7 @@ jobs:
           submodules: recursive
       - uses: taiki-e/install-action@just
       - uses: cachix/install-nix-action@v31
-      - uses: cachix/cachix-action@v16
+      - uses: cachix/cachix-action@v17
         # If PR is from a non-collaborator (e. g. dependabot) the secrets are missing and the login to cachix fails.
         continue-on-error: true
         with:
