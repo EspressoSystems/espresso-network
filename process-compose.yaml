@@ -523,7 +523,7 @@ processes:
 
   # A broker is the main message-routing unit of the CDN
   broker_0:
-    command: cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091
+    command: cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091 --public-advertise-endpoint local_ip:1738
     depends_on:
       keydb:
         condition: process_healthy
