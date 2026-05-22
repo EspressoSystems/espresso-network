@@ -29,6 +29,11 @@ pub trait DataBackfill: Send + Sync + 'static {
         10
     }
 
+    /// How long to sleep between batches to avoid saturating the database.
+    fn batch_delay(&self) -> Duration {
+        Duration::from_millis(50)
+    }
+
     /// Process one batch starting at `offset`.
     ///
     /// Returns `Some(next_offset)` to continue, or `None` when all rows have been processed.
@@ -214,6 +219,11 @@ impl MigrationRegistry {
                 return true;
             };
             offset = next_offset;
+
+            let delay = m.batch_delay();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
 
             if batch_count.is_multiple_of(m.log_frequency()) {
                 tracing::warn!(
