@@ -243,9 +243,9 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
             semaphore: Arc::new(Semaphore::new(1)),
         };
 
-        // Try to restore the DHT from the persistent store. If it fails, warn and start with an empty store
+        // Try to restore the DHT from the persistent store. If it fails, log and start with an empty store
         if let Err(err) = store.restore_from_persistent_storage().await {
-            warn!(
+            debug!(
                 "Failed to restore DHT from persistent storage: {err}. Starting with empty store",
             );
         }
@@ -258,9 +258,9 @@ impl<R: RecordStore, D: DhtPersistentStorage> PersistentStore<R, D> {
     ///
     /// Returns `true` if the DHT was saved, `false` otherwise.
     fn try_save_to_persistent_storage(&mut self) -> bool {
-        // Try to acquire the semaphore, warning if another save operation is already in progress
+        // Try to acquire the semaphore; if another save operation is already in progress, skip.
         let Ok(permit) = Arc::clone(&self.semaphore).try_acquire_owned() else {
-            warn!(
+            debug!(
                 "Skipping DHT save to persistent storage - another save operation is already in \
                  progress"
             );
