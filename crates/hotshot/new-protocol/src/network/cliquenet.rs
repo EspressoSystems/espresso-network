@@ -493,7 +493,24 @@ impl cliquenet::Metrics for CliquenetMetrics {
     }
 
     fn del(&self, key: &PublicKey) {
-        self.gauges.write().gauges.remove(key);
-        self.counters.write().counters.remove(key);
+        let key_string = key.to_string();
+
+        {
+            let mut gauges = self.gauges.write();
+            for (label, _) in gauges.gauges.remove(key).into_iter().flatten() {
+                if let Some(f) = gauges.family.get(&label) {
+                    f.destroy(&[&key_string]);
+                }
+            }
+        }
+
+        {
+            let mut counters = self.counters.write();
+            for (label, _) in counters.counters.remove(key).into_iter().flatten() {
+                if let Some(f) = counters.family.get(&label) {
+                    f.destroy(&[&key_string]);
+                }
+            }
+        }
     }
 }
