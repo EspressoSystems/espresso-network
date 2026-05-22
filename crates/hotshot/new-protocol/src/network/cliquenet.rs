@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -57,6 +58,7 @@ impl<T: NodeType> Cliquenet<T> {
                     .values()
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
+            .max_message_size(NonZeroUsize::new(20 * 1024 * 1024).expect("20 MB > 0"))
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
