@@ -158,17 +158,12 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
             let bls_key = vote1.vote.signing_key();
 
             if quorum_cert.is_none() {
-                match quorum_accumulator
-                    .accumulate(&vote1.vote, membership.clone())
-                    .await
-                {
+                match quorum_accumulator.accumulate(&vote1.vote, membership.clone()) {
                     Some(cert) => {
                         let stake_table =
-                            <QuorumCertificate2<T> as Certificate<T, _>>::stake_table(&membership)
-                                .await;
+                            <QuorumCertificate2<T> as Certificate<T, _>>::stake_table(&membership);
                         let threshold =
-                            <QuorumCertificate2<T> as Certificate<T, _>>::threshold(&membership)
-                                .await;
+                            <QuorumCertificate2<T> as Certificate<T, _>>::threshold(&membership);
                         match cert.is_valid_cert(
                             &StakeTableEntries::<T>::from(stake_table).0,
                             threshold,
@@ -191,7 +186,7 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
                                 quorum_accumulator = VoteAccumulator::new(lock.clone());
                                 for v in &quorum_votes {
                                     if let Some(cert) =
-                                        quorum_accumulator.accumulate(v, membership.clone()).await
+                                        quorum_accumulator.accumulate(v, membership.clone())
                                     {
                                         quorum_cert = Some(cert);
                                         break;
@@ -209,9 +204,7 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
             // Unlike regular votes, we don't have to double check the certificate because votes are
             // fully checked, including signature in the state_accumulator.
             if state_cert.is_none()
-                && let Some(cert) = state_accumulator
-                    .accumulate(&bls_key, &state_vote, &membership)
-                    .await
+                && let Some(cert) = state_accumulator.accumulate(&bls_key, &state_vote, &membership)
             {
                 state_cert = Some(cert);
             }

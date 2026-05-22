@@ -373,7 +373,6 @@ where
                         if let Err(err) = self
                             .network
                             .apply_epoch(epoch, &self.membership_coordinator)
-                            .await
                         {
                             error!(%epoch, %err, "network apply_epoch failed");
                         }
