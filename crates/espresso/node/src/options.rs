@@ -6,6 +6,7 @@ use std::{
     collections::HashSet,
     fmt::{self, Formatter},
     iter::once,
+    num::NonZeroU64,
     path::PathBuf,
     time::Duration,
 };
@@ -339,6 +340,18 @@ pub struct Options {
     /// terminates the walk
     #[clap(long, env = "ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT", default_value = "30s", value_parser = parse_duration)]
     pub bootstrap_epoch_catchup_timeout: Duration,
+
+    /// Number of blocks between new-protocol garbage collection passes.
+    ///
+    /// Controls how often the new-protocol coordinator triggers garbage
+    /// collection of decided views/epochs across consensus state, VID,
+    /// vote collectors, and storage.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_NEW_PROTOCOL_CONSENSUS_GC_INTERVAL",
+        default_value = "100"
+    )]
+    pub new_protocol_consensus_gc_interval: NonZeroU64,
 
     #[clap(flatten)]
     pub logging: logging::Config,
@@ -678,6 +691,7 @@ pub struct PublicNodeConfig {
     pub catchup_base_timeout: Duration,
     pub local_catchup_timeout: Duration,
     pub bootstrap_epoch_catchup_timeout: Duration,
+    pub new_protocol_consensus_gc_interval: NonZeroU64,
     pub catchup_backoff: BackoffParams,
     pub proposal_fetcher: ProposalFetcherConfig,
     pub libp2p: Libp2pTuning,
@@ -1017,6 +1031,7 @@ impl PublicNodeConfig {
             catchup_base_timeout: opt.catchup_base_timeout,
             local_catchup_timeout: opt.local_catchup_timeout,
             bootstrap_epoch_catchup_timeout: opt.bootstrap_epoch_catchup_timeout,
+            new_protocol_consensus_gc_interval: opt.new_protocol_consensus_gc_interval,
             catchup_backoff: opt.catchup_backoff,
             proposal_fetcher: opt.proposal_fetcher_config,
             libp2p: Libp2pTuning::from(opt),

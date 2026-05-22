@@ -68,7 +68,7 @@ pub enum ConsensusInput<T: NodeType> {
         state_cert: LightClientStateUpdateCertificateV2<T>,
     },
     EpochChange(EpochChangeMessage<T>),
-    HeaderCreated(ViewNumber, T::BlockHeader),
+    HeaderCreated(ViewNumber, Commitment<Leaf2<T>>, T::BlockHeader),
     ProposalWithVidShare(
         T::SignatureKey,
         ProposalMessage<T, Validated>,
@@ -131,7 +131,7 @@ pub struct Consensus<T: NodeType> {
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
     locked_cert: Option<Certificate1<T>>,
-    headers: BTreeMap<ViewNumber, T::BlockHeader>,
+    headers: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), T::BlockHeader>,
     leaves: BTreeMap<ViewNumber, Leaf2<T>>,
     last_decided_view: ViewNumber,
     last_decided_leaf: Leaf2<T>,
@@ -195,6 +195,7 @@ impl<T: NodeType> Consensus<T> {
         upgrade_lock: UpgradeLock<T>,
         genesis_leaf: Leaf2<T>,
         epoch_height: B,
+        garbage_collection_interval: B,
     ) -> Self
     where
         B: Into<BlockNumber>,
@@ -231,8 +232,7 @@ impl<T: NodeType> Consensus<T> {
             state_certs: BTreeMap::new(),
             upgrade_lock,
             vid_shares: BTreeMap::new(),
-            // TODO: make this configurable or Constant
-            garbage_collection_interval: 100.into(),
+            garbage_collection_interval: garbage_collection_interval.into(),
             epoch_height: epoch_height.into(),
         }
     }
@@ -331,8 +331,8 @@ impl<T: NodeType> Consensus<T> {
                     .insert(state_response.view, state_response.commitment);
                 Protocol::Continue
             },
-            ConsensusInput::HeaderCreated(view, header) => {
-                self.headers.insert(view, header);
+            ConsensusInput::HeaderCreated(view, commitment, header) => {
+                self.headers.insert((view, commitment), header);
                 Protocol::Continue
             },
             ConsensusInput::StateValidationFailed(state_response) => {
@@ -458,7 +458,8 @@ impl<T: NodeType> Consensus<T> {
         self.pending_certs1 = self.pending_certs1.split_off(&view);
         self.pending_certs2 = self.pending_certs2.split_off(&view);
         self.timeout_certs = self.timeout_certs.split_off(&view);
-        self.headers = self.headers.split_off(&view);
+        self.headers
+            .retain(|(header_view, _), _| *header_view >= view);
         self.leaves = self.leaves.split_off(&view);
         self.proposals = self.proposals.split_off(&view);
         self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -856,7 +857,11 @@ impl<T: NodeType> Consensus<T> {
             return;
         };
 
-        let Some(header) = self.headers.get(&view) else {
+        // Key the header lookup by the proposal's leaf commitment, not the
+        // cert's `leaf_commit` field b/c genesis cert leaf commit != genesis proposals
+        // leaf commitment.
+        let parent_commitment = proposal_commitment(proposal);
+        let Some(header) = self.headers.get(&(view, parent_commitment)) else {
             debug!("no block header");
             return;
         };
@@ -1039,11 +1044,10 @@ impl<T: NodeType> Consensus<T> {
         }
         self.last_decided_view = new_decided_view;
         self.last_decided_leaf = last_decided_leaf;
-        let cert1 = self
-            .certs
-            .get(&view)
-            .cloned()
-            .expect("cert1 must exist if cert2 exists");
+        let Some(cert1) = self.certs.get(&view).cloned() else {
+            debug!(%view, "cert1 missing");
+            return;
+        };
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert1,
@@ -1488,7 +1492,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
             ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),
-            ConsensusInput::HeaderCreated(view, _) => *view,
+            ConsensusInput::HeaderCreated(view, ..) => *view,
             ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
