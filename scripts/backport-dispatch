@@ -40,15 +40,8 @@ git fetch origin "${target_branch}"
 branch="backport-${pr_number}-to-${target_branch}"
 git checkout -b "${branch}" "origin/${target_branch}"
 
-parent_count=$(git rev-list --parents -n 1 "${sha}" | wc -w)
-if (( parent_count > 2 )); then
-  cherry_args=(-x -m 1)
-else
-  cherry_args=(-x)
-fi
-
 cherry_status=0
-git cherry-pick "${cherry_args[@]}" "${sha}" || cherry_status=$?
+git cherry-pick -x "${sha}" || cherry_status=$?
 
 if [[ "${cherry_status}" -ne 0 ]]; then
   mapfile -t conflicted < <(git diff --name-only --diff-filter=U)
