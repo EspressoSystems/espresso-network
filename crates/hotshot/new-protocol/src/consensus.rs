@@ -136,6 +136,8 @@ pub struct Consensus<T: NodeType> {
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
     locked_cert: Option<Certificate1<T>>,
     headers: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), T::BlockHeader>,
+    /// Block-push staging: headers now have complicated keys to be efficiently usable.
+    block_push_prep: BTreeMap<ViewNumber, BlockPushPrep<T>>,
     leaves: BTreeMap<ViewNumber, Leaf2<T>>,
     last_decided_view: ViewNumber,
     last_decided_leaf: Leaf2<T>,
@@ -171,6 +173,19 @@ pub struct Consensus<T: NodeType> {
     pub(crate) epoch_height: BlockNumber,
 
     pub(crate) tracer: Option<crate::leader_trace::LeaderTracerHandle>,
+}
+
+/// Captured at HeaderCreated time so block-push doesn't need to re-fetch the
+/// header from `self.headers` (which is keyed by `(view, leaf_commit)` and
+/// thus awkward to look up by view alone from `BlockBuilt`/`VidDisperseCreated`
+/// where the leaf_commit isn't in scope).
+struct BlockPushPrep<T: NodeType> {
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment,
+    metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    /// Pre-computed: header.block_number() == epoch_height's last block.
+    /// If true, the next leader is in epoch + 1; otherwise same epoch.
+    is_last_block: bool,
 }
 
 /// Protocol flow directive.
@@ -222,6 +237,7 @@ impl<T: NodeType> Consensus<T> {
             last_decided_view: ViewNumber::genesis(),
             last_decided_leaf: genesis_leaf,
             headers: BTreeMap::new(),
+            block_push_prep: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             node_id: KeyPrefix::from(&public_key),
             public_key,
@@ -351,6 +367,20 @@ impl<T: NodeType> Consensus<T> {
                     self.tracer,
                     view,
                     crate::leader_trace::LeaderEvent::HeaderCreatedApplied
+                );
+                let epoch_height = *self.epoch_height;
+                let block_number = header.block_number();
+                self.block_push_prep.insert(
+                    view,
+                    BlockPushPrep {
+                        epoch: EpochNumber::new(epoch_from_block_number(
+                            block_number,
+                            epoch_height,
+                        )),
+                        payload_commitment: header.payload_commitment(),
+                        metadata: header.metadata().clone(),
+                        is_last_block: is_last_block(block_number, epoch_height),
+                    },
                 );
                 self.headers.insert((view, commitment), header);
                 self.maybe_send_block_to_next_leader(view, outbox);
@@ -498,6 +528,7 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs = self.timeout_certs.split_off(&view);
         self.headers
             .retain(|(header_view, _), _| *header_view >= view);
+        self.block_push_prep = self.block_push_prep.split_off(&view);
         self.leaves = self.leaves.split_off(&view);
         self.proposals = self.proposals.split_off(&view);
         self.signed_proposals = self.signed_proposals.split_off(&view);
@@ -865,16 +896,14 @@ impl<T: NodeType> Consensus<T> {
         if self.pushed_block_views.contains(&view) {
             return;
         }
-        let Some(header) = self.headers.get(&view) else {
-            debug!(%view, "block push deferred: no block header");
+        let Some(prep) = self.block_push_prep.get(&view) else {
+            debug!(%view, "block push deferred: no block-push prep");
             return;
         };
-        let epoch_height = *self.epoch_height;
-        let epoch = EpochNumber::new(epoch_from_block_number(header.block_number(), epoch_height));
-        let next_epoch = if is_last_block(header.block_number(), epoch_height) {
-            epoch + 1
+        let next_epoch = if prep.is_last_block {
+            prep.epoch + 1
         } else {
-            epoch
+            prep.epoch
         };
         let next_view = view + 1;
         let Ok(membership) = self
@@ -896,14 +925,12 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "block push deferred: no payload yet");
             return;
         };
-        let metadata = header.metadata().clone();
-        let payload_commitment = header.payload_commitment();
         let block = match BlockPushMessage::new(
             view,
-            epoch,
+            prep.epoch,
             payload,
-            metadata,
-            payload_commitment,
+            prep.metadata.clone(),
+            prep.payload_commitment,
             &self.private_key,
         ) {
             Ok(block) => block,
