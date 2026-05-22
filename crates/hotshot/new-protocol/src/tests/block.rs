@@ -112,7 +112,7 @@ async fn test_request_block_same_view_different_parent_both_produce_output() {
         block::BlockAndHeaderRequest, helpers::proposal_commitment, tests::common::utils::TestData,
     };
 
-    let mut b = builder().await;
+    let mut b = builder();
 
     let test_data = TestData::new(3).await;
     let parent_a = test_data.views[0].proposal.data.clone();
@@ -150,7 +150,7 @@ async fn test_request_block_same_view_different_parent_both_produce_output() {
 async fn test_request_block_dedups_same_view_same_parent() {
     use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
 
-    let mut b = builder().await;
+    let mut b = builder();
     let test_data = TestData::new(2).await;
     let parent = test_data.views[0].proposal.data.clone();
 
