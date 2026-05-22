@@ -139,6 +139,18 @@ macro_rules! merkle_tree_backfill {
                 .execute(tx.as_mut())
                 .await?;
 
+                // Delete moved rows from the legacy table in the same transaction so that
+                // storage stays roughly flat during the migration (move, not copy).
+                sqlx::query(concat!(
+                    "DELETE FROM ",
+                    $legacy_table,
+                    " WHERE created >= $1 AND created < $2"
+                ))
+                .bind(offset as i64)
+                .bind(offset as i64 + batch_size)
+                .execute(tx.as_mut())
+                .await?;
+
                 Ok(Some(offset + self.batch_size() as u64))
             }
         }
@@ -158,9 +170,46 @@ merkle_tree_backfill!(
     "block_merkle_tree_bigint"
 );
 
+pub struct CleanupLegacyHashTable;
+
+#[async_trait]
+impl DataBackfill for CleanupLegacyHashTable {
+    fn name(&self) -> &'static str {
+        "hash_bigint_cleanup_legacy_hash"
+    }
+
+    fn requires(&self) -> &'static [&'static str] {
+        &[
+            "hash_bigint_backfill_fee_merkle_tree",
+            "hash_bigint_backfill_block_merkle_tree",
+        ]
+    }
+
+    async fn run_batch(
+        &self,
+        tx: &mut Transaction<Write>,
+        // Keyset cursor: last deleted id (0 on first batch).
+        offset: u64,
+    ) -> anyhow::Result<Option<u64>> {
+        // Both merkle tree tables are now empty so there are no FK references to hash.id.
+        let deleted: Vec<(i64,)> = sqlx::query_as(
+            "DELETE FROM hash WHERE id IN (
+                SELECT id FROM hash WHERE id > $1 ORDER BY id LIMIT $2
+             ) RETURNING id",
+        )
+        .bind(offset as i64)
+        .bind(self.batch_size() as i64)
+        .fetch_all(tx.as_mut())
+        .await?;
+
+        Ok(deleted.last().map(|(id,)| *id as u64))
+    }
+}
+
 pub fn hash_bigint_migrations() -> MigrationRegistry {
     MigrationRegistry::new()
         .backfill(BackfillHash)
         .backfill(BackfillFeeMerkleTree)
         .backfill(BackfillBlockMerkleTree)
+        .backfill(CleanupLegacyHashTable)
 }
