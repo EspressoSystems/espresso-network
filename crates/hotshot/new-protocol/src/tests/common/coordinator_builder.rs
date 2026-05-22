@@ -87,9 +87,10 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     );
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
+    let genesis_state = Arc::new(genesis_state);
     state_manager.seed_state(
         ViewNumber::genesis(),
-        Arc::new(genesis_state),
+        genesis_state.clone(),
         genesis_leaf.clone(),
     );
 
@@ -109,6 +110,16 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+    // The synthetic genesis proposal carries the genesis cert1 as its
+    // justify_qc, so the leaf derived from it has a different commitment than
+    // `genesis_leaf` (which has a null justify_qc). `request_header` for view 1
+    // looks up the parent state by the proposal's leaf commitment, so seed the
+    // genesis state under that commitment too.
+    state_manager.seed_state(
+        ViewNumber::genesis(),
+        genesis_state,
+        Leaf2::from(genesis_proposal.clone()),
+    );
     consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
 
     if let Some(seed) = pre_cutover_seed {

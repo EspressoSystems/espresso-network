@@ -586,8 +586,21 @@ impl<T: NodeType> Consensus<T> {
         self.leaves = self.leaves.split_off(&view);
         self.proposals = self.proposals.split_off(&view);
         self.signed_proposals = self.signed_proposals.split_off(&view);
+        self.vid_shares = self.vid_shares.split_off(&view);
         self.voted_1_views = self.voted_1_views.split_off(&view);
         self.voted_2_views = self.voted_2_views.split_off(&view);
+    }
+
+    /// Test-only: forcibly replace the proposal stored at `view`.
+    ///
+    /// Used to simulate the scenario where `self.proposals[parent_view]`
+    /// diverges from `self.certs[parent_view].data.leaf_commit` (e.g. a
+    /// byzantine leader sent two safe proposals at the same view, the cert
+    /// formed for the first but a later overwrite landed in the proposals
+    /// map).  No production code should ever do this.
+    #[cfg(test)]
+    pub(crate) fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<T>) {
+        self.proposals.insert(view, proposal);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -980,10 +993,31 @@ impl<T: NodeType> Consensus<T> {
             return;
         };
 
-        // Key the header lookup by the proposal's leaf commitment, not the
-        // cert's `leaf_commit` field b/c genesis cert leaf commit != genesis proposals
-        // leaf commitment.
-        let parent_commitment = proposal_commitment(proposal);
+        // Key the header lookup by the cert's `leaf_commit`, NOT
+        // `proposal_commitment(proposal)`.  `self.proposals` is keyed by view
+        // and can be overwritten by any later-arriving safe proposal at the
+        // same view, so it may not match the cert.  Using the cert's
+        // leaf_commit pins the lookup to the leaf the QC actually certified
+        // and prevents the leader from grabbing a header that was built for a
+        // different (same-view) parent and therefore carries a wrong
+        // block_number.
+        //
+        // Genesis is the one special case: the synthetic genesis proposal
+        // carries a non-null justify_qc, so the leaf derived from it has a
+        // different commitment than the anchor leaf the genesis cert was
+        // built over.  For view 1 we fall back to the proposal's commit.
+        let parent_commitment = if parent_view == ViewNumber::genesis() {
+            proposal_commitment(proposal)
+        } else if proposal_commitment(proposal) != parent_cert.data.leaf_commit {
+            warn!(
+                %parent_view,
+                "stored proposal at parent_view does not match parent cert's leaf_commit; \
+                 refusing to propose with mismatched parent"
+            );
+            return;
+        } else {
+            parent_cert.data.leaf_commit
+        };
         let Some(header) = self.headers.get(&(view, parent_commitment)) else {
             debug!("no block header");
             return;

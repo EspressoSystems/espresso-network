@@ -5,12 +5,10 @@
 use std::fmt::Debug;
 
 use anyhow::Result;
-use async_trait::async_trait;
 
 use super::Serializable;
 
 /// A trait for a request. Associates itself with a response type.
-#[async_trait]
 #[cfg(not(test))]
 pub trait Request: Send + Sync + Serializable + 'static + Clone + Debug {
     /// The response type associated with this request
@@ -20,11 +18,10 @@ pub trait Request: Send + Sync + Serializable + 'static + Clone + Debug {
     ///
     /// # Errors
     /// If the request is not valid
-    async fn validate(&self) -> Result<()>;
+    fn validate(&self) -> Result<()>;
 }
 
 /// A trait for a request. Associates itself with a response type.
-#[async_trait]
 #[cfg(test)]
 pub trait Request: Send + Sync + Serializable + 'static + Clone + Debug {
     /// The response type associated with this request
@@ -34,5 +31,5 @@ pub trait Request: Send + Sync + Serializable + 'static + Clone + Debug {
     ///
     /// # Errors
     /// If the request is not valid
-    async fn validate(&self) -> Result<()>;
+    fn validate(&self) -> Result<()>;
 }

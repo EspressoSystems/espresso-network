@@ -131,7 +131,7 @@ async fn test_certificate2_validity() {
     let leaf = Leaf::from_quorum_proposal(&proposal.data.into());
     let parent_leaf = Leaf::from_quorum_proposal(&parent_proposal.data.into());
 
-    assert!(leaf.parent_commitment() == parent_leaf.commit(&handle.hotshot.upgrade_lock).await);
+    assert!(leaf.parent_commitment() == parent_leaf.commit(&handle.hotshot.upgrade_lock));
 
     assert!(leaf2.parent_commitment() == parent_leaf2.commit());
 }

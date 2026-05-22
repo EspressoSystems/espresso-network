@@ -25,7 +25,7 @@ use crate::network::{
         record::{Namespace, RecordKey, RecordValue},
         store::persistent::DhtPersistentStorage,
     },
-    gen_multiaddr,
+    gen_multiaddr, log_summary,
 };
 
 /// A handle containing:
@@ -115,6 +115,7 @@ pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
     let (send_chan, recv_chan) = network.spawn_listeners().map_err(|err| {
         NetworkError::ListenError(format!("failed to spawn listeners for Libp2p: {err}"))
     })?;
+    log_summary::spawn_summary_task();
     let receiver = NetworkNodeReceiver {
         receiver: recv_chan,
         recv_kill: None,

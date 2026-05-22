@@ -190,10 +190,7 @@ where
         // cliquenet this dials the N-1/N/N+1 sliding window for the current
         // epoch before consensus starts.
         let mut coordinator_network = coordinator_network;
-        if let Err(err) = coordinator_network
-            .apply_epoch(current_epoch, &membership_coordinator)
-            .await
-        {
+        if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
             tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }
 

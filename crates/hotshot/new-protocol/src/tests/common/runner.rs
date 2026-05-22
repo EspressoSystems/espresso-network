@@ -6,6 +6,7 @@ use std::{
 
 use async_broadcast::Sender;
 use bon::Builder;
+use cliquenet::noise::Protocol;
 use committable::Committable;
 use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
@@ -251,7 +252,7 @@ impl TestRunner {
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
             let (membership, storage, client, external_events_tx) =
-                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key).await;
+                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key);
 
             let coord = build_test_coordinator(
                 i as u64,
@@ -376,7 +377,6 @@ impl TestRunner {
                                         self.epoch_height,
                                         k,
                                     )
-                                    .await
                                 };
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
@@ -561,6 +561,7 @@ async fn create_network(
                 .iter()
                 .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
         )
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let met = Box::new(NoMetrics);

@@ -11,6 +11,7 @@ use std::{
 };
 
 use async_lock::RwLock;
+use cliquenet::noise::Protocol;
 use committable::Committable;
 use hotshot::{
     HotShotInitializer, SystemContext,
@@ -196,6 +197,7 @@ async fn build_new_protocol_network(
                 .iter()
                 .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
         )
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
     let met = Box::new(NoMetrics);
     Cliquenet::create_with_config(parties[i].1, lock.clone(), config, peer_infos.clone(), met)
@@ -389,7 +391,7 @@ async fn spawn_node(
 ) -> NodeState {
     let network = build_new_protocol_network(i, parties, new_proto_lock).await;
     let (membership, storage, client, external_events_tx) =
-        mock_membership_with_client(num_nodes, EPOCH_HEIGHT, parties[i].1).await;
+        mock_membership_with_client(num_nodes, EPOCH_HEIGHT, parties[i].1);
 
     let coord = build_cutover_coordinator(
         i as u64,
