@@ -112,6 +112,12 @@ pub trait MetricsFamily<M>: Send + Sync + DynClone + Debug {
     /// contain exactly one value for each label name defined when the family was created, in the
     /// same order.
     fn create(&self, labels: Vec<String>) -> M;
+
+    /// Remove a metric in this family identified by its label values.
+    ///
+    /// The given values of `labels` must match exactly a label vector previously passed to
+    /// [`create`](Self::create).
+    fn destroy(&self, labels: &[&str]);
 }
 
 /// A family of related counters, partitioned by their label values.
@@ -192,19 +198,28 @@ impl MetricsFamily<Box<dyn Counter>> for NoMetrics {
     fn create(&self, _: Vec<String>) -> Box<dyn Counter> {
         Box::new(NoMetrics)
     }
+
+    fn destroy(&self, _: &[&str]) {}
 }
 impl MetricsFamily<Box<dyn Gauge>> for NoMetrics {
     fn create(&self, _: Vec<String>) -> Box<dyn Gauge> {
         Box::new(NoMetrics)
     }
+
+    fn destroy(&self, _: &[&str]) {}
 }
 impl MetricsFamily<Box<dyn Histogram>> for NoMetrics {
     fn create(&self, _: Vec<String>) -> Box<dyn Histogram> {
         Box::new(NoMetrics)
     }
+
+    fn destroy(&self, _: &[&str]) {}
 }
+
 impl MetricsFamily<()> for NoMetrics {
     fn create(&self, _: Vec<String>) {}
+
+    fn destroy(&self, _: &[&str]) {}
 }
 
 /// An ever-incrementing counter
@@ -362,24 +377,32 @@ mod test {
         fn create(&self, labels: Vec<String>) -> Box<dyn Counter> {
             Box::new(self.family(labels))
         }
+
+        fn destroy(&self, _: &[&str]) {}
     }
 
     impl MetricsFamily<Box<dyn Gauge>> for TestMetrics {
         fn create(&self, labels: Vec<String>) -> Box<dyn Gauge> {
             Box::new(self.family(labels))
         }
+
+        fn destroy(&self, _: &[&str]) {}
     }
 
     impl MetricsFamily<Box<dyn Histogram>> for TestMetrics {
         fn create(&self, labels: Vec<String>) -> Box<dyn Histogram> {
             Box::new(self.family(labels))
         }
+
+        fn destroy(&self, _: &[&str]) {}
     }
 
     impl MetricsFamily<()> for TestMetrics {
         fn create(&self, labels: Vec<String>) {
             self.family(labels).set(1);
         }
+
+        fn destroy(&self, _: &[&str]) {}
     }
 
     #[derive(Default, Debug)]
