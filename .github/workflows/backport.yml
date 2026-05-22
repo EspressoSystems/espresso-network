@@ -37,8 +37,10 @@ jobs:
         with:
           tool: mergiraf
 
-      - name: Register mergiraf as merge driver
+      - name: Configure git identity and mergiraf merge driver
         run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git config --global merge.mergiraf.name mergiraf
           git config --global merge.mergiraf.driver 'mergiraf merge --git %O %A %B -s %S -x %X -y %Y -p %P'
           mkdir -p ~/.config/git
@@ -96,4 +98,6 @@ jobs:
             ${{ steps.resolve.outputs.needs_claude }}
 
             For each PR: check it out, resolve the markers, run `just fmt`, commit, push, then `gh pr ready <pr>`.
+
+            Commit attribution: only create new commits authored by the current git identity (the bot). Do not use --amend, --author=, --reuse-message=, git rebase, or `git cherry-pick --continue`; those preserve the original PR author's identity, which must never happen here.
           claude_args: "--model claude-opus-4-6"

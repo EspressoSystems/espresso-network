@@ -12,9 +12,6 @@ target_branch="$2"
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is not set}"
 : "${GH_TOKEN:?GH_TOKEN is not set}"
 
-git config user.name 'github-actions[bot]'
-git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
 meta=$(gh pr view "${pr_number}" --json state,title,mergeCommit \
   -q '{state,title,sha:.mergeCommit.oid}')
 if [[ "$(jq -r '.state' <<<"${meta}")" != "MERGED" ]]; then
