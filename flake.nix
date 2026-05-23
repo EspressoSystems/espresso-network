@@ -89,9 +89,8 @@
         };
         vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
       });
-      prek-as-pre-commit = pkgs.runCommand "prek-as-pre-commit" { } ''
-        mkdir -p $out/bin
-        ln -s ${pkgs.prek}/bin/prek $out/bin/pre-commit
+      prek-as-pre-commit = pkgs.writeShellScriptBin "pre-commit" ''
+        exec ${pkgs.prek}/bin/prek "$@"
       '';
       myShell = pkgs.mkShellNoCC.override (lib.optionalAttrs stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
