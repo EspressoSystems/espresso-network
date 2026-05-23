@@ -31,8 +31,8 @@ stackable across rows.
 | 0   | baseline (main + bench harness)         | e475ad1 | devShells.x86_64-linux.default         | 2026-05-23T18:58:24Z | 4558             | 4492 (min 4453 / max 4549) | 3.20        | 8 396 912 | 5 153 389 | 3 546 013 |
 | 1   | kill wide outer `with pkgs;`            | 8dfa388 | devShells.x86_64-linux.default         | 2026-05-23T19:01:49Z | 4587             | 4551 (min 4390 / max 4614) | 3.22        | 8 396 924 | 5 153 401 | 3 546 014 |
 | 2   | drop `echidna-nixpkgs` (reverted)       | 2516559 | devShells.x86_64-linux.default         | 2026-05-23T19:05:18Z | 4751             | 4646 (min 4605 / max 4723) | 3.48        | 8 396 903 | 5 153 398 | 3 546 014 |
-| 3   | fix `dockerShell.shellHook` coercion    | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
-| 3.b | fix `dockerShell.shellHook` (docker)    | TBD    | devShells.x86_64-linux.dockerShell     |            |                  |                            |             |           |           |      |
+| 3   | fix `dockerShell.shellHook` coercion    | c45eb55 | devShells.x86_64-linux.default         | 2026-05-23T19:07:39Z | 4581             | 4582 (min 4548 / max 4627) | 3.25        | 8 396 924 | 5 153 401 | 3 546 014 |
+| 3.b | fix `dockerShell.shellHook` (docker)    | c45eb55 | devShells.x86_64-linux.dockerShell     | 2026-05-23T19:08:37Z | 4640             | 4584 (min 4476 / max 4639) | 3.27        | 8 497 726 | 5 243 412 | 3 613 255 |
 | 4   | decouple default shell from pre-commit  | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
 | 5   | de-overlay solhint/pup/golangci         | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
 | 6   | pin nightly toolchain                   | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
