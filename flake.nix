@@ -71,33 +71,29 @@
         (import rust-overlay)
         solc-bin.overlays.default
         dregs.overlays.default
-        (final: prev: {
-          solhint = prev.callPackage ./nix/solhint { };
-          pup = prev.callPackage ./nix/pup { };
-        })
-
-        (final: prev: {
-          golangci-lint = prev.golangci-lint.overrideAttrs (old: rec {
-            version = "1.64.8";
-            src = prev.fetchFromGitHub {
-              owner = "golangci";
-              repo = "golangci-lint";
-              rev = "v${version}";
-              sha256 = "sha256-ODnNBwtfILD0Uy2AKDR/e76ZrdyaOGlCktVUcf9ujy8";
-            };
-            vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
-          });
-        })
-
-        (final: prev: {
-          prek-as-pre-commit = final.runCommand "prek-as-pre-commit" { } ''
-            mkdir -p $out/bin
-            ln -s ${final.prek}/bin/prek $out/bin/pre-commit
-          '';
-        })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
       inherit (pkgs) lib stdenv;
+
+      # Local custom packages — kept out of `overlays` so they don't add
+      # an extra layer on top of every `pkgs.*` access. Referenced directly
+      # from the shells that need them.
+      solhint = pkgs.callPackage ./nix/solhint { };
+      pup = pkgs.callPackage ./nix/pup { };
+      golangci-lint = pkgs.golangci-lint.overrideAttrs (old: rec {
+        version = "1.64.8";
+        src = pkgs.fetchFromGitHub {
+          owner = "golangci";
+          repo = "golangci-lint";
+          rev = "v${version}";
+          sha256 = "sha256-ODnNBwtfILD0Uy2AKDR/e76ZrdyaOGlCktVUcf9ujy8";
+        };
+        vendorHash = "sha256-/iq7Ju7c2gS7gZn3n+y0kLtPn2Nn8HY/YdqSDYjtEkI=";
+      });
+      prek-as-pre-commit = pkgs.runCommand "prek-as-pre-commit" { } ''
+        mkdir -p $out/bin
+        ln -s ${pkgs.prek}/bin/prek $out/bin/pre-commit
+      '';
       myShell = pkgs.mkShellNoCC.override (lib.optionalAttrs stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
