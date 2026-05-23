@@ -42,8 +42,13 @@ stackable across rows.
 | 8   | narrow systems (`eachSystem`) — SKIPPED | —      | —                                      | —                    | —                | —                          | —           | —         | —         | —       |
 | 9   | `writeShellScriptBin` for prek wrapper  | f028be7 | devShells.x86_64-linux.default         | 2026-05-23T19:21:59Z | 4057             | 3964 (min 3916 / max 4016) | 2.85        | 6 703 047 | 4 223 714 | 2 857 057 |
 | F   | (intermediate cumulative)               | f028be7 | devShells.x86_64-linux.default         | 2026-05-23T19:23:08Z | 4044             | 3880 (min 3829 / max 4328) | 2.84        | 6 703 046 | 4 223 714 | 2 857 057 |
-| 10  | **`dregs` follows our nixpkgs**         | 8517c0a | devShells.x86_64-linux.default         | 2026-05-23T19:42:28Z | 3803             | **3777 (min 3570 / max 3809)** | **2.61**    | **6 592 690** | **4 167 751** | **2 816 961** |
-| FL  | _Floor_ — minimal rust-only flake (a)   | —       | devShells.x86_64-linux.default (b)     | 2026-05-23T19:46Z    | —                | **706 (min 687 / max 741)** | **0.36**    | **873 301** | **314 065**   | **158 113** |
+| 10  | `dregs` follows our nixpkgs             | 8517c0a | devShells.x86_64-linux.default         | 2026-05-23T19:42:28Z | 3803             | 3777 (min 3570 / max 3809) | 2.61        | 6 592 690 | 4 167 751 | 2 816 961 |
+| 11  | move docs tools → `devShells.docs`      | 83d54d8 | devShells.x86_64-linux.default         | 2026-05-23T19:49:25Z | 3720             | 3665 (min 3525 / max 3694) | 2.58        | 6 373 154 | 3 970 007 | 2 673 611 |
+| 12  | move Go toolchain → `devShells.go`      | 3c87345 | devShells.x86_64-linux.default         | 2026-05-23T19:51:44Z | 3565             | 3496 (min 3364 / max 3522) | 2.48        | 6 371 382 | 3 968 441 | 2 672 591 |
+| 13  | move Python → `devShells.python`        | bfa0540 | devShells.x86_64-linux.default         | 2026-05-23T19:54:46Z | 3733             | 3545 (min 3522 / max 3728) | 2.64        | 6 358 411 | 3 956 563 | 2 664 271 |
+| 14  | move go-ethereum → `devShells.contracts`| 28b2c27 | devShells.x86_64-linux.default         | 2026-05-23T19:57:42Z | 3683             | 3572 (min 3515 / max 3662) | 2.57        | 6 357 094 | 3 955 396 | 2 663 452 |
+| 15  | drop entr/pup/lazydocker/bc             | ca9bc88 | devShells.x86_64-linux.default         | 2026-05-23T19:59:54Z | 3712             | **3571 (min 3546 / max 3641)** | **2.55**    | **6 353 539** | **3 952 142** | **2 661 142** |
+| FL  | _Floor_ — minimal rust-only flake (a)   | —       | devShells.x86_64-linux.default (b)     | 2026-05-23T19:46Z    | —                | 706 (min 687 / max 741) | 0.36        | 873 301   | 314 065   | 158 113   |
 
 (a) Standalone flake at `/tmp/rust-only-flake/` — only `nixpkgs` and
 `rust-overlay` inputs, single devShell containing `pkg-config`, `openssl`,
@@ -94,31 +99,33 @@ helps `nix flake show` / `nix flake check`, which is out of scope for the
 
 ## Decisions
 
-**Net change vs baseline (row 0 → row 10):**
+**Net change vs baseline (row 0 → row 15):**
 
 | Metric    | Baseline   | Current    | Floor      | Δ vs baseline   | % of optimizable gap closed |
 | --------- | ---------- | ---------- | ---------- | --------------- | --------------------------- |
-| Cold (ms) | 4 492      | **3 777**  | 706        | **−715 (−15.9 %)** | 19 %                     |
-| Warm (ms) | 4 558      | 3 803      | —          | −755 (−16.6 %)  | —                            |
-| cpuTime   | 3.20 s     | 2.61 s     | 0.36 s     | −0.59 s (−18.4 %) | 21 %                       |
-| values    | 8 396 912  | 6 592 690  | 873 301    | **−1 804 222 (−21.5 %)** | 24 %                |
-| thunks    | 5 153 389  | 4 167 751  | 314 065    | −985 638 (−19.1 %) | 20 %                      |
-| envs      | 3 546 013  | 2 816 961  | 158 113    | −729 052 (−20.6 %) | 22 %                      |
+| Cold (ms) | 4 492      | **3 571**  | 706        | **−921 (−20.5 %)** | **24 %**                |
+| Warm (ms) | 4 558      | 3 712      | —          | −846 (−18.6 %)  | —                            |
+| cpuTime   | 3.20 s     | 2.55 s     | 0.36 s     | −0.65 s (−20.3 %) | 23 %                       |
+| values    | 8 396 912  | 6 353 539  | 873 301    | **−2 043 373 (−24.3 %)** | **27 %**            |
+| thunks    | 5 153 389  | 3 952 142  | 314 065    | −1 201 247 (−23.3 %) | 25 %                    |
+| envs      | 3 546 013  | 2 661 142  | 158 113    | −884 871 (−25.0 %) | 26 %                      |
 
 Floor reference: a minimal flake with `nixpkgs` + `rust-overlay` + a single
 devShell containing `pkg-config`, `openssl`, and the full stable Rust
-toolchain. "Optimizable gap" = `current − floor` vs `baseline − floor`.
+toolchain (with rust-analyzer/clippy/rustfmt/rust-src). "Optimizable gap" =
+`current − floor` vs `baseline − floor`.
 
-**Two contributors do almost all the work:**
+**The big-rock contributors** (everything else is rounding noise):
 
 1. Row 4 — pre-commit decoupling (≈−14 % cold, ≈−20 % values on its own).
-2. Row 10 — `dregs` follows our nixpkgs (≈−5 % cold, eliminates a whole
-   second nixpkgs source tree). Surfaced by `--trace-function-calls`
-   profiling.
+2. Row 10 — `dregs` follows our nixpkgs (≈−5 % cold; eliminates a whole
+   second nixpkgs source tree; surfaced by `--trace-function-calls`).
+3. Rows 11–15 — pruning the default shell: docs tooling
+   (plantuml/graphviz/mdbook), the Go toolchain, Python tooling, abigen
+   (go-ethereum), and small odds-and-ends (entr/pup/lazydocker/bc).
+   ≈−200 ms cold and ≈−240 K values combined.
 
-Everything else is rounding noise.
-
-**Keep:**
+**Keep (the whole branch):**
 
 - Row 1 — explicit `pkgs.lib`/`pkgs.stdenv` instead of wide outer `with pkgs;`
   (no perf, kept for explicitness).
@@ -126,17 +133,32 @@ Everything else is rounding noise.
   the default-shell *derivation* into the hook string).
 - Row 4 — pre-commit decoupling + new `devShells.preCommit` shell.
 - Row 5 — local packages (`solhint`, `pup`, `golangci-lint`,
-  `prek-as-pre-commit`) moved from overlays to `let` (hygiene, not perf).
+  `prek-as-pre-commit`) moved from overlays to `let`.
 - Row 6 — pinned nightly toolchain instead of `selectLatestNightlyWith`.
 - Row 7 — `dregs.overlays.default` replaced with direct
   `dregs.packages.${system}.unwrapped` reference.
 - Row 9 — `writeShellScriptBin` for the `prek-as-pre-commit` wrapper
   instead of `runCommand` + symlink.
-- Row 10 — `inputs.dregs.inputs.nixpkgs.follows = "nixpkgs";` — kills a
-  duplicate nixpkgs tree found via profiling.
-- (Also includes the CI fix in `.github/workflows/contracts.yml` to use
-  `.#preCommit` for `pre-commit run` invocations, since the default shell
-  no longer auto-installs hooks.)
+- Row 10 — `inputs.dregs.inputs.nixpkgs.follows = "nixpkgs";`.
+- Row 11 — `devShells.docs` (plantuml/graphviz/mdbook).
+- Row 12 — `devShells.go` (full Go toolchain + golangci-lint).
+- Row 13 — `devShells.python` (python3/ruff/ty).
+- Row 14 — `devShells.contracts` (go-ethereum for `abigen`).
+- Row 15 — dropped entr/pup/lazydocker/bc entirely.
+- CI workflow update in `.github/workflows/contracts.yml`: pre-commit
+  invocations now use `.#preCommit`, which `inputsFrom`s default +
+  contracts so hooks find every tool they shell out to.
+
+**Migration for `nix develop` users:**
+
+| What you were doing                | Now run                       |
+| ---------------------------------- | ----------------------------- |
+| Auto pre-commit hooks on shell entry | `nix develop .#preCommit` once |
+| `make doc` / edit diagrams         | `nix develop .#docs`          |
+| Go SDK work under `sdks/go/`       | `nix develop .#go`            |
+| `just py-fmt` / `just py-check`    | `nix develop .#python`        |
+| `just gen-bindings` (rare)         | `nix develop .#contracts` or `.#preCommit` |
+| Everything else (Rust, Forge, Solhint, demo-native, postgres) | `nix develop` (default) |
 
 **Drop / reverted:**
 
@@ -155,26 +177,26 @@ auto-installs pre-commit hooks. To install them, run
 `nix develop .#preCommit` once after cloning. CI is unaffected
 (still consumes `checks.pre-commit-check` directly).
 
-**Cumulative `nix develop` cold-eval improvement: ~16 %, ~21 % fewer
-allocated values.** We've closed roughly a fifth of the gap to a
-minimal-rust-shell floor (`3 777 − 706 = 3 071 ms` still in espresso-
-specific tooling). Further reductions require shrinking the package list
-in the default shell — see "Next steps" below.
+**Cumulative `nix develop` cold-eval improvement: ~20.5 %, ~24 % fewer
+allocated values.** ~24 % of the gap to a minimal-rust-shell floor closed
+(`3 571 − 706 = 2 865 ms` still in espresso-specific tooling). Most of
+the remaining gap is in `foundry` + `solc` + `postgresql_16` + the
+rust-tool family — all kept because they're hit daily.
 
-## Next steps (not yet attempted)
+## Remaining gap — where the time still goes
 
-The profile (~85K calls into `make-derivation.nix`) and the floor
-benchmark (706 ms with a small package list) both point to the same
-remaining lever: **the package list in `devShells.default`**. Concrete
-candidates for a follow-up round:
+`current − floor = 2 865 ms`. The packages that contribute most to that
+gap, by rough order of derivation-graph size (not measured one-by-one;
+infer from package-manager intuition):
 
-- Figures / docs: `graphviz`, `plantuml`, `mdbook` — used only when
-  editing diagrams or building docs locally.
-- Optional UX: `lazydocker`, `entr`, `coreutils`, `bc`, `libusb1` — small
-  individually, but they each pull a derivation graph.
-- Python tooling: `python3`, `ruff`, `ty` — used by some scripts; could
-  move to a `python` devShell or rely on the user's profile.
-- Go tooling beyond `abigen`: `go`, `golangci-lint` — both can move into
-  a `go` devShell since most contributors aren't touching Go daily.
+- `foundry` — large Rust binary with many transitive deps. Daily use.
+- `postgresql_16` — moderate. Used by tests and `demo-native`.
+- The wider Rust tool family (`cargo-nextest`, `cargo-audit`, `cargo-edit`,
+  `cargo-hack`, `cargo-sort`, `typos`, `just`, `cargo-watch`) — each a
+  small Rust binary; collectively non-trivial.
+- `dregs-unwrapped` — Rust binary.
+- `nodePackages.prettier` — Node + many transitive deps.
 
-Each one is a measurable experiment that didn't fit in this pass.
+Pruning any one of these would require either a workflow change (move
+postgres to a `db` shell?) or accepting a daily-use tool moving out of
+default. Diminishing returns from here.
