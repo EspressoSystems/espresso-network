@@ -51,7 +51,11 @@ stackable across rows.
 | 16  | drop postgresql_16 + solc + dregs from default's packages (d) | f0dd28d | devShells.x86_64-linux.default | 2026-05-23T20:08:49Z | 1726 | 1682 (min 1622 / max 1705) | 0.98 | 2 950 804 | 1 586 536 | 1 112 571 |
 | 17  | solc/dregs → contracts, drop `FOUNDRY_SOLC` from default (e) | 83f9510 | devShells.x86_64-linux.default | 2026-05-23T20:10:30Z | 1303 | 1250 (min 1179 / max 1301) | 0.78 | 1 905 177 | 1 086 211 | 716 599 |
 | 17.b| confirm post-foundry-restore (stable)   | 221958c | devShells.x86_64-linux.default         | 2026-05-23T20:12:30Z | 1297             | 1296 (min 1265 / max 1652) | 0.72        | 1 905 177 | 1 086 211 | 716 599   |
-| 18  | drop `cargo-watch` (unused) (c)         | 409efc7 | devShells.x86_64-linux.default         | 2026-05-23T20:27:52Z | (env-noise)      | (env-noise)                | (env-noise) | **1 903 147** | **1 084 379** | **715 239** |
+| 18  | drop `cargo-watch` (unused) (c)         | 409efc7 | devShells.x86_64-linux.default         | 2026-05-23T20:27:52Z | (env-noise)      | (env-noise)                | (env-noise) | 1 903 147 | 1 084 379 | 715 239   |
+| 19  | static `.pre-commit-config.yaml`, drop git-hooks framework (f) | 3558afa | devShells.x86_64-linux.default | 2026-05-23T20:55Z | (env-noise) | (env-noise) | (env-noise) | 1 903 072 | 1 084 311 | 715 187 |
+| 20  | nix-aware pre-commit hook (no eval change) | cc4cd96 | devShells.x86_64-linux.default | 2026-05-23T21:02Z | (env-noise) | (env-noise) | (env-noise) | 1 903 073 | 1 084 312 | 715 188 |
+| 21  | dregs → `devShells.mutation` (default unchanged) (g) | 64811ac | devShells.x86_64-linux.default | 2026-05-23T21:21Z | 1 322 | **1 313** | **0.72** | **1 903 074** | **1 084 313** | **715 188** |
+| 21.c| dregs → `devShells.mutation` (contracts shell) | 64811ac | devShells.x86_64-linux.contracts | 2026-05-23T21:21Z | 1 427 | 1 391 | 0.75 | **2 279 722** | **1 274 113** | **832 717** |
 | FL  | _Floor_ — minimal rust-only flake (a)   | —       | devShells.x86_64-linux.default (b)     | 2026-05-23T19:46Z    | —                | 706 (min 687 / max 741) | 0.36        | 873 301   | 314 065   | 158 113   |
 
 (c) Both bench runs landed during a load-average of ~17 (something
@@ -80,6 +84,25 @@ the unforced solc-bin derivation graph, not "solc/dregs moving to the
 contracts shell" (moving a package between shells doesn't change the
 default-shell eval graph — only what the default *no longer references*
 does).
+
+(f) Hand-written `.pre-commit-config.yaml` checked into the repo
+replaces the git-hooks-nix generated config. `prek install` (or our
+nix-aware hook stub in row 20) sets up the actual git hook. This drops
+the entire `inputs.git-hooks` chain from flake.lock (5 entries) and
+removes `checks.pre-commit-check` + `devShells.preCommit` from
+flake.nix. Default-shell values are essentially unchanged (the checks
+attribute was already lazy and not on the default-shell eval path) —
+the win is UX, not perf: `git commit` now works in any of our dev
+shells without a manual `nix develop .#preCommit` dance.
+
+(g) The same dregs flake whose duplicate-nixpkgs we fixed in row 10
+turned out to be by far the heaviest single eval cost — referencing
+`dregs.packages.${system}.unwrapped` once is ~3.4M values, because
+dregs's flake brings its own crane/git-hooks/rust-overlay graph. It was
+already out of default by row 17 (moved to `.#contracts`), but contracts
+shouldn't carry it either — mutation testing is a rare workflow. Now
+it lives in `devShells.mutation` and `.#contracts` is light enough to
+be a daily-driver shell.
 
 (a) Standalone flake at `/tmp/rust-only-flake/` — only `nixpkgs` and
 `rust-overlay` inputs, single devShell containing `pkg-config`, `openssl`,
@@ -130,33 +153,42 @@ helps `nix flake show` / `nix flake check`, which is out of scope for the
 
 ## Decisions
 
-**Net change vs baseline (row 0 → row 17.b):**
+**Net change vs baseline (row 0 → row 21):**
 
 | Metric    | Baseline   | Current    | Floor      | Δ vs baseline       | % of optimizable gap closed |
 | --------- | ---------- | ---------- | ---------- | ------------------- | --------------------------- |
-| Cold (ms) | 4 492      | **1 296**  | 706        | **−3 196 (−71.1 %)** | **84 %**                  |
-| Warm (ms) | 4 558      | 1 297      | —          | −3 261 (−71.5 %)    | —                            |
+| Cold (ms) | 4 492      | **1 313**  | 706        | **−3 179 (−70.8 %)** | **84 %**                  |
+| Warm (ms) | 4 558      | 1 322      | —          | −3 236 (−71.0 %)    | —                            |
 | cpuTime   | 3.20 s     | 0.72 s     | 0.36 s     | **−2.48 s (−77.5 %)** | **87 %**                   |
-| values    | 8 396 912  | 1 905 177  | 873 301    | **−6 491 735 (−77.3 %)** | **86 %**               |
-| thunks    | 5 153 389  | 1 086 211  | 314 065    | −4 067 178 (−78.9 %) | 84 %                       |
-| envs      | 3 546 013  | 716 599    | 158 113    | −2 829 414 (−79.8 %) | 83 %                       |
+| values    | 8 396 912  | 1 903 074  | 873 301    | **−6 493 838 (−77.3 %)** | **86 %**               |
+| thunks    | 5 153 389  | 1 084 313  | 314 065    | −4 069 076 (−79.0 %) | 84 %                       |
+| envs      | 3 546 013  | 715 188    | 158 113    | −2 830 825 (−79.8 %) | 83 %                       |
+
+**Contracts shell after dregs split** (row 21.c):
+2 279 722 values / 1 391 ms cold — down from 5 682 942 values when dregs
+was still in contracts. A daily-driver contracts shell now costs about
+the same as the default shell.
 
 Floor reference: a minimal flake with `nixpkgs` + `rust-overlay` + a single
 devShell containing `pkg-config`, `openssl`, and the full stable Rust
 toolchain (with rust-analyzer/clippy/rustfmt/rust-src). "Optimizable gap" =
 `current − floor` vs `baseline − floor`.
 
-**The big-rock contributors** (corrected via A/B benchmarking, ranked
-by `values` delta which is deterministic):
+**The big-rock contributors** (ranked by `values` — deterministic; A/B
+benchmarked separately where indicated):
 
-1. **Stop referencing `dregs.packages.${system}.unwrapped` from the
-   default shell** (part of row 16, made permanent by row 17 moving
-   `dregs` to `.#contracts`). Dregs's flake outputs walk substantial
-   transitive content; this alone ≈ **−3.4 M values**, the largest
-   single contributor in the whole sweep.
-2. **Row 4 — decouple default from `pre-commit-check`.** ≈ **−1.7 M
-   values**, ≈ −720 ms cold. Removed the git-hooks framework from the
-   default-shell eval path.
+1. **Stop referencing `dregs.packages.${system}.unwrapped` from any
+   daily-driver shell** (rows 16 + 17 removed it from default; row 21
+   removed it from contracts too, into its own `.#mutation` shell). A/B
+   shows dregs alone is ≈ **−3.4 M values, −2.4 s cpuTime** — by far
+   the heaviest single tool in the repo. The dregs flake brings its
+   own crane/git-hooks/rust-overlay graph along, so referencing its
+   outputs walks substantial transitive content.
+2. **Row 4 — decouple default from `pre-commit-check`** (then row 19
+   replaced the git-hooks framework with a committed `.pre-commit-
+   config.yaml`). ≈ **−1.7 M values, −720 ms cold**. Removed the
+   git-hooks framework from the default-shell eval path. Row 19 also
+   restored the "git commit just works" UX so this was net-positive.
 3. **Stop referencing the `solc-bin."0.8.28"` derivation** (part of
    row 17, by removing `FOUNDRY_SOLC` env var so the let-binding is
    no longer forced). ≈ **−1.0 M values**, ≈ −430 ms cold.
@@ -168,12 +200,12 @@ by `values` delta which is deterministic):
 6. **Row 16 (true postgres-only contribution)** — postgresql_16 itself
    was *not* the bear we thought: A/B shows ≈ **+10 K values, +110 ms
    cold** to have it in default. The change is still correct (postgres
-   genuinely is unused — see d) but it's a small-rock win, not a
-   big-rock one.
-7. Everything else (rows 1, 3, 5, 6, 7, 9, 12, 13, 14, 15, 18 — the
-   Go/Python/contracts/misc/cargo-watch prunes and the `with pkgs;`,
-   `runCommand→writeShellScriptBin`, nightly pin, etc.) — collectively
-   ~−250 K values, ~−400 ms cold. Each one individually within noise.
+   genuinely is unused — see d) but it's a small-rock win.
+7. Everything else (rows 1, 3, 5, 6, 7, 9, 12, 13, 14, 15, 18, 20 —
+   the Go/Python/contracts/misc/cargo-watch prunes, the `with pkgs;`,
+   `runCommand→writeShellScriptBin`, nightly pin, nix-aware hook fix,
+   etc.) — collectively ~−250 K values, ~−400 ms cold. Each one
+   individually within noise.
 
 **Keep (the whole branch):**
 
@@ -209,12 +241,13 @@ by `values` delta which is deterministic):
 
 | What you were doing                | Now run                       |
 | ---------------------------------- | ----------------------------- |
-| Auto pre-commit hooks on shell entry | `nix develop .#preCommit` once |
+| Auto pre-commit hooks on shell entry | Still happens — `nix develop` writes a nix-aware `.git/hooks/pre-commit` stub that runs `prek` against the committed `.pre-commit-config.yaml` |
 | `make doc` / edit diagrams         | `nix develop .#docs`          |
 | Go SDK work under `sdks/go/`       | `nix develop .#go`            |
 | `just py-fmt` / `just py-check`    | `nix develop .#python`        |
-| `just gen-bindings` (rare)         | `nix develop .#contracts` or `.#preCommit` |
-| `forge build`, `solc`, mutation testing (`dregs`) | `nix develop .#contracts` |
+| `just gen-bindings` (rare)         | `nix develop .#contracts` |
+| `forge build`, `solc`              | `nix develop .#contracts` |
+| Mutation testing (`dregs`)         | `nix develop .#mutation`  |
 | `psql` to a local DB                | `nix shell nixpkgs#postgresql_16 -c psql ...` |
 | Everything else (Rust dev, `anvil` for tests, `solhint`, `forge fmt`, demo-native) | `nix develop` (default) |
 
@@ -237,11 +270,11 @@ auto-installs pre-commit hooks. To install them, run
 
 **Cumulative `nix develop` cold-eval improvement: ~71 %, ~77 % fewer
 allocated values.** 84 % of the gap to a minimal-rust-shell floor closed
-(`1 296 − 706 = 590 ms` still in espresso-specific tooling).
+(`1 313 − 706 = 607 ms` still in espresso-specific tooling).
 
 ## Remaining gap — where the time still goes
 
-`current − floor ≈ 590 ms`. With postgres/solc/dregs gone and foundry
+`current − floor ≈ 607 ms`. With postgres/solc/dregs gone and foundry
 confirmed cheap (~2 K values), the remaining cost is spread across:
 
 - The Rust tool family (`cargo-nextest`, `cargo-audit`, `cargo-edit`,
