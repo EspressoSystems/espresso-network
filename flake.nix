@@ -211,10 +211,13 @@
       };
 
       # Opt-in shell for smart-contract work. Contains the solidity
-      # compiler (`solc`), mutation-testing tooling (`dregs-unwrapped`),
-      # and `go-ethereum` (for `abigen`). `foundry` stays in the default
-      # shell because `anvil` (bundled inside foundry) is needed for Rust
-      # tests — see comment near `foundry` in devShells.default.
+      # compiler (`solc`) and `go-ethereum` (for `abigen`). `foundry`
+      # stays in the default shell because `anvil` (bundled inside
+      # foundry) is needed for Rust tests — see comment near `foundry`
+      # in devShells.default. `dregs` (mutation testing) lives in
+      # `devShells.mutation` because evaluating its flake output is
+      # expensive (~3.4M values) and nobody runs mutation testing on
+      # every contract change.
       devShells.contracts =
         let
           solc = pkgs.solc-bin."0.8.28";
@@ -222,11 +225,18 @@
         pkgs.mkShellNoCC {
           packages = [
             solc
-            dregs.packages.${system}.unwrapped
             pkgs.go-ethereum
           ];
           FOUNDRY_SOLC = "${solc}/bin/solc";
         };
+
+      # Opt-in shell for mutation testing via `dregs`. Isolated from
+      # `contracts` because dregs's flake graph is by far the heaviest
+      # eval cost of any single tool in this repo — there's no reason
+      # for daily contract work to pay for it.
+      devShells.mutation = pkgs.mkShellNoCC {
+        packages = [ dregs.packages.${system}.unwrapped ];
+      };
 
       # Opt-in shell for the Python helper scripts under `scripts/` —
       # `just py-fmt` / `just py-check` etc. CI calls these scripts with
