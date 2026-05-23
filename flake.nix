@@ -207,7 +207,6 @@
             extensions = [ "rust-analyzer" "rustfmt" ];
           });
           solc = pkgs.solc-bin."0.8.28";
-          pre-commit = self.checks.${system}.pre-commit-check;
         in
         myShell (rustEnvVars // {
           packages = with pkgs; [
@@ -267,8 +266,7 @@
             # provides abigen
             go-ethereum
           ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ]
-          ++ lib.optionals (!stdenv.isDarwin) [ pkgs.cargo-watch ] # broken on OSX
-          ++ pre-commit.enabledPackages;
+          ++ lib.optionals (!stdenv.isDarwin) [ pkgs.cargo-watch ]; # broken on OSX
           shellHook = ''
             ${rustShellHook}
 
@@ -278,8 +276,6 @@
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
-
-            ${pre-commit.shellHook}
           '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
