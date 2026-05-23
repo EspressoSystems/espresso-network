@@ -231,10 +231,7 @@
             nixpkgs-fmt
             prek
             prek-as-pre-commit # compat to allow running pre-commit
-            entr
-            pup
             process-compose
-            lazydocker # a docker compose TUI
             # `postgresql` defaults to an older version (15), so we select the latest version (16)
             # explicitly.
             postgresql_16
@@ -245,10 +242,7 @@
             dregs.packages.${system}.unwrapped
             nodePackages.prettier
             solhint
-            libusb1
-
-            # scripts
-            bc
+            libusb1 # link-time dep of `libusb1-sys` Rust crate
           ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ]
           ++ lib.optionals (!stdenv.isDarwin) [ pkgs.cargo-watch ]; # broken on OSX
           shellHook = ''
