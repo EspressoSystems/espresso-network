@@ -33,7 +33,8 @@ stackable across rows.
 | 2   | drop `echidna-nixpkgs` (reverted)       | 2516559 | devShells.x86_64-linux.default         | 2026-05-23T19:05:18Z | 4751             | 4646 (min 4605 / max 4723) | 3.48        | 8 396 903 | 5 153 398 | 3 546 014 |
 | 3   | fix `dockerShell.shellHook` coercion    | c45eb55 | devShells.x86_64-linux.default         | 2026-05-23T19:07:39Z | 4581             | 4582 (min 4548 / max 4627) | 3.25        | 8 396 924 | 5 153 401 | 3 546 014 |
 | 3.b | fix `dockerShell.shellHook` (docker)    | c45eb55 | devShells.x86_64-linux.dockerShell     | 2026-05-23T19:08:37Z | 4640             | 4584 (min 4476 / max 4639) | 3.27        | 8 497 726 | 5 243 412 | 3 613 255 |
-| 4   | decouple default shell from pre-commit  | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
+| 4   | decouple default shell from pre-commit  | 86788dc | devShells.x86_64-linux.default         | 2026-05-23T19:10:44Z | 4015             | **3865 (min 3820 / max 3994)** | **2.88**    | **6 704 065** | **4 224 560** | **2 858 092** |
+| 4.b | + add `devShells.preCommit` (lazy)      | 0c7e0e8 | devShells.x86_64-linux.default         | 2026-05-23T19:12:02Z | 4082             | 4008 (min 3916 / max 4009) | 2.87        | 6 704 065 | 4 224 561 | 2 858 092 |
 | 5   | de-overlay solhint/pup/golangci         | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
 | 6   | pin nightly toolchain                   | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
 | 7   | coalesce remaining overlays             | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
