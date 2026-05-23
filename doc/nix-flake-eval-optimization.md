@@ -48,8 +48,8 @@ stackable across rows.
 | 13  | move Python → `devShells.python`        | bfa0540 | devShells.x86_64-linux.default         | 2026-05-23T19:54:46Z | 3733             | 3545 (min 3522 / max 3728) | 2.64        | 6 358 411 | 3 956 563 | 2 664 271 |
 | 14  | move go-ethereum → `devShells.contracts`| 28b2c27 | devShells.x86_64-linux.default         | 2026-05-23T19:57:42Z | 3683             | 3572 (min 3515 / max 3662) | 2.57        | 6 357 094 | 3 955 396 | 2 663 452 |
 | 15  | drop entr/pup/lazydocker/bc             | ca9bc88 | devShells.x86_64-linux.default         | 2026-05-23T19:59:54Z | 3712             | 3571 (min 3546 / max 3641) | 2.55        | 6 353 539 | 3 952 142 | 2 661 142 |
-| 16  | drop postgresql_16 (unused)             | f0dd28d | devShells.x86_64-linux.default         | 2026-05-23T20:08:49Z | 1726             | **1682 (min 1622 / max 1705)** | **0.98**    | **2 950 804** | **1 586 536** | **1 112 571** |
-| 17  | solc/dregs → contracts, drop `FOUNDRY_SOLC` from default | 83f9510 | devShells.x86_64-linux.default | 2026-05-23T20:10:30Z | 1303             | **1250 (min 1179 / max 1301)** | **0.78**    | **1 905 177** | **1 086 211** | **716 599**   |
+| 16  | drop postgresql_16 + solc + dregs from default's packages (d) | f0dd28d | devShells.x86_64-linux.default | 2026-05-23T20:08:49Z | 1726 | 1682 (min 1622 / max 1705) | 0.98 | 2 950 804 | 1 586 536 | 1 112 571 |
+| 17  | solc/dregs → contracts, drop `FOUNDRY_SOLC` from default (e) | 83f9510 | devShells.x86_64-linux.default | 2026-05-23T20:10:30Z | 1303 | 1250 (min 1179 / max 1301) | 0.78 | 1 905 177 | 1 086 211 | 716 599 |
 | 17.b| confirm post-foundry-restore (stable)   | 221958c | devShells.x86_64-linux.default         | 2026-05-23T20:12:30Z | 1297             | 1296 (min 1265 / max 1652) | 0.72        | 1 905 177 | 1 086 211 | 716 599   |
 | 18  | drop `cargo-watch` (unused) (c)         | 409efc7 | devShells.x86_64-linux.default         | 2026-05-23T20:27:52Z | (env-noise)      | (env-noise)                | (env-noise) | **1 903 147** | **1 084 379** | **715 239** |
 | FL  | _Floor_ — minimal rust-only flake (a)   | —       | devShells.x86_64-linux.default (b)     | 2026-05-23T19:46Z    | —                | 706 (min 687 / max 741) | 0.36        | 873 301   | 314 065   | 158 113   |
@@ -60,6 +60,26 @@ unreliable for this row; `values` (a deterministic counter) shows the
 true marginal: −2 030 vs row 17.b — i.e. cargo-watch's eval cost was
 negligible to begin with. The removal stands as code hygiene, not a
 perf win.
+
+(d) The original commit message for row 16 framed this as "drop
+postgresql_16". Subsequent A/B benchmarking (3×5 runs each state under
+the same host load) shows postgres alone is only ≈ +110 ms cold / +25 ms
+cpuTime / +9 663 values — far less than this row's headline drop. The
+bulk of row 16's reduction was the simultaneous removal of `solc` and
+`dregs.packages.${system}.unwrapped` from the package list — `dregs`
+in particular, since its flake outputs evaluate substantial transitive
+content. The commit was honest about doing all three together; the per-
+package attribution in the original "Decisions" section was not. See
+the corrected ranking below.
+
+(e) After row 16, `solc` was still being forced via the
+`FOUNDRY_SOLC = "${solc}/bin/solc"` env var (the `solc = pkgs.solc-bin
+."0.8.28"` let binding was referenced even though solc was no longer
+in the package list). Row 17 removed both. The ~1 M values delta is
+the unforced solc-bin derivation graph, not "solc/dregs moving to the
+contracts shell" (moving a package between shells doesn't change the
+default-shell eval graph — only what the default *no longer references*
+does).
 
 (a) Standalone flake at `/tmp/rust-only-flake/` — only `nixpkgs` and
 `rust-overlay` inputs, single devShell containing `pkg-config`, `openssl`,
@@ -126,23 +146,34 @@ devShell containing `pkg-config`, `openssl`, and the full stable Rust
 toolchain (with rust-analyzer/clippy/rustfmt/rust-src). "Optimizable gap" =
 `current − floor` vs `baseline − floor`.
 
-**The big-rock contributors** (everything else is rounding noise):
+**The big-rock contributors** (corrected via A/B benchmarking, ranked
+by `values` delta which is deterministic):
 
-1. **Row 16 — drop `postgresql_16`** (turned out to be entirely unused —
-   psql isn't called anywhere, postgres runs in Docker for demos, Rust
-   crates use pure-Rust drivers). ≈−1.9 s cold, ≈−3.4 M values on its
-   own. Biggest single win in the whole sweep.
-2. **Row 17 — `solc` + `dregs` to `contracts`** (plus drop `FOUNDRY_SOLC`
-   env var from default so solc's outPath isn't forced). ≈−430 ms cold,
-   ≈−1 M values.
-3. **Row 4 — pre-commit decoupling.** ≈−14 % cold, ≈−20 % values on its
-   own — the round-1 winner.
-4. **Row 10 — `dregs` follows our nixpkgs** (surfaced by
-   `--trace-function-calls`; eliminated a whole second nixpkgs source
-   tree). ≈−5 % cold.
-5. **Rows 11–15** — pruning the default shell: docs tooling, full Go
-   toolchain, Python tooling, abigen, and small odds-and-ends. Most are
-   individually small; together ≈−200 ms cold and ≈−240 K values.
+1. **Stop referencing `dregs.packages.${system}.unwrapped` from the
+   default shell** (part of row 16, made permanent by row 17 moving
+   `dregs` to `.#contracts`). Dregs's flake outputs walk substantial
+   transitive content; this alone ≈ **−3.4 M values**, the largest
+   single contributor in the whole sweep.
+2. **Row 4 — decouple default from `pre-commit-check`.** ≈ **−1.7 M
+   values**, ≈ −720 ms cold. Removed the git-hooks framework from the
+   default-shell eval path.
+3. **Stop referencing the `solc-bin."0.8.28"` derivation** (part of
+   row 17, by removing `FOUNDRY_SOLC` env var so the let-binding is
+   no longer forced). ≈ **−1.0 M values**, ≈ −430 ms cold.
+4. **Row 11 — move docs tooling (`plantuml`/`graphviz`/`mdbook`) to
+   `.#docs`.** ≈ **−220 K values**, ≈ −112 ms cold.
+5. **Row 10 — `dregs.inputs.nixpkgs.follows = "nixpkgs"`** (kills the
+   duplicate nixpkgs source tree; surfaced by profiling). ≈ −110 K
+   values, ≈ −187 ms cold.
+6. **Row 16 (true postgres-only contribution)** — postgresql_16 itself
+   was *not* the bear we thought: A/B shows ≈ **+10 K values, +110 ms
+   cold** to have it in default. The change is still correct (postgres
+   genuinely is unused — see d) but it's a small-rock win, not a
+   big-rock one.
+7. Everything else (rows 1, 3, 5, 6, 7, 9, 12, 13, 14, 15, 18 — the
+   Go/Python/contracts/misc/cargo-watch prunes and the `with pkgs;`,
+   `runCommand→writeShellScriptBin`, nightly pin, etc.) — collectively
+   ~−250 K values, ~−400 ms cold. Each one individually within noise.
 
 **Keep (the whole branch):**
 
