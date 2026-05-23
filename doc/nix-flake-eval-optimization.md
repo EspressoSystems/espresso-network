@@ -47,7 +47,10 @@ stackable across rows.
 | 12  | move Go toolchain → `devShells.go`      | 3c87345 | devShells.x86_64-linux.default         | 2026-05-23T19:51:44Z | 3565             | 3496 (min 3364 / max 3522) | 2.48        | 6 371 382 | 3 968 441 | 2 672 591 |
 | 13  | move Python → `devShells.python`        | bfa0540 | devShells.x86_64-linux.default         | 2026-05-23T19:54:46Z | 3733             | 3545 (min 3522 / max 3728) | 2.64        | 6 358 411 | 3 956 563 | 2 664 271 |
 | 14  | move go-ethereum → `devShells.contracts`| 28b2c27 | devShells.x86_64-linux.default         | 2026-05-23T19:57:42Z | 3683             | 3572 (min 3515 / max 3662) | 2.57        | 6 357 094 | 3 955 396 | 2 663 452 |
-| 15  | drop entr/pup/lazydocker/bc             | ca9bc88 | devShells.x86_64-linux.default         | 2026-05-23T19:59:54Z | 3712             | **3571 (min 3546 / max 3641)** | **2.55**    | **6 353 539** | **3 952 142** | **2 661 142** |
+| 15  | drop entr/pup/lazydocker/bc             | ca9bc88 | devShells.x86_64-linux.default         | 2026-05-23T19:59:54Z | 3712             | 3571 (min 3546 / max 3641) | 2.55        | 6 353 539 | 3 952 142 | 2 661 142 |
+| 16  | drop postgresql_16 (unused)             | f0dd28d | devShells.x86_64-linux.default         | 2026-05-23T20:08:49Z | 1726             | **1682 (min 1622 / max 1705)** | **0.98**    | **2 950 804** | **1 586 536** | **1 112 571** |
+| 17  | solc/dregs → contracts, drop `FOUNDRY_SOLC` from default | 83f9510 | devShells.x86_64-linux.default | 2026-05-23T20:10:30Z | 1303             | **1250 (min 1179 / max 1301)** | **0.78**    | **1 905 177** | **1 086 211** | **716 599**   |
+| 17.b| confirm post-foundry-restore (stable)   | 221958c | devShells.x86_64-linux.default         | 2026-05-23T20:12:30Z | 1297             | 1296 (min 1265 / max 1652) | 0.72        | 1 905 177 | 1 086 211 | 716 599   |
 | FL  | _Floor_ — minimal rust-only flake (a)   | —       | devShells.x86_64-linux.default (b)     | 2026-05-23T19:46Z    | —                | 706 (min 687 / max 741) | 0.36        | 873 301   | 314 065   | 158 113   |
 
 (a) Standalone flake at `/tmp/rust-only-flake/` — only `nixpkgs` and
@@ -99,16 +102,16 @@ helps `nix flake show` / `nix flake check`, which is out of scope for the
 
 ## Decisions
 
-**Net change vs baseline (row 0 → row 15):**
+**Net change vs baseline (row 0 → row 17.b):**
 
-| Metric    | Baseline   | Current    | Floor      | Δ vs baseline   | % of optimizable gap closed |
-| --------- | ---------- | ---------- | ---------- | --------------- | --------------------------- |
-| Cold (ms) | 4 492      | **3 571**  | 706        | **−921 (−20.5 %)** | **24 %**                |
-| Warm (ms) | 4 558      | 3 712      | —          | −846 (−18.6 %)  | —                            |
-| cpuTime   | 3.20 s     | 2.55 s     | 0.36 s     | −0.65 s (−20.3 %) | 23 %                       |
-| values    | 8 396 912  | 6 353 539  | 873 301    | **−2 043 373 (−24.3 %)** | **27 %**            |
-| thunks    | 5 153 389  | 3 952 142  | 314 065    | −1 201 247 (−23.3 %) | 25 %                    |
-| envs      | 3 546 013  | 2 661 142  | 158 113    | −884 871 (−25.0 %) | 26 %                      |
+| Metric    | Baseline   | Current    | Floor      | Δ vs baseline       | % of optimizable gap closed |
+| --------- | ---------- | ---------- | ---------- | ------------------- | --------------------------- |
+| Cold (ms) | 4 492      | **1 296**  | 706        | **−3 196 (−71.1 %)** | **84 %**                  |
+| Warm (ms) | 4 558      | 1 297      | —          | −3 261 (−71.5 %)    | —                            |
+| cpuTime   | 3.20 s     | 0.72 s     | 0.36 s     | **−2.48 s (−77.5 %)** | **87 %**                   |
+| values    | 8 396 912  | 1 905 177  | 873 301    | **−6 491 735 (−77.3 %)** | **86 %**               |
+| thunks    | 5 153 389  | 1 086 211  | 314 065    | −4 067 178 (−78.9 %) | 84 %                       |
+| envs      | 3 546 013  | 716 599    | 158 113    | −2 829 414 (−79.8 %) | 83 %                       |
 
 Floor reference: a minimal flake with `nixpkgs` + `rust-overlay` + a single
 devShell containing `pkg-config`, `openssl`, and the full stable Rust
@@ -117,13 +120,21 @@ toolchain (with rust-analyzer/clippy/rustfmt/rust-src). "Optimizable gap" =
 
 **The big-rock contributors** (everything else is rounding noise):
 
-1. Row 4 — pre-commit decoupling (≈−14 % cold, ≈−20 % values on its own).
-2. Row 10 — `dregs` follows our nixpkgs (≈−5 % cold; eliminates a whole
-   second nixpkgs source tree; surfaced by `--trace-function-calls`).
-3. Rows 11–15 — pruning the default shell: docs tooling
-   (plantuml/graphviz/mdbook), the Go toolchain, Python tooling, abigen
-   (go-ethereum), and small odds-and-ends (entr/pup/lazydocker/bc).
-   ≈−200 ms cold and ≈−240 K values combined.
+1. **Row 16 — drop `postgresql_16`** (turned out to be entirely unused —
+   psql isn't called anywhere, postgres runs in Docker for demos, Rust
+   crates use pure-Rust drivers). ≈−1.9 s cold, ≈−3.4 M values on its
+   own. Biggest single win in the whole sweep.
+2. **Row 17 — `solc` + `dregs` to `contracts`** (plus drop `FOUNDRY_SOLC`
+   env var from default so solc's outPath isn't forced). ≈−430 ms cold,
+   ≈−1 M values.
+3. **Row 4 — pre-commit decoupling.** ≈−14 % cold, ≈−20 % values on its
+   own — the round-1 winner.
+4. **Row 10 — `dregs` follows our nixpkgs** (surfaced by
+   `--trace-function-calls`; eliminated a whole second nixpkgs source
+   tree). ≈−5 % cold.
+5. **Rows 11–15** — pruning the default shell: docs tooling, full Go
+   toolchain, Python tooling, abigen, and small odds-and-ends. Most are
+   individually small; together ≈−200 ms cold and ≈−240 K values.
 
 **Keep (the whole branch):**
 
@@ -145,6 +156,12 @@ toolchain (with rust-analyzer/clippy/rustfmt/rust-src). "Optimizable gap" =
 - Row 13 — `devShells.python` (python3/ruff/ty).
 - Row 14 — `devShells.contracts` (go-ethereum for `abigen`).
 - Row 15 — dropped entr/pup/lazydocker/bc entirely.
+- Row 16 — dropped `postgresql_16` from default entirely (unused; see
+  big-rock #1 above).
+- Row 17 — `solc` + `dregs-unwrapped` routed into `devShells.contracts`;
+  removed the `FOUNDRY_SOLC` env var from default so solc's outPath
+  isn't forced when entering `nix develop`. `forge` users get the env
+  var from `.#contracts` instead.
 - CI workflow update in `.github/workflows/contracts.yml`: pre-commit
   invocations now use `.#preCommit`, which `inputsFrom`s default +
   contracts so hooks find every tool they shell out to.
@@ -158,7 +175,9 @@ toolchain (with rust-analyzer/clippy/rustfmt/rust-src). "Optimizable gap" =
 | Go SDK work under `sdks/go/`       | `nix develop .#go`            |
 | `just py-fmt` / `just py-check`    | `nix develop .#python`        |
 | `just gen-bindings` (rare)         | `nix develop .#contracts` or `.#preCommit` |
-| Everything else (Rust, Forge, Solhint, demo-native, postgres) | `nix develop` (default) |
+| `forge build`, `solc`, mutation testing (`dregs`) | `nix develop .#contracts` |
+| `psql` to a local DB                | `nix shell nixpkgs#postgresql_16 -c psql ...` |
+| Everything else (Rust dev, `anvil` for tests, `solhint`, `forge fmt`, demo-native) | `nix develop` (default) |
 
 **Drop / reverted:**
 
@@ -177,26 +196,24 @@ auto-installs pre-commit hooks. To install them, run
 `nix develop .#preCommit` once after cloning. CI is unaffected
 (still consumes `checks.pre-commit-check` directly).
 
-**Cumulative `nix develop` cold-eval improvement: ~20.5 %, ~24 % fewer
-allocated values.** ~24 % of the gap to a minimal-rust-shell floor closed
-(`3 571 − 706 = 2 865 ms` still in espresso-specific tooling). Most of
-the remaining gap is in `foundry` + `solc` + `postgresql_16` + the
-rust-tool family — all kept because they're hit daily.
+**Cumulative `nix develop` cold-eval improvement: ~71 %, ~77 % fewer
+allocated values.** 84 % of the gap to a minimal-rust-shell floor closed
+(`1 296 − 706 = 590 ms` still in espresso-specific tooling).
 
 ## Remaining gap — where the time still goes
 
-`current − floor = 2 865 ms`. The packages that contribute most to that
-gap, by rough order of derivation-graph size (not measured one-by-one;
-infer from package-manager intuition):
+`current − floor ≈ 590 ms`. With postgres/solc/dregs gone and foundry
+confirmed cheap (~2 K values), the remaining cost is spread across:
 
-- `foundry` — large Rust binary with many transitive deps. Daily use.
-- `postgresql_16` — moderate. Used by tests and `demo-native`.
-- The wider Rust tool family (`cargo-nextest`, `cargo-audit`, `cargo-edit`,
-  `cargo-hack`, `cargo-sort`, `typos`, `just`, `cargo-watch`) — each a
-  small Rust binary; collectively non-trivial.
-- `dregs-unwrapped` — Rust binary.
-- `nodePackages.prettier` — Node + many transitive deps.
+- The Rust tool family (`cargo-nextest`, `cargo-audit`, `cargo-edit`,
+  `cargo-hack`, `cargo-sort`, `typos`, `just`, `cargo-watch`,
+  `rust-analyzer`, `rustfmt`) — each a small Rust binary; collectively
+  non-trivial.
+- `foundry` (for `anvil`).
+- `solhint` (used both by hooks and locally).
+- `nodePackages.prettier` (used by hook + manual markdown formatting).
+- `nixpkgs-fmt`, `prek`, `process-compose`, `libusb1`, the rest.
 
-Pruning any one of these would require either a workflow change (move
-postgres to a `db` shell?) or accepting a daily-use tool moving out of
-default. Diminishing returns from here.
+These are all daily-use tools. Pruning further means real workflow
+changes and the payoff is small (a few hundred ms over 1.3 s). Stopping
+here unless someone wants to push for sub-second.
