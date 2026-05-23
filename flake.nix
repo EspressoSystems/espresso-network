@@ -26,6 +26,7 @@
   inputs.solc-bin.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.dregs.url = "github:EspressoSystems/dregs";
+  inputs.dregs.inputs.nixpkgs.follows = "nixpkgs";
 
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
