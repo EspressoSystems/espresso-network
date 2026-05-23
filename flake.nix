@@ -280,6 +280,18 @@
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
+      # Opt-in shell that runs the git-hooks shellHook so that pre-commit /
+      # prek is installed in .git/hooks. Kept separate from the default
+      # devShell so most users don't pay the git-hooks eval cost on every
+      # `nix develop`. CI consumes `checks.pre-commit-check` directly.
+      devShells.preCommit =
+        let
+          pre-commit = self.checks.${system}.pre-commit-check;
+        in
+        pkgs.mkShellNoCC {
+          packages = pre-commit.enabledPackages;
+          shellHook = pre-commit.shellHook;
+        };
       devShells.dockerShell = pkgs.mkShell {
         inputsFrom = [ self.devShells.${system}.default ];
         packages = [ pkgs.docker ];
