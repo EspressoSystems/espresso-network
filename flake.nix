@@ -249,11 +249,6 @@
 
             # scripts
             bc
-
-            # provides abigen (used by `just gen-bindings`, run as a
-            # pre-commit hook in CI). Keep in default. The full Go
-            # toolchain (`go`, `golangci-lint`) lives in `devShells.go`.
-            go-ethereum
           ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ]
           ++ lib.optionals (!stdenv.isDarwin) [ pkgs.cargo-watch ]; # broken on OSX
           shellHook = ''
@@ -283,6 +278,16 @@
         packages = [ pkgs.go golangci-lint ];
       };
 
+      # Opt-in shell for smart-contract work that goes beyond what the
+      # default shell already provides (foundry + solc + solhint stay
+      # in default for daily contract-adjacent Rust dev). Currently this
+      # is only `go-ethereum` for `abigen`, used by `just gen-bindings`
+      # — a workflow that runs rarely (regenerating ABIs after contract
+      # changes) but is also exercised by CI's contract-bindings hook.
+      devShells.contracts = pkgs.mkShellNoCC {
+        packages = with pkgs; [ go-ethereum ];
+      };
+
       # Opt-in shell for the Python helper scripts under `scripts/` —
       # `just py-fmt` / `just py-check` etc. CI calls these scripts with
       # the GitHub-Actions-provided python3, not via nix, so the default
@@ -300,6 +305,14 @@
           pre-commit = self.checks.${system}.pre-commit-check;
         in
         pkgs.mkShellNoCC {
+          # Inherit foundry/solc/solhint/just/etc. from the default shell
+          # so CI's `pre-commit run forge-fmt|solhint|contract-bindings`
+          # invocations find every tool the hook entries shell out to.
+          # Add `contracts` for abigen (gen-bindings).
+          inputsFrom = [
+            self.devShells.${system}.default
+            self.devShells.${system}.contracts
+          ];
           packages = pre-commit.enabledPackages;
           shellHook = pre-commit.shellHook;
         };
