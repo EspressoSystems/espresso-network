@@ -240,8 +240,7 @@
             nodePackages.prettier
             solhint
             libusb1 # link-time dep of `libusb1-sys` Rust crate
-          ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ]
-          ++ lib.optionals (!stdenv.isDarwin) [ pkgs.cargo-watch ]; # broken on OSX
+          ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ];
           shellHook = ''
             ${rustShellHook}
 
