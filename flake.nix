@@ -31,9 +31,6 @@
   inputs.flake-compat.url = "github:edolstra/flake-compat";
   inputs.flake-compat.flake = false;
 
-  inputs.git-hooks.url = "github:cachix/git-hooks.nix";
-  inputs.git-hooks.inputs.nixpkgs.follows = "nixpkgs";
-
   # Pinned echidna version - current nixpkgs version fails to build
   # See https://hydra.nixos.org/job/nixos/trunk-combined/nixpkgs.echidna.x86_64-linux for build status
   inputs.echidna-nixpkgs.url = "github:NixOS/nixpkgs/08dacfca559e1d7da38f3cf05f1f45ee9bfd213c";
@@ -44,7 +41,6 @@
     , rust-overlay
     , nixpkgs-cross-overlay
     , flake-utils
-    , git-hooks
     , solc-bin
     , echidna-nixpkgs
     , dregs
@@ -116,85 +112,6 @@
           };
     in
     {
-      checks = {
-        pre-commit-check = git-hooks.lib.${system}.run {
-          src = ./.;
-          # Use the rust pre-commit implementation `prek`
-          imports = [
-            ({ lib, ... }: {
-              config.package = lib.mkForce pkgs.prek;
-            })
-          ];
-          hooks = {
-            doc = {
-              enable = true;
-              description = "Generate figures";
-              entry = "make doc";
-              types_or = [ "plantuml" ];
-              pass_filenames = false;
-            };
-            rustfmt = {
-              enable = true;
-              description = "Run rustfmt on changed files";
-              # cargo-fmt is slower, does not format all files, and doesn't allow passing file arguments
-              entry = "rustfmt";
-              types_or = [ "rust" ];
-              pass_filenames = true;
-            };
-            cargo-sort = {
-              enable = true;
-              description = "Ensure Cargo.toml are sorted";
-              entry = "cargo sort -g -w";
-              types_or = [ "toml" ];
-              pass_filenames = false;
-            };
-            cargo-lock = {
-              enable = true;
-              description = "Ensure Cargo.lock is compatible with Cargo.toml";
-              entry = "cargo update --workspace --verbose";
-              types_or = [ "toml" ];
-              pass_filenames = false;
-            };
-            forge-fmt = {
-              enable = true;
-              description = "Enforce forge fmt";
-              entry = "forge fmt";
-              types_or = [ "solidity" ];
-              pass_filenames = false;
-            };
-            solhint = {
-              enable = true;
-              description = "Solidity linter";
-              entry = "solhint 'contracts/{script,src,test}/**/*.sol'";
-              types_or = [ "solidity" ];
-              pass_filenames = true;
-            };
-            contract-bindings = {
-              enable = true;
-              description = "Generate contract bindings";
-              entry = "just gen-bindings";
-              types_or = [ "solidity" ];
-              pass_filenames = false;
-            };
-            prettier-fmt = {
-              enable = true;
-              description = "Enforce markdown formatting";
-              entry = "prettier -w";
-              types_or = [ "markdown" ];
-              pass_filenames = true;
-            };
-            spell-checking = {
-              enable = true;
-              description = "Spell checking";
-              # --force-exclude to exclude excluded files if they are passed as arguments
-              entry = "typos --force-exclude";
-              pass_filenames = true;
-              # Add excludes to the .typos.toml file instead
-            };
-            nixpkgs-fmt.enable = true;
-          };
-        };
-      };
       devShells.default =
         let
           stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
@@ -250,6 +167,13 @@
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
+
+            # If the repo ships a .pre-commit-config.yaml, make sure prek
+            # has installed the git hook. No git-hooks-nix eval at shell
+            # entry — `prek install` is cheap.
+            if [ -d .git ] && [ -f .pre-commit-config.yaml ] && [ ! -e .git/hooks/pre-commit ]; then
+              prek install >/dev/null 2>&1 || true
+            fi
           '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
         });
@@ -271,8 +195,7 @@
       # compiler (`solc`), mutation-testing tooling (`dregs-unwrapped`),
       # and `go-ethereum` (for `abigen`). `foundry` stays in the default
       # shell because `anvil` (bundled inside foundry) is needed for Rust
-      # tests — see comment near `foundry` in devShells.default. CI's
-      # `pre-commit` invocations pull this shell in via `inputsFrom`.
+      # tests — see comment near `foundry` in devShells.default.
       devShells.contracts =
         let
           solc = pkgs.solc-bin."0.8.28";
@@ -294,26 +217,6 @@
         packages = with pkgs; [ python3 ruff ty ];
       };
 
-      # Opt-in shell that runs the git-hooks shellHook so that pre-commit /
-      # prek is installed in .git/hooks. Kept separate from the default
-      # devShell so most users don't pay the git-hooks eval cost on every
-      # `nix develop`. CI consumes `checks.pre-commit-check` directly.
-      devShells.preCommit =
-        let
-          pre-commit = self.checks.${system}.pre-commit-check;
-        in
-        pkgs.mkShellNoCC {
-          # Inherit foundry/solc/solhint/just/etc. from the default shell
-          # so CI's `pre-commit run forge-fmt|solhint|contract-bindings`
-          # invocations find every tool the hook entries shell out to.
-          # Add `contracts` for abigen (gen-bindings).
-          inputsFrom = [
-            self.devShells.${system}.default
-            self.devShells.${system}.contracts
-          ];
-          packages = pre-commit.enabledPackages;
-          shellHook = pre-commit.shellHook;
-        };
       devShells.dockerShell = pkgs.mkShell {
         inputsFrom = [ self.devShells.${system}.default ];
         packages = [ pkgs.docker ];

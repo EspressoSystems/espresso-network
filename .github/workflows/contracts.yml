@@ -47,10 +47,10 @@ jobs:
         run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions
 
       - name: Format check
-        run: nix develop --accept-flake-config .#preCommit -c pre-commit run forge-fmt --all-files --show-diff-on-failure
+        run: nix develop --accept-flake-config -c pre-commit run forge-fmt --all-files --show-diff-on-failure
 
       - name: Solhint solidity linter
-        run: nix develop --accept-flake-config .#preCommit -c pre-commit run solhint --all-files --show-diff-on-failure
+        run: nix develop --accept-flake-config -c pre-commit run solhint --all-files --show-diff-on-failure
 
       - name: Build contracts
         run: nix develop --accept-flake-config -c forge build --skip test
@@ -59,7 +59,7 @@ jobs:
         run: nix develop --accept-flake-config -c forge lint --deny notes contracts/src/
 
       - name: Check if bindings up to date (also forces a build)
-        run: nix develop --accept-flake-config .#preCommit -c pre-commit run contract-bindings --all-files --show-diff-on-failure
+        run: nix develop --accept-flake-config -c pre-commit run contract-bindings --all-files --show-diff-on-failure
 
       - name: Print changes to bindings
         if: ${{ failure() }}

@@ -1,0 +1,80 @@
+# Source of truth for pre-commit hooks. Run by `prek` (Rust
+# reimplementation of pre-commit) — `prek install` installs the git hook
+# from the espresso-network default devShell on first entry.
+#
+# All hook entries call commands by name; the tools come from
+# `nix develop` (default shell) — see flake.nix.
+repos:
+  - repo: local
+    hooks:
+      - id: doc
+        name: Generate figures
+        entry: make doc
+        language: system
+        types_or: [plantuml]
+        pass_filenames: false
+
+      - id: rustfmt
+        name: Run rustfmt on changed files
+        # cargo-fmt is slower, does not format all files, and doesn't allow passing file arguments
+        entry: rustfmt
+        language: system
+        types_or: [rust]
+        pass_filenames: true
+
+      - id: cargo-sort
+        name: Ensure Cargo.toml are sorted
+        entry: cargo sort -g -w
+        language: system
+        types_or: [toml]
+        pass_filenames: false
+
+      - id: cargo-lock
+        name: Ensure Cargo.lock is compatible with Cargo.toml
+        entry: cargo update --workspace --verbose
+        language: system
+        types_or: [toml]
+        pass_filenames: false
+
+      - id: forge-fmt
+        name: Enforce forge fmt
+        entry: forge fmt
+        language: system
+        types_or: [solidity]
+        pass_filenames: false
+
+      - id: solhint
+        name: Solidity linter
+        entry: solhint 'contracts/{script,src,test}/**/*.sol'
+        language: system
+        types_or: [solidity]
+        pass_filenames: true
+
+      - id: contract-bindings
+        name: Generate contract bindings
+        entry: just gen-bindings
+        language: system
+        types_or: [solidity]
+        pass_filenames: false
+
+      - id: prettier-fmt
+        name: Enforce markdown formatting
+        entry: prettier -w
+        language: system
+        types_or: [markdown]
+        pass_filenames: true
+
+      - id: spell-checking
+        name: Spell checking
+        # --force-exclude to exclude excluded files if they are passed as arguments
+        entry: typos --force-exclude
+        language: system
+        pass_filenames: true
+        # Add excludes to the .typos.toml file instead
+
+      - id: nixpkgs-fmt
+        name: nixpkgs-fmt
+        entry: nixpkgs-fmt
+        language: system
+        types: [nix]
+        pass_filenames: true
