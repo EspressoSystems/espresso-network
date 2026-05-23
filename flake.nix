@@ -253,9 +253,9 @@
             ruff
             ty
 
-            go
-            golangci-lint
-            # provides abigen
+            # provides abigen (used by `just gen-bindings`, run as a
+            # pre-commit hook in CI). Keep in default. The full Go
+            # toolchain (`go`, `golangci-lint`) lives in `devShells.go`.
             go-ethereum
           ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ]
           ++ lib.optionals (!stdenv.isDarwin) [ pkgs.cargo-watch ]; # broken on OSX
@@ -277,6 +277,13 @@
       # constructions during eval.
       devShells.docs = pkgs.mkShellNoCC {
         packages = with pkgs; [ graphviz plantuml mdbook ];
+      };
+
+      # Opt-in shell for working on the Go SDK under `sdks/go/`. The full
+      # toolchain is heavy at eval time (~200K thunks); CI doesn't run it
+      # against this repo, and most contributors don't touch Go daily.
+      devShells.go = pkgs.mkShellNoCC {
+        packages = [ pkgs.go golangci-lint ];
       };
 
       # Opt-in shell that runs the git-hooks shellHook so that pre-commit /
