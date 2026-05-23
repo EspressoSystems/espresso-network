@@ -73,8 +73,11 @@ impl TestHarness {
             EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
+        // Use the same version as `TestViewGenerator` (vid2) so the genesis
+        // leaf commitment matches the `parent_commitment` carried by the
+        // first proposal from `TestData`.
         let genesis_leaf =
-            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.vid2.base).await;
 
         let consensus = Consensus::new(
             membership.clone(),
