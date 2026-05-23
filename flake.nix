@@ -232,14 +232,9 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             process-compose
-            # `postgresql` defaults to an older version (15), so we select the latest version (16)
-            # explicitly.
-            postgresql_16
 
             # Ethereum contracts, solidity, ...
             foundry
-            solc
-            dregs.packages.${system}.unwrapped
             nodePackages.prettier
             solhint
             libusb1 # link-time dep of `libusb1-sys` Rust crate
