@@ -70,7 +70,6 @@
       overlays = [
         (import rust-overlay)
         solc-bin.overlays.default
-        dregs.overlays.default
       ];
       pkgs = import nixpkgs { inherit system overlays; };
       inherit (pkgs) lib stdenv;
@@ -248,7 +247,7 @@
             # Ethereum contracts, solidity, ...
             foundry
             solc
-            dregs-unwrapped
+            dregs.packages.${system}.unwrapped
             nodePackages.prettier
             solhint
             libusb1
