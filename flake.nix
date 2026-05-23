@@ -199,9 +199,12 @@
       devShells.default =
         let
           stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-          nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.minimal.override {
+          # Pinned (was `selectLatestNightlyWith`, which iterates the entire
+          # rust-overlay nightly attrset). Bump as needed when a newer
+          # rust-analyzer/rustfmt is wanted.
+          nightlyToolchain = pkgs.rust-bin.nightly."2026-04-16".minimal.override {
             extensions = [ "rust-analyzer" "rustfmt" ];
-          });
+          };
           solc = pkgs.solc-bin."0.8.28";
         in
         myShell (rustEnvVars // {
