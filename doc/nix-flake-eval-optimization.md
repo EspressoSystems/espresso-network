@@ -51,7 +51,15 @@ stackable across rows.
 | 16  | drop postgresql_16 (unused)             | f0dd28d | devShells.x86_64-linux.default         | 2026-05-23T20:08:49Z | 1726             | **1682 (min 1622 / max 1705)** | **0.98**    | **2 950 804** | **1 586 536** | **1 112 571** |
 | 17  | solc/dregs → contracts, drop `FOUNDRY_SOLC` from default | 83f9510 | devShells.x86_64-linux.default | 2026-05-23T20:10:30Z | 1303             | **1250 (min 1179 / max 1301)** | **0.78**    | **1 905 177** | **1 086 211** | **716 599**   |
 | 17.b| confirm post-foundry-restore (stable)   | 221958c | devShells.x86_64-linux.default         | 2026-05-23T20:12:30Z | 1297             | 1296 (min 1265 / max 1652) | 0.72        | 1 905 177 | 1 086 211 | 716 599   |
+| 18  | drop `cargo-watch` (unused) (c)         | 409efc7 | devShells.x86_64-linux.default         | 2026-05-23T20:27:52Z | (env-noise)      | (env-noise)                | (env-noise) | **1 903 147** | **1 084 379** | **715 239** |
 | FL  | _Floor_ — minimal rust-only flake (a)   | —       | devShells.x86_64-linux.default (b)     | 2026-05-23T19:46Z    | —                | 706 (min 687 / max 741) | 0.36        | 873 301   | 314 065   | 158 113   |
+
+(c) Both bench runs landed during a load-average of ~17 (something
+else on the box was hammering CPU). Wall-clock and cpuTime are
+unreliable for this row; `values` (a deterministic counter) shows the
+true marginal: −2 030 vs row 17.b — i.e. cargo-watch's eval cost was
+negligible to begin with. The removal stands as code hygiene, not a
+perf win.
 
 (a) Standalone flake at `/tmp/rust-only-flake/` — only `nixpkgs` and
 `rust-overlay` inputs, single devShell containing `pkg-config`, `openssl`,
