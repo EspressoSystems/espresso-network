@@ -41,7 +41,46 @@ stackable across rows.
 | 7   | drop `dregs.overlays.default`           | 2bbef24 | devShells.x86_64-linux.default         | 2026-05-23T19:19:39Z | 4077             | 4013 (min 3815 / max 4078) | 2.93        | 6 703 018 | 4 223 692 | 2 857 039 |
 | 8   | narrow systems (`eachSystem`) — SKIPPED | —      | —                                      | —                    | —                | —                          | —           | —         | —         | —       |
 | 9   | `writeShellScriptBin` for prek wrapper  | f028be7 | devShells.x86_64-linux.default         | 2026-05-23T19:21:59Z | 4057             | 3964 (min 3916 / max 4016) | 2.85        | 6 703 047 | 4 223 714 | 2 857 057 |
-| F   | **final / cumulative**                  | f028be7 | devShells.x86_64-linux.default         | 2026-05-23T19:23:08Z | 4044             | **3880 (min 3829 / max 4328)** | **2.84**    | **6 703 046** | **4 223 714** | **2 857 057** |
+| F   | (intermediate cumulative)               | f028be7 | devShells.x86_64-linux.default         | 2026-05-23T19:23:08Z | 4044             | 3880 (min 3829 / max 4328) | 2.84        | 6 703 046 | 4 223 714 | 2 857 057 |
+| 10  | **`dregs` follows our nixpkgs**         | 8517c0a | devShells.x86_64-linux.default         | 2026-05-23T19:42:28Z | 3803             | **3777 (min 3570 / max 3809)** | **2.61**    | **6 592 690** | **4 167 751** | **2 816 961** |
+| FL  | _Floor_ — minimal rust-only flake (a)   | —       | devShells.x86_64-linux.default (b)     | 2026-05-23T19:46Z    | —                | **706 (min 687 / max 741)** | **0.36**    | **873 301** | **314 065**   | **158 113** |
+
+(a) Standalone flake at `/tmp/rust-only-flake/` — only `nixpkgs` and
+`rust-overlay` inputs, single devShell containing `pkg-config`, `openssl`,
+and the stable Rust toolchain (with rust-analyzer, clippy, rustfmt,
+rust-src). Establishes the absolute floor for "a non-trivial Rust shell".
+
+(b) Same attr name, different flake — see (a).
+
+## Profiling
+
+`NIX_COUNT_CALLS=1` doesn't produce output with this Nix build, but
+`--trace-function-calls` does (writes per-enter/exit lines to stderr with
+location + nanosecond timestamps). For the baseline default-shell eval
+the trace is ~6.7M lines; aggregating by `entered` location gives the
+hottest call sites:
+
+```text
+ ~500K  «none»:0                                      builtin functions (no source loc)
+~105K   lib/trivial.nix:1126                          mirrorFunctionArgs-style helper
+ ~90K   lib/attrsets.nix:662                          mapAttrs callback
+ ~85K   pkgs/stdenv/generic/make-derivation.nix:445   per-derivation work
+ ~85K   lib/lists.nix:347                             concatMap callback
+ ~85K   lib/systems/default.nix:46                    per-derivation system attr
+ ~74K   lib/meta.nix:328                              `meta` propagation
+ ~33K   lib/attrsets.nix:1814                         recursiveUpdate-style helper
+```
+
+Two findings drove the next rounds:
+
+1. **Two distinct nixpkgs source trees in the trace** — `dj9rm8…` (our
+   main nixpkgs) and `f1fvmyl…` (a different rev pulled in by `dregs`,
+   which didn't have `nixpkgs.follows`). Fixed by row 10 below; profiling
+   after the fix shows only `dj9rm8…` in the top 15.
+2. **~85K calls into `make-derivation.nix`** — i.e. ~85K derivations are
+   being constructed during eval. The shell pulls in dozens of tools and
+   each tool brings transitive deps. Pruning the package list is the
+   remaining big lever.
 
 ### Why row 8 is skipped
 
@@ -55,20 +94,29 @@ helps `nix flake show` / `nix flake check`, which is out of scope for the
 
 ## Decisions
 
-**Net change vs baseline (row 0 → row F):**
+**Net change vs baseline (row 0 → row 10):**
 
-| Metric    | Baseline   | Final      | Δ           |
-| --------- | ---------- | ---------- | ----------- |
-| Cold (ms) | 4 492      | 3 880      | **−612 (−13.6 %)** |
-| Warm (ms) | 4 558      | 4 044      | −514 (−11.3 %)   |
-| cpuTime   | 3.20 s     | 2.84 s     | −0.36 s (−11.3 %) |
-| values    | 8 396 912  | 6 703 046  | **−1 693 866 (−20.2 %)** |
-| thunks    | 5 153 389  | 4 223 714  | −929 675 (−18.0 %)     |
-| envs      | 3 546 013  | 2 857 057  | −688 956 (−19.4 %)     |
+| Metric    | Baseline   | Current    | Floor      | Δ vs baseline   | % of optimizable gap closed |
+| --------- | ---------- | ---------- | ---------- | --------------- | --------------------------- |
+| Cold (ms) | 4 492      | **3 777**  | 706        | **−715 (−15.9 %)** | 19 %                     |
+| Warm (ms) | 4 558      | 3 803      | —          | −755 (−16.6 %)  | —                            |
+| cpuTime   | 3.20 s     | 2.61 s     | 0.36 s     | −0.59 s (−18.4 %) | 21 %                       |
+| values    | 8 396 912  | 6 592 690  | 873 301    | **−1 804 222 (−21.5 %)** | 24 %                |
+| thunks    | 5 153 389  | 4 167 751  | 314 065    | −985 638 (−19.1 %) | 20 %                      |
+| envs      | 3 546 013  | 2 816 961  | 158 113    | −729 052 (−20.6 %) | 22 %                      |
 
-**Single biggest contributor:** decoupling the default devShell from
-`self.checks.${system}.pre-commit-check` (row 4). Hooks now opt-in via
-`nix develop .#preCommit`. Everything else is sub-noise.
+Floor reference: a minimal flake with `nixpkgs` + `rust-overlay` + a single
+devShell containing `pkg-config`, `openssl`, and the full stable Rust
+toolchain. "Optimizable gap" = `current − floor` vs `baseline − floor`.
+
+**Two contributors do almost all the work:**
+
+1. Row 4 — pre-commit decoupling (≈−14 % cold, ≈−20 % values on its own).
+2. Row 10 — `dregs` follows our nixpkgs (≈−5 % cold, eliminates a whole
+   second nixpkgs source tree). Surfaced by `--trace-function-calls`
+   profiling.
+
+Everything else is rounding noise.
 
 **Keep:**
 
@@ -76,8 +124,7 @@ helps `nix flake show` / `nix flake check`, which is out of scope for the
   (no perf, kept for explicitness).
 - Row 3 — `dockerShell.shellHook` fix (correctness bug — was concatenating
   the default-shell *derivation* into the hook string).
-- Row 4 — pre-commit decoupling + new `devShells.preCommit` shell. **The
-  win.**
+- Row 4 — pre-commit decoupling + new `devShells.preCommit` shell.
 - Row 5 — local packages (`solhint`, `pup`, `golangci-lint`,
   `prek-as-pre-commit`) moved from overlays to `let` (hygiene, not perf).
 - Row 6 — pinned nightly toolchain instead of `selectLatestNightlyWith`.
@@ -85,6 +132,11 @@ helps `nix flake show` / `nix flake check`, which is out of scope for the
   `dregs.packages.${system}.unwrapped` reference.
 - Row 9 — `writeShellScriptBin` for the `prek-as-pre-commit` wrapper
   instead of `runCommand` + symlink.
+- Row 10 — `inputs.dregs.inputs.nixpkgs.follows = "nixpkgs";` — kills a
+  duplicate nixpkgs tree found via profiling.
+- (Also includes the CI fix in `.github/workflows/contracts.yml` to use
+  `.#preCommit` for `pre-commit run` invocations, since the default shell
+  no longer auto-installs hooks.)
 
 **Drop / reverted:**
 
@@ -103,6 +155,26 @@ auto-installs pre-commit hooks. To install them, run
 `nix develop .#preCommit` once after cloning. CI is unaffected
 (still consumes `checks.pre-commit-check` directly).
 
-**Cumulative `nix develop` cold-eval improvement: ~13–14 %, ~20 % fewer
-allocated values.** Almost all of that comes from a single architectural
-change (row 4). The other kept changes are hygiene / correctness wins.
+**Cumulative `nix develop` cold-eval improvement: ~16 %, ~21 % fewer
+allocated values.** We've closed roughly a fifth of the gap to a
+minimal-rust-shell floor (`3 777 − 706 = 3 071 ms` still in espresso-
+specific tooling). Further reductions require shrinking the package list
+in the default shell — see "Next steps" below.
+
+## Next steps (not yet attempted)
+
+The profile (~85K calls into `make-derivation.nix`) and the floor
+benchmark (706 ms with a small package list) both point to the same
+remaining lever: **the package list in `devShells.default`**. Concrete
+candidates for a follow-up round:
+
+- Figures / docs: `graphviz`, `plantuml`, `mdbook` — used only when
+  editing diagrams or building docs locally.
+- Optional UX: `lazydocker`, `entr`, `coreutils`, `bc`, `libusb1` — small
+  individually, but they each pull a derivation graph.
+- Python tooling: `python3`, `ruff`, `ty` — used by some scripts; could
+  move to a `python` devShell or rely on the user's profile.
+- Go tooling beyond `abigen`: `go`, `golangci-lint` — both can move into
+  a `go` devShell since most contributors aren't touching Go daily.
+
+Each one is a measurable experiment that didn't fit in this pass.
