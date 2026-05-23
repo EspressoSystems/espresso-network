@@ -39,8 +39,18 @@ stackable across rows.
 | 6   | pin nightly toolchain                   | ff05541 | devShells.x86_64-linux.default         | 2026-05-23T19:16:26Z | 4020             | 3970 (min 3927 / max 4080) | 2.96        | 6 703 052 | 4 223 718 | 2 857 104 |
 | 6.b | pin nightly toolchain (re-run)          | ff05541 | devShells.x86_64-linux.default         | 2026-05-23T19:17:25Z | 4038             | 3906 (min 3882 / max 4023) | 2.91        | 6 703 052 | 4 223 718 | 2 857 104 |
 | 7   | drop `dregs.overlays.default`           | 2bbef24 | devShells.x86_64-linux.default         | 2026-05-23T19:19:39Z | 4077             | 4013 (min 3815 / max 4078) | 2.93        | 6 703 018 | 4 223 692 | 2 857 039 |
-| 8   | narrow systems (`eachSystem`)           | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
+| 8   | narrow systems (`eachSystem`) — SKIPPED | —      | —                                      | —                    | —                | —                          | —           | —         | —         | —       |
 | 9   | replace `prek-as-pre-commit` runCommand | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
+
+### Why row 8 is skipped
+
+`flake-utils.lib.eachDefaultSystem` wraps the outputs as
+`{ devShells.x86_64-linux = …; devShells.aarch64-linux = …; … }` lazily.
+Asking for `.#devShells.x86_64-linux.default` only forces the matching
+system attribute, so the other three systems contribute zero to the eval
+graph for that query. Narrowing the input list to `eachSystem [ … ]` only
+helps `nix flake show` / `nix flake check`, which is out of scope for the
+`nix develop` cold-eval target we're optimizing.
 
 ## Decisions
 
