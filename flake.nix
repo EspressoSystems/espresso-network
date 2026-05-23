@@ -97,7 +97,8 @@
         })
       ];
       pkgs = import nixpkgs { inherit system overlays; };
-      myShell = pkgs.mkShellNoCC.override (pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+      inherit (pkgs) lib stdenv;
+      myShell = pkgs.mkShellNoCC.override (lib.optionalAttrs stdenv.isLinux {
         # The mold linker is around 50% faster on Linux than the default linker.
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
       });
@@ -119,14 +120,14 @@
             envVars = rustEnvVars;
           };
     in
-    with pkgs; {
+    {
       checks = {
         pre-commit-check = git-hooks.lib.${system}.run {
           src = ./.;
           # Use the rust pre-commit implementation `prek`
           imports = [
             ({ lib, ... }: {
-              config.package = lib.mkForce prek;
+              config.package = lib.mkForce pkgs.prek;
             })
           ];
           hooks = {
@@ -209,7 +210,7 @@
           pre-commit = self.checks.${system}.pre-commit-check;
         in
         myShell (rustEnvVars // {
-          packages = [
+          packages = with pkgs; [
             # Rust dependencies
             pkg-config
             openssl
@@ -265,8 +266,8 @@
             golangci-lint
             # provides abigen
             go-ethereum
-          ] ++ lib.optionals stdenv.isDarwin [ darwin.libresolv ]
-          ++ lib.optionals (!stdenv.isDarwin) [ cargo-watch ] # broken on OSX
+          ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ]
+          ++ lib.optionals (!stdenv.isDarwin) [ pkgs.cargo-watch ] # broken on OSX
           ++ pre-commit.enabledPackages;
           shellHook = ''
             ${rustShellHook}
@@ -306,7 +307,7 @@
           };
         in
         myShell (rustEnvVars // {
-          packages = [
+          packages = with pkgs; [
             # Rust dependencies
             pkg-config
             openssl
@@ -321,7 +322,7 @@
           toolchain = pkgs.rust-bin.nightly.latest.minimal;
         in
         myShell (rustEnvVars // {
-          packages = [
+          packages = with pkgs; [
             # Rust dependencies
             pkg-config
             openssl
@@ -345,7 +346,7 @@
           };
         in
         myShell (rustEnvVars // {
-          packages = [
+          packages = with pkgs; [
             # Rust dependencies
             pkg-config
             openssl
@@ -365,7 +366,7 @@
         myShell {
           packages = [
             # Foundry tools
-            foundry
+            pkgs.foundry
             solc
 
             # Security analysis tools
