@@ -249,9 +249,6 @@
 
             # scripts
             bc
-            python3
-            ruff
-            ty
 
             # provides abigen (used by `just gen-bindings`, run as a
             # pre-commit hook in CI). Keep in default. The full Go
@@ -284,6 +281,14 @@
       # against this repo, and most contributors don't touch Go daily.
       devShells.go = pkgs.mkShellNoCC {
         packages = [ pkgs.go golangci-lint ];
+      };
+
+      # Opt-in shell for the Python helper scripts under `scripts/` —
+      # `just py-fmt` / `just py-check` etc. CI calls these scripts with
+      # the GitHub-Actions-provided python3, not via nix, so the default
+      # shell doesn't need them.
+      devShells.python = pkgs.mkShellNoCC {
+        packages = with pkgs; [ python3 ruff ty ];
       };
 
       # Opt-in shell that runs the git-hooks shellHook so that pre-commit /
