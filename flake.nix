@@ -204,7 +204,6 @@
           nightlyToolchain = pkgs.rust-bin.nightly."2026-04-16".minimal.override {
             extensions = [ "rust-analyzer" "rustfmt" ];
           };
-          solc = pkgs.solc-bin."0.8.28";
         in
         myShell (rustEnvVars // {
           packages = with pkgs; [
@@ -251,7 +250,6 @@
             export CARGO_HOME=$HOME/.cargo-nix
           '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
-          FOUNDRY_SOLC = "${solc}/bin/solc";
         });
       # Opt-in shell for rebuilding architecture diagrams and the mdbook
       # site (`make doc`). Pulled out of default to trim ~80K derivation
@@ -267,15 +265,24 @@
         packages = [ pkgs.go golangci-lint ];
       };
 
-      # Opt-in shell for smart-contract work that goes beyond what the
-      # default shell already provides (foundry + solc + solhint stay
-      # in default for daily contract-adjacent Rust dev). Currently this
-      # is only `go-ethereum` for `abigen`, used by `just gen-bindings`
-      # — a workflow that runs rarely (regenerating ABIs after contract
-      # changes) but is also exercised by CI's contract-bindings hook.
-      devShells.contracts = pkgs.mkShellNoCC {
-        packages = with pkgs; [ go-ethereum ];
-      };
+      # Opt-in shell for smart-contract work. Contains the solidity
+      # compiler (`solc`), mutation-testing tooling (`dregs-unwrapped`),
+      # and `go-ethereum` (for `abigen`). `foundry` stays in the default
+      # shell because `anvil` (bundled inside foundry) is needed for Rust
+      # tests — see comment near `foundry` in devShells.default. CI's
+      # `pre-commit` invocations pull this shell in via `inputsFrom`.
+      devShells.contracts =
+        let
+          solc = pkgs.solc-bin."0.8.28";
+        in
+        pkgs.mkShellNoCC {
+          packages = [
+            solc
+            dregs.packages.${system}.unwrapped
+            pkgs.go-ethereum
+          ];
+          FOUNDRY_SOLC = "${solc}/bin/solc";
+        };
 
       # Opt-in shell for the Python helper scripts under `scripts/` —
       # `just py-fmt` / `just py-check` etc. CI calls these scripts with
