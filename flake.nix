@@ -168,11 +168,30 @@
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
 
-            # If the repo ships a .pre-commit-config.yaml, make sure prek
-            # has installed the git hook. No git-hooks-nix eval at shell
-            # entry — `prek install` is cheap.
-            if [ -d .git ] && [ -f .pre-commit-config.yaml ] && [ ! -e .git/hooks/pre-commit ]; then
-              prek install >/dev/null 2>&1 || true
+            # Install a nix-aware pre-commit hook that runs prek with
+            # the committed .pre-commit-config.yaml. If the user is
+            # already inside this dev shell (or any shell with the hook
+            # tools on PATH), the hook calls prek directly. If they're
+            # outside (e.g. committing from an IDE), it re-enters
+            # `nix develop` first so rustfmt/forge/solhint/etc. resolve.
+            # Write only if our marker isn't present, so we don't
+            # clobber a customised hook.
+            if [ -d .git ] && [ -f .pre-commit-config.yaml ] \
+               && ! grep -q 'espresso-network-precommit-hook' .git/hooks/pre-commit 2>/dev/null; then
+              mkdir -p .git/hooks
+              cat > .git/hooks/pre-commit <<'HOOK'
+            #!/usr/bin/env bash
+            # espresso-network-precommit-hook — managed by flake.nix.
+            # Runs prek against the committed .pre-commit-config.yaml,
+            # entering the nix dev shell first if necessary so the hook
+            # tools resolve.
+            set -e
+            if command -v prek >/dev/null 2>&1 && command -v rustfmt >/dev/null 2>&1; then
+              exec prek run --hook-stage=commit "$@"
+            fi
+            exec nix develop --quiet --accept-flake-config -c prek run --hook-stage=commit "$@"
+            HOOK
+              chmod +x .git/hooks/pre-commit
             fi
           '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
