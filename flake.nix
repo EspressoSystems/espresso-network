@@ -239,11 +239,6 @@
             # explicitly.
             postgresql_16
 
-            # Figures
-            graphviz
-            plantuml
-            coreutils
-
             # Ethereum contracts, solidity, ...
             foundry
             solc
@@ -251,7 +246,6 @@
             nodePackages.prettier
             solhint
             libusb1
-            mdbook
 
             # scripts
             bc
@@ -278,6 +272,13 @@
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
           FOUNDRY_SOLC = "${solc}/bin/solc";
         });
+      # Opt-in shell for rebuilding architecture diagrams and the mdbook
+      # site (`make doc`). Pulled out of default to trim ~80K derivation
+      # constructions during eval.
+      devShells.docs = pkgs.mkShellNoCC {
+        packages = with pkgs; [ graphviz plantuml mdbook ];
+      };
+
       # Opt-in shell that runs the git-hooks shellHook so that pre-commit /
       # prek is installed in .git/hooks. Kept separate from the default
       # devShell so most users don't pay the git-hooks eval cost on every
