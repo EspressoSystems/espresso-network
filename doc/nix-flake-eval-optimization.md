@@ -26,9 +26,9 @@ stackable across rows.
 
 ## Results
 
-| #   | Change                                  | Commit | Attr                                   | When (UTC) | Warm median (ms) | Cold median (ms) (min/max) | cpuTime (s) | nrValues  | nrThunks  | envs |
-| --- | --------------------------------------- | ------ | -------------------------------------- | ---------- | ---------------- | -------------------------- | ----------- | --------- | --------- | ---- |
-| 0   | baseline (main)                         | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
+| #   | Change                                  | Commit  | Attr                                   | When (UTC)           | Warm median (ms) | Cold median (ms) (min/max) | cpuTime (s) | nrValues  | nrThunks  | envs    |
+| --- | --------------------------------------- | ------- | -------------------------------------- | -------------------- | ---------------- | -------------------------- | ----------- | --------- | --------- | ------- |
+| 0   | baseline (main + bench harness)         | e475ad1 | devShells.x86_64-linux.default         | 2026-05-23T18:58:24Z | 4558             | 4492 (min 4453 / max 4549) | 3.20        | 8 396 912 | 5 153 389 | 3 546 013 |
 | 1   | kill `with pkgs;`                       | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
 | 2   | drop `echidna-nixpkgs`                  | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
 | 3   | fix `dockerShell.shellHook` coercion    | TBD    | devShells.x86_64-linux.default         |            |                  |                            |             |           |           |      |
