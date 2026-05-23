@@ -233,6 +233,9 @@
             process-compose
 
             # Ethereum contracts, solidity, ...
+            # foundry is here because `anvil` (bundled inside it) is used
+            # as an EVM test node by Rust tests. Other foundry tools
+            # (forge / cast / chisel) and `solc` live in `.#contracts`.
             foundry
             nodePackages.prettier
             solhint
