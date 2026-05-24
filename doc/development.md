@@ -5,23 +5,31 @@
 - Clone: `git clone git@github.com:EspressoSystems/espresso-network`
 - Install [nix](https://nixos.org/download.html)
 - Activate the dev shell: `nix develop` (or `nix-shell` for legacy)
-- Optional: copy `.envrc.example` to `.envrc.local` and run `direnv allow` so any shell entering the repo gets the env automatically
+- Optional: copy `.envrc.example` to `.envrc.local` and run `direnv allow` so any shell entering the repo gets the env
+  automatically
 - Without nix: see [ubuntu.md](./ubuntu.md)
 
 ## Dev shells
 
-The default shell is the small, fast daily driver. Specialised tooling lives in opt-in shells.
+The default shell is the small, fast daily driver. Other shells are either add-ons (everything in default plus extras)
+or standalone (smaller, focused on one toolchain).
 
-- `nix develop` (default): rust toolchain, anvil, solhint, forge fmt, prettier, postgres-via-docker, process-compose, demo-native
-- `nix develop .#contracts`: `solc`, `go-ethereum` (abigen), `FOUNDRY_SOLC` set. For `just gen-bindings`, `forge build`, manual contract work
-- `nix develop .#mutation`: `dregs` for mutation testing
+Add-ons (default + extras, suitable for daily use):
+
+- `nix develop` (default): rust toolchain, anvil, solhint, forge fmt, prettier, process-compose
+- `nix develop .#contracts`: default + `solc` + `go-ethereum` (abigen) + `FOUNDRY_SOLC` set. Use when working on
+  contracts and rust tests at the same time (e.g. running `cargo test` against forge-built contracts)
+- `nix develop .#mutation`: contracts + `dregs` for mutation testing
+- `nix develop .#dockerShell`: default + `docker`
+
+Standalone (smaller, separate toolchain):
+
 - `nix develop .#docs`: `plantuml`, `graphviz`, `mdbook` for `make doc`
 - `nix develop .#go`: full Go toolchain + `golangci-lint` for `sdks/go/`
 - `nix develop .#python`: `python3`, `ruff`, `ty` for repo scripts
-- `nix develop .#dockerShell`: default + `docker`
+- `nix develop .#echidna`: `slither`, `echidna`, `crytic-compile`
 - `nix develop .#crossShell`, `.#armCrossShell`: rust cross-compile (musl)
 - `nix develop .#nightly`, `.#coverage`, `.#rustShell`: minimal rust variants
-- `nix develop .#echidna`: `slither`, `echidna`, `crytic-compile`
 
 If a daily workflow forces you to leave the default shell often, it probably belongs in default. File an issue.
 
@@ -29,7 +37,8 @@ If a daily workflow forces you to leave the default shell often, it probably bel
 
 - Source of truth: `.pre-commit-config.yaml` (committed)
 - Runner: [`prek`](https://github.com/j178/prek), a rust reimplementation of pre-commit
-- Entering `nix develop` installs `.git/hooks/pre-commit` automatically. The hook is nix-aware: it runs `prek` directly when the dev shell is active, and re-enters `nix develop` first when committing from outside (IDE, plain terminal)
+- Entering `nix develop` installs `.git/hooks/pre-commit` automatically. The hook is nix-aware: it runs `prek` directly
+  when the dev shell is active, and re-enters `nix develop` first when committing from outside (IDE, plain terminal)
 - To add or change a hook: edit `.pre-commit-config.yaml`
 - To run a hook manually: `pre-commit run <id>` from inside the default shell
 
@@ -43,8 +52,10 @@ If a daily workflow forces you to leave the default shell often, it probably bel
 
 ## Running a local network
 
-- `just demo-native` brings up a full local network via `process-compose` (postgres in docker, espresso nodes, prover, etc.)
-- Variants: `just demo-native-pos`, `just demo-native-pos-base`, `just demo-native-drb-header`, `just demo-native-epoch-reward`, etc.
+- `just demo-native` brings up a full local network via `process-compose` (postgres in docker, espresso nodes, prover,
+  etc.)
+- Variants: `just demo-native-pos`, `just demo-native-pos-base`, `just demo-native-drb-header`,
+  `just demo-native-epoch-reward`, etc.
 - Stop with `Ctrl-C` then `just cleanup-process-compose` if anything was left behind
 
 ## Contracts
@@ -55,7 +66,8 @@ Enter the contracts shell: `nix develop .#contracts`.
 - Test: `just sol-test`
 - Lint: `solhint 'contracts/{script,src,test}/**/*.sol'` (also a pre-commit hook)
 - Format: `forge fmt`
-- Rust bindings: `just gen-bindings` (regenerates rust + ABI exports under `contracts/rust/adapter/src/bindings`, `contracts/artifacts/`, `sdks/go/`)
+- Rust bindings: `just gen-bindings` (regenerates rust + ABI exports under `contracts/rust/adapter/src/bindings`,
+  `contracts/artifacts/`, `sdks/go/`)
 - Solidity docs: `forge doc`
 
 Conventions:
@@ -63,7 +75,8 @@ Conventions:
 - `contracts/src` is production code
 - `contracts/demo` is demo-only code
 - V2 contracts inherit V1 storage. Never modify V1 storage layout.
-- Use the latest version's rust bindings (e.g. `StakeTableV3`) for runtime code; V1/V2 bindings exist only for deploy/upgrade code
+- Use the latest version's rust bindings (e.g. `StakeTableV3`) for runtime code; V1/V2 bindings exist only for
+  deploy/upgrade code
 
 ## Deployment
 
