@@ -148,6 +148,10 @@
             prek
             prek-as-pre-commit # compat to allow running pre-commit
             process-compose
+            entr # file-watcher
+            pup # html parser, used for Datadog log queries — see nix/pup/README.md
+            lazydocker # docker compose TUI, used by `just demo-docker`
+            bc # used by scripts/verify-pos-deployment.sh
 
             # Ethereum contracts, solidity, ...
             # foundry is here because `anvil` (bundled inside it) is used
