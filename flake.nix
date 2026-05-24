@@ -174,10 +174,10 @@
             # tools on PATH), the hook calls prek directly. If they're
             # outside (e.g. committing from an IDE), it re-enters
             # `nix develop` first so rustfmt/forge/solhint/etc. resolve.
-            # Write only if our marker isn't present, so we don't
-            # clobber a customised hook.
-            if [ -d .git ] && [ -f .pre-commit-config.yaml ] \
-               && ! grep -q 'espresso-network-precommit-hook' .git/hooks/pre-commit 2>/dev/null; then
+            # Rewritten unconditionally on every shell entry so updates
+            # propagate. If you want a customised hook, put it under a
+            # different name (git only runs `.git/hooks/pre-commit`).
+            if [ -d .git ] && [ -f .pre-commit-config.yaml ]; then
               mkdir -p .git/hooks
               cat > .git/hooks/pre-commit <<'HOOK'
             #!/usr/bin/env bash
@@ -187,9 +187,12 @@
             # tools resolve.
             set -e
             if command -v prek >/dev/null 2>&1 && command -v rustfmt >/dev/null 2>&1; then
-              exec prek run --hook-stage=commit "$@"
+              exec prek run --hook-stage=pre-commit "$@"
             fi
-            exec nix develop --quiet --accept-flake-config -c prek run --hook-stage=commit "$@"
+            # Force experimental features on for users whose nix.conf
+            # doesn't enable nix-command/flakes by default.
+            export NIX_CONFIG="''${NIX_CONFIG:-}"$'\nexperimental-features = nix-command flakes'
+            exec nix develop --quiet --accept-flake-config -c prek run --hook-stage=pre-commit "$@"
             HOOK
               chmod +x .git/hooks/pre-commit
             fi
@@ -210,19 +213,17 @@
         packages = [ pkgs.go golangci-lint ];
       };
 
-      # Opt-in shell for smart-contract work. Contains the solidity
-      # compiler (`solc`) and `go-ethereum` (for `abigen`). `foundry`
-      # stays in the default shell because `anvil` (bundled inside
-      # foundry) is needed for Rust tests — see comment near `foundry`
-      # in devShells.default. `dregs` (mutation testing) lives in
-      # `devShells.mutation` because evaluating its flake output is
-      # expensive (~3.4M values) and nobody runs mutation testing on
-      # every contract change.
+      # Add-on shell for smart-contract work: default + `solc` +
+      # `go-ethereum` (abigen) + `FOUNDRY_SOLC`. Rust tests that touch
+      # contracts often need both `forge` / `anvil` (in default) and
+      # `solc` (here), so contracts is layered on top of default rather
+      # than being a separate minimal shell.
       devShells.contracts =
         let
           solc = pkgs.solc-bin."0.8.28";
         in
         pkgs.mkShellNoCC {
+          inputsFrom = [ self.devShells.${system}.default ];
           packages = [
             solc
             pkgs.go-ethereum
@@ -230,11 +231,14 @@
           FOUNDRY_SOLC = "${solc}/bin/solc";
         };
 
-      # Opt-in shell for mutation testing via `dregs`. Isolated from
-      # `contracts` because dregs's flake graph is by far the heaviest
-      # eval cost of any single tool in this repo — there's no reason
-      # for daily contract work to pay for it.
+      # Add-on shell for mutation testing via `dregs`. Layered on
+      # contracts (which itself is layered on default) so rust + forge
+      # + solc + abigen are all available alongside dregs. Isolated
+      # because dregs's flake graph is by far the heaviest eval cost of
+      # any single tool in this repo (~3.4M values) — no reason to pay
+      # for it during daily contract work.
       devShells.mutation = pkgs.mkShellNoCC {
+        inputsFrom = [ self.devShells.${system}.contracts ];
         packages = [ dregs.packages.${system}.unwrapped ];
       };
 
