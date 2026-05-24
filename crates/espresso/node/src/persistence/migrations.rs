@@ -79,63 +79,65 @@ macro_rules! merkle_tree_backfill {
                 offset: u64,
             ) -> anyhow::Result<Option<u64>> {
                 let batch_size = self.batch_size() as i64;
-                let rows: Vec<(
-                    serde_json::Value,
-                    i64,
-                    i64,
-                    Option<serde_json::Value>,
-                    Option<sqlx::types::BitVec>,
-                    Option<serde_json::Value>,
-                    Option<serde_json::Value>,
-                )> = sqlx::query_as(concat!(
-                    "SELECT path, created, hash_id::BIGINT, children, children_bitvec, idx, entry \
-                     FROM ",
+
+                // Check if any rows remain at or beyond the current offset. Checking only the
+                // current window would cause early termination if block heights have gaps larger
+                // than batch_size; checking the open-ended tail means gaps are just a few fast
+                // no-op iterations.
+                let any: Option<(i64,)> = sqlx::query_as(concat!(
+                    "SELECT created FROM ",
                     $legacy_table,
-                    " WHERE created >= $1 AND created < $2 ORDER BY created, path"
+                    " WHERE created >= $1 LIMIT 1"
                 ))
                 .bind(offset as i64)
-                .bind(offset as i64 + batch_size)
-                .fetch_all(tx.as_mut())
+                .fetch_optional(tx.as_mut())
                 .await?;
-
-                if rows.is_empty() {
+                if any.is_none() {
                     return Ok(None);
                 }
-                let n = rows.len();
 
-                let mut paths = Vec::with_capacity(n);
-                let mut createds = Vec::with_capacity(n);
-                let mut hash_ids = Vec::with_capacity(n);
-                let mut childrens = Vec::with_capacity(n);
-                let mut children_bitvecs = Vec::with_capacity(n);
-                let mut idxs = Vec::with_capacity(n);
-                let mut entries = Vec::with_capacity(n);
-
-                for (path, created, hash_id, children, children_bitvec, idx, entry) in rows {
-                    paths.push(path);
-                    createds.push(created);
-                    hash_ids.push(hash_id);
-                    childrens.push(children);
-                    children_bitvecs.push(children_bitvec);
-                    idxs.push(idx);
-                    entries.push(entry);
-                }
-
+                // Move rows from legacy into the new _bigint table, translating both
+                // `hash_id` and every element of `children` from legacy hash ids into
+                // hash_bigint ids by joining on the hash `value`. This removes any
+                // dependency on `BackfillHash` having preserved the original ids.
                 sqlx::query(concat!(
                     "INSERT INTO ",
                     $new_table,
                     " (path, created, hash_id, children, children_bitvec, idx, entry)
-                     SELECT * FROM UNNEST($1::jsonb[], $2::bigint[], $3::bigint[], \
-                     $4::jsonb[], $5::bit varying[], $6::jsonb[], $7::jsonb[])
-                     ON CONFLICT DO NOTHING"
+                     SELECT
+                         legacy_merkle_node.path,
+                         legacy_merkle_node.created,
+                         new_hash.id,
+                         CASE WHEN legacy_merkle_node.children IS NULL THEN NULL
+                              ELSE COALESCE((
+                                  SELECT jsonb_agg(child_new_hash.id ORDER BY \
+                     child_position)
+                                  FROM \
+                     jsonb_array_elements_text(legacy_merkle_node.children)
+                                       WITH ORDINALITY AS child_elem(legacy_hash_id, \
+                     child_position)
+                                  JOIN hash AS child_legacy_hash
+                                    ON child_legacy_hash.id = \
+                     child_elem.legacy_hash_id::INT
+                                  JOIN hash_bigint AS child_new_hash
+                                    ON child_new_hash.value = child_legacy_hash.value
+                              ), '[]'::jsonb)
+                         END,
+                         legacy_merkle_node.children_bitvec,
+                         legacy_merkle_node.idx,
+                         legacy_merkle_node.entry
+                     FROM ",
+                    $legacy_table,
+                    " AS legacy_merkle_node
+                     JOIN hash AS legacy_hash ON legacy_hash.id = \
+                     legacy_merkle_node.hash_id
+                     JOIN hash_bigint AS new_hash ON new_hash.value = legacy_hash.value
+                     WHERE legacy_merkle_node.created >= $1 AND legacy_merkle_node.created \
+                     < $2
+                     ON CONFLICT (path, created) DO NOTHING"
                 ))
-                .bind(&paths)
-                .bind(&createds)
-                .bind(&hash_ids)
-                .bind(&childrens)
-                .bind(&children_bitvecs)
-                .bind(&idxs)
-                .bind(&entries)
+                .bind(offset as i64)
+                .bind(offset as i64 + batch_size)
                 .execute(tx.as_mut())
                 .await?;
 
@@ -212,4 +214,190 @@ pub fn hash_bigint_migrations() -> MigrationRegistry {
         .backfill(BackfillFeeMerkleTree)
         .backfill(BackfillBlockMerkleTree)
         .backfill(CleanupLegacyHashTable)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::Address;
+    use espresso_types::{FEE_MERKLE_TREE_HEIGHT, FeeAccount, FeeAmount, FeeMerkleTree, SeqTypes};
+    use hotshot_query_service::{
+        data_source::{
+            Transaction as _, VersionedDataSource,
+            sql::Config,
+            storage::sql::{
+                SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
+                testing::TmpDb,
+            },
+        },
+        merklized_state::UpdateStateData,
+    };
+    use jf_merkle_tree_compat::{
+        LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
+    };
+
+    use super::*;
+    use crate::api::sql::impl_testable_data_source::tmp_options;
+
+    async fn run_to_completion(
+        backfill: &dyn DataBackfill,
+        storage: &SqlStorage,
+    ) -> anyhow::Result<()> {
+        let mut offset = 0u64;
+        loop {
+            let mut tx = storage.write().await?;
+            let next = backfill.run_batch(&mut tx, offset).await?;
+            tx.commit().await?;
+            match next {
+                Some(o) => offset = o,
+                None => return Ok(()),
+            }
+        }
+    }
+
+    async fn write_fee_merkle_proofs(
+        tx: &mut SqlTransaction<Write>,
+        tree: &FeeMerkleTree,
+        accounts: &[FeeAccount],
+        block_height: u64,
+    ) {
+        let proofs: Vec<_> = accounts
+            .iter()
+            .map(|a| {
+                let proof = match tree.universal_lookup(a) {
+                    LookupResult::Ok(_, p) => p,
+                    LookupResult::NotFound(p) => p,
+                    LookupResult::NotInMemory => panic!("account not in memory"),
+                };
+                let path =
+                    <FeeAccount as ToTraversalPath<{ FeeMerkleTree::ARITY }>>::to_traversal_path(
+                        a,
+                        tree.height(),
+                    );
+                (proof, path)
+            })
+            .collect();
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::insert_merkle_nodes_batch(
+            tx,
+            proofs,
+            block_height,
+        )
+        .await
+        .expect("insert_merkle_nodes_batch");
+    }
+
+    /// Regression test for the FK race between `BackfillHash` and live writes
+    /// to `hash_bigint`.
+    ///
+    /// V1302 seeds the `hash_bigint(id)` sequence above `MAX(hash.id)` so new
+    /// auto-ids cannot collide with legacy ids — but nothing protects the
+    /// `value` UNIQUE constraint. Whenever a post-migration write inserts a
+    /// value that also lives in legacy `hash` (the common case: empty-subtree
+    /// hashes and unchanged branch hashes are byte-identical across blocks),
+    /// the live row claims a new id, and the backfill's `INSERT (old_id, value)
+    /// ON CONFLICT DO NOTHING` is silently dropped. The Merkle tree backfill
+    /// then copies the legacy `hash_id` verbatim and the FK to `hash_bigint(id)`
+    /// fires because that id was never inserted.
+    ///
+    /// This test exercises the real `UpdateStateData::insert_merkle_nodes_batch`
+    /// path so the shared-hash overlap arises from realistic Merkle proofs.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn backfill_preserves_fk_when_live_write_shares_hash_value() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("config");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("connect");
+
+        let mut tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        tree.update(account, FeeAmount::from(100_u64)).unwrap();
+
+        // Write a real Merkle proof for `account` into the *new* _bigint tables.
+        let mut tx = storage.write().await.unwrap();
+        write_fee_merkle_proofs(&mut tx, &tree, &[account], 1).await;
+        tx.commit().await.unwrap();
+
+        // Move every row from the _bigint tables back into the legacy tables to
+        // simulate a database that was populated before V1302 ran. Then reset
+        // the hash_bigint sequence the way V1302 itself does.
+        let mut tx = storage.write().await.unwrap();
+        sqlx::query("INSERT INTO hash (id, value) SELECT id::INT, value FROM hash_bigint")
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO fee_merkle_tree (path, created, hash_id, children, children_bitvec, idx, \
+             entry) SELECT path, created, hash_id::INT, children, children_bitvec::BIT(256), idx, \
+             entry FROM fee_merkle_tree_bigint",
+        )
+        .execute(tx.as_mut())
+        .await
+        .unwrap();
+        sqlx::query("TRUNCATE fee_merkle_tree_bigint, block_merkle_tree_bigint, hash_bigint")
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        sqlx::query(
+            "SELECT setval(pg_get_serial_sequence('hash_bigint', 'id'), GREATEST(COALESCE((SELECT \
+             MAX(id) FROM hash), 1), 1))",
+        )
+        .execute(tx.as_mut())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // Live post-V1302 write at a new block height. The proof for the same
+        // account shares almost every hash value with the legacy proof above,
+        // so the live `batch_insert_hashes` calls collide on `value` with every
+        // row BackfillHash is about to copy.
+        let mut tx = storage.write().await.unwrap();
+        write_fee_merkle_proofs(&mut tx, &tree, &[account], 2).await;
+        tx.commit().await.unwrap();
+
+        // Drive backfills directly so a failure surfaces immediately rather
+        // than entering the registry's 5-minute retry loop.
+        run_to_completion(&BackfillHash, &storage)
+            .await
+            .expect("BackfillHash failed");
+        run_to_completion(&BackfillFeeMerkleTree, &storage)
+            .await
+            .expect("BackfillFeeMerkleTree failed (FK violation from dropped hash row)");
+
+        let mut tx = storage.read().await.unwrap();
+        let (n_legacy,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM fee_merkle_tree")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        assert_eq!(n_legacy, 0, "legacy fee_merkle_tree rows were not migrated");
+
+        let (n_heights,): (i64,) =
+            sqlx::query_as("SELECT COUNT(DISTINCT created) FROM fee_merkle_tree_bigint")
+                .fetch_one(tx.as_mut())
+                .await
+                .unwrap();
+        assert_eq!(n_heights, 2, "expected rows at both heights");
+
+        let (n_orphans,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM fee_merkle_tree_bigint fmt LEFT JOIN hash_bigint hb ON hb.id = \
+             fmt.hash_id WHERE hb.id IS NULL",
+        )
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        assert_eq!(n_orphans, 0, "fee_merkle_tree_bigint has dangling hash_id");
+
+        let (n_orphan_children,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ( SELECT child_id FROM fee_merkle_tree_bigint fmt, \
+             jsonb_array_elements_text(fmt.children) AS arr(child_id) WHERE fmt.children IS NOT \
+             NULL ) c LEFT JOIN hash_bigint hb ON hb.id = c.child_id::BIGINT WHERE hb.id IS NULL",
+        )
+        .fetch_one(tx.as_mut())
+        .await
+        .unwrap();
+        assert_eq!(
+            n_orphan_children, 0,
+            "fee_merkle_tree_bigint.children has dangling hash_id"
+        );
+    }
 }
