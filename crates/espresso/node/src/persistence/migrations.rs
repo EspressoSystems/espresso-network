@@ -80,15 +80,16 @@ macro_rules! merkle_tree_backfill {
             ) -> anyhow::Result<Option<u64>> {
                 let batch_size = self.batch_size() as i64;
 
-                // Check if there is any work left in this window. If not, return None to
-                // signal completion.
+                // Check if any rows remain at or beyond the current offset. Checking only the
+                // current window would cause early termination if block heights have gaps larger
+                // than batch_size; checking the open-ended tail means gaps are just a few fast
+                // no-op iterations.
                 let any: Option<(i64,)> = sqlx::query_as(concat!(
                     "SELECT created FROM ",
                     $legacy_table,
-                    " WHERE created >= $1 AND created < $2 LIMIT 1"
+                    " WHERE created >= $1 LIMIT 1"
                 ))
                 .bind(offset as i64)
-                .bind(offset as i64 + batch_size)
                 .fetch_optional(tx.as_mut())
                 .await?;
                 if any.is_none() {
