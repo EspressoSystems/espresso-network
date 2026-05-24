@@ -104,27 +104,35 @@ macro_rules! merkle_tree_backfill {
                     $new_table,
                     " (path, created, hash_id, children, children_bitvec, idx, entry)
                      SELECT
-                         fmt.path,
-                         fmt.created,
-                         hb.id,
-                         CASE WHEN fmt.children IS NULL THEN NULL
+                         legacy_merkle_node.path,
+                         legacy_merkle_node.created,
+                         new_hash.id,
+                         CASE WHEN legacy_merkle_node.children IS NULL THEN NULL
                               ELSE COALESCE((
-                                  SELECT jsonb_agg(chb.id ORDER BY ord)
-                                  FROM jsonb_array_elements_text(fmt.children)
-                                       WITH ORDINALITY AS arr(child_id, ord)
-                                  JOIN hash ch ON ch.id = arr.child_id::INT
-                                  JOIN hash_bigint chb ON chb.value = ch.value
+                                  SELECT jsonb_agg(child_new_hash.id ORDER BY \
+                     child_position)
+                                  FROM \
+                     jsonb_array_elements_text(legacy_merkle_node.children)
+                                       WITH ORDINALITY AS child_elem(legacy_hash_id, \
+                     child_position)
+                                  JOIN hash AS child_legacy_hash
+                                    ON child_legacy_hash.id = \
+                     child_elem.legacy_hash_id::INT
+                                  JOIN hash_bigint AS child_new_hash
+                                    ON child_new_hash.value = child_legacy_hash.value
                               ), '[]'::jsonb)
                          END,
-                         fmt.children_bitvec,
-                         fmt.idx,
-                         fmt.entry
+                         legacy_merkle_node.children_bitvec,
+                         legacy_merkle_node.idx,
+                         legacy_merkle_node.entry
                      FROM ",
                     $legacy_table,
-                    " fmt
-                     JOIN hash h ON h.id = fmt.hash_id
-                     JOIN hash_bigint hb ON hb.value = h.value
-                     WHERE fmt.created >= $1 AND fmt.created < $2
+                    " AS legacy_merkle_node
+                     JOIN hash AS legacy_hash ON legacy_hash.id = \
+                     legacy_merkle_node.hash_id
+                     JOIN hash_bigint AS new_hash ON new_hash.value = legacy_hash.value
+                     WHERE legacy_merkle_node.created >= $1 AND legacy_merkle_node.created \
+                     < $2
                      ON CONFLICT (path, created) DO NOTHING"
                 ))
                 .bind(offset as i64)
