@@ -1,0 +1,229 @@
+# Development
+
+- Obtain code: `git clone git@github.com:EspressoSystems/espresso-network`.
+- Make sure [nix](https://nixos.org/download.html) is installed.
+- Activate the environment with `nix-shell`, or `nix develop`. If using [direnv](https://direnv.net/), copy
+  `.envrc.example` to `.envrc.local` (or create your own `.envrc.local` file) and run `direnv allow`.
+- For installation without nix please see [ubuntu.md](./ubuntu.md).
+
+## Documentation
+
+The rust code documentation can be found at [espresso-network.docs.espressosys.com](https://espresso-network.docs.espressosys.com).
+Please note the disclaimer about API stability at the end of the readme.
+
+To generate the documentation locally and view it in the browser, run
+
+```sh
+just doc --open
+```
+
+## Run the tests
+
+```sh
+just pull # to pull docker images
+just test
+```
+
+## Building figures
+
+```sh
+make doc
+```
+
+## Building and running
+
+Docker images and the [docker-compose-demo.yaml](../docker-compose-demo.yaml) file are provided for convenience. The
+Docker-based demo fetches the images from the `ghcr` repository, where they are updated with every push to `main` on
+GitHub. For testing uncommitted changes, you can also run the binaries by manually building and running the services.
+
+Build all executables with `cargo build --release`. You may then start an Espresso network. First, start an
+orchestrator. Choose a port `$PORT` to run it on and decide how many Espresso nodes `$N` you will use, then run
+`target/release/orchestrator -p $PORT -n $N`.
+
+The Espresso Network will distribute a HotShot configuration to all the nodes which connect to it, which specifies
+consensus parameters like view timers. There is a default config, but you can override any parameters you want by
+passing additional options to the `orchestrator` executable. Run `target/release/orchestrator --help` to see a list of
+available options.
+
+Next, you must launch a `cdn` instance, which is necessary to facilitate consensus.
+
+```bash
+just dev-cdn -- -p 1738
+```
+
+In this case, we run it on port 1738.
+
+Once you have started the orchestrator and the CDN, you must connect `$N` Espresso nodes to them, after which the
+network will start up automatically. To start one node, run
+
+```bash
+target/release/espresso-node \
+    --orchestrator-url http://localhost:$PORT \
+    --cdn-endpoint "127.0.0.1:1738"  \
+    -- http --port 8083 -- query --storage-path storage -- submit
+```
+
+A useful Bash snippet for running `$N` nodes simultaneously in the background of your shell is:
+
+```bash
+for i in `seq $N`; do
+    target/release/espresso-node \
+        --orchestrator-url http://localhost:$PORT \
+        --cdn-endpoint "127.0.0.1:1738"  \
+done
+```
+
+For running a full demo natively run `just demo-native`.
+
+### Contracts
+
+#### Development
+
+A foundry project for the contracts specific to HotShot can be found in the directory `contracts`.
+
+To compile
+
+```shell
+forge build
+```
+
+To run the tests
+
+```shell
+just sol-test
+```
+
+In order to avoid constant warnings about checksum mismatches with [svm-rs](https://github.com/roynalnaruto/svm-rs)
+managed `solc` we set `FOUNDRY_SRC` to solc installed via flake.nix.
+
+- To use the contracts from rust generate the rust contracts bindings: `just gen-bindings`.
+- Bindings are only generated for contracts in the `contracts/src` folder
+
+To generate documentation in `./docs` for solidity code run
+
+```shell
+forge doc
+```
+
+#### Deployment via Foundry
+
+To deploy the contracts to a local testnet, first run a dev chain (e.g. `anvil`), then run
+
+```sh
+forge script DeployHotShot --broadcast --rpc-url local
+```
+
+To deploy to sepolia set `SEPOLIA_RPC_URL` and `MNEMONIC` env vars and run
+
+```sh
+forge script DeployHotShot --broadcast --rpc-url sepolia
+```
+
+To additionally verify the contract on etherscan set the `ETHERSCAN_API_KEY` env var and run
+
+```sh
+forge script DeployHotShot --broadcast --rpc-url sepolia --verify
+```
+
+Running the script will save a file with details about the deployment in `contracts/broadcast/$CHAIN_ID`.
+
+#### Deployment via Rust
+
+**Build and Run**
+
+```bash
+cargo run --bin deploy -- [FLAGS/OPTIONS]
+```
+
+Or, for help
+
+```bash
+cargo run --bin deploy -- --help
+```
+
+**Configuration**
+
+You can configure the deployer using CLI flags or environment variables. Most options can be set via environment
+variables (see the code for the full list `crates/espresso/node/src/bin/deploy.rs`). Common environment variables:
+
+- `ESPRESSO_L1_PROVIDER` L1 JSON-RPC endpoint
+- `ESPRESSO_ETH_MNEMONIC` Mnemonic for the deployer wallet
+- `ESPRESSO_ETH_MULTISIG_ADDRESS` Multisig admin address
+- `ESPRESSO_DEPLOYER_ACCOUNT_INDEX` Account index in the wallet
+- `ESPRESSO_API_NODE_URL` Espresso node URL for HotShot config
+
+You can use a `.env` file and load it with:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+#### Deployment via Docker
+
+You can run the deployer in a container but you need to stand up all services via docker compose
+
+```bash
+just pull
+just demo deploy-prover-contracts
+```
+
+If making dev changes locally run, `./scripts/build-docker-images-native --image $IMAGE_TO_BE_REBUILT` instead of
+`just pull`.
+
+#### Dry run upgrades via Docker
+
+You can only run a dry run for multisig upgrades but you need to stand up all services via docker compose Example:
+
+```bash
+just pull
+just demo
+docker compose run --rm upgrade-prover-contracts-v2 /bin/deploy --upgrade-light-client-v2 --dry-run --use-multisig
+```
+
+If making dev changes locally run, `./scripts/build-docker-images-native` instead of `just pull`.
+
+For AWS ECS, ensure all required environment variables and secrets are set in your task definition.
+
+### Logging
+
+You can control the log level using the `RUST_LOG` environment variable. For example:
+
+```bash
+RUST_LOG=info cargo run --bin deploy -- [FLAGS]
+RUST_LOG=debug cargo run --bin deploy -- [FLAGS]
+```
+
+For Docker:
+
+```bash
+docker run --env-file .env.docker -e RUST_LOG=debug ...
+```
+
+(see .env.docker.example for the vars required for .env.docker)
+
+### Folder Structure Rationale
+
+- code for demo purposes goes into the `contracts/demo` folder
+- code that eventually ends up in production goes into the `contracts/src` folder
+
+### Benchmarking and profiling
+
+The gas consumption for verifying a plonk proof as well as updating the state of the light client contract can be seen
+by running:
+
+```sh
+just gas-benchmarks
+cat gas-benchmarks.txt
+# [PASS] test_verify_succeeds() (gas: 507774)
+# [PASS] testCorrectUpdateBench() (gas: 594533)
+```
+
+In order to profile the gas consumption of the light client contract do the following:
+
+1. Set the environment variables `SEPOLIA_RPC_URL`, `MNEMONIC` and `ETHERSCAN_API_KEY`.
+2. `just lc-contract-profiling-sepolia`
+3. Create an account on [sentio.xyz](https://app.sentio.xyz/).
+4. Use the hash of the transaction generated in step two when calling the function `newFinalizedState` in order to
+   obtain the gas profile.
