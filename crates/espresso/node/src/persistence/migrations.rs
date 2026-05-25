@@ -288,7 +288,7 @@ mod tests {
     /// Regression test for the FK race between `BackfillHash` and live writes
     /// to `hash_bigint`.
     ///
-    /// V1302 seeds the `hash_bigint(id)` sequence above `MAX(hash.id)` so new
+    /// V1501 seeds the `hash_bigint(id)` sequence above `MAX(hash.id)` so new
     /// auto-ids cannot collide with legacy ids — but nothing protects the
     /// `value` UNIQUE constraint. Whenever a post-migration write inserts a
     /// value that also lives in legacy `hash` (the common case: empty-subtree
@@ -319,8 +319,8 @@ mod tests {
         tx.commit().await.unwrap();
 
         // Move every row from the _bigint tables back into the legacy tables to
-        // simulate a database that was populated before V1302 ran. Then reset
-        // the hash_bigint sequence the way V1302 itself does.
+        // simulate a database that was populated before V1501 ran. Then reset
+        // the hash_bigint sequence the way V1501 itself does.
         let mut tx = storage.write().await.unwrap();
         sqlx::query("INSERT INTO hash (id, value) SELECT id::INT, value FROM hash_bigint")
             .execute(tx.as_mut())
@@ -347,7 +347,7 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        // Live post-V1302 write at a new block height. The proof for the same
+        // Live post-V1501 write at a new block height. The proof for the same
         // account shares almost every hash value with the legacy proof above,
         // so the live `batch_insert_hashes` calls collide on `value` with every
         // row BackfillHash is about to copy.
