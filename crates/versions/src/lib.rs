@@ -15,12 +15,9 @@ pub const EPOCH_VERSION: Version = version(0, 3);
 pub const DRB_AND_HEADER_UPGRADE_VERSION: Version = version(0, 4);
 pub const EPOCH_REWARD_VERSION: Version = version(0, 5);
 pub const DRB_FIX_VERSION: Version = version(0, 5);
-pub const DA_UPGRADE_VERSION: Version = version(0, 6);
-pub const VID2_UPGRADE_VERSION: Version = version(0, 6);
-pub const CLIQUENET_VERSION: Version = version(0, 6);
 pub const NEW_PROTOCOL_VERSION: Version = version(0, 6);
 pub const MIN_SUPPORTED_VERSION: Version = VERSION_0_1;
-pub const MAX_SUPPORTED_VERSION: Version = CLIQUENET_VERSION;
+pub const MAX_SUPPORTED_VERSION: Version = NEW_PROTOCOL_VERSION;
 
 // Known upgrade hashes:
 
@@ -237,7 +234,7 @@ mod tests {
     };
 
     use super::{
-        CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, VersionError, decode,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, VersionError, decode,
         encode, parse_version, version,
     };
 
@@ -303,7 +300,7 @@ mod tests {
     fn parse_version_roundtrip() {
         for v in [
             EPOCH_VERSION,
-            CLIQUENET_VERSION,
+            NEW_PROTOCOL_VERSION,
             DRB_AND_HEADER_UPGRADE_VERSION,
             version(0, 0),
             version(u16::MAX, u16::MAX),

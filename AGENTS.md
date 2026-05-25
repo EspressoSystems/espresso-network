@@ -212,14 +212,14 @@ table sync.
 Versions in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` defines version pairs for network
 operation.
 
-| Version | Alias                                                           | Key Changes                                                                |
-| ------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| V0_1    | -                                                               | Base types: Header, ChainConfig, Transaction, ADVZ VID proofs              |
-| V0_2    | `FeeVersion`                                                    | Fee support (version marker)                                               |
-| V0_3    | `EpochVersion`                                                  | PoS: stake_table_contract, reward_merkle_tree, AvidM VID proofs            |
-| V0_4    | `DrbAndHeaderUpgradeVersion`                                    | Header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2 |
-| V0_5    | `EpochRewardVersion`                                            | Epoch reward / DRB fix                                                     |
-| V0_6    | `DaUpgradeVersion` / `Vid2UpgradeVersion` / `CLIQUENET_VERSION` / `NEW_PROTOCOL_VERSION` | DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6) |
+| Version | Alias                        | Key Changes                                                                     |
+| ------- | ---------------------------- | ------------------------------------------------------------------------------- |
+| V0_1    | -                            | Base types: Header, ChainConfig, Transaction, ADVZ VID proofs                   |
+| V0_2    | `FeeVersion`                 | Fee support (version marker)                                                    |
+| V0_3    | `EpochVersion`               | PoS: stake_table_contract, reward_merkle_tree, AvidM VID proofs                 |
+| V0_4    | `DrbAndHeaderUpgradeVersion` | Header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2      |
+| V0_5    | `EpochRewardVersion`         | Epoch reward / DRB fix                                                          |
+| V0_6    | `NEW_PROTOCOL_VERSION`       | DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6) |
 
 ## Consensus Upgrades
 

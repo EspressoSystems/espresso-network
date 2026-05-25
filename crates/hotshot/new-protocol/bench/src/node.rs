@@ -33,7 +33,7 @@ use hotshot_types::{
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
-use versions::{CLIQUENET_VERSION, Upgrade};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
@@ -332,7 +332,7 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
         &block.encode(),
         &metadata.encode(),
         num_nodes,
-        versions::VID2_UPGRADE_VERSION,
+        versions::NEW_PROTOCOL_VERSION,
     );
     let builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
@@ -345,7 +345,7 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
 }
 
 fn bench_upgrade_lock() -> UpgradeLock<TestTypes> {
-    UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
+    UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION))
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.
@@ -388,5 +388,5 @@ fn build_genesis_proposal(
 }
 
 pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
-    UpgradeLock::new(CLIQUENET_VERSION.into())
+    UpgradeLock::new(NEW_PROTOCOL_VERSION.into())
 }
