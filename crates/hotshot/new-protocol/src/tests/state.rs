@@ -82,10 +82,14 @@ async fn new_manager() -> StateManager<TestTypes> {
     let mut manager =
         StateManager::new(Arc::new(TestInstanceState::default()), test_upgrade_lock());
     let genesis_state = TestValidatedState::default();
+    // Must match the version used by `TestViewGenerator` (which produces the
+    // proposals fed to the manager), otherwise the genesis leaf commitment
+    // won't match the `parent_commitment` carried by the first proposal's
+    // justify_qc.
     let genesis_leaf = Leaf2::<TestTypes>::genesis(
         &genesis_state,
         &TestInstanceState::default(),
-        TEST_VERSIONS.test.base,
+        TEST_VERSIONS.vid2.base,
     )
     .await;
     manager.seed_state(ViewNumber::genesis(), Arc::new(genesis_state), genesis_leaf);

@@ -5,7 +5,9 @@ use std::{
 };
 
 pub use cliquenet::Config as CliquenetConfig;
-use cliquenet::{NetAddr, NetworkError as CliquenetError, Role, Slot, x25519::PublicKey};
+use cliquenet::{
+    NetAddr, NetworkError as CliquenetError, Role, Slot, noise::Protocol, x25519::PublicKey,
+};
 use hotshot_types::{
     PeerConnectInfo,
     data::{EpochNumber, ViewNumber},
@@ -58,7 +60,8 @@ impl<T: NodeType> Cliquenet<T> {
                     .values()
                     .map(|info| (info.x25519_key.into(), info.p2p_addr.clone())),
             )
-            .max_message_size(NonZeroUsize::new(20 * 1024 * 1024).expect("20 MB > 0"))
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
+            .max_message_size(NonZeroUsize::new(80 * 1024 * 1024).expect("80 MB > 0"))
             .build();
 
         Self::create_with_config(signing_key, upgrade_lock, cfg, parties, metrics).await
@@ -67,7 +70,7 @@ impl<T: NodeType> Cliquenet<T> {
     pub(crate) async fn create_with_config<P>(
         signing_key: T::SignatureKey,
         upgrade_lock: UpgradeLock<T>,
-        mut config: cliquenet::Config,
+        config: cliquenet::Config,
         parties: P,
         metrics: Box<dyn Metrics>,
     ) -> Result<Self, NetworkError>
@@ -75,9 +78,8 @@ impl<T: NodeType> Cliquenet<T> {
         P: IntoIterator<Item = (T::SignatureKey, PeerConnectInfo)>,
     {
         let public_key = config.public_key();
-        assert!(config.metrics.is_none());
-        config.metrics = Some(Arc::new(CliquenetMetrics::new(metrics)));
-        let network = cliquenet::Network::create(config)
+        let metrics = CliquenetMetrics::new(metrics);
+        let network = cliquenet::Network::create(config.with_metrics(metrics))
             .await
             .map_err(to_network_error)?;
 
@@ -288,7 +290,7 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     ///
     /// We keep validators that were in `e-1` but not in `e` for one additional
     /// epoch and eagerly connect to new validators of `e+1`.
-    async fn apply_epoch(
+    fn apply_epoch(
         &mut self,
         epoch: EpochNumber,
         coord: &EpochMembershipCoordinator<T>,
@@ -560,7 +562,24 @@ impl cliquenet::Metrics for CliquenetMetrics {
     }
 
     fn del(&self, key: &PublicKey) {
-        self.gauges.write().gauges.remove(key);
-        self.counters.write().counters.remove(key);
+        let key_string = key.to_string();
+
+        {
+            let mut gauges = self.gauges.write();
+            for (label, _) in gauges.gauges.remove(key).into_iter().flatten() {
+                if let Some(f) = gauges.family.get(&label) {
+                    f.destroy(&[&key_string]);
+                }
+            }
+        }
+
+        {
+            let mut counters = self.counters.write();
+            for (label, _) in counters.counters.remove(key).into_iter().flatten() {
+                if let Some(f) = counters.family.get(&label) {
+                    f.destroy(&[&key_string]);
+                }
+            }
+        }
     }
 }

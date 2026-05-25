@@ -64,7 +64,7 @@ pub trait Network<T: NodeType> {
         &mut self,
         epoch: EpochNumber,
         coord: &EpochMembershipCoordinator<T>,
-    ) -> impl Future<Output = Result<()>> + Send;
+    ) -> Result<()>;
 }
 
 #[derive(Clone, Copy, Debug)]
