@@ -30,6 +30,7 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
     DhtPersistentStorage, SerializableRecord,
 };
 use hotshot_query_service::{
+    availability::LeafQueryData,
     data_source::{
         Transaction as _, VersionedDataSource,
         storage::{
