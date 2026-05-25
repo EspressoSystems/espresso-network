@@ -601,7 +601,7 @@
 <a href=#601 id=601 data-nosnippet>601</a>
 <a href=#602 id=602 data-nosnippet>602</a>    <span class="kw">use </span>pretty_assertions::assert_eq;
 <a href=#603 id=603 data-nosnippet>603</a>    <span class="kw">use </span>tempfile::tempdir;
-<a href=#604 id=604 data-nosnippet>604</a>    <span class="kw">use </span>versions::{CLIQUENET_VERSION, EPOCH_VERSION};
+<a href=#604 id=604 data-nosnippet>604</a>    <span class="kw">use </span>versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 <a href=#605 id=605 data-nosnippet>605</a>
 <a href=#606 id=606 data-nosnippet>606</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#607 id=607 data-nosnippet>607</a>    <span class="kw">use </span><span class="kw">crate</span>::testing::{leaf_chain, random_validator};
@@ -1087,14 +1087,14 @@
 <a href=#1087 id=1087 data-nosnippet>1087</a>
 <a href=#1088 id=1088 data-nosnippet>1088</a>        <span class="kw">let </span>epoch = EpochNumber::new(<span class="number">1</span>);
 <a href=#1089 id=1089 data-nosnippet>1089</a>        <span class="kw">let </span>state = random_stake_table();
-<a href=#1090 id=1090 data-nosnippet>1090</a>        db.insert_stake_table(epoch, <span class="kw-2">&amp;</span>state, CLIQUENET_VERSION, EPOCH_VERSION)
+<a href=#1090 id=1090 data-nosnippet>1090</a>        db.insert_stake_table(epoch, <span class="kw-2">&amp;</span>state, NEW_PROTOCOL_VERSION, EPOCH_VERSION)
 <a href=#1091 id=1091 data-nosnippet>1091</a>            .<span class="kw">await
 <a href=#1092 id=1092 data-nosnippet>1092</a>            </span>.unwrap();
 <a href=#1093 id=1093 data-nosnippet>1093</a>        <span class="kw">let </span>(loaded_epoch, loaded_state, loaded_version, loaded_next_version) =
 <a href=#1094 id=1094 data-nosnippet>1094</a>            db.stake_table_lower_bound(epoch).<span class="kw">await</span>.unwrap().unwrap();
 <a href=#1095 id=1095 data-nosnippet>1095</a>        <span class="macro">assert_eq!</span>(loaded_epoch, epoch);
 <a href=#1096 id=1096 data-nosnippet>1096</a>        <span class="macro">assert_eq!</span>(loaded_state, state);
-<a href=#1097 id=1097 data-nosnippet>1097</a>        <span class="macro">assert_eq!</span>(loaded_version, CLIQUENET_VERSION);
+<a href=#1097 id=1097 data-nosnippet>1097</a>        <span class="macro">assert_eq!</span>(loaded_version, NEW_PROTOCOL_VERSION);
 <a href=#1098 id=1098 data-nosnippet>1098</a>        <span class="macro">assert_eq!</span>(loaded_next_version, EPOCH_VERSION);
 <a href=#1099 id=1099 data-nosnippet>1099</a>    }
 <a href=#1100 id=1100 data-nosnippet>1100</a>
@@ -1114,7 +1114,7 @@
 <a href=#1114 id=1114 data-nosnippet>1114</a>            <span class="string">"random_stake_table must populate used_x25519_keys for this test to be meaningful"
 <a href=#1115 id=1115 data-nosnippet>1115</a>        </span>);
 <a href=#1116 id=1116 data-nosnippet>1116</a>
-<a href=#1117 id=1117 data-nosnippet>1117</a>        db.insert_stake_table(epoch, <span class="kw-2">&amp;</span>state, CLIQUENET_VERSION, CLIQUENET_VERSION)
+<a href=#1117 id=1117 data-nosnippet>1117</a>        db.insert_stake_table(epoch, <span class="kw-2">&amp;</span>state, NEW_PROTOCOL_VERSION, NEW_PROTOCOL_VERSION)
 <a href=#1118 id=1118 data-nosnippet>1118</a>            .<span class="kw">await
 <a href=#1119 id=1119 data-nosnippet>1119</a>            </span>.unwrap();
 <a href=#1120 id=1120 data-nosnippet>1120</a>        <span class="kw">let </span>(<span class="kw">_</span>, loaded, ..) = db.stake_table_lower_bound(epoch).<span class="kw">await</span>.unwrap().unwrap();

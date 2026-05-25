@@ -33,7 +33,7 @@
 <a href=#33 id=33 data-nosnippet>33</a>    x25519::Keypair,
 <a href=#34 id=34 data-nosnippet>34</a>};
 <a href=#35 id=35 data-nosnippet>35</a><span class="kw">use </span>tracing::{error, info, warn};
-<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>versions::{CLIQUENET_VERSION, Upgrade};
+<a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>versions::{NEW_PROTOCOL_VERSION, Upgrade};
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="kw">use </span>crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 <a href=#39 id=39 data-nosnippet>39</a>
@@ -343,7 +343,7 @@
 <a href=#343 id=343 data-nosnippet>343</a>        <span class="kw-2">&amp;</span>block.encode(),
 <a href=#344 id=344 data-nosnippet>344</a>        <span class="kw-2">&amp;</span>metadata.encode(),
 <a href=#345 id=345 data-nosnippet>345</a>        num_nodes,
-<a href=#346 id=346 data-nosnippet>346</a>        versions::VID2_UPGRADE_VERSION,
+<a href=#346 id=346 data-nosnippet>346</a>        versions::NEW_PROTOCOL_VERSION,
 <a href=#347 id=347 data-nosnippet>347</a>    );
 <a href=#348 id=348 data-nosnippet>348</a>    <span class="kw">let </span>builder_commitment =
 <a href=#349 id=349 data-nosnippet>349</a>        &lt;TestBlockPayload <span class="kw">as </span>BlockPayload&lt;TestTypes&gt;&gt;::builder_commitment(<span class="kw-2">&amp;</span>block, <span class="kw-2">&amp;</span>metadata);
@@ -356,7 +356,7 @@
 <a href=#356 id=356 data-nosnippet>356</a>}
 <a href=#357 id=357 data-nosnippet>357</a>
 <a href=#358 id=358 data-nosnippet>358</a><span class="kw">fn </span>bench_upgrade_lock() -&gt; UpgradeLock&lt;TestTypes&gt; {
-<a href=#359 id=359 data-nosnippet>359</a>    UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
+<a href=#359 id=359 data-nosnippet>359</a>    UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION))
 <a href=#360 id=360 data-nosnippet>360</a>}
 <a href=#361 id=361 data-nosnippet>361</a>
 <a href=#362 id=362 data-nosnippet>362</a><span class="doccomment">/// Create a genesis `Certificate1` that references the genesis leaf.
@@ -399,6 +399,6 @@
 <a href=#399 id=399 data-nosnippet>399</a>}
 <a href=#400 id=400 data-nosnippet>400</a>
 <a href=#401 id=401 data-nosnippet>401</a><span class="kw">pub fn </span>upgrade_lock&lt;T: NodeType&gt;() -&gt; UpgradeLock&lt;T&gt; {
-<a href=#402 id=402 data-nosnippet>402</a>    UpgradeLock::new(CLIQUENET_VERSION.into())
+<a href=#402 id=402 data-nosnippet>402</a>    UpgradeLock::new(NEW_PROTOCOL_VERSION.into())
 <a href=#403 id=403 data-nosnippet>403</a>}
 </code></pre></div></section></main></body></html>

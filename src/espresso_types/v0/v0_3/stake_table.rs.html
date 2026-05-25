@@ -23,7 +23,7 @@
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>thiserror::Error;
 <a href=#24 id=24 data-nosnippet>24</a><span class="kw">use </span>tokio::task::JoinHandle;
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">use </span>vbs::version::Version;
-<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>versions::CLIQUENET_VERSION;
+<a href=#26 id=26 data-nosnippet>26</a><span class="kw">use </span>versions::NEW_PROTOCOL_VERSION;
 <a href=#27 id=27 data-nosnippet>27</a>
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span><span class="kw">super</span>::L1Client;
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>crate::{
@@ -122,9 +122,9 @@
 <a href=#122 id=122 data-nosnippet>122</a>    /// onward, roots are post-CLIQUENET and this filter applies.
 <a href=#123 id=123 data-nosnippet>123</a>    ///
 <a href=#124 id=124 data-nosnippet>124</a>    /// Operators are warned at startup on the version immediately preceding
-<a href=#125 id=125 data-nosnippet>125</a>    /// CLIQUENET if their on-chain entry is missing network info.
+<a href=#125 id=125 data-nosnippet>125</a>    /// NEW_PROTOCOL if their on-chain entry is missing network info.
 <a href=#126 id=126 data-nosnippet>126</a>    </span><span class="kw">pub fn </span>is_eligible(<span class="kw-2">&amp;</span><span class="self">self</span>, protocol_version: Version) -&gt; bool {
-<a href=#127 id=127 data-nosnippet>127</a>        <span class="kw">if </span>protocol_version &gt;= CLIQUENET_VERSION
+<a href=#127 id=127 data-nosnippet>127</a>        <span class="kw">if </span>protocol_version &gt;= NEW_PROTOCOL_VERSION
 <a href=#128 id=128 data-nosnippet>128</a>            &amp;&amp; (<span class="self">self</span>.x25519_key.is_none() || <span class="self">self</span>.p2p_addr.is_none())
 <a href=#129 id=129 data-nosnippet>129</a>        {
 <a href=#130 id=130 data-nosnippet>130</a>            <span class="kw">return </span><span class="bool-val">false</span>;

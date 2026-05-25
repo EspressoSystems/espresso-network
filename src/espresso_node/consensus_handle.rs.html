@@ -30,7 +30,7 @@
 <a href=#30 id=30 data-nosnippet>30</a>};
 <a href=#31 id=31 data-nosnippet>31</a><span class="kw">use </span>tokio::spawn;
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>tokio_util::task::AbortOnDropHandle;
-<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>versions::version;
+<a href=#33 id=33 data-nosnippet>33</a><span class="kw">use </span>versions::NEW_PROTOCOL_VERSION;
 <a href=#34 id=34 data-nosnippet>34</a>
 <a href=#35 id=35 data-nosnippet>35</a><span class="comment">// TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 <a href=#36 id=36 data-nosnippet>36</a>// vid_shares) rather than a `Vec&lt;LeafInfo&gt;`. This is because `Consensus` doesn't own `StateManager`
@@ -173,7 +173,7 @@
 <a href=#173 id=173 data-nosnippet>173</a>            </span>.hotshot
 <a href=#174 id=174 data-nosnippet>174</a>            .upgrade_lock
 <a href=#175 id=175 data-nosnippet>175</a>            .version_infallible(view)
-<a href=#176 id=176 data-nosnippet>176</a>            &gt;= version(<span class="number">0</span>, <span class="number">8</span>)
+<a href=#176 id=176 data-nosnippet>176</a>            &gt;= NEW_PROTOCOL_VERSION
 <a href=#177 id=177 data-nosnippet>177</a>    }
 <a href=#178 id=178 data-nosnippet>178</a>
 <a href=#179 id=179 data-nosnippet>179</a>    <span class="kw">async fn </span>new_protocol(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {

@@ -20,7 +20,7 @@
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>parking_lot::RwLock;
 <a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>serde::{Deserialize, Serialize, de::DeserializeOwned};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>vbs::version::Version;
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span>versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 <a href=#24 id=24 data-nosnippet>24</a>
 <a href=#25 id=25 data-nosnippet>25</a><span class="doccomment">/// The version we should expect for external messages
 <a href=#26 id=26 data-nosnippet>26</a></span><span class="kw">pub const </span>EXTERNAL_MESSAGE_VERSION: Version = Version { major: <span class="number">0</span>, minor: <span class="number">0 </span>};
@@ -755,7 +755,7 @@
 <a href=#755 id=755 data-nosnippet>755</a>    }
 <a href=#756 id=756 data-nosnippet>756</a>
 <a href=#757 id=757 data-nosnippet>757</a>    <span class="kw">pub fn </span>upgraded_vid2(<span class="kw-2">&amp;</span><span class="self">self</span>, view: ViewNumber) -&gt; bool {
-<a href=#758 id=758 data-nosnippet>758</a>        <span class="self">self</span>.version_infallible(view) &gt;= VID2_UPGRADE_VERSION
+<a href=#758 id=758 data-nosnippet>758</a>        <span class="self">self</span>.version_infallible(view) &gt;= NEW_PROTOCOL_VERSION
 <a href=#759 id=759 data-nosnippet>759</a>    }
 <a href=#760 id=760 data-nosnippet>760</a>
 <a href=#761 id=761 data-nosnippet>761</a>    <span class="doccomment">/// Serialize a message with a version number, using `message.view_number()`

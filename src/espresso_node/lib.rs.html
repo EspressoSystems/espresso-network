@@ -464,10 +464,10 @@
 <a href=#464 id=464 data-nosnippet>464</a>            </span>);
 <a href=#465 id=465 data-nosnippet>465</a>
 <a href=#466 id=466 data-nosnippet>466</a>            <span class="comment">// Publish our cliquenet `connect_info` into the stake table from
-<a href=#467 id=467 data-nosnippet>467</a>            // `CLIQUENET_VERSION` on, so peers can dial us. Modify `validator_config`
+<a href=#467 id=467 data-nosnippet>467</a>            // `NEW_PROTOCOL_VERSION` on, so peers can dial us. Modify `validator_config`
 <a href=#468 id=468 data-nosnippet>468</a>            // in place so the same `connect_info` is sent later when posting to
 <a href=#469 id=469 data-nosnippet>469</a>            // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
-<a href=#470 id=470 data-nosnippet>470</a>            </span><span class="kw">if </span>genesis.base_version &gt;= versions::CLIQUENET_VERSION {
+<a href=#470 id=470 data-nosnippet>470</a>            </span><span class="kw">if </span>genesis.base_version &gt;= versions::NEW_PROTOCOL_VERSION {
 <a href=#471 id=471 data-nosnippet>471</a>                <span class="kw">let </span>advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
 <a href=#472 id=472 data-nosnippet>472</a>                    <span class="string">"ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
 <a href=#473 id=473 data-nosnippet>473</a>                     Cliquenet network from the orchestrator"</span>,
@@ -856,7 +856,7 @@
 <a href=#856 id=856 data-nosnippet>856</a>    stake_table_contract: <span class="prelude-ty">Option</span>&lt;alloy::primitives::Address&gt;,
 <a href=#857 id=857 data-nosnippet>857</a>    l1_client: <span class="kw-2">&amp;</span>espresso_types::v0::L1Client,
 <a href=#858 id=858 data-nosnippet>858</a>) {
-<a href=#859 id=859 data-nosnippet>859</a>    <span class="kw">if </span>current_version != versions::VID2_UPGRADE_VERSION {
+<a href=#859 id=859 data-nosnippet>859</a>    <span class="kw">if </span>current_version != versions::EPOCH_REWARD_VERSION {
 <a href=#860 id=860 data-nosnippet>860</a>        <span class="kw">return</span>;
 <a href=#861 id=861 data-nosnippet>861</a>    }
 <a href=#862 id=862 data-nosnippet>862</a>    <span class="kw">let </span><span class="prelude-val">Some</span>(addr) = stake_table_contract <span class="kw">else </span>{

@@ -27,7 +27,7 @@
 <a href=#27 id=27 data-nosnippet>27</a><span class="kw">use </span>thiserror::Error;
 <a href=#28 id=28 data-nosnippet>28</a><span class="kw">use </span>vbs::version::Version;
 <a href=#29 id=29 data-nosnippet>29</a><span class="kw">use </span>vec1::Vec1;
-<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
+<a href=#30 id=30 data-nosnippet>30</a><span class="kw">use </span>versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 <a href=#31 id=31 data-nosnippet>31</a>
 <a href=#32 id=32 data-nosnippet>32</a><span class="kw">use </span>crate::{
 <a href=#33 id=33 data-nosnippet>33</a>    drb::DrbResult,
@@ -384,7 +384,7 @@
 <a href=#384 id=384 data-nosnippet>384</a>                     error: {err}"
 <a href=#385 id=385 data-nosnippet>385</a>                </span>)
 <a href=#386 id=386 data-nosnippet>386</a>            })
-<a href=#387 id=387 data-nosnippet>387</a>    } <span class="kw">else if </span>version &lt; VID2_UPGRADE_VERSION {
+<a href=#387 id=387 data-nosnippet>387</a>    } <span class="kw">else if </span>version &lt; NEW_PROTOCOL_VERSION {
 <a href=#388 id=388 data-nosnippet>388</a>        <span class="kw">let </span>param = init_avidm_param(total_weight).unwrap();
 <a href=#389 id=389 data-nosnippet>389</a>        <span class="kw">let </span>encoded_tx_len = encoded_transactions.len();
 <a href=#390 id=390 data-nosnippet>390</a>        AvidMScheme::commit(

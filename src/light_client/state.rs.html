@@ -849,7 +849,7 @@
 <a href=#849 id=849 data-nosnippet>849</a>    <span class="kw">use </span>hotshot_types::{addr::NetAddr, x25519};
 <a href=#850 id=850 data-nosnippet>850</a>    <span class="kw">use </span>itertools::izip;
 <a href=#851 id=851 data-nosnippet>851</a>    <span class="kw">use </span>pretty_assertions::assert_eq;
-<a href=#852 id=852 data-nosnippet>852</a>    <span class="kw">use </span>versions::{CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+<a href=#852 id=852 data-nosnippet>852</a>    <span class="kw">use </span>versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 <a href=#853 id=853 data-nosnippet>853</a>
 <a href=#854 id=854 data-nosnippet>854</a>    <span class="kw">use </span>super::<span class="kw-2">*</span>;
 <a href=#855 id=855 data-nosnippet>855</a>    <span class="kw">use </span>crate::{
@@ -1356,7 +1356,7 @@
 <a href=#1356 id=1356 data-nosnippet>1356</a>
 <a href=#1357 id=1357 data-nosnippet>1357</a>        <span class="kw">let </span>epoch = genesis.first_epoch_with_dynamic_stake_table;
 <a href=#1358 id=1358 data-nosnippet>1358</a>        <span class="kw">let </span>root_height = root_block_in_epoch(<span class="kw-2">*</span>epoch - <span class="number">1</span>, <span class="number">10</span>);
-<a href=#1359 id=1359 data-nosnippet>1359</a>        client.set_upgrade(root_height, CLIQUENET_VERSION).<span class="kw">await</span>;
+<a href=#1359 id=1359 data-nosnippet>1359</a>        client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).<span class="kw">await</span>;
 <a href=#1360 id=1360 data-nosnippet>1360</a>
 <a href=#1361 id=1361 data-nosnippet>1361</a>        lc.quorum_for_epoch(epoch).<span class="kw">await</span>.unwrap();
 <a href=#1362 id=1362 data-nosnippet>1362</a>
@@ -1400,13 +1400,13 @@
 <a href=#1400 id=1400 data-nosnippet>1400</a>            lower_bound_epoch,
 <a href=#1401 id=1401 data-nosnippet>1401</a>            <span class="kw-2">&amp;</span>prev_state,
 <a href=#1402 id=1402 data-nosnippet>1402</a>            DRB_AND_HEADER_UPGRADE_VERSION,
-<a href=#1403 id=1403 data-nosnippet>1403</a>            CLIQUENET_VERSION,
+<a href=#1403 id=1403 data-nosnippet>1403</a>            NEW_PROTOCOL_VERSION,
 <a href=#1404 id=1404 data-nosnippet>1404</a>        )
 <a href=#1405 id=1405 data-nosnippet>1405</a>        .<span class="kw">await
 <a href=#1406 id=1406 data-nosnippet>1406</a>        </span>.unwrap();
 <a href=#1407 id=1407 data-nosnippet>1407</a>
 <a href=#1408 id=1408 data-nosnippet>1408</a>        client
-<a href=#1409 id=1409 data-nosnippet>1409</a>            .set_upgrade(target_epoch_root, CLIQUENET_VERSION)
+<a href=#1409 id=1409 data-nosnippet>1409</a>            .set_upgrade(target_epoch_root, NEW_PROTOCOL_VERSION)
 <a href=#1410 id=1410 data-nosnippet>1410</a>            .<span class="kw">await</span>;
 <a href=#1411 id=1411 data-nosnippet>1411</a>
 <a href=#1412 id=1412 data-nosnippet>1412</a>        <span class="kw">let </span>err = lc.quorum_for_epoch(target_epoch).<span class="kw">await</span>.unwrap_err();
@@ -1450,7 +1450,7 @@
 <a href=#1450 id=1450 data-nosnippet>1450</a>        .<span class="kw">await
 <a href=#1451 id=1451 data-nosnippet>1451</a>        </span>.unwrap();
 <a href=#1452 id=1452 data-nosnippet>1452</a>
-<a href=#1453 id=1453 data-nosnippet>1453</a>        client.set_upgrade(root_height, CLIQUENET_VERSION).<span class="kw">await</span>;
+<a href=#1453 id=1453 data-nosnippet>1453</a>        client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).<span class="kw">await</span>;
 <a href=#1454 id=1454 data-nosnippet>1454</a>
 <a href=#1455 id=1455 data-nosnippet>1455</a>        <span class="kw">let </span>expected = client.quorum_for_epoch(target_epoch).<span class="kw">await</span>.into();
 <a href=#1456 id=1456 data-nosnippet>1456</a>        <span class="macro">assert_eq!</span>(<span class="kw-2">*</span>lc.quorum_for_epoch(target_epoch).<span class="kw">await</span>.unwrap(), expected);
@@ -1498,7 +1498,7 @@
 <a href=#1498 id=1498 data-nosnippet>1498</a>        );
 <a href=#1499 id=1499 data-nosnippet>1499</a>
 <a href=#1500 id=1500 data-nosnippet>1500</a>        <span class="kw">let </span>epoch = genesis.first_epoch_with_dynamic_stake_table + <span class="number">1</span>;
-<a href=#1501 id=1501 data-nosnippet>1501</a>        db.insert_stake_table(epoch, <span class="kw-2">&amp;</span>state, CLIQUENET_VERSION, CLIQUENET_VERSION)
+<a href=#1501 id=1501 data-nosnippet>1501</a>        db.insert_stake_table(epoch, <span class="kw-2">&amp;</span>state, NEW_PROTOCOL_VERSION, NEW_PROTOCOL_VERSION)
 <a href=#1502 id=1502 data-nosnippet>1502</a>            .<span class="kw">await
 <a href=#1503 id=1503 data-nosnippet>1503</a>            </span>.unwrap();
 <a href=#1504 id=1504 data-nosnippet>1504</a>
