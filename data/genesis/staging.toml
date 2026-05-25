@@ -2,8 +2,8 @@ base_version = "0.8"
 upgrade_version = "0.8"
 genesis_version = "0.8"
 epoch_height = 3000
-drb_difficulty = 5000000000
-drb_upgrade_difficulty = 5000000000
+drb_difficulty = 10
+drb_upgrade_difficulty = 10
 epoch_start_block = 1
 
 [stake_table]
