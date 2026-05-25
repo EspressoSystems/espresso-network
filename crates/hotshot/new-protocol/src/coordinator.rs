@@ -24,7 +24,7 @@ use hotshot_types::{
     vote::HasViewNumber,
 };
 use tokio::{select, sync::oneshot};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
@@ -118,6 +118,7 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         storage: S,
+        garbage_collection_interval: u64,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -128,6 +129,7 @@ where
             upgrade_lock.clone(),
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
+            garbage_collection_interval,
         );
 
         let genesis_cert1 = initializer.high_qc.clone();
@@ -142,8 +144,6 @@ where
             next_drb_result: None,
             state_cert: None,
         };
-        consensus.seed_genesis(genesis_cert1, genesis_proposal);
-
         let mut state_manager = StateManager::new(
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
@@ -153,6 +153,17 @@ where
             initializer.anchor_state.clone(),
             initializer.anchor_leaf.clone(),
         );
+        // The synthetic genesis proposal has a non-null justify_qc (the genesis
+        // cert1) so the leaf derived from it has a different commitment than
+        // the anchor leaf produced by `Leaf2::genesis`. `request_header` for
+        // view 1 looks up the parent state by the *proposal's* leaf
+        // commitment, so seed the same state under that commitment too.
+        state_manager.seed_state(
+            ViewNumber::genesis(),
+            initializer.anchor_state.clone(),
+            Leaf2::from(genesis_proposal.clone()),
+        );
+        consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
         let lock = upgrade_lock.clone();
         Self::builder()
@@ -359,7 +370,6 @@ where
                         if let Err(err) = self
                             .network
                             .apply_epoch(epoch, &self.membership_coordinator)
-                            .await
                         {
                             error!(%epoch, %err, "network apply_epoch failed");
                         }
@@ -832,7 +842,11 @@ where
             StateManagerOutput::Header {
                 response,
                 header: Some(hdr),
-            } => Some(ConsensusInput::HeaderCreated(response.view, hdr)),
+            } => Some(ConsensusInput::HeaderCreated(
+                response.view,
+                proposal_commitment(&response.parent_proposal),
+                hdr,
+            )),
             StateManagerOutput::Header {
                 response,
                 header: None,
@@ -1001,6 +1015,7 @@ where
     }
 
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
+        info!(node = %self.node_id, %view, "garbage collecting");
         self.consensus.gc(view, epoch);
         self.checkpoint_collector.gc(view, epoch);
         let _ = self.network.gc(view); // TODO

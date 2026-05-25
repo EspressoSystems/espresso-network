@@ -48,7 +48,7 @@ pub struct Genesis {
     pub stake_table: Vec<StakeTableEntry<PubKey>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
     /// Maximum number of stake tables to cache in memory at any given time.
@@ -849,7 +849,7 @@ mod test {
     use hotshot_types::{addr::NetAddr, x25519};
     use itertools::izip;
     use pretty_assertions::assert_eq;
-    use versions::{CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::*;
     use crate::{
@@ -1356,7 +1356,7 @@ mod test {
 
         let epoch = genesis.first_epoch_with_dynamic_stake_table;
         let root_height = root_block_in_epoch(*epoch - 1, 10);
-        client.set_upgrade(root_height, CLIQUENET_VERSION).await;
+        client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).await;
 
         lc.quorum_for_epoch(epoch).await.unwrap();
 
@@ -1400,13 +1400,13 @@ mod test {
             lower_bound_epoch,
             &prev_state,
             DRB_AND_HEADER_UPGRADE_VERSION,
-            CLIQUENET_VERSION,
+            NEW_PROTOCOL_VERSION,
         )
         .await
         .unwrap();
 
         client
-            .set_upgrade(target_epoch_root, CLIQUENET_VERSION)
+            .set_upgrade(target_epoch_root, NEW_PROTOCOL_VERSION)
             .await;
 
         let err = lc.quorum_for_epoch(target_epoch).await.unwrap_err();
@@ -1450,7 +1450,7 @@ mod test {
         .await
         .unwrap();
 
-        client.set_upgrade(root_height, CLIQUENET_VERSION).await;
+        client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).await;
 
         let expected = client.quorum_for_epoch(target_epoch).await.into();
         assert_eq!(*lc.quorum_for_epoch(target_epoch).await.unwrap(), expected);
@@ -1486,10 +1486,19 @@ mod test {
         used_schnorr.insert(complete.state_ver_key.clone());
         used_schnorr.insert(incomplete.state_ver_key.clone());
 
-        let state = StakeTableState::new(validators, Default::default(), used_bls, used_schnorr);
+        let mut used_x25519 = HashSet::default();
+        used_x25519.insert(complete.x25519_key.unwrap());
+
+        let state = StakeTableState::new(
+            validators,
+            Default::default(),
+            used_bls,
+            used_schnorr,
+            used_x25519,
+        );
 
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
-        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, CLIQUENET_VERSION)
+        db.insert_stake_table(epoch, &state, NEW_PROTOCOL_VERSION, NEW_PROTOCOL_VERSION)
             .await
             .unwrap();
 

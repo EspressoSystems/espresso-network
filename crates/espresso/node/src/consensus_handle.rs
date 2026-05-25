@@ -30,7 +30,7 @@ use hotshot_types::{
 };
 use tokio::spawn;
 use tokio_util::task::AbortOnDropHandle;
-use versions::version;
+use versions::NEW_PROTOCOL_VERSION;
 
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 // vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
@@ -182,7 +182,7 @@ where
             .hotshot
             .upgrade_lock
             .version_infallible(view)
-            >= version(0, 8)
+            >= NEW_PROTOCOL_VERSION
     }
 
     async fn new_protocol(&self) -> bool {
@@ -230,16 +230,15 @@ where
         self.legacy_handle.read().await.decided_leaf().await
     }
 
-    pub async fn decided_state(&self) -> Arc<T::ValidatedState> {
+    pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
         if self.new_protocol().await {
             return self
                 .client_api
                 .decided_state()
                 .await
-                .expect("coordinator channel closed")
-                .expect("decided state must exist");
+                .expect("coordinator channel closed");
         }
-        self.legacy_handle.read().await.decided_state().await
+        Some(self.legacy_handle.read().await.decided_state().await)
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {

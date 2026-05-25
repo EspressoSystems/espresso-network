@@ -58,8 +58,7 @@ impl TestHarness {
         let state_private_key = state_key_pair.sign_key_ref().clone();
         let instance = Arc::new(TestInstanceState::default());
         let (membership, storage, client) =
-            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key)
-                .await;
+            mock_membership_with_num_nodes(HARNESS_NUM_NODES, HARNESS_EPOCH_HEIGHT, public_key);
         let upgrade_lock = test_upgrade_lock();
 
         let epoch_manager = EpochManager::new(10, membership.clone());
@@ -74,8 +73,11 @@ impl TestHarness {
             EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
         let genesis_state = TestValidatedState::default();
+        // Use the same version as `TestViewGenerator` (vid2) so the genesis
+        // leaf commitment matches the `parent_commitment` carried by the
+        // first proposal from `TestData`.
         let genesis_leaf =
-            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.test.base).await;
+            Leaf2::<TestTypes>::genesis(&genesis_state, &instance, TEST_VERSIONS.vid2.base).await;
 
         let consensus = Consensus::new(
             membership.clone(),
@@ -86,6 +88,7 @@ impl TestHarness {
             upgrade_lock.clone(),
             genesis_leaf.clone(),
             epoch_height,
+            100,
         );
 
         let vid_disperse_task = VidDisperser::new(membership.clone());

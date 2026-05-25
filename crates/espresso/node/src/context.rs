@@ -2,6 +2,7 @@ use std::{
     fmt::{Debug, Display},
     future::Future,
     marker::PhantomData,
+    num::NonZeroU64,
     sync::Arc,
     time::Duration,
 };
@@ -117,6 +118,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
+        new_protocol_consensus_gc_interval: NonZeroU64,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -188,10 +190,7 @@ where
         // cliquenet this dials the N-1/N/N+1 sliding window for the current
         // epoch before consensus starts.
         let mut coordinator_network = coordinator_network;
-        if let Err(err) = coordinator_network
-            .apply_epoch(current_epoch, &membership_coordinator)
-            .await
-        {
+        if let Err(err) = coordinator_network.apply_epoch(current_epoch, &membership_coordinator) {
             tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }
 
@@ -214,6 +213,7 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
+            .garbage_collection_interval(new_protocol_consensus_gc_interval.get())
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
@@ -422,7 +422,7 @@ where
         self.consensus_handle.state(view).await
     }
 
-    pub async fn decided_state(&self) -> Arc<ValidatedState> {
+    pub async fn decided_state(&self) -> Option<Arc<ValidatedState>> {
         self.consensus_handle.decided_state().await
     }
 

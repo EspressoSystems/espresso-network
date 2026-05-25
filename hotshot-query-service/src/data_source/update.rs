@@ -19,7 +19,10 @@ use committable::Committable;
 use futures::future::Future;
 use hotshot::types::EventType;
 use hotshot_types::{
-    data::{Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ns_table::parse_ns_table},
+    data::{
+        Leaf2, VidCommitment, VidCommon, VidDisperseShare, VidShare, ViewNumber,
+        ns_table::parse_ns_table,
+    },
     event::LeafInfo,
     new_protocol::CoordinatorEvent,
     traits::{
@@ -183,7 +186,7 @@ where
                             Some(VidShare::V2(share.share.clone())),
                         ),
                         None => {
-                            if leaf2.view_number().u64() == 0 {
+                            if leaf2.view_number() == ViewNumber::genesis() {
                                 // HotShot does not run VID in consensus for the genesis block. In
                                 // this case, the block payload is guaranteed to always be empty, so
                                 // VID isn't really necessary. But for consistency, we will still
@@ -282,7 +285,25 @@ where
                             )),
                             Some(VidShare::V2(share.share.clone())),
                         ),
-                        Some(_) | None => (None, None),
+                        Some(_) => (None, None),
+                        None => {
+                            if leaf.view_number() == ViewNumber::genesis() {
+                                // HotShot does not run VID in consensus for the genesis block. In
+                                // this case, the block payload is guaranteed to always be empty, so
+                                // VID isn't really necessary. But for consistency, we will still
+                                // store the VID dispersal data, computing it ourselves based on the
+                                // well-known genesis VID commitment.
+                                match genesis_vid(leaf) {
+                                    Ok((common, share)) => (Some(common), Some(share)),
+                                    Err(err) => {
+                                        tracing::warn!("failed to compute genesis VID: {err:#}");
+                                        (None, None)
+                                    },
+                                }
+                            } else {
+                                (None, None)
+                            }
+                        },
                     };
 
                     if vid_common.is_none() {

@@ -5,7 +5,6 @@ use std::{ops::Range, vec};
 use anyhow::anyhow;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use jf_merkle_tree::{MerkleTreeScheme, append_only::MerkleTree as JfMerkleTree};
-use jf_utils::canonical;
 use p3_maybe_rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tagged_base64::tagged;
@@ -59,10 +58,8 @@ pub struct AvidmGf2Share {
     /// Range of this share in the encoded payload.
     range: Range<usize>,
     /// Actual share content.
-    #[serde(with = "canonical")]
     payload: Vec<Vec<u8>>,
     /// Merkle proof of the content.
-    #[serde(with = "canonical")]
     mt_proofs: Vec<MerkleProof>,
 }
 
