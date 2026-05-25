@@ -691,30 +691,32 @@ where
                     );
                 });
             },
-            ConsensusOutput::SendBlockToLeader { next_leader, block } => {
-                let view = block.view;
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::BlockPush(block)),
-                };
-                crate::trace_leader_event!(
-                    self.consensus.tracer,
-                    view,
-                    crate::leader_trace::LeaderEvent::BlockPushUnicastStart
-                );
-                if let Err(err) = self.network.unicast(view, &next_leader, &message) {
-                    let err = CoordinatorError::from(err).context("block push unicast");
-                    if err.severity == Severity::Critical {
-                        return Err(err);
-                    } else {
-                        warn!(%err, %view, "network error while pushing block to next leader");
-                    }
-                }
-                crate::trace_leader_event!(
-                    self.consensus.tracer,
-                    view,
-                    crate::leader_trace::LeaderEvent::BlockPushUnicastEnd
-                );
+            ConsensusOutput::SendBlockToLeader { .. } => {
+                // disable moonshot
+
+                // let view = block.view;
+                // let message = Message {
+                //     sender: self.public_key.clone(),
+                //     message_type: MessageType::Consensus(ConsensusMessage::BlockPush(block)),
+                // };
+                // crate::trace_leader_event!(
+                //     self.consensus.tracer,
+                //     view,
+                //     crate::leader_trace::LeaderEvent::BlockPushUnicastStart
+                // );
+                // if let Err(err) = self.network.unicast(view, &next_leader, &message) {
+                //     let err = CoordinatorError::from(err).context("block push unicast");
+                //     if err.severity == Severity::Critical {
+                //         return Err(err);
+                //     } else {
+                //         warn!(%err, %view, "network error while pushing block to next leader");
+                //     }
+                // }
+                // crate::trace_leader_event!(
+                //     self.consensus.tracer,
+                //     view,
+                //     crate::leader_trace::LeaderEvent::BlockPushUnicastEnd
+                // );
             },
             ConsensusOutput::SendTimeoutVote(vote, lock) => {
                 let message = Message {
