@@ -96,7 +96,11 @@ where
         .load_earliest_cert2(requested_height)
         .await
         .map_err(internal)?
-        .ok_or_else(|| not_found("no cert2 finality proof available"))?;
+        .ok_or_else(|| {
+            not_found(format!(
+                "no cert2 finality proof available at or after height {requested_height}"
+            ))
+        })?;
 
     let cert2_height = cert2.data.block_number;
     if cert2_height < requested_height {
