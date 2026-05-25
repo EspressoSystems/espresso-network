@@ -42,7 +42,7 @@ lazy_static! {
 }
 
 use super::exponential_backoff::ExponentialBackoff;
-use crate::network::{ClientRequest, NetworkEvent};
+use crate::network::{ClientRequest, NetworkEvent, log_summary::LogEvent};
 
 /// Behaviour wrapping libp2p's kademlia
 /// included:
@@ -184,7 +184,9 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
             // The key already exists in the cache, send the value to all channels
             for chan in chans {
                 if chan.send(entry.value.clone()).is_err() {
-                    warn!("Get DHT: channel closed before get record request result could be sent");
+                    debug!(
+                        "Get DHT: channel closed before get record request result could be sent"
+                    );
                 }
             }
         } else {
@@ -280,7 +282,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     },
                 },
                 Err(err) => {
-                    warn!("Error in Kademlia query: {err:?}");
+                    LogEvent::DhtKadQueryError.record();
+                    debug!("Error in Kademlia query: {err:?}");
                     false
                 },
             },
@@ -323,7 +326,7 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     // Send the record to all channels that are still open
                     for n in notify {
                         if n.send(record.value.clone()).is_err() {
-                            warn!(
+                            debug!(
                                 "Get DHT: channel closed before get record request result could \
                                  be sent"
                             );
@@ -334,25 +337,23 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                 }
             }
             // disagreement => query more nodes
-            else {
-                // there is some internal disagreement or not enough nodes returned
-                // Initiate new query that hits more replicas
-                if retry_count > 0 {
-                    let new_retry_count = retry_count - 1;
-                    warn!(
-                        "Get DHT: Internal disagreement for get dht request {progress:?}! \
-                         requerying with more nodes. {new_retry_count:?} retries left"
-                    );
-                    self.retry_get(KadGetQuery {
-                        backoff,
-                        progress: DHTProgress::NotStarted,
-                        notify,
-                        key,
-                        retry_count: new_retry_count,
-                        records: Vec::new(),
-                    });
-                }
-                warn!(
+            else if retry_count > 0 {
+                let new_retry_count = retry_count - 1;
+                debug!(
+                    "Get DHT: Internal disagreement for get dht request {progress:?}! requerying \
+                     with more nodes. {new_retry_count:?} retries left"
+                );
+                self.retry_get(KadGetQuery {
+                    backoff,
+                    progress: DHTProgress::NotStarted,
+                    notify,
+                    key,
+                    retry_count: new_retry_count,
+                    records: Vec::new(),
+                });
+            } else {
+                LogEvent::DhtDisagreementGivenUp.record();
+                debug!(
                     "Get DHT: Internal disagreement for get dht request {progress:?}! Giving up \
                      because out of retries. "
                 );
@@ -438,7 +439,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> DHTBehaviour<K, D> {
                     if let Some(chan) = self.in_progress_get_closest_peers.remove(&query_id) {
                         let _: Result<_, _> = chan.send(());
                     };
-                    warn!("Failed to get closest peers: {e:?}");
+                    LogEvent::DhtClosestPeersFailure.record();
+                    debug!("Failed to get closest peers: {e:?}");
                 },
             },
             KademliaEvent::OutboundQueryProgressed {
