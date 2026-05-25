@@ -329,8 +329,8 @@ where
         self.data_source.append(info).await
     }
 
-    async fn store_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        self.data_source.store_payload(block).await
+    async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        self.data_source.append_payload(block).await
     }
 }
 

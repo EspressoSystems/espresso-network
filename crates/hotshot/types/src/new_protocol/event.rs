@@ -35,7 +35,7 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
     /// Emitted when a node has reconstructed a block payload from VID shares.
     /// Lets downstream consumers (e.g. query service) fill in a payload that
     /// was missing when the corresponding view was decided.
-    PayloadAvailable {
+    BlockPayloadReconstructed {
         view: ViewNumber,
         header: TYPES::BlockHeader,
         payload: TYPES::BlockPayload,
@@ -68,8 +68,8 @@ impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
             Self::ExternalMessageReceived { .. } => {
                 write!(f, "ExternalMessageReceived")
             },
-            Self::PayloadAvailable { view, .. } => {
-                write!(f, "PayloadAvailable: view={view}")
+            Self::BlockPayloadReconstructed { view, .. } => {
+                write!(f, "BlockPayloadReconstructed: view={view}")
             },
         }
     }

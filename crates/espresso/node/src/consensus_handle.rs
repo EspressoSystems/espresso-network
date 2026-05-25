@@ -87,11 +87,11 @@ where
                 sender: sender.clone(),
             })
         },
-        ConsensusOutput::PayloadAvailable {
+        ConsensusOutput::BlockPayloadReconstructed {
             view,
             header,
             payload,
-        } => Some(CoordinatorEvent::PayloadAvailable {
+        } => Some(CoordinatorEvent::BlockPayloadReconstructed {
             view: *view,
             header: header.clone(),
             payload: payload.clone(),

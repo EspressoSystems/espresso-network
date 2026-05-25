@@ -859,10 +859,14 @@ where
         Ok(())
     }
 
-    async fn store_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        // Write to storage and notify any pending fetchers waiting on this height. Idempotent: if
-        // the block was already stored (e.g. by a decide event that arrived with the payload), the
-        // upsert path inside `insert_block` short-circuits and the notify is a cheap no-op.
+    /// Append a payload for a block whose leaf was already decided without one.
+    ///
+    /// In the new protocol, decide events can arrive before VID reconstruction
+    /// has produced the block payload, so [`append`](Self::append) may persist
+    /// a leaf with no payload attached. The payload is then back-filled here
+    /// once it becomes available, leaving the rest of the block info untouched.
+    async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        // Write to storage and notify any pending fetchers waiting on this height.
         self.fetcher.store(&block).await;
         block.notify(&self.fetcher.notifiers).await;
         Ok(())
