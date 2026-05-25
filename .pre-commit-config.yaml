@@ -1,9 +1,4 @@
-# Source of truth for pre-commit hooks. Run by `prek` (Rust
-# reimplementation of pre-commit) — `prek install` installs the git hook
-# from the espresso-network default devShell on first entry.
-#
-# All hook entries call commands by name; the tools come from
-# `nix develop` (default shell) — see flake.nix.
+# Hooks run by `prek` (rust pre-commit). Tools come from `nix develop`.
 repos:
   - repo: local
     hooks:

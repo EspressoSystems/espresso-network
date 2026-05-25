@@ -54,13 +54,11 @@
       rustEnvVars = { inherit RUST_LOG RUST_BACKTRACE; };
 
       rustShellHook = ''
-        # on mac os `bin/pwd -P` returns the canonical path on case insensitive file-systems
+        # `bin/pwd -P` for macOS case-insensitive filesystems
         my_pwd=$(/bin/pwd -P 2> /dev/null || pwd)
 
-        # Use a distinct target dir for builds from within nix shells.
+        # Distinct from non-nix `target/` so they don't fight
         export CARGO_TARGET_DIR="$my_pwd/target/nix"
-
-        # Add rust binaries to PATH
         export PATH="$CARGO_TARGET_DIR/debug:$PATH"
       '';
 
@@ -71,9 +69,6 @@
       pkgs = import nixpkgs { inherit system overlays; };
       inherit (pkgs) lib stdenv;
 
-      # Local custom packages — kept out of `overlays` so they don't add
-      # an extra layer on top of every `pkgs.*` access. Referenced directly
-      # from the shells that need them.
       solhint = pkgs.callPackage ./nix/solhint { };
       pup = pkgs.callPackage ./nix/pup { };
       golangci-lint = pkgs.golangci-lint.overrideAttrs (old: rec {
@@ -90,7 +85,7 @@
         exec ${pkgs.prek}/bin/prek "$@"
       '';
       myShell = pkgs.mkShellNoCC.override (lib.optionalAttrs stdenv.isLinux {
-        # The mold linker is around 50% faster on Linux than the default linker.
+        # mold linker, ~50% faster on Linux
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.clangStdenv;
       });
       crossShell = { config }:
@@ -115,24 +110,19 @@
       devShells.default =
         let
           stableToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
-          # Pinned (was `selectLatestNightlyWith`, which iterates the entire
-          # rust-overlay nightly attrset). Bump as needed when a newer
-          # rust-analyzer/rustfmt is wanted.
+          # Bump the date when a newer rust-analyzer/rustfmt is wanted.
           nightlyToolchain = pkgs.rust-bin.nightly."2026-04-16".minimal.override {
             extensions = [ "rust-analyzer" "rustfmt" ];
           };
         in
         myShell (rustEnvVars // {
           packages = with pkgs; [
-            # Rust dependencies
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # libp2p-autonat
             stableToolchain
             jq
-
-            # Rust tools
             cargo-audit
             cargo-edit
             cargo-hack
@@ -142,59 +132,40 @@
             just
             nightlyToolchain.passthru.availableComponents.rust-analyzer
             nightlyToolchain.passthru.availableComponents.rustfmt
-
-            # Tools
             nixpkgs-fmt
             prek
-            prek-as-pre-commit # compat to allow running pre-commit
+            prek-as-pre-commit # `pre-commit` alias for muscle memory
             process-compose
-            entr # file-watcher
-            pup # html parser, used for Datadog log queries — see nix/pup/README.md
-            lazydocker # docker compose TUI, used by `just demo-docker`
+            entr
+            pup # html parser for Datadog log queries
+            lazydocker # used by `just demo-docker`
             bc # used by scripts/verify-pos-deployment.sh
-
-            # Ethereum contracts, solidity, ...
-            # foundry is here because `anvil` (bundled inside it) is used
-            # as an EVM test node by Rust tests. Other foundry tools
-            # (forge / cast / chisel) and `solc` live in `.#contracts`.
+            # foundry kept for `anvil`; forge/cast/chisel/solc are in `.#contracts`
             foundry
             nodePackages.prettier
             solhint
-            libusb1 # link-time dep of `libusb1-sys` Rust crate
+            libusb1 # link-time dep of `libusb1-sys` crate
           ] ++ lib.optionals stdenv.isDarwin [ pkgs.darwin.libresolv ];
           shellHook = ''
             ${rustShellHook}
 
-            # Add the local scripts to the PATH
             export PATH="$my_pwd/scripts:$PATH"
 
-            # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
-            # with rustup installations.
+            # Avoid clash with rustup's ~/.cargo
             export CARGO_HOME=$HOME/.cargo-nix
 
-            # Install a nix-aware pre-commit hook that runs prek with
-            # the committed .pre-commit-config.yaml. If the user is
-            # already inside this dev shell (or any shell with the hook
-            # tools on PATH), the hook calls prek directly. If they're
-            # outside (e.g. committing from an IDE), it re-enters
-            # `nix develop` first so rustfmt/forge/solhint/etc. resolve.
-            # Rewritten unconditionally on every shell entry so updates
-            # propagate. If you want a customised hook, put it under a
-            # different name (git only runs `.git/hooks/pre-commit`).
+            # Install pre-commit hook. Rewritten on every shell entry so updates propagate.
             if [ -d .git ] && [ -f .pre-commit-config.yaml ]; then
               mkdir -p .git/hooks
               cat > .git/hooks/pre-commit <<'HOOK'
             #!/usr/bin/env bash
-            # espresso-network-precommit-hook — managed by flake.nix.
-            # Runs prek against the committed .pre-commit-config.yaml,
-            # entering the nix dev shell first if necessary so the hook
-            # tools resolve.
+            # espresso-network-precommit-hook — managed by flake.nix
             set -e
             if command -v prek >/dev/null 2>&1 && command -v rustfmt >/dev/null 2>&1; then
               exec prek run --hook-stage=pre-commit "$@"
             fi
-            # Force experimental features on for users whose nix.conf
-            # doesn't enable nix-command/flakes by default.
+            # Re-enter nix shell for commits made outside it (IDE etc.).
+            # Force experimental features in case the user's nix.conf doesn't enable them.
             export NIX_CONFIG="''${NIX_CONFIG:-}"$'\nexperimental-features = nix-command flakes'
             exec nix develop --quiet --accept-flake-config -c prek run --hook-stage=pre-commit "$@"
             HOOK
@@ -203,25 +174,14 @@
           '';
           RUST_SRC_PATH = "${stableToolchain}/lib/rustlib/src/rust/library";
         });
-      # Opt-in shell for rebuilding architecture diagrams and the mdbook
-      # site (`make doc`). Pulled out of default to trim ~80K derivation
-      # constructions during eval.
       devShells.docs = pkgs.mkShellNoCC {
         packages = with pkgs; [ graphviz plantuml mdbook ];
       };
 
-      # Opt-in shell for working on the Go SDK under `sdks/go/`. The full
-      # toolchain is heavy at eval time (~200K thunks); CI doesn't run it
-      # against this repo, and most contributors don't touch Go daily.
       devShells.go = pkgs.mkShellNoCC {
         packages = [ pkgs.go golangci-lint ];
       };
 
-      # Add-on shell for smart-contract work: default + `solc` +
-      # `go-ethereum` (abigen) + `FOUNDRY_SOLC`. Rust tests that touch
-      # contracts often need both `forge` / `anvil` (in default) and
-      # `solc` (here), so contracts is layered on top of default rather
-      # than being a separate minimal shell.
       devShells.contracts =
         let
           solc = pkgs.solc-bin."0.8.28";
@@ -235,21 +195,11 @@
           FOUNDRY_SOLC = "${solc}/bin/solc";
         };
 
-      # Add-on shell for mutation testing via `dregs`. Layered on
-      # contracts (which itself is layered on default) so rust + forge
-      # + solc + abigen are all available alongside dregs. Isolated
-      # because dregs's flake graph is by far the heaviest eval cost of
-      # any single tool in this repo (~3.4M values) — no reason to pay
-      # for it during daily contract work.
       devShells.mutation = pkgs.mkShellNoCC {
         inputsFrom = [ self.devShells.${system}.contracts ];
         packages = [ dregs.packages.${system}.unwrapped ];
       };
 
-      # Opt-in shell for the Python helper scripts under `scripts/` —
-      # `just py-fmt` / `just py-check` etc. CI calls these scripts with
-      # the GitHub-Actions-provided python3, not via nix, so the default
-      # shell doesn't need them.
       devShells.python = pkgs.mkShellNoCC {
         packages = with pkgs; [ python3 ruff ty ];
       };
@@ -276,11 +226,10 @@
         in
         myShell (rustEnvVars // {
           packages = with pkgs; [
-            # Rust dependencies
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # libp2p-autonat
             toolchain
           ];
           shellHook = rustShellHook;
@@ -291,11 +240,10 @@
         in
         myShell (rustEnvVars // {
           packages = with pkgs; [
-            # Rust dependencies
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # libp2p-autonat
             toolchain
             grcov
           ];
@@ -315,17 +263,16 @@
         in
         myShell (rustEnvVars // {
           packages = with pkgs; [
-            # Rust dependencies
             pkg-config
             openssl
             curl
-            protobuf # to compile libp2p-autonat
+            protobuf # libp2p-autonat
             stableToolchain
           ];
           shellHook = rustShellHook;
         });
 
-      # A separate dev-shell due to large size of dependencies (incl. ghc)
+      # Separated due to ghc dep size.
       devShells.echidna =
         let
           solc = pkgs.solc-bin."0.8.28";
@@ -333,11 +280,8 @@
         in
         myShell {
           packages = [
-            # Foundry tools
             pkgs.foundry
             solc
-
-            # Security analysis tools
             echidna-pkgs.slither-analyzer
             echidna-pkgs.echidna
             echidna-pkgs.python3.pkgs.crytic-compile
