@@ -1526,11 +1526,6 @@ impl<T: NodeType> Consensus<T> {
                 *self.epoch_height,
             )
         {
-            // Verify we have the block for the QC on this commitment
-            let Some(block_commitment) = self.blocks_reconstructed.get(&parent_view) else {
-                debug!(%view, %parent_view, "block commitment not available");
-                return;
-            };
             let Some(prev_proposal) = self.proposals.get(&parent_view) else {
                 debug!(%view, %parent_view, "proposal not available");
                 return;
@@ -1539,6 +1534,11 @@ impl<T: NodeType> Consensus<T> {
             let parent_epoch = prev_proposal.epoch;
 
             if !parent_is_pre_cutover {
+                // Verify we have the block for the QC on this commitment
+                let Some(block_commitment) = self.blocks_reconstructed.get(&parent_view) else {
+                    debug!(%view, %parent_view, "block commitment not available");
+                    return;
+                };
                 let VidCommitment::V2(prev_block_commitment) =
                     prev_proposal.block_header.payload_commitment()
                 else {
