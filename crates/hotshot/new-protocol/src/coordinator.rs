@@ -144,8 +144,6 @@ where
             next_drb_result: None,
             state_cert: None,
         };
-        consensus.seed_genesis(genesis_cert1, genesis_proposal);
-
         let mut state_manager = StateManager::new(
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
@@ -155,6 +153,17 @@ where
             initializer.anchor_state.clone(),
             initializer.anchor_leaf.clone(),
         );
+        // The synthetic genesis proposal has a non-null justify_qc (the genesis
+        // cert1) so the leaf derived from it has a different commitment than
+        // the anchor leaf produced by `Leaf2::genesis`. `request_header` for
+        // view 1 looks up the parent state by the *proposal's* leaf
+        // commitment, so seed the same state under that commitment too.
+        state_manager.seed_state(
+            ViewNumber::genesis(),
+            initializer.anchor_state.clone(),
+            Leaf2::from(genesis_proposal.clone()),
+        );
+        consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
         let lock = upgrade_lock.clone();
         Self::builder()
@@ -309,11 +318,6 @@ where
                         warn!(%view, %epoch, "timeout: no vote1 received for this view");
                     }
                     let input = ConsensusInput::Timeout(view, epoch);
-                    // Timer is only reset so we can resend the timeout vote
-                    // This isn't strictly necessary for the protocol, but it's a good idea to
-                    // resend the timeout vote to avoid a situation where the network is stuck
-                    // view because we fail to form a timeout certificate.
-                    self.timer.reset();
                     return Ok(input)
                 }
                 Some(output) = self.state_manager.next() => {
