@@ -758,6 +758,16 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
         self.version_infallible(view) >= NEW_PROTOCOL_VERSION
     }
 
+    /// Return whether the new protocol (HotShot 0.8) is active for the given view.
+    ///
+    /// Once true for any view, all consensus messages tagged with versions strictly
+    /// less than `NEW_PROTOCOL_VERSION` should be ignored at the legacy task layer
+    /// for that view onward. The wire-level deserialize already rejects
+    /// version-mismatched messages via [`Self::version`].
+    pub fn new_protocol_active(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= NEW_PROTOCOL_VERSION
+    }
+
     /// Serialize a message with a version number, using `message.view_number()`
     /// and an optional decided upgrade certificate to determine the message's
     /// version.

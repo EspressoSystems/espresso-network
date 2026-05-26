@@ -19,7 +19,7 @@ use hotshot_types::{
 use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     client::CoordinatorClient,
-    consensus::Consensus,
+    consensus::{Consensus, PreCutoverSeed},
     coordinator::{Coordinator, timer::Timer},
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
@@ -33,12 +33,7 @@ use crate::{
     vote::VoteCollector,
 };
 
-/// Build a [`Coordinator`] for testing with an externally provided network.
-///
-/// The coordinator is fully bootstrapped: consensus is seeded with a genesis
-/// certificate and proposal so that the view-1 leader can propose without any
-/// external injection.  The initial `ViewChanged` and (for the leader)
-/// `RequestBlockAndHeader` outputs are already queued in the outbox.
+#[allow(clippy::too_many_arguments)]
 pub async fn build_test_coordinator<N: Network<TestTypes>>(
     node_index: u64,
     network: N,
@@ -47,6 +42,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
+    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
 ) -> Coordinator<TestTypes, N, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
@@ -98,6 +94,19 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         genesis_leaf.clone(),
     );
 
+    if let Some(seed) = pre_cutover_seed.as_ref() {
+        let anchor_view = seed.decided_anchor.view_number();
+        if let Some(state) = seed.validated_states.get(&anchor_view).cloned() {
+            state_manager.seed_state(anchor_view, state, seed.decided_anchor.clone());
+        }
+        for leaf in &seed.undecided {
+            let view = leaf.view_number();
+            if let Some(state) = seed.validated_states.get(&view).cloned() {
+                state_manager.seed_state(view, state, leaf.clone());
+            }
+        }
+    }
+
     // Build a genesis cert1 and proposal so consensus can self-start.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
@@ -113,9 +122,10 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     );
     consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
 
-    // Seed the genesis proposal into the backing TestStorage so that
-    // peers can serve the genesis block to late-joiners during
-    // `EpochMembershipCoordinator::catchup` (epoch 0 root block == 0).
+    if let Some(seed) = pre_cutover_seed {
+        consensus.apply_pre_cutover_seed(seed);
+    }
+
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2 {
             block_header: genesis_leaf.block_header().clone(),
@@ -188,7 +198,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
 ///
 /// Uses `QuorumCertificate2::new` with `None` signatures, matching the
 /// pattern used by `Leaf2::genesis` for its justify_qc.
-fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
+pub(crate) fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestTypes> {
     let data = QuorumData2 {
         leaf_commit: genesis_leaf.commit(),
         epoch: Some(EpochNumber::genesis()),
@@ -204,7 +214,7 @@ fn build_genesis_cert1(genesis_leaf: &Leaf2<TestTypes>) -> Certificate1<TestType
 }
 
 /// Create a genesis `Proposal` from the genesis leaf and cert.
-fn build_genesis_proposal(
+pub(crate) fn build_genesis_proposal(
     genesis_leaf: &Leaf2<TestTypes>,
     genesis_cert1: &Certificate1<TestTypes>,
 ) -> Proposal<TestTypes> {
