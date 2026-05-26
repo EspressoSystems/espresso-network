@@ -39,12 +39,15 @@ pub fn display_stake_table(
 
     for validator in stake_table.iter() {
         let comm: Commission = validator.commission.try_into()?;
-        let bls_key = validator.stake_table_key.to_string();
+        let bls_key = match &validator.stake_table_key {
+            Some(key) => key.to_string(),
+            None => "<no_bls_key>".to_string(),
+        };
         let key_str = if compact {
             let end = bls_key.chars().map(|c| c.len_utf8()).take(40).sum();
             format!("{}..", &bls_key[..end])
         } else {
-            bls_key.to_string()
+            bls_key.clone()
         };
         output_success(format!(
             "Validator {}: {key_str} comm={comm} stake={} ESP",

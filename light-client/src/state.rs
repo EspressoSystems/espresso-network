@@ -667,7 +667,7 @@ fn stake_table_state_to_quorum(state: StakeTableState) -> Result<StakeTable> {
     Ok(active_validators
         .into_values()
         .map(|validator| StakeTableEntry {
-            stake_key: validator.stake_table_key,
+            stake_key: *validator.stake_table_key(),
             stake_amount: validator.stake,
         })
         .collect())
