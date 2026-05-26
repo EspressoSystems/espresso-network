@@ -436,6 +436,8 @@ where
                             block.payload.metadata.clone(),
                             block.payload_commitment,
                         );
+                        // We built this block; skip reconstructing it from our own loopback share.
+                        self.vid_reconstructor.mark_reconstructed(block.view);
                         self.unicast_to_leader(
                             next_view,
                             epoch,
