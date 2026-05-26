@@ -1,5 +1,4 @@
 use crate::{
-    data::ViewNumber,
     event::{Event, LeafInfo},
     message::Proposal as SignedProposal,
     new_protocol::Proposal,
@@ -20,9 +19,6 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
         cert1: SimpleCertificate<TYPES, QuorumData2<TYPES>, SuccessThreshold>,
         /// Cert2 which finalizes the most recent leaf in the chain
         cert2: Option<SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>>,
-    },
-    ViewChanged {
-        view_number: ViewNumber,
     },
     QuorumProposal {
         proposal: SignedProposal<TYPES, Proposal<TYPES>>,
@@ -46,9 +42,6 @@ impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
                     .map(|info| *info.leaf.view_number())
                     .unwrap_or_default();
                 write!(f, "NewDecide: view={view}")
-            },
-            Self::ViewChanged { view_number } => {
-                write!(f, "ViewChanged: view={view_number}")
             },
             Self::QuorumProposal { proposal, .. } => {
                 write!(
