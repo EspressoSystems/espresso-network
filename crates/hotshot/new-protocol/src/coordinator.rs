@@ -1087,7 +1087,7 @@ where
 
                 let cur_view = self.consensus.current_view();
                 if self.consensus.timeout_cert_at(cur_view).is_some() {
-                    self.resume_after_cutover_tc().await;
+                    self.resume_after_cutover_tc();
                 } else if cur_view + 1 == cutover_view
                     && self.consensus.cert1_at(cur_view).is_some()
                     && self.consensus.proposal_at(cur_view).is_some()
