@@ -1,4 +1,5 @@
 use crate::{
+    data::ViewNumber,
     event::{Event, LeafInfo},
     message::Proposal as SignedProposal,
     new_protocol::Proposal,
