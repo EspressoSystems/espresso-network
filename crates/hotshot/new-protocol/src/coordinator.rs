@@ -442,10 +442,17 @@ where
                         self.storage.append_da(
                             out.view,
                             out.epoch,
-                            out.payload,
-                            out.metadata,
+                            out.payload.clone(),
+                            out.metadata.clone(),
                             VidCommitment::V2(out.payload_commitment),
                         );
+                        if let Some(proposal) = self.consensus.proposal_at(out.view) {
+                            self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
+                                view: out.view,
+                                header: proposal.block_header.clone(),
+                                payload: out.payload,
+                            });
+                        }
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
                     Err(()) => {
@@ -739,6 +746,7 @@ where
                     self.epoch_manager.request_drb_result(next_epoch + 1);
                 }
             },
+            ConsensusOutput::BlockPayloadReconstructed { .. } => {},
         }
         Ok(())
     }
