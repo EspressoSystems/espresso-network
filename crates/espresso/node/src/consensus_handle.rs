@@ -78,9 +78,6 @@ where
                 cert2: cert2.clone(),
             })
         },
-        ConsensusOutput::ViewChanged(view, _epoch) => {
-            Some(CoordinatorEvent::ViewChanged { view_number: *view })
-        },
         ConsensusOutput::ProposalValidated { proposal, sender } => {
             Some(CoordinatorEvent::QuorumProposal {
                 proposal: proposal.clone(),
