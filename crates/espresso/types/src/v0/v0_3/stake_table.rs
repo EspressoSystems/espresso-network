@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::task::JoinHandle;
 use vbs::version::Version;
-use versions::CLIQUENET_VERSION;
+use versions::NEW_PROTOCOL_VERSION;
 
 use super::L1Client;
 use crate::{
@@ -122,9 +122,9 @@ impl<KEY: SignatureKey> AuthenticatedValidator<KEY> {
     /// onward, roots are post-CLIQUENET and this filter applies.
     ///
     /// Operators are warned at startup on the version immediately preceding
-    /// CLIQUENET if their on-chain entry is missing network info.
+    /// NEW_PROTOCOL if their on-chain entry is missing network info.
     pub fn is_eligible(&self, protocol_version: Version) -> bool {
-        if protocol_version >= CLIQUENET_VERSION
+        if protocol_version >= NEW_PROTOCOL_VERSION
             && (self.x25519_key.is_none() || self.p2p_addr.is_none())
         {
             return false;

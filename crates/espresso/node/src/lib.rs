@@ -464,10 +464,10 @@ where
             );
 
             // Publish our cliquenet `connect_info` into the stake table from
-            // `CLIQUENET_VERSION` on, so peers can dial us. Modify `validator_config`
+            // `NEW_PROTOCOL_VERSION` on, so peers can dial us. Modify `validator_config`
             // in place so the same `connect_info` is sent later when posting to
             // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
-            if genesis.base_version >= versions::CLIQUENET_VERSION {
+            if genesis.base_version >= versions::NEW_PROTOCOL_VERSION {
                 let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
                     "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
                      Cliquenet network from the orchestrator",
@@ -856,7 +856,7 @@ async fn check_cliquenet_info_registered(
     stake_table_contract: Option<alloy::primitives::Address>,
     l1_client: &espresso_types::v0::L1Client,
 ) {
-    if current_version != versions::VID2_UPGRADE_VERSION {
+    if current_version != versions::EPOCH_REWARD_VERSION {
         return;
     }
     let Some(addr) = stake_table_contract else {

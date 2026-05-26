@@ -46,7 +46,7 @@ use vbs::version::StaticVersion;
 // instead we write `with_minor_versions!(some_macro!(args))`.
 macro_rules! with_minor_versions {
     ($m:ident!($($arg:tt),*)) => {
-        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6, v0_7, v0_8);
+        $m!($($arg,)* v0_1, v0_2, v0_3, v0_4, v0_5, v0_6);
     };
 }
 
@@ -160,8 +160,6 @@ pub type FeeVersion = StaticVersion<0, 2>;
 pub type EpochVersion = StaticVersion<0, 3>;
 pub type DrbAndHeaderUpgradeVersion = StaticVersion<0, 4>;
 pub type EpochRewardVersion = StaticVersion<0, 5>;
-pub type DaUpgradeVersion = StaticVersion<0, 6>;
-pub type Vid2UpgradeVersion = StaticVersion<0, 7>;
 
 pub type Leaf = hotshot_types::data::Leaf<SeqTypes>;
 pub type Leaf2 = hotshot_types::data::Leaf2<SeqTypes>;

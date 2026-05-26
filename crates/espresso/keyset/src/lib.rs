@@ -175,7 +175,7 @@ impl TryFrom<KeySetOptions> for KeySet {
             bail!("neither mnemonic, key file nor full set of private keys was provided")
         };
 
-        // TODO: remove this fallback once the network upgrades to CLIQUENET_VERSION and x25519
+        // TODO: remove this fallback once the network upgrades to NEW_PROTOCOL_VERSION and x25519
         // keys become required. For now, generate a random key so existing deployments without an
         // x25519 key configured can still start.
         let x25519 = match x25519 {
