@@ -93,10 +93,15 @@ where
                     let param = query.bind(path)?;
                     // Parentheses are required: UNION operands cannot contain ORDER BY/LIMIT
                     // without them.
+                    //
+                    // `ORDER BY path DESC, created DESC` matches the (path, created) primary
+                    // key's natural backwards walk. Without `path` in the ORDER BY, the planner
+                    // sometimes picks a single-column `created` index and filters by path,
+                    // which scans tens of thousands of rows per call.
                     sub_queries.push(format!(
                         "(SELECT path, created, hash_id::BIGINT AS hash_id, children, \
                          children_bitvec, idx, entry FROM {legacy_table} WHERE path = {param} AND \
-                         created <= $1 ORDER BY created DESC LIMIT 1)"
+                         created <= $1 ORDER BY path DESC, created DESC LIMIT 1)"
                     ));
                 }
                 let sql = format!(
@@ -814,9 +819,13 @@ fn build_get_path_query<'q>(
         let path: serde_json::Value = path.into();
         let node_path = query.bind(path)?;
 
+        // `ORDER BY path DESC, created DESC` matches the (path, created) primary key's
+        // natural backwards walk. Without `path` in the ORDER BY, the planner sometimes
+        // picks a single-column `created` index and filters by path, which scans tens of
+        // thousands of rows per call.
         let sub_query = format!(
             "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
-             ORDER BY created DESC LIMIT 1) AS latest_node",
+             ORDER BY path DESC, created DESC LIMIT 1) AS latest_node",
         );
 
         sub_queries.push(sub_query);
