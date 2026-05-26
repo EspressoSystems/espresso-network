@@ -15,6 +15,7 @@ use clap::Parser;
 use clap_serde_derive::ClapSerde;
 use hotshot_contract_adapter::sol_types::{
     EspToken::{self, EspTokenEvents},
+    G2PointSol,
     RewardClaim::RewardClaimEvents,
     StakeTableV3::StakeTableV3Events,
 };
@@ -111,6 +112,12 @@ fn exit(msg: impl AsRef<str>) -> ! {
     output_error(format!("Error: {}", msg.as_ref()))
 }
 
+fn display_bls_vk(vk: G2PointSol) -> String {
+    BLSPubKey::try_from(vk)
+        .map(|k| k.to_string())
+        .unwrap_or_else(|_| "<invalid>".to_string())
+}
+
 // Events containing custom structs do not get the Debug derive, due to a bug in
 // foundry. We instead format those types nicely with tagged base64.
 fn decode_and_display_logs(logs: &[Log]) {
@@ -121,7 +128,7 @@ fn decode_and_display_logs(logs: &[Log]) {
                     "event: ValidatorRegistered {{ account: {}, blsVk: {}, schnorrVk: {}, \
                      commission: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVk),
+                    display_bls_vk(e.blsVk),
                     StateVerKey::from(e.schnorrVk),
                     e.commission
                 )),
@@ -129,7 +136,7 @@ fn decode_and_display_logs(logs: &[Log]) {
                     "event: ValidatorRegisteredV2 {{ account: {}, blsVK: {}, schnorrVK: {}, \
                      commission: {}, metadataUri: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK),
+                    display_bls_vk(e.blsVK),
                     StateVerKey::from(e.schnorrVK),
                     e.commission,
                     e.metadataUri
@@ -147,13 +154,13 @@ fn decode_and_display_logs(logs: &[Log]) {
                 StakeTableV3Events::ConsensusKeysUpdated(e) => output_success(format!(
                     "event: ConsensusKeysUpdated {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK),
+                    display_bls_vk(e.blsVK),
                     StateVerKey::from(e.schnorrVK)
                 )),
                 StakeTableV3Events::ConsensusKeysUpdatedV2(e) => output_success(format!(
                     "event: ConsensusKeysUpdatedV2 {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,
-                    BLSPubKey::from(e.blsVK),
+                    display_bls_vk(e.blsVK),
                     StateVerKey::from(e.schnorrVK)
                 )),
                 StakeTableV3Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),

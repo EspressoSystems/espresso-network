@@ -803,7 +803,7 @@ fn stake_table_state_to_quorum(
         .active_validators()
         .values()
         .map(|validator| StakeTableEntry {
-            stake_key: validator.stake_table_key,
+            stake_key: *validator.stake_table_key(),
             stake_amount: validator.stake,
         })
         .collect())
@@ -1482,9 +1482,11 @@ mod test {
         validators.insert(complete.account, complete.clone());
         validators.insert(incomplete.account, incomplete.clone());
 
+        let complete_bls = complete.stake_table_key.expect("authenticated validator");
+        let incomplete_bls = incomplete.stake_table_key.expect("authenticated validator");
         let mut used_bls = HashSet::default();
-        used_bls.insert(complete.stake_table_key);
-        used_bls.insert(incomplete.stake_table_key);
+        used_bls.insert(complete_bls);
+        used_bls.insert(incomplete_bls);
 
         let mut used_schnorr = HashSet::default();
         used_schnorr.insert(complete.state_ver_key.clone());
@@ -1508,7 +1510,7 @@ mod test {
 
         let quorum = lc.quorum_for_epoch(epoch).await.unwrap();
         let expected: StakeTable = vec![StakeTableEntry {
-            stake_key: complete.stake_table_key,
+            stake_key: complete_bls,
             stake_amount: complete.stake,
         }]
         .into();

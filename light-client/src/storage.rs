@@ -1129,12 +1129,15 @@ mod test {
         let candidate: RegisteredValidator<PubKey> = validator.clone().into();
         let x25519_key =
             x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
+        let candidate_bls = candidate
+            .stake_table_key
+            .expect("random_validator returns authenticated validator");
         StakeTableState::new(
             [(candidate.account, candidate.clone())]
                 .into_iter()
                 .collect(),
             [Address::random()].into_iter().collect(),
-            [candidate.stake_table_key].into_iter().collect(),
+            [candidate_bls].into_iter().collect(),
             [candidate.state_ver_key].into_iter().collect(),
             [x25519_key].into_iter().collect(),
         )
@@ -1144,6 +1147,9 @@ mod test {
     fn chain_stake_table(state: &StakeTableState) -> StakeTableState {
         let new_validator = random_validator();
         let new_candidate: RegisteredValidator<PubKey> = new_validator.clone().into();
+        let new_candidate_bls = new_candidate
+            .stake_table_key
+            .expect("random_validator returns authenticated validator");
         let new_exit = Address::random();
         let new_x25519 =
             x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
@@ -1163,7 +1169,7 @@ mod test {
             state
                 .used_bls_keys()
                 .iter()
-                .chain([&new_candidate.stake_table_key])
+                .chain([&new_candidate_bls])
                 .cloned()
                 .collect(),
             state

@@ -3026,6 +3026,25 @@ impl SequencerPersistence for Persistence {
     }
 }
 
+fn deserialize_authenticated_validator_map(
+    bytes: &[u8],
+) -> anyhow::Result<AuthenticatedValidatorMap> {
+    if let Ok(map) = bincode::deserialize::<AuthenticatedValidatorMap>(bytes) {
+        return Ok(map);
+    }
+
+    let legacy: IndexMap<Address, super::RegisteredValidatorPreOption> =
+        bincode::deserialize(bytes).context("deserializing stake table")?;
+    legacy
+        .into_iter()
+        .map(|(addr, v)| {
+            let registered = v.migrate();
+            let authenticated = AuthenticatedValidator::try_from(registered)?;
+            Ok((addr, authenticated))
+        })
+        .collect()
+}
+
 #[async_trait]
 impl MembershipPersistence for Persistence {
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
@@ -3047,9 +3066,7 @@ impl MembershipPersistence for Persistence {
                 let stake_table_bytes: Vec<u8> = row.get("stake");
                 let reward_bytes: Option<Vec<u8>> = row.get("block_reward");
                 let stake_table_hash_bytes: Option<Vec<u8>> = row.get("stake_table_hash");
-                let stake_table: AuthenticatedValidatorMap =
-                    bincode::deserialize(&stake_table_bytes)
-                        .context("deserializing stake table")?;
+                let stake_table = deserialize_authenticated_validator_map(&stake_table_bytes)?;
                 let reward: Option<RewardAmount> = reward_bytes
                     .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
                     .transpose()?;
@@ -3084,8 +3101,7 @@ impl MembershipPersistence for Persistence {
             .into_iter()
             .map(
                 |(id, stake_bytes, reward_bytes_opt, stake_table_hash_bytes_opt)| {
-                    let stake_table: AuthenticatedValidatorMap =
-                        bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
+                    let stake_table = deserialize_authenticated_validator_map(&stake_bytes)?;
 
                     let block_reward: Option<RewardAmount> = reward_bytes_opt
                         .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
@@ -3723,11 +3739,12 @@ mod test {
 
         let epoch = 1i64;
         let address = validator.account;
+        let legacy_bls_key = validator.stake_table_key.expect("mock has BLS key");
 
         // Create legacy data without x25519 fields
         let legacy = RegisteredValidatorNoX25519 {
             account: validator.account,
-            stake_table_key: validator.stake_table_key,
+            stake_table_key: legacy_bls_key,
             state_ver_key: validator.state_ver_key.clone(),
             stake: validator.stake,
             commission: validator.commission,
@@ -3743,7 +3760,7 @@ mod test {
         // JSON: serialize without x25519 fields
         let json_legacy = RegisteredValidatorNoX25519 {
             account: validator.account,
-            stake_table_key: validator.stake_table_key,
+            stake_table_key: legacy_bls_key,
             state_ver_key: validator.state_ver_key.clone(),
             stake: validator.stake,
             commission: validator.commission,
@@ -3846,6 +3863,118 @@ mod test {
         }
     }
 
+    fn pre_option_validator(seed: u8, stake: u64) -> super::super::RegisteredValidatorPreOption {
+        use std::collections::HashMap;
+
+        use alloy::primitives::U256;
+        use hotshot_types::light_client::StateVerKey;
+
+        super::super::RegisteredValidatorPreOption {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([seed; 32], 0).0,
+            state_ver_key: StateVerKey::default(),
+            stake: U256::from(stake),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
+        }
+    }
+
+    async fn insert_legacy_stake_row(
+        persistence: &Persistence,
+        epoch: i64,
+        validator: super::super::RegisteredValidatorPreOption,
+    ) {
+        let mut map: IndexMap<Address, super::super::RegisteredValidatorPreOption> =
+            IndexMap::new();
+        map.insert(validator.account, validator);
+        let stake_bytes = bincode::serialize(&map).unwrap();
+        let mut tx = persistence.db.write().await.unwrap();
+        tx.execute(
+            query("INSERT INTO epoch_drb_and_root (epoch, stake) VALUES ($1, $2)")
+                .bind(epoch)
+                .bind(&stake_bytes),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_legacy_storage() {
+        let tmp = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&tmp).await;
+
+        let v1 = pre_option_validator(1, 100);
+        let v2 = pre_option_validator(2, 200);
+        let v1_addr = v1.account;
+        let v2_addr = v2.account;
+        insert_legacy_stake_row(&persistence, 1, v1).await;
+        insert_legacy_stake_row(&persistence, 2, v2).await;
+
+        let (loaded1, ..) = persistence
+            .load_stake(EpochNumber::new(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded1.len(), 1);
+        assert!(loaded1.get(&v1_addr).unwrap().stake_table_key.is_some());
+
+        let (loaded2, ..) = persistence
+            .load_stake(EpochNumber::new(2))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded2.len(), 1);
+        assert!(loaded2.get(&v2_addr).unwrap().stake_table_key.is_some());
+
+        let latest = persistence.load_latest_stake(10).await.unwrap().unwrap();
+        assert_eq!(latest.len(), 2);
+        let epochs: Vec<_> = latest.iter().map(|(e, ..)| *e).collect();
+        assert!(epochs.contains(&EpochNumber::new(1)));
+        assert!(epochs.contains(&EpochNumber::new(2)));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_mixed_storage() {
+        let tmp = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&tmp).await;
+
+        let legacy_v = pre_option_validator(3, 300);
+        let legacy_addr = legacy_v.account;
+        insert_legacy_stake_row(&persistence, 5, legacy_v).await;
+
+        let current_v = espresso_types::v0_3::AuthenticatedValidator::mock();
+        let current_addr = current_v.account;
+        let mut current_map = IndexMap::new();
+        current_map.insert(current_addr, current_v);
+        persistence
+            .store_stake(EpochNumber::new(6), current_map, None, None)
+            .await
+            .unwrap();
+
+        let latest = persistence.load_latest_stake(10).await.unwrap().unwrap();
+        assert_eq!(latest.len(), 2);
+        let by_epoch: std::collections::HashMap<_, _> = latest
+            .into_iter()
+            .map(|(e, (map, _), _)| (e, map))
+            .collect();
+        assert!(
+            by_epoch
+                .get(&EpochNumber::new(5))
+                .unwrap()
+                .contains_key(&legacy_addr)
+        );
+        assert!(
+            by_epoch
+                .get(&EpochNumber::new(6))
+                .unwrap()
+                .contains_key(&current_addr)
+        );
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_store_all_validators_authenticated_and_unauthenticated() {
         use std::collections::HashMap;
@@ -3860,7 +3989,7 @@ mod test {
         // Create an authenticated validator
         let authenticated_validator = RegisteredValidator {
             account: Address::random(),
-            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0),
             state_ver_key: StateVerKey::default(),
             stake: U256::from(1000),
             commission: 100,
@@ -3873,7 +4002,7 @@ mod test {
         // Create an unauthenticated validator
         let unauthenticated_validator = RegisteredValidator {
             account: Address::random(),
-            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0),
             state_ver_key: StateVerKey::default(),
             stake: U256::from(2000),
             commission: 200,
