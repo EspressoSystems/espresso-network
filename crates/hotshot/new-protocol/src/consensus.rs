@@ -142,6 +142,15 @@ pub enum ConsensusOutput<T: NodeType> {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
     },
+    /// Emitted when a node has reconstructed a block payload from VID shares.
+    /// Notifies downstream consumers (e.g. the query service) so they can store
+    /// the payload even if the corresponding view has already been decided
+    /// without a payload in the decide event.
+    BlockPayloadReconstructed {
+        view: ViewNumber,
+        header: T::BlockHeader,
+        payload: T::BlockPayload,
+    },
 }
 
 pub struct Consensus<T: NodeType> {

@@ -152,7 +152,7 @@ impl<T: NodeType> BlockBuilder<T> {
             // sleep so the coordinator's event queue doesnot overflow
             // because if there are no transactions then the block production is way too fast
             if buffer.is_empty() {
-                sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(500)).await;
             }
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {
