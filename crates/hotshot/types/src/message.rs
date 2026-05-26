@@ -20,10 +20,7 @@ use hotshot_utils::anytrace::*;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
-use versions::{
-    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade,
-    VID2_UPGRADE_VERSION,
-};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
@@ -758,7 +755,7 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
     }
 
     pub fn upgraded_vid2(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view) >= VID2_UPGRADE_VERSION
+        self.version_infallible(view) >= NEW_PROTOCOL_VERSION
     }
 
     /// Return whether the new protocol (HotShot 0.8) is active for the given view.

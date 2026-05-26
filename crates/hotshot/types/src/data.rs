@@ -27,7 +27,7 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
+use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     drb::DrbResult,
@@ -384,7 +384,7 @@ pub fn vid_commitment(
                      error: {err}"
                 )
             })
-    } else if version < VID2_UPGRADE_VERSION {
+    } else if version < NEW_PROTOCOL_VERSION {
         let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(

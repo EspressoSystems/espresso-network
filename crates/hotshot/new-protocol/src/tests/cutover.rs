@@ -10,7 +10,7 @@ use hotshot_types::{
     stake_table::StakeTableEntries,
     vote::{Certificate, HasViewNumber},
 };
-use versions::{CLIQUENET_VERSION, version};
+use versions::{NEW_PROTOCOL_VERSION, version};
 
 use crate::{
     consensus::PreCutoverSeed,
@@ -172,10 +172,10 @@ async fn upgrade_certificate_cutover() {
 
     let num_nodes = 5;
     let num_views = 2;
-    let pre_cliquenet = version(CLIQUENET_VERSION.major, CLIQUENET_VERSION.minor - 1);
+    let pre_cliquenet = version(NEW_PROTOCOL_VERSION.major, NEW_PROTOCOL_VERSION.minor - 1);
     let upgrade_data = UpgradeProposalData {
         old_version: pre_cliquenet,
-        new_version: CLIQUENET_VERSION,
+        new_version: NEW_PROTOCOL_VERSION,
         decide_by: ViewNumber::new(1),
         new_version_hash: vec![0u8; 12],
         old_version_last_view: ViewNumber::new(num_views as u64),
@@ -196,7 +196,7 @@ async fn upgrade_certificate_cutover() {
     let cert = cert_opt
         .as_ref()
         .expect("upgrade certificate should be embedded in legacy chain");
-    assert_eq!(cert.data.new_version, CLIQUENET_VERSION);
+    assert_eq!(cert.data.new_version, NEW_PROTOCOL_VERSION);
     assert_eq!(cert.data.old_version, pre_cliquenet);
     assert_eq!(
         cert.data.new_version_first_view,

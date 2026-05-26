@@ -24,7 +24,7 @@ use hotshot_types::{
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
     utils::epoch_from_block_number,
 };
-use versions::CLIQUENET_VERSION;
+use versions::NEW_PROTOCOL_VERSION;
 
 use crate::{client::ClientApi, consensus::PreCutoverSeed};
 
@@ -124,7 +124,8 @@ impl CutoverGate {
             return true;
         }
         let cur_view = legacy.cur_view().await;
-        let crossed = legacy.hotshot.upgrade_lock.version_infallible(cur_view) >= CLIQUENET_VERSION;
+        let crossed =
+            legacy.hotshot.upgrade_lock.version_infallible(cur_view) >= NEW_PROTOCOL_VERSION;
         if !crossed {
             return false;
         }

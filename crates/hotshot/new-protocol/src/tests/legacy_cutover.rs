@@ -46,7 +46,7 @@ use tokio::{
     time::sleep,
 };
 use url::Url;
-use versions::{CLIQUENET_VERSION, Upgrade, version};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade, version};
 
 use crate::{
     consensus::ConsensusOutput,
@@ -66,11 +66,11 @@ async fn spawn_legacy_cluster(
     num_nodes: usize,
     upgrade_view: u64,
 ) -> Vec<SystemContextHandle<TestTypes, MemoryImpl>> {
-    let pre_cliquenet = version(CLIQUENET_VERSION.major, CLIQUENET_VERSION.minor - 1);
+    let pre_cliquenet = version(NEW_PROTOCOL_VERSION.major, NEW_PROTOCOL_VERSION.minor - 1);
     let mut metadata: TestDescription<TestTypes, MemoryImpl> =
         TestDescription::default_multiple_rounds();
     metadata = metadata.set_num_nodes(num_nodes as u64, num_nodes as u64);
-    metadata.upgrade = Upgrade::new(pre_cliquenet, CLIQUENET_VERSION);
+    metadata.upgrade = Upgrade::new(pre_cliquenet, NEW_PROTOCOL_VERSION);
     metadata.upgrade_view = Some(upgrade_view);
     metadata.test_config.epoch_height = EPOCH_HEIGHT;
     metadata.test_config.set_view_upgrade(upgrade_view);

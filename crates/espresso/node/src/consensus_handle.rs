@@ -28,7 +28,7 @@ use hotshot_types::{
 };
 use tokio::spawn;
 use tokio_util::task::AbortOnDropHandle;
-use versions::version;
+use versions::NEW_PROTOCOL_VERSION;
 
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 // vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
@@ -190,7 +190,7 @@ where
             .hotshot
             .upgrade_lock
             .version_infallible(view)
-            >= version(0, 8)
+            >= NEW_PROTOCOL_VERSION
     }
 
     /// Whether the cutover has happened — the gate has latched on this

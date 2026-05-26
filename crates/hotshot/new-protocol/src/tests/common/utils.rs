@@ -318,7 +318,7 @@ impl TestData {
         let node_key_map = Arc::new(keys.clone());
         // Must match `test_upgrade_lock()` so signature commitments are
         // byte-identical across harnesses.
-        let upgrade = versions::Upgrade::trivial(versions::CLIQUENET_VERSION);
+        let upgrade = versions::Upgrade::trivial(versions::NEW_PROTOCOL_VERSION);
 
         let mut generator =
             TestViewGenerator::generate(membership.clone(), node_key_map.clone(), upgrade);
