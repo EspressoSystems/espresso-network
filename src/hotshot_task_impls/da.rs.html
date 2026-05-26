@@ -518,9 +518,12 @@
 <a href=#518 id=518 data-nosnippet>518</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
 <a href=#519 id=519 data-nosnippet>519</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
 <a href=#520 id=520 data-nosnippet>520</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#521 id=521 data-nosnippet>521</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await
-<a href=#522 id=522 data-nosnippet>522</a>    </span>}
-<a href=#523 id=523 data-nosnippet>523</a>
-<a href=#524 id=524 data-nosnippet>524</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
-<a href=#525 id=525 data-nosnippet>525</a>}
+<a href=#521 id=521 data-nosnippet>521</a>        <span class="kw">if </span><span class="self">self</span>.upgrade_lock.new_protocol_active(<span class="self">self</span>.cur_view) {
+<a href=#522 id=522 data-nosnippet>522</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#523 id=523 data-nosnippet>523</a>        }
+<a href=#524 id=524 data-nosnippet>524</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await
+<a href=#525 id=525 data-nosnippet>525</a>    </span>}
+<a href=#526 id=526 data-nosnippet>526</a>
+<a href=#527 id=527 data-nosnippet>527</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {}
+<a href=#528 id=528 data-nosnippet>528</a>}
 </code></pre></div></section></main></body></html>

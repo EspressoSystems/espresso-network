@@ -842,16 +842,22 @@
 <a href=#842 id=842 data-nosnippet>842</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
 <a href=#843 id=843 data-nosnippet>843</a>        receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
 <a href=#844 id=844 data-nosnippet>844</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#845 id=845 data-nosnippet>845</a>        <span class="self">self</span>.handle(event, receiver.clone(), sender.clone()).<span class="kw">await
-<a href=#846 id=846 data-nosnippet>846</a>    </span>}
-<a href=#847 id=847 data-nosnippet>847</a>
-<a href=#848 id=848 data-nosnippet>848</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#849 id=849 data-nosnippet>849</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>((view, cancel_sender)) = <span class="self">self</span>.vote_dependencies.pop_last() {
-<a href=#850 id=850 data-nosnippet>850</a>            <span class="kw">if </span>!cancel_sender.is_closed() {
-<a href=#851 id=851 data-nosnippet>851</a>                <span class="macro">tracing::error!</span>(<span class="string">"Aborting vote dependency task for view {view}"</span>);
-<a href=#852 id=852 data-nosnippet>852</a>                <span class="kw">let _ </span>= cancel_sender.try_broadcast(());
-<a href=#853 id=853 data-nosnippet>853</a>            }
-<a href=#854 id=854 data-nosnippet>854</a>        }
-<a href=#855 id=855 data-nosnippet>855</a>    }
-<a href=#856 id=856 data-nosnippet>856</a>}
+<a href=#845 id=845 data-nosnippet>845</a>        <span class="kw">if </span><span class="self">self
+<a href=#846 id=846 data-nosnippet>846</a>            </span>.upgrade_lock
+<a href=#847 id=847 data-nosnippet>847</a>            .new_protocol_active(<span class="self">self</span>.latest_voted_view)
+<a href=#848 id=848 data-nosnippet>848</a>        {
+<a href=#849 id=849 data-nosnippet>849</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#850 id=850 data-nosnippet>850</a>        }
+<a href=#851 id=851 data-nosnippet>851</a>        <span class="self">self</span>.handle(event, receiver.clone(), sender.clone()).<span class="kw">await
+<a href=#852 id=852 data-nosnippet>852</a>    </span>}
+<a href=#853 id=853 data-nosnippet>853</a>
+<a href=#854 id=854 data-nosnippet>854</a>    <span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#855 id=855 data-nosnippet>855</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>((view, cancel_sender)) = <span class="self">self</span>.vote_dependencies.pop_last() {
+<a href=#856 id=856 data-nosnippet>856</a>            <span class="kw">if </span>!cancel_sender.is_closed() {
+<a href=#857 id=857 data-nosnippet>857</a>                <span class="macro">tracing::error!</span>(<span class="string">"Aborting vote dependency task for view {view}"</span>);
+<a href=#858 id=858 data-nosnippet>858</a>                <span class="kw">let _ </span>= cancel_sender.try_broadcast(());
+<a href=#859 id=859 data-nosnippet>859</a>            }
+<a href=#860 id=860 data-nosnippet>860</a>        }
+<a href=#861 id=861 data-nosnippet>861</a>    }
+<a href=#862 id=862 data-nosnippet>862</a>}
 </code></pre></div></section></main></body></html>
