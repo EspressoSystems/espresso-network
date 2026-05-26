@@ -287,7 +287,7 @@ where
     /// Kick the leader after the seed lands when a forwarded TC2 had
     /// already advanced `current_view`. No-op unless leader and all
     /// prerequisites are present.
-    async fn resume_after_cutover_tc(&mut self) {
+    fn resume_after_cutover_tc(&mut self) {
         let cur_view = self.consensus.current_view();
         if self.consensus.timeout_cert_at(cur_view).is_none() {
             return;
