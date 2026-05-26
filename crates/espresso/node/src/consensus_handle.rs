@@ -84,6 +84,15 @@ where
                 sender: sender.clone(),
             })
         },
+        ConsensusOutput::BlockPayloadReconstructed {
+            view,
+            header,
+            payload,
+        } => Some(CoordinatorEvent::BlockPayloadReconstructed {
+            view: *view,
+            header: header.clone(),
+            payload: payload.clone(),
+        }),
         _ => None,
     }
 }
