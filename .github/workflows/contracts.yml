@@ -44,22 +44,22 @@ jobs:
           skipPush: ${{ github.actor == 'dependabot[bot]' }}
 
       - name: Check toolchain versions
-        run: nix develop --accept-flake-config -c ./scripts/show-toolchain-versions
+        run: nix develop .#contracts --accept-flake-config -c ./scripts/show-toolchain-versions
 
       - name: Format check
-        run: nix develop --accept-flake-config -c pre-commit run forge-fmt --all-files --show-diff-on-failure
+        run: nix develop .#contracts --accept-flake-config -c pre-commit run forge-fmt --all-files --show-diff-on-failure
 
       - name: Solhint solidity linter
-        run: nix develop --accept-flake-config -c pre-commit run solhint --all-files --show-diff-on-failure
+        run: nix develop .#contracts --accept-flake-config -c pre-commit run solhint --all-files --show-diff-on-failure
 
       - name: Build contracts
-        run: nix develop --accept-flake-config -c forge build --skip test
+        run: nix develop .#contracts --accept-flake-config -c forge build --skip test
 
       - name: Lint production contracts
-        run: nix develop --accept-flake-config -c forge lint --deny notes contracts/src/
+        run: nix develop .#contracts --accept-flake-config -c forge lint --deny notes contracts/src/
 
       - name: Check if bindings up to date (also forces a build)
-        run: nix develop --accept-flake-config -c pre-commit run contract-bindings --all-files --show-diff-on-failure
+        run: nix develop .#contracts --accept-flake-config -c pre-commit run contract-bindings --all-files --show-diff-on-failure
 
       - name: Print changes to bindings
         if: ${{ failure() }}
@@ -76,15 +76,15 @@ jobs:
         include:
           - test-type: forge
             command: "just contracts-test-forge"
-            nix-env: ""
+            nix-env: ".#contracts"
             with-diff-test: true
           - test-type: invariant
             command: "just contracts-test-invariant"
-            nix-env: ""
+            nix-env: ".#contracts"
             with-diff-test: true
           - test-type: fuzz
             command: "just contracts-test-fuzz"
-            nix-env: ""
+            nix-env: ".#contracts"
             with-diff-test: true
           - test-type: echidna
             command: "just contracts-test-echidna --format text"
@@ -92,7 +92,7 @@ jobs:
             with-diff-test: false
           - test-type: network
             command: "just contracts-test-network"
-            nix-env: ""
+            nix-env: ".#contracts"
             with-diff-test: false
     steps:
       - uses: actions/checkout@v6
