@@ -293,5 +293,18 @@
 <a href=#293 id=293 data-nosnippet>293</a><span class="kw">pub trait </span>UpdateAvailabilityData&lt;Types: NodeType&gt; {
 <a href=#294 id=294 data-nosnippet>294</a>    <span class="doccomment">/// Append information about a new block to the database.
 <a href=#295 id=295 data-nosnippet>295</a>    </span><span class="kw">fn </span>append(<span class="kw-2">&amp;</span><span class="self">self</span>, info: BlockInfo&lt;Types&gt;) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;()&gt;&gt;;
-<a href=#296 id=296 data-nosnippet>296</a>}
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a>    <span class="doccomment">/// Append a payload for a block whose leaf was already decided without one.
+<a href=#298 id=298 data-nosnippet>298</a>    ///
+<a href=#299 id=299 data-nosnippet>299</a>    /// Decide events in the new protocol may arrive before VID reconstruction has produced the
+<a href=#300 id=300 data-nosnippet>300</a>    /// block payload. When the payload eventually becomes available the data source uses this
+<a href=#301 id=301 data-nosnippet>301</a>    /// method to fill it in, notifying any pending fetchers. Implementations that don't track
+<a href=#302 id=302 data-nosnippet>302</a>    /// blocks (e.g. metrics-only) may leave the default no-op.
+<a href=#303 id=303 data-nosnippet>303</a>    </span><span class="kw">fn </span>append_payload(
+<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#305 id=305 data-nosnippet>305</a>        _block: BlockQueryData&lt;Types&gt;,
+<a href=#306 id=306 data-nosnippet>306</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;()&gt;&gt; {
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">async </span>{ <span class="prelude-val">Ok</span>(()) }
+<a href=#308 id=308 data-nosnippet>308</a>    }
+<a href=#309 id=309 data-nosnippet>309</a>}
 </code></pre></div></section></main></body></html>
