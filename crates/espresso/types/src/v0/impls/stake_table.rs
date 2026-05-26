@@ -24,14 +24,17 @@ use bigdecimal::BigDecimal;
 use committable::{Commitment, Committable, RawCommitmentBuilder};
 use futures::future::BoxFuture;
 use hotshot::types::{BLSPubKey, SchnorrPubKey, SignatureKey as _};
-use hotshot_contract_adapter::sol_types::{
-    EspToken::{self, EspTokenInstance},
-    StakeTableV3::{
-        self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
-        P2pAddrUpdated, StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit,
-        ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3,
-        X25519KeyUpdated,
+use hotshot_contract_adapter::{
+    sol_types::{
+        EspToken::{self, EspTokenInstance},
+        StakeTableV3::{
+            self, CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated,
+            P2pAddrUpdated, StakeTableV3Events, Undelegated, UndelegatedV2, ValidatorExit,
+            ValidatorExitV2, ValidatorRegistered, ValidatorRegisteredV2, ValidatorRegisteredV3,
+            X25519KeyUpdated,
+        },
     },
+    stake_table::StakeTableSolError,
 };
 use hotshot_types::{
     PeerConfig, PeerConnectInfo,
@@ -328,7 +331,14 @@ impl StakeTableState {
                 schnorrVk,
                 commission,
             }) => {
-                let stake_table_key: BLSPubKey = blsVk.into();
+                let stake_table_key = BLSPubKey::try_from(blsVk).ok();
+                if stake_table_key.is_none() {
+                    tracing::warn!(
+                        ?account,
+                        "registering unauthenticated validator (invalid BLS key)"
+                    );
+                }
+                let authenticated = stake_table_key.is_some();
                 let state_ver_key: SchnorrPubKey = schnorrVk.into();
 
                 if self.validator_exits.contains(&account) {
@@ -340,11 +350,13 @@ impl StakeTableState {
                     return Err(StakeTableError::AlreadyRegistered(account));
                 }
 
-                // The stake table contract enforces that each bls key is only used once.
-                if self.used_bls_keys.contains(&stake_table_key) {
-                    return Err(StakeTableError::BlsKeyAlreadyUsed(
-                        stake_table_key.to_string(),
-                    ));
+                // Unparsable keys (`None`) are never deduped; the L1 contract
+                // dedups by raw G2 bytes so distinct registrations are unique
+                // on-chain regardless.
+                if let Some(k) = stake_table_key.as_ref()
+                    && self.used_bls_keys.contains(k)
+                {
+                    return Err(StakeTableError::BlsKeyAlreadyUsed(k.to_string()));
                 }
 
                 // The stake table v1 contract does *not* enforce that each schnorr key is only used once.
@@ -355,7 +367,9 @@ impl StakeTableState {
                 }
 
                 // All checks ok, applying changes
-                self.used_bls_keys.insert(stake_table_key);
+                if let Some(k) = stake_table_key.as_ref() {
+                    self.used_bls_keys.insert(*k);
+                }
                 self.used_schnorr_keys.insert(state_ver_key.clone());
 
                 entry.or_insert(RegisteredValidator {
@@ -365,31 +379,43 @@ impl StakeTableState {
                     stake: U256::ZERO,
                     commission,
                     delegators: HashMap::new(),
-                    authenticated: true,
+                    authenticated,
                     x25519_key: None,
                     p2p_addr: None,
                 });
             },
 
             StakeTableEvent::RegisterV2(ref reg) => {
-                let authenticated = reg.authenticate().is_ok();
-                if !authenticated {
-                    tracing::warn!(
-                        account = ?reg.account,
-                        "Validator registered with invalid signature"
-                    );
-                }
+                let (stake_table_key, state_ver_key, authenticated): (
+                    Option<BLSPubKey>,
+                    SchnorrPubKey,
+                    bool,
+                ) = match reg.authenticate() {
+                    Ok((bls, schnorr)) => (Some(bls), schnorr, true),
+                    Err(StakeTableSolError::InvalidBlsKey) => {
+                        tracing::warn!(
+                            account = ?reg.account,
+                            "registering unauthenticated: unparsable BLS key",
+                        );
+                        (None, reg.schnorrVK.into(), false)
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            account = ?reg.account,
+                            %e,
+                            "registering unauthenticated: bad signature",
+                        );
+                        let bls = BLSPubKey::try_from(reg.blsVK)
+                            .expect("InvalidBlsKey was matched above");
+                        (Some(bls), reg.schnorrVK.into(), false)
+                    },
+                };
 
                 let ValidatorRegisteredV2 {
                     account,
-                    blsVK,
-                    schnorrVK,
                     commission,
                     ..
                 } = reg;
-
-                let stake_table_key: BLSPubKey = (*blsVK).into();
-                let state_ver_key: SchnorrPubKey = (*schnorrVK).into();
 
                 // Reject if validator already exited
                 if self.validator_exits.contains(account) {
@@ -401,11 +427,12 @@ impl StakeTableState {
                     return Err(StakeTableError::AlreadyRegistered(*account));
                 }
 
-                // The stake table v2 contract enforces that each bls key is only used once.
-                if self.used_bls_keys.contains(&stake_table_key) {
-                    return Err(StakeTableError::BlsKeyAlreadyUsed(
-                        stake_table_key.to_string(),
-                    ));
+                // See V1 arm: unparsable keys aren't deduped, parsable ones are
+                // whether or not the signature verified.
+                if let Some(k) = stake_table_key.as_ref()
+                    && self.used_bls_keys.contains(k)
+                {
+                    return Err(StakeTableError::BlsKeyAlreadyUsed(k.to_string()));
                 }
 
                 // The stake table v2 contract enforces schnorr key is only used once.
@@ -416,7 +443,9 @@ impl StakeTableState {
                 }
 
                 // All checks ok, applying changes
-                self.used_bls_keys.insert(stake_table_key);
+                if let Some(k) = stake_table_key.as_ref() {
+                    self.used_bls_keys.insert(*k);
+                }
                 self.used_schnorr_keys.insert(state_ver_key.clone());
 
                 entry.or_insert(RegisteredValidator {
@@ -536,7 +565,9 @@ impl StakeTableState {
                     schnorrVK,
                 } = update;
 
-                let stake_table_key: BLSPubKey = blsVK.into();
+                let Ok(stake_table_key) = BLSPubKey::try_from(blsVK) else {
+                    return Ok(Err(ExpectedStakeTableError::InvalidBlsKey));
+                };
                 let state_ver_key: SchnorrPubKey = schnorrVK.into();
 
                 if !self.validators.contains_key(&account) {
@@ -564,26 +595,26 @@ impl StakeTableState {
                 let validator = self.validators.get_mut(&account).unwrap_or_else(|| {
                     panic!("validator {account} must exist after contains_key check")
                 });
-                validator.stake_table_key = stake_table_key;
+                validator.stake_table_key = Some(stake_table_key);
                 validator.state_ver_key = state_ver_key;
+                // V1 contract verified BLS POP at submission; no off-chain sig to re-check.
+                validator.authenticated = true;
             },
 
             StakeTableEvent::KeyUpdateV2(update) => {
-                // Signature authentication is performed right after fetching, if we get an
-                // unauthenticated event here, something went wrong, we abort early.
-                update
-                    .authenticate()
-                    .map_err(|e| StakeTableError::AuthenticationFailed(e.to_string()))?;
+                // `validate_event` pre-filters auth failures during live fetch;
+                // on replay an unparsable key is a soft skip, other failures are fatal.
+                let (stake_table_key, state_ver_key) = match update.authenticate() {
+                    Ok(parsed) => parsed,
+                    Err(StakeTableSolError::InvalidBlsKey) => {
+                        return Ok(Err(ExpectedStakeTableError::InvalidBlsKey));
+                    },
+                    Err(e) => {
+                        return Err(StakeTableError::AuthenticationFailed(e.to_string()));
+                    },
+                };
 
-                let ConsensusKeysUpdatedV2 {
-                    account,
-                    blsVK,
-                    schnorrVK,
-                    ..
-                } = update;
-
-                let stake_table_key: BLSPubKey = blsVK.into();
-                let state_ver_key: SchnorrPubKey = schnorrVK.into();
+                let ConsensusKeysUpdatedV2 { account, .. } = update;
 
                 if !self.validators.contains_key(&account) {
                     return Err(StakeTableError::ValidatorNotFound(account));
@@ -611,8 +642,9 @@ impl StakeTableState {
                 let validator = self.validators.get_mut(&account).unwrap_or_else(|| {
                     panic!("validator {account} must exist after contains_key check")
                 });
-                validator.stake_table_key = stake_table_key;
+                validator.stake_table_key = Some(stake_table_key);
                 validator.state_ver_key = state_ver_key;
+                validator.authenticated = true;
             },
 
             StakeTableEvent::CommissionUpdate(CommissionUpdated {
@@ -637,26 +669,38 @@ impl StakeTableState {
             },
 
             StakeTableEvent::RegisterV3(ref reg) => {
-                let authenticated = reg.authenticate().is_ok();
-                if !authenticated {
-                    tracing::warn!(
-                        account = ?reg.account,
-                        "Validator registered with invalid signature"
-                    );
-                }
+                let (stake_table_key, state_ver_key, authenticated): (
+                    Option<BLSPubKey>,
+                    SchnorrPubKey,
+                    bool,
+                ) = match reg.authenticate() {
+                    Ok((bls, schnorr)) => (Some(bls), schnorr, true),
+                    Err(StakeTableSolError::InvalidBlsKey) => {
+                        tracing::warn!(
+                            account = ?reg.account,
+                            "registering unauthenticated: unparsable BLS key",
+                        );
+                        (None, reg.schnorrVK.into(), false)
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            account = ?reg.account,
+                            %e,
+                            "registering unauthenticated: bad signature",
+                        );
+                        let bls = BLSPubKey::try_from(reg.blsVK)
+                            .expect("InvalidBlsKey was matched above");
+                        (Some(bls), reg.schnorrVK.into(), false)
+                    },
+                };
 
                 let ValidatorRegisteredV3 {
                     account,
-                    blsVK,
-                    schnorrVK,
                     commission,
                     x25519Key,
                     p2pAddr,
                     ..
                 } = reg;
-
-                let stake_table_key: BLSPubKey = (*blsVK).into();
-                let state_ver_key: SchnorrPubKey = (*schnorrVK).into();
 
                 if x25519Key.0 == [0u8; 32] {
                     return Err(StakeTableError::InvalidX25519Key("zero key".into()));
@@ -684,10 +728,11 @@ impl StakeTableState {
                     return Err(StakeTableError::AlreadyRegistered(*account));
                 }
 
-                if self.used_bls_keys.contains(&stake_table_key) {
-                    return Err(StakeTableError::BlsKeyAlreadyUsed(
-                        stake_table_key.to_string(),
-                    ));
+                // Unparsable keys aren't deduped; the L1 contract dedups by raw G2 bytes.
+                if let Some(k) = stake_table_key.as_ref()
+                    && self.used_bls_keys.contains(k)
+                {
+                    return Err(StakeTableError::BlsKeyAlreadyUsed(k.to_string()));
                 }
 
                 if self.used_schnorr_keys.contains(&state_ver_key) {
@@ -703,7 +748,9 @@ impl StakeTableState {
                 }
 
                 // All checks ok, applying changes
-                self.used_bls_keys.insert(stake_table_key);
+                if let Some(k) = stake_table_key.as_ref() {
+                    self.used_bls_keys.insert(*k);
+                }
                 self.used_schnorr_keys.insert(state_ver_key.clone());
                 self.used_x25519_keys.insert(x25519_key);
 
@@ -2027,14 +2074,12 @@ impl EpochCommittees {
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
             .values()
             .map(|v| {
-                address_mapping.insert(v.stake_table_key, v.account);
+                let key = *v.stake_table_key();
+                address_mapping.insert(key, v.account);
                 (
-                    v.stake_table_key,
+                    key,
                     PeerConfig {
-                        stake_table_entry: BLSPubKey::stake_table_entry(
-                            &v.stake_table_key,
-                            v.stake,
-                        ),
+                        stake_table_entry: BLSPubKey::stake_table_entry(&key, v.stake),
                         state_ver_key: v.state_ver_key.clone(),
                         connect_info: v.x25519_key.and_then(|p| {
                             let a = v.p2p_addr.clone()?;
@@ -3010,12 +3055,12 @@ pub mod testing {
                 validator_stake += alloy::primitives::U256::from(stake);
             }
 
-            let stake_table_key = val.bls_vk.into();
+            let stake_table_key = BLSPubKey::try_from(val.bls_vk).expect("valid test BLS key");
             let state_ver_key = val.schnorr_vk.into();
 
             RegisteredValidator {
                 account: val.account,
-                stake_table_key,
+                stake_table_key: Some(stake_table_key),
                 state_ver_key,
                 stake: validator_stake,
                 commission: val.commission,
@@ -3046,16 +3091,37 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-
-    use alloy::{primitives::Address, rpc::types::Log};
-    use hotshot_contract_adapter::stake_table::{StakeTableContractVersion, sign_address_bls};
-    use hotshot_types::signature_key::BLSKeyPair;
+    use alloy::{
+        primitives::{Address, Bytes},
+        rpc::types::Log,
+    };
+    use hotshot_contract_adapter::{
+        sol_types::{G1PointSol, G2PointSol},
+        stake_table::{StakeTableContractVersion, sign_address_bls},
+    };
+    use hotshot_types::{light_client::StateKeyPair, signature_key::BLSKeyPair};
     use pretty_assertions::assert_matches;
     use rstest::rstest;
     use versions::{CLIQUENET_VERSION, DA_UPGRADE_VERSION, VID2_UPGRADE_VERSION};
 
     use super::*;
     use crate::{L1ClientOptions, v0::impls::testing::*};
+
+    fn zero_g2() -> G2PointSol {
+        G2PointSol {
+            x0: U256::ZERO,
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        }
+    }
+
+    fn zero_g1() -> G1PointSol {
+        G1PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        }
+    }
 
     #[test_log::test]
     fn test_from_l1_events() -> anyhow::Result<()> {
@@ -3273,7 +3339,7 @@ mod tests {
         )
         .unwrap_err();
 
-        let bls: BLSPubKey = val.bls_vk.into();
+        let bls = BLSPubKey::try_from(val.bls_vk).expect("valid test BLS key");
         assert!(matches!(err, StakeTableError::BlsKeyAlreadyUsed(addr) if addr == bls.to_string()));
     }
 
@@ -3439,6 +3505,27 @@ mod tests {
     }
 
     #[test]
+    fn test_register_v2_bad_sig_preserves_parsed_bls_key() {
+        let val = TestValidator::random();
+        let other = TestValidator::random();
+        let bad_val = TestValidator {
+            bls_sig: other.bls_sig,
+            ..val.clone()
+        };
+
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV2((&bad_val).into()))
+            .expect("no fatal error")
+            .expect("registered unauthenticated");
+
+        let registered = state.validators().get(&val.account).expect("present");
+        assert!(!registered.authenticated);
+        let expected_bls = BLSPubKey::try_from(val.bls_vk).expect("valid bls key");
+        assert_eq!(registered.stake_table_key.as_ref(), Some(&expected_bls));
+    }
+
+    #[test]
     fn test_authenticated_validator_deserialize_rejects_unauthenticated() {
         let mut validator = RegisteredValidator::<BLSPubKey>::mock();
         validator.authenticated = false;
@@ -3549,7 +3636,8 @@ mod tests {
         state.apply_event(event).unwrap().unwrap();
 
         let updated = state.validators.get(&val.account).unwrap();
-        assert_eq!(updated.stake_table_key, new_keys.bls_vk.into());
+        let expected_bls = BLSPubKey::try_from(new_keys.bls_vk).expect("valid test BLS key");
+        assert_eq!(updated.stake_table_key.as_ref(), Some(&expected_bls));
         assert_eq!(updated.state_ver_key, new_keys.schnorr_vk.into());
     }
 
@@ -3566,7 +3654,9 @@ mod tests {
         state.apply_event(event1).unwrap().unwrap();
         let result = state.apply_event(event2);
 
-        let expected_bls_key = BLSPubKey::from(val.bls_vk).to_string();
+        let expected_bls_key = BLSPubKey::try_from(val.bls_vk)
+            .expect("valid test BLS key")
+            .to_string();
 
         assert_matches!(
             result,
@@ -3931,6 +4021,86 @@ mod tests {
         );
     }
 
+    async fn snapshot_stake_table_commit(
+        network: &str,
+        rpc_url: &str,
+        contract: &str,
+        to_block: u64,
+    ) {
+        let l1 = L1ClientOptions {
+            l1_events_max_retry_duration: Duration::from_secs(120),
+            l1_events_max_block_range: 10_000,
+            l1_retry_delay: Duration::from_secs(2),
+            ..Default::default()
+        }
+        .connect(vec![rpc_url.parse().unwrap()])
+        .expect("unable to construct l1 client");
+
+        let events =
+            Fetcher::fetch_events_from_contract(l1, contract.parse().unwrap(), None, to_block)
+                .await
+                .unwrap();
+
+        let validator_set =
+            ValidatorSet::from_l1_events(events.into_iter().map(|(_, e)| e), EPOCH_VERSION)
+                .expect("failed to build validator set");
+
+        let active_as_registered = to_registered_validator_map(validator_set.active_validators());
+        let active_state = StakeTableState::new(
+            active_as_registered,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        );
+        let active_commit = active_state.commit();
+
+        let summary = format!(
+            "network: {network}\nto_block: {to_block}\nstake_table_contract: \
+             {contract}\nstake_table_hash: {}\nactive_validators_commit: {}\nall_validators: \
+             {}\nactive_validators: {}\n",
+            validator_set
+                .stake_table_hash()
+                .expect("stake_table_hash should be set"),
+            active_commit,
+            validator_set.all_validators().len(),
+            validator_set.active_validators().len(),
+        );
+
+        let mut settings = insta::Settings::clone_current();
+        let data_dir = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("../../../data/insta_snapshots");
+        settings.set_snapshot_path(data_dir);
+        settings.set_prepend_module_to_snapshot(false);
+        settings.bind(|| {
+            insta::assert_snapshot!(format!("{network}_stake_table_snapshot"), summary);
+        });
+    }
+
+    #[ignore = "talks to public Sepolia RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn snapshot_decaf_stake_table_commit() {
+        snapshot_stake_table_commit(
+            "decaf",
+            "https://ethereum-sepolia.publicnode.com",
+            "0x40304fbe94d5e7d1492dd90c53a2d63e8506a037",
+            10_935_000,
+        )
+        .await;
+    }
+
+    #[ignore = "talks to public Ethereum mainnet RPC"]
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn snapshot_mainnet_stake_table_commit() {
+        snapshot_stake_table_commit(
+            "mainnet",
+            "https://ethereum-rpc.publicnode.com",
+            "0xcef474d372b5b09defe2af187bf17338dc704451",
+            25_188_000,
+        )
+        .await;
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     #[should_panic]
     async fn test_large_max_events_range_panic() {
@@ -4244,12 +4414,15 @@ mod tests {
                 state.apply_event(StakeTableEvent::KeyUpdateV2((&new_keys).into()))??;
 
                 let validator = state.validators().get(&val.account).context("validator")?;
-                let expected_bls: BLSPubKey = new_keys.bls_vk.into();
+                let expected_bls =
+                    BLSPubKey::try_from(new_keys.bls_vk).expect("valid test BLS key");
                 let expected_schnorr: SchnorrPubKey = new_keys.schnorr_vk.into();
-                assert_eq!(validator.stake_table_key, expected_bls);
+                assert_eq!(validator.stake_table_key.as_ref(), Some(&expected_bls));
                 assert_eq!(validator.state_ver_key, expected_schnorr);
-                // KeyUpdate does not re-authenticate
-                assert!(!validator.authenticated);
+                // KeyUpdateV2 authenticates signatures, so on success the validator
+                // is promoted to `authenticated=true`, even if a prior registration
+                // left it unauthenticated.
+                assert!(validator.authenticated);
             },
             EventType::CommissionUpdate => {
                 let new_commission: u16 = 5000;
@@ -4292,11 +4465,21 @@ mod tests {
             },
         }
 
+        // For most event types the validator is still unauthenticated and is
+        // filtered out of the active set. The KeyUpdate case is the exception:
+        // KeyUpdateV2 verifies signatures and promotes the validator to
+        // `authenticated=true`, so it becomes eligible for selection.
         let active = select_active_validator_set(state.validators(), EPOCH_VERSION);
-        match active {
-            Err(StakeTableError::NoValidValidators) => {},
-            Err(e) => bail!("Unexpected error: {e}"),
-            Ok(map) => assert!(!map.contains_key(&val.account)),
+        match event_type {
+            EventType::KeyUpdate => match active {
+                Ok(map) => assert!(map.contains_key(&val.account)),
+                Err(e) => bail!("expected validator to be selected after KeyUpdate, got {e}"),
+            },
+            _ => match active {
+                Err(StakeTableError::NoValidValidators) => {},
+                Err(e) => bail!("Unexpected error: {e}"),
+                Ok(map) => assert!(!map.contains_key(&val.account)),
+            },
         }
         Ok(())
     }
@@ -4775,5 +4958,374 @@ mod tests {
         assert_matches!(post, Err(StakeTableError::NoValidValidators));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_register_v1_zero_g2_excluded_from_active_set() {
+        let account = Address::random();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk: zero_g2(),
+                schnorrVk: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+            }))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(v.stake_table_key.is_none());
+        assert!(!v.authenticated);
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn test_register_v2_zero_g2_excluded_from_active_set() {
+        let account = Address::random();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account,
+                blsVK: zero_g2(),
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(v.stake_table_key.is_none());
+        assert!(!v.authenticated);
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn test_zero_bls_key_register_unauthenticated() {
+        let account = Address::random();
+        let schnorr_key_pair = StateKeyPair::generate();
+        let mut state = StakeTableState::default();
+
+        let reg_v2 = ValidatorRegisteredV2 {
+            account,
+            blsVK: zero_g2(),
+            schnorrVK: schnorr_key_pair.ver_key().into(),
+            commission: 0,
+            blsSig: zero_g1().into(),
+            schnorrSig: Bytes::default(),
+            metadataUri: String::new(),
+        };
+        state
+            .apply_event(StakeTableEvent::RegisterV2(reg_v2))
+            .expect("no fatal error")
+            .expect("registered as unauthenticated");
+        let registered = state.validators().get(&account).expect("present");
+        assert!(!registered.authenticated);
+        assert!(registered.stake_table_key.is_none());
+        assert!(AuthenticatedValidator::try_from(registered).is_err());
+
+        // V1 Register on a fresh state takes the same path.
+        let account_v1 = Address::random();
+        let schnorr_v1 = StateKeyPair::generate();
+        let mut state_v1 = StakeTableState::default();
+        let reg_v1 = ValidatorRegistered {
+            account: account_v1,
+            blsVk: zero_g2(),
+            schnorrVk: schnorr_v1.ver_key().into(),
+            commission: 0,
+        };
+        state_v1
+            .apply_event(StakeTableEvent::Register(reg_v1))
+            .expect("no fatal error")
+            .expect("registered as unauthenticated");
+        let registered_v1 = state_v1.validators().get(&account_v1).expect("present");
+        assert!(!registered_v1.authenticated);
+        assert!(registered_v1.stake_table_key.is_none());
+
+        // KeyUpdateV2 with unparsable key: soft skip, prior key preserved.
+        let valid_val = TestValidator::random();
+        state
+            .apply_event(StakeTableEvent::RegisterV2((&valid_val).into()))
+            .unwrap()
+            .unwrap();
+        let prior_key_v2 = state
+            .validators()
+            .get(&valid_val.account)
+            .unwrap()
+            .stake_table_key;
+        let update = ConsensusKeysUpdatedV2 {
+            account: valid_val.account,
+            blsVK: zero_g2(),
+            schnorrVK: schnorr_key_pair.ver_key().into(),
+            blsSig: zero_g1().into(),
+            schnorrSig: Bytes::default(),
+        };
+        assert_matches!(
+            state.apply_event(StakeTableEvent::KeyUpdateV2(update)),
+            Ok(Err(ExpectedStakeTableError::InvalidBlsKey))
+        );
+        assert_eq!(
+            state
+                .validators()
+                .get(&valid_val.account)
+                .unwrap()
+                .stake_table_key,
+            prior_key_v2
+        );
+
+        // V1 KeyUpdate keeps the skip-event behavior so the prior valid key is preserved.
+        let valid_v1 = TestValidator::random();
+        state_v1
+            .apply_event(StakeTableEvent::Register((&valid_v1).into()))
+            .unwrap()
+            .unwrap();
+        let prior_key = state_v1
+            .validators()
+            .get(&valid_v1.account)
+            .unwrap()
+            .stake_table_key;
+        let update_v1 = ConsensusKeysUpdated {
+            account: valid_v1.account,
+            blsVK: zero_g2(),
+            schnorrVK: schnorr_key_pair.ver_key().into(),
+        };
+        assert_matches!(
+            state_v1.apply_event(StakeTableEvent::KeyUpdate(update_v1)),
+            Ok(Err(ExpectedStakeTableError::InvalidBlsKey))
+        );
+        assert_eq!(
+            state_v1
+                .validators()
+                .get(&valid_v1.account)
+                .unwrap()
+                .stake_table_key,
+            prior_key
+        );
+    }
+
+    /// Regression for the bug: a Register with an unparsable BLS key must
+    /// leave the validator in the map so subsequent events to that account
+    /// (delegations, exits) apply cleanly instead of hitting ValidatorNotFound.
+    #[test]
+    fn test_zero_bls_key_registered_unauthenticated_in_from_l1_events() {
+        let valid_val = TestValidator::random();
+        let poison_account = Address::random();
+        let schnorr_key_pair = StateKeyPair::generate();
+
+        let events = vec![
+            StakeTableEvent::RegisterV2((&valid_val).into()),
+            StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account: poison_account,
+                blsVK: zero_g2(),
+                schnorrVK: schnorr_key_pair.ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }),
+            StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: poison_account,
+                amount: U256::from(10),
+            }),
+        ];
+
+        let (validators, _) = validators_from_l1_events(events.into_iter()).expect("must not fail");
+        let valid = validators
+            .get(&valid_val.account)
+            .expect("valid validator present");
+        assert!(valid.authenticated);
+
+        let poisoned = validators
+            .get(&poison_account)
+            .expect("poison validator present as unauthenticated");
+        assert!(!poisoned.authenticated);
+        assert!(poisoned.stake_table_key.is_none());
+        assert_eq!(poisoned.stake, U256::from(10));
+        assert!(AuthenticatedValidator::try_from(poisoned).is_err());
+    }
+
+    /// Two distinct off-curve registrations must both succeed; unparsable
+    /// keys are never inserted into `used_bls_keys`.
+    #[test]
+    fn test_two_distinct_unparsable_g2_keys_both_register() {
+        let zero = zero_g2();
+        // x=(1, 0), y=(0, 0): violates y² = x³ + b' over Fp2.
+        let nonzero = G2PointSol {
+            x0: U256::from(1),
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        };
+        assert!(BLSPubKey::try_from(zero).is_err());
+        assert!(BLSPubKey::try_from(nonzero).is_err());
+        assert_ne!(zero, nonzero);
+
+        let acc_a = Address::random();
+        let acc_b = Address::random();
+
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account: acc_a,
+                blsVK: zero,
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }))
+            .expect("first unparsable register must not fail")
+            .expect("first unparsable register must apply");
+        state
+            .apply_event(StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account: acc_b,
+                blsVK: nonzero,
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }))
+            .expect("second unparsable register must not fail")
+            .expect("second unparsable register must apply");
+
+        for account in [acc_a, acc_b] {
+            let v = state.validators().get(&account).expect("present");
+            assert!(!v.authenticated);
+            assert!(v.stake_table_key.is_none());
+        }
+        assert!(state.used_bls_keys().is_empty());
+    }
+
+    /// After a poison Register, a subsequent valid KeyUpdateV2 must
+    /// authenticate the validator and install the new keys.
+    #[test]
+    fn test_zero_g2_then_valid_key_update() {
+        let mut state = StakeTableState::default();
+        let valid_val = TestValidator::random();
+        let account = valid_val.account;
+
+        state
+            .apply_event(StakeTableEvent::RegisterV2(ValidatorRegisteredV2 {
+                account,
+                blsVK: zero_g2(),
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                commission: 0,
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+                metadataUri: String::new(),
+            }))
+            .unwrap()
+            .unwrap();
+        assert!(!state.validators().get(&account).unwrap().authenticated);
+
+        let new_keys = TestValidator::random_update_keys(account, 0);
+        let update: ConsensusKeysUpdatedV2 = (&new_keys).into();
+        state
+            .apply_event(StakeTableEvent::KeyUpdateV2(update))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).unwrap();
+        let expected_bls = BLSPubKey::try_from(new_keys.bls_vk).unwrap();
+        assert_eq!(v.stake_table_key.as_ref(), Some(&expected_bls));
+        // KeyUpdateV2 authenticates signatures, so on success the validator
+        // is promoted to `authenticated=true`.
+        assert!(v.authenticated);
+    }
+
+    #[test]
+    fn test_key_update_bad_key_no_corruption() {
+        // V1 path
+        let mut state_v1 = StakeTableState::default();
+        let val = TestValidator::random();
+        state_v1
+            .apply_event(StakeTableEvent::Register((&val).into()))
+            .unwrap()
+            .unwrap();
+        let prior_v1 = state_v1
+            .validators()
+            .get(&val.account)
+            .unwrap()
+            .stake_table_key;
+        assert_matches!(
+            state_v1.apply_event(StakeTableEvent::KeyUpdate(ConsensusKeysUpdated {
+                account: val.account,
+                blsVK: zero_g2(),
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+            })),
+            Ok(Err(ExpectedStakeTableError::InvalidBlsKey))
+        );
+        assert_eq!(
+            state_v1
+                .validators()
+                .get(&val.account)
+                .unwrap()
+                .stake_table_key,
+            prior_v1
+        );
+
+        // V2 path: replay-from-persistence safety net; live fetch is pre-filtered.
+        let mut state_v2 = StakeTableState::default();
+        let val2 = TestValidator::random();
+        state_v2
+            .apply_event(StakeTableEvent::RegisterV2((&val2).into()))
+            .unwrap()
+            .unwrap();
+        let prior_v2 = state_v2
+            .validators()
+            .get(&val2.account)
+            .unwrap()
+            .stake_table_key;
+        assert_matches!(
+            state_v2.apply_event(StakeTableEvent::KeyUpdateV2(ConsensusKeysUpdatedV2 {
+                account: val2.account,
+                blsVK: zero_g2(),
+                schnorrVK: StateKeyPair::generate().ver_key().into(),
+                blsSig: zero_g1().into(),
+                schnorrSig: Bytes::default(),
+            })),
+            Ok(Err(ExpectedStakeTableError::InvalidBlsKey))
+        );
+        assert_eq!(
+            state_v2
+                .validators()
+                .get(&val2.account)
+                .unwrap()
+                .stake_table_key,
+            prior_v2
+        );
     }
 }
