@@ -662,6 +662,8 @@ async fn handle_events<N, P, C>(
     }
 }
 
+const PROCESS_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Turns persisted decided leaves into query-service decide events and GCs processed data.
 /// Decoupled from [`handle_events`] so slow ingestion/GC can't stall (or drop) consensus events;
 /// cursor-driven, so it can lag without losing data.
@@ -690,10 +692,21 @@ async fn process_decided_events_task<P, C>(
         );
     }
 
-    // `watch` coalesces to the latest signal; that's fine since processing is cursor-driven and a
-    // stale `deciding_qc` is self-filtering.
-    while decide_rx.changed().await.is_ok() {
-        let Some((view, deciding_qc)) = decide_rx.borrow_and_update().clone() else {
+    // Reused on a timeout to re-attempt the most recent decide when no new one has arrived.
+    let mut latest: DecideSignal = None;
+
+    loop {
+        // Wait for the next decide, retrying the most recent one if none arrives within the timeout.
+        match tokio::time::timeout(PROCESS_RETRY_INTERVAL, decide_rx.changed()).await {
+            Ok(Ok(())) => latest = decide_rx.borrow_and_update().clone(),
+            Ok(Err(_)) => {
+                tracing::info!("decide signal channel closed, stopping decide processor");
+                return;
+            },
+            Err(_) => {}, // Timed out; fall through to retry `latest`.
+        }
+
+        let Some((view, deciding_qc)) = latest.clone() else {
             continue;
         };
         let decided = view.u64();
@@ -717,7 +730,7 @@ async fn process_decided_events_task<P, C>(
                     .set(decided.saturating_sub(last_processed) as usize);
             },
             Err(err) => {
-                // Cursor not advanced, so this is retried on the next decide. No data is lost.
+                // Cursor not advanced, so this is retried next iteration. No data is lost.
                 metrics.failures.add(1);
                 tracing::warn!(?view, "deferred decide processing failed: {err:#}");
             },
