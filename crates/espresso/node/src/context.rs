@@ -678,18 +678,25 @@ async fn process_decided_events_task<P, C>(
     P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
-    // Highest successfully-processed view, for the backlog gauge. Seeded from the anchor view.
+    // Highest view confirmed processed, for the backlog gauge. Floored at the anchor view; the
+    // cursor reported below raises it.
     let mut last_processed = anchor_view.map(|v| v.u64()).unwrap_or(0);
 
     // Process leaves persisted before a previous shutdown but not yet handled.
-    if let Some(view) = anchor_view
-        && let Err(err) = persistence
+    if let Some(view) = anchor_view {
+        match persistence
             .process_decided_events(view, None, consumer.as_ref())
             .await
-    {
-        tracing::warn!(
-            "failed to process decided leaves on startup, chain may not be up to date: {err:#}"
-        );
+        {
+            Ok(processed) => {
+                if let Some(v) = processed {
+                    last_processed = last_processed.max(v.u64());
+                }
+            },
+            Err(err) => tracing::warn!(
+                "failed to process decided leaves on startup, chain may not be up to date: {err:#}"
+            ),
+        }
     }
 
     // Reused on a timeout to re-attempt the most recent decide when no new one has arrived.
@@ -722,15 +729,19 @@ async fn process_decided_events_task<P, C>(
         metrics.duration.add_point(start.elapsed().as_secs_f64());
 
         match result {
-            Ok(()) => {
-                last_processed = last_processed.max(decided);
+            Ok(processed) => {
+                // Advance from the real cursor, not `decided`: if ingestion/GC lagged, `processed`
+                // stays behind and the backlog gauge reflects it.
+                if let Some(v) = processed {
+                    last_processed = last_processed.max(v.u64());
+                }
                 metrics.last_processed.set(last_processed as usize);
                 metrics
                     .backlog
                     .set(decided.saturating_sub(last_processed) as usize);
             },
             Err(err) => {
-                // Cursor not advanced, so this is retried next iteration. No data is lost.
+                // Cursor not advanced, so this range is retried next iteration; no data is lost.
                 metrics.failures.add(1);
                 tracing::warn!(?view, "deferred decide processing failed: {err:#}");
             },

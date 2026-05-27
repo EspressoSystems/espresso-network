@@ -905,8 +905,14 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()> {
         self.persist_decided_leaves(decided_view, leaf_chain, deciding_qc.clone(), consumer)
             .await?;
-        self.process_decided_events(decided_view, deciding_qc, consumer)
+        // Leaves are persisted; processing failures are non-fatal here and retried in production.
+        if let Err(err) = self
+            .process_decided_events(decided_view, deciding_qc, consumer)
             .await
+        {
+            tracing::warn!(?decided_view, "decide event processing failed: {err:#}");
+        }
+        Ok(())
     }
 
     /// Persist decided leaves only (the critical, must-not-lag half of a decide; also the
@@ -922,16 +928,22 @@ pub trait SequencerPersistence:
     ) -> anyhow::Result<()>;
 
     /// Generate decide events for `consumer` from persisted leaves, then GC processed data.
-    /// Driven by a persistent cursor (e.g. `last_processed_view`): processes everything from the
-    /// cursor up to the latest decided leaf and advances it only on success, so it may lag behind
-    /// consensus without losing data. Default is a no-op (backends with no replayable storage).
+    /// Cursor-driven (e.g. `last_processed_view`): advances only on success, so it may lag
+    /// consensus without losing data.
+    ///
+    /// Returns the highest view confirmed processed (the cursor), or `None` if nothing was
+    /// processed, so the caller can track real progress. Errors are propagated; the failed range
+    /// is retried on the next call.
+    ///
+    /// Default returns `Some(decided_view)`: backends with no replayable storage (e.g. `NoStorage`)
+    /// forward events synchronously in `persist_decided_leaves` and are always caught up here.
     async fn process_decided_events(
         &self,
-        _decided_view: ViewNumber,
+        decided_view: ViewNumber,
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
-    ) -> anyhow::Result<()> {
-        Ok(())
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(Some(decided_view))
     }
 
     async fn load_anchor_leaf(

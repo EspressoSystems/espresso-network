@@ -1418,11 +1418,34 @@ mod tests {
             );
         }
 
-        // One process pass at the latest view drains the whole backlog and runs GC.
+        // A failing consumer propagates the error and leaves the cursor un-advanced: nothing is
+        // GC'd and the range is retried below.
         storage
+            .process_decided_events(ViewNumber::new(3), None, &FailConsumer)
+            .await
+            .unwrap_err();
+        for i in 0..4 {
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "a failed process pass must not garbage collect anything"
+            );
+        }
+
+        // One process pass at the latest view drains the whole backlog, runs GC, and reports the
+        // cursor it advanced to.
+        let processed = storage
             .process_decided_events(ViewNumber::new(3), None, &consumer)
             .await
             .unwrap();
+        assert_eq!(
+            processed,
+            Some(ViewNumber::new(3)),
+            "process_decided_events should report the highest processed view"
+        );
 
         // All four leaves delivered, with payloads and VID shares reconstructed from storage.
         let leaf_chain = consumer.leaf_chain().await;
