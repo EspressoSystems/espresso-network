@@ -1389,7 +1389,7 @@ mod tests {
                 .unwrap();
         }
 
-        // Persist-only: leaves durable (anchor advanced), but no events emitted and no GC.
+        // Persist-only: leaves saved (anchor advanced), but no events emitted and no GC.
         assert_eq!(
             storage.load_anchor_view().await.unwrap(),
             ViewNumber::new(3),

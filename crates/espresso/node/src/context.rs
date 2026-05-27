@@ -378,7 +378,7 @@ where
             ),
         );
 
-        // Event loop. On a decide this only does the durable leaf write, then signals `decide_tx`.
+        // Event loop. On a decide this only does the leaf write, then signals `decide_tx`.
         ctx.spawn(
             "event handler",
             handle_events(
@@ -662,7 +662,7 @@ async fn handle_events<N, P, C>(
     }
 }
 
-/// Turns durably-persisted decided leaves into query-service decide events and GCs processed data.
+/// Turns persisted decided leaves into query-service decide events and GCs processed data.
 /// Decoupled from [`handle_events`] so slow ingestion/GC can't stall (or drop) consensus events;
 /// cursor-driven, so it can lag without losing data.
 #[tracing::instrument(skip_all)]

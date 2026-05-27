@@ -981,7 +981,7 @@ pub trait SequencerPersistence:
             .await
     }
 
-    /// Durably persist decided leaves only (the critical, must-not-lag half of a decide; also the
+    /// Persist decided leaves only (the critical, must-not-lag half of a decide; also the
     /// anchor for restart recovery). Query-service ingestion and GC are deferred to
     /// [`process_decided_events`](Self::process_decided_events). Backends with no replayable storage
     /// (e.g. `NoStorage`) may instead forward decide events to `consumer` here.
@@ -993,7 +993,7 @@ pub trait SequencerPersistence:
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 
-    /// Generate decide events for `consumer` from durably-persisted leaves, then GC processed data.
+    /// Generate decide events for `consumer` from persisted leaves, then GC processed data.
     /// Driven by a persistent cursor (e.g. `last_processed_view`): processes everything from the
     /// cursor up to the latest decided leaf and advances it only on success, so it may lag behind
     /// consensus without losing data. Default is a no-op (backends with no replayable storage).
