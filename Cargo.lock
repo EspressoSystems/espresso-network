@@ -6345,6 +6345,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "tracing-test",
 ]
 
 [[package]]
@@ -6611,6 +6612,7 @@ dependencies = [
  "futures",
  "hotshot-builder-api",
  "hotshot-contract-adapter",
+ "hotshot-libp2p-networking",
  "hotshot-task",
  "hotshot-types",
  "hotshot-utils",

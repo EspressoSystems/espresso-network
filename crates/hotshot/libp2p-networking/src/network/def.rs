@@ -23,6 +23,7 @@ use super::{
         validated::ValidatedStore,
     },
     cbor,
+    log_summary::LogEvent,
 };
 
 /// Overarching network behaviour performing:
@@ -98,7 +99,8 @@ impl<K: SignatureKey + 'static, D: DhtPersistentStorage> NetworkDef<K, D> {
     /// Publish a given gossip
     pub fn publish_gossip(&mut self, topic: IdentTopic, contents: Vec<u8>) {
         if let Err(e) = self.gossipsub.publish(topic, contents) {
-            tracing::warn!("Failed to publish gossip message. Error: {:?}", e);
+            LogEvent::GossipPublishFailure.record();
+            tracing::debug!("Failed to publish gossip message. Error: {:?}", e);
         }
     }
     /// Subscribe to a given topic

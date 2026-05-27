@@ -70,10 +70,13 @@ use super::{
     cbor::Cbor,
     gen_transport,
 };
-use crate::network::behaviours::{
-    dht::{DHTBehaviour, DHTProgress, KadPutQuery},
-    direct_message::{DMBehaviour, DMRequest},
-    exponential_backoff::ExponentialBackoff,
+use crate::network::{
+    behaviours::{
+        dht::{DHTBehaviour, DHTProgress, KadPutQuery},
+        direct_message::{DMBehaviour, DMRequest},
+        exponential_backoff::ExponentialBackoff,
+    },
+    log_summary::LogEvent,
 };
 
 /// Maximum size of a message
@@ -667,14 +670,16 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                             None
                         },
                         GossipEvent::GossipsubNotSupported { peer_id } => {
-                            warn!("Peer {peer_id:?} does not support gossipsub");
+                            LogEvent::GossipsubNotSupported.record();
+                            debug!("Peer {peer_id:?} does not support gossipsub");
                             None
                         },
                         GossipEvent::SlowPeer {
                             peer_id,
                             failed_messages: _,
                         } => {
-                            warn!("Peer {peer_id:?} is slow");
+                            LogEvent::GossipsubSlowPeer.record();
+                            debug!("Peer {peer_id:?} is slow");
                             None
                         },
                     },
@@ -718,7 +723,8 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 peer_id,
                 error,
             } => {
-                warn!("Outgoing connection error to {peer_id:?}: {error:?}");
+                LogEvent::DialFailure.record();
+                debug!("Outgoing connection error to {peer_id:?}: {error:?}");
             },
             SwarmEvent::IncomingConnectionError {
                 connection_id: _,
@@ -727,13 +733,15 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 error,
                 peer_id: _,
             } => {
-                warn!("Incoming connection error: {error:?}");
+                LogEvent::IncomingConnError.record();
+                debug!("Incoming connection error: {error:?}");
             },
             SwarmEvent::ListenerError {
                 listener_id: _,
                 error,
             } => {
-                warn!("Listener error: {error:?}");
+                LogEvent::ListenerError.record();
+                debug!("Listener error: {error:?}");
             },
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 let my_id = *self.swarm.local_peer_id();
