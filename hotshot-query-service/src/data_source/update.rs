@@ -44,6 +44,7 @@ use crate::{
         BlockInfo, BlockQueryData, LeafQueryData, QueryableHeader, QueryablePayload,
         UpdateAvailabilityData, VidCommonQueryData,
     },
+    types::HeightIndexed,
 };
 
 /// An extension trait for types which implement the update trait for each API module.
@@ -325,6 +326,16 @@ where
                         tracing::error!(height, "failed to append leaf information: {err:#}");
                         return Err(height);
                     }
+                }
+            },
+            CoordinatorEvent::BlockPayloadReconstructed {
+                header, payload, ..
+            } => {
+                let block = BlockQueryData::new(header.clone(), payload.clone());
+                let height = block.height();
+                if let Err(err) = self.append_payload(block).await {
+                    tracing::error!(height, "failed to store reconstructed payload: {err:#}");
+                    return Err(height);
                 }
             },
             _ => {},

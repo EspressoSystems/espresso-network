@@ -666,7 +666,19 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// leaf carrying `next_drb_result`). Adds the result to membership,
     /// persists it to storage, and cancels any in-flight local computation
     /// for `epoch`.
+    ///
+    /// If the stake table for `epoch` has not yet been loaded (e.g. the async
+    /// catchup that registers it is still in flight), this logs an error and
+    /// returns; the in-flight catchup will compute the DRB itself once it
+    /// completes.
     pub fn supply_drb(&self, epoch: EpochNumber, drb: DrbResult) {
+        if self.membership.snapshot(epoch).is_none() {
+            tracing::error!(
+                "supply_drb called for epoch {epoch} but stake table not yet loaded; dropping \
+                 externally-supplied DRB and relying on in-flight catchup"
+            );
+            return;
+        }
         self.membership.add_drb_result(epoch, drb);
         let maybe_token = self.drb_cancel_map.lock().remove(&epoch);
         if let Some(token) = maybe_token {
