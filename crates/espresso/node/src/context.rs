@@ -4,7 +4,7 @@ use std::{
     marker::PhantomData,
     num::NonZeroU64,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -31,12 +31,20 @@ use hotshot_types::{
     message::UpgradeLock,
     network::NetworkConfig,
     new_protocol::CoordinatorEvent,
+    simple_certificate::CertificatePair,
     storage_metrics::StorageMetricsValue,
-    traits::{metrics::Metrics, network::ConnectedNetwork},
+    traits::{
+        metrics::{Counter, Gauge, Histogram, Metrics},
+        network::ConnectedNetwork,
+    },
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
-use tokio::{spawn, sync::mpsc::channel, task::JoinHandle};
+use tokio::{
+    spawn,
+    sync::{mpsc::channel, watch},
+    task::JoinHandle,
+};
 use tracing::{Instrument, Level};
 use url::Url;
 
@@ -351,7 +359,32 @@ where
             metrics,
         );
 
-        // Spawn event handling loop.
+        // The event consumer is shared between the (latency-sensitive) event loop and the
+        // background decide processor, so wrap it in an `Arc`.
+        let event_consumer = Arc::new(event_consumer);
+
+        // Channel used by the event loop to wake the background decide processor. `watch` coalesces
+        // notifications: the processor is driven by a durable cursor, so it only ever needs the
+        // latest decided view, not every intermediate one.
+        let (decide_tx, decide_rx) = watch::channel::<DecideSignal>(None);
+
+        // Spawn the background decide processor: query-service ingestion + garbage collection. This
+        // is decoupled from the event loop so that slow ingestion never stalls (or drops) consensus
+        // events. It reads only durable storage and advances its cursor on success, so it may lag
+        // without losing data.
+        ctx.spawn(
+            "decide processor",
+            process_decided_events_task(
+                persistence.clone(),
+                event_consumer.clone(),
+                decide_rx,
+                anchor_view,
+                DecideProcessorMetrics::new(metrics),
+            ),
+        );
+
+        // Spawn event handling loop. On a decide this only does the durable leaf write, then signals
+        // the background processor via `decide_tx`.
         ctx.spawn(
             "event handler",
             handle_events(
@@ -363,7 +396,7 @@ where
                 external_event_handler,
                 Some(event_streamer.clone()),
                 event_consumer,
-                anchor_view,
+                decide_tx,
             ),
         );
 
@@ -525,9 +558,51 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
     }
 }
 
+/// Signal sent from the consensus event loop to the background decide processor: the latest decided
+/// view and its (optional) deciding QC. `None` is the initial/no-op value of the `watch` channel.
+type DecideSignal = Option<(ViewNumber, Option<Arc<CertificatePair<SeqTypes>>>)>;
+
+/// Metrics for the background decide processor ([`process_decided_events_task`]). The key signal is
+/// `backlog`: how many views behind consensus the deferred query-service ingestion / GC has fallen.
+/// Sustained growth means the processor cannot keep up and staging tables will accumulate (no data
+/// is lost, but disk grows).
+struct DecideProcessorMetrics {
+    /// Latest decided view the processor has been asked to handle.
+    last_decided: Arc<dyn Gauge>,
+    /// Latest view the processor has successfully processed.
+    last_processed: Arc<dyn Gauge>,
+    /// `last_decided - last_processed`.
+    backlog: Arc<dyn Gauge>,
+    /// Wall-clock time of each `process_decided_events` pass.
+    duration: Arc<dyn Histogram>,
+    /// Number of failed processing passes (retried on the next decide).
+    failures: Arc<dyn Counter>,
+}
+
+impl DecideProcessorMetrics {
+    fn new(metrics: &(impl Metrics + ?Sized)) -> Self {
+        let metrics = metrics.subgroup("decide_processor".into());
+        Self {
+            last_decided: metrics
+                .create_gauge("last_decided".into(), Some("view".into()))
+                .into(),
+            last_processed: metrics
+                .create_gauge("last_processed".into(), Some("view".into()))
+                .into(),
+            backlog: metrics
+                .create_gauge("backlog".into(), Some("view".into()))
+                .into(),
+            duration: metrics
+                .create_histogram("process_duration".into(), Some("seconds".into()))
+                .into(),
+            failures: metrics.create_counter("failures".into(), None).into(),
+        }
+    }
+}
+
 #[tracing::instrument(skip_all, fields(node_id))]
 #[allow(clippy::too_many_arguments)]
-async fn handle_events<N, P>(
+async fn handle_events<N, P, C>(
     consensus_handle: Arc<ConsensusHandle<SeqTypes, ConsensusNode<N, P>>>,
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
@@ -535,25 +610,13 @@ async fn handle_events<N, P>(
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
     events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
-    event_consumer: impl PersistenceEventConsumer + 'static,
-    anchor_view: Option<ViewNumber>,
+    event_consumer: Arc<C>,
+    decide_tx: watch::Sender<DecideSignal>,
 ) where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
+    C: PersistenceEventConsumer + 'static,
 {
-    if let Some(view) = anchor_view {
-        // Process and clean up any leaves that we may have persisted last time we were running but
-        // failed to handle due to a shutdown.
-        if let Err(err) = persistence
-            .append_decided_leaves(view, vec![], None, &event_consumer)
-            .await
-        {
-            tracing::warn!(
-                "failed to process decided leaves, chain may not be up to date: {err:#}"
-            );
-        }
-    }
-
     while let Some(event) = events.next().await {
         tracing::debug!(node_id, ?event, "consensus event");
 
@@ -576,7 +639,18 @@ async fn handle_events<N, P>(
             _ => {},
         }
 
-        let persistence_fut = persistence.handle_event(&event, &event_consumer);
+        // Critical path: only durably persist the decided leaves here, then wake the background
+        // processor to do query-service ingestion + GC. The signal is sent *after* the persist
+        // future completes, so the processor never reads ahead of committed state.
+        let persistence_fut = async {
+            if let Some(signal) = persistence
+                .persist_event(&event, event_consumer.as_ref())
+                .await
+            {
+                // A closed receiver only happens during shutdown; ignore the error.
+                let _ = decide_tx.send(Some(signal));
+            }
+        };
 
         let state_signer_fut = async {
             state_signer
@@ -599,6 +673,79 @@ async fn handle_events<N, P>(
         };
 
         tokio::join!(persistence_fut, state_signer_fut, events_streamer_fut);
+    }
+}
+
+/// Background task that turns durably-persisted decided leaves into query-service decide events and
+/// garbage-collects processed data.
+///
+/// This is decoupled from [`handle_events`] so that slow query-service ingestion or GC can never
+/// stall the consensus event loop (and thus never cause coordinator events to be dropped). It is
+/// driven entirely by durable storage and a persistent cursor, so it can lag arbitrarily without
+/// losing data: on each wake-up it processes everything from the cursor up to the latest decided
+/// leaf, advancing the cursor only on success.
+#[tracing::instrument(skip_all)]
+async fn process_decided_events_task<P, C>(
+    persistence: Arc<P>,
+    consumer: Arc<C>,
+    mut decide_rx: watch::Receiver<DecideSignal>,
+    anchor_view: Option<ViewNumber>,
+    metrics: DecideProcessorMetrics,
+) where
+    P: SequencerPersistence,
+    C: PersistenceEventConsumer + 'static,
+{
+    // The highest view we have successfully processed, used to report the backlog gauge. Seeded
+    // from the anchor view so the gauge is meaningful before the first decide arrives.
+    let mut last_processed = anchor_view.map(|v| v.u64()).unwrap_or(0);
+
+    // On startup, process and clean up any leaves that were persisted last time we were running but
+    // not yet handled due to a shutdown. The cursor handles the rest of the backlog.
+    if let Some(view) = anchor_view
+        && let Err(err) = persistence
+            .process_decided_events(view, None, consumer.as_ref())
+            .await
+    {
+        tracing::warn!(
+            "failed to process decided leaves on startup, chain may not be up to date: {err:#}"
+        );
+    }
+
+    // `watch::changed` coalesces: if several decides arrive while we are busy, we observe only the
+    // latest `(view, deciding_qc)`. That is correct — `process_decided_events` is cursor-driven and
+    // drains the full backlog up to the latest decided leaf, and a stale `deciding_qc` is
+    // self-filtering (it is only attached when its view matches the decided leaf).
+    while decide_rx.changed().await.is_ok() {
+        let Some((view, deciding_qc)) = decide_rx.borrow_and_update().clone() else {
+            continue;
+        };
+        let decided = view.u64();
+        metrics.last_decided.set(decided as usize);
+        metrics
+            .backlog
+            .set(decided.saturating_sub(last_processed) as usize);
+
+        let start = Instant::now();
+        let result = persistence
+            .process_decided_events(view, deciding_qc, consumer.as_ref())
+            .await;
+        metrics.duration.add_point(start.elapsed().as_secs_f64());
+
+        match result {
+            Ok(()) => {
+                last_processed = last_processed.max(decided);
+                metrics.last_processed.set(last_processed as usize);
+                metrics
+                    .backlog
+                    .set(decided.saturating_sub(last_processed) as usize);
+            },
+            Err(err) => {
+                // The cursor is not advanced on failure, so this is retried on the next decide. No
+                // data is lost; the backlog gauge will reflect the lag until it recovers.
+                metrics.failures.add(1);
+                tracing::warn!(?view, "deferred decide processing failed: {err:#}");
+            },
+        }
     }
 }
 

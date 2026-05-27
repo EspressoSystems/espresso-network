@@ -757,12 +757,12 @@ impl SequencerPersistence for Persistence {
         Ok(Some(ViewNumber::new(u64::from_le_bytes(bytes))))
     }
 
-    async fn append_decided_leaves(
+    async fn persist_decided_leaves(
         &self,
-        view: ViewNumber,
+        _view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
+        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let path = inner.decided_leaf2_path();
@@ -817,6 +817,16 @@ impl SequencerPersistence for Persistence {
             )?;
         }
 
+        Ok(())
+    }
+
+    async fn process_decided_events(
+        &self,
+        view: ViewNumber,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
         match inner
             .generate_decide_events(view, deciding_qc, consumer)
             .await
