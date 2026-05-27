@@ -1257,16 +1257,9 @@ mod tests {
         }
     }
 
-    /// Verify that splitting a decide into [`persist_decided_leaves`] (the critical path) and
-    /// [`process_decided_events`] (the deferred background work) loses no data:
-    ///
-    /// - `persist_decided_leaves` durably records leaves but emits no decide events and does no GC.
-    /// - Multiple persists can accumulate before any processing (the processor lagging / coalescing
-    ///   its wake-ups), and a single later `process_decided_events` at the latest view still drains
-    ///   the entire backlog and runs GC.
-    ///
-    /// [`persist_decided_leaves`]: super::SequencerPersistence::persist_decided_leaves
-    /// [`process_decided_events`]: super::SequencerPersistence::process_decided_events
+    /// Splitting a decide into `persist_decided_leaves` (persist only, no events/GC) and a later
+    /// `process_decided_events` loses no data: multiple persists can accumulate, and one process
+    /// pass at the latest view drains the whole backlog and runs GC.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_deferred_decide_processing<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -1364,7 +1357,7 @@ mod tests {
             chain.push((leaf.clone(), qc.clone(), vid.clone(), da_proposal.clone()));
         }
 
-        // Add the per-view artifacts (these are persisted at receive time, before any decide).
+        // Per-view artifacts, as persisted at receive time (before any decide).
         for (_, _, vid, da) in &chain {
             storage.append_da2(da, vid_commitment).await.unwrap();
             storage
@@ -1375,8 +1368,7 @@ mod tests {
 
         let consumer = EventCollector::default();
 
-        // Persist two decides back-to-back WITHOUT processing in between, simulating a lagging
-        // background processor (or coalesced wake-ups): views {0,1} then views {2,3}.
+        // Two decides with no processing in between (a lagging/coalescing processor): {0,1}, {2,3}.
         for (from, to, view) in [(0usize, 2usize, 1u64), (2, 4, 3)] {
             let leaf_chain = chain
                 .iter()
@@ -1397,8 +1389,7 @@ mod tests {
                 .unwrap();
         }
 
-        // After persisting only: leaves are durable (anchor advanced to the latest decided view),
-        // but NO decide events were emitted and NO garbage collection ran.
+        // Persist-only: leaves durable (anchor advanced), but no events emitted and no GC.
         assert_eq!(
             storage.load_anchor_view().await.unwrap(),
             ViewNumber::new(3),
@@ -1427,14 +1418,13 @@ mod tests {
             );
         }
 
-        // A single deferred processing pass at the latest view drains the whole backlog (cursor
-        // catch-up) and runs GC.
+        // One process pass at the latest view drains the whole backlog and runs GC.
         storage
             .process_decided_events(ViewNumber::new(3), None, &consumer)
             .await
             .unwrap();
 
-        // All four leaves were delivered, with payloads and VID shares reconstructed from storage.
+        // All four leaves delivered, with payloads and VID shares reconstructed from storage.
         let leaf_chain = consumer.leaf_chain().await;
         assert_eq!(leaf_chain.len(), 4, "{leaf_chain:#?}");
         for ((leaf, ..), info) in chain.iter().zip(leaf_chain.iter()) {
@@ -1464,7 +1454,7 @@ mod tests {
             );
         }
 
-        // Processing again with nothing new is a no-op: no duplicate events, cursor unchanged.
+        // Re-processing with nothing new is a no-op.
         let consumer2 = EventCollector::default();
         storage
             .process_decided_events(ViewNumber::new(3), None, &consumer2)

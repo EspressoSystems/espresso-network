@@ -864,19 +864,9 @@ pub trait SequencerPersistence:
         }
     }
 
-    /// Durably persist the decided leaves carried by `event`, without generating decide events or
-    /// garbage-collecting.
-    ///
-    /// This is the persist-only half of [`handle_event`](Self::handle_event), intended for the
-    /// consensus event loop where staying ahead of the event channel matters. On a decide it
-    /// returns `Some((decided_view, deciding_qc))` so the caller can wake a background task to run
-    /// [`process_decided_events`](Self::process_decided_events); on any other event it returns
-    /// `None`.
-    ///
-    /// `consumer` is forwarded to [`persist_decided_leaves`](Self::persist_decided_leaves) only for
-    /// the benefit of backends with no replayable storage (e.g. `NoStorage`), which emit decide
-    /// events inline; durable backends ignore it here and feed the consumer later, from
-    /// [`process_decided_events`](Self::process_decided_events).
+    /// Persist-only half of [`handle_event`](Self::handle_event), for the consensus event loop.
+    /// Returns `Some((decided_view, deciding_qc))` on a decide so the caller can wake a background
+    /// task to run [`process_decided_events`](Self::process_decided_events); `None` otherwise.
     async fn persist_event(
         &self,
         event: &CoordinatorEvent<SeqTypes>,
@@ -975,14 +965,9 @@ pub trait SequencerPersistence:
     /// consensus storage. For example, the `consumer` could be used for moving data from consensus
     /// storage to long-term archival storage.
     ///
-    /// This is a convenience combinator equivalent to [`persist_decided_leaves`] followed by
-    /// [`process_decided_events`]. Production code drives the two halves on separate tasks (the
-    /// durable write on the consensus event loop, the event generation + GC in the background); see
-    /// [`persist_event`](Self::persist_event). Tests and back-compat callers use this synchronous
-    /// combination.
-    ///
-    /// [`persist_decided_leaves`]: Self::persist_decided_leaves
-    /// [`process_decided_events`]: Self::process_decided_events
+    /// Convenience combinator: [`persist_decided_leaves`](Self::persist_decided_leaves) then
+    /// [`process_decided_events`](Self::process_decided_events). Production drives the two halves on
+    /// separate tasks; tests and back-compat callers use this synchronous form.
     async fn append_decided_leaves(
         &self,
         decided_view: ViewNumber,
@@ -996,14 +981,10 @@ pub trait SequencerPersistence:
             .await
     }
 
-    /// Durably persist decided leaves. This is the critical, must-not-lag half of handling a
-    /// decide: it records the decided leaves and is the anchor for restart recovery. It must not
-    /// perform query-service ingestion or garbage collection — that is deferred to
-    /// [`process_decided_events`](Self::process_decided_events).
-    ///
-    /// For backends with no replayable storage (e.g. `NoStorage`), this may forward decide events
-    /// directly to `consumer`, since there is no durable state to drive
-    /// [`process_decided_events`](Self::process_decided_events).
+    /// Durably persist decided leaves only (the critical, must-not-lag half of a decide; also the
+    /// anchor for restart recovery). Query-service ingestion and GC are deferred to
+    /// [`process_decided_events`](Self::process_decided_events). Backends with no replayable storage
+    /// (e.g. `NoStorage`) may instead forward decide events to `consumer` here.
     async fn persist_decided_leaves(
         &self,
         decided_view: ViewNumber,
@@ -1012,16 +993,10 @@ pub trait SequencerPersistence:
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 
-    /// Generate decide events for `consumer` from durably-persisted leaves, then garbage-collect
-    /// data that has been fully processed.
-    ///
-    /// This is driven by a persistent cursor (e.g. `last_processed_view`), so it is safe to call at
-    /// any time after [`persist_decided_leaves`](Self::persist_decided_leaves): it processes
-    /// everything from the cursor up to the latest decided leaf and advances the cursor only on
-    /// success. Because it reads only already-durable data and gates GC on `consumer` success, it
-    /// may lag arbitrarily behind consensus without losing data.
-    ///
-    /// The default implementation is a no-op, for backends that have no replayable storage.
+    /// Generate decide events for `consumer` from durably-persisted leaves, then GC processed data.
+    /// Driven by a persistent cursor (e.g. `last_processed_view`): processes everything from the
+    /// cursor up to the latest decided leaf and advances it only on success, so it may lag behind
+    /// consensus without losing data. Default is a no-op (backends with no replayable storage).
     async fn process_decided_events(
         &self,
         _decided_view: ViewNumber,
