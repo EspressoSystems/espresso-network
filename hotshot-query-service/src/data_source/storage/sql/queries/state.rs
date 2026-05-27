@@ -94,19 +94,14 @@ where
                     // Parentheses are required: UNION operands cannot contain ORDER BY/LIMIT
                     // without them.
                     //
-                    // `(path, created) <= ({param}, $1)` is a row-value comparison, which
-                    // Postgres maps directly to a composite b-tree range scan on the
-                    // (path, created) primary key. The single-column `created` index cannot
-                    // satisfy a row-value predicate, so the planner cannot pick the path that
-                    // scans the table backwards through `created` and filters by path. The
-                    // redundant `path = {param}` keeps the result set restricted to a single
-                    // path after the row-comparison range, and the ORDER BY matches the PK's
-                    // natural backward walk for the final LIMIT 1.
+                    // `ORDER BY path DESC, created DESC` matches the (path, created) primary
+                    // key's natural backwards walk. Without `path` in the ORDER BY, the planner
+                    // sometimes picks a single-column `created` index and filters by path,
+                    // which scans tens of thousands of rows per call.
                     sub_queries.push(format!(
                         "(SELECT path, created, hash_id::BIGINT AS hash_id, children, \
                          children_bitvec, idx, entry FROM {legacy_table} WHERE path = {param} AND \
-                         (path, created) <= ({param}, $1) ORDER BY path DESC, created DESC LIMIT \
-                         1)"
+                         created <= $1 ORDER BY path DESC, created DESC LIMIT 1)"
                     ));
                 }
                 let sql = format!(
@@ -824,16 +819,13 @@ fn build_get_path_query<'q>(
         let path: serde_json::Value = path.into();
         let node_path = query.bind(path)?;
 
-        // `(path, created) <= ({node_path}, $1)` is a row-value comparison, which Postgres
-        // maps directly to a composite b-tree range scan on the (path, created) primary key.
-        // The single-column `created` index cannot satisfy a row-value predicate, so the
-        // planner cannot pick the path that scans the table backwards through `created` and
-        // filters by path. The redundant `path = {node_path}` keeps the result set restricted
-        // to a single path after the row-comparison range, and the ORDER BY matches the PK's
-        // natural backward walk for the final LIMIT 1.
+        // `ORDER BY path DESC, created DESC` matches the (path, created) primary key's
+        // natural backwards walk. Without `path` in the ORDER BY, the planner sometimes
+        // picks a single-column `created` index and filters by path, which scans tens of
+        // thousands of rows per call.
         let sub_query = format!(
-            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND (path, created) <= \
-             ({node_path}, $1) ORDER BY path DESC, created DESC LIMIT 1) AS latest_node",
+            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
+             ORDER BY path DESC, created DESC LIMIT 1) AS latest_node",
         );
 
         sub_queries.push(sub_query);
