@@ -8353,6 +8353,74 @@ mod test {
                 )
                 .await?;
 
+                // Merklized state parity (block-state and fee-state). Wait for
+                // both backends to have indexed the snapshot we'll query.
+                wait_until_block_height(&client, "block-state/block-height", avail_block).await;
+                wait_until_block_height(&client, "fee-state/block-height", avail_block).await;
+
+                // block-state/block-height and fee-state/block-height (latest
+                // height for which merklized state is available).
+                compare_endpoints(&http, api_port, axum_port, "block-state/block-height").await?;
+                compare_endpoints(&http, api_port, axum_port, "fee-state/block-height").await?;
+
+                // block-state path by height: the merkle tree at height H
+                // contains the headers of blocks [0, H), so a valid key is H-1.
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "block-state/{avail_block}/{}",
+                        avail_block.saturating_sub(1)
+                    ),
+                )
+                .await?;
+
+                // block-state path by commit. Use the tree commitment from
+                // the header at avail_block.
+                let block_mt_commit = avail_header.block_merkle_tree_root().to_string();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "block-state/commit/{block_mt_commit}/{}",
+                        avail_block.saturating_sub(1)
+                    ),
+                )
+                .await?;
+
+                // fee-state path by height for a known fee account, and
+                // fee-balance/latest for the same account.
+                let fee_account = validated_state
+                    .fee_merkle_tree
+                    .iter()
+                    .next()
+                    .map(|(addr, _)| *addr)
+                    .expect("fee tree should have at least one account");
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("fee-state/{avail_block}/{fee_account}"),
+                )
+                .await?;
+                let fee_mt_commit = avail_header.fee_merkle_tree_root().to_string();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("fee-state/commit/{fee_mt_commit}/{fee_account}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("fee-state/fee-balance/latest/{fee_account}"),
+                )
+                .await?;
+
                 // Error equivalence: both tide-disco and Axum must return the same
                 // HTTP status codes for common failure cases that clients encounter.
 

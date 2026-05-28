@@ -172,6 +172,8 @@ where
     S: v1::RewardApi
         + v1::AvailabilityApi
         + v1::HotShotAvailabilityApi
+        + v1::BlockStateApi
+        + v1::FeeStateApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi
@@ -192,6 +194,8 @@ where
     S: v1::RewardApi
         + v1::AvailabilityApi
         + v1::HotShotAvailabilityApi
+        + v1::BlockStateApi
+        + v1::FeeStateApi
         + Clone
         + Send
         + Sync
@@ -613,6 +617,65 @@ where
             })
         };
 
+    // Merklized state handlers: block-state
+    let get_block_state_path_by_height =
+        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
+            <S as v1::BlockStateApi>::get_block_state_path(
+                &state,
+                v1::Snapshot::Height(height),
+                key,
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+        };
+    let get_block_state_path_by_commit =
+        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
+            <S as v1::BlockStateApi>::get_block_state_path(
+                &state,
+                v1::Snapshot::Commit(commit),
+                key,
+            )
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+        };
+    let get_block_state_height = |State(state): State<S>| async move {
+        <S as v1::BlockStateApi>::get_block_state_height(&state)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    // Merklized state handlers: fee-state
+    let get_fee_state_path_by_height =
+        |State(state): State<S>, Path((height, key)): Path<(u64, String)>| async move {
+            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Height(height), key)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+    let get_fee_state_path_by_commit =
+        |State(state): State<S>, Path((commit, key)): Path<(String, String)>| async move {
+            <S as v1::FeeStateApi>::get_fee_state_path(&state, v1::Snapshot::Commit(commit), key)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+    let get_fee_state_height = |State(state): State<S>| async move {
+        <S as v1::FeeStateApi>::get_fee_state_height(&state)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_fee_balance_latest = |State(state): State<S>, Path(address): Path<String>| async move {
+        state
+            .get_fee_balance_latest(address)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
         .route(
@@ -761,6 +824,38 @@ where
         .route(
             routes::v1::STREAM_NAMESPACE_PROOFS_ROUTE,
             get(stream_namespace_proofs),
+        )
+        // Merklized state: block-state.
+        // Order matters: the literal `block-height` and `commit/...` segments must be
+        // registered before the catch-all `{height}/{key}` so axum matches them first.
+        .route(
+            routes::v1::BLOCK_STATE_HEIGHT_ROUTE,
+            get(get_block_state_height),
+        )
+        .route(
+            routes::v1::BLOCK_STATE_PATH_BY_COMMIT_ROUTE,
+            get(get_block_state_path_by_commit),
+        )
+        .route(
+            routes::v1::BLOCK_STATE_PATH_BY_HEIGHT_ROUTE,
+            get(get_block_state_path_by_height),
+        )
+        // Merklized state: fee-state
+        .route(
+            routes::v1::FEE_STATE_HEIGHT_ROUTE,
+            get(get_fee_state_height),
+        )
+        .route(
+            routes::v1::FEE_STATE_BALANCE_LATEST_ROUTE,
+            get(get_fee_balance_latest),
+        )
+        .route(
+            routes::v1::FEE_STATE_PATH_BY_COMMIT_ROUTE,
+            get(get_fee_state_path_by_commit),
+        )
+        .route(
+            routes::v1::FEE_STATE_PATH_BY_HEIGHT_ROUTE,
+            get(get_fee_state_path_by_height),
         )
         .with_state(state)
 }

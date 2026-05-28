@@ -27,6 +27,8 @@ where
     S: v1::RewardApi
         + v1::AvailabilityApi
         + v1::HotShotAvailabilityApi
+        + v1::BlockStateApi
+        + v1::FeeStateApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi

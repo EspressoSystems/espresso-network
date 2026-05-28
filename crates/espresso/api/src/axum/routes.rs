@@ -163,6 +163,19 @@ pub mod v1 {
 
     pub const STREAM_NAMESPACE_PROOFS_ROUTE: &str =
         "/v1/availability/stream/blocks/{height}/namespace/{namespace}";
+
+    //=========================================================================
+    // Merklized State API Routes (block-state and fee-state)
+    //=========================================================================
+
+    pub const BLOCK_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/block-state/{height}/{key}";
+    pub const BLOCK_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/block-state/commit/{commit}/{key}";
+    pub const BLOCK_STATE_HEIGHT_ROUTE: &str = "/v1/block-state/block-height";
+
+    pub const FEE_STATE_PATH_BY_HEIGHT_ROUTE: &str = "/v1/fee-state/{height}/{key}";
+    pub const FEE_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/fee-state/commit/{commit}/{key}";
+    pub const FEE_STATE_HEIGHT_ROUTE: &str = "/v1/fee-state/block-height";
+    pub const FEE_STATE_BALANCE_LATEST_ROUTE: &str = "/v1/fee-state/fee-balance/latest/{address}";
 }
 
 //=============================================================================
