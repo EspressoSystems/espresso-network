@@ -826,11 +826,12 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<Option<ViewNumber>> {
-        let mut inner = self.inner.write().await;
-
         // On error, GC does not run over the failed range, so the leaves stay on disk and are
         // retried; no data is lost.
-        let intervals = inner
+        let intervals = self
+            .inner
+            .write()
+            .await
             .generate_decide_events(view, deciding_qc, consumer)
             .await?;
 
@@ -838,7 +839,8 @@ impl SequencerPersistence for Persistence {
         let processed = intervals.iter().map(|i| *i.end()).max();
 
         // Best-effort GC; runs again at the next decide.
-        if let Err(err) = inner.collect_garbage(view, &intervals) {
+        let res = self.inner.write().await.collect_garbage(view, &intervals);
+        if let Err(err) = res {
             tracing::warn!(?view, "GC failed: {err:#}");
         }
 

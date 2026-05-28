@@ -735,6 +735,12 @@ async fn process_decided_events_task<P, C>(
                 if let Some(v) = processed {
                     last_processed = last_processed.max(v.u64());
                 }
+                // reset latest if we have processed all the decided leaves
+                if let Some((view, _)) = latest.clone()
+                    && last_processed >= view.u64()
+                {
+                    latest = None;
+                }
                 metrics.last_processed.set(last_processed as usize);
                 metrics
                     .backlog
