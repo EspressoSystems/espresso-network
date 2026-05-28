@@ -50,8 +50,8 @@ fn make_config(node: &Node, all: &[&Node]) -> Config {
         .bind(node.addr().into())
         .parties(all.iter().map(|n| (n.key, n.addr().into())))
         .receive_timeout(Duration::from_secs(5))
-        .retry_delays(vec![1, 3])
-        .max_retry_delay(Duration::from_secs(5))
+        .connect_retry_delays(vec![1, 3])
+        .send_retry_delays(vec![1, 3])
         .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build()
 }
@@ -585,8 +585,8 @@ async fn unknown_peer_backs_off() {
             .bind(a.addr().into())
             .parties([(a.key, a.addr().into())])
             .receive_timeout(Duration::from_secs(5))
-            .retry_delays(vec![1])
-            .max_retry_delay(Duration::from_secs(1))
+            .connect_retry_delays(vec![1])
+            .send_retry_delays(vec![1])
             .backoff_duration(Duration::from_secs(60))
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
@@ -604,8 +604,8 @@ async fn unknown_peer_backs_off() {
             .bind(c.addr().into())
             .parties([(a.key, a.addr().into()), (c.key, c.addr().into())])
             .receive_timeout(Duration::from_secs(5))
-            .retry_delays(vec![1])
-            .max_retry_delay(Duration::from_secs(1))
+            .connect_retry_delays(vec![1])
+            .send_retry_delays(vec![1])
             .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     )
