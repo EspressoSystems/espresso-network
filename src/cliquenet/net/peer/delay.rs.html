@@ -105,12 +105,11 @@
 <a href=#105 id=105 data-nosnippet>105</a>}
 <a href=#106 id=106 data-nosnippet>106</a>
 <a href=#107 id=107 data-nosnippet>107</a><span class="kw">fn </span>timeout(conf: <span class="kw-2">&amp;</span>Config, at: usize) -&gt; Instant {
-<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">let </span>d = conf
-<a href=#109 id=109 data-nosnippet>109</a>        .retry_delays
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="kw">let </span>d = <span class="kw-2">*</span>conf
+<a href=#109 id=109 data-nosnippet>109</a>        .send_retry_delays
 <a href=#110 id=110 data-nosnippet>110</a>        .get(at)
-<a href=#111 id=111 data-nosnippet>111</a>        .copied()
-<a href=#112 id=112 data-nosnippet>112</a>        .map(|d| Duration::from_secs(d.into()))
-<a href=#113 id=113 data-nosnippet>113</a>        .unwrap_or(conf.max_retry_delay);
-<a href=#114 id=114 data-nosnippet>114</a>    Instant::now() + d
-<a href=#115 id=115 data-nosnippet>115</a>}
+<a href=#111 id=111 data-nosnippet>111</a>        .unwrap_or_else(|| conf.send_retry_delays.last());
+<a href=#112 id=112 data-nosnippet>112</a>
+<a href=#113 id=113 data-nosnippet>113</a>    Instant::now() + Duration::from_secs(d.into())
+<a href=#114 id=114 data-nosnippet>114</a>}
 </code></pre></div></section></main></body></html>

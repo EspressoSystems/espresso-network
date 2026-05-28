@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["until"]};
+window.SIDEBAR_ITEMS = {"fn":["until"],"mod":["nonempty"]};
