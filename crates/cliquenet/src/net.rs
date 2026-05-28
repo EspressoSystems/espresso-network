@@ -166,6 +166,14 @@ impl Network {
         &mut self.recv
     }
 
+    pub fn split(&self) -> (&NetworkController, &NetworkReceiver) {
+        (&self.ctrl, &self.recv)
+    }
+
+    pub fn split_mut(&mut self) -> (&mut NetworkController, &mut NetworkReceiver) {
+        (&mut self.ctrl, &mut self.recv)
+    }
+
     pub fn split_into(self) -> (NetworkController, NetworkReceiver) {
         (self.ctrl, self.recv)
     }
@@ -195,11 +203,16 @@ impl NetworkReceiver {
     /// The returned public key denotes the source where the message came from.
     pub async fn receive(&mut self) -> Option<(PublicKey, Bytes)> {
         let (k, b, _) = self.rx.recv().await?;
+        debug!(peer = %k, len = b.len(), "message received");
         Some((k, b))
     }
 }
 
 impl NetworkController {
+    pub fn config(&self) -> &Config {
+        &self.conf
+    }
+
     /// Iterate over all parties.
     pub fn parties(&self) -> impl Iterator<Item = (&PublicKey, &Role)> {
         self.parties.iter()
@@ -207,8 +220,11 @@ impl NetworkController {
 
     /// Send a message to a party, identified by the given public key.
     pub fn unicast(&mut self, s: Slot, to: PublicKey, msg: Vec<u8>) -> Result<(), NetworkError> {
-        debug!(slot = %s, %to, "unicast");
+        debug!(slot = %s, %to, len = msg.len(), "unicast");
         self.length_check(&msg)?;
+        if self.lt_lower_bound(s) {
+            return Ok(());
+        }
         let cmd = SendCommand::builder()
             .slot(s)
             .action(SendAction::Unicast(to, msg))
@@ -220,8 +236,11 @@ impl NetworkController {
 
     /// Send a message to all parties.
     pub fn broadcast(&mut self, s: Slot, msg: Vec<u8>) -> Result<(), NetworkError> {
-        debug!(slot = %s, "broadcast");
+        debug!(slot = %s, len = msg.len(), "broadcast");
         self.length_check(&msg)?;
+        if self.lt_lower_bound(s) {
+            return Ok(());
+        }
         let cmd = SendCommand::builder()
             .slot(s)
             .action(SendAction::Broadcast(msg))
@@ -236,8 +255,11 @@ impl NetworkController {
     where
         P: IntoIterator<Item = PublicKey>,
     {
-        debug!(slot = %s, "multicast");
+        debug!(slot = %s, len = msg.len(), "multicast");
         self.length_check(&msg)?;
+        if self.lt_lower_bound(s) {
+            return Ok(());
+        }
         let cmd = SendCommand::builder()
             .slot(s)
             .action(SendAction::Multicast(to.into_iter().collect(), msg))
@@ -249,8 +271,12 @@ impl NetworkController {
 
     /// General send operation, supporting custom retry policies.
     pub fn send(&mut self, cmd: SendCommand) -> Result<(), NetworkError> {
-        debug!(slot = %cmd.slot, "send");
-        self.length_check(msg_bytes(&cmd))?;
+        let bytes = msg_bytes(&cmd);
+        debug!(slot = %cmd.slot, len = %bytes.len(), "send");
+        self.length_check(bytes)?;
+        if self.lt_lower_bound(cmd.slot) {
+            return Ok(());
+        }
         self.tx
             .send(Command::Send(cmd))
             .map_err(|_| NetworkError::ChannelClosed)
@@ -341,6 +367,21 @@ impl NetworkController {
             return Err(NetworkError::MessageTooLarge);
         }
         Ok(())
+    }
+
+    /// Check if the given slot is less than our lower bound.
+    fn lt_lower_bound(&self, s: Slot) -> bool {
+        if s < self.lower_bound {
+            warn!(
+                name = %self.conf.name,
+                node = %self.node,
+                slot = %s,
+                lower_bound = %self.lower_bound,
+                "slot below lower bound"
+            );
+            return true;
+        }
+        false
     }
 }
 
