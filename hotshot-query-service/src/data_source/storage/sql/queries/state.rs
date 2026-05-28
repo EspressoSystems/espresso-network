@@ -87,26 +87,15 @@ where
             } else {
                 let legacy_table = state_type.strip_suffix("_bigint").unwrap_or(state_type);
                 let mut query = QueryBuilder::default();
-                query.bind(created)?;
-                let mut sub_queries = Vec::with_capacity(missing.len());
-                for path in missing {
-                    let param = query.bind(path)?;
-                    // Parentheses are required: UNION operands cannot contain ORDER BY/LIMIT
-                    // without them.
-                    //
-                    // `ORDER BY path DESC, created DESC` matches the (path, created) primary
-                    // key's natural backwards walk. Without `path` in the ORDER BY, the planner
-                    // sometimes picks a single-column `created` index and filters by path,
-                    // which scans tens of thousands of rows per call.
-                    sub_queries.push(format!(
-                        "(SELECT path, created, hash_id::BIGINT AS hash_id, children, \
-                         children_bitvec, idx, entry FROM {legacy_table} WHERE path = {param} AND \
-                         created <= $1 ORDER BY path DESC, created DESC LIMIT 1)"
-                    ));
-                }
+                let paths_param = query.bind(missing)?;
+                let created_param = query.bind(created)?;
                 let sql = format!(
-                    "SELECT * FROM ({}) AS t ORDER BY t.path DESC",
-                    sub_queries.join(" UNION ")
+                    "SELECT n.path, n.created, n.hash_id::BIGINT AS hash_id, n.children, \
+                     n.children_bitvec, n.idx, n.entry FROM unnest({paths_param}::jsonb[]) AS \
+                     p(path), LATERAL (SELECT * FROM {legacy_table} WHERE {legacy_table}.path = \
+                     p.path AND {legacy_table}.created <= {created_param} ORDER BY \
+                     {legacy_table}.path DESC, {legacy_table}.created DESC LIMIT 1) AS n ORDER BY \
+                     n.path DESC"
                 );
                 let legacy_rows =
                     query
@@ -787,7 +776,6 @@ impl Node {
 /// Compute the full set of path JSON values for a traversal path (leaf to root).
 ///
 /// Each element is the path prefix used as a row key in a Merkle-tree table.
-#[cfg(not(feature = "embedded-db"))]
 fn traversal_path_values(traversal_path: &[usize], tree_height: usize) -> Vec<serde_json::Value> {
     let len = tree_height;
     let mut result = Vec::with_capacity(len + 1);
@@ -806,43 +794,40 @@ fn build_get_path_query<'q>(
     created: i64,
 ) -> QueryResult<(QueryBuilder<'q>, String)> {
     let mut query = QueryBuilder::default();
-    let mut traversal_path = traversal_path.into_iter().map(|x| x as i32);
+    let paths = traversal_path_values(&traversal_path, traversal_path.len());
 
-    // We iterate through the path vector skipping the first element after each iteration
-    let len = traversal_path.len();
-    let mut sub_queries = Vec::new();
+    #[cfg(not(feature = "embedded-db"))]
+    let sql = {
+        let paths_param = query.bind(paths)?;
+        let created_param = query.bind(created)?;
+        // One LATERAL point-lookup per path in the array, instead of N UNION'd subqueries.
+        // Postgres plans the inner subquery once and reuses it, collapsing N independent
+        // planner decisions into one.
+        format!(
+            "SELECT n.* FROM unnest({paths_param}::jsonb[]) AS p(path), LATERAL (SELECT * FROM \
+             {table} WHERE {table}.path = p.path AND {table}.created <= {created_param} ORDER BY \
+             {table}.path DESC, {table}.created DESC LIMIT 1) AS n ORDER BY n.path DESC"
+        )
+    };
 
-    query.bind(created)?;
-
-    for _ in 0..=len {
-        let path = traversal_path.clone().rev().collect::<Vec<_>>();
-        let path: serde_json::Value = path.into();
-        let node_path = query.bind(path)?;
-
-        // `ORDER BY path DESC, created DESC` matches the (path, created) primary key's
-        // natural backwards walk. Without `path` in the ORDER BY, the planner sometimes
-        // picks a single-column `created` index and filters by path, which scans tens of
-        // thousands of rows per call.
-        let sub_query = format!(
-            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
-             ORDER BY path DESC, created DESC LIMIT 1) AS latest_node",
-        );
-
-        sub_queries.push(sub_query);
-        traversal_path.next();
-    }
-
-    let mut sql: String = sub_queries.join(" UNION ");
-
-    sql = format!("SELECT * FROM ({sql}) as t ");
-
-    // PostgreSQL already orders JSON arrays by length, so no additional function is needed
-    // For SQLite, `length()` is used to sort by length.
-    if cfg!(feature = "embedded-db") {
-        sql.push_str("ORDER BY length(t.path) DESC");
-    } else {
-        sql.push_str("ORDER BY t.path DESC");
-    }
+    #[cfg(feature = "embedded-db")]
+    let sql = {
+        // SQLite has no native array binding, so we keep the UNION form. Each subquery
+        // is a point lookup by the composite (path, created) primary key.
+        let created_param = query.bind(created)?;
+        let mut sub_queries = Vec::with_capacity(paths.len());
+        for path in paths {
+            let node_path = query.bind(path)?;
+            sub_queries.push(format!(
+                "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= \
+                 {created_param} ORDER BY path DESC, created DESC LIMIT 1) AS latest_node",
+            ));
+        }
+        format!(
+            "SELECT * FROM ({}) as t ORDER BY length(t.path) DESC",
+            sub_queries.join(" UNION ")
+        )
+    };
 
     Ok((query, sql))
 }
