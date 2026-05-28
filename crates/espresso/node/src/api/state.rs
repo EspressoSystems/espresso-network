@@ -2024,14 +2024,14 @@ where
                 let txs: Vec<Self::Transaction> = block
                     .enumerate()
                     .enumerate()
-                    .filter_map(|(i, (idx, _))| {
-                        let tx = block.transaction(&idx)?;
+                    .filter_map(|(position_in_block, (tx_index, _tx))| {
+                        let tx = block.transaction(&tx_index)?;
                         if let Some(ns) = ns_filter
                             && tx.namespace() != ns
                         {
                             return None;
                         }
-                        TransactionQueryData::new(tx, &block, &idx, i as u64)
+                        TransactionQueryData::new(tx, &block, &tx_index, position_in_block as u64)
                     })
                     .collect();
                 futures::stream::iter(txs)
