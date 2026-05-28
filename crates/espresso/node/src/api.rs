@@ -3257,7 +3257,10 @@ mod test {
     };
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
-    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade, version};
+    use versions::{
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
+        version,
+    };
 
     use self::{
         data_source::testing::TestableSequencerDataSource, options::HotshotEvents,
@@ -4983,7 +4986,7 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 
-        const V6: Upgrade = Upgrade::trivial(version(0, 6));
+        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -5014,12 +5017,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V6)
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, V6).await;
+        let _network = TestNetwork::new(config, V5).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5088,7 +5091,7 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
 
-        const V6: Upgrade = Upgrade::trivial(version(0, 6));
+        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -5119,12 +5122,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V6)
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
             .await
             .unwrap()
             .build();
 
-        let _network = TestNetwork::new(config, V6).await;
+        let _network = TestNetwork::new(config, V5).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5205,7 +5208,7 @@ mod test {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const NUM_EPOCHS: u64 = 6;
-        const V6: Upgrade = Upgrade::trivial(version(0, 6));
+        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -5236,12 +5239,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V6)
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, V6).await;
+        let network = TestNetwork::new(config, V5).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5298,13 +5301,13 @@ mod test {
         Ok(())
     }
 
-    /// Verifies that the `leader_counts` array in V6 headers is correct.
+    /// Verifies that the `leader_counts` array in V5+ headers is correct.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epoch_leader_counts() -> anyhow::Result<()> {
         const EPOCH_HEIGHT: u64 = 10;
         const NUM_NODES: usize = 5;
         const NUM_EPOCHS: u64 = 6;
-        const V6: Upgrade = Upgrade::trivial(version(0, 6));
+        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
 
         let network_config = TestConfigBuilder::default()
             .epoch_height(EPOCH_HEIGHT)
@@ -5335,12 +5338,12 @@ mod test {
                     &NoMetrics,
                 )
             }))
-            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V6)
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
             .await
             .unwrap()
             .build();
 
-        let network = TestNetwork::new(config, V6).await;
+        let network = TestNetwork::new(config, V5).await;
         let client: Client<ServerError, SequencerApiVersion> =
             Client::new(format!("http://localhost:{api_port}").parse().unwrap());
 
@@ -5369,7 +5372,7 @@ mod test {
 
             let header_leader_counts = header
                 .leader_counts()
-                .expect("V6 header must have leader_counts");
+                .expect("V5+ header must have leader_counts");
 
             // Reset counts at the start of a new epoch
             let is_epoch_start = (height - 1) % EPOCH_HEIGHT == 0;

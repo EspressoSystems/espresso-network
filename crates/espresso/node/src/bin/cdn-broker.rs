@@ -33,7 +33,7 @@ struct Args {
     /// The user-facing endpoint in `IP:port` form to advertise
     #[arg(
         long,
-        default_value = "local_ip:1738",
+        default_value = "public_ip:1738",
         env = "ESPRESSO_CDN_BROKER_PUBLIC_ADVERTISE_ENDPOINT"
     )]
     public_advertise_endpoint: String,

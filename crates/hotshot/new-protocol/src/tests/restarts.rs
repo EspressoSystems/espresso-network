@@ -1,13 +1,9 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::time::Duration;
 
-use hotshot_types::data::ViewNumber;
-
-use crate::tests::common::runner::{NodeAction, NodeChange, TestRunner};
-
-/// Helper: collect view numbers from an iterator.
-fn views(iter: impl IntoIterator<Item = u64>) -> BTreeSet<ViewNumber> {
-    iter.into_iter().map(ViewNumber::new).collect()
-}
+use crate::tests::common::{
+    runner::{NodeAction, NodeChange, TestRunner},
+    views,
+};
 
 // ---------------------------------------------------------------------------
 // Restart from blank state (with epochs)

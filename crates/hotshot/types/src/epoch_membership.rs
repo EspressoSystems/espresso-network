@@ -10,6 +10,7 @@ use either::Either;
 use hotshot_utils::{anytrace::*, *};
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
+use tokio_util::sync::CancellationToken;
 use versions::DRB_FIX_VERSION;
 
 use crate::{
@@ -32,6 +33,12 @@ type EpochMap<TYPES> = HashMap<EpochNumber, InactiveReceiver<Result<EpochMembers
 
 type DrbMap = HashSet<EpochNumber>;
 
+/// Cancellation tokens for in-flight DRB computations. When an
+/// external source supplies the DRB result for `epoch` (e.g. a decided leaf
+/// carrying `next_drb_result`), `supply_drb` fires the token so the local
+/// computation can stop early instead of grinding to completion.
+type DrbCancelMap = HashMap<EpochNumber, CancellationToken>;
+
 type EpochSender<TYPES> = (EpochNumber, Sender<Result<EpochMembership<TYPES>>>);
 
 /// The per-epoch snapshot type associated with `T::Membership`.
@@ -46,6 +53,7 @@ pub struct EpochMembershipCoordinator<TYPES: NodeType> {
     membership: Arc<TYPES::Membership>,
     catchup_map: Arc<Mutex<EpochMap<TYPES>>>,
     drb_calculation_map: Arc<Mutex<DrbMap>>,
+    drb_cancel_map: Arc<Mutex<DrbCancelMap>>,
     epoch_height: BlockNumber,
     store_drb_progress_fn: StoreDrbProgressFn,
     load_drb_progress_fn: LoadDrbProgressFn,
@@ -59,6 +67,7 @@ impl<TYPES: NodeType> Clone for EpochMembershipCoordinator<TYPES> {
             membership: Arc::clone(&self.membership),
             catchup_map: Arc::clone(&self.catchup_map),
             drb_calculation_map: Arc::clone(&self.drb_calculation_map),
+            drb_cancel_map: Arc::clone(&self.drb_cancel_map),
             epoch_height: self.epoch_height,
             store_drb_progress_fn: Arc::clone(&self.store_drb_progress_fn),
             load_drb_progress_fn: Arc::clone(&self.load_drb_progress_fn),
@@ -79,6 +88,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
             membership: membership.into(),
             catchup_map: Arc::default(),
             drb_calculation_map: Arc::default(),
+            drb_cancel_map: Arc::default(),
             epoch_height: epoch_height.into(),
             store_drb_progress_fn: store_drb_progress_fn(storage.clone()),
             load_drb_progress_fn: load_drb_progress_fn(storage.clone()),
@@ -567,7 +577,7 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         epoch: EpochNumber,
         root_leaf: Leaf2<TYPES>,
     ) -> Result<DrbResult> {
-        {
+        let cancel_token = {
             let mut drb_calculation_map_lock = self.drb_calculation_map.lock();
 
             if drb_calculation_map_lock.contains(&epoch) {
@@ -575,18 +585,23 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
                     "DRB calculation for epoch {} already in progress",
                     epoch
                 ));
-            } else {
-                drb_calculation_map_lock.insert(epoch);
             }
-        }
+            drb_calculation_map_lock.insert(epoch);
+
+            let token = CancellationToken::new();
+            self.drb_cancel_map.lock().insert(epoch, token.clone());
+            token
+        };
 
         let Ok(drb_seed_input_vec) = bincode::serialize(&root_leaf.justify_qc().signatures) else {
+            self.clear_drb_state(epoch);
             return Err(anytrace::error!(
                 "Failed to serialize the QC signature for leaf {root_leaf:?}"
             ));
         };
 
         let Some(drb_difficulty_selector) = self.drb_difficulty_selector.read().clone() else {
+            self.clear_drb_state(epoch);
             return Err(anytrace::error!(
                 "The DRB difficulty selector is missing from the epoch membership coordinator. \
                  This node will not be able to spawn any DRB calculation tasks from catchup."
@@ -614,9 +629,29 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         let store_drb_progress_fn = self.store_drb_progress_fn.clone();
         let load_drb_progress_fn = self.load_drb_progress_fn.clone();
 
-        let drb = compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn).await;
+        // Race the local computation against the cancellation token. If the
+        // token fires, an external source has already added the DRB to
+        // membership, so read it back rather than waiting for the local hash
+        // loop to finish.
+        let drb = tokio::select! {
+            drb = compute_drb_result(drb_input, store_drb_progress_fn, load_drb_progress_fn) => {
+                drb
+            },
+            () = cancel_token.cancelled() => {
+                tracing::info!(
+                    "DRB calculation for epoch {epoch} cancelled by external supplier"
+                );
+                self.clear_drb_state(epoch);
+                return self.membership.get_epoch_drb(epoch).await.map_err(|e| {
+                    anytrace::error!(
+                        "DRB calculation for epoch {epoch} was cancelled but the externally \
+                         supplied result is no longer available: {e}"
+                    )
+                });
+            },
+        };
 
-        self.drb_calculation_map.lock().remove(&epoch);
+        self.clear_drb_state(epoch);
 
         tracing::info!("Writing drb result from catchup to storage for epoch {epoch}: {drb:?}");
         if let Err(e) = (self.store_drb_result_fn)(epoch, drb).await {
@@ -625,6 +660,46 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         self.membership.add_drb_result(epoch, drb);
 
         Ok(drb)
+    }
+
+    /// Supply a DRB result obtained from an external source (e.g. a decided
+    /// leaf carrying `next_drb_result`). Adds the result to membership,
+    /// persists it to storage, and cancels any in-flight local computation
+    /// for `epoch`.
+    ///
+    /// If the stake table for `epoch` has not yet been loaded (e.g. the async
+    /// catchup that registers it is still in flight), this logs an error and
+    /// returns; the in-flight catchup will compute the DRB itself once it
+    /// completes.
+    pub fn supply_drb(&self, epoch: EpochNumber, drb: DrbResult) {
+        if self.membership.snapshot(epoch).is_none() {
+            tracing::error!(
+                "supply_drb called for epoch {epoch} but stake table not yet loaded; dropping \
+                 externally-supplied DRB and relying on in-flight catchup"
+            );
+            return;
+        }
+        self.membership.add_drb_result(epoch, drb);
+        let maybe_token = self.drb_cancel_map.lock().remove(&epoch);
+        if let Some(token) = maybe_token {
+            token.cancel();
+        }
+        let store_drb_result_fn = self.store_drb_result_fn.clone();
+        tokio::spawn(async move {
+            tracing::info!(
+                "Writing externally supplied drb result to storage for epoch {epoch}: {drb:?}"
+            );
+            if let Err(e) = store_drb_result_fn(epoch, drb).await {
+                tracing::warn!("Failed to add externally supplied drb result to storage: {e}");
+            }
+        });
+    }
+
+    /// Remove per-epoch DRB bookkeeping after a computation finishes or is
+    /// cancelled. Safe to call multiple times.
+    fn clear_drb_state(&self, epoch: EpochNumber) {
+        self.drb_calculation_map.lock().remove(&epoch);
+        self.drb_cancel_map.lock().remove(&epoch);
     }
 }
 

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use espresso_types::{PubKey, SeqTypes};
 use hotshot::types::Message;
 use hotshot_types::{
@@ -11,7 +11,7 @@ use hotshot_types::{
 };
 use request_response::network::Bytes;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError};
 use vbs::{BinarySerializer, bincode_serializer::BincodeSerializer, version::StaticVersion};
 
 use crate::context::TaskList;
@@ -69,13 +69,16 @@ impl ExternalEventHandler {
         // Match the type
         match external_message {
             ExternalMessage::RequestResponse(request_response) => {
-                // Send the inner message to the request-response protocol
-                self.request_response_sender
-                    .send(request_response.into())
-                    .await?;
+                match self
+                    .request_response_sender
+                    .try_send(request_response.into())
+                {
+                    Ok(()) => Ok(()),
+                    Err(TrySendError::Full(..)) => bail!("request-response channel full"),
+                    Err(TrySendError::Closed(..)) => bail!("request-response channel closed"),
+                }
             },
         }
-        Ok(())
     }
 
     /// The main loop for sending outbound messages.

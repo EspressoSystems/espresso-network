@@ -21,9 +21,6 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
         /// Cert2 which finalizes the most recent leaf in the chain
         cert2: Option<SimpleCertificate<TYPES, Vote2Data<TYPES>, SuccessThreshold>>,
     },
-    ViewChanged {
-        view_number: ViewNumber,
-    },
     QuorumProposal {
         proposal: SignedProposal<TYPES, Proposal<TYPES>>,
         sender: TYPES::SignatureKey,
@@ -31,6 +28,14 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
     ExternalMessageReceived {
         sender: TYPES::SignatureKey,
         data: Vec<u8>,
+    },
+    /// Emitted when a node has reconstructed a block payload from VID shares.
+    /// Lets downstream consumers (e.g. query service) fill in a payload that
+    /// was missing when the corresponding view was decided.
+    BlockPayloadReconstructed {
+        view: ViewNumber,
+        header: TYPES::BlockHeader,
+        payload: TYPES::BlockPayload,
     },
 }
 
@@ -47,9 +52,6 @@ impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
                     .unwrap_or_default();
                 write!(f, "NewDecide: view={view}")
             },
-            Self::ViewChanged { view_number } => {
-                write!(f, "ViewChanged: view={view_number}")
-            },
             Self::QuorumProposal { proposal, .. } => {
                 write!(
                     f,
@@ -59,6 +61,9 @@ impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
             },
             Self::ExternalMessageReceived { .. } => {
                 write!(f, "ExternalMessageReceived")
+            },
+            Self::BlockPayloadReconstructed { view, .. } => {
+                write!(f, "BlockPayloadReconstructed: view={view}")
             },
         }
     }

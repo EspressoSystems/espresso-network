@@ -9,7 +9,8 @@ use hotshot::traits::{BlockPayload, ValidatedState as _};
 use hotshot_types::{
     consensus::PayloadWithMetadata,
     data::{
-        EpochNumber, VidCommitment, ViewNumber, vid_commitment, vid_disperse::vid_total_weight,
+        EpochNumber, Leaf2, VidCommitment, ViewNumber, vid_commitment,
+        vid_disperse::vid_total_weight,
     },
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
@@ -29,6 +30,7 @@ use tracing::{error, warn};
 
 use crate::{
     consensus::ConsensusInput,
+    helpers::proposal_commitment,
     message::{DedupManifest, Proposal, TransactionMessage},
     state::HeaderRequest,
 };
@@ -97,7 +99,11 @@ pub struct BlockBuilder<T: NodeType> {
     config: BlockBuilderConfig,
     upgrade_lock: UpgradeLock<T>,
     current_view: ViewNumber,
-    calculations: BTreeMap<ViewNumber, AbortHandle>,
+    // Keyed by (view, parent_proposal commitment) so that two requests for
+    // the same view but different parents (e.g. one from
+    // `handle_proposal_with_vid_share` and one from
+    // `handle_timeout_certificate`) don't dedup against each other.
+    calculations: BTreeMap<(ViewNumber, Commitment<Leaf2<T>>), AbortHandle>,
     tasks: JoinSet<Result<BlockBuilderOutput<T>, BlockError>>,
 }
 
@@ -127,7 +133,8 @@ impl<T: NodeType> BlockBuilder<T> {
 
     pub fn request_block(&mut self, request: BlockAndHeaderRequest<T>) {
         let view = request.view;
-        if self.calculations.contains_key(&view) {
+        let parent_commitment = proposal_commitment(&request.parent_proposal);
+        if self.calculations.contains_key(&(view, parent_commitment)) {
             return;
         }
         let Ok(version) = self.upgrade_lock.version(view) else {
@@ -145,7 +152,7 @@ impl<T: NodeType> BlockBuilder<T> {
             // sleep so the coordinator's event queue doesnot overflow
             // because if there are no transactions then the block production is way too fast
             if buffer.is_empty() {
-                sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(500)).await;
             }
             let (hashes, txs): (Vec<_>, Vec<_>) = buffer.into_iter().unzip();
             let manifest = DedupManifest {
@@ -206,7 +213,7 @@ impl<T: NodeType> BlockBuilder<T> {
                 manifest,
             })
         });
-        self.calculations.insert(view, handle);
+        self.calculations.insert((view, parent_commitment), handle);
     }
 
     pub async fn next(&mut self) -> Option<Result<BlockBuilderOutput<T>, BlockError>> {
@@ -224,11 +231,14 @@ impl<T: NodeType> BlockBuilder<T> {
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        let keep = self.calculations.split_off(&view_number);
-        for handle in self.calculations.values() {
-            handle.abort();
-        }
-        self.calculations = keep;
+        self.calculations.retain(|(view, _), handle| {
+            if *view < view_number {
+                handle.abort();
+                false
+            } else {
+                true
+            }
+        });
     }
 
     pub fn on_submit_transaction(&mut self, tx: T::Transaction) {

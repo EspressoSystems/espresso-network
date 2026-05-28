@@ -129,6 +129,9 @@ impl<TYPES: NodeType> TaskState for ViewSyncTaskState<TYPES> {
         sender: &Sender<Arc<Self::Event>>,
         _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self.upgrade_lock.new_protocol_active(self.cur_view) {
+            return Ok(());
+        }
         self.handle(event, sender.clone()).await
     }
 
@@ -190,6 +193,9 @@ impl<TYPES: NodeType> TaskState for ViewSyncReplicaTaskState<TYPES> {
         sender: &Sender<Arc<Self::Event>>,
         _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self.upgrade_lock.new_protocol_active(self.cur_view) {
+            return Ok(());
+        }
         self.handle(event, sender.clone()).await;
 
         Ok(())

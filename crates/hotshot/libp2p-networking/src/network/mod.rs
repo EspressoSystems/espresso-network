@@ -8,6 +8,8 @@
 pub mod behaviours;
 /// defines the swarm and network definition (internal)
 mod def;
+/// Periodic aggregated summary of suppressed libp2p log noise.
+pub mod log_summary;
 /// functionality of a libp2p network node
 mod node;
 /// Alternative Libp2p transport implementations
