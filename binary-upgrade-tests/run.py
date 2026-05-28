@@ -170,6 +170,7 @@ SCENARIOS: dict[str, list[Action]] = {
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_FS_OVERLAY),
+        SmokeTest(),
     ],
     "old-from-new-pg": [
         SmokeTest(tag_source="base"),
@@ -181,6 +182,7 @@ SCENARIOS: dict[str, list[Action]] = {
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_PG_OVERLAY),
+        SmokeTest(),
     ],
 }
 
