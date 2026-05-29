@@ -4,7 +4,7 @@ use anyhow::Result;
 use espresso_node::Genesis;
 use espresso_types::UpgradeMode;
 use futures::{StreamExt, future::join_all};
-use hotshot_types::utils::epoch_from_block_number;
+use hotshot_types::{traits::block_contents::BlockHeader, utils::epoch_from_block_number};
 use versions::{
     DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
     NEW_PROTOCOL_VERSION, Upgrade,
@@ -37,6 +37,7 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
 
     let mut stream = futures::stream::iter(subscriptions).flatten_unordered(None);
     let mut iteration = 0u64;
+    let mut last_base_block: Option<(u64, u64)> = None;
 
     while let Some(header) = stream.next().await {
         let header = header.unwrap();
@@ -56,7 +57,22 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
             assert_eq!(header.version(), upgrade.base);
         }
 
+        if header.version() == upgrade.base {
+            last_base_block = Some((header.height(), header.timestamp_millis()));
+        }
+
         if header.version() == upgrade.target {
+            if let Some((prev_height, prev_ts)) = last_base_block {
+                let gap_ms = header.timestamp_millis().saturating_sub(prev_ts);
+                println!(
+                    "upgrade gap: {:.2}s between block {} (v{}) and block {} (v{})",
+                    gap_ms as f64 / 1000.0,
+                    prev_height,
+                    upgrade.base,
+                    header.height(),
+                    upgrade.target,
+                );
+            }
             println!("header version matched! height={:?}", header.height());
             break;
         }
@@ -129,6 +145,9 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
         } else {
             None
         },
+        // The new protocol does not use a builder; skip builder-dependent waits and
+        // balance-conservation checks when running against v0.6+.
+        requires_builder: upgrade.target < NEW_PROTOCOL_VERSION,
         ..Default::default()
     };
 

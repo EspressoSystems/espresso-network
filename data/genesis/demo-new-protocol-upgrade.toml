@@ -34,8 +34,8 @@ number = 0
 
 [[upgrade]]
 version = "0.6"
-start_proposing_view = 150
-stop_proposing_view = 1000
+start_proposing_view = 600
+stop_proposing_view = 2000
 
 [upgrade.da]
 [upgrade.da.chain_config]

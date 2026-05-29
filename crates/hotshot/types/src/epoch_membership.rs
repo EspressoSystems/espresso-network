@@ -210,6 +210,13 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// keyed by signature key. Each entry's `Option<PeerConnectInfo>`
     /// reflects whether the peer has connection info registered.
     ///
+    /// When the same peer appears in both the stake table and the DA
+    /// committee, `Some` connect info wins over `None`. The DA committee
+    /// inside an epoch snapshot can be a stale bootstrap copy with no
+    /// connect info while the stake table carries fresh L1-derived info
+    /// (e.g. during the pre-CLIQUENET → CLIQUENET cutover); plain
+    /// last-write-wins would clobber the live data.
+    ///
     /// Returns `None` if the stake table for `epoch` is unavailable
     /// (e.g. catchup is still in progress).
     pub fn epoch_peers(
@@ -217,18 +224,29 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
         e: Option<EpochNumber>,
     ) -> Option<HashMap<TYPES::SignatureKey, Option<PeerConnectInfo>>> {
         let membership = self.stake_table_for_epoch(e).ok()?;
-        Some(if let Some(snap) = membership.snapshot() {
-            snap.stake_table()
-                .chain(snap.da_stake_table())
-                .map(|m| (m.stake_table_entry.public_key(), m.connect_info.clone()))
-                .collect()
+        let mut out: HashMap<TYPES::SignatureKey, Option<PeerConnectInfo>> = HashMap::new();
+        let mut merge =
+            |key: TYPES::SignatureKey, info: Option<PeerConnectInfo>| match out.entry(key) {
+                Entry::Vacant(slot) => {
+                    slot.insert(info);
+                },
+                Entry::Occupied(mut slot) => {
+                    if slot.get().is_none() && info.is_some() {
+                        slot.insert(info);
+                    }
+                },
+            };
+        if let Some(snap) = membership.snapshot() {
+            for m in snap.stake_table().chain(snap.da_stake_table()) {
+                merge(m.stake_table_entry.public_key(), m.connect_info.clone());
+            }
         } else {
             let snap = membership.non_epoch_snapshot()?;
-            snap.stake_table()
-                .chain(snap.da_stake_table())
-                .map(|m| (m.stake_table_entry.public_key(), m.connect_info.clone()))
-                .collect()
-        })
+            for m in snap.stake_table().chain(snap.da_stake_table()) {
+                merge(m.stake_table_entry.public_key(), m.connect_info.clone());
+            }
+        }
+        Some(out)
     }
 
     /// Collect the union of `epoch-1`, `epoch`, and `epoch+1` stake tables
