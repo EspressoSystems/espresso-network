@@ -6,7 +6,8 @@ use espresso_types::UpgradeMode;
 use futures::{StreamExt, future::join_all};
 use hotshot_types::utils::epoch_from_block_number;
 use versions::{
-    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
+    NEW_PROTOCOL_VERSION, Upgrade,
 };
 
 use crate::{
@@ -168,6 +169,15 @@ async fn test_native_demo_epoch_reward_upgrade() -> Result<()> {
     run_upgrade_test(
         "data/genesis/demo-epoch-reward-upgrade.toml",
         Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_new_protocol_upgrade() -> Result<()> {
+    run_upgrade_test(
+        "data/genesis/demo-new-protocol-upgrade.toml",
+        Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION),
     )
     .await
 }
