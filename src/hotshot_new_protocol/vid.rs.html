@@ -233,5 +233,15 @@
 <a href=#233 id=233 data-nosnippet>233</a>        <span class="self">self</span>.calculations = keep;
 <a href=#234 id=234 data-nosnippet>234</a>        <span class="self">self</span>.accumulators = <span class="self">self</span>.accumulators.split_off(<span class="kw-2">&amp;</span>view_number);
 <a href=#235 id=235 data-nosnippet>235</a>    }
-<a href=#236 id=236 data-nosnippet>236</a>}
+<a href=#236 id=236 data-nosnippet>236</a>
+<a href=#237 id=237 data-nosnippet>237</a>    <span class="doccomment">/// Mark `view` as already-reconstructed: drop accumulated shares, abort any
+<a href=#238 id=238 data-nosnippet>238</a>    /// in-flight reconstruction task, and ignore later shares for this view.
+<a href=#239 id=239 data-nosnippet>239</a>    </span><span class="kw">pub fn </span>mark_reconstructed(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber) {
+<a href=#240 id=240 data-nosnippet>240</a>        <span class="self">self</span>.reconstructed.insert(view);
+<a href=#241 id=241 data-nosnippet>241</a>        <span class="self">self</span>.accumulators.remove(<span class="kw-2">&amp;</span>view);
+<a href=#242 id=242 data-nosnippet>242</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(handle) = <span class="self">self</span>.calculations.remove(<span class="kw-2">&amp;</span>view) {
+<a href=#243 id=243 data-nosnippet>243</a>            handle.abort();
+<a href=#244 id=244 data-nosnippet>244</a>        }
+<a href=#245 id=245 data-nosnippet>245</a>    }
+<a href=#246 id=246 data-nosnippet>246</a>}
 </code></pre></div></section></main></body></html>
