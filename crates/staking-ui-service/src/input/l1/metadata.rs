@@ -5,17 +5,18 @@ use std::{
     time::Duration,
 };
 
-use crate::{
-    Error, Result,
-    error::{ResultExt, ensure},
-    types::common::{ImageSet, NodeMetadata, NodeMetadataContent},
-};
 use hickory_resolver::{Resolver, TokioResolver};
 use prometheus_parse::Scrape;
 use reqwest::Url;
 use tagged_base64::TaggedBase64;
 use tide_disco::http::url::Host;
 use tracing::instrument;
+
+use crate::{
+    Error, Result,
+    error::{ResultExt, ensure},
+    types::common::{ImageSet, NodeMetadata, NodeMetadataContent},
+};
 
 /// Metadata sourced from third party URIs should be automatically refreshed every fixed number of
 /// L1 blocks.
@@ -51,7 +52,7 @@ pub trait MetadataFetcher: Sync {
                 Err(err) => {
                     tracing::warn!(%uri, "unable to fetch metadata, returning default: {err:#}");
                     None
-                }
+                },
             };
             Some(NodeMetadata { uri, content })
         }
@@ -170,7 +171,7 @@ impl HttpMetadataFetcher {
                     };
                     res.map_err(|err| err.context(format!("for host {domain}")))?;
                 }
-            }
+            },
             Host::Ipv4(ipv4) => check_metadata_ipv4_safety(ipv4)?,
             Host::Ipv6(ipv6) => check_metadata_ipv6_safety(ipv6)?,
         }
@@ -278,17 +279,17 @@ fn parse_prometheus(text: &str) -> Result<NodeMetadataContent> {
                             Ok(url) => metadata.company_website = Some(url),
                             Err(err) => {
                                 tracing::warn!("malformed company website {value}: {err:#}");
-                            }
+                            },
                         },
                         _ => continue,
                     }
                 }
-            }
+            },
             "consensus_version" => {
                 if let Some(desc) = sample.labels.get("desc") {
                     metadata.client_version = Some(desc.into());
                 }
-            }
+            },
             "consensus_node_identity_icon" => {
                 let mut icon = ImageSet::default();
                 for (label, value) in sample.labels.iter() {
@@ -300,7 +301,7 @@ fn parse_prometheus(text: &str) -> Result<NodeMetadataContent> {
                         Err(err) => {
                             tracing::warn!("malformed icon URL {value}: {err:#}");
                             continue;
-                        }
+                        },
                     };
                     match label.as_str() {
                         "small_1x" => icon.small.ratio1 = Some(url),
@@ -311,11 +312,11 @@ fn parse_prometheus(text: &str) -> Result<NodeMetadataContent> {
                         "large_3x" => icon.large.ratio3 = Some(url),
                         _ => {
                             tracing::warn!("unrecognized icon format {label}");
-                        }
+                        },
                     }
                 }
                 metadata.icon = Some(icon);
-            }
+            },
             _ => continue,
         }
     }
@@ -337,17 +338,13 @@ pub fn parse_metadata_uri(uri: &str) -> Option<Url> {
             // it, as if they had opted out of registering one at all.
             tracing::warn!("node registered invalid metadata URI {uri}: {err:#}");
             None
-        }
+        },
     }
 }
 
 #[cfg(test)]
 mod test {
     use std::{borrow::Cow, str::FromStr, sync::Arc};
-
-    use crate::types::common::{ImageSet, RatioSet};
-
-    use super::*;
 
     use async_lock::RwLock;
     use espresso_types::PubKey;
@@ -361,6 +358,9 @@ mod test {
     use toml::toml;
     use vbs::version::{StaticVersion, StaticVersionType};
     use warp::Filter;
+
+    use super::*;
+    use crate::types::common::{ImageSet, RatioSet};
 
     #[test_log::test]
     fn test_parse_prometheus_all_fields() {

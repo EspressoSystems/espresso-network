@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
-use crate::types::common::Ratio;
-
-use super::common::{ActiveNodeSetEntry, EpochAndBlock, L1BlockInfo, NodeExit, NodeSetEntry};
 use alloy::primitives::Address;
 use bitvec::vec::BitVec;
 use serde::{Deserialize, Serialize};
+
+use super::common::{ActiveNodeSetEntry, EpochAndBlock, L1BlockInfo, NodeExit, NodeSetEntry};
+use crate::types::common::Ratio;
 
 /// A snapshot of the full node set, according to the staking contract, at a point in time.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

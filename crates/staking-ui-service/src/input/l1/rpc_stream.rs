@@ -1,12 +1,12 @@
 //! An L1 event stream based on a standard JSON-RPC server.
 
-use super::{
-    BlockInput, L1Event, ResettableStream, options::L1ClientOptions,
-    switching_transport::SwitchingTransport,
+use std::{
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
 };
-use crate::input::l1::provider::get_events;
-use crate::types::common::Address;
-use crate::{Error, Result, types::common::L1BlockId};
+
 use alloy::{
     eips::BlockId,
     network::Ethereum,
@@ -17,14 +17,18 @@ use futures::{
     future,
     stream::{self, BoxStream, Stream, StreamExt},
 };
-use std::{
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
 use tide_disco::Url;
 use tokio::time::{sleep, timeout};
+
+use super::{
+    BlockInput, L1Event, ResettableStream, options::L1ClientOptions,
+    switching_transport::SwitchingTransport,
+};
+use crate::{
+    Error, Result,
+    input::l1::provider::get_events,
+    types::common::{Address, L1BlockId},
+};
 
 /// Builder for creating an RpcStream.
 struct RpcStreamBuilder {
@@ -84,13 +88,13 @@ impl RpcStreamBuilder {
                         Some(item) => {
                             last_block = Some(item.block.number);
                             return Some((item, (builder, stream, last_block)));
-                        }
+                        },
                         None => {
                             sleep(builder.options.l1_retry_delay).await;
                             tracing::warn!("L1 block stream ended, reconnecting...");
                             stream = builder.establish_stream(last_block).await;
                             tracing::info!("Successfully reconnected to L1 block stream");
-                        }
+                        },
                     }
                 }
             },
@@ -143,7 +147,7 @@ impl RpcStreamBuilder {
                             // the stream at the higher level where we already handle reconnects
                             // (`stream_with_reconnect`).
                             return None;
-                        }
+                        },
                     };
                     let blocks =
                         process_block_header(provider, &mut last_block_number, head, retry_delay);
@@ -202,11 +206,11 @@ impl RpcStreamBuilder {
                         Ok(None) => {
                             tracing::warn!(%hash, "HTTP stream: Block not available");
                             return Some((stream::empty().boxed(), (stream, last_block_number)));
-                        }
+                        },
                         Err(err) => {
                             tracing::warn!(%hash, "HTTP stream: Failed to fetch block: {err:#}");
                             return Some((stream::empty().boxed(), (stream, last_block_number)));
-                        }
+                        },
                     };
 
                     let blocks = process_block_header(
@@ -249,7 +253,7 @@ impl RpcStreamBuilder {
                     let provider_index = i % urls.len();
                     let url = &urls[provider_index];
                     self.create_ws_stream(url, last_block).await
-                }
+                },
                 None => self.create_http_stream(last_block).await,
             };
 
@@ -257,14 +261,14 @@ impl RpcStreamBuilder {
                 Ok(stream) => {
                     tracing::info!(attempt = i, "Successfully established L1 block stream");
                     return stream;
-                }
+                },
                 Err(err) => {
                     tracing::warn!(
                         attempt = i,
                         "Failed to establish stream: {err}, retrying..."
                     );
                     sleep(self.options.l1_retry_delay).await;
-                }
+                },
             }
         }
 
@@ -342,28 +346,28 @@ async fn fetch_finalized(
                             hash: block.header.hash,
                             parent: block.header.parent_hash,
                         };
-                    }
+                    },
                     Ok(None) => {
                         tracing::warn!("head's parent is None, will retry");
-                    }
+                    },
                     Err(err) => {
                         tracing::warn!("failed to fetch head's parent: {err:#}");
-                    }
+                    },
                 }
-            }
+            },
             Ok(Some(block)) => {
                 return L1BlockId {
                     number: block.header.number,
                     hash: block.header.hash,
                     parent: block.header.parent_hash,
                 };
-            }
+            },
             Ok(None) => {
                 tracing::warn!("finalized block is None, will retry");
-            }
+            },
             Err(err) => {
                 tracing::warn!("Failed to fetch finalized block: {err}, will retry");
-            }
+            },
         }
         sleep(retry_delay).await;
     }
@@ -422,17 +426,17 @@ fn fetch_missing_blocks(
                 match provider.get_block(BlockId::number(block_num)).await {
                     Ok(Some(block)) => {
                         break block.header;
-                    }
+                    },
                     Ok(None) => {
                         tracing::warn!("Missing block {block_num} not found, retrying...");
                         sleep(retry_delay).await;
-                    }
+                    },
                     Err(err) => {
                         tracing::warn!(
                             "Failed to fetch missing block {block_num}: {err}, retrying..."
                         );
                         sleep(retry_delay).await;
-                    }
+                    },
                 }
             }
         }
@@ -503,7 +507,7 @@ async fn fetch_block_events(
                 } else {
                     sleep(retry_delay).await;
                 }
-            }
+            },
         }
     }
 
@@ -518,12 +522,12 @@ async fn fetch_block_events(
                 tracing::warn!("Block {block_number} not found, retrying...");
                 sleep(retry_delay).await;
                 continue;
-            }
+            },
             Err(err) => {
                 tracing::warn!("Failed to fetch block {block_number}: {err}, retrying...");
                 sleep(retry_delay).await;
                 continue;
-            }
+            },
         };
 
         match try_get_events_from_header(
@@ -542,7 +546,7 @@ async fn fetch_block_events(
                     "Failed to fetch logs: {err}, retrying..."
                 );
                 sleep(retry_delay).await;
-            }
+            },
         }
     }
 }
@@ -582,32 +586,37 @@ async fn create_block_input(
 }
 #[cfg(test)]
 mod tests {
-    use crate::input::l1;
-    use crate::input::l1::testing::ContractDeployment;
+    use std::time::Duration;
 
-    use crate::input::l1::testing::MemoryStorage;
-    use crate::input::l1::testing::NoCatchup;
-    use crate::input::l1::testing::NoMetadata;
-    use crate::input::l1::{Snapshot, State};
-    use crate::metrics::PrometheusMetrics;
-    use crate::types::common::Ratio;
+    use alloy::{
+        node_bindings::Anvil,
+        providers::{ProviderBuilder, ext::AnvilApi},
+        sol_types::SolEvent,
+    };
     use async_lock::RwLock;
-    use tokio::time::sleep;
-
-    use super::*;
-    use alloy::providers::ext::AnvilApi;
-    use alloy::sol_types::SolEvent;
-    use alloy::{node_bindings::Anvil, providers::ProviderBuilder};
     use committable::Committable;
     use espresso_types::v0::StakeTableState;
     use futures::StreamExt;
-    use hotshot_contract_adapter::sol_types::StakeTableV2::{
+    use hotshot_contract_adapter::sol_types::StakeTableV3::{
         CommissionUpdated, ConsensusKeysUpdated, ConsensusKeysUpdatedV2, Delegated, Undelegated,
         UndelegatedV2, ValidatorExit, ValidatorExitClaimed, ValidatorExitV2, ValidatorRegistered,
         ValidatorRegisteredV2, WithdrawalClaimed,
     };
     use staking_cli::demo::DelegationConfig;
-    use std::time::Duration;
+    use tokio::time::sleep;
+
+    use super::*;
+    use crate::{
+        input::{
+            l1,
+            l1::{
+                Snapshot, State,
+                testing::{ContractDeployment, MemoryStorage, NoCatchup, NoMetadata},
+            },
+        },
+        metrics::PrometheusMetrics,
+        types::common::Ratio,
+    };
 
     #[test_log::test(tokio::test)]
     async fn test_rpc_stream_with_anvil() {
@@ -893,8 +902,8 @@ mod tests {
                     L1Event::StakeTable(_) => {
                         found_stake_event = true;
                         break 'outer;
-                    }
-                    L1Event::Reward(_) => {}
+                    },
+                    L1Event::Reward(_) => {},
                 }
             }
         }
@@ -949,20 +958,23 @@ mod tests {
             for event in &block_input.events {
                 match event {
                     L1Event::StakeTable(stake_event) => {
-                        println!("Stream event: {stake_event:?}");
+                        println!(
+                            "Stream event: {:?}",
+                            std::mem::discriminant(stake_event.as_ref())
+                        );
                         if let Ok(event) = (**stake_event).clone().try_into() {
                             match stake_table_state_from_stream.apply_event(event) {
-                                Ok(Ok(())) => {}
+                                Ok(Ok(())) => {},
                                 Ok(Err(e)) => {
                                     println!("Expected error: {e:?}");
-                                }
+                                },
                                 Err(err) => {
                                     panic!("Critical stake table error: {err:?}");
-                                }
+                                },
                             }
                         }
-                    }
-                    L1Event::Reward(_) => {}
+                    },
+                    L1Event::Reward(_) => {},
                 }
             }
         }
@@ -1041,19 +1053,22 @@ mod tests {
                             let result =
                                 stake_table_state_from_stream.apply_event(stake_table_event);
                             match result {
-                                Ok(Ok(())) => {}
+                                Ok(Ok(())) => {},
                                 Ok(Err(e)) => {
                                     println!("Expected error: {e:?}");
-                                }
+                                },
                                 Err(err) => {
                                     panic!("Critical stake table error: {err:?}");
-                                }
+                                },
                             }
                         } else {
-                            tracing::info!(?event, "skipping irrelevant contract event");
+                            tracing::info!(
+                                event = ?std::mem::discriminant(event.as_ref()),
+                                "skipping irrelevant contract event",
+                            );
                         }
-                    }
-                    L1Event::Reward(_) => {}
+                    },
+                    L1Event::Reward(_) => {},
                 }
             }
         }
@@ -1118,13 +1133,13 @@ mod tests {
                 if let Ok(event) = st_event.as_ref().clone().try_into() {
                     let result = state.apply_event(event);
                     match result {
-                        Ok(Ok(())) => {}
+                        Ok(Ok(())) => {},
                         Ok(Err(err)) => {
                             println!("Expected error: {err:?}");
-                        }
+                        },
                         Err(err) => {
                             panic!("Critical err: {err:?}");
-                        }
+                        },
                     }
                 }
             }
@@ -1274,15 +1289,17 @@ mod tests {
 
                         assert_eq!(
                             wallet_delegation.amount, *delegated_amount,
-                            "Delegation amount mismatch: delegator {delegator_address} to validator {}",
+                            "Delegation amount mismatch: delegator {delegator_address} to \
+                             validator {}",
                             node.address,
                         );
-                    }
+                    },
                     Err(e) => {
                         panic!(
-                            "Delegator {delegator_address} wallet not found in subscription state but exists in L1 validator delegators: {e}"
+                            "Delegator {delegator_address} wallet not found in subscription state \
+                             but exists in L1 validator delegators: {e}"
                         );
-                    }
+                    },
                 }
             }
         }

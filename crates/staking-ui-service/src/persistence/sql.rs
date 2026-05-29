@@ -1,4 +1,17 @@
 //! SQL-based persistent storage
+use std::{collections::HashMap, path::PathBuf, str::FromStr, time::Duration};
+
+use alloy::primitives::U256;
+use anyhow::Context;
+use clap::Parser;
+use futures::TryStreamExt;
+use serde_json::Value;
+use sqlx::{
+    ConnectOptions, QueryBuilder,
+    sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteSynchronous},
+};
+use tracing::{instrument, log::LevelFilter};
+
 use crate::{
     Error, Result,
     input::{
@@ -14,17 +27,6 @@ use crate::{
         wallet::WalletDiff,
     },
 };
-use alloy::primitives::U256;
-use anyhow::Context;
-use clap::Parser;
-use futures::TryStreamExt;
-use serde_json::Value;
-use sqlx::{
-    ConnectOptions, QueryBuilder,
-    sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteSynchronous},
-};
-use std::{collections::HashMap, path::PathBuf, str::FromStr, time::Duration};
-use tracing::{instrument, log::LevelFilter};
 
 /// Options for persistence.
 #[derive(Parser, Clone, Debug)]
@@ -233,10 +235,10 @@ impl Persistence {
                     match withdrawal_type {
                         WithdrawalType::Undelegation => {
                             pending_undelegations.insert(node, withdrawal);
-                        }
+                        },
                         WithdrawalType::Exit => {
                             pending_exits.insert(node, withdrawal);
-                        }
+                        },
                     }
                 }
             }
@@ -275,7 +277,8 @@ impl Persistence {
                     .transpose()
                     .context("serializing metadata")?;
                 sqlx::query(
-                    "INSERT INTO node (address, staking_key, state_key, commission, stake, metadata)
+                    "INSERT INTO node (address, staking_key, state_key, commission, stake, \
+                     metadata)
                      VALUES ($1, $2, $3, $4, $5, $6)
                      ON CONFLICT(address) DO UPDATE SET
                          staking_key = excluded.staking_key,
@@ -292,7 +295,7 @@ impl Persistence {
                 .bind(metadata)
                 .execute(&mut **tx)
                 .await?;
-            }
+            },
             FullNodeSetDiff::NodeExit(exit) => {
                 let result = sqlx::query("DELETE FROM node WHERE address = $1")
                     .bind(exit.address.to_string())
@@ -306,7 +309,7 @@ impl Persistence {
                     ))
                     .map_err(Into::into);
                 }
-            }
+            },
         }
         Ok(())
     }
@@ -365,7 +368,7 @@ impl Persistence {
                     ))
                     .map_err(Into::into);
                 }
-            }
+            },
             WalletDiff::DelegatedToNode(delegation) => {
                 // Check if delegation exists
                 let existing = sqlx::query_as::<_, (String,)>(
@@ -378,11 +381,15 @@ impl Persistence {
 
                 let new_amount = if let Some((amount,)) = existing {
                     let current_amount = U256::from_str(&amount).unwrap_or(U256::ZERO);
-                    current_amount.checked_add(delegation.amount)
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "Overflow: adding delegation {} to existing amount {current_amount}",
-                            delegation.amount
-                        ))?
+                    current_amount
+                        .checked_add(delegation.amount)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Overflow: adding delegation {} to existing amount \
+                                 {current_amount}",
+                                delegation.amount
+                            )
+                        })?
                 } else {
                     delegation.amount
                 };
@@ -399,7 +406,7 @@ impl Persistence {
                 .bind(new_amount.to_string())
                 .execute(&mut **tx)
                 .await?;
-            }
+            },
             WalletDiff::UndelegatedFromNode(withdrawal) => {
                 let (amount,) = sqlx::query_as::<_, (String,)>(
                     "SELECT amount FROM delegation WHERE delegator = $1 AND node = $2",
@@ -410,14 +417,16 @@ impl Persistence {
                 .await?;
 
                 let current_amount = U256::from_str(&amount).unwrap_or(U256::ZERO);
-                let new_amount = current_amount.checked_sub(withdrawal.amount).ok_or_else(
-                    || {
-                        anyhow::anyhow!(
-                            "Underflow: withdrawal {} exceeds delegation amount {current_amount}",
-                            withdrawal.amount
-                        )
-                    },
-                )?;
+                let new_amount =
+                    current_amount
+                        .checked_sub(withdrawal.amount)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Underflow: withdrawal {} exceeds delegation amount \
+                                 {current_amount}",
+                                withdrawal.amount
+                            )
+                        })?;
 
                 // If new amount is zero, delete the delegation
                 // otherwise update it
@@ -461,7 +470,8 @@ impl Persistence {
                 // Insert pending undelegation
                 // we expect this to fail if there's already a pending undelegation
                 sqlx::query(
-                    "INSERT INTO pending_withdrawals (delegator, node, withdrawal_type, amount, unlocks_at)
+                    "INSERT INTO pending_withdrawals (delegator, node, withdrawal_type, amount, \
+                     unlocks_at)
                      VALUES ($1, $2, $3, $4, $5)",
                 )
                 .bind(withdrawal.delegator.to_string())
@@ -471,7 +481,7 @@ impl Persistence {
                 .bind(withdrawal.available_time as i64)
                 .execute(&mut **tx)
                 .await?;
-            }
+            },
             WalletDiff::NodeExited(withdrawal) => {
                 // Delete the delegation as node has exited
                 let result = sqlx::query(
@@ -494,7 +504,8 @@ impl Persistence {
                 // Insert pending exit with the amount from the withdrawal
                 // we expect this to fail if there is already a pending exit
                 sqlx::query(
-                    "INSERT INTO pending_withdrawals (delegator, node, withdrawal_type, amount, unlocks_at)
+                    "INSERT INTO pending_withdrawals (delegator, node, withdrawal_type, amount, \
+                     unlocks_at)
                      VALUES ($1, $2, $3, $4, $5)",
                 )
                 .bind(withdrawal.delegator.to_string())
@@ -504,7 +515,7 @@ impl Persistence {
                 .bind(withdrawal.available_time as i64)
                 .execute(&mut **tx)
                 .await?;
-            }
+            },
             WalletDiff::UndelegationWithdrawal(withdrawal) => {
                 // Delete the pending undelegation withdrawal
                 let result = sqlx::query(
@@ -523,7 +534,7 @@ impl Persistence {
                     ))
                     .map_err(Into::into);
                 }
-            }
+            },
             WalletDiff::NodeExitWithdrawal(withdrawal) => {
                 // Delete the pending exit withdrawal
                 let result = sqlx::query(
@@ -542,7 +553,7 @@ impl Persistence {
                     ))
                     .map_err(Into::into);
                 }
-            }
+            },
         }
         Ok(())
     }
@@ -777,7 +788,7 @@ impl EspressoPersistence for Persistence {
                 // All accounts start at 0, if we don't have another value for this account it has
                 // never accrued any rewards.
                 Ok(ESPTokenAmount::ZERO)
-            }
+            },
         }
     }
 
@@ -885,9 +896,10 @@ impl EspressoPersistence for Persistence {
                     );
                 } else {
                     return Err(Error::internal().context(format!(
-                    "an update has been skipped; last_update: {last_block}, current update: {:?}",
-                    update.espresso_block
-                )));
+                        "an update has been skipped; last_update: {last_block}, current update: \
+                         {:?}",
+                        update.espresso_block
+                    )));
                 }
             }
         } else {
@@ -954,7 +966,7 @@ impl EspressoPersistence for Persistence {
                     .execute(tx.as_mut())
                     .await
                     .context("inserting new active node set")?;
-                }
+                },
                 ActiveNodeSetDiff::NewBlock {
                     leader,
                     failed_leaders,
@@ -1013,7 +1025,7 @@ impl EspressoPersistence for Persistence {
                             .await
                             .context("updating voter stats")?;
                     }
-                }
+                },
             }
         }
 
@@ -1066,19 +1078,23 @@ impl EspressoPersistence for Persistence {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
-    use crate::input::l1::testing::{block_snapshot, make_node};
-    use crate::types::common::{
-        Address, ESPTokenAmount, ImageSet, NodeExit, NodeMetadata, NodeMetadataContent,
-        PendingWithdrawal, RatioSet, Withdrawal,
-    };
-    use crate::types::global::FullNodeSetDiff;
     use espresso_types::PubKey;
     use hotshot_types::traits::signature_key::BuilderSignatureKey;
     use im::ordmap;
-
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    use super::*;
+    use crate::{
+        input::l1::testing::{block_snapshot, make_node},
+        types::{
+            common::{
+                Address, ESPTokenAmount, ImageSet, NodeExit, NodeMetadata, NodeMetadataContent,
+                PendingWithdrawal, RatioSet, Withdrawal,
+            },
+            global::FullNodeSetDiff,
+        },
+    };
 
     /// Tests the complete persistence lifecycle
     #[test_log::test(tokio::test)]

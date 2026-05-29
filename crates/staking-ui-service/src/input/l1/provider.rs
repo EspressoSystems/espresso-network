@@ -2,12 +2,6 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::{
-    Error, Result,
-    error::{ResultExt, ensure},
-    input::l1::{L1BlockSnapshot, L1Event},
-    types::common::{Address, ESPTokenAmount, L1BlockId, Timestamp},
-};
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     primitives::utils::format_ether,
@@ -18,16 +12,23 @@ use alloy::{
 use hotshot_contract_adapter::sol_types::{
     EspToken,
     RewardClaim::RewardClaimEvents,
-    StakeTableV2::{self, StakeTableV2Events},
+    StakeTableV3::{self, StakeTableV3Events},
 };
 use tracing::instrument;
+
+use crate::{
+    Error, Result,
+    error::{ResultExt, ensure},
+    input::l1::{L1BlockSnapshot, L1Event},
+    types::common::{Address, ESPTokenAmount, L1BlockId, Timestamp},
+};
 
 /// Get the Espresso stake table genesis block.
 pub async fn load_genesis(
     provider: &impl Provider,
     stake_table: Address,
 ) -> Result<L1BlockSnapshot> {
-    let stake_table_contract = StakeTableV2::new(stake_table, provider);
+    let stake_table_contract = StakeTableV3::new(stake_table, provider);
 
     // Fetch the finalized block first.
     // This avoids a race condition where the initialized block could change
@@ -55,7 +56,7 @@ pub async fn load_genesis(
         initialized_at_block <= finalized_block_number,
         Error::internal().context(format!(
             "Initialized block {initialized_at_block} must be less than finalized block \
-                {finalized_block_number}"
+             {finalized_block_number}"
         ))
     );
 
@@ -102,7 +103,7 @@ pub async fn get_initial_token_supply(
     stake_table: Address,
 ) -> Result<ESPTokenAmount> {
     // Get the token contract from the stake table contract.
-    let stake_table = StakeTableV2::new(stake_table, provider);
+    let stake_table = StakeTableV3::new(stake_table, provider);
     let token =
         stake_table.token().call().await.context(|| {
             Error::internal().context("getting token address from stake table contract")
@@ -196,12 +197,13 @@ pub(super) async fn get_events(
 
         // Try to decode stake table event
         if log.address() == stake_table_address {
-            let event = StakeTableV2Events::decode_raw_log(log.topics(), &log.data().data)
+            let event = StakeTableV3Events::decode_raw_log(log.topics(), &log.data().data)
                 .unwrap_or_else(|e| {
                     // This is a panic, not an error, as it should be impossible to successfully
                     // retrieve an event from the stake table address but not be able to decode it.
                     panic!(
-                        "failed to decode event from stake table {stake_table_address}, tx {:?}: {e:#}",
+                        "failed to decode event from stake table {stake_table_address}, tx {:?}: \
+                         {e:#}",
                         log.transaction_hash
                     );
                 });
@@ -214,7 +216,8 @@ pub(super) async fn get_events(
             let event = RewardClaimEvents::decode_raw_log(log.topics(), &log.data().data)
                 .unwrap_or_else(|e| {
                     panic!(
-                        "failed to decode event from reward contract {reward_contract_address}, tx {:?}: {e:#}",
+                        "failed to decode event from reward contract {reward_contract_address}, \
+                         tx {:?}: {e:#}",
                         log.transaction_hash
                     );
                 });
@@ -247,12 +250,11 @@ mod test {
     use staking_cli::DEV_MNEMONIC;
     use tide_disco::Url;
 
+    use super::*;
     use crate::input::l1::testing::{
         ContractDeployment, DeploymentConfig, assert_events_eq,
         validator_registered_event_with_account,
     };
-
-    use super::*;
 
     #[tokio::test]
     #[test_log::test]
@@ -291,7 +293,7 @@ mod test {
             .connect_http(anvil.endpoint_url());
 
         let stake_table_address = deployment.stake_table_addr;
-        let contract = StakeTableV2::new(stake_table_address, &provider);
+        let contract = StakeTableV3::new(stake_table_address, &provider);
 
         // Change the exit escrow period, to verify that the genesis snapshot loads the exit escrow
         // period from the time when the contract was initialized, not what it is now.
@@ -351,7 +353,7 @@ mod test {
                     StdRng::seed_from_u64(index as u64),
                     address,
                 );
-                let stake_table = StakeTableV2::new(deployment.stake_table_addr, provider.clone());
+                let stake_table = StakeTableV3::new(deployment.stake_table_addr, provider.clone());
                 tracing::info!(index, %address, "submitting registration");
                 async move {
                     let tx = stake_table
@@ -372,7 +374,7 @@ mod test {
                     tracing::info!(index, "transaction mined");
 
                     let expected_event = L1Event::StakeTable(Arc::new(
-                        StakeTableV2Events::ValidatorRegisteredV2(node),
+                        StakeTableV3Events::ValidatorRegisteredV2(node),
                     ));
                     (receipt, expected_event)
                 }

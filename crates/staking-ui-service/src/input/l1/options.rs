@@ -1,12 +1,13 @@
 //! Configuration options for Rpc Stream client.
 
-use crate::types::common::Address;
-use crate::{Result, input::l1::switching_transport::SwitchingTransport};
+use std::time::Duration;
+
 use alloy::{providers::RootProvider, rpc::client::RpcClient};
 use clap::Parser;
 use espresso_types::parse_duration;
-use std::time::Duration;
 use tide_disco::Url;
+
+use crate::{Result, input::l1::switching_transport::SwitchingTransport, types::common::Address};
 
 /// Configuration for an Rpc Stream client.
 #[derive(Clone, Debug, Parser)]

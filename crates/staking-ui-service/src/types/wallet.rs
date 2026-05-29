@@ -1,7 +1,8 @@
 //! Types that make up the API specific to an individual wallet.
 
-use super::common::{Delegation, ESPTokenAmount, L1BlockInfo, PendingWithdrawal, Withdrawal};
 use serde::{Deserialize, Serialize};
+
+use super::common::{Delegation, ESPTokenAmount, L1BlockInfo, PendingWithdrawal, Withdrawal};
 
 /// A complete snapshot of a user's wallet state, at a point in time.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

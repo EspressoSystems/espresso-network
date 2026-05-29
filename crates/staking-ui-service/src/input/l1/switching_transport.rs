@@ -1,17 +1,19 @@
 //! An RPC client with multiple remote (HTTP) providers that can switch between them.
 
-use super::options::L1ClientOptions;
-use crate::Result;
+use std::{pin::Pin, sync::Arc, time::Instant};
+
 use alloy::{
     rpc::json_rpc::{RequestPacket, ResponsePacket},
     transports::{RpcError, TransportErrorKind, http::Http},
 };
 use futures::Future;
 use parking_lot::RwLock;
-use std::{pin::Pin, sync::Arc, time::Instant};
 use tide_disco::Url;
 use tokio::sync::Notify;
 use tower_service::Service;
+
+use super::options::L1ClientOptions;
+use crate::Result;
 
 /// An RPC client with multiple remote (HTTP) providers.
 ///
@@ -239,7 +241,7 @@ impl Service<RequestPacket> for SwitchingTransport {
                     // If it's okay, log the success to the status
                     current_transport.status.write().log_success();
                     Ok(res)
-                }
+                },
                 Err(err) => {
                     // Treat rate limited errors specially; these should not cause failover, but instead
                     // should only cause us to temporarily back off on making requests to the RPC
@@ -268,7 +270,7 @@ impl Service<RequestPacket> for SwitchingTransport {
                     }
 
                     Err(err)
-                }
+                },
             }
         })
     }

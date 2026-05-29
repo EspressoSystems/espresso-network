@@ -11,8 +11,6 @@ use std::{
     time::Duration,
 };
 
-use crate::metrics::PrometheusMetrics;
-use crate::types::common::{NodeMetadataContent, NodeSetEntry};
 use alloy::{
     network::EthereumWallet,
     primitives::{Address, FixedBytes, U256, keccak256},
@@ -37,7 +35,7 @@ use hotshot_contract_adapter::{
     sol_types::{
         G1PointSol,
         RewardClaim::RewardsClaimed,
-        StakeTableV2::{
+        StakeTableV3::{
             self, CommissionUpdated, ConsensusKeysUpdatedV2, Delegated, ExitEscrowPeriodUpdated,
             MetadataUriUpdated, Undelegated, ValidatorExit, ValidatorExitClaimed,
             ValidatorRegistered, ValidatorRegisteredV2, WithdrawalClaimed,
@@ -50,15 +48,20 @@ use hotshot_types::{
     light_client::{StateKeyPair, StateVerKey, hash_bytes_to_field},
     signature_key::BLSKeyPair,
     traits::signature_key::{SignatureKey, StateSignatureKey},
+    x25519,
 };
 use jf_signature::{SignatureScheme, schnorr::SchnorrSignatureScheme};
 use pretty_assertions::assert_eq;
 use rand::{CryptoRng, Rng, RngCore, SeedableRng, rngs::StdRng, seq::IteratorRandom};
-use staking_cli::demo::{DelegationConfig, StakingTransactions};
+use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
 use tide_disco::{Error as _, StatusCode, Url};
 use tokio::{task::spawn, time::sleep};
 
 use super::*;
+use crate::{
+    metrics::PrometheusMetrics,
+    types::common::{NodeMetadataContent, NodeSetEntry},
+};
 
 /// Easy-setup storage that just uses memory.
 #[derive(Clone, Debug, Default)]
@@ -326,9 +329,9 @@ impl NodeSetEntry {
     pub fn from_event_no_metadata(event: &ValidatorRegisteredV2) -> Self {
         let legacy = ValidatorRegistered {
             account: event.account,
-            blsVk: event.blsVK,
+            blsVk: event.blsVK.clone(),
             commission: event.commission,
-            schnorrVk: event.schnorrVK,
+            schnorrVk: event.schnorrVK.clone(),
         };
         (&legacy).into()
     }
@@ -421,17 +424,17 @@ impl Iterator for EventGenerator {
                     self.commissions.insert(event.account, event.commission);
 
                     if t == REGISTER {
-                        StakeTableV2Events::ValidatorRegistered(ValidatorRegistered {
+                        StakeTableV3Events::ValidatorRegistered(ValidatorRegistered {
                             account: event.account,
-                            blsVk: event.blsVK,
-                            schnorrVk: event.schnorrVK,
+                            blsVk: event.blsVK.clone(),
+                            schnorrVk: event.schnorrVK.clone(),
                             commission: event.commission,
                         })
                         .into()
                     } else {
-                        StakeTableV2Events::ValidatorRegisteredV2(event).into()
+                        StakeTableV3Events::ValidatorRegisteredV2(event).into()
                     }
-                }
+                },
 
                 DEREGISTER => {
                     // Choose a random node to deregister.
@@ -457,16 +460,16 @@ impl Iterator for EventGenerator {
                     self.nodes.remove(&node);
                     self.commissions.remove(&node);
                     self.exited_nodes.insert(node);
-                    StakeTableV2Events::ValidatorExit(ValidatorExit { validator: node }).into()
-                }
+                    StakeTableV3Events::ValidatorExit(ValidatorExit { validator: node }).into()
+                },
 
                 EXIT_ESCROW_PERIOD_UPDATED => {
                     // Set the exit escrow period to something random.
-                    StakeTableV2Events::ExitEscrowPeriodUpdated(ExitEscrowPeriodUpdated {
+                    StakeTableV3Events::ExitEscrowPeriodUpdated(ExitEscrowPeriodUpdated {
                         newExitEscrowPeriod: self.rng.next_u64(),
                     })
                     .into()
-                }
+                },
 
                 DELEGATE => {
                     // Choose a random validator to delegate to.
@@ -485,13 +488,13 @@ impl Iterator for EventGenerator {
                         .and_modify(|existing| *existing += amount)
                         .or_insert(amount);
 
-                    StakeTableV2Events::Delegated(Delegated {
+                    StakeTableV3Events::Delegated(Delegated {
                         delegator,
                         validator,
                         amount,
                     })
                     .into()
-                }
+                },
 
                 UNDELEGATE => {
                     if self.delegations.is_empty() {
@@ -530,13 +533,13 @@ impl Iterator for EventGenerator {
 
                     self.pending_undelegations.insert(key, undelegate_amount);
 
-                    StakeTableV2Events::Undelegated(Undelegated {
+                    StakeTableV3Events::Undelegated(Undelegated {
                         delegator,
                         validator: node,
                         amount: undelegate_amount,
                     })
                     .into()
-                }
+                },
 
                 WITHDRAWAL => {
                     let pending_undelegations: Vec<_> =
@@ -555,7 +558,7 @@ impl Iterator for EventGenerator {
                         let amount = self.pending_undelegations.remove(&key).unwrap();
                         let (delegator, validator) = key;
                         // undelegationId is not tracked in EventGenerator, use 0 as placeholder
-                        StakeTableV2Events::WithdrawalClaimed(WithdrawalClaimed {
+                        StakeTableV3Events::WithdrawalClaimed(WithdrawalClaimed {
                             delegator,
                             validator,
                             undelegationId: 0,
@@ -566,14 +569,14 @@ impl Iterator for EventGenerator {
                         let key = pending_exits[idx - pending_undelegations.len()];
                         let amount = self.pending_exits.remove(&key).unwrap();
                         let (delegator, validator) = key;
-                        StakeTableV2Events::ValidatorExitClaimed(ValidatorExitClaimed {
+                        StakeTableV3Events::ValidatorExitClaimed(ValidatorExitClaimed {
                             delegator,
                             validator,
                             amount,
                         })
                         .into()
                     }
-                }
+                },
 
                 KEY_UPDATE => {
                     let Some(&node) = self.nodes.iter().choose(&mut self.rng) else {
@@ -591,7 +594,7 @@ impl Iterator for EventGenerator {
                     let schnorr_sig: StateSignatureSol =
                         sign_address_schnorr(&new_schnorr_key, node).into();
 
-                    StakeTableV2Events::ConsensusKeysUpdatedV2(ConsensusKeysUpdatedV2 {
+                    StakeTableV3Events::ConsensusKeysUpdatedV2(ConsensusKeysUpdatedV2 {
                         account: node,
                         blsVK: new_bls_key.ver_key().into(),
                         schnorrVK: new_schnorr_key.ver_key().into(),
@@ -599,7 +602,7 @@ impl Iterator for EventGenerator {
                         schnorrSig: schnorr_sig.into(),
                     })
                     .into()
-                }
+                },
 
                 COMMISSION_UPDATE => {
                     let Some(&node) = self.nodes.iter().choose(&mut self.rng) else {
@@ -608,14 +611,14 @@ impl Iterator for EventGenerator {
                     let new_commission = self.rng.gen_range(0..COMMISSION_BASIS_POINTS);
                     let old_commission = self.commissions.insert(node, new_commission).unwrap();
 
-                    StakeTableV2Events::CommissionUpdated(CommissionUpdated {
+                    StakeTableV3Events::CommissionUpdated(CommissionUpdated {
                         validator: node,
                         oldCommission: old_commission,
                         newCommission: new_commission,
                         timestamp: self.rng.next_u64().try_into().unwrap(),
                     })
                     .into()
-                }
+                },
 
                 CLAIM_REWARDS => {
                     let delegators: Vec<Address> = self
@@ -633,18 +636,18 @@ impl Iterator for EventGenerator {
                     let amount = U256::from(self.rng.gen_range(10u64..1000u64));
 
                     RewardClaimEvents::RewardsClaimed(RewardsClaimed { user, amount }).into()
-                }
+                },
 
                 METADATA_URI_UPDATED => {
                     let Some(&node) = self.nodes.iter().choose(&mut self.rng) else {
                         continue;
                     };
-                    StakeTableV2Events::MetadataUriUpdated(MetadataUriUpdated {
+                    StakeTableV3Events::MetadataUriUpdated(MetadataUriUpdated {
                         validator: node,
                         metadataUri: random_metadata_uri(&mut self.rng),
                     })
                     .into()
-                }
+                },
 
                 _ => unreachable!(),
             };
@@ -932,9 +935,11 @@ impl ContractDeployment {
             })?;
 
         let mut contracts = Contracts::new();
-        args.deploy_all(&mut contracts).await.map_err(|err| {
-            Error::internal().context(format!("Failed to deploy contracts: {err}"))
-        })?;
+        args.deploy_to_stake_table_v3(&mut contracts)
+            .await
+            .map_err(|err| {
+                Error::internal().context(format!("Failed to deploy contracts: {err}"))
+            })?;
 
         let stake_table_addr = contracts
             .address(Contract::StakeTableProxy)
@@ -960,24 +965,26 @@ impl ContractDeployment {
         })
     }
 
-    pub fn create_test_validators(
-        count: usize,
-    ) -> Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)> {
+    pub fn create_test_validators(count: usize) -> Vec<StakingKeySet> {
         (0..count)
             .map(|i| {
                 let index = i as u32;
                 let seed = [index as u8; 32];
-                let signer = build_signer(DEV_MNEMONIC, index);
-                let bls_key_pair = BLSKeyPair::generate(&mut StdRng::from_seed(seed));
-                let state_key_pair = StateKeyPair::generate_from_seed_indexed(seed, index as u64);
-                (signer, bls_key_pair, state_key_pair)
+                StakingKeySet {
+                    signer: build_signer(DEV_MNEMONIC, index),
+                    bls: BLSKeyPair::generate(&mut StdRng::from_seed(seed)),
+                    state: StateKeyPair::generate_from_seed_indexed(seed, index as u64),
+                    x25519: x25519::Keypair::generated_from_seed_indexed(seed, index as u64)
+                        .unwrap(),
+                    p2p_addr: "127.0.0.1:8080".parse().unwrap(),
+                }
             })
             .collect()
     }
 
     pub async fn register_validators(
         &self,
-        validators: Vec<(PrivateKeySigner, BLSKeyPair, StateKeyPair)>,
+        validators: Vec<StakingKeySet>,
         delegation_config: DelegationConfig,
     ) -> Result<Vec<TransactionReceipt>> {
         let provider = ProviderBuilder::new()
@@ -1098,6 +1105,8 @@ impl BackgroundTaskState {
         let signer = PrivateKeySigner::random();
         let bls_key = BLSKeyPair::generate(&mut StdRng::from_seed(seed));
         let schnorr_key = StateKeyPair::generate_from_seed_indexed(seed, self.validator_index);
+        let x25519_key =
+            x25519::Keypair::generated_from_seed_indexed(seed, self.validator_index).unwrap();
 
         let deployer = build_signer(DEV_MNEMONIC, 0);
         let provider = ProviderBuilder::new()
@@ -1109,7 +1118,13 @@ impl BackgroundTaskState {
             self.rpc_url.clone(),
             &provider,
             self.stake_table_addr,
-            vec![(signer.clone(), bls_key.clone(), schnorr_key.clone())],
+            vec![StakingKeySet {
+                signer: signer.clone(),
+                bls: bls_key.clone(),
+                state: schnorr_key.clone(),
+                x25519: x25519_key,
+                p2p_addr: "127.0.0.1:8080".parse().unwrap(),
+            }],
             None,
             DelegationConfig::MultipleDelegators,
         )
@@ -1158,15 +1173,15 @@ impl BackgroundTaskState {
                             provider,
                             delegators: delegator_infos,
                         });
-                    }
+                    },
                     Err(err) => {
                         tracing::error!(
                             "Background: Failed to register validator #{}: {err:#}",
                             self.validator_index
                         );
-                    }
+                    },
                 }
-            }
+            },
             Err(e) => {
                 tracing::error!(
                     "Background: Failed to create staking transactions for validator #{}: {e:?}",
@@ -1179,7 +1194,7 @@ impl BackgroundTaskState {
                         U256::from(100_000) * U256::from(10).pow(U256::from(18)),
                     ) // 100k ETH)
                     .await;
-            }
+            },
         }
         self.validator_index += 1;
     }
@@ -1204,7 +1219,7 @@ impl BackgroundTaskState {
             sign_address_schnorr(&new_schnorr_key, validator.address).into();
 
         tracing::debug!(signer = %validator.provider.default_signer_address(), "update keys");
-        match StakeTableV2::new(self.stake_table_addr, &validator.provider)
+        match StakeTableV3::new(self.stake_table_addr, &validator.provider)
             .updateConsensusKeysV2(
                 new_bls_key.ver_key().into(),
                 new_schnorr_key.ver_key().into(),
@@ -1254,7 +1269,7 @@ impl BackgroundTaskState {
         }
 
         let provider = ProviderBuilder::new().connect_http(self.rpc_url.clone());
-        let stake_table = StakeTableV2::new(self.stake_table_addr, &provider);
+        let stake_table = StakeTableV3::new(self.stake_table_addr, &provider);
 
         if let Ok(delegated_amount) = stake_table
             .delegations(validator.address, delegator.address)
@@ -1268,7 +1283,7 @@ impl BackgroundTaskState {
                 signer = %delegator.provider.default_signer_address(),
                 "undelegate"
             );
-            match StakeTableV2::new(self.stake_table_addr, &delegator.provider)
+            match StakeTableV3::new(self.stake_table_addr, &delegator.provider)
                 .undelegate(validator.address, undelegate_amount)
                 .send()
                 .await
@@ -1276,14 +1291,15 @@ impl BackgroundTaskState {
                 Ok(pending_tx) => match pending_tx.get_receipt().await {
                     Ok(receipt) => {
                         tracing::info!(
-                            "Background: Undelegated {} ESP from validator #{} by delegator {:?} (tx: {:?})",
+                            "Background: Undelegated {} ESP from validator #{} by delegator {:?} \
+                             (tx: {:?})",
                             undelegate_amount / U256::from(10).pow(U256::from(18)),
                             validator.index,
                             delegator.address,
                             receipt.transaction_hash
                         );
                         self.pending_undelegations.insert(key);
-                    }
+                    },
                     Err(e) => tracing::error!(
                         "Background: Failed to get undelegate receipt for validator #{}: {e:?}",
                         validator.index
@@ -1307,7 +1323,7 @@ impl BackgroundTaskState {
         let validator = &self.registered_validators[idx];
 
         tracing::debug!(signer = %validator.provider.default_signer_address(), "deregister");
-        match StakeTableV2::new(self.stake_table_addr, &validator.provider)
+        match StakeTableV3::new(self.stake_table_addr, &validator.provider)
             .deregisterValidator()
             .send()
             .await
@@ -1322,7 +1338,7 @@ impl BackgroundTaskState {
                     }
 
                     self.registered_validators.remove(idx);
-                }
+                },
                 Err(e) => tracing::error!(
                     "Background: Failed to get deregister receipt for validator #{}: {e:?}",
                     validator.index
@@ -1333,7 +1349,7 @@ impl BackgroundTaskState {
                     "Background: Failed to deregister validator #{}: {e:?}",
                     validator.index
                 );
-            }
+            },
         }
     }
 
@@ -1363,12 +1379,12 @@ impl BackgroundTaskState {
         if let Some(provider) = self.delegator_providers.get(&delegator_addr) {
             tracing::debug!(signer = %provider.default_signer_address(), "withdraw");
             let result = if is_exit {
-                StakeTableV2::new(self.stake_table_addr, &provider)
+                StakeTableV3::new(self.stake_table_addr, &provider)
                     .claimValidatorExit(validator_addr)
                     .send()
                     .await
             } else {
-                StakeTableV2::new(self.stake_table_addr, &provider)
+                StakeTableV3::new(self.stake_table_addr, &provider)
                     .claimWithdrawal(validator_addr)
                     .send()
                     .await
@@ -1387,17 +1403,17 @@ impl BackgroundTaskState {
                         } else {
                             self.pending_undelegations.remove(&key);
                         }
-                    }
+                    },
                     Err(e) => {
                         tracing::error!("Background: Failed to get withdrawal receipt: {e:?}")
-                    }
+                    },
                 },
                 Err(e) => {
                     // if exit escrow period is not over
                     if !e.to_string().contains("0x5a774357") {
                         tracing::error!("Background: Withdrawal failed: {e:?}");
                     }
-                }
+                },
             }
         }
     }
@@ -1447,129 +1463,133 @@ pub fn assert_events_eq(l: &L1Event, r: &L1Event) {
     match (l, r) {
         (L1Event::StakeTable(l), L1Event::StakeTable(r)) => match (l.as_ref(), r.as_ref()) {
             (
-                StakeTableV2Events::ValidatorRegistered(l),
-                StakeTableV2Events::ValidatorRegistered(r),
+                StakeTableV3Events::ValidatorRegistered(l),
+                StakeTableV3Events::ValidatorRegistered(r),
             ) => {
                 assert_eq!(l.account, r.account);
                 assert_eq!(l.blsVk, r.blsVk);
                 assert_eq!(l.schnorrVk, r.schnorrVk);
                 assert_eq!(l.commission, r.commission);
-            }
+            },
             (
-                StakeTableV2Events::ValidatorRegisteredV2(l),
-                StakeTableV2Events::ValidatorRegisteredV2(r),
+                StakeTableV3Events::ValidatorRegisteredV2(l),
+                StakeTableV3Events::ValidatorRegisteredV2(r),
             ) => {
                 assert_eq!(l.account, r.account);
                 assert_eq!(l.blsVK, r.blsVK);
                 assert_eq!(l.schnorrVK, r.schnorrVK);
                 assert_eq!(l.commission, r.commission);
-            }
-            (StakeTableV2Events::ValidatorExit(l), StakeTableV2Events::ValidatorExit(r)) => {
+            },
+            (StakeTableV3Events::ValidatorExit(l), StakeTableV3Events::ValidatorExit(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::ValidatorExitV2(l), StakeTableV2Events::ValidatorExitV2(r)) => {
+            },
+            (StakeTableV3Events::ValidatorExitV2(l), StakeTableV3Events::ValidatorExitV2(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::Delegated(l), StakeTableV2Events::Delegated(r)) => {
+            },
+            (StakeTableV3Events::Delegated(l), StakeTableV3Events::Delegated(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::Undelegated(l), StakeTableV2Events::Undelegated(r)) => {
+            },
+            (StakeTableV3Events::Undelegated(l), StakeTableV3Events::Undelegated(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::UndelegatedV2(l), StakeTableV2Events::UndelegatedV2(r)) => {
+            },
+            (StakeTableV3Events::UndelegatedV2(l), StakeTableV3Events::UndelegatedV2(r)) => {
                 assert_eq!(l, r);
-            }
+            },
             (
-                StakeTableV2Events::ConsensusKeysUpdated(l),
-                StakeTableV2Events::ConsensusKeysUpdated(r),
+                StakeTableV3Events::ConsensusKeysUpdated(l),
+                StakeTableV3Events::ConsensusKeysUpdated(r),
             ) => {
                 assert_eq!(l.account, r.account);
                 assert_eq!(l.blsVK, r.blsVK);
                 assert_eq!(l.schnorrVK, r.schnorrVK);
-            }
+            },
             (
-                StakeTableV2Events::ConsensusKeysUpdatedV2(l),
-                StakeTableV2Events::ConsensusKeysUpdatedV2(r),
+                StakeTableV3Events::ConsensusKeysUpdatedV2(l),
+                StakeTableV3Events::ConsensusKeysUpdatedV2(r),
             ) => {
                 assert_eq!(l.account, r.account);
                 assert_eq!(l.blsVK, r.blsVK);
                 assert_eq!(l.schnorrVK, r.schnorrVK);
-            }
+            },
             (
-                StakeTableV2Events::CommissionUpdated(l),
-                StakeTableV2Events::CommissionUpdated(r),
+                StakeTableV3Events::CommissionUpdated(l),
+                StakeTableV3Events::CommissionUpdated(r),
             ) => {
                 assert_eq!(l, r);
-            }
+            },
             (
-                StakeTableV2Events::ExitEscrowPeriodUpdated(l),
-                StakeTableV2Events::ExitEscrowPeriodUpdated(r),
+                StakeTableV3Events::ExitEscrowPeriodUpdated(l),
+                StakeTableV3Events::ExitEscrowPeriodUpdated(r),
             ) => {
                 assert_eq!(l, r);
-            }
+            },
             (
-                StakeTableV2Events::MaxCommissionIncreaseUpdated(l),
-                StakeTableV2Events::MaxCommissionIncreaseUpdated(r),
+                StakeTableV3Events::MaxCommissionIncreaseUpdated(l),
+                StakeTableV3Events::MaxCommissionIncreaseUpdated(r),
             ) => {
                 assert_eq!(l, r);
-            }
+            },
             (
-                StakeTableV2Events::MinCommissionUpdateIntervalUpdated(l),
-                StakeTableV2Events::MinCommissionUpdateIntervalUpdated(r),
+                StakeTableV3Events::MinCommissionUpdateIntervalUpdated(l),
+                StakeTableV3Events::MinCommissionUpdateIntervalUpdated(r),
             ) => {
                 assert_eq!(l, r);
-            }
+            },
             (
-                StakeTableV2Events::OwnershipTransferred(l),
-                StakeTableV2Events::OwnershipTransferred(r),
+                StakeTableV3Events::OwnershipTransferred(l),
+                StakeTableV3Events::OwnershipTransferred(r),
             ) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::Paused(l), StakeTableV2Events::Paused(r)) => {
+            },
+            (StakeTableV3Events::Paused(l), StakeTableV3Events::Paused(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::Unpaused(l), StakeTableV2Events::Unpaused(r)) => {
+            },
+            (StakeTableV3Events::Unpaused(l), StakeTableV3Events::Unpaused(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::Initialized(l), StakeTableV2Events::Initialized(r)) => {
+            },
+            (StakeTableV3Events::Initialized(l), StakeTableV3Events::Initialized(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::RoleAdminChanged(l), StakeTableV2Events::RoleAdminChanged(r)) => {
+            },
+            (StakeTableV3Events::RoleAdminChanged(l), StakeTableV3Events::RoleAdminChanged(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::RoleGranted(l), StakeTableV2Events::RoleGranted(r)) => {
+            },
+            (StakeTableV3Events::RoleGranted(l), StakeTableV3Events::RoleGranted(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::RoleRevoked(l), StakeTableV2Events::RoleRevoked(r)) => {
+            },
+            (StakeTableV3Events::RoleRevoked(l), StakeTableV3Events::RoleRevoked(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::Upgraded(l), StakeTableV2Events::Upgraded(r)) => {
+            },
+            (StakeTableV3Events::Upgraded(l), StakeTableV3Events::Upgraded(r)) => {
                 assert_eq!(l, r);
-            }
-            (StakeTableV2Events::Withdrawal(l), StakeTableV2Events::Withdrawal(r)) => {
+            },
+            (StakeTableV3Events::Withdrawal(l), StakeTableV3Events::Withdrawal(r)) => {
                 assert_eq!(l, r);
-            }
+            },
             (
-                StakeTableV2Events::WithdrawalClaimed(l),
-                StakeTableV2Events::WithdrawalClaimed(r),
+                StakeTableV3Events::WithdrawalClaimed(l),
+                StakeTableV3Events::WithdrawalClaimed(r),
             ) => {
                 assert_eq!(l, r);
-            }
+            },
             (
-                StakeTableV2Events::ValidatorExitClaimed(l),
-                StakeTableV2Events::ValidatorExitClaimed(r),
+                StakeTableV3Events::ValidatorExitClaimed(l),
+                StakeTableV3Events::ValidatorExitClaimed(r),
             ) => {
                 assert_eq!(l, r);
-            }
+            },
             (l, r) => {
-                panic!("mismatched stake table events:\n{l:#?}\n{r:#?}",);
-            }
+                panic!(
+                    "mismatched stake table events:\n{:?}\n{:?}",
+                    std::mem::discriminant(l),
+                    std::mem::discriminant(r)
+                );
+            },
         },
         (L1Event::Reward(l), L1Event::Reward(r)) => {
             assert_eq!(l, r);
-        }
+        },
         (l, r) => {
-            panic!("Reward event mismatched with stake table event:\n{l:#?}\n{r:#?}");
-        }
+            panic!("Reward event mismatched with stake table event:\n{l:?}\n{r:?}");
+        },
     }
 }

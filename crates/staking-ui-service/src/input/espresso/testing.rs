@@ -411,14 +411,14 @@ impl EspressoPersistence for MemoryStorage {
                     for voter in voters.iter_ones() {
                         active_nodes.nodes[voter].votes += 1;
                     }
-                }
+                },
                 ActiveNodeSetDiff::NewEpoch { nodes, apr } => {
                     *active_nodes = Some(ActiveNodeSet {
                         espresso_block: update.espresso_block,
                         apr,
                         nodes: nodes.into_iter().map(ActiveNode::new).collect(),
                     });
-                }
+                },
             }
         }
 

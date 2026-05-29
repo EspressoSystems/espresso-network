@@ -105,7 +105,7 @@ impl Options {
                 Err(err) => {
                     tracing::warn!("error loading L1 genesis, will retry: {err:#}");
                     sleep(self.l1_options.l1_retry_delay).await;
-                }
+                },
             }
         };
         tracing::info!(?genesis_block, "loaded L1 genesis");
@@ -242,19 +242,25 @@ mod test {
     use std::time::Duration;
 
     use alloy::node_bindings::Anvil;
-    use espresso_node::api;
-    use espresso_node::api::data_source::testing::TestableSequencerDataSource;
-    use espresso_node::api::sql::DataSource;
-    use espresso_node::api::test_helpers::{TestNetwork, TestNetworkConfigBuilder};
-    use espresso_node::testing::TestConfigBuilder;
-    use hotshot_query_service::data_source::SqlDataSource;
-    use hotshot_query_service::testing::mocks::MOCK_UPGRADE;
+    use espresso_node::{
+        api,
+        api::{
+            data_source::testing::TestableSequencerDataSource,
+            sql::DataSource,
+            test_helpers::{TestNetwork, TestNetworkConfigBuilder},
+        },
+        testing::TestConfigBuilder,
+    };
+    use hotshot_query_service::{data_source::SqlDataSource, testing::mocks::MOCK_UPGRADE};
     use portpicker::pick_unused_port;
-    use staking_ui_service::input::espresso::testing::start_pos_network;
-    use staking_ui_service::types::common::{ESPTokenAmount, L1BlockId};
-    use staking_ui_service::types::global::{ActiveNodeSetSnapshot, FullNodeSetSnapshot};
-    use staking_ui_service::{Error, input::l1::testing::ContractDeployment};
-
+    use staking_ui_service::{
+        Error,
+        input::{espresso::testing::start_pos_network, l1::testing::ContractDeployment},
+        types::{
+            common::{ESPTokenAmount, L1BlockId},
+            global::{ActiveNodeSetSnapshot, FullNodeSetSnapshot},
+        },
+    };
     use surf_disco::Client;
     use tempfile::tempdir;
     use tide_disco::{Error as _, StatusCode};
@@ -329,7 +335,7 @@ mod test {
                         tracing::info!("waiting for Espresso API to become available");
                         sleep(Duration::from_secs(1)).await;
                         continue;
-                    }
+                    },
                 };
             assert_eq!(active_node_set.nodes.len(), network.peers.len() + 1);
             break active_node_set.espresso_block;

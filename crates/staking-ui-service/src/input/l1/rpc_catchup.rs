@@ -92,7 +92,7 @@ impl L1Catchup for RpcCatchup {
                         tracing::warn!(from, to, attempt, ?err, "fetch L1 events failed, retrying");
                         sleep(delay).await;
                         delay = (delay * 2).min(max_delay);
-                    }
+                    },
                 }
             };
             events.extend(chunk_events);
@@ -135,12 +135,11 @@ mod test {
     use pretty_assertions::assert_eq;
     use tokio::time::sleep;
 
+    use super::*;
     use crate::input::l1::{
         ResettableStream, RpcStream,
         testing::{BackgroundStakeTableOps, ContractDeployment, assert_events_eq},
     };
-
-    use super::*;
 
     #[test_log::test]
     fn test_block_range_chunks_exact_multiple() {

@@ -179,7 +179,8 @@ where
             ensure!(
                 snapshot.espresso_block.block == block,
                 Error::internal().context(format!(
-                    "internal inconsistency: snapshot returned for block {} is not for latest block {block}",
+                    "internal inconsistency: snapshot returned for block {} is not for latest \
+                     block {block}",
                     snapshot.espresso_block.block
                 ))
             );
@@ -201,7 +202,12 @@ where
                 .parse()
                 .context(Error::bad_request)?;
             let block: u64 = req.integer_param("block")?;
-            state.espresso.read().await.lifetime_rewards(address, block).await
+            state
+                .espresso
+                .read()
+                .await
+                .lifetime_rewards(address, block)
+                .await
         }
         .boxed()
     })?
@@ -216,45 +222,39 @@ where
 mod test {
     use std::time::Duration;
 
-    use crate::{
-        input::l1::testing::{MemoryStorage, NoMetadata},
-        metrics::PrometheusMetrics,
-        types::wallet::{WalletSnapshot, WalletUpdate},
-    };
     use alloy::primitives::Address;
     use futures::future::try_join;
+    use hotshot_contract_adapter::sol_types::StakeTableV3::{
+        Delegated, StakeTableV3Events, Undelegated,
+    };
     use portpicker::pick_unused_port;
     use pretty_assertions::assert_eq;
     use surf_disco::Client;
     use tide_disco::{Error as _, StatusCode};
     use tokio::{task::spawn, time::sleep};
 
-    use crate::types::{common::U256, wallet::WalletDiff};
-    use hotshot_contract_adapter::sol_types::StakeTableV2::{
-        Delegated, StakeTableV2Events, Undelegated,
-    };
-
+    use super::*;
     use crate::{
         input::{
             espresso::testing::{MemoryStorage as EspressoStorage, MockEspressoClient},
             l1::{
                 BlockInput, Snapshot,
                 testing::{
-                    MemoryStorage as L1Storage, NoCatchup, VecStream, block_id, block_snapshot,
-                    subscribe_until, validator_registered_event,
+                    MemoryStorage, MemoryStorage as L1Storage, NoCatchup, NoMetadata, VecStream,
+                    block_id, block_snapshot, subscribe_until, validator_registered_event,
                 },
             },
         },
+        metrics::PrometheusMetrics,
         types::{
-            common::{L1BlockId, NodeSetEntry},
+            common::{L1BlockId, NodeSetEntry, U256},
             global::{
                 ActiveNodeSetDiff, ActiveNodeSetSnapshot, ActiveNodeSetUpdate, FullNodeSetDiff,
                 FullNodeSetSnapshot, FullNodeSetUpdate,
             },
+            wallet::{WalletDiff, WalletSnapshot, WalletUpdate},
         },
     };
-
-    use super::*;
 
     /// Generate a trivial Espresso state.
     ///
@@ -367,7 +367,7 @@ mod test {
         let mut inputs = VecStream::infinite();
         inputs.push(
             BlockInput::empty(2)
-                .with_event(StakeTableV2Events::ValidatorRegisteredV2(node.clone())),
+                .with_event(StakeTableV3Events::ValidatorRegisteredV2(node.clone())),
         );
         subscribe_until(&l1, inputs, |l1| l1.latest_l1_block().number == 2).await;
 
@@ -467,8 +467,8 @@ mod test {
 
         inputs.push(
             BlockInput::empty(2)
-                .with_event(StakeTableV2Events::ValidatorRegisteredV2(validator.clone()))
-                .with_event(StakeTableV2Events::Delegated(Delegated {
+                .with_event(StakeTableV3Events::ValidatorRegisteredV2(validator.clone()))
+                .with_event(StakeTableV3Events::Delegated(Delegated {
                     delegator,
                     validator: validator_address,
                     amount: U256::from(1000),
@@ -476,7 +476,7 @@ mod test {
         );
 
         inputs.push(
-            BlockInput::empty(3).with_event(StakeTableV2Events::Undelegated(Undelegated {
+            BlockInput::empty(3).with_event(StakeTableV3Events::Undelegated(Undelegated {
                 delegator,
                 validator: validator_address,
                 amount: U256::from(400),

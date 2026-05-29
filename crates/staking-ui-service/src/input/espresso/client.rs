@@ -166,7 +166,7 @@ impl QueryServiceClient {
                         // Something is wrong; sleep the shorter interval and then retry.
                         sleep(catchup_interval).await;
                         continue;
-                    }
+                    },
                     Ok(block_height) => block_height,
                 };
                 if from >= block_height {
@@ -187,7 +187,7 @@ impl QueryServiceClient {
                         // Something is wrong; sleep the shorter interval and then retry.
                         sleep(catchup_interval).await;
                         continue;
-                    }
+                    },
                     Ok(leaves) => leaves,
                 };
 
@@ -198,7 +198,7 @@ impl QueryServiceClient {
                         tracing::error!("failed to parse leaves, will retry: {err:#}");
                         sleep(catchup_interval).await;
                         continue;
-                    }
+                    },
                 };
 
                 // Sleep a shorter duration if we expect that there are already more leaves
@@ -234,14 +234,14 @@ impl QueryServiceClient {
                             // we will start from the next leaf after this one.
                             tracing::debug!(from, ?leaf, "got new Espresso leaf");
                             return Some((leaf, (fallible_stream, client, from + 1)));
-                        }
+                        },
                         Some(Err(err)) => {
                             tracing::error!("error from leaf stream: {err:#}");
-                        }
+                        },
                         None => {
                             tracing::error!("leaf stream ended unexpectedly, reconnecting");
                             fallible_stream = client.fallible_leaves(from);
-                        }
+                        },
                     }
 
                     // If there was any kind of error, pause a bit before retrying.
@@ -325,11 +325,11 @@ impl EspressoClient for QueryServiceClient {
             match self.inner.get::<u64>("node/block-height").send().await {
                 Ok(0) => {
                     tracing::info!("waiting for Espresso blocks");
-                }
+                },
                 Ok(height) => break height - 1,
                 Err(err) => {
                     tracing::warn!("error getting block height, will retry: {err:#}");
-                }
+                },
             }
             sleep(Duration::from_secs(1)).await;
         };
@@ -454,7 +454,7 @@ impl EspressoClient for QueryServiceClient {
                     Err(e) if attempt < 3 => {
                         tracing::warn!(block, offset, error = %e, "failed to fetch reward accounts, retrying");
                         sleep(Duration::from_secs(1)).await;
-                    }
+                    },
                     Err(e) => return Err(e.into()),
                 }
             };
@@ -501,14 +501,6 @@ impl EspressoClient for QueryServiceClient {
 mod test {
     use std::sync::Arc;
 
-    use crate::input::espresso::{
-        State,
-        testing::{DEFAULT_TOKEN_SUPPLY, EPOCH_HEIGHT, MemoryStorage, UPGRADE, start_pos_network},
-    };
-    use crate::metrics::PrometheusMetrics;
-
-    use super::*;
-
     use async_lock::RwLock;
     use espresso_node::{
         api::{
@@ -525,6 +517,17 @@ mod test {
     use portpicker::pick_unused_port;
     use surf_disco::{Error, StatusCode};
     use tokio::task::spawn;
+
+    use super::*;
+    use crate::{
+        input::espresso::{
+            State,
+            testing::{
+                DEFAULT_TOKEN_SUPPLY, EPOCH_HEIGHT, MemoryStorage, UPGRADE, start_pos_network,
+            },
+        },
+        metrics::PrometheusMetrics,
+    };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_epochs() {
@@ -675,12 +678,12 @@ mod test {
                     let leaf = leaves.next().await.unwrap().0;
                     assert_eq!(leaf.height(), next_leaf);
                     next_leaf += 1;
-                }
+                },
                 Err(_) => {
                     // We shouldn't have been able to get farther than the server did.
                     assert!(next_leaf <= reached_height + 1);
                     break;
-                }
+                },
             }
         }
 
@@ -815,18 +818,11 @@ mod test {
     ) -> AuthenticatedValidatorMap {
         network
             .server
-            .consensus()
-            .read()
+            .consensus_handle()
+            .membership_coordinator()
             .await
-            .membership_coordinator
-            .stake_table_for_epoch(Some(epoch))
-            .await
-            .unwrap()
-            .coordinator
             .membership()
-            .read()
-            .await
-            .active_validators(&epoch)
+            .active_validators(epoch)
             .unwrap()
     }
 }

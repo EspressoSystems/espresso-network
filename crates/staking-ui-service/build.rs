@@ -1,11 +1,12 @@
-use vergen::EmitBuilder;
+use vergen::Emitter;
+use vergen_gitcl::GitclBuilder;
 
 pub fn main() -> anyhow::Result<()> {
-    // Set an environment variable with git information
-    EmitBuilder::builder()
-        .git_sha(false)
-        .git_describe(true, true, None)
-        .git_commit_timestamp()
-        .emit()?;
+    let git = GitclBuilder::default()
+        .sha(false)
+        .describe(true, true, None)
+        .commit_timestamp(true)
+        .build()?;
+    Emitter::default().add_instructions(&git)?.emit()?;
     Ok(())
 }

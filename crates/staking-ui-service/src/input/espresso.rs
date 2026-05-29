@@ -175,7 +175,8 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
         }
         if block < last_block.number {
             return Err(Error::gone().context(format!(
-                "rewards for Espresso block {block} are not available; earliest available block is {}",
+                "rewards for Espresso block {block} are not available; earliest available block \
+                 is {}",
                 last_block.number
             )));
         }
@@ -196,7 +197,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
                 Err(err) => {
                     tracing::error!("error finding initial Espresso block: {err:#}");
                     sleep(Duration::from_secs(1)).await;
-                }
+                },
             }
         };
         let espresso = { state.read().await.espresso.clone() };
@@ -211,7 +212,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
                     Err(err) => {
                         tracing::error!(?leaf, ?voters, "error computing leaf effects: {err:#}");
                         sleep(Duration::from_secs(1)).await;
-                    }
+                    },
                 }
             };
 
@@ -259,7 +260,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
                     "saved snapshot is from latest epoch, restoring state"
                 );
                 snapshot.espresso_block.block + 1
-            }
+            },
             snapshot => {
                 tracing::info!(
                     current_epoch,
@@ -282,7 +283,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
 
                 // Set our state to the first block of this epoch.
                 epoch_start
-            }
+            },
         };
 
         Ok(next_espresso_block)
@@ -317,7 +318,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
                         err.context(format!("fetching parent leaf {}", height - 1))
                     })?;
                 (parent.view_number().u64(), None)
-            }
+            },
         };
 
         // Download epoch state if necessary.
@@ -335,7 +336,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
             epoch.number() == current_epoch,
             Error::internal().context(format!(
                 "internal inconsistency: have wrong epoch {} for leaf {height} in epoch \
-                {current_epoch}",
+                 {current_epoch}",
                 epoch.number()
             ))
         );
@@ -405,7 +406,7 @@ impl<S: EspressoPersistence, C: EspressoClient> State<S, C> {
                     "epoch changed, GC will run"
                 );
                 true
-            }
+            },
             _ => false,
         };
 
@@ -583,13 +584,15 @@ impl EpochState {
         ensure!(
             drb_leaf.epoch(epoch_height).as_deref().copied() == Some(epoch - 1),
             Error::internal().context(format!(
-                "transition leaf {drb_leaf:?} is not from expected epoch {} (epoch_height={epoch_height})",
+                "transition leaf {drb_leaf:?} is not from expected epoch {} \
+                 (epoch_height={epoch_height})",
                 epoch - 1
             ))
         );
         let drb_result = drb_leaf.next_drb_result.ok_or_else(|| {
             Error::internal().context(format!(
-                "transition block of epoch {} (height {transition_block}) does not have next epoch DRB result",
+                "transition block of epoch {} (height {transition_block}) does not have next \
+                 epoch DRB result",
                 epoch - 1,
             ))
         })?;
@@ -846,24 +849,23 @@ pub trait EspressoClient: Clone + Send + Sync {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::input::espresso::testing::{
-        DEFAULT_TOKEN_SUPPLY, MockEspressoClient, fake_drb_result,
-    };
-
-    use crate::input::espresso::client::{QueryServiceClient, QueryServiceOptions};
-    use crate::persistence::sql::{Persistence, PersistenceOptions};
-    use alloy::primitives::U256;
+    use alloy::{primitives::U256, transports::http::reqwest::StatusCode};
+    use async_lock::Semaphore;
     use surf_disco::Client as HttpClient;
     use tempfile::NamedTempFile;
-    use testing::start_pos_network;
-    use vbs::version::StaticVersion;
-
-    use alloy::transports::http::reqwest::StatusCode;
-    use async_lock::Semaphore;
-    use testing::MemoryStorage;
+    use testing::{MemoryStorage, start_pos_network};
     use tide_disco::Error;
     use tokio::task::spawn;
+    use vbs::version::StaticVersion;
+
+    use super::*;
+    use crate::{
+        input::espresso::{
+            client::{QueryServiceClient, QueryServiceOptions},
+            testing::{DEFAULT_TOKEN_SUPPLY, MockEspressoClient, fake_drb_result},
+        },
+        persistence::sql::{Persistence, PersistenceOptions},
+    };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_handle_leaf_node_stats() {
@@ -1359,11 +1361,11 @@ mod test {
                 Ok(block) if block >= latest_espresso_block => {
                     tracing::info!("Reward-state is at block {block}");
                     break latest_espresso_block;
-                }
-                Ok(_) => {}
+                },
+                Ok(_) => {},
                 Err(e) => {
                     tracing::warn!("Failed to get reward-state block height, will retry: {e}");
-                }
+                },
             }
         }
     }
@@ -1404,13 +1406,15 @@ mod test {
                 .unwrap_or(U256::from(0));
 
             tracing::info!(
-                "Node {idx}: stored_rewards={stored_rewards} WEI, espresso_api={espresso_reward_balance} WEI at block {latest_espresso_block}"
+                "Node {idx}: stored_rewards={stored_rewards} WEI, \
+                 espresso_api={espresso_reward_balance} WEI at block {latest_espresso_block}"
             );
 
             assert_eq!(
                 U256::from(stored_rewards),
                 espresso_reward_balance,
-                "Node {idx} reward balance mismatch: stored={stored_rewards}, espresso_api={espresso_reward_balance}"
+                "Node {idx} reward balance mismatch: stored={stored_rewards}, \
+                 espresso_api={espresso_reward_balance}"
             );
         }
     }

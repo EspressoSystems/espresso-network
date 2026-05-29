@@ -200,7 +200,7 @@ impl Metrics {
                             .create(vec![result.endpoint.to_string()])
                             .add(1);
                     }
-                }
+                },
                 Either::Right(_) => {
                     // Timer tick. Update computed stats.
                     self.elapsed.add(1);
@@ -245,7 +245,7 @@ impl Metrics {
                         ..*curr_tick
                     };
                     self.rollup_pointer = prev_pointer;
-                }
+                },
             }
         }
     }
@@ -407,7 +407,7 @@ impl Client {
                 Ok(res) => break res,
                 Err(_) => {
                     self.sleep(self.opt.polling_interval).await;
-                }
+                },
             }
         }
     }

@@ -1,12 +1,11 @@
 //! Primitive types.
 
+pub use alloy::primitives::{Address, BlockHash, U256};
 use derivative::Derivative;
 use espresso_types::PubKey;
 use hotshot_types::traits::signature_key::SignatureKey;
 use serde::{Deserialize, Serialize};
 use surf_disco::Url;
-
-pub use alloy::primitives::{Address, BlockHash, U256};
 pub use tagged_base64::TaggedBase64;
 
 /// An amount of Espresso tokens in WEI.
