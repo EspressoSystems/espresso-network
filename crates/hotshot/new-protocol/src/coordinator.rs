@@ -436,6 +436,8 @@ where
                             block.payload.metadata.clone(),
                             block.payload_commitment,
                         );
+                        // We built this block; skip reconstructing it from our own loopback share.
+                        self.vid_reconstructor.mark_reconstructed(block.view);
                         self.unicast_to_leader(
                             next_view,
                             epoch,
@@ -692,14 +694,11 @@ where
                     .map_err(|e| e.context("unicast transactions"))?;
                 }
 
-                // Proactively fetch DRBs for the next epoch so
-                // late-starting nodes have them before they need to
-                // propose or verify certs in a new epoch. The dedup
-                // in request_drb_result makes repeated calls free.
+                // Proactively fetch the DRB for the next epoch so
+                // late-starting nodes have it before they need it
                 let next_epoch = epoch + 1;
                 if next_epoch > EpochNumber::genesis() + 1 {
                     self.epoch_manager.request_drb_result(next_epoch);
-                    self.epoch_manager.request_drb_result(next_epoch + 1);
                 }
             },
             ConsensusOutput::BlockPayloadReconstructed { .. } => {},

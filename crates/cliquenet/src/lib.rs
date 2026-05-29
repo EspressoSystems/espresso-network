@@ -23,9 +23,13 @@ pub use net::{
     SendCommandBuilder,
 };
 
-use crate::x25519::{Keypair, PublicKey};
+use crate::{
+    util::nonempty::NonEmpty,
+    x25519::{Keypair, PublicKey},
+};
 
 #[derive(Builder)]
+#[builder(finish_fn(vis = "", name = "internal_build"))]
 #[non_exhaustive]
 pub struct Config {
     /// Network name.
@@ -40,19 +44,10 @@ pub struct Config {
     ///
     /// With this map, a node specifies the noise protocol names it supports
     /// per version number.
-    #[builder(with = |xs: impl IntoIterator<Item = (Version, noise::Protocol)>| {
-        let m = BTreeMap::from_iter(xs);
-        assert! {
-            !m.is_empty(),
-            "at least one noise protocol is required"
-        }
-        assert! {
-            m.keys().zip(m.keys().skip(1)).all(|(a, b)| u16::from(*a) + 1 == u16::from(*b)),
-            "noise protocol versions must be consecutive"
-        }
-        m
+    #[builder(with = |it: impl IntoIterator<Item = (Version, noise::Protocol)>| {
+        NonEmpty::assert_non_empty_map(it)
     })]
-    noise_protocols: BTreeMap<Version, noise::Protocol>,
+    noise_protocols: NonEmpty<BTreeMap<Version, noise::Protocol>>,
 
     /// DH keypair
     keypair: Keypair,
@@ -71,30 +66,61 @@ pub struct Config {
     #[builder(default = NonZeroUsize::new(10485760).expect("10485760 > 0"))]
     max_message_size: NonZeroUsize,
 
-    /// Retry delays in seconds.
-    #[builder(default = vec![1, 3, 5, 15, 30])]
-    retry_delays: Vec<u8>,
+    /// Connect retry delays in seconds.
+    #[builder(
+        default = NonEmpty::new(1, [3, 5, 15, 30]),
+        with = |it: impl IntoIterator<Item = u8>| NonEmpty::assert_non_empty_vec(it)
+    )]
+    connect_retry_delays: NonEmpty<Vec<u8>>,
 
-    #[builder(default = Duration::from_secs(30))]
-    max_retry_delay: Duration,
+    /// Send retry delays in seconds.
+    #[builder(
+        default = NonEmpty::new(5, [15, 30]),
+        with = |it: impl IntoIterator<Item = u8>| NonEmpty::assert_non_empty_vec(it)
+    )]
+    send_retry_delays: NonEmpty<Vec<u8>>,
 
     /// Randomly delay the initial connect attempt between 0 and 1s.
     #[builder(default = true)]
     random_connect_delay: bool,
 
+    /// How long to wait to establish a TCP connection?
     #[builder(default = Duration::from_secs(30))]
     connect_timeout: Duration,
 
+    /// How long to wait for a noise handshake to complete?
     #[builder(default = Duration::from_secs(10))]
     handshake_timeout: Duration,
 
+    /// After sending a message we expect to hear back from the peer.
+    ///
+    /// If we do not receive anything for this duration we reconnect.
     #[builder(default = Duration::from_secs(30))]
     receive_timeout: Duration,
 
+    /// If a party is not known we tell it to back off for this amount of time.
+    ///
+    /// This may happen when not all peers have a consistent configuration.
     #[builder(default = Duration::from_secs(30))]
     backoff_duration: Duration,
 
+    /// Optional metrics implementation.
     metrics: Option<Arc<dyn Metrics>>,
+}
+
+impl<S: config_builder::IsComplete> ConfigBuilder<S> {
+    pub fn build(self) -> Config {
+        let conf = self.internal_build();
+
+        let v1 = conf.noise_protocols.iter().map(|(k, _)| k);
+        let v2 = conf.noise_protocols.iter().map(|(k, _)| k).skip(1);
+        assert! {
+            v1.zip(v2).all(|(a, b)| u16::from(*a) + 1 == u16::from(*b)),
+            "cliquenet configuration requires consecutive noise protocol versions"
+        }
+
+        conf
+    }
 }
 
 impl fmt::Debug for Config {
@@ -106,8 +132,8 @@ impl fmt::Debug for Config {
             .field("parties", &self.parties)
             .field("peer_budget", &self.peer_budget)
             .field("max_message_size", &self.max_message_size)
-            .field("retry_delays", &self.retry_delays)
-            .field("max_retry_delay", &self.max_retry_delay)
+            .field("connect_retry_delays", &self.connect_retry_delays)
+            .field("send_retry_delays", &self.send_retry_delays)
             .field("random_connect_delay", &self.random_connect_delay)
             .field("connect_timeout", &self.connect_timeout)
             .field("handshake_timeout", &self.handshake_timeout)
