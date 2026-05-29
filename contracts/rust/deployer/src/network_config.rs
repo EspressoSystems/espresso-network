@@ -52,7 +52,7 @@ pub async fn fetch_stake_table_from_sequencer(
                     let url = sequencer_url
                         .join(&format!("node/stake-table/{}", epoch.u64()))
                         .unwrap();
-                    tracing::error!(%url, "Failed to fetch the stake table: {e}, num_retries left: {}", NUM_RETRIES - i - 1);
+                    tracing::warn!(%url, "Failed to fetch the stake table: {e}, num_retries left: {}", NUM_RETRIES - i - 1);
                     if NUM_RETRIES - i > 1 {
                         sleep(Duration::from_secs(5)).await;
                     }
@@ -73,7 +73,7 @@ pub async fn fetch_stake_table_from_sequencer(
                         return Ok(known_nodes_with_stake.into());
                     },
                     Err(e) => {
-                        tracing::error!(%url, "Failed to fetch the network config: {e}, num_retries left: {}", NUM_RETRIES - i - 1);
+                        tracing::warn!(%url, "Failed to fetch the network config: {e}, num_retries left: {}", NUM_RETRIES - i - 1);
                         if NUM_RETRIES - i > 1 {
                             sleep(Duration::from_secs(5)).await;
                         }
