@@ -95,13 +95,24 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
 
 async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let genesis = load_genesis_file(genesis_path)?;
-    let _demo = NativeDemo::run(
-        None,
-        Some(vec![(
-            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
-            genesis_path.to_string(),
-        )]),
-    )?;
+    let mut env_overrides = vec![(
+        "ESPRESSO_NODE_GENESIS_FILE".to_string(),
+        genesis_path.to_string(),
+    )];
+    // The new protocol has no external builder, so each block carries only the
+    // ~1 txn/s the load generator feeds at the default 2s mean delay. The
+    // progress assertion below requires `2 * expected_block_height` txns, which
+    // at 1 txn/s would take ~20 min. Feed transactions faster on the no-builder
+    // path so the txn requirement is met around the same time as the block-height
+    // target instead of dominating the runtime. (Builder-based upgrades batch
+    // many txns per block, so they don't need this.)
+    if upgrade.target >= NEW_PROTOCOL_VERSION {
+        env_overrides.push((
+            "ESPRESSO_SUBMIT_TRANSACTIONS_DELAY".to_string(),
+            "200ms".to_string(),
+        ));
+    }
+    let _demo = NativeDemo::run(None, Some(env_overrides))?;
 
     assert_native_demo_works(Default::default()).await?;
     assert_upgrade_happens(&genesis, upgrade).await?;

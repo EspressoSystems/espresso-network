@@ -670,14 +670,18 @@ const PREDICTED_CUTOVER_VIEW: u64 = UPGRADE_VIEW + 20;
 /// subset of `{V-2, V-1, V, V+1, V+2}`.
 const V: u64 = PREDICTED_CUTOVER_VIEW - 1;
 
-/// Happy path. `cutover_view - 1` reliably has no QC at cutover, so
-/// the new protocol skips it via TC2.
+/// Happy path. The leader of `cutover_view` finishes assembling the QC
+/// for `cutover_view - 1` in the legacy protocol (the legacy gate now
+/// admits pre-cutover vote collection past the boundary), so that QC
+/// rides into the new protocol via the cutover seed's `high_qc`. The
+/// first new-protocol leader proposes directly on it — no TC2 skip, no
+/// timer wait — and every view including `cutover_view - 1` is decided.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
     run_cutover_test(
         4,
         6,
-        views([PREDICTED_CUTOVER_VIEW - 1]),
+        BTreeSet::new(),
         Duration::from_secs(180),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         Vec::new(),

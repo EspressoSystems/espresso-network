@@ -626,6 +626,7 @@ processes:
     command: submit-transactions
     environment:
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=${ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT}
+      - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY=${ESPRESSO_SUBMIT_TRANSACTIONS_DELAY:-2s}
     depends_on:
       espresso-node-0:
         condition: process_healthy
@@ -643,6 +644,7 @@ processes:
     command: submit-transactions
     environment:
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=${ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT}
+      - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY=${ESPRESSO_SUBMIT_TRANSACTIONS_DELAY:-2s}
     depends_on:
       espresso-node-0:
         condition: process_healthy

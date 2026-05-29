@@ -261,6 +261,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                     .await;
                 }
             },
+            HotShotEvent::Qc2Formed(either::Left(qc))
+                if self.upgrade_lock.new_protocol_active(self.cur_view)
+                    && !self.upgrade_lock.new_protocol_active(qc.view_number()) =>
+            {
+                // Boundary-only: the vote collector formed the QC for the last
+                // legacy view, but because the cutover-view proposal belongs to
+                // the new protocol, nothing in the (now-gated) proposal path will
+                // land it in `high_qc`. Capture it here so `extract_pre_cutover_seed`
+                // carries it across and the new protocol proposes on it directly
+                // instead of timing the view out. `update_high_qc` is monotone, so
+                // this is a strict no-op outside the cutover window.
+                let mut consensus_writer = self.consensus.write().await;
+                let _ = consensus_writer.update_high_qc(qc.clone());
+                drop(consensus_writer);
+                if let Err(e) = self.storage.update_high_qc2(qc.clone()).await {
+                    tracing::warn!("Failed to persist boundary high QC: {e}");
+                }
+            },
             _ => {},
         }
 
@@ -279,7 +297,26 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for ConsensusTaskS
         _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
         if self.upgrade_lock.new_protocol_active(self.cur_view) {
-            return Ok(());
+            // We have crossed into the new protocol. Keep collecting votes for
+            // strictly-pre-cutover views so the leader of the cutover view can
+            // finish assembling the last legacy QC, which then rides into the
+            // new protocol via `high_qc` / the cutover seed. Everything else —
+            // proposing, voting, view changes — stays shut down.
+            let admit = match event.as_ref() {
+                HotShotEvent::QuorumVoteRecv(vote) => {
+                    !self.upgrade_lock.new_protocol_active(vote.view_number())
+                },
+                HotShotEvent::EpochRootQuorumVoteRecv(vote) => {
+                    !self.upgrade_lock.new_protocol_active(vote.view_number())
+                },
+                HotShotEvent::Qc2Formed(either::Left(qc)) => {
+                    !self.upgrade_lock.new_protocol_active(qc.view_number())
+                },
+                _ => false,
+            };
+            if !admit {
+                return Ok(());
+            }
         }
         self.handle(event, sender.clone()).await
     }
