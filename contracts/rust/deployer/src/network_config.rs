@@ -35,8 +35,9 @@ pub async fn fetch_stake_table_from_sequencer(
     epoch: Option<EpochNumber>,
 ) -> Result<HSStakeTable<SeqTypes>> {
     tracing::info!("Initializing stake table from node for epoch {epoch:?}");
+    const NUM_RETRIES: usize = 5;
 
-    loop {
+    for i in 0..NUM_RETRIES {
         match epoch {
             Some(epoch) => match surf_disco::Client::<
                 tide_disco::error::ServerError,
@@ -46,12 +47,12 @@ pub async fn fetch_stake_table_from_sequencer(
             .send()
             .await
             {
-                Ok(resp) => break Ok(resp.into()),
+                Ok(resp) => return Ok(resp.into()),
                 Err(e) => {
                     let url = sequencer_url
                         .join(&format!("node/stake-table/{}", epoch.u64()))
                         .unwrap();
-                    tracing::error!(%url, "Failed to fetch the stake table: {e}");
+                    tracing::error!(%url, "Failed to fetch the stake table: {e}, num_retries left: {}", NUM_RETRIES - i - 1);
                     sleep(Duration::from_secs(5)).await;
                 },
             },
@@ -67,16 +68,19 @@ pub async fn fetch_stake_table_from_sequencer(
                                 &value["config"]["known_nodes_with_stake"].to_string(),
                             )
                             .with_context(|| "Failed to parse the stake table")?;
-                        break Ok(known_nodes_with_stake.into());
+                        return Ok(known_nodes_with_stake.into());
                     },
                     Err(e) => {
-                        tracing::error!(%url, "Failed to fetch the network config: {e}");
+                        tracing::error!(%url, "Failed to fetch the network config: {e}, num_retries left: {}", NUM_RETRIES - i - 1);
                         sleep(Duration::from_secs(5)).await;
                     },
                 }
             },
         }
     }
+    return Err(anyhow::anyhow!(
+        "Failed to fetch the stake table after {NUM_RETRIES} attempts"
+    ));
 }
 
 #[inline]
