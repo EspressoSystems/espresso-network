@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["create_combined_router","create_router_v1","create_router_v2","redirect_to_docs","rewrite_root_to_v2","serve_openapi_spec","serve_swagger_ui"],"mod":["routes"],"struct":["ErrorResponse","SendQuery"]};
+window.SIDEBAR_ITEMS = {"fn":["classify_availability_error","create_combined_router","create_router_v1","create_router_v2","drive_ws_stream","redirect_to_docs","rewrite_root_to_v2","serve_openapi_spec","serve_swagger_ui"],"mod":["routes"],"struct":["ErrorResponse","SendQuery"]};

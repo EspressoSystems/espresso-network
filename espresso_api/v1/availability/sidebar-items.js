@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BlockId"],"trait":["AvailabilityApi"]};
+window.SIDEBAR_ITEMS = {"enum":["BlockId","LeafId","PayloadId"],"trait":["AvailabilityApi","HotShotAvailabilityApi"]};

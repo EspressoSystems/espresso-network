@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["NodeApiStateImpl"]};
+window.SIDEBAR_ITEMS = {"fn":["bad_request","block_id_to_hs","enforce_range","not_found","payload_id_to_hs","range_exceeded"],"struct":["NodeApiStateImpl"]};
