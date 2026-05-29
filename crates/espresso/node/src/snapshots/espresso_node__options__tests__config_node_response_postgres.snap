@@ -1,0 +1,198 @@
+---
+source: crates/espresso/node/src/options.rs
+assertion_line: 1254
+expression: cfg
+---
+orchestrator_url: "http://orchestrator.example:8080/"
+cdn_endpoint: "cdn.example:8081"
+cliquenet_bind_address: "0.0.0.0:9977"
+cliquenet_advertise_address: "node1.example:9977"
+libp2p_bind_address: "0.0.0.0:1769"
+libp2p_advertise_address: "node1.example:1769"
+libp2p_bootstrap_nodes:
+  - /ip4/10.0.0.1/tcp/1769
+public_api_url: "http://node1.example:24000/"
+builder_urls:
+  - "http://builder.example:31004/"
+state_relay_server_url: "http://relay.example:8083/"
+state_peers:
+  - "https://peer1.example/"
+  - "https://peer2.example/"
+config_peers:
+  - "https://peer1.example/"
+is_da: true
+genesis_file: /path/to/genesis.toml
+identity:
+  country_code: US
+  latitude: ~
+  longitude: ~
+  node_name: Snapshot Node
+  node_description: ~
+  company_name: ~
+  company_website: ~
+  operating_system: linux
+  node_type: espresso-sequencer 0.0.0
+  network_type: ~
+  icon_14x14_1x: ~
+  icon_14x14_2x: ~
+  icon_14x14_3x: ~
+  icon_24x24_1x: ~
+  icon_24x24_2x: ~
+  icon_24x24_3x: ~
+catchup_base_timeout:
+  secs: 2
+  nanos: 0
+local_catchup_timeout:
+  secs: 5
+  nanos: 0
+bootstrap_epoch_catchup_timeout:
+  secs: 30
+  nanos: 0
+new_protocol_consensus_gc_interval: 100
+catchup_backoff:
+  factor: 4
+  base:
+    secs: 0
+    nanos: 200000000
+  max:
+    secs: 5
+    nanos: 0
+  jitter:
+    numerator: 1
+    denominator: 10
+  disable: false
+proposal_fetcher:
+  num_workers: 2
+  fetch_timeout:
+    secs: 2
+    nanos: 0
+libp2p:
+  heartbeat_interval:
+    secs: 1
+    nanos: 0
+  heartbeat_initial_delay:
+    secs: 5
+    nanos: 0
+  history_gossip: 3
+  history_length: 5
+  mesh_n: 8
+  mesh_n_high: 12
+  mesh_n_low: 6
+  mesh_outbound_min: 2
+  max_ihave_length: 5000
+  max_ihave_messages: 10
+  published_message_ids_cache_time:
+    secs: 10
+    nanos: 0
+  iwant_followup_time:
+    secs: 3
+    nanos: 0
+  max_messages_per_rpc: ~
+  gossip_retransmission: 3
+  gossip_factor: 0.25
+  gossip_lazy: 6
+  max_gossip_transmit_size: 2000000
+  max_direct_transmit_size: 20000000
+  fanout_ttl:
+    secs: 60
+    nanos: 0
+  duplicate_cache_time:
+    secs: 1200
+    nanos: 0
+  flood_publish: true
+l1:
+  retry_delay:
+    secs: 1
+    nanos: 0
+  polling_interval:
+    secs: 7
+    nanos: 0
+  blocks_cache_size: 100
+  events_channel_capacity: 100
+  events_max_block_range: 10000
+  subscription_timeout:
+    secs: 60
+    nanos: 0
+  frequent_failure_tolerance:
+    secs: 60
+    nanos: 0
+  consecutive_failure_tolerance: 10
+  failover_revert:
+    secs: 1800
+    nanos: 0
+  rate_limit_delay: ~
+  stake_table_update_interval:
+    secs: 3600
+    nanos: 0
+  events_max_retry_duration:
+    secs: 1200
+    nanos: 0
+  finalized_safety_margin: ~
+l1_provider_count: 1
+l1_ws_provider_count: 0
+storage:
+  backend: sql
+  fs: ~
+  sql:
+    prune: true
+    archive: false
+    lightweight: false
+    disable_proactive_fetching: false
+    fetch_rate_limit: ~
+    active_fetch_delay: ~
+    chunk_fetch_delay: ~
+    sync_status_chunk_size: ~
+    sync_status_ttl: ~
+    proactive_scan_chunk_size: ~
+    proactive_scan_interval: ~
+    idle_connection_timeout:
+      secs: 600
+      nanos: 0
+    connection_timeout:
+      secs: 1800
+      nanos: 0
+    slow_statement_threshold:
+      secs: 1
+      nanos: 0
+    statement_timeout:
+      secs: 600
+      nanos: 0
+    min_connections: 0
+    max_connections: 25
+    query_min_connections: ~
+    query_max_connections: ~
+    pruning:
+      pruning_threshold: 1000000000000
+      minimum_retention: ~
+      target_retention: ~
+      batch_size: ~
+      max_usage: ~
+      interval: ~
+      pages: ~
+    consensus_pruning:
+      target_retention: 302000
+      minimum_retention: 130000
+      target_usage: 1000000000
+modules:
+  http:
+    port: 24000
+    max_connections: ~
+    axum_port: ~
+    tonic_port: ~
+  query:
+    peers: []
+    light_client:
+      num_stake_tables_in_memory: 100
+      decaf: false
+    light_client_db:
+      num_connections: 5
+      num_leaves: 100
+      num_stake_tables: 100
+      lc_path: ~
+  submit: false
+  status: false
+  catchup: false
+  config: true
+  hotshot_events: false
+  explorer: false
+  light_client: false

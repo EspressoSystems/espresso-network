@@ -8,7 +8,7 @@ use hotshot_types::{
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
     traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::is_epoch_root,
+    utils::{is_epoch_root, is_transition_block},
 };
 use hotshot_utils::anytrace;
 use tokio::task::{AbortHandle, JoinSet};
@@ -100,6 +100,19 @@ impl<T: NodeType> EpochManager<T> {
                 return;
             };
             self.request_drb_result(epoch + 2);
+        }
+
+        // If this is the transition block of an epoch feed the DRB result to the coordinator.
+        if is_transition_block(block_number, *self.epoch_height)
+            && let Some(epoch) = leaf.epoch(*self.epoch_height)
+            && let Some(drb) = leaf.next_drb_result
+        {
+            let target_epoch = epoch + 1;
+            if !self.completed_drb_requests.contains(&target_epoch) {
+                self.membership_coordinator.supply_drb(target_epoch, drb);
+                self.completed_drb_requests.insert(target_epoch);
+                self.pending_drb_requests.remove(&target_epoch);
+            }
         }
     }
 

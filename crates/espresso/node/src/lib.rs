@@ -19,7 +19,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
+use std::{fmt::Debug, marker::PhantomData, num::NonZeroU64, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -133,6 +133,8 @@ pub struct NetworkParams {
     /// Per-step timeout for the startup stake-table catchup walk
     /// (`bootstrap_epoch_window`).
     pub bootstrap_epoch_catchup_timeout: Duration,
+    /// Number of blocks between new-protocol consensus garbage collection passes.
+    pub new_protocol_consensus_gc_interval: NonZeroU64,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -462,10 +464,10 @@ where
             );
 
             // Publish our cliquenet `connect_info` into the stake table from
-            // `CLIQUENET_VERSION` on, so peers can dial us. Modify `validator_config`
+            // `NEW_PROTOCOL_VERSION` on, so peers can dial us. Modify `validator_config`
             // in place so the same `connect_info` is sent later when posting to
             // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
-            if genesis.base_version >= versions::CLIQUENET_VERSION {
+            if genesis.base_version >= versions::NEW_PROTOCOL_VERSION {
                 let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
                     "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
                      Cliquenet network from the orchestrator",
@@ -828,6 +830,7 @@ where
         event_consumer,
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
+        network_params.new_protocol_consensus_gc_interval,
     )
     .await?;
 
@@ -853,7 +856,7 @@ async fn check_cliquenet_info_registered(
     stake_table_contract: Option<alloy::primitives::Address>,
     l1_client: &espresso_types::v0::L1Client,
 ) {
-    if current_version != versions::VID2_UPGRADE_VERSION {
+    if current_version != versions::EPOCH_REWARD_VERSION {
         return;
     }
     let Some(addr) = stake_table_contract else {
@@ -1657,6 +1660,7 @@ pub mod testing {
                 event_consumer,
                 Default::default(),
                 Duration::from_secs(2),
+                NonZeroU64::new(100).unwrap(),
             )
             .await
             .unwrap()

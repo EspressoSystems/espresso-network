@@ -518,6 +518,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for DaTaskState<TY
         sender: &Sender<Arc<Self::Event>>,
         _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self.upgrade_lock.new_protocol_active(self.cur_view) {
+            return Ok(());
+        }
         self.handle(event, sender.clone()).await
     }
 

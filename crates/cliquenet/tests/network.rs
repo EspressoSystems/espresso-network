@@ -4,6 +4,7 @@ use bytes::Bytes;
 use cliquenet::{
     Config, Network, Role, Slot,
     error::NetworkError,
+    noise::Protocol,
     x25519::{Keypair, PublicKey},
 };
 use tokio::time::{sleep, timeout};
@@ -51,6 +52,7 @@ fn make_config(node: &Node, all: &[&Node]) -> Config {
         .receive_timeout(Duration::from_secs(5))
         .retry_delays(vec![1, 3])
         .max_retry_delay(Duration::from_secs(5))
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build()
 }
 
@@ -586,6 +588,7 @@ async fn unknown_peer_backs_off() {
             .retry_delays(vec![1])
             .max_retry_delay(Duration::from_secs(1))
             .backoff_duration(Duration::from_secs(60))
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     )
     .await
@@ -603,6 +606,7 @@ async fn unknown_peer_backs_off() {
             .receive_timeout(Duration::from_secs(5))
             .retry_delays(vec![1])
             .max_retry_delay(Duration::from_secs(1))
+            .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
             .build(),
     )
     .await

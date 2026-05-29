@@ -925,6 +925,7 @@ impl StakingTransactions<HttpProviderWithWallet> {
 
         let st = StakeTableV3::new(stake_table, &token_holder_provider);
         let version: StakeTableContractVersion = st.getVersion().call().await?.try_into()?;
+        tracing::info!(?version, "stake table contract version");
         if matches!(
             version,
             StakeTableContractVersion::V2 | StakeTableContractVersion::V3
@@ -1217,6 +1218,15 @@ pub(crate) async fn stake_for_demo(
 
         let (bls, state, x25519) = load_validator_keys(val_index, mnemonic_env.as_deref())?;
         let p2p_addr = load_p2p_addr(val_index)?;
+        tracing::info!(
+            val_index,
+            address = %signer.address(),
+            bls_key = %bls.ver_key(),
+            state_key = %state.ver_key(),
+            x25519_key = %x25519.public_key(),
+            %p2p_addr,
+            "registering validator",
+        );
         validator_keys.push(StakingKeySet {
             signer,
             bls,

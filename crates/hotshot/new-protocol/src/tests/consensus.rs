@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
 use hotshot::{traits::ValidatedState, types::BLSPubKey};
-use hotshot_example_types::{node_types::TestTypes, state_types::TestValidatedState};
+use hotshot_example_types::{
+    block_types::TestBlockHeader,
+    node_types::{TEST_VERSIONS, TestTypes},
+    state_types::TestValidatedState,
+};
 use hotshot_types::{
-    data::{EpochNumber, ViewNumber},
+    data::{EpochNumber, Leaf2, ViewNumber},
     traits::signature_key::SignatureKey,
 };
 
@@ -20,7 +24,7 @@ use crate::{
             is_request_state, is_send_cert1, is_send_timeout_cert, is_send_timeout_vote,
             is_view_changed, is_vote1, is_vote2, node_index_for_key,
         },
-        utils::ConsensusHarness,
+        utils::{ConsensusHarness, MockBlock},
     },
 };
 
@@ -582,6 +586,93 @@ async fn test_leader_sends_proposal() {
     assert!(
         any(harness.outputs(), is_proposal),
         "Leader should send a proposal when it has cert1, header, block, and vid_disperse"
+    );
+}
+
+/// Regression: `maybe_propose` must refuse to propose when
+/// `self.proposals[parent_view]` has drifted from
+/// `parent_cert.data.leaf_commit`.
+///
+/// `self.proposals` is keyed by view and can be overwritten (e.g. byzantine
+/// leader sends two safe proposals at the same view, the cert formed for the
+/// first but a later overwrite landed in the proposals map). In that case the
+/// canonical header was built off the cert's leaf — but if `maybe_propose`
+/// derived the header lookup key from `self.proposals[parent_view]`, it could
+/// pick up a header built for a different parent (same view, different
+/// height) and emit a proposal whose `justify_qc` says height `h` but whose
+/// own `block_header` says height `h+2`, exactly matching the
+/// `Invalid Height: parent_height=X, proposal_height=X+2` production error.
+#[tokio::test]
+async fn test_propose_refuses_when_stored_proposal_differs_from_cert() {
+    let test_data = TestData::new(4).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_2);
+    let mut harness = ConsensusHarness::new(leader_index).await;
+
+    // Standard happy-path setup through view 1: receive proposal, which
+    // triggers RequestBlockAndHeader for view 2 (auto-built by the harness
+    // against the canonical view-1 proposal as parent).
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
+        .await;
+
+    // Sanity: header for view 2 has been built off the canonical view-1
+    // parent. Without the fix and with `proposals[1]` overwritten below, the
+    // header lookup would still find a header (the canonical one) keyed by
+    // a different commitment than what `maybe_propose` would compute — so
+    // either we'd lose the header (silent stall) or worse, find a header
+    // we built for the byzantine parent. The check guards both.
+
+    // Inject a synthetic "byzantine" proposal at view 1 — same view but a
+    // different leaf commit (taken from view 2's proposal, with its view
+    // number rewritten to 1). This simulates the case where a second safe
+    // proposal at view 1 overwrites `self.proposals[1]` after the cert had
+    // already formed for the first.
+    let mut byzantine = test_data.views[1].proposal.data.clone();
+    byzantine.view_number = test_data.views[0].view_number;
+    let canonical_commit = proposal_commitment(&test_data.views[0].proposal.data);
+    let byzantine_commit = proposal_commitment(&byzantine);
+    assert_ne!(
+        canonical_commit, byzantine_commit,
+        "test setup: byzantine proposal must have a different leaf commit"
+    );
+    harness
+        .consensus
+        .force_set_proposal(test_data.views[0].view_number, byzantine.clone());
+
+    // Plant a header keyed by the byzantine commit at view 2. Without this
+    // step, even the buggy code would silently fail to find a header and
+    // return early — so the test wouldn't differentiate the fix from the
+    // bug. With this header present, the buggy code WOULD look it up
+    // (via `proposal_commitment(proposals[1]) = byzantine_commit`), find
+    // it, and emit a wrong-height proposal. The fix's commitment check
+    // catches the mismatch before the lookup.
+    let mock = MockBlock::new();
+    let byzantine_parent_leaf: Leaf2<TestTypes> = byzantine.into();
+    let byzantine_built_header = TestBlockHeader::new(
+        &byzantine_parent_leaf,
+        mock.payload_commitment,
+        mock.builder_commitment,
+        mock.metadata,
+        TEST_VERSIONS.test.base,
+    );
+    harness
+        .apply(ConsensusInput::HeaderCreated(
+            test_data.views[1].view_number,
+            byzantine_commit,
+            byzantine_built_header,
+        ))
+        .await;
+
+    // cert1 for view 1 (over the canonical proposal) — this is what
+    // `maybe_propose(view=2)` will use as `parent_cert`. Its leaf_commit no
+    // longer matches `proposals[1]`.
+    harness.apply(test_data.views[0].cert1_input()).await;
+
+    assert!(
+        !any(harness.outputs(), is_proposal),
+        "Leader must NOT propose when proposals[parent_view] disagrees with \
+         parent_cert.leaf_commit"
     );
 }
 
