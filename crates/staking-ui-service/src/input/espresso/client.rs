@@ -13,7 +13,7 @@ use futures::{
 };
 use hotshot_query_service::{availability::LeafQueryData, types::HeightIndexed};
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
-use surf_disco::{Client, Url};
+use surf_disco::{Client, ContentType, Url};
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
 use vbs::version::StaticVersion;
@@ -101,6 +101,8 @@ impl QueryServiceOptions {
 #[derive(Clone, Debug)]
 pub struct QueryServiceClient {
     inner: Client<hotshot_query_service::Error, FormatVersion>,
+    /// JSON client for node/validators to workaround bincode breakage
+    client_json: Client<hotshot_query_service::Error, FormatVersion>,
     epoch_start_block: u64,
     epoch_height: u64,
     polling_interval: Option<Duration>,
@@ -119,8 +121,12 @@ impl QueryServiceClient {
         let url = opt.url.ok_or_else(|| {
             Error::internal().context("Espresso URL must be provided when not in L1-only mode")
         })?;
-        let inner = Client::builder(url)
+        let inner = Client::builder(url.clone())
             .set_timeout(Some(opt.http_timeout))
+            .build();
+        let validators_client = Client::builder(url)
+            .set_timeout(Some(opt.http_timeout))
+            .content_type(ContentType::Json)
             .build();
 
         // Get the epoch height. We need this for multiple endpoints, and it never changes, so we
@@ -129,6 +135,7 @@ impl QueryServiceClient {
 
         Ok(Self {
             inner,
+            client_json: validators_client,
             epoch_height: config.hotshot_config().blocks_per_epoch(),
             epoch_start_block: config.hotshot_config().epoch_start_block(),
             polling_interval: opt.polling_interval,
@@ -365,7 +372,7 @@ impl EspressoClient for QueryServiceClient {
 
     async fn stake_table_for_epoch(&self, epoch: u64) -> Result<AuthenticatedValidatorMap> {
         let nodes: AuthenticatedValidatorMap = self
-            .inner
+            .client_json
             .get(&format!("node/validators/{epoch}"))
             .send()
             .await?;

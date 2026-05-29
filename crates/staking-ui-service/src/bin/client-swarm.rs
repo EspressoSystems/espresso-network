@@ -215,11 +215,9 @@ impl Metrics {
                     let delta_failures = curr_tick.failures - prev_tick.failures;
                     let delta_duration = curr_tick.total_duration - prev_tick.total_duration;
                     let requests_per_sec = delta_requests / ROLLUP;
-                    let requests_per_failure = if delta_failures == 0 {
-                        usize::MAX
-                    } else {
-                        delta_requests / delta_failures
-                    };
+                    let requests_per_failure = delta_requests
+                        .checked_div(delta_failures)
+                        .unwrap_or(usize::MAX);
                     let avg_duration = if delta_requests == 0 {
                         usize::MAX
                     } else {
