@@ -102,6 +102,67 @@ pub mod v1 {
     /// Get light client state certificate (V2)
     /// Path: GET /v1/availability/state-cert-v2/{epoch}
     pub const STATE_CERT_V2_ROUTE: &str = "/v1/availability/state-cert-v2/{epoch}";
+
+    //=========================================================================
+    // HotShot Availability API Routes (mirrored from hotshot-query-service)
+    //=========================================================================
+
+    pub const LEAF_BY_HEIGHT_ROUTE: &str = "/v1/availability/leaf/{height}";
+    pub const LEAF_BY_HASH_ROUTE: &str = "/v1/availability/leaf/hash/{hash}";
+    pub const LEAF_RANGE_ROUTE: &str = "/v1/availability/leaf/{from}/{until}";
+
+    pub const HEADER_BY_HEIGHT_ROUTE: &str = "/v1/availability/header/{height}";
+    pub const HEADER_BY_HASH_ROUTE: &str = "/v1/availability/header/hash/{hash}";
+    pub const HEADER_BY_PAYLOAD_HASH_ROUTE: &str =
+        "/v1/availability/header/payload-hash/{payload_hash}";
+    pub const HEADER_RANGE_ROUTE: &str = "/v1/availability/header/{from}/{until}";
+
+    pub const BLOCK_BY_HEIGHT_ROUTE: &str = "/v1/availability/block/{height}";
+    pub const BLOCK_BY_HASH_ROUTE: &str = "/v1/availability/block/hash/{hash}";
+    pub const BLOCK_BY_PAYLOAD_HASH_ROUTE: &str =
+        "/v1/availability/block/payload-hash/{payload_hash}";
+    pub const BLOCK_RANGE_ROUTE: &str = "/v1/availability/block/{from}/{until}";
+
+    pub const PAYLOAD_BY_HEIGHT_ROUTE: &str = "/v1/availability/payload/{height}";
+    pub const PAYLOAD_BY_HASH_ROUTE: &str = "/v1/availability/payload/hash/{hash}";
+    pub const PAYLOAD_BY_BLOCK_HASH_ROUTE: &str =
+        "/v1/availability/payload/block-hash/{block_hash}";
+    pub const PAYLOAD_RANGE_ROUTE: &str = "/v1/availability/payload/{from}/{until}";
+
+    pub const VID_COMMON_BY_HEIGHT_ROUTE: &str = "/v1/availability/vid/common/{height}";
+    pub const VID_COMMON_BY_HASH_ROUTE: &str = "/v1/availability/vid/common/hash/{hash}";
+    pub const VID_COMMON_BY_PAYLOAD_HASH_ROUTE: &str =
+        "/v1/availability/vid/common/payload-hash/{payload_hash}";
+    pub const VID_COMMON_RANGE_ROUTE: &str = "/v1/availability/vid/common/{from}/{until}";
+
+    pub const TRANSACTION_BY_POSITION_NOPROOF_ROUTE: &str =
+        "/v1/availability/transaction/{height}/{index}/noproof";
+    pub const TRANSACTION_BY_HASH_NOPROOF_ROUTE: &str =
+        "/v1/availability/transaction/hash/{hash}/noproof";
+    pub const TRANSACTION_PROOF_BY_POSITION_ROUTE: &str =
+        "/v1/availability/transaction/{height}/{index}/proof";
+    pub const TRANSACTION_PROOF_BY_HASH_ROUTE: &str =
+        "/v1/availability/transaction/hash/{hash}/proof";
+    pub const TRANSACTION_BY_POSITION_ROUTE: &str = "/v1/availability/transaction/{height}/{index}";
+    pub const TRANSACTION_BY_HASH_ROUTE: &str = "/v1/availability/transaction/hash/{hash}";
+
+    pub const BLOCK_SUMMARY_BY_HEIGHT_ROUTE: &str = "/v1/availability/block/summary/{height}";
+    pub const BLOCK_SUMMARY_RANGE_ROUTE: &str = "/v1/availability/block/summaries/{from}/{until}";
+
+    pub const LIMITS_ROUTE: &str = "/v1/availability/limits";
+    pub const CERT2_BY_HEIGHT_ROUTE: &str = "/v1/availability/cert2/{height}";
+
+    pub const STREAM_LEAVES_ROUTE: &str = "/v1/availability/stream/leaves/{height}";
+    pub const STREAM_HEADERS_ROUTE: &str = "/v1/availability/stream/headers/{height}";
+    pub const STREAM_BLOCKS_ROUTE: &str = "/v1/availability/stream/blocks/{height}";
+    pub const STREAM_PAYLOADS_ROUTE: &str = "/v1/availability/stream/payloads/{height}";
+    pub const STREAM_VID_COMMON_ROUTE: &str = "/v1/availability/stream/vid/common/{height}";
+    pub const STREAM_TRANSACTIONS_ROUTE: &str = "/v1/availability/stream/transactions/{height}";
+    pub const STREAM_TRANSACTIONS_NS_ROUTE: &str =
+        "/v1/availability/stream/transactions/{height}/namespace/{namespace}";
+
+    pub const STREAM_NAMESPACE_PROOFS_ROUTE: &str =
+        "/v1/availability/stream/blocks/{height}/namespace/{namespace}";
 }
 
 //=============================================================================
