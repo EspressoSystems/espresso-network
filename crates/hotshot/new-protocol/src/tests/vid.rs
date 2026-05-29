@@ -67,6 +67,53 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     }
 }
 
+/// `mark_reconstructed` should suppress reconstruction for the marked view
+/// even when threshold-plus shares are fed in afterwards.
+#[tokio::test]
+async fn test_mark_reconstructed_skips_reconstruction() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    reconstructor.mark_reconstructed(view.view_number);
+
+    // Feed threshold-plus shares; none should trigger reconstruction.
+    let proposal_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
+    let proposal_share = view
+        .vid_shares
+        .iter()
+        .find(|s| s.recipient_key == proposal_key)
+        .unwrap()
+        .clone();
+    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.metadata);
+    for i in 1..view.vid_shares.len() as u64 {
+        let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
+        let share = view
+            .vid_shares
+            .iter()
+            .find(|s| s.recipient_key == key)
+            .unwrap()
+            .clone();
+        reconstructor.handle_vid_share(share, None);
+    }
+
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
+
+    match result {
+        Err(_elapsed) => { /* no task ever spawned — good */ },
+        Ok(None) => { /* no tasks — good */ },
+        Ok(Some(Err(()))) => { /* error, not a duplicate success */ },
+        Ok(Some(Ok(out))) => {
+            panic!(
+                "BUG: mark_reconstructed should have suppressed reconstruction, but got a result \
+                 for view {:?}",
+                out.view
+            );
+        },
+    }
+}
+
 /// Shares arriving after reconstruction has already completed for a view
 /// should be silently dropped (the `reconstructed` set guards this path).
 #[tokio::test]
