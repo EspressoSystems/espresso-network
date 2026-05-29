@@ -427,6 +427,7 @@ pub mod status;
 pub mod task;
 pub mod testing;
 pub mod types;
+pub mod util;
 
 use std::sync::Arc;
 

@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::{Arc, OnceLock},
+};
 
 use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
@@ -29,6 +32,7 @@ use hotshot_query_service::{
         },
     },
     merklized_state::Snapshot,
+    util::SingleFlight,
 };
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
@@ -60,6 +64,10 @@ use crate::{
 };
 
 pub type DataSource = SqlDataSource<SeqTypes, Provider>;
+
+/// Cloneable result of a coalesced `get_frontier` lookup. `anyhow::Error` is not `Clone`, so it is
+/// wrapped in an `Arc` to share a single failure across all waiters of a single flight.
+type FrontierResult = Arc<Result<BlocksFrontier, Arc<anyhow::Error>>>;
 
 #[async_trait]
 impl SequencerDataSource for DataSource {
@@ -991,7 +999,35 @@ impl CatchupStorage for DataSource {
         height: u64,
         view: ViewNumber,
     ) -> anyhow::Result<BlocksFrontier> {
-        self.as_ref().get_frontier(instance, height, view).await
+        // Coalesce concurrent identical lookups so N parallel callers share a single underlying
+        // `block_merkle_tree` query. Under high concurrency this lookup can take minutes due to
+        // disk-I/O contention on `IPC: BufferIO` waits; without coalescing every peer issues its
+        // own query and they stampede on the same shared buffer pages.
+        //
+        // The key is just `height` — `view` only matters in the "future height → state replay"
+        // fallback inside `SqlStorage::get_frontier`, which is not the hot path causing the
+        // stampede. Two callers asking for the same height with different `view`s would converge
+        // on the same frontier anyway when the data is present locally.
+        static FRONTIER_FLIGHT: OnceLock<SingleFlight<u64, FrontierResult>> = OnceLock::new();
+        let flight = FRONTIER_FLIGHT.get_or_init(SingleFlight::new);
+
+        let this = self.clone();
+        let instance = instance.clone();
+        let value = flight
+            .run(height, move || async move {
+                let res = this
+                    .as_ref()
+                    .get_frontier(&instance, height, view)
+                    .await
+                    .map_err(Arc::new);
+                Arc::new(res)
+            })
+            .await;
+
+        match &*value {
+            Ok(frontier) => Ok(frontier.clone()),
+            Err(arc_err) => Err(anyhow::anyhow!("{arc_err:#}")),
+        }
     }
 
     async fn get_chain_config(
