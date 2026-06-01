@@ -106,6 +106,19 @@ pub struct PostgresOptions {
     /// Use TLS for an encrypted connection to the database.
     #[clap(long, env = "ESPRESSO_NODE_POSTGRES_USE_TLS")]
     pub(crate) use_tls: bool,
+
+    /// Disable `DEFERRABLE` on read transactions for the query service.
+    ///
+    /// When true, read transactions on Postgres start with `SERIALIZABLE READ ONLY` (no
+    /// `DEFERRABLE`), so they begin immediately rather than waiting for a safe serializable
+    /// snapshot. This trades start-up latency for the chance of a serialization-error retry,
+    /// and is opt-in.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_POSTGRES_NO_DEFERRABLE",
+        default_value_t = false
+    )]
+    pub(crate) no_deferrable: bool,
 }
 
 impl Default for PostgresOptions {
@@ -349,6 +362,10 @@ impl From<PostgresOptions> for Config {
         cfg = cfg.slow_statement_threshold(Duration::from_secs(1));
         cfg = cfg.statement_timeout(Duration::from_secs(600)); // 10 minutes default
 
+        hotshot_query_service::data_source::storage::sql::set_no_deferrable_on_read(
+            opt.no_deferrable,
+        );
+
         cfg
     }
 }
@@ -436,6 +453,10 @@ impl TryFrom<&Options> for Config {
                 cfg.query_max_connections(opt.query_max_connections.unwrap_or(opt.max_connections));
             cfg =
                 cfg.query_min_connections(opt.query_min_connections.unwrap_or(opt.min_connections));
+
+            hotshot_query_service::data_source::storage::sql::set_no_deferrable_on_read(
+                opt.postgres_options.no_deferrable,
+            );
         }
 
         cfg = cfg.connection_timeout(opt.connection_timeout);
