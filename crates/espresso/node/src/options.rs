@@ -81,19 +81,6 @@ pub struct Options {
     #[clap(long, env = "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS")]
     pub cliquenet_advertise_address: Option<NetAddr>,
 
-    /// Logical name identifying this network.
-    ///
-    /// Cliquenet uses this as the Noise handshake prologue: peers with
-    /// different names cannot connect. Set a distinct value per environment to
-    /// keep networks disjoint and prevent accidental merges. The default is a
-    /// sentinel that deliberately matches no real deployment.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_CLIQUENET_NETWORK_NAME",
-        default_value = "unconfigured-cliquenet-name"
-    )]
-    pub cliquenet_network_name: String,
-
     /// The address to bind to for Libp2p (in `host:port` form)
     #[clap(
         long,
@@ -690,7 +677,6 @@ pub struct PublicNodeConfig {
     pub cdn_endpoint: String,
     pub cliquenet_bind_address: NetAddr,
     pub cliquenet_advertise_address: Option<NetAddr>,
-    pub cliquenet_network_name: String,
     pub libp2p_bind_address: String,
     pub libp2p_advertise_address: Option<String>,
     pub libp2p_bootstrap_nodes: Option<Vec<Multiaddr>>,
@@ -1031,7 +1017,6 @@ impl PublicNodeConfig {
             cdn_endpoint: opt.cdn_endpoint.clone(),
             cliquenet_bind_address: opt.cliquenet_bind_address.clone(),
             cliquenet_advertise_address: opt.cliquenet_advertise_address.clone(),
-            cliquenet_network_name: opt.cliquenet_network_name.clone(),
             libp2p_bind_address: opt.libp2p_bind_address.clone(),
             libp2p_advertise_address: opt.libp2p_advertise_address.clone(),
             libp2p_bootstrap_nodes: opt.libp2p_bootstrap_nodes.clone(),
