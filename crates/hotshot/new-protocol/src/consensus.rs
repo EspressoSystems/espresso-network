@@ -21,8 +21,8 @@ use hotshot_types::{
         check_qc_state_cert_correspondence,
     },
     simple_vote::{
-        CheckpointData, HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote,
-        TimeoutData2, TimeoutVote2, Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2,
+        Vote2Data,
     },
     stake_table::{HSStakeTable, StakeTableEntries},
     traits::{
@@ -42,8 +42,8 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal,
-        ProposalFetchRequest, ProposalMessage, Validated, VidShareMessage, Vote1, Vote2,
+        Certificate1, Certificate2, EpochChangeMessage, Proposal, ProposalFetchRequest,
+        ProposalMessage, Validated, VidShareMessage, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -115,7 +115,6 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestDrbResult(EpochNumber),
     SendProposal(SignedProposal<T, Proposal<T>>),
     SendVidShares(Vec<VidShareMessage<T>>),
-    SendCheckpointVote(CheckpointVote<T>),
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
@@ -1177,8 +1176,6 @@ impl<T: NodeType> Consensus<T> {
         }
         let new_decided_view = max(self.last_decided_view, leaf.view_number());
         let last_decided_leaf = leaf.clone();
-        // garbage collect everything strictly below the newly decided view.
-        let gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
         let mut decided = vec![leaf];
         let mut vid_shares = vec![self.signed_vid_share(view)];
 
@@ -1213,26 +1210,6 @@ impl<T: NodeType> Consensus<T> {
             cert2: Some(cert2.clone()),
             vid_shares,
         });
-        if let Some(gc) = gc {
-            let gc_data = CheckpointData {
-                view: gc.0,
-                epoch: gc.1.unwrap_or_default(),
-            };
-            let vote = match SimpleVote::create_signed_vote(
-                gc_data,
-                view,
-                &self.public_key,
-                &self.private_key,
-                &self.upgrade_lock,
-            ) {
-                Ok(vote) => vote,
-                Err(err) => {
-                    warn!(%view, %err, "failed to create signed checkpoint vote");
-                    return;
-                },
-            };
-            outbox.push_back(ConsensusOutput::SendCheckpointVote(vote));
-        }
     }
 
     /// Build a `LightClientStateUpdateVote2` for an epoch-root leaf.

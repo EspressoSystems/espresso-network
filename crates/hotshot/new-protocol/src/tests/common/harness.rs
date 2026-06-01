@@ -68,7 +68,6 @@ impl TestHarness {
         let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let timeout_one_honest_collector =
             VoteCollector::new(membership.clone(), upgrade_lock.clone());
-        let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
         let epoch_root_collector =
             EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
@@ -134,7 +133,6 @@ impl TestHarness {
             .vote2_collector(vote2_collector)
             .timeout_collector(timeout_collector)
             .timeout_one_honest_collector(timeout_one_honest_collector)
-            .checkpoint_collector(checkpoint_collector)
             .epoch_root_collector(epoch_root_collector)
             .vid_disperser(vid_disperse_task)
             .vid_reconstructor(vid_reconstruction_task)
