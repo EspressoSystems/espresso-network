@@ -265,26 +265,19 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                 if self.upgrade_lock.new_protocol_active(self.cur_view)
                     && !self.upgrade_lock.new_protocol_active(qc.view_number()) =>
             {
-                // Boundary-only: the vote collector formed the QC for the last
-                // legacy view, but because the cutover-view proposal belongs to
-                // the new protocol, nothing in the (now-gated) proposal path will
-                // land it in `high_qc`. Capture it here so `extract_pre_cutover_seed`
-                // carries it across and the new protocol proposes on it directly
-                // instead of timing the view out. `update_high_qc` is monotone, so
-                // this is a strict no-op outside the cutover window.
+                // Cutover boundary only: the gated proposal path won't land this
+                // last-legacy QC in `high_qc`, so capture it here for
+                // `extract_pre_cutover_seed` to carry across. `update_high_qc` is
+                // monotone, so this is a no-op outside the cutover window.
                 let mut consensus_writer = self.consensus.write().await;
                 let _ = consensus_writer.update_high_qc(qc.clone());
                 drop(consensus_writer);
                 if let Err(e) = self.storage.update_high_qc2(qc.clone()).await {
                     tracing::warn!("Failed to persist boundary high QC: {e}");
                 }
-                // Forward the formed QC to any external listener so the espresso
-                // bridge can hand it to the new-protocol coordinator. This covers
-                // the case where the cutover seed was snapshotted before this QC
-                // finished assembling: the coordinator registers it and the first
-                // new-protocol leader proposes on it instead of timing the view
-                // out. Only the cutover-view leader reaches this arm (only it
-                // collects these votes), so the QC lands exactly where needed.
+                // Forward to the espresso bridge -> new-protocol coordinator, in case the
+                // cutover seed was snapshotted before this QC finished assembling. Only the
+                // cutover-view leader reaches this arm, so it lands exactly where needed.
                 broadcast_event(
                     Event {
                         view_number: qc.view_number(),
@@ -312,11 +305,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for ConsensusTaskS
         _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
         if self.upgrade_lock.new_protocol_active(self.cur_view) {
-            // We have crossed into the new protocol. Keep collecting votes for
-            // strictly-pre-cutover views so the leader of the cutover view can
-            // finish assembling the last legacy QC, which then rides into the
-            // new protocol via `high_qc` / the cutover seed. Everything else —
-            // proposing, voting, view changes — stays shut down.
+            // Past cutover: still admit votes/QCs for strictly-pre-cutover views so
+            // the cutover leader can finish the last legacy QC; everything else
+            // (proposing, voting, view changes) stays shut down.
             let admit = match event.as_ref() {
                 HotShotEvent::QuorumVoteRecv(vote) => {
                     !self.upgrade_lock.new_protocol_active(vote.view_number())

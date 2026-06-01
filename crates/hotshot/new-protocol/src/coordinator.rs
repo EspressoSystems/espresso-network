@@ -1128,21 +1128,18 @@ where
                 let _ = respond.send(());
             },
             ClientRequest::SubmitLegacyHighQc { qc, respond } => {
-                // The QC certifies the last legacy view; the cutover view is the
-                // next one. Register it idempotently so the smooth-start
-                // precondition (`cert1_at(cutover_view - 1)`) is satisfied —
-                // whether this arrives before or after the cutover seed.
+                // QC certifies the last legacy view; cutover view is the next.
+                // Register idempotently so the smooth-start precondition holds
+                // regardless of arrival order vs. the cutover seed.
                 let qc_view = qc.view_number();
                 let cutover_view = qc_view + 1;
                 self.consensus.register_legacy_qc(&qc);
 
-                // If we're still parked on the last legacy view (the seed landed
-                // without this QC and is waiting out the view timer) and haven't
-                // already skipped via TC2, kick the leader to propose the cutover
-                // view on the real QC now. `cur_view` only equals `qc_view` while
-                // parked: once the smooth `start()` ran (here or at seed time) the
-                // view advances to `cutover_view`, so this is self-idempotent, and
-                // `maybe_propose` additionally dedups by `proposed_views`.
+                // Still parked on the last legacy view (seed landed without this
+                // QC, waiting out the timer) and not yet skipped via TC2: propose
+                // the cutover view on the real QC now. Self-idempotent — once
+                // started, `cur_view` advances past `qc_view` and `maybe_propose`
+                // dedups by `proposed_views`.
                 let cur_view = self.consensus.current_view();
                 if cur_view == qc_view
                     && self.consensus.timeout_cert_at(cutover_view).is_none()

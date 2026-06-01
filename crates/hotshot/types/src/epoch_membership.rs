@@ -210,11 +210,9 @@ impl<TYPES: NodeType> EpochMembershipCoordinator<TYPES> {
     /// keyed by signature key. Each entry's `Option<PeerConnectInfo>`
     /// reflects whether the peer has connection info registered.
     ///
-    /// When the same peer appears in both the stake table and the DA
-    /// committee, `Some` connect info wins over `None`. The DA committee
-    /// inside an epoch snapshot can be a stale bootstrap copy with no
-    /// connect info while the stake table carries fresh L1-derived info
-    /// (e.g. during the pre-CLIQUENET → CLIQUENET cutover); plain
+    /// For a peer in both, `Some` connect info wins over `None`: the snapshot's DA
+    /// committee may be a stale bootstrap copy lacking connect info while the stake
+    /// table has fresh L1-derived info (e.g. during CLIQUENET cutover), so plain
     /// last-write-wins would clobber the live data.
     ///
     /// Returns `None` if the stake table for `epoch` is unavailable

@@ -99,13 +99,8 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
         "ESPRESSO_NODE_GENESIS_FILE".to_string(),
         genesis_path.to_string(),
     )];
-    // The new protocol has no external builder, so each block carries only the
-    // ~1 txn/s the load generator feeds at the default 2s mean delay. The
-    // progress assertion below requires `2 * expected_block_height` txns, which
-    // at 1 txn/s would take ~20 min. Feed transactions faster on the no-builder
-    // path so the txn requirement is met around the same time as the block-height
-    // target instead of dominating the runtime. (Builder-based upgrades batch
-    // many txns per block, so they don't need this.)
+    // No-builder path gets only ~1 txn/s from the load generator, so the txn
+    // requirement (2 * block_height) would dominate runtime. Submit faster.
     if upgrade.target >= NEW_PROTOCOL_VERSION {
         env_overrides.push((
             "ESPRESSO_SUBMIT_TRANSACTIONS_DELAY".to_string(),
@@ -156,8 +151,7 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
         } else {
             None
         },
-        // The new protocol does not use a builder; skip builder-dependent waits and
-        // balance-conservation checks when running against v0.6+.
+        // v0.6+ has no builder: skip builder-dependent waits and balance checks.
         requires_builder: upgrade.target < NEW_PROTOCOL_VERSION,
         ..Default::default()
     };

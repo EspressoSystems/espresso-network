@@ -277,12 +277,10 @@ pub enum EventType<TYPES: NodeType> {
         vote: TimeoutVote2<TYPES>,
     },
 
-    /// Emitted by the legacy consensus task when it forms the QC for the last
-    /// legacy view at the legacy → new-protocol upgrade boundary (only the
-    /// leader of the cutover view forms it). Used so the espresso bridge can
-    /// forward this QC into the new-protocol coordinator even if the cutover
-    /// seed was snapshotted before the QC finished assembling — letting the
-    /// first new-protocol leader propose on it instead of timing the view out.
+    /// QC for the last legacy view, formed by the cutover-view leader at the
+    /// legacy -> new-protocol boundary. Lets the espresso bridge forward it to the
+    /// new-protocol coordinator if the cutover seed was snapshotted before this QC
+    /// finished assembling.
     LegacyHighQcFormed {
         /// The QC for the last legacy view (`cutover_view - 1`).
         qc: QuorumCertificate2<TYPES>,

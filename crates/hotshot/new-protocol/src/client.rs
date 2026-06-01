@@ -124,9 +124,8 @@ impl<T: NodeType> ClientApi<T> {
             .await
     }
 
-    /// Forward the QC for the last legacy view (formed at the cutover boundary)
-    /// into the coordinator, so the first new-protocol leader can propose on it
-    /// even if the cutover seed was snapshotted before the QC finished forming.
+    /// Forward the last legacy view's QC so the first new-protocol leader can
+    /// propose on it even if the cutover seed was snapshotted before it formed.
     pub async fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::SubmitLegacyHighQc { qc, respond }, rx)

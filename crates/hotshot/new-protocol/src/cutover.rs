@@ -159,10 +159,9 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
     }
 }
 
-/// Forward the legacy QC for the last legacy view into the coordinator. Only
-/// the cutover-view leader forms this QC, so this lands it exactly where it is
-/// needed: the leader proposes the cutover view on it instead of waiting out a
-/// view timeout when the cutover seed was snapshotted before the QC formed.
+/// Forward the last legacy view's QC into the coordinator, so the cutover-view
+/// leader can propose on it instead of waiting out a timeout when the cutover
+/// seed was snapshotted before the QC formed.
 pub async fn forward_legacy_high_qc<T: NodeType>(
     legacy_event_rx: InactiveReceiver<Event<T>>,
     client_api: ClientApi<T>,
