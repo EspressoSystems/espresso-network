@@ -116,12 +116,23 @@ where
             // map is still structurally valid, so we recover the guard rather than propagate.
             let mut map = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(existing) = map.get(&key) {
-                tracing::debug!(?key, "single_flight: coalescing concurrent request");
+                // `strong_count` counts every live handle to the shared future at this instant:
+                // the one parked in the map, the owning caller awaiting it, and any joiners that
+                // already coalesced. It does *not* yet include this caller's clone (made below), so
+                // the number of callers piggybacking on the in-flight work is `live_handles`. It's
+                // `None` only once the future has completed (racy at the margin); treat that as 0.
+                let live_handles = existing.strong_count().unwrap_or(0);
+                tracing::debug!(
+                    ?key,
+                    live_handles,
+                    "single_flight: coalescing concurrent request"
+                );
                 (existing.clone(), None)
             } else {
                 let fut: BoxFuture<'static, V> = f().boxed();
                 let shared: SharedFut<V> = fut.shared();
                 map.insert(key.clone(), shared.clone());
+                tracing::debug!(?key, "single_flight: starting new request");
                 let guard = RemoveOnDrop {
                     map: self.in_flight.clone(),
                     key: Some(key),
