@@ -801,7 +801,7 @@
 <a href=#801 id=801 data-nosnippet>801</a>    // use. They should share a single lock so upgrade certificate updates
 <a href=#802 id=802 data-nosnippet>802</a>    // are visible to both.
 <a href=#803 id=803 data-nosnippet>803</a>    </span><span class="kw">let </span>cliquenet = Cliquenet::create(
-<a href=#804 id=804 data-nosnippet>804</a>        <span class="string">"espresso"</span>,
+<a href=#804 id=804 data-nosnippet>804</a>        <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"espresso-{}"</span>, genesis.chain_config.chain_id),
 <a href=#805 id=805 data-nosnippet>805</a>        pub_key,
 <a href=#806 id=806 data-nosnippet>806</a>        network_params.x25519_secret_key.into(),
 <a href=#807 id=807 data-nosnippet>807</a>        network_params.cliquenet_bind_addr.clone(),
