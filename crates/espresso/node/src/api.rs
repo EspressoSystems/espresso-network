@@ -7703,272 +7703,715 @@ mod test {
         Ok(())
     }
 
+    /// Assert both tide-disco and the Axum endpoint return the same HTTP error status code.
+    async fn compare_error_endpoints(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+        expected_status: u16,
+    ) -> anyhow::Result<()> {
+        let tide_status = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .status()
+            .as_u16();
+        let axum_status = http
+            .get(format!("http://localhost:{axum_port}/v1/{path}"))
+            .send()
+            .await?
+            .status()
+            .as_u16();
+        assert_eq!(
+            tide_status, expected_status,
+            "v1/{path}: tide should return {expected_status}, got {tide_status}"
+        );
+        assert_eq!(
+            axum_status, expected_status,
+            "v1/{path}: axum should return {expected_status}, got {axum_status}"
+        );
+        Ok(())
+    }
+
+    /// Connect to both tide-disco and axum WebSocket endpoints, collect up to 10 messages each,
+    /// and assert that at least 2 messages appear in both streams.
+    async fn compare_ws_endpoints(api_port: u16, axum_port: u16, path: &str) -> anyhow::Result<()> {
+        use std::{collections::HashSet, time::Duration};
+
+        use futures::StreamExt as _;
+        use tokio::time::timeout;
+        use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+        async fn collect_messages(port: u16, path: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+            let url = format!("ws://localhost:{port}/v1/{path}");
+            let (mut ws, _) = connect_async(&url).await?;
+            let mut messages = Vec::new();
+            while messages.len() < 10 {
+                match timeout(Duration::from_millis(500), ws.next()).await {
+                    Ok(Some(Ok(Message::Text(text)))) => {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                            messages.push(v);
+                        }
+                    },
+                    _ => break,
+                }
+            }
+            Ok(messages)
+        }
+
+        let (tide_msgs, axum_msgs) = tokio::join!(
+            collect_messages(api_port, path),
+            collect_messages(axum_port, path)
+        );
+        let tide_msgs = tide_msgs?;
+        let axum_msgs = axum_msgs?;
+
+        let tide_set: HashSet<String> = tide_msgs.iter().map(|v| v.to_string()).collect();
+        let common = axum_msgs
+            .iter()
+            .filter(|v| tide_set.contains(&v.to_string()))
+            .count();
+
+        assert!(
+            common >= 2,
+            "v1/{path}: expected ≥2 messages in common between tide ({} msgs) and axum ({} msgs), \
+             got {common}",
+            tide_msgs.len(),
+            axum_msgs.len(),
+        );
+        Ok(())
+    }
+
     #[rstest]
     #[case(POS_V3)]
     #[case(POS_V4)]
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
-        const EPOCH_HEIGHT: u64 = 10;
-        const NUM_NODES: usize = 5;
+    #[test_log::test]
+    fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) {
+        let test = async move {
+            const EPOCH_HEIGHT: u64 = 10;
+            const NUM_NODES: usize = 5;
 
-        let network_config = TestConfigBuilder::default()
-            .epoch_height(EPOCH_HEIGHT)
-            .build();
+            let network_config = TestConfigBuilder::default()
+                .epoch_height(EPOCH_HEIGHT)
+                .build();
 
-        let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
-        println!("API PORT = {api_port}");
-        println!("AXUM PORT = {axum_port}");
+            let api_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            let axum_port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+            println!("API PORT = {api_port}");
+            println!("AXUM PORT = {axum_port}");
 
-        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
-        let persistence: [_; NUM_NODES] = storage
-            .iter()
-            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
+            let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+            let persistence: [_; NUM_NODES] = storage
+                .iter()
+                .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap();
 
-        let mut api_opts = Options::with_port(api_port).catchup(Default::default());
-        api_opts.http.axum_port = Some(axum_port);
+            let mut api_opts = Options::with_port(api_port).catchup(Default::default());
+            api_opts.http.axum_port = Some(axum_port);
 
-        let config = TestNetworkConfigBuilder::with_num_nodes()
-            .api_config(SqlDataSource::options(&storage[0], api_opts))
-            .network_config(network_config)
-            .persistences(persistence.clone())
-            .catchups(std::array::from_fn(|_| {
-                StatePeers::<StaticVersion<0, 1>>::from_urls(
-                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                    Default::default(),
-                    Duration::from_secs(2),
-                    &NoMetrics,
+            let config = TestNetworkConfigBuilder::with_num_nodes()
+                .api_config(SqlDataSource::options(&storage[0], api_opts))
+                .network_config(network_config.clone())
+                .persistences(persistence.clone())
+                .catchups(std::array::from_fn(|_| {
+                    StatePeers::<StaticVersion<0, 1>>::from_urls(
+                        vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                        Default::default(),
+                        Duration::from_secs(2),
+                        &NoMetrics,
+                    )
+                }))
+                .pos_hook(
+                    DelegationConfig::MultipleDelegators,
+                    hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
+                    upgrade,
                 )
-            }))
-            .pos_hook(
-                DelegationConfig::MultipleDelegators,
-                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-                upgrade,
-            )
-            .await
+                .await
+                .unwrap()
+                .build();
+
+            let mut network = TestNetwork::new(config, upgrade).await;
+
+            // wait for 4 epochs
+            let mut events = network.server.event_stream();
+            wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
+
+            let url = format!("http://localhost:{api_port}").parse().unwrap();
+            let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
+
+            let validated_state = network.server.decided_state().await.unwrap();
+            let decided_leaf = network.server.decided_leaf().await;
+            let height = decided_leaf.height();
+
+            // validate proof returned from the api
+            if upgrade.base == EPOCH_VERSION {
+                // V1 case — axum only implements the v2 reward tree, so no axum comparison here
+                wait_until_block_height(&client, "reward-state/block-height", height).await;
+
+                network.stop_consensus().await;
+
+                for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
+                    let (_, expected_proof) = validated_state
+                        .reward_merkle_tree_v1
+                        .lookup(*address)
+                        .expect_ok()
+                        .unwrap();
+
+                    let res = client
+                        .get::<RewardAccountQueryDataV1>(&format!(
+                            "reward-state/proof/{height}/{address}"
+                        ))
+                        .send()
+                        .await
+                        .unwrap();
+
+                    match res.proof.proof {
+                        RewardMerkleProofV1::Presence(p) => {
+                            assert_eq!(
+                                p, expected_proof,
+                                "Proof mismatch for V1 at {height}, addr={address}"
+                            );
+                        },
+                        other => panic!(
+                            "Expected Present proof for V1 at {height}, addr={address}, got \
+                             {other:?}"
+                        ),
+                    }
+                }
+            } else {
+                // V2 case
+
+                // Submit two transactions to the same namespace in separate blocks
+                // so the namespace-filtered WS stream produces ≥2 messages.
+                // Submitting both at once risks the builder batching them into a
+                // single block; submitting sequentially (wait between) guarantees
+                // different blocks so the second wait_for_decide_on_handle doesn't
+                // hang looking for an event that was already consumed by the first.
+                let avail_ns = NamespaceId::from(42_u32);
+                let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
+                network
+                    .server
+                    .submit_transaction(avail_tx.clone())
+                    .await
+                    .unwrap();
+                let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
+
+                // Submit the second transaction only after the first is decided,
+                // ensuring it lands in a strictly later block.
+                let avail_tx2 = Transaction::new(avail_ns, vec![4, 5, 6]);
+                network
+                    .server
+                    .submit_transaction(avail_tx2.clone())
+                    .await
+                    .unwrap();
+                wait_for_decide_on_handle(&mut events, &avail_tx2).await;
+
+                wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
+                // Wait for the availability query service to index avail_block.
+                wait_until_block_height(&client, "node/block-height", avail_block).await;
+
+                network.stop_consensus().await;
+
+                let http = reqwest::Client::new();
+
+                for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
+                    let (_, expected_proof) = validated_state
+                        .reward_merkle_tree_v2
+                        .lookup(*address)
+                        .expect_ok()
+                        .unwrap();
+
+                    let res = client
+                        .get::<RewardAccountQueryDataV2>(&format!(
+                            "reward-state-v2/proof/{height}/{address}"
+                        ))
+                        .send()
+                        .await
+                        .unwrap();
+
+                    match res.proof.proof.clone() {
+                        RewardMerkleProofV2::Presence(p) => {
+                            assert_eq!(
+                                p, expected_proof,
+                                "Proof mismatch for V2 at {height}, addr={address}"
+                            );
+                        },
+                        other => panic!(
+                            "Expected Present proof for V2 at {height}, addr={address}, got \
+                             {other:?}"
+                        ),
+                    }
+
+                    let reward_claim_input = client
+                        .get::<RewardClaimInput>(&format!(
+                            "reward-state-v2/reward-claim-input/{height}/{address}"
+                        ))
+                        .send()
+                        .await
+                        .unwrap();
+
+                    assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
+
+                    // Both servers share the same underlying SQL data source; compare responses
+                    // for each per-address endpoint under reward-state-v2.
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state-v2/proof/{height}/{address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state-v2/reward-balance/{height}/{address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state-v2/proof/latest/{address}"),
+                    )
+                    .await?;
+                    compare_endpoints(
+                        &http,
+                        api_port,
+                        axum_port,
+                        &format!("reward-state-v2/reward-balance/latest/{address}"),
+                    )
+                    .await?;
+                }
+
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
+                )
+                .await?;
+
+                // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
+
+                // Namespace proof by height
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
+                )
+                .await?;
+
+                // Namespace proof by block hash and payload hash
+                let avail_header: Header = client
+                    .get(&format!("availability/header/{avail_block}"))
+                    .send()
+                    .await
+                    .unwrap();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "availability/block/hash/{}/namespace/{avail_ns}",
+                        avail_header.commit()
+                    ),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "availability/block/payload-hash/{}/namespace/{avail_ns}",
+                        avail_header.payload_commitment()
+                    ),
+                )
+                .await?;
+
+                // Namespace proof range
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                        avail_block + 1
+                    ),
+                )
+                .await?;
+
+                // State certificate parity (epoch 1 is complete after 4 epochs)
+                compare_endpoints(&http, api_port, axum_port, "availability/state-cert/1").await?;
+                compare_endpoints(&http, api_port, axum_port, "availability/state-cert-v2/1")
+                    .await?;
+
+                // HotShot availability parity: leaf, header, block, payload, vid/common, etc.
+                let avail_leaf: LeafQueryData<SeqTypes> = client
+                    .get(&format!("availability/leaf/{avail_block}"))
+                    .send()
+                    .await
+                    .unwrap();
+                let leaf_hash = avail_leaf.hash();
+                let block_hash = avail_header.commit();
+                let payload_hash = avail_header.payload_commitment();
+
+                // Leaf endpoints
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/leaf/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/leaf/hash/{leaf_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/leaf/{avail_block}/{}", avail_block + 1),
+                )
+                .await?;
+
+                // Header endpoints
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/header/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/header/hash/{block_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/header/payload-hash/{payload_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/header/{avail_block}/{}", avail_block + 1),
+                )
+                .await?;
+
+                // Block endpoints
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/block/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/block/hash/{block_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/block/payload-hash/{payload_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/block/{avail_block}/{}", avail_block + 1),
+                )
+                .await?;
+
+                // Payload endpoints
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/payload/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/payload/hash/{payload_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/payload/block-hash/{block_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/payload/{avail_block}/{}", avail_block + 1),
+                )
+                .await?;
+
+                // VID common endpoints
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/vid/common/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/vid/common/hash/{block_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/vid/common/payload-hash/{payload_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/vid/common/{avail_block}/{}", avail_block + 1),
+                )
+                .await?;
+
+                // Transaction endpoints
+                let tx_hash = avail_tx.commit();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/transaction/{avail_block}/0/noproof"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/transaction/hash/{tx_hash}/noproof"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/transaction/{avail_block}/0/proof"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/transaction/hash/{tx_hash}/proof"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/transaction/{avail_block}/0"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/transaction/hash/{tx_hash}"),
+                )
+                .await?;
+
+                // Block summary endpoints
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/block/summary/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "availability/block/summaries/{avail_block}/{}",
+                        avail_block + 1
+                    ),
+                )
+                .await?;
+
+                // Limits endpoint (static response)
+                compare_endpoints(&http, api_port, axum_port, "availability/limits").await?;
+
+                // Cert2 endpoint (returns null when no cert is available at this height)
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/cert2/{avail_block}"),
+                )
+                .await?;
+
+                // WebSocket streaming parity: both servers share the same data source, so their
+                // streams must produce the same items. We collect up to 10 messages from each and
+                // verify ≥2 appear in both.
+                //
+                // For unfiltered streams, start 10 blocks before avail_block so there are at
+                // least 10 committed blocks ready to stream (consensus has already stopped).
+                // For namespace-filtered streams, start at avail_block where the two submitted
+                // transactions were included, giving ≥2 matching messages.
+                let ws_start = avail_block.saturating_sub(10);
+                compare_ws_endpoints(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/leaves/{ws_start}"),
+                )
+                .await?;
+                compare_ws_endpoints(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/headers/{ws_start}"),
+                )
+                .await?;
+                compare_ws_endpoints(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/blocks/{ws_start}"),
+                )
+                .await?;
+                compare_ws_endpoints(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/payloads/{ws_start}"),
+                )
+                .await?;
+                compare_ws_endpoints(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/vid/common/{ws_start}"),
+                )
+                .await?;
+                compare_ws_endpoints(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/transactions/{ws_start}"),
+                )
+                .await?;
+                // Namespace-filtered streams: start at avail_block; two transactions were
+                // submitted so the stream produces ≥2 messages.
+                compare_ws_endpoints(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/transactions/{avail_block}/namespace/{avail_ns}"),
+                )
+                .await?;
+                compare_ws_endpoints(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/blocks/{avail_block}/namespace/{avail_ns}"),
+                )
+                .await?;
+
+                // Error equivalence: both tide-disco and Axum must return the same
+                // HTTP status codes for common failure cases that clients encounter.
+
+                // Requesting a leaf far ahead of the chain tip times out and returns
+                // 404 Not Found from both servers.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "availability/leaf/999999",
+                    404,
+                )
+                .await?;
+
+                // Requesting a block range that exceeds the per-request limit
+                // returns 400 Bad Request from both servers.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/block/{avail_block}/{}", avail_block + 200),
+                    400,
+                )
+                .await?;
+
+                // Requesting a namespace proof range that exceeds the limit also
+                // returns 400 Bad Request from both servers.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "availability/block/{avail_block}/{}/namespace/{avail_ns}",
+                        avail_block + 200
+                    ),
+                    400,
+                )
+                .await?;
+            }
+
+            anyhow::Ok(())
+        };
+
+        // `block_on` polls the future on the *calling* thread. The default test thread stack is
+        // 2 MiB on Linux, which isn't enough for this test's large async state machine. We spawn
+        // a fresh thread with 32 MiB and run the tokio runtime there instead.
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(test)
+                    .unwrap()
+            })
             .unwrap()
-            .build();
-
-        let mut network = TestNetwork::new(config, upgrade).await;
-
-        // wait for 4 epochs
-        let mut events = network.server.event_stream();
-        wait_for_epochs(&mut events, EPOCH_HEIGHT, 4).await;
-
-        let url = format!("http://localhost:{api_port}").parse().unwrap();
-        let client: Client<ServerError, StaticVersion<0, 1>> = Client::new(url);
-
-        let validated_state = network.server.decided_state().await.unwrap();
-        let decided_leaf = network.server.decided_leaf().await;
-        let height = decided_leaf.height();
-
-        // validate proof returned from the api
-        if upgrade.base == EPOCH_VERSION {
-            // V1 case — axum only implements the v2 reward tree, so no axum comparison here
-            wait_until_block_height(&client, "reward-state/block-height", height).await;
-
-            network.stop_consensus().await;
-
-            for (address, _) in validated_state.reward_merkle_tree_v1.iter() {
-                let (_, expected_proof) = validated_state
-                    .reward_merkle_tree_v1
-                    .lookup(*address)
-                    .expect_ok()
-                    .unwrap();
-
-                let res = client
-                    .get::<RewardAccountQueryDataV1>(&format!(
-                        "reward-state/proof/{height}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .unwrap();
-
-                match res.proof.proof {
-                    RewardMerkleProofV1::Presence(p) => {
-                        assert_eq!(
-                            p, expected_proof,
-                            "Proof mismatch for V1 at {height}, addr={address}"
-                        );
-                    },
-                    other => panic!(
-                        "Expected Present proof for V1 at {height}, addr={address}, got {other:?}"
-                    ),
-                }
-            }
-        } else {
-            // V2 case
-
-            // Submit a transaction so we have a block with actual namespace data for
-            // availability parity tests. Both servers share the same SQL data source, so they
-            // must return identical responses.
-            let avail_ns = NamespaceId::from(42_u32);
-            let avail_tx = Transaction::new(avail_ns, vec![1, 2, 3]);
-            network
-                .server
-                .submit_transaction(avail_tx.clone())
-                .await
-                .unwrap();
-            let (avail_block, _) = wait_for_decide_on_handle(&mut events, &avail_tx).await;
-
-            wait_until_block_height(&client, "reward-state-v2/block-height", height).await;
-            // Wait for the availability query service to index avail_block.
-            wait_until_block_height(&client, "node/block-height", avail_block).await;
-
-            network.stop_consensus().await;
-
-            let http = reqwest::Client::new();
-
-            for (address, _) in validated_state.reward_merkle_tree_v2.iter() {
-                let (_, expected_proof) = validated_state
-                    .reward_merkle_tree_v2
-                    .lookup(*address)
-                    .expect_ok()
-                    .unwrap();
-
-                let res = client
-                    .get::<RewardAccountQueryDataV2>(&format!(
-                        "reward-state-v2/proof/{height}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .unwrap();
-
-                match res.proof.proof.clone() {
-                    RewardMerkleProofV2::Presence(p) => {
-                        assert_eq!(
-                            p, expected_proof,
-                            "Proof mismatch for V2 at {height}, addr={address}"
-                        );
-                    },
-                    other => panic!(
-                        "Expected Present proof for V2 at {height}, addr={address}, got {other:?}"
-                    ),
-                }
-
-                let reward_claim_input = client
-                    .get::<RewardClaimInput>(&format!(
-                        "reward-state-v2/reward-claim-input/{height}/{address}"
-                    ))
-                    .send()
-                    .await
-                    .unwrap();
-
-                assert_eq!(reward_claim_input, res.to_reward_claim_input()?);
-
-                // Both servers share the same underlying SQL data source; compare responses
-                // for each per-address endpoint under reward-state-v2.
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("reward-state-v2/proof/{height}/{address}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("reward-state-v2/reward-claim-input/{height}/{address}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("reward-state-v2/reward-balance/{height}/{address}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("reward-state-v2/proof/latest/{address}"),
-                )
-                .await?;
-                compare_endpoints(
-                    &http,
-                    api_port,
-                    axum_port,
-                    &format!("reward-state-v2/reward-balance/latest/{address}"),
-                )
-                .await?;
-            }
-
-            compare_endpoints(
-                &http,
-                api_port,
-                axum_port,
-                &format!("reward-state-v2/reward-amounts/{height}/0/1000"),
-            )
-            .await?;
-            compare_endpoints(
-                &http,
-                api_port,
-                axum_port,
-                &format!("reward-state-v2/reward-merkle-tree-v2/{height}"),
-            )
-            .await?;
-
-            // Availability v1 parity: verify the axum v1 routes return the same JSON as tide.
-
-            // Namespace proof by height
-            compare_endpoints(
-                &http,
-                api_port,
-                axum_port,
-                &format!("availability/block/{avail_block}/namespace/{avail_ns}"),
-            )
-            .await?;
-
-            // Namespace proof by block hash and payload hash
-            let avail_header: Header = client
-                .get(&format!("availability/header/{avail_block}"))
-                .send()
-                .await
-                .unwrap();
-            compare_endpoints(
-                &http,
-                api_port,
-                axum_port,
-                &format!(
-                    "availability/block/hash/{}/namespace/{avail_ns}",
-                    avail_header.commit()
-                ),
-            )
-            .await?;
-            compare_endpoints(
-                &http,
-                api_port,
-                axum_port,
-                &format!(
-                    "availability/block/payload-hash/{}/namespace/{avail_ns}",
-                    avail_header.payload_commitment()
-                ),
-            )
-            .await?;
-
-            // Namespace proof range
-            compare_endpoints(
-                &http,
-                api_port,
-                axum_port,
-                &format!(
-                    "availability/block/{avail_block}/{}/namespace/{avail_ns}",
-                    avail_block + 1
-                ),
-            )
-            .await?;
-
-            // State certificate parity (epoch 1 is complete after 4 epochs)
-            compare_endpoints(&http, api_port, axum_port, "availability/state-cert/1").await?;
-            compare_endpoints(&http, api_port, axum_port, "availability/state-cert-v2/1").await?;
-        }
-
-        Ok(())
+            .join()
+            .unwrap()
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
