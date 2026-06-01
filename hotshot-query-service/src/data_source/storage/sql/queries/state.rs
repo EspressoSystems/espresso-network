@@ -695,38 +695,46 @@ fn build_get_path_query<'q>(
 ) -> QueryResult<(QueryBuilder<'q>, String)> {
     let mut query = QueryBuilder::default();
     let mut traversal_path = traversal_path.into_iter().map(|x| x as i32);
-
-    // We iterate through the path vector skipping the first element after each iteration
     let len = traversal_path.len();
-    let mut sub_queries = Vec::new();
 
-    query.bind(created)?;
-
+    let mut paths = Vec::with_capacity(len + 1);
     for _ in 0..=len {
         let path = traversal_path.clone().rev().collect::<Vec<_>>();
-        let path: serde_json::Value = path.into();
-        let node_path = query.bind(path)?;
-
-        let sub_query = format!(
-            "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
-             ORDER BY created DESC LIMIT 1) AS latest_node",
-        );
-
-        sub_queries.push(sub_query);
+        paths.push(serde_json::Value::from(path));
         traversal_path.next();
     }
 
-    let mut sql: String = sub_queries.join(" UNION ");
+    #[cfg(not(feature = "embedded-db"))]
+    let sql = {
+        let paths_param = query.bind(paths)?;
+        let created_param = query.bind(created)?;
+        // `ORDER BY {table}.path DESC, {table}.created DESC` matches the (path, created)
+        // primary key's natural backwards walk. Without `path` in the ORDER BY, the
+        // planner sometimes picks a single-column `created` index and filters by path,
+        // which scans tens of thousands of rows per call.
+        format!(
+            "SELECT n.* FROM unnest({paths_param}::jsonb[]) AS p(path), LATERAL (SELECT * FROM \
+             {table} WHERE {table}.path = p.path AND {table}.created <= {created_param} ORDER BY \
+             {table}.path DESC, {table}.created DESC LIMIT 1) AS n ORDER BY n.path DESC"
+        )
+    };
 
-    sql = format!("SELECT * FROM ({sql}) as t ");
-
-    // PostgreSQL already orders JSON arrays by length, so no additional function is needed
-    // For SQLite, `length()` is used to sort by length.
-    if cfg!(feature = "embedded-db") {
-        sql.push_str("ORDER BY length(t.path) DESC");
-    } else {
-        sql.push_str("ORDER BY t.path DESC");
-    }
+    #[cfg(feature = "embedded-db")]
+    let sql = {
+        query.bind(created)?;
+        let mut sub_queries = Vec::with_capacity(paths.len());
+        for path in paths {
+            let node_path = query.bind(path)?;
+            sub_queries.push(format!(
+                "SELECT * FROM (SELECT * FROM {table} WHERE path = {node_path} AND created <= $1 \
+                 ORDER BY path DESC, created DESC LIMIT 1) AS latest_node",
+            ));
+        }
+        format!(
+            "SELECT * FROM ({}) as t ORDER BY length(t.path) DESC",
+            sub_queries.join(" UNION ")
+        )
+    };
 
     Ok((query, sql))
 }
