@@ -11,7 +11,7 @@ use hotshot_new_protocol::{
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     cutover::{
         CutoverGate, extract_pre_cutover_seed, forward_legacy_epoch_changes,
-        forward_legacy_timeout_votes,
+        forward_legacy_high_qc, forward_legacy_timeout_votes,
     },
     network::Network,
     state::UpdateLeaf,
@@ -152,6 +152,10 @@ where
             AbortOnDropHandle::new(spawn(run_coordinator(coordinator, event_tx)));
 
         spawn(forward_legacy_timeout_votes(
+            legacy_event_rx.clone(),
+            client_api.clone(),
+        ));
+        spawn(forward_legacy_high_qc(
             legacy_event_rx.clone(),
             client_api.clone(),
         ));

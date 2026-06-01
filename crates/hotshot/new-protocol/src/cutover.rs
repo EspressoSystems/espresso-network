@@ -159,6 +159,24 @@ pub async fn forward_legacy_timeout_votes<T: NodeType>(
     }
 }
 
+/// Forward the legacy QC for the last legacy view into the coordinator. Only
+/// the cutover-view leader forms this QC, so this lands it exactly where it is
+/// needed: the leader proposes the cutover view on it instead of waiting out a
+/// view timeout when the cutover seed was snapshotted before the QC formed.
+pub async fn forward_legacy_high_qc<T: NodeType>(
+    legacy_event_rx: InactiveReceiver<Event<T>>,
+    client_api: ClientApi<T>,
+) {
+    let mut rx = legacy_event_rx.activate_cloned();
+    while let Some(event) = rx.next().await {
+        if let EventType::LegacyHighQcFormed { qc } = event.event
+            && let Err(err) = client_api.submit_legacy_high_qc(qc).await
+        {
+            tracing::warn!(%err, "failed to forward legacy high QC to new-protocol coordinator");
+        }
+    }
+}
+
 /// Forward legacy epoch transitions into `bump_network_epoch`.
 /// `epoch_height == 0` disables forwarding.
 pub async fn forward_legacy_epoch_changes<T: NodeType>(

@@ -18,7 +18,9 @@ use crate::{
     },
     error::HotShotError,
     message::{Proposal, convert_proposal},
-    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
+    simple_certificate::{
+        CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
+    },
     simple_vote::TimeoutVote2,
     traits::{ValidatedState, node_implementation::NodeType},
     vote::HasViewNumber,
@@ -274,6 +276,17 @@ pub enum EventType<TYPES: NodeType> {
         /// The vote that was signed and broadcast on the legacy wire.
         vote: TimeoutVote2<TYPES>,
     },
+
+    /// Emitted by the legacy consensus task when it forms the QC for the last
+    /// legacy view at the legacy → new-protocol upgrade boundary (only the
+    /// leader of the cutover view forms it). Used so the espresso bridge can
+    /// forward this QC into the new-protocol coordinator even if the cutover
+    /// seed was snapshotted before the QC finished assembling — letting the
+    /// first new-protocol leader propose on it instead of timing the view out.
+    LegacyHighQcFormed {
+        /// The QC for the last legacy view (`cutover_view - 1`).
+        qc: QuorumCertificate2<TYPES>,
+    },
 }
 
 impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
@@ -323,6 +336,9 @@ impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
             },
             Self::LegacyTimeoutVoteEmitted { vote } => {
                 write!(f, "LegacyTimeoutVoteEmitted: view={}", vote.view_number())
+            },
+            Self::LegacyHighQcFormed { qc } => {
+                write!(f, "LegacyHighQcFormed: view={}", qc.view_number())
             },
         }
     }
@@ -379,6 +395,11 @@ impl<TYPES: NodeType> EventType<TYPES> {
                 anyhow::bail!(
                     "LegacyTimeoutVoteEmitted is upgrade-bridging only and has no legacy \
                      equivalent"
+                )
+            },
+            EventType::LegacyHighQcFormed { .. } => {
+                anyhow::bail!(
+                    "LegacyHighQcFormed is upgrade-bridging only and has no legacy equivalent"
                 )
             },
         })

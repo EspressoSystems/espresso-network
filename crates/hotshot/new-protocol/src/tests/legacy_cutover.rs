@@ -51,7 +51,7 @@ use versions::{NEW_PROTOCOL_VERSION, Upgrade, version};
 use crate::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity, timer::Timer},
-    cutover::{CutoverGate, forward_legacy_timeout_votes},
+    cutover::{CutoverGate, forward_legacy_high_qc, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
@@ -421,10 +421,13 @@ async fn spawn_node(
     let legacy_event_rx = legacy.read().await.event_stream_known_impl().deactivate();
     bg_handles.push(
         tokio::spawn(forward_legacy_timeout_votes(
-            legacy_event_rx,
+            legacy_event_rx.clone(),
             client_api.clone(),
         ))
         .abort_handle(),
+    );
+    bg_handles.push(
+        tokio::spawn(forward_legacy_high_qc(legacy_event_rx, client_api.clone())).abort_handle(),
     );
 
     let (decision_tx, decision_rx) = mpsc::unbounded_channel::<DecisionEvent>();

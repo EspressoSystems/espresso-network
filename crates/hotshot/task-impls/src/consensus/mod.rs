@@ -14,7 +14,7 @@ use hotshot_types::{
     consensus::OuterConsensus,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::Event,
+    event::{Event, EventType},
     message::UpgradeLock,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
@@ -35,7 +35,7 @@ use self::handlers::{
 };
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_view_change, validate_qc_and_next_epoch_qc},
+    helpers::{broadcast_event, broadcast_view_change, validate_qc_and_next_epoch_qc},
     vote_collection::{EpochRootVoteCollectorsMap, VoteCollectorsMap},
 };
 
@@ -278,6 +278,21 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                 if let Err(e) = self.storage.update_high_qc2(qc.clone()).await {
                     tracing::warn!("Failed to persist boundary high QC: {e}");
                 }
+                // Forward the formed QC to any external listener so the espresso
+                // bridge can hand it to the new-protocol coordinator. This covers
+                // the case where the cutover seed was snapshotted before this QC
+                // finished assembling: the coordinator registers it and the first
+                // new-protocol leader proposes on it instead of timing the view
+                // out. Only the cutover-view leader reaches this arm (only it
+                // collects these votes), so the QC lands exactly where needed.
+                broadcast_event(
+                    Event {
+                        view_number: qc.view_number(),
+                        event: EventType::LegacyHighQcFormed { qc: qc.clone() },
+                    },
+                    &self.output_event_stream,
+                )
+                .await;
             },
             _ => {},
         }
