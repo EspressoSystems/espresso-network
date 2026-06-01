@@ -68,12 +68,12 @@
 <a href=#68 id=68 data-nosnippet>68</a>        <span class="prelude-val">Ok</span>(())
 <a href=#69 id=69 data-nosnippet>69</a>    }
 <a href=#70 id=70 data-nosnippet>70</a>
-<a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">async fn </span>append_decided_leaves(
+<a href=#71 id=71 data-nosnippet>71</a>    <span class="kw">async fn </span>persist_decided_leaves(
 <a href=#72 id=72 data-nosnippet>72</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#73 id=73 data-nosnippet>73</a>        view_number: ViewNumber,
 <a href=#74 id=74 data-nosnippet>74</a>        leaves: <span class="kw">impl </span>IntoIterator&lt;Item = (<span class="kw-2">&amp;</span>LeafInfo&lt;SeqTypes&gt;, CertificatePair&lt;SeqTypes&gt;)&gt; + Send,
 <a href=#75 id=75 data-nosnippet>75</a>        deciding_qc: <span class="prelude-ty">Option</span>&lt;Arc&lt;CertificatePair&lt;SeqTypes&gt;&gt;&gt;,
-<a href=#76 id=76 data-nosnippet>76</a>        consumer: <span class="kw-2">&amp;</span><span class="kw">impl </span>EventConsumer,
+<a href=#76 id=76 data-nosnippet>76</a>        consumer: <span class="kw-2">&amp;</span>(<span class="kw">impl </span>EventConsumer + <span class="lifetime">'static</span>),
 <a href=#77 id=77 data-nosnippet>77</a>    ) -&gt; anyhow::Result&lt;()&gt; {
 <a href=#78 id=78 data-nosnippet>78</a>        <span class="kw">let </span>leaves = leaves
 <a href=#79 id=79 data-nosnippet>79</a>            .into_iter()

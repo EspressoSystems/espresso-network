@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["handle_events"],"macro":["spawn_with_log_level"],"struct":["SequencerContext","TaskList"],"type":["Consensus","ConsensusNode"]};
+window.SIDEBAR_ITEMS = {"constant":["PROCESS_RETRY_INTERVAL"],"fn":["handle_events","process_decided_events_task"],"macro":["spawn_with_log_level"],"struct":["DecideProcessorMetrics","SequencerContext","TaskList"],"type":["Consensus","ConsensusNode","DecideSignal"]};
