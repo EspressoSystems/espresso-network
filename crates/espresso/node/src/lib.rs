@@ -141,6 +141,9 @@ pub struct NetworkParams {
     pub cliquenet_bind_addr: NetAddr,
     /// Cliquenet address to advertise to other nodes (registered in the stake table).
     pub cliquenet_advertise_addr: Option<NetAddr>,
+    /// Logical Cliquenet network name (used as the Noise handshake prologue).
+    /// Peers with different names cannot connect which keeps environments disjoint.
+    pub cliquenet_network_name: String,
     /// X25519 secret key.
     pub x25519_secret_key: x25519::SecretKey,
     /// The address to send to other Libp2p nodes to contact us. Required for orchestrator
@@ -801,7 +804,7 @@ where
     // use. They should share a single lock so upgrade certificate updates
     // are visible to both.
     let cliquenet = Cliquenet::create(
-        "espresso",
+        &network_params.cliquenet_network_name,
         pub_key,
         network_params.x25519_secret_key.into(),
         network_params.cliquenet_bind_addr.clone(),
