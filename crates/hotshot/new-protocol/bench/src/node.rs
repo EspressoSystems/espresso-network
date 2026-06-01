@@ -131,7 +131,6 @@ async fn build_coordinator(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
-        100,
     );
 
     let vote1_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());

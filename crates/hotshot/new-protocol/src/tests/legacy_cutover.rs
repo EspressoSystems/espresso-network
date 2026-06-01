@@ -253,7 +253,6 @@ async fn build_cutover_coordinator(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
-        100,
     );
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());

@@ -199,7 +199,6 @@ pub struct Consensus<T: NodeType> {
     node_id: KeyPrefix,
     upgrade_lock: UpgradeLock<T>,
 
-    garbage_collection_interval: BlockNumber,
     pub(crate) epoch_height: BlockNumber,
 }
 
@@ -232,7 +231,6 @@ impl<T: NodeType> Consensus<T> {
         upgrade_lock: UpgradeLock<T>,
         genesis_leaf: Leaf2<T>,
         epoch_height: B,
-        garbage_collection_interval: B,
     ) -> Self
     where
         B: Into<BlockNumber>,
@@ -270,7 +268,6 @@ impl<T: NodeType> Consensus<T> {
             state_certs: BTreeMap::new(),
             upgrade_lock,
             vid_shares: BTreeMap::new(),
-            garbage_collection_interval: garbage_collection_interval.into(),
             epoch_height: epoch_height.into(),
         }
     }
@@ -1180,10 +1177,8 @@ impl<T: NodeType> Consensus<T> {
         }
         let new_decided_view = max(self.last_decided_view, leaf.view_number());
         let last_decided_leaf = leaf.clone();
-        let mut gc = None;
-        if leaf.block_header().block_number() % *self.garbage_collection_interval == 0 {
-            gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
-        }
+        // garbage collect everything strictly below the newly decided view.
+        let gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
         let mut decided = vec![leaf];
         let mut vid_shares = vec![self.signed_vid_share(view)];
 
@@ -1200,11 +1195,6 @@ impl<T: NodeType> Consensus<T> {
             let mut leaf: Leaf2<T> = proposal.clone().into();
             if let Some(payload) = self.blocks.get(&parent_view) {
                 leaf.fill_block_payload_unchecked(payload.clone());
-            }
-            if gc.is_none()
-                && leaf.block_header().block_number() % *self.garbage_collection_interval == 0
-            {
-                gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
             }
             vid_shares.push(self.signed_vid_share(parent_view));
             decided.push(leaf);
