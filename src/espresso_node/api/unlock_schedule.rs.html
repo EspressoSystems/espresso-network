@@ -5,9 +5,9 @@
 <a href=#5 id=5 data-nosnippet>5</a><span class="kw">use </span>espresso_types::{v0_1::ChainId, v0_3::RewardAmount};
 <a href=#6 id=6 data-nosnippet>6</a><span class="kw">use </span>serde::Deserialize;
 <a href=#7 id=7 data-nosnippet>7</a>
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">const </span>SCHEDULE_TOML: <span class="kw-2">&amp;</span>str = <span class="macro">include_str!</span>(<span class="string">"../../../../../data/token-unlock-schedule.toml"</span>);
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span><span class="kw">crate</span>::MAINNET_CHAIN_ID;
 <a href=#9 id=9 data-nosnippet>9</a>
-<a href=#10 id=10 data-nosnippet>10</a><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">const </span>MAINNET_CHAIN_ID: u64 = <span class="number">1</span>;
+<a href=#10 id=10 data-nosnippet>10</a><span class="kw">const </span>SCHEDULE_TOML: <span class="kw-2">&amp;</span>str = <span class="macro">include_str!</span>(<span class="string">"../../../../../data/token-unlock-schedule.toml"</span>);
 <a href=#11 id=11 data-nosnippet>11</a>
 <a href=#12 id=12 data-nosnippet>12</a><span class="attr">#[derive(Deserialize)]
 <a href=#13 id=13 data-nosnippet>13</a></span><span class="kw">struct </span>UnlockEntry {
@@ -120,7 +120,7 @@
 <a href=#120 id=120 data-nosnippet>120</a>    <span class="doccomment">/// Tokens still locked on L1 per the unlock schedule.
 <a href=#121 id=121 data-nosnippet>121</a>    /// Mainnet: `initial_supply - unlocked(now)`. Non-mainnet: `0`.
 <a href=#122 id=122 data-nosnippet>122</a>    </span><span class="kw">fn </span>locked(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; U256 {
-<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">if </span><span class="self">self</span>.chain_id == U256::from(MAINNET_CHAIN_ID) {
+<a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">if </span><span class="self">self</span>.chain_id == MAINNET_CHAIN_ID.<span class="number">0 </span>{
 <a href=#124 id=124 data-nosnippet>124</a>            <span class="self">self</span>.initial_supply
 <a href=#125 id=125 data-nosnippet>125</a>                .saturating_sub(unlocked_amount_at(<span class="self">self</span>.now_secs))
 <a href=#126 id=126 data-nosnippet>126</a>        } <span class="kw">else </span>{
@@ -245,7 +245,7 @@
 <a href=#245 id=245 data-nosnippet>245</a>    <span class="comment">// --- SupplyCalculator tests ---
 <a href=#246 id=246 data-nosnippet>246</a>
 <a href=#247 id=247 data-nosnippet>247</a>    </span><span class="kw">fn </span>mainnet_id() -&gt; ChainId {
-<a href=#248 id=248 data-nosnippet>248</a>        ChainId(U256::from(MAINNET_CHAIN_ID))
+<a href=#248 id=248 data-nosnippet>248</a>        MAINNET_CHAIN_ID
 <a href=#249 id=249 data-nosnippet>249</a>    }
 <a href=#250 id=250 data-nosnippet>250</a>
 <a href=#251 id=251 data-nosnippet>251</a>    <span class="kw">fn </span>testnet_id() -&gt; ChainId {

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["AUTONAT_CONFIDENCE_MAX","ESTABLISHED_LIMIT","ESTABLISHED_LIMIT_UNWR","MAX_GOSSIP_MSG_SIZE"],"mod":["config","handle"],"struct":["NetworkNode"]};
+window.SIDEBAR_ITEMS = {"constant":["AUTONAT_CONFIDENCE_MAX","ESTABLISHED_LIMIT","ESTABLISHED_LIMIT_UNWR","MAX_GOSSIP_MSG_SIZE"],"fn":["direct_message_protocol","gossipsub_prefix","kad_protocol","mainnet_direct_message_protocol","mainnet_gossipsub_prefix","mainnet_kad_protocol"],"mod":["config","handle"],"struct":["NetworkNode"]};
