@@ -178,4 +178,10 @@ mod tests {
         let mut b = Bytes::copy_from_slice(&[STD, 16]);
         assert_eq!(Trailer::from_bytes(&mut b), None);
     }
+
+    #[test]
+    fn regression_no_ack_trailer_short_input_does_not_panic() {
+        let mut b = Bytes::copy_from_slice(&[NO_ACK, 8]);
+        assert_eq!(Trailer::from_bytes(&mut b), None);
+    }
 }
