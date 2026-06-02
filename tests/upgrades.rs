@@ -4,9 +4,10 @@ use anyhow::Result;
 use espresso_node::Genesis;
 use espresso_types::UpgradeMode;
 use futures::{StreamExt, future::join_all};
-use hotshot_types::utils::epoch_from_block_number;
+use hotshot_types::{traits::block_contents::BlockHeader, utils::epoch_from_block_number};
 use versions::{
-    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
+    DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
+    NEW_PROTOCOL_VERSION, Upgrade,
 };
 
 use crate::{
@@ -36,6 +37,7 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
 
     let mut stream = futures::stream::iter(subscriptions).flatten_unordered(None);
     let mut iteration = 0u64;
+    let mut last_base_block: Option<(u64, u64)> = None;
 
     while let Some(header) = stream.next().await {
         let header = header.unwrap();
@@ -55,7 +57,22 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
             assert_eq!(header.version(), upgrade.base);
         }
 
+        if header.version() == upgrade.base {
+            last_base_block = Some((header.height(), header.timestamp_millis()));
+        }
+
         if header.version() == upgrade.target {
+            if let Some((prev_height, prev_ts)) = last_base_block {
+                let gap_ms = header.timestamp_millis().saturating_sub(prev_ts);
+                println!(
+                    "upgrade gap: {:.2}s between block {} (v{}) and block {} (v{})",
+                    gap_ms as f64 / 1000.0,
+                    prev_height,
+                    upgrade.base,
+                    header.height(),
+                    upgrade.target,
+                );
+            }
             println!("header version matched! height={:?}", header.height());
             break;
         }
@@ -78,13 +95,19 @@ async fn assert_upgrade_happens(genesis: &Genesis, upgrade: Upgrade) -> Result<(
 
 async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
     let genesis = load_genesis_file(genesis_path)?;
-    let _demo = NativeDemo::run(
-        None,
-        Some(vec![(
-            "ESPRESSO_NODE_GENESIS_FILE".to_string(),
-            genesis_path.to_string(),
-        )]),
-    )?;
+    let mut env_overrides = vec![(
+        "ESPRESSO_NODE_GENESIS_FILE".to_string(),
+        genesis_path.to_string(),
+    )];
+    // No-builder path gets only ~1 txn/s from the load generator, so the txn
+    // requirement (2 * block_height) would dominate runtime. Submit faster.
+    if upgrade.target >= NEW_PROTOCOL_VERSION {
+        env_overrides.push((
+            "ESPRESSO_SUBMIT_TRANSACTIONS_DELAY".to_string(),
+            "200ms".to_string(),
+        ));
+    }
+    let _demo = NativeDemo::run(None, Some(env_overrides))?;
 
     assert_native_demo_works(Default::default()).await?;
     assert_upgrade_happens(&genesis, upgrade).await?;
@@ -128,6 +151,8 @@ async fn run_upgrade_test(genesis_path: &str, upgrade: Upgrade) -> Result<()> {
         } else {
             None
         },
+        // v0.6+ has no builder: skip builder-dependent waits and balance checks.
+        requires_builder: upgrade.target < NEW_PROTOCOL_VERSION,
         ..Default::default()
     };
 
@@ -168,6 +193,15 @@ async fn test_native_demo_epoch_reward_upgrade() -> Result<()> {
     run_upgrade_test(
         "data/genesis/demo-epoch-reward-upgrade.toml",
         Upgrade::new(DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION),
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_native_demo_new_protocol_upgrade() -> Result<()> {
+    run_upgrade_test(
+        "data/genesis/demo-new-protocol-upgrade.toml",
+        Upgrade::new(EPOCH_REWARD_VERSION, NEW_PROTOCOL_VERSION),
     )
     .await
 }

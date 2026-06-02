@@ -1315,6 +1315,41 @@ where
                 }
                 let _ = respond.send(());
             },
+            ClientRequest::SubmitLegacyHighQc { qc, respond } => {
+                // QC certifies the last legacy view; cutover view is the next.
+                // Register idempotently so the smooth-start precondition holds
+                // regardless of arrival order vs. the cutover seed.
+                let qc_view = qc.view_number();
+                let cutover_view = qc_view + 1;
+                self.consensus.register_legacy_qc(&qc);
+
+                // Still parked on the last legacy view (seed landed without this
+                // QC, waiting out the timer) and not yet skipped via TC2: propose
+                // the cutover view on the real QC now. Self-idempotent — once
+                // started, `cur_view` advances past `qc_view` and `maybe_propose`
+                // dedups by `proposed_views`.
+                let cur_view = self.consensus.current_view();
+                if cur_view == qc_view
+                    && self.consensus.timeout_cert_at(cutover_view).is_none()
+                    && self.consensus.cert1_at(qc_view).is_some()
+                    && self.consensus.proposal_at(qc_view).is_some()
+                {
+                    tracing::info!(
+                        %cutover_view,
+                        "bridged late legacy high QC; proposing cutover view on it (no timeout)"
+                    );
+                    self.start();
+                    while let Some(output) = self.outbox.pop_front() {
+                        if let Err(err) = self.process_consensus_output(output) {
+                            tracing::warn!(
+                                %err,
+                                "error processing bridged-high-qc bootstrap output"
+                            );
+                        }
+                    }
+                }
+                let _ = respond.send(());
+            },
             ClientRequest::BumpNetworkEpoch { epoch, respond } => {
                 if let Err(err) = self
                     .network

@@ -18,7 +18,9 @@ use crate::{
     },
     error::HotShotError,
     message::{Proposal, convert_proposal},
-    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
+    simple_certificate::{
+        CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
+    },
     simple_vote::TimeoutVote2,
     traits::{ValidatedState, node_implementation::NodeType},
     vote::HasViewNumber,
@@ -274,6 +276,15 @@ pub enum EventType<TYPES: NodeType> {
         /// The vote that was signed and broadcast on the legacy wire.
         vote: TimeoutVote2<TYPES>,
     },
+
+    /// QC for the last legacy view, formed by the cutover-view leader at the
+    /// legacy -> new-protocol boundary. Lets the espresso bridge forward it to the
+    /// new-protocol coordinator if the cutover seed was snapshotted before this QC
+    /// finished assembling.
+    LegacyHighQcFormed {
+        /// The QC for the last legacy view (`cutover_view - 1`).
+        qc: QuorumCertificate2<TYPES>,
+    },
 }
 
 impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
@@ -323,6 +334,9 @@ impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
             },
             Self::LegacyTimeoutVoteEmitted { vote } => {
                 write!(f, "LegacyTimeoutVoteEmitted: view={}", vote.view_number())
+            },
+            Self::LegacyHighQcFormed { qc } => {
+                write!(f, "LegacyHighQcFormed: view={}", qc.view_number())
             },
         }
     }
@@ -379,6 +393,11 @@ impl<TYPES: NodeType> EventType<TYPES> {
                 anyhow::bail!(
                     "LegacyTimeoutVoteEmitted is upgrade-bridging only and has no legacy \
                      equivalent"
+                )
+            },
+            EventType::LegacyHighQcFormed { .. } => {
+                anyhow::bail!(
+                    "LegacyHighQcFormed is upgrade-bridging only and has no legacy equivalent"
                 )
             },
         })
