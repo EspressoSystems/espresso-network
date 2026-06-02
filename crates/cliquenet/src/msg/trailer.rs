@@ -107,7 +107,7 @@ mod tests {
     use bytes::Bytes;
     use quickcheck::{Arbitrary, Gen, quickcheck};
 
-    use super::Trailer;
+    use super::{STD, Trailer};
     use crate::msg::{MsgId, Slot};
 
     impl Arbitrary for Trailer {
@@ -130,5 +130,11 @@ mod tests {
             let t2 = Trailer::from_bytes(&mut b);
             Some(t1) == t2
         }
+    }
+
+    #[test]
+    fn regression_std_trailer_short_input_does_not_panic() {
+        let mut b = Bytes::copy_from_slice(&[STD, 16]);
+        assert_eq!(Trailer::from_bytes(&mut b), None);
     }
 }
