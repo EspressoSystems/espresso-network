@@ -14,12 +14,8 @@ type Result<T> = std::result::Result<T, NetworkError>;
 /// `spawn_blocking` worker (e.g. share fan-out) without keeping `&mut self`
 /// borrow on the network.
 pub trait NetworkSender<T: NodeType>: Send + Sync + Clone + 'static {
-    fn unicast(
-        &self,
-        v: ViewNumber,
-        to: &T::SignatureKey,
-        m: &Message<T, Validated>,
-    ) -> Result<()>;
+    fn unicast(&self, v: ViewNumber, to: &T::SignatureKey, m: &Message<T, Validated>)
+    -> Result<()>;
 }
 
 pub trait Network<T: NodeType> {

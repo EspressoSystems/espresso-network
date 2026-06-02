@@ -9,17 +9,16 @@
 //! On non-Linux targets this is a no-op stub so local development on macOS
 //! still compiles and runs.
 
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use tokio::task::JoinHandle;
-use tracing::warn;
-
-#[cfg(target_os = "linux")]
-use std::path::Path;
 #[cfg(target_os = "linux")]
 use time::OffsetDateTime;
+use tokio::task::JoinHandle;
+use tracing::warn;
 
 /// Handle to a running sampler. Holding it does nothing; drop it to leave
 /// the sampler running, or call [`CpuSampler::stop`] to flush + join.
@@ -138,11 +137,7 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
         // ---- per-thread /proc/self/task/<tid>/stat ----
         if let Ok(rd) = std::fs::read_dir("/proc/self/task") {
             for ent in rd.flatten() {
-                let tid: i64 = match ent
-                    .file_name()
-                    .to_str()
-                    .and_then(|s| s.parse().ok())
-                {
+                let tid: i64 = match ent.file_name().to_str().and_then(|s| s.parse().ok()) {
                     Some(v) => v,
                     None => continue,
                 };
@@ -175,8 +170,8 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
                     if dt > 0 {
                         let user = (ticks.user.saturating_sub(p.user)) as f64 / dt as f64;
                         let sys_ = (ticks.system.saturating_sub(p.system)) as f64 / dt as f64;
-                        let iow  = (ticks.iowait.saturating_sub(p.iowait)) as f64 / dt as f64;
-                        let idl  = (ticks.idle.saturating_sub(p.idle)) as f64 / dt as f64;
+                        let iow = (ticks.iowait.saturating_sub(p.iowait)) as f64 / dt as f64;
+                        let idl = (ticks.idle.saturating_sub(p.idle)) as f64 / dt as f64;
                         inner.core_rows.lock().push(CoreRow {
                             t_ns,
                             cpu_id,
@@ -226,17 +221,21 @@ fn flush(inner: &Inner) -> std::io::Result<()> {
         let path = inner.out_dir.join(format!("cpu_node{}.csv", inner.node_id));
         let mut wtr = csv::Writer::from_path(&path)?;
         for r in cpu_rows {
-            wtr.serialize(r).map_err(|e| std::io::Error::other(e.to_string()))?;
+            wtr.serialize(r)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
         wtr.flush()?;
     }
 
     let core_rows = std::mem::take(&mut *inner.core_rows.lock());
     if !core_rows.is_empty() {
-        let path = inner.out_dir.join(format!("core_node{}.csv", inner.node_id));
+        let path = inner
+            .out_dir
+            .join(format!("core_node{}.csv", inner.node_id));
         let mut wtr = csv::Writer::from_path(&path)?;
         for r in core_rows {
-            wtr.serialize(r).map_err(|e| std::io::Error::other(e.to_string()))?;
+            wtr.serialize(r)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
         wtr.flush()?;
     }
@@ -246,7 +245,8 @@ fn flush(inner: &Inner) -> std::io::Result<()> {
         let path = inner.out_dir.join(format!("net_node{}.csv", inner.node_id));
         let mut wtr = csv::Writer::from_path(&path)?;
         for r in net_rows {
-            wtr.serialize(r).map_err(|e| std::io::Error::other(e.to_string()))?;
+            wtr.serialize(r)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
         wtr.flush()?;
     }
@@ -269,8 +269,14 @@ struct CoreTicks {
 #[cfg(target_os = "linux")]
 impl CoreTicks {
     fn total(&self) -> u64 {
-        self.user + self.nice + self.system + self.idle
-            + self.iowait + self.irq + self.softirq + self.steal
+        self.user
+            + self.nice
+            + self.system
+            + self.idle
+            + self.iowait
+            + self.irq
+            + self.softirq
+            + self.steal
     }
 }
 
@@ -309,16 +315,19 @@ fn read_proc_stat_cores() -> Option<Vec<(u32, CoreTicks)>> {
         if nums.len() < 8 {
             continue;
         }
-        out.push((cpu_id, CoreTicks {
-            user: nums[0],
-            nice: nums[1],
-            system: nums[2],
-            idle: nums[3],
-            iowait: nums[4],
-            irq: nums[5],
-            softirq: nums[6],
-            steal: nums[7],
-        }));
+        out.push((
+            cpu_id,
+            CoreTicks {
+                user: nums[0],
+                nice: nums[1],
+                system: nums[2],
+                idle: nums[3],
+                iowait: nums[4],
+                irq: nums[5],
+                softirq: nums[6],
+                steal: nums[7],
+            },
+        ));
     }
     Some(out)
 }
@@ -342,7 +351,10 @@ fn read_proc_net_dev() -> Option<Vec<(String, u64, u64)>> {
         if iface == "lo" || iface.is_empty() {
             continue;
         }
-        let nums: Vec<u64> = rest.split_whitespace().filter_map(|f| f.parse().ok()).collect();
+        let nums: Vec<u64> = rest
+            .split_whitespace()
+            .filter_map(|f| f.parse().ok())
+            .collect();
         if nums.len() < 9 {
             continue;
         }
@@ -384,8 +396,8 @@ mod tests {
         // Real-world example: comm can contain spaces, parens, etc.
         // Fields after comm: state ppid pgrp session tty_nr tpgid flags
         //                    minflt cminflt majflt cmajflt UTIME STIME ...
-        let line = "1234 ((my proc (foo))) S 1 1 1 0 -1 4194304 \
-                    100 200 0 0 1500 750 0 0 20 0 8 0 1234 0 0";
+        let line = "1234 ((my proc (foo))) S 1 1 1 0 -1 4194304 100 200 0 0 1500 750 0 0 20 0 8 0 \
+                    1234 0 0";
         let (u, s) = parse_stat(line).expect("parse");
         assert_eq!(u, 1500);
         assert_eq!(s, 750);

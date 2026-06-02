@@ -684,8 +684,10 @@ where
                 let sender = self.network.sender();
                 let public_key = self.public_key.clone();
                 let tracer = self.consensus.tracer.clone();
-                let trace_view: u64 =
-                    vid_shares.first().map(|s| *s.data.view_number()).unwrap_or(0);
+                let trace_view: u64 = vid_shares
+                    .first()
+                    .map(|s| *s.data.view_number())
+                    .unwrap_or(0);
                 tokio::task::spawn_blocking(move || {
                     crate::trace_leader_event!(
                         tracer,
@@ -697,9 +699,7 @@ where
                         let view = share.data.view_number();
                         let message = Message {
                             sender: public_key.clone(),
-                            message_type: MessageType::Consensus(ConsensusMessage::VidShare(
-                                share,
-                            )),
+                            message_type: MessageType::Consensus(ConsensusMessage::VidShare(share)),
                         };
                         if let Err(err) = crate::network::NetworkSender::unicast(
                             &sender, view, &recipient, &message,
