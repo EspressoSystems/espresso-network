@@ -219,6 +219,7 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
+            .metrics(metrics)
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();
