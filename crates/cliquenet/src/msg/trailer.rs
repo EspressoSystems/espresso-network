@@ -33,10 +33,7 @@ impl Trailer {
         let trailer_typ = bytes[len - 2];
         match trailer_typ {
             STD => {
-                if trailer_len != 16 {
-                    return None;
-                }
-                if len < 18 {
+                if trailer_len != 16 || len < 18 {
                     return None;
                 }
                 let id = u64::from_be_bytes(bytes[len - 10..len - 2].try_into().ok()?);
@@ -48,10 +45,7 @@ impl Trailer {
                 })
             },
             NO_ACK => {
-                if trailer_len != 8 {
-                    return None;
-                }
-                if len < 10 {
+                if trailer_len != 8 || len < 10 {
                     return None;
                 }
                 let slot = u64::from_be_bytes(bytes[len - 10..len - 2].try_into().ok()?);
@@ -158,14 +152,12 @@ mod tests {
             Some(t1) == t2
         }
 
-        // `from_bytes` parses untrusted bytes, so it must never panic.
         fn prop_from_bytes_arbitrary_does_not_panic(bytes: Vec<u8>) -> bool {
             let mut b = Bytes::copy_from_slice(&bytes);
             let _ = Trailer::from_bytes(&mut b);
             true
         }
 
-        // Same, with trailer-shaped inputs that hit the slicing paths.
         fn prop_from_bytes_trailer_like_does_not_panic(t: TrailerLike) -> bool {
             let mut b = Bytes::copy_from_slice(&t.0);
             let _ = Trailer::from_bytes(&mut b);
