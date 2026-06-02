@@ -92,7 +92,7 @@ pub const ESTABLISHED_LIMIT_UNWR: u32 = 10;
 /// Matches libp2p-autonat's default `confidence_max`.
 const AUTONAT_CONFIDENCE_MAX: usize = 3;
 
-/// Mainnet libp2p protocol identifiers. The snapshot test below locks these down so a
+/// Mainnet libp2p protocol identifiers. The snapshot tests below lock these down so a
 /// change that would partition mainnet (e.g. a stray `protocol_id_prefix` call) is caught.
 /// `None` for gossipsub means "do not call `protocol_id_prefix`" — libp2p's defaults
 /// (`/meshsub/1.1.0` and `/meshsub/1.0.0`) are then used.
@@ -104,6 +104,37 @@ pub(crate) fn mainnet_kad_protocol() -> StreamProtocol {
 }
 pub(crate) fn mainnet_direct_message_protocol() -> StreamProtocol {
     StreamProtocol::new("/HotShot/direct_message/1.0")
+}
+
+/// Resolve the gossipsub `protocol_id_prefix` for the given network discriminator.
+/// `None` returns the mainnet value (the libp2p default).
+pub(crate) fn gossipsub_prefix(discriminator: Option<&str>) -> Option<String> {
+    match discriminator {
+        None => mainnet_gossipsub_prefix().map(String::from),
+        Some(d) => Some(format!("/HotShot/gossipsub/1.0/{d}")),
+    }
+}
+
+/// Resolve the kademlia stream protocol for the given network discriminator.
+pub(crate) fn kad_protocol(discriminator: Option<&str>) -> Result<StreamProtocol, NetworkError> {
+    match discriminator {
+        None => Ok(mainnet_kad_protocol()),
+        Some(d) => StreamProtocol::try_from_owned(format!("/ipfs/kad/1.0.0/{d}"))
+            .map_err(|err| NetworkError::ConfigError(format!("invalid kademlia protocol: {err}"))),
+    }
+}
+
+/// Resolve the direct-message stream protocol for the given network discriminator.
+pub(crate) fn direct_message_protocol(
+    discriminator: Option<&str>,
+) -> Result<StreamProtocol, NetworkError> {
+    match discriminator {
+        None => Ok(mainnet_direct_message_protocol()),
+        Some(d) => StreamProtocol::try_from_owned(format!("/HotShot/direct_message/1.0/{d}"))
+            .map_err(|err| {
+                NetworkError::ConfigError(format!("invalid direct_message protocol: {err}"))
+            }),
+    }
 }
 
 /// Network definition
@@ -238,11 +269,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
             // Derive a `Gossipsub` config from our gossip config
             let mut gossipsub_builder = GossipsubConfigBuilder::default();
-            let gossipsub_prefix = match &config.network_discriminator {
-                None => mainnet_gossipsub_prefix().map(String::from),
-                Some(d) => Some(format!("/HotShot/gossipsub/1.0/{d}")),
-            };
-            if let Some(prefix) = gossipsub_prefix {
+            if let Some(prefix) = gossipsub_prefix(config.network_discriminator.as_deref()) {
                 gossipsub_builder.protocol_id_prefix(prefix);
             }
             let gossipsub_config = gossipsub_builder
@@ -293,13 +320,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             let identify = IdentifyBehaviour::new(identify_cfg);
 
             // - Build DHT needed for peer discovery
-            let kad_protocol = match &config.network_discriminator {
-                None => mainnet_kad_protocol(),
-                Some(d) => StreamProtocol::try_from_owned(format!("/ipfs/kad/1.0.0/{d}")).map_err(
-                    |err| NetworkError::ConfigError(format!("invalid kademlia protocol: {err}")),
-                )?,
-            };
-            let mut kconfig = Config::new(kad_protocol);
+            let mut kconfig = Config::new(kad_protocol(config.network_discriminator.as_deref())?);
             kconfig
                 .set_parallelism(NonZeroUsize::new(5).unwrap())
                 .set_provider_publication_interval(Some(kademlia_record_republication_interval))
@@ -339,17 +360,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 RequestResponse::with_codec(
                     cbor,
                     [(
-                        match &config.network_discriminator {
-                            None => mainnet_direct_message_protocol(),
-                            Some(d) => StreamProtocol::try_from_owned(format!(
-                                "/HotShot/direct_message/1.0/{d}"
-                            ))
-                            .map_err(|err| {
-                                NetworkError::ConfigError(format!(
-                                    "invalid direct_message protocol: {err}"
-                                ))
-                            })?,
-                        },
+                        direct_message_protocol(config.network_discriminator.as_deref())?,
                         ProtocolSupport::Full,
                     )],
                     rrconfig.clone(),
@@ -897,16 +908,28 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
 #[cfg(test)]
 mod tests {
-    use super::{mainnet_direct_message_protocol, mainnet_gossipsub_prefix, mainnet_kad_protocol};
+    use super::{direct_message_protocol, gossipsub_prefix, kad_protocol};
+
+    fn snapshot_for(discriminator: Option<&str>) -> String {
+        format!(
+            "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}",
+            gossipsub_prefix(discriminator),
+            kad_protocol(discriminator).unwrap(),
+            direct_message_protocol(discriminator).unwrap(),
+        )
+    }
 
     #[test]
     fn mainnet_libp2p_protocol_identifiers() {
-        let snapshot = format!(
-            "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}",
-            mainnet_gossipsub_prefix(),
-            mainnet_kad_protocol(),
-            mainnet_direct_message_protocol(),
+        insta::assert_snapshot!("mainnet_libp2p_protocol_identifiers", snapshot_for(None));
+    }
+
+    #[test]
+    fn decaf_libp2p_protocol_identifiers() {
+        // Decaf's chain_id is 0xdecaf (912559 decimal); see data/genesis/decaf.toml.
+        insta::assert_snapshot!(
+            "decaf_libp2p_protocol_identifiers",
+            snapshot_for(Some("912559"))
         );
-        insta::assert_snapshot!("mainnet_libp2p_protocol_identifiers", snapshot);
     }
 }

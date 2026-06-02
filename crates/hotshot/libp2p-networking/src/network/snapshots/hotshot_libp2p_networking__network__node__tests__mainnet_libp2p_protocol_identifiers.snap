@@ -1,6 +1,6 @@
 ---
 source: crates/hotshot/libp2p-networking/src/network/node.rs
-expression: snapshot
+expression: snapshot_for(None)
 ---
 gossipsub_prefix: None
 kad: /ipfs/kad/1.0.0
