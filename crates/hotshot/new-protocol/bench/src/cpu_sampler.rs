@@ -33,6 +33,7 @@ struct Inner {
     out_dir: PathBuf,
     cpu_rows: Mutex<Vec<CpuRow>>,
     core_rows: Mutex<Vec<CoreRow>>,
+    net_rows: Mutex<Vec<NetRow>>,
 }
 
 #[derive(Serialize)]
@@ -54,6 +55,18 @@ struct CoreRow {
     idle_pct: f64,
 }
 
+/// Per-interface byte deltas since the previous tick. Loopback (`lo`) is
+/// dropped. Rate is derived downstream as
+/// `rx_bytes / (t_ns_curr - t_ns_prev_for_same_iface) * 1e9`, so the tick
+/// period can be changed without breaking the schema.
+#[derive(Serialize)]
+struct NetRow {
+    t_ns: i128,
+    iface: String,
+    rx_bytes: u64,
+    tx_bytes: u64,
+}
+
 impl CpuSampler {
     /// Start sampling. `out_dir` is the directory next to `leader_trace_node*.csv`.
     pub fn start(node_id: u64, out_dir: PathBuf, tick: Duration) -> Self {
@@ -62,6 +75,7 @@ impl CpuSampler {
             out_dir,
             cpu_rows: Mutex::new(Vec::with_capacity(4096)),
             core_rows: Mutex::new(Vec::with_capacity(4096)),
+            net_rows: Mutex::new(Vec::with_capacity(4096)),
         });
 
         let join = {
@@ -96,6 +110,7 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
     let mut prev_proc: Option<(u64, u64)> = None;
     let mut prev_threads: HashMap<i64, (u64, u64)> = HashMap::new();
     let mut prev_cores: HashMap<u32, CoreTicks> = HashMap::new();
+    let mut prev_net: HashMap<String, (u64, u64)> = HashMap::new();
     let clk_tck = clk_tck();
     let mut ticker = tokio::time::interval(tick);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -175,6 +190,25 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
                 prev_cores.insert(cpu_id, ticks);
             }
         }
+
+        // ---- per-interface /proc/net/dev ----
+        if let Some(ifaces) = read_proc_net_dev() {
+            for (iface, rx, tx) in ifaces {
+                if let Some(&(prev_rx, prev_tx)) = prev_net.get(&iface) {
+                    let drx = rx.saturating_sub(prev_rx);
+                    let dtx = tx.saturating_sub(prev_tx);
+                    if drx > 0 || dtx > 0 {
+                        inner.net_rows.lock().push(NetRow {
+                            t_ns,
+                            iface: iface.clone(),
+                            rx_bytes: drx,
+                            tx_bytes: dtx,
+                        });
+                    }
+                }
+                prev_net.insert(iface, (rx, tx));
+            }
+        }
     }
 }
 
@@ -202,6 +236,16 @@ fn flush(inner: &Inner) -> std::io::Result<()> {
         let path = inner.out_dir.join(format!("core_node{}.csv", inner.node_id));
         let mut wtr = csv::Writer::from_path(&path)?;
         for r in core_rows {
+            wtr.serialize(r).map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+        wtr.flush()?;
+    }
+
+    let net_rows = std::mem::take(&mut *inner.net_rows.lock());
+    if !net_rows.is_empty() {
+        let path = inner.out_dir.join(format!("net_node{}.csv", inner.node_id));
+        let mut wtr = csv::Writer::from_path(&path)?;
+        for r in net_rows {
             wtr.serialize(r).map_err(|e| std::io::Error::other(e.to_string()))?;
         }
         wtr.flush()?;
@@ -279,6 +323,34 @@ fn read_proc_stat_cores() -> Option<Vec<(u32, CoreTicks)>> {
     Some(out)
 }
 
+/// Read `/proc/net/dev` and return cumulative `(iface, rx_bytes, tx_bytes)`
+/// for every non-loopback interface. Each line looks like
+///
+/// ```text
+///   ens5: 1234567890 9876543 0 0 ...  87654321098 1234567 ...
+/// ```
+///
+/// where the first field after the colon is `rx_bytes` and the 9th is
+/// `tx_bytes` (Linux man-page order).
+#[cfg(target_os = "linux")]
+fn read_proc_net_dev() -> Option<Vec<(String, u64, u64)>> {
+    let s = std::fs::read_to_string("/proc/net/dev").ok()?;
+    let mut out = Vec::new();
+    for line in s.lines().skip(2) {
+        let (name, rest) = line.split_once(':')?;
+        let iface = name.trim();
+        if iface == "lo" || iface.is_empty() {
+            continue;
+        }
+        let nums: Vec<u64> = rest.split_whitespace().filter_map(|f| f.parse().ok()).collect();
+        if nums.len() < 9 {
+            continue;
+        }
+        out.push((iface.to_string(), nums[0], nums[8]));
+    }
+    Some(out)
+}
+
 #[cfg(target_os = "linux")]
 fn clk_tck() -> u64 {
     // SAFETY: sysconf with a valid name is always safe.
@@ -323,5 +395,16 @@ mod tests {
     fn parses_real_self_stat() {
         let s = std::fs::read_to_string("/proc/self/stat").expect("read");
         let _ = parse_stat(&s).expect("parse self");
+    }
+
+    #[test]
+    fn reads_real_proc_net_dev() {
+        let ifs = read_proc_net_dev().expect("proc/net/dev present");
+        // At least one non-loopback interface should be present on any
+        // realistic Linux build host. We don't assert *which* one.
+        assert!(!ifs.is_empty(), "expected at least one non-lo interface");
+        for (iface, _rx, _tx) in &ifs {
+            assert_ne!(iface, "lo");
+        }
     }
 }

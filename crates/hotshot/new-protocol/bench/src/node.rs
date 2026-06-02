@@ -63,7 +63,11 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_default();
-    let cpu_sampler = CpuSampler::start(cfg.node_id, cpu_out_dir, Duration::from_millis(50));
+    let cpu_sampler = CpuSampler::start(
+        cfg.node_id,
+        cpu_out_dir,
+        Duration::from_millis(cfg.sampler_tick_ms),
+    );
 
     let coordinator = build_coordinator(
         public_key,
