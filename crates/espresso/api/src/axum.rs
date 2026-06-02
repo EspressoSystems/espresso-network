@@ -11,12 +11,13 @@ use aide::{
 };
 use axum::{
     Extension, Json, Router,
-    extract::{Path, Request, State},
+    extract::{Path, Request, State, ws::WebSocketUpgrade},
     http::{StatusCode, Uri},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
+use futures::stream::BoxStream;
 use schemars::transform::Transform;
 use serde::Serialize;
 use serialization_api::v2::{
@@ -25,7 +26,10 @@ use serialization_api::v2::{
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
 
-use crate::{error::ApiError, handlers, v1, v2};
+use crate::{
+    error::{ApiError, AvailabilityError},
+    handlers, v1, v2,
+};
 
 /// API error response
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -35,8 +39,9 @@ struct ErrorResponse {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
@@ -45,6 +50,20 @@ impl IntoResponse for ApiError {
         });
 
         (status, body).into_response()
+    }
+}
+
+/// Classify an `anyhow::Error` from an availability handler into the appropriate `ApiError`
+/// variant. Errors produced via [`AvailabilityError`] in the state implementation carry semantic
+/// meaning; everything else falls back to a 500 Internal Server Error.
+fn classify_availability_error(err: anyhow::Error) -> ApiError {
+    let is_not_found = err
+        .downcast_ref::<AvailabilityError>()
+        .map(|e| matches!(e, AvailabilityError::NotFound(_)));
+    match is_not_found {
+        Some(true) => ApiError::NotFound(err),
+        Some(false) => ApiError::BadRequest(err),
+        None => ApiError::Internal(err),
     }
 }
 
@@ -127,11 +146,32 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
     }
 }
 
+async fn drive_ws_stream<T: Serialize>(
+    mut socket: axum::extract::ws::WebSocket,
+    stream: BoxStream<'static, T>,
+) {
+    use futures::StreamExt as _;
+    futures::pin_mut!(stream);
+    while let Some(item) = stream.next().await {
+        let Ok(json) = serde_json::to_string(&item) else {
+            break;
+        };
+        if socket
+            .send(axum::extract::ws::Message::Text(json.into()))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
 /// Create a combined router serving both v1 and v2 APIs
 pub fn create_combined_router<S>(state: S) -> Router
 where
     S: v1::RewardApi
         + v1::AvailabilityApi
+        + v1::HotShotAvailabilityApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi
@@ -149,7 +189,13 @@ where
 /// Create v1 router without OpenAPI documentation (internal types)
 pub fn create_router_v1<S>(state: S) -> Router
 where
-    S: v1::RewardApi + v1::AvailabilityApi + Clone + Send + Sync + 'static,
+    S: v1::RewardApi
+        + v1::AvailabilityApi
+        + v1::HotShotAvailabilityApi
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     // Create handler closures that capture the generic state type
     let get_reward_claim_input =
@@ -220,7 +266,7 @@ where
                 .get_namespace_proof(v1::availability::BlockId::Height(height), namespace)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/hash/{hash}/namespace/{namespace}
@@ -230,7 +276,7 @@ where
                 .get_namespace_proof(v1::availability::BlockId::Hash(hash), namespace)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/payload-hash/{payload-hash}/namespace/{namespace}
@@ -243,7 +289,7 @@ where
                 )
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     // Route: /v1/availability/block/{from}/{until}/namespace/{namespace}
@@ -253,7 +299,7 @@ where
                 .get_namespace_proof_range(from, until, namespace)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_incorrect_encoding_proof =
@@ -265,7 +311,7 @@ where
                 )
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let get_state_cert_v1 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
@@ -273,7 +319,7 @@ where
             .get_state_cert(epoch)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let get_state_cert_v2 = |State(state): State<S>, Path(epoch): Path<u64>| async move {
@@ -281,8 +327,291 @@ where
             .get_state_cert_v2(epoch)
             .await
             .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    // HotShot availability API handlers
+
+    let get_leaf_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_leaf(v1::LeafId::Height(height))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_leaf_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_leaf(v1::LeafId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_leaf_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+        state
+            .get_leaf_range(from, until)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let get_header_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_header(v1::BlockId::Height(height))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_header_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_header(v1::BlockId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_header_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+        state
+            .get_header(v1::BlockId::PayloadHash(payload_hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_header_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+        state
+            .get_header_range(from, until)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let get_block_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_block(v1::BlockId::Height(height))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_block_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_block(v1::BlockId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_block_by_payload_hash = |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+        state
+            .get_block(v1::BlockId::PayloadHash(payload_hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_block_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+        state
+            .get_block_range(from, until)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let get_payload_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_payload(v1::PayloadId::Height(height))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_payload_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_payload(v1::PayloadId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_payload_by_block_hash = |State(state): State<S>, Path(block_hash): Path<String>| async move {
+        state
+            .get_payload(v1::PayloadId::BlockHash(block_hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_payload_range = |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+        state
+            .get_payload_range(from, until)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let get_vid_common_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_vid_common(v1::BlockId::Height(height))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_vid_common_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_vid_common(v1::BlockId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_vid_common_by_payload_hash =
+        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_vid_common(v1::BlockId::PayloadHash(payload_hash))
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+    let get_vid_common_range =
+        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_vid_common_range(from, until)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let get_transaction_by_position =
+        |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_by_position(height, index)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+    let get_transaction_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_transaction_by_hash(hash)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_transaction_proof_by_position =
+        |State(state): State<S>, Path((height, index)): Path<(u64, u64)>| async move {
+            state
+                .get_transaction_proof_by_position(height, index)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+    let get_transaction_proof_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_transaction_proof_by_hash(hash)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let get_block_summary_by_height = |State(state): State<S>, Path(height): Path<usize>| async move {
+        state
+            .get_block_summary(height)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+    let get_block_summary_range =
+        |State(state): State<S>, Path((from, until)): Path<(usize, usize)>| async move {
+            state
+                .get_block_summary_range(from, until)
+                .await
+                .map(Json)
+                .map_err(classify_availability_error)
+        };
+
+    let get_limits = |State(state): State<S>| async move {
+        state
+            .get_limits()
+            .await
+            .map(Json)
             .map_err(ApiError::Internal)
     };
+
+    let get_cert2 = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_cert2(height)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    // WebSocket streaming handlers
+    let stream_leaves =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_leaves(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_leaves: {e}"),
+                }
+            })
+        };
+    let stream_headers =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_headers(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_headers: {e}"),
+                }
+            })
+        };
+    let stream_blocks =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_blocks(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_blocks: {e}"),
+                }
+            })
+        };
+    let stream_payloads =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_payloads(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_payloads: {e}"),
+                }
+            })
+        };
+    let stream_vid_common =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_vid_common(height).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_vid_common: {e}"),
+                }
+            })
+        };
+    let stream_transactions =
+        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_transactions(height, None).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_transactions: {e}"),
+                }
+            })
+        };
+    let stream_transactions_ns =
+        |ws: WebSocketUpgrade,
+         State(state): State<S>,
+         Path((height, namespace)): Path<(usize, u32)>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_transactions(height, Some(namespace)).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_transactions_ns: {e}"),
+                }
+            })
+        };
+    let stream_namespace_proofs =
+        |ws: WebSocketUpgrade,
+         State(state): State<S>,
+         Path((height, namespace)): Path<(usize, u32)>| async move {
+            ws.on_upgrade(move |socket| async move {
+                match state.stream_namespace_proofs(height, namespace).await {
+                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Err(e) => tracing::warn!("stream_namespace_proofs: {e}"),
+                }
+            })
+        };
 
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
@@ -331,6 +660,108 @@ where
         )
         .route(routes::v1::STATE_CERT_V1_ROUTE, get(get_state_cert_v1))
         .route(routes::v1::STATE_CERT_V2_ROUTE, get(get_state_cert_v2))
+        // HotShot availability API routes
+        .route(routes::v1::LEAF_BY_HEIGHT_ROUTE, get(get_leaf_by_height))
+        .route(routes::v1::LEAF_BY_HASH_ROUTE, get(get_leaf_by_hash))
+        .route(routes::v1::LEAF_RANGE_ROUTE, get(get_leaf_range))
+        .route(
+            routes::v1::HEADER_BY_HEIGHT_ROUTE,
+            get(get_header_by_height),
+        )
+        .route(routes::v1::HEADER_BY_HASH_ROUTE, get(get_header_by_hash))
+        .route(
+            routes::v1::HEADER_BY_PAYLOAD_HASH_ROUTE,
+            get(get_header_by_payload_hash),
+        )
+        .route(routes::v1::HEADER_RANGE_ROUTE, get(get_header_range))
+        .route(routes::v1::BLOCK_BY_HEIGHT_ROUTE, get(get_block_by_height))
+        .route(routes::v1::BLOCK_BY_HASH_ROUTE, get(get_block_by_hash))
+        .route(
+            routes::v1::BLOCK_BY_PAYLOAD_HASH_ROUTE,
+            get(get_block_by_payload_hash),
+        )
+        .route(routes::v1::BLOCK_RANGE_ROUTE, get(get_block_range))
+        .route(
+            routes::v1::PAYLOAD_BY_HEIGHT_ROUTE,
+            get(get_payload_by_height),
+        )
+        .route(
+            routes::v1::PAYLOAD_BY_HASH_ROUTE,
+            get(get_payload_by_hash),
+        )
+        .route(
+            routes::v1::PAYLOAD_BY_BLOCK_HASH_ROUTE,
+            get(get_payload_by_block_hash),
+        )
+        .route(routes::v1::PAYLOAD_RANGE_ROUTE, get(get_payload_range))
+        .route(
+            routes::v1::VID_COMMON_BY_HEIGHT_ROUTE,
+            get(get_vid_common_by_height),
+        )
+        .route(
+            routes::v1::VID_COMMON_BY_HASH_ROUTE,
+            get(get_vid_common_by_hash),
+        )
+        .route(
+            routes::v1::VID_COMMON_BY_PAYLOAD_HASH_ROUTE,
+            get(get_vid_common_by_payload_hash),
+        )
+        .route(
+            routes::v1::VID_COMMON_RANGE_ROUTE,
+            get(get_vid_common_range),
+        )
+        .route(
+            routes::v1::TRANSACTION_BY_POSITION_NOPROOF_ROUTE,
+            get(get_transaction_by_position),
+        )
+        .route(
+            routes::v1::TRANSACTION_BY_HASH_NOPROOF_ROUTE,
+            get(get_transaction_by_hash),
+        )
+        .route(
+            routes::v1::TRANSACTION_PROOF_BY_POSITION_ROUTE,
+            get(get_transaction_proof_by_position),
+        )
+        .route(
+            routes::v1::TRANSACTION_PROOF_BY_HASH_ROUTE,
+            get(get_transaction_proof_by_hash),
+        )
+        .route(
+            routes::v1::TRANSACTION_BY_POSITION_ROUTE,
+            get(get_transaction_proof_by_position),
+        )
+        .route(
+            routes::v1::TRANSACTION_BY_HASH_ROUTE,
+            get(get_transaction_proof_by_hash),
+        )
+        .route(
+            routes::v1::BLOCK_SUMMARY_BY_HEIGHT_ROUTE,
+            get(get_block_summary_by_height),
+        )
+        .route(
+            routes::v1::BLOCK_SUMMARY_RANGE_ROUTE,
+            get(get_block_summary_range),
+        )
+        .route(routes::v1::LIMITS_ROUTE, get(get_limits))
+        .route(routes::v1::CERT2_BY_HEIGHT_ROUTE, get(get_cert2))
+        // WebSocket streaming routes
+        .route(routes::v1::STREAM_LEAVES_ROUTE, get(stream_leaves))
+        .route(routes::v1::STREAM_HEADERS_ROUTE, get(stream_headers))
+        .route(routes::v1::STREAM_BLOCKS_ROUTE, get(stream_blocks))
+        .route(routes::v1::STREAM_PAYLOADS_ROUTE, get(stream_payloads))
+        .route(routes::v1::STREAM_VID_COMMON_ROUTE, get(stream_vid_common))
+        .route(
+            routes::v1::STREAM_TRANSACTIONS_ROUTE,
+            get(stream_transactions),
+        )
+        .route(
+            routes::v1::STREAM_TRANSACTIONS_NS_ROUTE,
+            get(stream_transactions_ns),
+        )
+        .route(
+            routes::v1::STREAM_NAMESPACE_PROOFS_ROUTE,
+            get(stream_namespace_proofs),
+        )
         .with_state(state)
 }
 

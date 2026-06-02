@@ -877,6 +877,17 @@ impl Persistence {
         Ok(())
     }
 
+    /// The `last_processed_view` cursor: highest view with a generated decide event, or `None`.
+    async fn load_processed_view(&self) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(self
+            .db
+            .read()
+            .await?
+            .fetch_optional("SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1")
+            .await?
+            .map(|row| ViewNumber::new(row.get::<i64, _>("last_processed_view") as u64)))
+    }
+
     async fn generate_decide_events(
         &self,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
@@ -1562,12 +1573,12 @@ impl SequencerPersistence for Persistence {
             .await
     }
 
-    async fn append_decided_leaves(
+    async fn persist_decided_leaves(
         &self,
-        view: ViewNumber,
+        _view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &(impl EventConsumer + 'static),
+        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let values = leaf_chain
             .into_iter()
@@ -1590,7 +1601,7 @@ impl SequencerPersistence for Persistence {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        // First, append the new leaves. We do this in its own transaction because even if GC or the
+        // Append the new leaves. We do this in its own transaction because even if GC or the
         // event consumer later fails, there is no need to abort the storage of the leaves.
         WRITE_BACKOFF
             .retry_if(WRITE_RETRY_MAX, is_serialization_error, || async {
@@ -1606,23 +1617,25 @@ impl SequencerPersistence for Persistence {
             })
             .await?;
 
-        // Generate an event for the new leaves and, only if it succeeds, clean up data we no longer
-        // need.
-        if let Err(err) = self.generate_decide_events(deciding_qc, consumer).await {
-            // GC/event processing failure is not an error, since by this point we have at least
-            // managed to persist the decided leaves successfully, and GC will just run again at the
-            // next decide. Log an error but do not return it.
-            tracing::warn!(?view, "event processing failed: {err:#}");
-            return Ok(());
-        }
+        Ok(())
+    }
 
-        // Garbage collect data which was not included in any decide event, but which at this point
-        // is old enough to just forget about.
+    async fn process_decided_events(
+        &self,
+        view: ViewNumber,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        // Generate events for the new leaves, then GC. On error `last_processed_view` is not
+        // advanced past the failure point, so no data is lost and the range is retried.
+        self.generate_decide_events(deciding_qc, consumer).await?;
+
+        // Best-effort GC of data not included in any decide event; runs again at the next decide.
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
 
-        Ok(())
+        self.load_processed_view().await
     }
 
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {

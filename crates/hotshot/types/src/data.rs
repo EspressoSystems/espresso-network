@@ -27,7 +27,7 @@ use tagged_base64::{TaggedBase64, Tb64Error};
 use thiserror::Error;
 use vbs::version::Version;
 use vec1::Vec1;
-use versions::{EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
+use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
     drb::DrbResult,
@@ -384,7 +384,7 @@ pub fn vid_commitment(
                      error: {err}"
                 )
             })
-    } else if version < VID2_UPGRADE_VERSION {
+    } else if version < NEW_PROTOCOL_VERSION {
         let param = init_avidm_param(total_weight).unwrap();
         let encoded_tx_len = encoded_transactions.len();
         AvidMScheme::commit(
@@ -1772,10 +1772,9 @@ impl<TYPES: NodeType> Committable for Leaf2<TYPES> {
 }
 
 impl<TYPES: NodeType> Leaf<TYPES> {
-    #[allow(clippy::unused_async)]
     /// Calculate the leaf commitment,
     /// which is gated on the version to include the block header.
-    pub async fn commit(&self, _upgrade_lock: &UpgradeLock<TYPES>) -> Commitment<Self> {
+    pub fn commit(&self, _upgrade_lock: &UpgradeLock<TYPES>) -> Commitment<Self> {
         <Self as Committable>::commit(self)
     }
 }
@@ -1863,8 +1862,7 @@ impl<TYPES: NodeType> QuorumCertificate<TYPES> {
         let data = QuorumData {
             leaf_commit: Leaf::genesis(validated_state, instance_state, upgrade.base)
                 .await
-                .commit(&upgrade_lock)
-                .await,
+                .commit(&upgrade_lock),
         };
 
         let versioned_data =

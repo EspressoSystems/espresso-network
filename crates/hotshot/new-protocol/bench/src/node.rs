@@ -33,7 +33,7 @@ use hotshot_types::{
     x25519::Keypair,
 };
 use tracing::{error, info, warn};
-use versions::{CLIQUENET_VERSION, Upgrade};
+use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
@@ -156,9 +156,10 @@ async fn build_coordinator(
     );
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
+    let genesis_state = Arc::new(genesis_state);
     state_manager.seed_state(
         ViewNumber::genesis(),
-        Arc::new(genesis_state),
+        genesis_state.clone(),
         genesis_leaf.clone(),
     );
 
@@ -166,6 +167,16 @@ async fn build_coordinator(
     // can self-start without external injection from the orchestrator.
     let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
     let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
+    // The synthetic genesis proposal has a non-null justify_qc so the leaf
+    // derived from it has a different commitment than `genesis_leaf`.
+    // `request_header` for view 1 looks up the parent state by the
+    // proposal's leaf commitment, so seed the same state under that
+    // commitment too (mirrors coordinator builder behavior).
+    state_manager.seed_state(
+        ViewNumber::genesis(),
+        genesis_state,
+        Leaf2::from(genesis_proposal.clone()),
+    );
     consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
     let proposal_validator =
@@ -332,7 +343,7 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
         &block.encode(),
         &metadata.encode(),
         num_nodes,
-        versions::VID2_UPGRADE_VERSION,
+        versions::NEW_PROTOCOL_VERSION,
     );
     let builder_commitment =
         <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
@@ -345,7 +356,7 @@ fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
 }
 
 fn bench_upgrade_lock() -> UpgradeLock<TestTypes> {
-    UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
+    UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION))
 }
 
 /// Create a genesis `Certificate1` that references the genesis leaf.
@@ -388,5 +399,5 @@ fn build_genesis_proposal(
 }
 
 pub fn upgrade_lock<T: NodeType>() -> UpgradeLock<T> {
-    UpgradeLock::new(CLIQUENET_VERSION.into())
+    UpgradeLock::new(NEW_PROTOCOL_VERSION.into())
 }

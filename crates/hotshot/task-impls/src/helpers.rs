@@ -1113,7 +1113,7 @@ pub(crate) async fn validate_proposal_view_and_certs<
 
     // Validate the proposal's signature. This should also catch if the leaf_commitment does not equal our calculated parent commitment
     let mut membership = validation_info.membership.clone();
-    proposal.validate_signature(&membership).await?;
+    proposal.validate_signature(&membership)?;
 
     // Verify a timeout certificate OR a view sync certificate exists and is valid.
     if proposal.data.justify_qc().view_number() != view_number - 1 {
