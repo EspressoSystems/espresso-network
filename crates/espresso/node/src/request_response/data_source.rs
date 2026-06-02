@@ -313,7 +313,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             Request::Cert2(height) => {
                 let cert2 = match &self.storage {
                     Some(Storage::Sql(storage)) => storage
-                        .load_earliest_cert2(*height)
+                        .load_cert2(*height)
                         .await
                         .with_context(|| "failed to load cert2 from sql storage")?,
                     Some(Storage::Fs(_)) => bail!("fs storage not supported for cert2"),
@@ -322,7 +322,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
                 match cert2 {
                     Some(cert2) => Ok(Response::Cert2(cert2)),
-                    None => bail!("no cert2 available for height {height}"),
+                    None => bail!("no cert2 available at height {height}"),
                 }
             },
             Request::RewardMerkleTreeV2(height, view) => {
