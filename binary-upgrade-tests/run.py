@@ -576,6 +576,7 @@ class Node:
         target: int,
         timeout: float,
         container_status: Callable[[], str | None] | None = None,
+        backfill: bool = False,
     ) -> None:
         assert self.has_query, f"{self} does not have query API"
         abort = _abort_if_exited(self, container_status)
@@ -607,17 +608,21 @@ class Node:
                 )
             time.sleep(2.0)
 
-        leaf_idx = target - 1
+        assert last_stor is not None  # set by the storage loop above
+        # Tip leaf was witnessed live so is always present; backfilling backends
+        # must also serve a pre-join leaf, proving peer catchup works.
+        leaves = [last_stor - 1] + ([target - 1] if backfill else [])
         leaf_deadline = time.monotonic() + 30.0
         while True:
-            if self.leaf_available(leaf_idx):
-                log.info(f"{self} availability/leaf/{leaf_idx} ok")
+            missing = [i for i in leaves if not self.leaf_available(i)]
+            if not missing:
+                log.info(f"{self} availability/leaf {leaves} ok")
                 return
             if abort and (msg := abort()):
-                raise RuntimeError(f"Aborted waiting for {self} leaf/{leaf_idx}: {msg}")
+                raise RuntimeError(f"Aborted waiting for {self} leaf {missing}: {msg}")
             if time.monotonic() >= leaf_deadline:
                 raise TimeoutError(
-                    f"{self} leaf/{leaf_idx} not available after 30s"
+                    f"{self} leaf {missing} not available after 30s"
                     f" (storage_height={last_stor})"
                 )
             time.sleep(2.0)
@@ -803,7 +808,9 @@ def _restart_with_config_peer(compose: Compose, idx: int, tag: str) -> None:
     )
 
 
-def _wait_storage(compose: Compose, idx: int, timeout: float) -> None:
+def _wait_storage(
+    compose: Compose, idx: int, timeout: float, backfill: bool = False
+) -> None:
     peer_idxs = tuple(i for i in NODE_INDICES if i != idx)
     peers = [n for i in peer_idxs if (n := Node.from_index(i)).has_query]
     heights = [h for p in peers if (h := p.storage_height()) is not None]
@@ -817,6 +824,7 @@ def _wait_storage(compose: Compose, idx: int, timeout: float) -> None:
             target,
             timeout,
             container_status=lambda: compose.container_status(str(node)),
+            backfill=backfill,
         )
     except (TimeoutError, RuntimeError):
         compose.dump_service_logs(str(node))
@@ -834,7 +842,7 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
             else:
                 compose.wipe_pg_node(idx)
             _restart_with_config_peer(compose, idx, config.upgrade_tag)
-            _wait_storage(compose, idx, timeout=240.0)
+            _wait_storage(compose, idx, timeout=240.0, backfill=backend == "pg")
 
         case JoinNode(idx=idx, overlay=overlay, timeout=timeout):
             os.environ[f"ESPRESSO_NODE_{idx}_API_PORT"] = str(NEW_NODE_API_PORT)
@@ -842,7 +850,9 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
             compose.with_overlays(overlay).run(
                 "up", "-d", f"espresso-node-{idx}", docker_tag=config.base_tag
             )
-            _wait_storage(compose, idx, timeout=timeout)
+            _wait_storage(
+                compose, idx, timeout=timeout, backfill=overlay == NODE_5_PG_OVERLAY
+            )
 
         case UpgradeSupportServices():
             log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
