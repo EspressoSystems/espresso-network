@@ -282,9 +282,9 @@
 <a href=#282 id=282 data-nosnippet>282</a>        height: u64,
 <a href=#283 id=283 data-nosnippet>283</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;Vec&lt;Leaf2&gt;&gt;&gt;;
 <a href=#284 id=284 data-nosnippet>284</a>
-<a href=#285 id=285 data-nosnippet>285</a>    <span class="doccomment">/// Load the earliest cert2 whose finalized block height is at or above `height`.
+<a href=#285 id=285 data-nosnippet>285</a>    <span class="doccomment">/// Load the cert2 stored at exactly `height`, if one exists.
 <a href=#286 id=286 data-nosnippet>286</a>    ///
-<a href=#287 id=287 data-nosnippet>287</a>    /// Returns `None` when no cert2 height &gt;= `height` is locally available
+<a href=#287 id=287 data-nosnippet>287</a>    /// Returns `None` when no cert2 is stored at exactly `height`.
 <a href=#288 id=288 data-nosnippet>288</a>    </span><span class="kw">fn </span>get_cert2(
 <a href=#289 id=289 data-nosnippet>289</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#290 id=290 data-nosnippet>290</a>        _height: u64,

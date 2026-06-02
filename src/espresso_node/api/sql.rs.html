@@ -789,7 +789,7 @@
 <a href=#789 id=789 data-nosnippet>789</a>            .clone();
 <a href=#790 id=790 data-nosnippet>790</a>
 <a href=#791 id=791 data-nosnippet>791</a>        <span class="comment">// New protocol: cert2 alone proves finality. Return the leaf range up to the finalizing
-<a href=#792 id=792 data-nosnippet>792</a>        // cert2's height
+<a href=#792 id=792 data-nosnippet>792</a>        // cert2's height.
 <a href=#793 id=793 data-nosnippet>793</a>        </span><span class="kw">if </span>leaf.block_header().version() &gt;= NEW_PROTOCOL_VERSION {
 <a href=#794 id=794 data-nosnippet>794</a>            <span class="kw">let </span>cert2: espresso_types::Certificate2&lt;SeqTypes&gt; =
 <a href=#795 id=795 data-nosnippet>795</a>                tx.load_earliest_cert2(height).<span class="kw">await</span><span class="question-mark">?</span>.context(<span class="macro">format!</span>(
@@ -845,7 +845,7 @@
 <a href=#845 id=845 data-nosnippet>845</a>        <span class="prelude-val">Ok</span>(chain)
 <a href=#846 id=846 data-nosnippet>846</a>    }
 <a href=#847 id=847 data-nosnippet>847</a>
-<a href=#848 id=848 data-nosnippet>848</a>    <span class="kw">async fn </span>load_earliest_cert2(
+<a href=#848 id=848 data-nosnippet>848</a>    <span class="kw">async fn </span>load_cert2(
 <a href=#849 id=849 data-nosnippet>849</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#850 id=850 data-nosnippet>850</a>        height: u64,
 <a href=#851 id=851 data-nosnippet>851</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;espresso_types::Certificate2&lt;SeqTypes&gt;&gt;&gt; {
@@ -853,7 +853,7 @@
 <a href=#853 id=853 data-nosnippet>853</a>            </span>.read()
 <a href=#854 id=854 data-nosnippet>854</a>            .<span class="kw">await
 <a href=#855 id=855 data-nosnippet>855</a>            </span>.context(<span class="string">"opening transaction to fetch cert2"</span>)<span class="question-mark">?</span>;
-<a href=#856 id=856 data-nosnippet>856</a>        <span class="prelude-val">Ok</span>(tx.load_earliest_cert2(height).<span class="kw">await</span><span class="question-mark">?</span>)
+<a href=#856 id=856 data-nosnippet>856</a>        <span class="prelude-val">Ok</span>(tx.load_cert2(height).<span class="kw">await</span><span class="question-mark">?</span>)
 <a href=#857 id=857 data-nosnippet>857</a>    }
 <a href=#858 id=858 data-nosnippet>858</a>
 <a href=#859 id=859 data-nosnippet>859</a>    <span class="kw">async fn </span>get_leaf(<span class="kw-2">&amp;</span><span class="self">self</span>, height: u64) -&gt; anyhow::Result&lt;Leaf2&gt; {
@@ -1005,11 +1005,11 @@
 <a href=#1005 id=1005 data-nosnippet>1005</a>        <span class="self">self</span>.as_ref().get_leaf_chain(height).<span class="kw">await
 <a href=#1006 id=1006 data-nosnippet>1006</a>    </span>}
 <a href=#1007 id=1007 data-nosnippet>1007</a>
-<a href=#1008 id=1008 data-nosnippet>1008</a>    <span class="kw">async fn </span>load_earliest_cert2(
+<a href=#1008 id=1008 data-nosnippet>1008</a>    <span class="kw">async fn </span>load_cert2(
 <a href=#1009 id=1009 data-nosnippet>1009</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
 <a href=#1010 id=1010 data-nosnippet>1010</a>        height: u64,
 <a href=#1011 id=1011 data-nosnippet>1011</a>    ) -&gt; anyhow::Result&lt;<span class="prelude-ty">Option</span>&lt;espresso_types::Certificate2&lt;SeqTypes&gt;&gt;&gt; {
-<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="self">self</span>.as_ref().load_earliest_cert2(height).<span class="kw">await
+<a href=#1012 id=1012 data-nosnippet>1012</a>        <span class="self">self</span>.as_ref().load_cert2(height).<span class="kw">await
 <a href=#1013 id=1013 data-nosnippet>1013</a>    </span>}
 <a href=#1014 id=1014 data-nosnippet>1014</a>
 <a href=#1015 id=1015 data-nosnippet>1015</a>    <span class="kw">async fn </span>get_leaf(<span class="kw-2">&amp;</span><span class="self">self</span>, height: u64) -&gt; anyhow::Result&lt;Leaf2&gt; {
