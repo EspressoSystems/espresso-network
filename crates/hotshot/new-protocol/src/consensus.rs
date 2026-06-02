@@ -498,7 +498,10 @@ impl<T: NodeType> Consensus<T> {
                 Protocol::Continue
             },
             ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
-                // Directly send the VID shares before making a proposal.
+                // As leader we already have the payload; record the commitment so
+                // voting doesn't have to wait on the (skipped) reconstruction path.
+                self.blocks_reconstructed
+                    .insert(view, vid_disperse.payload_commitment);
                 self.send_vid_shares(&view, vid_disperse, outbox);
                 Protocol::Continue
             },

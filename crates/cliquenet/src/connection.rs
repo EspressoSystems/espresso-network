@@ -92,11 +92,14 @@ impl Connection {
             }
         })
         .chain(
-            conf.retry_delays
+            conf.connect_retry_delays
                 .iter()
                 .map(|&d| Duration::from_secs(d.into())),
         )
-        .chain(repeat(conf.max_retry_delay));
+        .chain(repeat({
+            let d = *conf.connect_retry_delays.last();
+            Duration::from_secs(d.into())
+        }));
 
         let addr = addr.to_string();
         let node = conf.keypair.public_key();
@@ -244,16 +247,8 @@ async fn select_version(
 ) -> Result<(Version, Prologue)> {
     const INIT_PAYLOAD_LEN: usize = 4;
 
-    let our_min = conf
-        .noise_protocols
-        .first_key_value()
-        .map(|(k, _)| *k)
-        .expect("noise_configs is not empty");
-    let our_max = conf
-        .noise_protocols
-        .last_key_value()
-        .map(|(k, _)| *k)
-        .expect("noise_configs is not empty");
+    let our_min = *conf.noise_protocols.first().0;
+    let our_max = *conf.noise_protocols.last().0;
 
     let mut send_buf = [0u8; INIT_PAYLOAD_LEN];
     let mut recv_buf = [0u8; INIT_PAYLOAD_LEN];

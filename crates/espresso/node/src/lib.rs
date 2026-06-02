@@ -808,7 +808,7 @@ where
     // use. They should share a single lock so upgrade certificate updates
     // are visible to both.
     let cliquenet = Cliquenet::create(
-        "espresso",
+        &format!("espresso-{}", genesis.chain_config.chain_id),
         pub_key,
         network_params.x25519_secret_key.into(),
         network_params.cliquenet_bind_addr.clone(),

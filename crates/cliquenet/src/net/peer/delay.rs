@@ -105,11 +105,10 @@ impl DelayQueue {
 }
 
 fn timeout(conf: &Config, at: usize) -> Instant {
-    let d = conf
-        .retry_delays
+    let d = *conf
+        .send_retry_delays
         .get(at)
-        .copied()
-        .map(|d| Duration::from_secs(d.into()))
-        .unwrap_or(conf.max_retry_delay);
-    Instant::now() + d
+        .unwrap_or_else(|| conf.send_retry_delays.last());
+
+    Instant::now() + Duration::from_secs(d.into())
 }
