@@ -214,6 +214,7 @@ where
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
             .garbage_collection_interval(new_protocol_consensus_gc_interval.get())
+            .metrics(metrics)
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();

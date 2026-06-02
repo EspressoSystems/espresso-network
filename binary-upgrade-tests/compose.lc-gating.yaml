@@ -1,0 +1,32 @@
+# Backport of e725d204cf onto BASE_TAGs that pre-date the LCv3 gating.
+#
+# Without this gate, deploy-lcv3-upgrade races against the prover's first
+# epoch-root push and can leave the LightClient contract stuck at block 0,
+# causing the initial smoke test to fail with light_client_updated stuck at 0.
+#
+# Applied only when the extracted BASE_TAG compose does not already define
+# wait-for-lc-epoch. Variable names match BASE_TAG=20260505's old
+# ESPRESSO_SEQUENCER_* schema; once we move to a BASE_TAG that ships the
+# gating natively, this overlay is dropped automatically.
+
+services:
+  wait-for-lc-epoch-2:
+    image: badouralix/curl-jq
+    command: /scripts/wait-for-light-client-epoch 2
+    environment:
+      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_SEQUENCER_L1_PORT}
+      - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS=${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS}
+    volumes:
+      - ./scripts:/scripts:ro
+    depends_on:
+      demo-l1-network:
+        condition: service_healthy
+      wait-for-v4:
+        condition: service_completed_successfully
+      prover-one-shot:
+        condition: service_started
+
+  deploy-lcv3-upgrade:
+    depends_on:
+      wait-for-lc-epoch-2:
+        condition: service_completed_successfully
