@@ -789,7 +789,7 @@ impl CatchupStorage for SqlStorage {
             .clone();
 
         // New protocol: cert2 alone proves finality. Return the leaf range up to the finalizing
-        // cert2's height
+        // cert2's height.
         if leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
             let cert2: espresso_types::Certificate2<SeqTypes> =
                 tx.load_earliest_cert2(height).await?.context(format!(
@@ -845,7 +845,7 @@ impl CatchupStorage for SqlStorage {
         Ok(chain)
     }
 
-    async fn load_earliest_cert2(
+    async fn load_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
@@ -853,7 +853,7 @@ impl CatchupStorage for SqlStorage {
             .read()
             .await
             .context("opening transaction to fetch cert2")?;
-        Ok(tx.load_earliest_cert2(height).await?)
+        Ok(tx.load_cert2(height).await?)
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
@@ -1005,11 +1005,11 @@ impl CatchupStorage for DataSource {
         self.as_ref().get_leaf_chain(height).await
     }
 
-    async fn load_earliest_cert2(
+    async fn load_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
-        self.as_ref().load_earliest_cert2(height).await
+        self.as_ref().load_cert2(height).await
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
