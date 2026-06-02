@@ -70,6 +70,11 @@ pub struct NetworkNodeConfig {
     #[builder(default)]
     /// The timeout for DHT lookups.
     pub dht_timeout: Option<Duration>,
+
+    /// Optional discriminator appended to libp2p protocol identifiers; `None` keeps mainnet
+    /// protocol strings byte-identical to today.
+    #[builder(default)]
+    pub network_discriminator: Option<String>,
 }
 
 impl Clone for NetworkNodeConfig {
@@ -87,6 +92,7 @@ impl Clone for NetworkNodeConfig {
             dht_file_path: self.dht_file_path.clone(),
             auth_message: self.auth_message.clone(),
             dht_timeout: self.dht_timeout,
+            network_discriminator: self.network_discriminator.clone(),
         }
     }
 }

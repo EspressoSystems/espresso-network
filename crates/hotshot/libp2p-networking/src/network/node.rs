@@ -238,7 +238,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
             // Derive a `Gossipsub` config from our gossip config
             let mut gossipsub_builder = GossipsubConfigBuilder::default();
-            if let Some(prefix) = mainnet_gossipsub_prefix() {
+            let gossipsub_prefix = match &config.network_discriminator {
+                None => mainnet_gossipsub_prefix().map(String::from),
+                Some(d) => Some(format!("/HotShot/gossipsub/1.0/{d}")),
+            };
+            if let Some(prefix) = gossipsub_prefix {
                 gossipsub_builder.protocol_id_prefix(prefix);
             }
             let gossipsub_config = gossipsub_builder
@@ -289,7 +293,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             let identify = IdentifyBehaviour::new(identify_cfg);
 
             // - Build DHT needed for peer discovery
-            let mut kconfig = Config::new(mainnet_kad_protocol());
+            let kad_protocol = match &config.network_discriminator {
+                None => mainnet_kad_protocol(),
+                Some(d) => StreamProtocol::try_from_owned(format!("/ipfs/kad/1.0.0/{d}")).map_err(
+                    |err| NetworkError::ConfigError(format!("invalid kademlia protocol: {err}")),
+                )?,
+            };
+            let mut kconfig = Config::new(kad_protocol);
             kconfig
                 .set_parallelism(NonZeroUsize::new(5).unwrap())
                 .set_provider_publication_interval(Some(kademlia_record_republication_interval))
@@ -328,7 +338,20 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             let direct_message: super::cbor::Behaviour<Vec<u8>, Vec<u8>> =
                 RequestResponse::with_codec(
                     cbor,
-                    [(mainnet_direct_message_protocol(), ProtocolSupport::Full)],
+                    [(
+                        match &config.network_discriminator {
+                            None => mainnet_direct_message_protocol(),
+                            Some(d) => StreamProtocol::try_from_owned(format!(
+                                "/HotShot/direct_message/1.0/{d}"
+                            ))
+                            .map_err(|err| {
+                                NetworkError::ConfigError(format!(
+                                    "invalid direct_message protocol: {err}"
+                                ))
+                            })?,
+                        },
+                        ProtocolSupport::Full,
+                    )],
                     rrconfig.clone(),
                 );
 

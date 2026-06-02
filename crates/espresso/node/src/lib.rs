@@ -760,6 +760,9 @@ where
 
     let combined_network = {
         info!("Initializing Libp2p network");
+        // Mainnet keeps today's libp2p protocol strings byte-identical.
+        let chain_id = genesis.chain_config.chain_id;
+        let network_discriminator = (chain_id.0 != U256::ONE).then(|| chain_id.to_string());
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
@@ -772,6 +775,7 @@ where
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
             &validator_config.private_key,
             hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
+            network_discriminator,
         )
         .await
         .with_context(|| {
