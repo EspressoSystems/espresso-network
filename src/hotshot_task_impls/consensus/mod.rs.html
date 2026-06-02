@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a>    consensus::OuterConsensus,
 <a href=#15 id=15 data-nosnippet>15</a>    data::{EpochNumber, ViewNumber},
 <a href=#16 id=16 data-nosnippet>16</a>    epoch_membership::EpochMembershipCoordinator,
-<a href=#17 id=17 data-nosnippet>17</a>    event::Event,
+<a href=#17 id=17 data-nosnippet>17</a>    event::{Event, EventType},
 <a href=#18 id=18 data-nosnippet>18</a>    message::UpgradeLock,
 <a href=#19 id=19 data-nosnippet>19</a>    simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, TimeoutCertificate2},
 <a href=#20 id=20 data-nosnippet>20</a>    simple_vote::{HasEpoch, NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
@@ -35,7 +35,7 @@
 <a href=#35 id=35 data-nosnippet>35</a>};
 <a href=#36 id=36 data-nosnippet>36</a><span class="kw">use </span>crate::{
 <a href=#37 id=37 data-nosnippet>37</a>    events::HotShotEvent,
-<a href=#38 id=38 data-nosnippet>38</a>    helpers::{broadcast_view_change, validate_qc_and_next_epoch_qc},
+<a href=#38 id=38 data-nosnippet>38</a>    helpers::{broadcast_event, broadcast_view_change, validate_qc_and_next_epoch_qc},
 <a href=#39 id=39 data-nosnippet>39</a>    vote_collection::{EpochRootVoteCollectorsMap, VoteCollectorsMap},
 <a href=#40 id=40 data-nosnippet>40</a>};
 <a href=#41 id=41 data-nosnippet>41</a>
@@ -261,33 +261,76 @@
 <a href=#261 id=261 data-nosnippet>261</a>                    .<span class="kw">await</span>;
 <a href=#262 id=262 data-nosnippet>262</a>                }
 <a href=#263 id=263 data-nosnippet>263</a>            },
-<a href=#264 id=264 data-nosnippet>264</a>            <span class="kw">_ </span>=&gt; {},
-<a href=#265 id=265 data-nosnippet>265</a>        }
-<a href=#266 id=266 data-nosnippet>266</a>
-<a href=#267 id=267 data-nosnippet>267</a>        <span class="prelude-val">Ok</span>(())
-<a href=#268 id=268 data-nosnippet>268</a>    }
-<a href=#269 id=269 data-nosnippet>269</a>}
-<a href=#270 id=270 data-nosnippet>270</a>
-<a href=#271 id=271 data-nosnippet>271</a><span class="attr">#[async_trait]
-<a href=#272 id=272 data-nosnippet>272</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;&gt; TaskState <span class="kw">for </span>ConsensusTaskState&lt;TYPES, I&gt; {
-<a href=#273 id=273 data-nosnippet>273</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
-<a href=#274 id=274 data-nosnippet>274</a>
-<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">async fn </span>handle_event(
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#277 id=277 data-nosnippet>277</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
-<a href=#278 id=278 data-nosnippet>278</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#279 id=279 data-nosnippet>279</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
-<a href=#280 id=280 data-nosnippet>280</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#281 id=281 data-nosnippet>281</a>        <span class="kw">if </span><span class="self">self</span>.upgrade_lock.new_protocol_active(<span class="self">self</span>.cur_view) {
-<a href=#282 id=282 data-nosnippet>282</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#283 id=283 data-nosnippet>283</a>        }
-<a href=#284 id=284 data-nosnippet>284</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await
-<a href=#285 id=285 data-nosnippet>285</a>    </span>}
-<a href=#286 id=286 data-nosnippet>286</a>
-<a href=#287 id=287 data-nosnippet>287</a>    <span class="doccomment">/// Joins all subtasks.
-<a href=#288 id=288 data-nosnippet>288</a>    </span><span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#289 id=289 data-nosnippet>289</a>        <span class="comment">// Cancel the old timeout task
-<a href=#290 id=290 data-nosnippet>290</a>        </span>std::mem::replace(<span class="kw-2">&amp;mut </span><span class="self">self</span>.timeout_task, tokio::spawn(<span class="kw">async </span>{})).abort();
-<a href=#291 id=291 data-nosnippet>291</a>    }
-<a href=#292 id=292 data-nosnippet>292</a>}
+<a href=#264 id=264 data-nosnippet>264</a>            HotShotEvent::Qc2Formed(either::Left(qc))
+<a href=#265 id=265 data-nosnippet>265</a>                <span class="kw">if </span><span class="self">self</span>.upgrade_lock.new_protocol_active(<span class="self">self</span>.cur_view)
+<a href=#266 id=266 data-nosnippet>266</a>                    &amp;&amp; !<span class="self">self</span>.upgrade_lock.new_protocol_active(qc.view_number()) =&gt;
+<a href=#267 id=267 data-nosnippet>267</a>            {
+<a href=#268 id=268 data-nosnippet>268</a>                <span class="comment">// Cutover boundary only: the gated proposal path won't land this
+<a href=#269 id=269 data-nosnippet>269</a>                // last-legacy QC in `high_qc`, so capture it here for
+<a href=#270 id=270 data-nosnippet>270</a>                // `extract_pre_cutover_seed` to carry across. `update_high_qc` is
+<a href=#271 id=271 data-nosnippet>271</a>                // monotone, so this is a no-op outside the cutover window.
+<a href=#272 id=272 data-nosnippet>272</a>                </span><span class="kw">let </span><span class="kw-2">mut </span>consensus_writer = <span class="self">self</span>.consensus.write().<span class="kw">await</span>;
+<a href=#273 id=273 data-nosnippet>273</a>                <span class="kw">let _ </span>= consensus_writer.update_high_qc(qc.clone());
+<a href=#274 id=274 data-nosnippet>274</a>                drop(consensus_writer);
+<a href=#275 id=275 data-nosnippet>275</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(e) = <span class="self">self</span>.storage.update_high_qc2(qc.clone()).<span class="kw">await </span>{
+<a href=#276 id=276 data-nosnippet>276</a>                    <span class="macro">tracing::warn!</span>(<span class="string">"Failed to persist boundary high QC: {e}"</span>);
+<a href=#277 id=277 data-nosnippet>277</a>                }
+<a href=#278 id=278 data-nosnippet>278</a>                <span class="comment">// Forward to the espresso bridge -&gt; new-protocol coordinator, in case the
+<a href=#279 id=279 data-nosnippet>279</a>                // cutover seed was snapshotted before this QC finished assembling. Only the
+<a href=#280 id=280 data-nosnippet>280</a>                // cutover-view leader reaches this arm, so it lands exactly where needed.
+<a href=#281 id=281 data-nosnippet>281</a>                </span>broadcast_event(
+<a href=#282 id=282 data-nosnippet>282</a>                    Event {
+<a href=#283 id=283 data-nosnippet>283</a>                        view_number: qc.view_number(),
+<a href=#284 id=284 data-nosnippet>284</a>                        event: EventType::LegacyHighQcFormed { qc: qc.clone() },
+<a href=#285 id=285 data-nosnippet>285</a>                    },
+<a href=#286 id=286 data-nosnippet>286</a>                    <span class="kw-2">&amp;</span><span class="self">self</span>.output_event_stream,
+<a href=#287 id=287 data-nosnippet>287</a>                )
+<a href=#288 id=288 data-nosnippet>288</a>                .<span class="kw">await</span>;
+<a href=#289 id=289 data-nosnippet>289</a>            },
+<a href=#290 id=290 data-nosnippet>290</a>            <span class="kw">_ </span>=&gt; {},
+<a href=#291 id=291 data-nosnippet>291</a>        }
+<a href=#292 id=292 data-nosnippet>292</a>
+<a href=#293 id=293 data-nosnippet>293</a>        <span class="prelude-val">Ok</span>(())
+<a href=#294 id=294 data-nosnippet>294</a>    }
+<a href=#295 id=295 data-nosnippet>295</a>}
+<a href=#296 id=296 data-nosnippet>296</a>
+<a href=#297 id=297 data-nosnippet>297</a><span class="attr">#[async_trait]
+<a href=#298 id=298 data-nosnippet>298</a></span><span class="kw">impl</span>&lt;TYPES: NodeType, I: NodeImplementation&lt;TYPES&gt;&gt; TaskState <span class="kw">for </span>ConsensusTaskState&lt;TYPES, I&gt; {
+<a href=#299 id=299 data-nosnippet>299</a>    <span class="kw">type </span>Event = HotShotEvent&lt;TYPES&gt;;
+<a href=#300 id=300 data-nosnippet>300</a>
+<a href=#301 id=301 data-nosnippet>301</a>    <span class="kw">async fn </span>handle_event(
+<a href=#302 id=302 data-nosnippet>302</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#303 id=303 data-nosnippet>303</a>        event: Arc&lt;<span class="self">Self</span>::Event&gt;,
+<a href=#304 id=304 data-nosnippet>304</a>        sender: <span class="kw-2">&amp;</span>Sender&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#305 id=305 data-nosnippet>305</a>        _receiver: <span class="kw-2">&amp;</span>Receiver&lt;Arc&lt;<span class="self">Self</span>::Event&gt;&gt;,
+<a href=#306 id=306 data-nosnippet>306</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">if </span><span class="self">self</span>.upgrade_lock.new_protocol_active(<span class="self">self</span>.cur_view) {
+<a href=#308 id=308 data-nosnippet>308</a>            <span class="comment">// Past cutover: still admit votes/QCs for strictly-pre-cutover views so
+<a href=#309 id=309 data-nosnippet>309</a>            // the cutover leader can finish the last legacy QC; everything else
+<a href=#310 id=310 data-nosnippet>310</a>            // (proposing, voting, view changes) stays shut down.
+<a href=#311 id=311 data-nosnippet>311</a>            </span><span class="kw">let </span>admit = <span class="kw">match </span>event.as_ref() {
+<a href=#312 id=312 data-nosnippet>312</a>                HotShotEvent::QuorumVoteRecv(vote) =&gt; {
+<a href=#313 id=313 data-nosnippet>313</a>                    !<span class="self">self</span>.upgrade_lock.new_protocol_active(vote.view_number())
+<a href=#314 id=314 data-nosnippet>314</a>                },
+<a href=#315 id=315 data-nosnippet>315</a>                HotShotEvent::EpochRootQuorumVoteRecv(vote) =&gt; {
+<a href=#316 id=316 data-nosnippet>316</a>                    !<span class="self">self</span>.upgrade_lock.new_protocol_active(vote.view_number())
+<a href=#317 id=317 data-nosnippet>317</a>                },
+<a href=#318 id=318 data-nosnippet>318</a>                HotShotEvent::Qc2Formed(either::Left(qc)) =&gt; {
+<a href=#319 id=319 data-nosnippet>319</a>                    !<span class="self">self</span>.upgrade_lock.new_protocol_active(qc.view_number())
+<a href=#320 id=320 data-nosnippet>320</a>                },
+<a href=#321 id=321 data-nosnippet>321</a>                <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
+<a href=#322 id=322 data-nosnippet>322</a>            };
+<a href=#323 id=323 data-nosnippet>323</a>            <span class="kw">if </span>!admit {
+<a href=#324 id=324 data-nosnippet>324</a>                <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#325 id=325 data-nosnippet>325</a>            }
+<a href=#326 id=326 data-nosnippet>326</a>        }
+<a href=#327 id=327 data-nosnippet>327</a>        <span class="self">self</span>.handle(event, sender.clone()).<span class="kw">await
+<a href=#328 id=328 data-nosnippet>328</a>    </span>}
+<a href=#329 id=329 data-nosnippet>329</a>
+<a href=#330 id=330 data-nosnippet>330</a>    <span class="doccomment">/// Joins all subtasks.
+<a href=#331 id=331 data-nosnippet>331</a>    </span><span class="kw">fn </span>cancel_subtasks(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#332 id=332 data-nosnippet>332</a>        <span class="comment">// Cancel the old timeout task
+<a href=#333 id=333 data-nosnippet>333</a>        </span>std::mem::replace(<span class="kw-2">&amp;mut </span><span class="self">self</span>.timeout_task, tokio::spawn(<span class="kw">async </span>{})).abort();
+<a href=#334 id=334 data-nosnippet>334</a>    }
+<a href=#335 id=335 data-nosnippet>335</a>}
 </code></pre></div></section></main></body></html>

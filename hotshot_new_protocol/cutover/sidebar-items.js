@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["extract_pre_cutover_seed","forward_legacy_epoch_changes","forward_legacy_timeout_votes"],"struct":["CutoverGate"]};
+window.SIDEBAR_ITEMS = {"fn":["extract_pre_cutover_seed","forward_legacy_epoch_changes","forward_legacy_high_qc","forward_legacy_timeout_votes"],"struct":["CutoverGate"]};
