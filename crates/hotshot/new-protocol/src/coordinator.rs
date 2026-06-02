@@ -3,6 +3,7 @@ mod metrics;
 pub mod timer;
 
 use std::{
+    cmp::{max, min},
     collections::{BTreeMap, HashMap},
     sync::Arc,
     time::Duration,
@@ -99,6 +100,8 @@ pub struct Coordinator<T: NodeType, N, S> {
     cached_validated_proposals: BTreeMap<ViewNumber, ValidatedProposal<T>>,
     #[builder(default)]
     cached_vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
+    #[builder(default = ViewNumber::genesis())]
+    gc_view: ViewNumber,
     metrics: Option<metrics::Metrics>,
 }
 
@@ -431,7 +434,7 @@ where
                         let msg = format!("missing epoch in view {}", cert.view_number());
                         return Err(CoordinatorError::critical(msg).context("gc certificate"))
                     };
-                    self.gc(cert.view_number(), epoch);
+                    self.gc(epoch, GcScope::Checkpoint(cert.view_number()))?;
                 }
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
@@ -604,6 +607,9 @@ where
                 for leaf in leaves {
                     self.epoch_manager.handle_leaf_decided(leaf);
                 }
+                if let Some(e) = cert1.epoch() {
+                    self.gc(e, GcScope::Decided(cert1.view_number()))?
+                }
             },
             ConsensusOutput::LockUpdated(cert) => {
                 debug!(
@@ -770,6 +776,7 @@ where
                 info!(%node, %view, %epoch, "view changed");
                 self.consensus.set_view(view, epoch);
                 self.timer.reset_with_epoch(view, epoch);
+                self.gc(epoch, GcScope::Local(view))?;
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;
@@ -1211,6 +1218,7 @@ where
                 recipient,
                 respond,
             } => {
+                let view = max(view, self.gc_view);
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::External(payload),
@@ -1398,26 +1406,52 @@ where
             ));
     }
 
-    fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
-        info!(node = %self.node_id, %view, "garbage collecting");
-        self.consensus.gc(view, epoch);
-        self.checkpoint_collector.gc(view, epoch);
-        let _ = self.network.gc(view); // TODO
-        self.state_manager.gc(view);
-        self.vid_disperser.gc(view);
-        self.vid_reconstructor.gc(view);
-        self.vote1_collector.gc(view, epoch);
-        self.vote2_collector.gc(view, epoch);
-        self.timeout_collector.gc(view, epoch);
-        self.timeout_one_honest_collector.gc(view, epoch);
-        self.epoch_root_collector.gc(view, epoch);
-        self.epoch_manager.gc(epoch);
-        self.block_builder.gc(view);
-        self.pending_proposal_fetches.gc(view);
-        self.storage.gc(view);
-        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&view);
-        self.cached_vid_shares = self.cached_vid_shares.split_off(&view);
+    fn gc(&mut self, epoch: EpochNumber, scope: GcScope) -> Result<(), CoordinatorError> {
+        self.consensus.gc(scope);
+        match scope {
+            GcScope::Local(view) => {
+                debug!(node = %self.node_id, %view, "local garbage collection");
+                self.cached_validated_proposals = self.cached_validated_proposals.split_off(&view);
+                self.cached_vid_shares = self.cached_vid_shares.split_off(&view);
+                self.timeout_collector.gc(view, epoch);
+                self.timeout_one_honest_collector.gc(view, epoch);
+                self.vote1_collector.gc(view, epoch);
+                self.vote2_collector.gc(view, epoch);
+            },
+            GcScope::Decided(view) => {
+                info!(node = %self.node_id, %view, "decided view garbage collection");
+                self.epoch_manager.gc(epoch);
+                self.epoch_root_collector.gc(view, epoch);
+                self.pending_proposal_fetches.gc(view);
+                self.vid_disperser.gc(view);
+                self.vid_reconstructor.gc(view);
+            },
+            GcScope::Checkpoint(view) => {
+                info!(node = %self.node_id, %view, "checkpoint garbage collection");
+                self.gc_view = max(self.gc_view, view);
+                // We do not want to GC too far ahead in case we get a
+                // checkpoint cert from the future:
+                let view = min(view, self.consensus.last_decided_view());
+                self.block_builder.gc(view);
+                self.checkpoint_collector.gc(view, epoch);
+                self.network.gc(view)?;
+                self.storage.gc(view);
+                self.state_manager.gc(view);
+            },
+        }
+        Ok(())
     }
+}
+
+/// Garbage collection scope.
+#[derive(Debug, Clone, Copy)]
+pub enum GcScope {
+    /// GC is invoked on local view changes.
+    Local(ViewNumber),
+    /// GC is invoked on local decided views.
+    Decided(ViewNumber),
+    /// GC is invoked when reaching a checkpoint.
+    Checkpoint(ViewNumber),
 }
 
 fn check_payload_commitment<T: NodeType>(

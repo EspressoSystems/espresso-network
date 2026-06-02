@@ -1,5 +1,5 @@
 use std::{
-    cmp::max,
+    cmp::{max, min},
     collections::{BTreeMap, BTreeSet},
     marker::PhantomData,
     sync::Arc,
@@ -39,6 +39,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     block::BlockAndHeaderRequest,
+    coordinator::GcScope,
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -369,22 +370,6 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Register `justify_qc` as Cert1 for its parent view (idempotent)
-    /// and bump `locked_cert` if newer.
-    pub(crate) fn register_legacy_qc(&mut self, justify_qc: &Certificate1<T>) {
-        let parent_view = justify_qc.view_number();
-        self.certs
-            .entry(parent_view)
-            .or_insert_with(|| justify_qc.clone());
-        if self
-            .locked_cert
-            .as_ref()
-            .is_none_or(|locked| locked.view_number() < parent_view)
-        {
-            self.locked_cert = Some(justify_qc.clone());
-        }
-    }
-
     /// Return the proposal stored at the given view, if any.
     pub fn proposal_at(&self, view: ViewNumber) -> Option<&Proposal<T>> {
         self.proposals.get(&view)
@@ -410,11 +395,6 @@ impl<T: NodeType> Consensus<T> {
         view: ViewNumber,
     ) -> Result<ProposalFetchRequest<T>, <T::SignatureKey as SignatureKey>::SignError> {
         ProposalFetchRequest::new(view, self.public_key.clone(), &self.private_key)
-    }
-
-    /// Return the Certificate2 stored at the given view, if any.
-    pub fn cert2_at(&self, view: ViewNumber) -> Option<&Certificate2<T>> {
-        self.certs2.get(&view)
     }
 
     /// Return the TimeoutCertificate2 that advanced consensus to `view`, if
@@ -656,36 +636,33 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.get(view)
     }
 
-    pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
-        self.proposed_views = self.proposed_views.split_off(&view);
-        self.states_verified = self.states_verified.split_off(&view);
-        self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
-        self.blocks = self.blocks.split_off(&view);
-        self.certs = self.certs.split_off(&view);
-        self.certs2 = self.certs2.split_off(&view);
-        self.pending_certs1 = self.pending_certs1.split_off(&view);
-        self.pending_certs2 = self.pending_certs2.split_off(&view);
-        self.timeout_certs = self.timeout_certs.split_off(&view);
-        self.headers
-            .retain(|(header_view, _), _| *header_view >= view);
-        self.leaves = self.leaves.split_off(&view);
-        self.proposals = self.proposals.split_off(&view);
-        self.signed_proposals = self.signed_proposals.split_off(&view);
-        self.vid_shares = self.vid_shares.split_off(&view);
-        self.voted_1_views = self.voted_1_views.split_off(&view);
-        self.voted_2_views = self.voted_2_views.split_off(&view);
-    }
-
-    /// Test-only: forcibly replace the proposal stored at `view`.
-    ///
-    /// Used to simulate the scenario where `self.proposals[parent_view]`
-    /// diverges from `self.certs[parent_view].data.leaf_commit` (e.g. a
-    /// byzantine leader sent two safe proposals at the same view, the cert
-    /// formed for the first but a later overwrite landed in the proposals
-    /// map).  No production code should ever do this.
-    #[cfg(test)]
-    pub(crate) fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<T>) {
-        self.proposals.insert(view, proposal);
+    pub fn gc(&mut self, scope: GcScope) {
+        match scope {
+            GcScope::Local(view) => {
+                self.headers
+                    .retain(|(header_view, _), _| *header_view >= view);
+                self.timeout_certs = self.timeout_certs.split_off(&view);
+                self.proposed_views = self.proposed_views.split_off(&view);
+                self.states_verified = self.states_verified.split_off(&view);
+                self.voted_1_views = self.voted_1_views.split_off(&view);
+                self.voted_2_views = self.voted_2_views.split_off(&view);
+            },
+            GcScope::Decided(view) => {
+                self.pending_certs1 = self.pending_certs1.split_off(&view);
+                self.pending_certs2 = self.pending_certs2.split_off(&view);
+                self.vid_shares = self.vid_shares.split_off(&view);
+            },
+            GcScope::Checkpoint(view) => {
+                let view = min(view, self.last_decided_view);
+                self.blocks = self.blocks.split_off(&view);
+                self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
+                self.certs = self.certs.split_off(&view);
+                self.certs2 = self.certs2.split_off(&view);
+                self.leaves = self.leaves.split_off(&view);
+                self.proposals = self.proposals.split_off(&view);
+                self.signed_proposals = self.signed_proposals.split_off(&view);
+            },
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1993,6 +1970,64 @@ impl<T: NodeType> Consensus<T> {
         }
 
         missing
+    }
+
+    /// Register `justify_qc` as Cert1 for its parent view (idempotent)
+    /// and bump `locked_cert` if newer.
+    pub(crate) fn register_legacy_qc(&mut self, justify_qc: &Certificate1<T>) {
+        let parent_view = justify_qc.view_number();
+        self.certs
+            .entry(parent_view)
+            .or_insert_with(|| justify_qc.clone());
+        if self
+            .locked_cert
+            .as_ref()
+            .is_none_or(|locked| locked.view_number() < parent_view)
+        {
+            self.locked_cert = Some(justify_qc.clone());
+        }
+    }
+
+    /// Test-only: Resume consensus from persisted proposals after a restart.
+    #[cfg(test)]
+    pub(crate) fn seed_resume(&mut self, proposals: impl IntoIterator<Item = Proposal<T>>) {
+        let mut proposals: Vec<Proposal<T>> = proposals.into_iter().collect();
+        proposals.sort_by_key(|p| p.view_number);
+        let Some(top) = proposals.last().cloned() else {
+            return;
+        };
+        for proposal in proposals {
+            let view = proposal.view_number;
+            self.register_legacy_qc(&proposal.justify_qc);
+            self.leaves.insert(view, Leaf2::from(proposal.clone()));
+            self.proposals.insert(view, proposal);
+            // Already participated in these views before the restart; don't
+            // re-propose or re-vote on them.
+            self.proposed_views.insert(view);
+            self.voted_1_views.insert(view);
+            self.voted_2_views.insert(view);
+        }
+        self.current_epoch = Some(top.epoch);
+        let top_view = top.view_number;
+        if top_view > self.last_decided_view {
+            self.last_decided_view = top_view;
+            self.last_decided_leaf = Leaf2::from(top);
+        }
+        if top_view > self.current_view {
+            self.current_view = top_view;
+        }
+    }
+
+    /// Test-only: forcibly replace the proposal stored at `view`.
+    ///
+    /// Used to simulate the scenario where `self.proposals[parent_view]`
+    /// diverges from `self.certs[parent_view].data.leaf_commit` (e.g. a
+    /// byzantine leader sent two safe proposals at the same view, the cert
+    /// formed for the first but a later overwrite landed in the proposals
+    /// map).  No production code should ever do this.
+    #[cfg(test)]
+    pub(crate) fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<T>) {
+        self.proposals.insert(view, proposal);
     }
 }
 

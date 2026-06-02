@@ -233,6 +233,11 @@ impl TestRunner {
 
         let mut cancels = HashMap::new();
 
+        // Each node's storage is kept here so a `Restart` can reuse the same
+        // instance and resume from its persisted proposals instead of
+        // rebuilding from genesis.
+        let mut node_storages: Vec<Option<TestStorage<TestTypes>>> = vec![None; self.num_nodes];
+
         // Generate keys and addresses for all nodes.
         let parties = (0..self.num_nodes)
             .map(|i| {
@@ -253,6 +258,7 @@ impl TestRunner {
 
             let (membership, storage, client, external_events_tx) =
                 mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key);
+            node_storages[i] = Some(storage.clone());
 
             let coord = build_test_coordinator(
                 i as u64,
@@ -370,7 +376,7 @@ impl TestRunner {
                                 // Create a fresh coordinator from genesis.
                                 let net =
                                     create_network(change.idx, &parties, &self.upgrade_lock).await;
-                                let (membership, storage, client, external_events_tx) = {
+                                let (membership, fresh_storage, client, external_events_tx) = {
                                     let k = parties[change.idx].1;
                                     mock_membership_with_client(
                                         self.num_nodes,
@@ -378,6 +384,9 @@ impl TestRunner {
                                         k,
                                     )
                                 };
+                                let storage =
+                                    node_storages[change.idx].clone().unwrap_or(fresh_storage);
+                                node_storages[change.idx] = Some(storage.clone());
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
                                     net,

@@ -327,6 +327,7 @@ impl Peer {
                     let s = *self.next_slot.borrow_and_update();
                     debug_assert!(s > self.lower_bound);
                     self.lower_bound = s;
+                    self.msgs.gc(s);
                     self.retry.gc(s);
                 }
 

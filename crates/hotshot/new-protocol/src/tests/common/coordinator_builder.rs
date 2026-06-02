@@ -1,7 +1,7 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use committable::Committable;
-use hotshot::types::BLSPubKey;
+use hotshot::{traits::ValidatedState, types::BLSPubKey};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
@@ -124,6 +124,24 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
 
     if let Some(seed) = pre_cutover_seed {
         consensus.apply_pre_cutover_seed(seed);
+    }
+
+    // Resume from persisted proposals (restart). Reconstruct native
+    // new-protocol proposals from the stored quorum-proposal wrappers and
+    // seed both consensus and the state manager so the node rejoins near the
+    // frontier. `TestValidatedState` is recoverable from the header.
+    let mut resume = Vec::new();
+    for proposal in storage.proposals_cloned().await.into_values() {
+        let p = Proposal::from(proposal.data);
+        if p.view_number == ViewNumber::genesis() {
+            continue;
+        }
+        let state = <TestValidatedState as ValidatedState<TestTypes>>::from_header(&p.block_header);
+        state_manager.seed_state(p.view_number, Arc::new(state), Leaf2::from(p.clone()));
+        resume.push(p);
+    }
+    if !resume.is_empty() {
+        consensus.seed_resume(resume);
     }
 
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
