@@ -92,6 +92,20 @@ pub const ESTABLISHED_LIMIT_UNWR: u32 = 10;
 /// Matches libp2p-autonat's default `confidence_max`.
 const AUTONAT_CONFIDENCE_MAX: usize = 3;
 
+/// Mainnet libp2p protocol identifiers. The snapshot test below locks these down so a
+/// change that would partition mainnet (e.g. a stray `protocol_id_prefix` call) is caught.
+/// `None` for gossipsub means "do not call `protocol_id_prefix`" — libp2p's defaults
+/// (`/meshsub/1.1.0` and `/meshsub/1.0.0`) are then used.
+pub(crate) fn mainnet_gossipsub_prefix() -> Option<&'static str> {
+    None
+}
+pub(crate) fn mainnet_kad_protocol() -> StreamProtocol {
+    StreamProtocol::new("/ipfs/kad/1.0.0")
+}
+pub(crate) fn mainnet_direct_message_protocol() -> StreamProtocol {
+    StreamProtocol::new("/HotShot/direct_message/1.0")
+}
+
 /// Network definition
 #[derive(derive_more::Debug)]
 pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
@@ -223,7 +237,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             };
 
             // Derive a `Gossipsub` config from our gossip config
-            let gossipsub_config = GossipsubConfigBuilder::default()
+            let mut gossipsub_builder = GossipsubConfigBuilder::default();
+            if let Some(prefix) = mainnet_gossipsub_prefix() {
+                gossipsub_builder.protocol_id_prefix(prefix);
+            }
+            let gossipsub_config = gossipsub_builder
                 .message_id_fn(message_id_fn) // Use the (blake3) hash of a message as its ID
                 .validation_mode(ValidationMode::Strict) // Force all messages to have valid signatures
                 .heartbeat_interval(config.gossip_config.heartbeat_interval) // Time between gossip heartbeats
@@ -271,7 +289,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             let identify = IdentifyBehaviour::new(identify_cfg);
 
             // - Build DHT needed for peer discovery
-            let mut kconfig = Config::new(StreamProtocol::new("/ipfs/kad/1.0.0"));
+            let mut kconfig = Config::new(mainnet_kad_protocol());
             kconfig
                 .set_parallelism(NonZeroUsize::new(5).unwrap())
                 .set_provider_publication_interval(Some(kademlia_record_republication_interval))
@@ -310,10 +328,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             let direct_message: super::cbor::Behaviour<Vec<u8>, Vec<u8>> =
                 RequestResponse::with_codec(
                     cbor,
-                    [(
-                        StreamProtocol::new("/HotShot/direct_message/1.0"),
-                        ProtocolSupport::Full,
-                    )],
+                    [(mainnet_direct_message_protocol(), ProtocolSupport::Full)],
                     rrconfig.clone(),
                 );
 
@@ -854,5 +869,21 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     /// Get a reference to the network node's peer id.
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mainnet_direct_message_protocol, mainnet_gossipsub_prefix, mainnet_kad_protocol};
+
+    #[test]
+    fn mainnet_libp2p_protocol_identifiers() {
+        let snapshot = format!(
+            "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}",
+            mainnet_gossipsub_prefix(),
+            mainnet_kad_protocol(),
+            mainnet_direct_message_protocol(),
+        );
+        insta::assert_snapshot!("mainnet_libp2p_protocol_identifiers", snapshot);
     }
 }
