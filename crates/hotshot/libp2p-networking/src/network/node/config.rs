@@ -71,8 +71,7 @@ pub struct NetworkNodeConfig {
     /// The timeout for DHT lookups.
     pub dht_timeout: Option<Duration>,
 
-    /// Optional discriminator appended to libp2p protocol identifiers; `None` keeps mainnet
-    /// protocol strings byte-identical to today.
+    /// `None` is the legacy value, used for mainnet.
     #[builder(default)]
     pub network_discriminator: Option<String>,
 }
