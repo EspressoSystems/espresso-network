@@ -18,7 +18,7 @@ use tokio::{
     sync::mpsc::{self},
     task::{AbortHandle, JoinSet},
 };
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::message::Vote1;
 
@@ -210,6 +210,11 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
             }
 
             if let (Some(q), Some(s)) = (&quorum_cert, &state_cert) {
+                info!(
+                    view = %q.view_number(),
+                    epoch = %s.epoch,
+                    "epoch-root certificates formed"
+                );
                 return (q.clone(), s.clone());
             }
         }
