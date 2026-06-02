@@ -304,8 +304,10 @@ impl<T: NodeType> Consensus<T> {
         let view = seed.decided_anchor.view_number();
         if view > self.last_decided_view {
             self.last_decided_view = view;
-            self.last_decided_leaf = seed.decided_anchor;
+            self.last_decided_leaf = seed.decided_anchor.clone();
         }
+
+        let mut highest_seeded_block: u64 = seed.decided_anchor.block_header().block_number();
 
         for leaf in seed.undecided {
             let view = leaf.view_number();
@@ -314,6 +316,9 @@ impl<T: NodeType> Consensus<T> {
 
             let block_number = leaf.block_header().block_number();
             let epoch = EpochNumber::new(epoch_from_block_number(block_number, *self.epoch_height));
+            if block_number > highest_seeded_block {
+                highest_seeded_block = block_number;
+            }
 
             let view_change_evidence = leaf.view_change_evidence.clone().and_then(|e| match e {
                 ViewChangeEvidence2::Timeout(tc) => Some(tc),
@@ -354,6 +359,13 @@ impl<T: NodeType> Consensus<T> {
         }
         if last_pre_cutover > self.current_view {
             self.current_view = last_pre_cutover;
+        }
+        let seeded_epoch = EpochNumber::new(epoch_from_block_number(
+            highest_seeded_block,
+            *self.epoch_height,
+        ));
+        if self.current_epoch.is_none_or(|cur| cur < seeded_epoch) {
+            self.current_epoch = Some(seeded_epoch);
         }
     }
 

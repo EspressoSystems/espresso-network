@@ -206,15 +206,7 @@ where
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer_for_coordinator)
-            .upgrade_lock({
-                // TODO: The Coordinator and HotShot each create their own UpgradeLock
-                // from the same inputs. They need to share a single lock so that upgrade
-                // certificate updates are visible to both.
-                UpgradeLock::from_certificate(
-                    upgrade,
-                    &initializer_for_coordinator.decided_upgrade_certificate,
-                )
-            })
+            .upgrade_lock(handle.hotshot.upgrade_lock.clone())
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .state_private_key(validator_config.state_private_key.clone())
