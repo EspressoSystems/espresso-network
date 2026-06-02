@@ -1489,8 +1489,18 @@ mod test {
         used_bls.insert(incomplete_bls);
 
         let mut used_schnorr = HashSet::default();
-        used_schnorr.insert(complete.state_ver_key.clone());
-        used_schnorr.insert(incomplete.state_ver_key.clone());
+        used_schnorr.insert(
+            complete
+                .state_ver_key
+                .clone()
+                .expect("random_validator has valid schnorr key"),
+        );
+        used_schnorr.insert(
+            incomplete
+                .state_ver_key
+                .clone()
+                .expect("random_validator has valid schnorr key"),
+        );
 
         let mut used_x25519 = HashSet::default();
         used_x25519.insert(complete.x25519_key.unwrap());

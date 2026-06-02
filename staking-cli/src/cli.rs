@@ -118,6 +118,12 @@ fn display_bls_vk(vk: G2PointSol) -> String {
         .unwrap_or_else(|_| "<invalid>".to_string())
 }
 
+fn display_schnorr_vk(vk: hotshot_contract_adapter::sol_types::EdOnBN254PointSol) -> String {
+    StateVerKey::try_from(vk)
+        .map(|k| k.to_string())
+        .unwrap_or_else(|_| "<invalid>".to_string())
+}
+
 // Events containing custom structs do not get the Debug derive, due to a bug in
 // foundry. We instead format those types nicely with tagged base64.
 fn decode_and_display_logs(logs: &[Log]) {
@@ -129,7 +135,7 @@ fn decode_and_display_logs(logs: &[Log]) {
                      commission: {} }}",
                     e.account,
                     display_bls_vk(e.blsVk),
-                    StateVerKey::from(e.schnorrVk),
+                    display_schnorr_vk(e.schnorrVk),
                     e.commission
                 )),
                 StakeTableV3Events::ValidatorRegisteredV2(e) => output_success(format!(
@@ -137,7 +143,7 @@ fn decode_and_display_logs(logs: &[Log]) {
                      commission: {}, metadataUri: {} }}",
                     e.account,
                     display_bls_vk(e.blsVK),
-                    StateVerKey::from(e.schnorrVK),
+                    display_schnorr_vk(e.schnorrVK),
                     e.commission,
                     e.metadataUri
                 )),
@@ -155,13 +161,13 @@ fn decode_and_display_logs(logs: &[Log]) {
                     "event: ConsensusKeysUpdated {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,
                     display_bls_vk(e.blsVK),
-                    StateVerKey::from(e.schnorrVK)
+                    display_schnorr_vk(e.schnorrVK)
                 )),
                 StakeTableV3Events::ConsensusKeysUpdatedV2(e) => output_success(format!(
                     "event: ConsensusKeysUpdatedV2 {{ account: {}, blsVK: {}, schnorrVK: {} }}",
                     e.account,
                     display_bls_vk(e.blsVK),
-                    StateVerKey::from(e.schnorrVK)
+                    display_schnorr_vk(e.schnorrVK)
                 )),
                 StakeTableV3Events::CommissionUpdated(e) => output_success(format!("event: {e:?}")),
                 StakeTableV3Events::MetadataUriUpdated(e) => output_success(format!(

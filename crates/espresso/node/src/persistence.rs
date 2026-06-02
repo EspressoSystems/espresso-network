@@ -41,7 +41,7 @@ impl RegisteredValidatorNoX25519 {
         RegisteredValidator {
             account: self.account,
             stake_table_key: Some(self.stake_table_key),
-            state_ver_key: self.state_ver_key,
+            state_ver_key: Some(self.state_ver_key),
             stake: self.stake,
             commission: self.commission,
             delegators: self.delegators,
@@ -72,7 +72,40 @@ impl RegisteredValidatorPreOption {
         RegisteredValidator {
             account: self.account,
             stake_table_key: Some(self.stake_table_key),
-            state_ver_key: self.state_ver_key,
+            state_ver_key: Some(self.state_ver_key),
+            stake: self.stake,
+            commission: self.commission,
+            delegators: self.delegators,
+            authenticated: self.authenticated,
+            x25519_key: self.x25519_key,
+            p2p_addr: self.p2p_addr,
+        }
+    }
+}
+
+// TODO: replace with a proper data migration if it is ever deemed worthwhile.
+// Layout written after BLS fix (381b0f9207) but before Schnorr Option fix.
+// stake_table_key is Option<KEY>, state_ver_key is raw StateVerKey.
+// Field order must match exactly (bincode is order-sensitive).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegisteredValidatorPreSchnorrOption {
+    pub account: Address,
+    pub stake_table_key: Option<PubKey>,
+    pub state_ver_key: hotshot_types::light_client::StateVerKey,
+    pub stake: U256,
+    pub commission: u16,
+    pub delegators: HashMap<Address, U256>,
+    pub authenticated: bool,
+    pub x25519_key: Option<hotshot_types::x25519::PublicKey>,
+    pub p2p_addr: Option<hotshot_types::addr::NetAddr>,
+}
+
+impl RegisteredValidatorPreSchnorrOption {
+    pub fn migrate(self) -> RegisteredValidator<PubKey> {
+        RegisteredValidator {
+            account: self.account,
+            stake_table_key: self.stake_table_key,
+            state_ver_key: Some(self.state_ver_key),
             stake: self.stake,
             commission: self.commission,
             delegators: self.delegators,

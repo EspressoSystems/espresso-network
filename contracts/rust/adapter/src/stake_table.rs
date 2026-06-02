@@ -73,10 +73,15 @@ impl From<BLSPubKey> for G2PointSol {
     }
 }
 
-impl From<EdOnBN254PointSol> for StateVerKey {
-    fn from(value: EdOnBN254PointSol) -> Self {
+impl TryFrom<EdOnBN254PointSol> for StateVerKey {
+    type Error = StakeTableSolError;
+
+    fn try_from(value: EdOnBN254PointSol) -> Result<Self, Self::Error> {
         let point: ark_ed_on_bn254::EdwardsAffine = value.into();
-        Self::from(point)
+        if !point.is_on_curve() || !point.is_in_correct_subgroup_assuming_on_curve() {
+            return Err(StakeTableSolError::InvalidSchnorrKey);
+        }
+        Ok(Self::from(point))
     }
 }
 
@@ -155,7 +160,7 @@ fn authenticate_stake_table_validator_event(
     };
     authenticate_bls_sig(&bls_vk, account, &bls_sig_jellyfish)?;
 
-    let schnorr_vk: StateVerKey = schnorr_vk.into();
+    let schnorr_vk = StateVerKey::try_from(schnorr_vk)?;
     let schnorr_sig_jellyfish =
         schnorr::Signature::<EdwardsConfig>::deserialize_compressed(schnorr_sig)?;
     authenticate_schnorr_sig(&schnorr_vk, account, &schnorr_sig_jellyfish)?;
@@ -173,6 +178,8 @@ pub enum StakeTableSolError {
     InvalidSchnorrSignature(#[from] jf_signature::SignatureError),
     #[error("Invalid BLS key")]
     InvalidBlsKey,
+    #[error("Invalid Schnorr key")]
+    InvalidSchnorrKey,
 }
 
 impl StakeTableV3::ValidatorRegisteredV3 {
@@ -218,13 +225,13 @@ impl StakeTableV3::ConsensusKeysUpdatedV2 {
 mod test {
     use alloy::primitives::{Address, U256};
     use hotshot_types::{
-        light_client::StateKeyPair,
+        light_client::{StateKeyPair, StateVerKey},
         signature_key::{BLSKeyPair, BLSPrivKey, BLSPubKey},
     };
 
     use super::{StateSignatureSol, sign_address_bls, sign_address_schnorr};
     use crate::sol_types::{
-        G1PointSol, G2PointSol,
+        EdOnBN254PointSol, G1PointSol, G2PointSol,
         StakeTableV3::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
     };
 
@@ -350,6 +357,36 @@ mod test {
             bad_schnorr_event.schnorrSig = StateSignatureSol::from(wrong_schnorr_sig).into();
             assert!(bad_schnorr_event.authenticate().is_err());
         }
+    }
+
+    #[test]
+    fn test_zero_schnorr_verkey_conversion_is_err() {
+        let zero_ed = EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        };
+        assert!(StateVerKey::try_from(zero_ed).is_err());
+    }
+
+    #[test]
+    fn test_zero_schnorr_authenticate_returns_err_not_panic() {
+        use alloy::primitives::Bytes;
+        let bls_key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
+        let address = Address::random();
+        let bls_sig = sign_address_bls(&bls_key_pair, address);
+        let event = ValidatorRegisteredV2 {
+            account: address,
+            blsVK: bls_key_pair.ver_key().into(),
+            schnorrVK: EdOnBN254PointSol {
+                x: U256::ZERO,
+                y: U256::ZERO,
+            },
+            commission: 0,
+            blsSig: G1PointSol::from(bls_sig).into(),
+            schnorrSig: Bytes::from(vec![0u8; 64]),
+            metadataUri: String::new(),
+        };
+        assert!(event.authenticate().is_err());
     }
 }
 

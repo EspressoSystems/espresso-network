@@ -3033,6 +3033,21 @@ fn deserialize_authenticated_validator_map(
         return Ok(map);
     }
 
+    // Pre-Schnorr-Option: stake_table_key as Option<KEY>, state_ver_key as raw KEY.
+    if let Ok(pre_schnorr) =
+        bincode::deserialize::<IndexMap<Address, super::RegisteredValidatorPreSchnorrOption>>(bytes)
+    {
+        return pre_schnorr
+            .into_iter()
+            .map(|(addr, v)| {
+                let registered = v.migrate();
+                let authenticated = AuthenticatedValidator::try_from(registered)?;
+                Ok((addr, authenticated))
+            })
+            .collect();
+    }
+
+    // Pre-Option: both keys raw, with x25519/p2p fields.
     let legacy: IndexMap<Address, super::RegisteredValidatorPreOption> =
         bincode::deserialize(bytes).context("deserializing stake table")?;
     legacy
@@ -3741,11 +3756,16 @@ mod test {
         let address = validator.account;
         let legacy_bls_key = validator.stake_table_key.expect("mock has BLS key");
 
+        let state_ver_key_raw = validator
+            .state_ver_key
+            .clone()
+            .expect("mock has valid Schnorr key");
+
         // Create legacy data without x25519 fields
         let legacy = RegisteredValidatorNoX25519 {
             account: validator.account,
             stake_table_key: legacy_bls_key,
-            state_ver_key: validator.state_ver_key.clone(),
+            state_ver_key: state_ver_key_raw.clone(),
             stake: validator.stake,
             commission: validator.commission,
             delegators: HashMap::new(),
@@ -3761,7 +3781,7 @@ mod test {
         let json_legacy = RegisteredValidatorNoX25519 {
             account: validator.account,
             stake_table_key: legacy_bls_key,
-            state_ver_key: validator.state_ver_key.clone(),
+            state_ver_key: state_ver_key_raw,
             stake: validator.stake,
             commission: validator.commission,
             delegators: HashMap::new(),
@@ -3990,7 +4010,7 @@ mod test {
         let authenticated_validator = RegisteredValidator {
             account: Address::random(),
             stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0),
-            state_ver_key: StateVerKey::default(),
+            state_ver_key: Some(StateVerKey::default()),
             stake: U256::from(1000),
             commission: 100,
             delegators: HashMap::new(),
@@ -4003,7 +4023,7 @@ mod test {
         let unauthenticated_validator = RegisteredValidator {
             account: Address::random(),
             stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0),
-            state_ver_key: StateVerKey::default(),
+            state_ver_key: Some(StateVerKey::default()),
             stake: U256::from(2000),
             commission: 200,
             delegators: HashMap::new(),

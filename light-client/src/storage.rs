@@ -1138,7 +1138,11 @@ mod test {
                 .collect(),
             [Address::random()].into_iter().collect(),
             [candidate_bls].into_iter().collect(),
-            [candidate.state_ver_key].into_iter().collect(),
+            [candidate
+                .state_ver_key
+                .expect("random_validator has valid schnorr key")]
+            .into_iter()
+            .collect(),
             [x25519_key].into_iter().collect(),
         )
     }
@@ -1175,7 +1179,10 @@ mod test {
             state
                 .used_schnorr_keys()
                 .iter()
-                .chain([&new_candidate.state_ver_key])
+                .chain([new_candidate
+                    .state_ver_key
+                    .as_ref()
+                    .expect("random_validator has valid schnorr key")])
                 .cloned()
                 .collect(),
             state

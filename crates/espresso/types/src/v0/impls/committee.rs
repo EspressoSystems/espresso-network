@@ -137,7 +137,7 @@ impl EpochCommittee {
                     key,
                     PeerConfig {
                         stake_table_entry: BLSPubKey::stake_table_entry(&key, v.stake),
-                        state_ver_key: v.state_ver_key.clone(),
+                        state_ver_key: v.state_ver_key().clone(),
                         connect_info: v.x25519_key.and_then(|p| {
                             let a = v.p2p_addr.clone()?;
                             Some(PeerConnectInfo {

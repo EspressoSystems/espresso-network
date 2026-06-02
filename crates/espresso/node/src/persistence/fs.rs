@@ -50,7 +50,9 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 
-use super::{RegisteredValidatorNoX25519, RegisteredValidatorPreOption};
+use super::{
+    RegisteredValidatorNoX25519, RegisteredValidatorPreOption, RegisteredValidatorPreSchnorrOption,
+};
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
@@ -59,12 +61,28 @@ use crate::{
 /// Deserialize a stake table from bytes, trying current and legacy formats.
 /// Returns (stake_tuple, needs_rewrite) where needs_rewrite=true means legacy format was used.
 fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
-    // Try current format (stake_table_key as Option<KEY>).
+    // Try current format (both keys as Option<KEY>).
     if let Ok(stake) = bincode::deserialize::<StakeTuple>(bytes) {
         return Ok((stake, false));
     }
 
-    // Pre-Option: stake_table_key as raw KEY, x25519/p2p fields present.
+    // Pre-Schnorr-Option: stake_table_key as Option<KEY>, state_ver_key as raw KEY.
+    type PreSchnorrMap = indexmap::IndexMap<Address, RegisteredValidatorPreSchnorrOption>;
+    type PreSchnorrTuple = (PreSchnorrMap, Option<RewardAmount>, Option<StakeTableHash>);
+    if let Ok(pre_schnorr) = bincode::deserialize::<PreSchnorrTuple>(bytes) {
+        let migrated: AuthenticatedValidatorMap = pre_schnorr
+            .0
+            .into_iter()
+            .map(|(addr, v)| {
+                let registered = v.migrate();
+                let authenticated = AuthenticatedValidator::try_from(registered)?;
+                Ok((addr, authenticated))
+            })
+            .collect::<anyhow::Result<_>>()?;
+        return Ok(((migrated, pre_schnorr.1, pre_schnorr.2), true));
+    }
+
+    // Pre-Option: both keys raw, x25519/p2p fields present.
     type PreOptionMap = indexmap::IndexMap<Address, RegisteredValidatorPreOption>;
     type PreOptionTuple = (PreOptionMap, Option<RewardAmount>, Option<StakeTableHash>);
     if let Ok(pre_option) = bincode::deserialize::<PreOptionTuple>(bytes) {
@@ -3204,7 +3222,7 @@ mod test {
         let authenticated_validator = RegisteredValidator {
             account: Address::random(),
             stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0),
-            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            state_ver_key: Some(hotshot_types::light_client::StateVerKey::default()),
             stake: U256::from(1000),
             commission: 100,
             delegators: HashMap::new(),
@@ -3217,7 +3235,7 @@ mod test {
         let unauthenticated_validator = RegisteredValidator {
             account: Address::random(),
             stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0),
-            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            state_ver_key: Some(hotshot_types::light_client::StateVerKey::default()),
             stake: U256::from(2000),
             commission: 200,
             delegators: HashMap::new(),
