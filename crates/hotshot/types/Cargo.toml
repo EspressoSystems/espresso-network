@@ -12,10 +12,12 @@ path = "bin/mnemonic.rs"
 
 [features]
 gpu-vid = ["jf-advz/gpu-vid"]
+rlp = ["alloy-rlp"]
 test-srs = ["jf-advz/test-srs"]
 
 [dependencies]
 alloy = { workspace = true }
+alloy-rlp = { workspace = true, optional = true }
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ed-on-bn254 = { workspace = true }
@@ -77,6 +79,8 @@ vid = { workspace = true }
 
 [dev-dependencies]
 quickcheck.workspace = true
+test-log.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

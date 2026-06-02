@@ -35,7 +35,11 @@ use crate::{
 /// transitions to subsequent stake tables. Thus, this genesis must be configured correctly (i.e.
 /// matching the genesis state of honest HotShot nodes) or else the light client may not operate
 /// correctly.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(
+    feature = "rlp",
+    derive(alloy_rlp::RlpEncodable, alloy_rlp::RlpDecodable)
+)]
 pub struct Genesis {
     /// The number of blocks in an epoch.
     pub epoch_height: u64,
@@ -1672,5 +1676,37 @@ mod test {
             err.to_string().contains("invalid namespace proof"),
             "{err:#}"
         );
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_test {
+    use alloy::primitives::U256;
+    use alloy_rlp::{Decodable, Encodable};
+    use hotshot_types::traits::signature_key::SignatureKey;
+
+    use super::*;
+
+    #[test_log::test]
+    fn rlp_genesis_round_trip() {
+        let genesis = Genesis {
+            epoch_height: 1000,
+            first_epoch_with_dynamic_stake_table: EpochNumber::new(3),
+            stake_table: vec![StakeTableEntry {
+                stake_key: PubKey::generated_from_seed_indexed(
+                    Default::default(),
+                    Default::default(),
+                )
+                .0,
+                stake_amount: U256::MAX,
+            }],
+        };
+
+        let mut buf = vec![];
+        genesis.encode(&mut buf);
+
+        let mut buf = buf.as_slice();
+        assert_eq!(genesis, Genesis::decode(&mut buf).unwrap());
+        assert!(buf.is_empty());
     }
 }
