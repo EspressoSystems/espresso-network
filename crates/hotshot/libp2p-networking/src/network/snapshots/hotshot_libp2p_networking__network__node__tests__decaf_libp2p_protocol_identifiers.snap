@@ -1,7 +1,7 @@
 ---
 source: crates/hotshot/libp2p-networking/src/network/node.rs
-expression: "snapshot_for(Some(\"912559\"))"
+expression: "snapshot_for(Some(U256::from(0xdecafu64)))"
 ---
-gossipsub_prefix: Some("/HotShot/gossipsub/1.0/912559")
-kad: /ipfs/kad/1.0.0/912559
-direct_message: /HotShot/direct_message/1.0/912559
+gossipsub_prefix: Some("/HotShot/gossipsub/1.0/0xdecaf")
+kad: /ipfs/kad/1.0.0/0xdecaf
+direct_message: /HotShot/direct_message/1.0/0xdecaf

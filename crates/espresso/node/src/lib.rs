@@ -762,7 +762,7 @@ where
         info!("Initializing Libp2p network");
         // Mainnet keeps today's libp2p protocol strings byte-identical.
         let chain_id = genesis.chain_config.chain_id;
-        let network_discriminator = (chain_id.0 != U256::ONE).then(|| chain_id.to_string());
+        let network_discriminator = (chain_id.0 != U256::ONE).then_some(chain_id.0);
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),

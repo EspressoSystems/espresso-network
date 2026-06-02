@@ -19,6 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy::primitives::U256;
 use bimap::BiMap;
 use futures::{SinkExt, StreamExt, channel::mpsc};
 use hotshot_types::{
@@ -108,29 +109,29 @@ pub(crate) fn mainnet_direct_message_protocol() -> StreamProtocol {
 
 /// Resolve the gossipsub `protocol_id_prefix` for the given network discriminator.
 /// `None` returns the mainnet value (the libp2p default).
-pub(crate) fn gossipsub_prefix(discriminator: Option<&str>) -> Option<String> {
+pub(crate) fn gossipsub_prefix(discriminator: Option<U256>) -> Option<String> {
     match discriminator {
         None => mainnet_gossipsub_prefix().map(String::from),
-        Some(d) => Some(format!("/HotShot/gossipsub/1.0/{d}")),
+        Some(d) => Some(format!("/HotShot/gossipsub/1.0/{d:#x}")),
     }
 }
 
 /// Resolve the kademlia stream protocol for the given network discriminator.
-pub(crate) fn kad_protocol(discriminator: Option<&str>) -> Result<StreamProtocol, NetworkError> {
+pub(crate) fn kad_protocol(discriminator: Option<U256>) -> Result<StreamProtocol, NetworkError> {
     match discriminator {
         None => Ok(mainnet_kad_protocol()),
-        Some(d) => StreamProtocol::try_from_owned(format!("/ipfs/kad/1.0.0/{d}"))
+        Some(d) => StreamProtocol::try_from_owned(format!("/ipfs/kad/1.0.0/{d:#x}"))
             .map_err(|err| NetworkError::ConfigError(format!("invalid kademlia protocol: {err}"))),
     }
 }
 
 /// Resolve the direct-message stream protocol for the given network discriminator.
 pub(crate) fn direct_message_protocol(
-    discriminator: Option<&str>,
+    discriminator: Option<U256>,
 ) -> Result<StreamProtocol, NetworkError> {
     match discriminator {
         None => Ok(mainnet_direct_message_protocol()),
-        Some(d) => StreamProtocol::try_from_owned(format!("/HotShot/direct_message/1.0/{d}"))
+        Some(d) => StreamProtocol::try_from_owned(format!("/HotShot/direct_message/1.0/{d:#x}"))
             .map_err(|err| {
                 NetworkError::ConfigError(format!("invalid direct_message protocol: {err}"))
             }),
@@ -269,7 +270,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
             // Derive a `Gossipsub` config from our gossip config
             let mut gossipsub_builder = GossipsubConfigBuilder::default();
-            if let Some(prefix) = gossipsub_prefix(config.network_discriminator.as_deref()) {
+            if let Some(prefix) = gossipsub_prefix(config.network_discriminator) {
                 gossipsub_builder.protocol_id_prefix(prefix);
             }
             let gossipsub_config = gossipsub_builder
@@ -320,7 +321,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             let identify = IdentifyBehaviour::new(identify_cfg);
 
             // - Build DHT needed for peer discovery
-            let mut kconfig = Config::new(kad_protocol(config.network_discriminator.as_deref())?);
+            let mut kconfig = Config::new(kad_protocol(config.network_discriminator)?);
             kconfig
                 .set_parallelism(NonZeroUsize::new(5).unwrap())
                 .set_provider_publication_interval(Some(kademlia_record_republication_interval))
@@ -360,7 +361,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 RequestResponse::with_codec(
                     cbor,
                     [(
-                        direct_message_protocol(config.network_discriminator.as_deref())?,
+                        direct_message_protocol(config.network_discriminator)?,
                         ProtocolSupport::Full,
                     )],
                     rrconfig.clone(),
@@ -908,9 +909,9 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
 #[cfg(test)]
 mod tests {
-    use super::{direct_message_protocol, gossipsub_prefix, kad_protocol};
+    use super::{U256, direct_message_protocol, gossipsub_prefix, kad_protocol};
 
-    fn snapshot_for(discriminator: Option<&str>) -> String {
+    fn snapshot_for(discriminator: Option<U256>) -> String {
         format!(
             "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}",
             gossipsub_prefix(discriminator),
@@ -926,10 +927,9 @@ mod tests {
 
     #[test]
     fn decaf_libp2p_protocol_identifiers() {
-        // Decaf's chain_id is 0xdecaf (912559 decimal); see data/genesis/decaf.toml.
         insta::assert_snapshot!(
             "decaf_libp2p_protocol_identifiers",
-            snapshot_for(Some("912559"))
+            snapshot_for(Some(U256::from(0xdecafu64)))
         );
     }
 }

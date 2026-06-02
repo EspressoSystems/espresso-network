@@ -22,6 +22,7 @@ use std::{
 #[cfg(feature = "hotshot-testing")]
 use std::{collections::HashMap, str::FromStr};
 
+use alloy::primitives::U256;
 use anyhow::{Context, anyhow};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -407,7 +408,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
         pub_key: &T::SignatureKey,
         priv_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
         metrics: Libp2pMetricsValue,
-        network_discriminator: Option<String>,
+        network_discriminator: Option<U256>,
     ) -> anyhow::Result<Self> {
         // Try to take our Libp2p config from our broader network config
         let libp2p_config = config
