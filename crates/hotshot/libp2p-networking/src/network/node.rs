@@ -19,6 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use alloy::primitives::U256;
 use bimap::BiMap;
 use futures::{SinkExt, StreamExt, channel::mpsc};
 use hotshot_types::{
@@ -86,6 +87,53 @@ pub const MAX_GOSSIP_MSG_SIZE: usize = 2_000_000_000;
 pub const ESTABLISHED_LIMIT: NonZeroU32 = NonZeroU32::new(ESTABLISHED_LIMIT_UNWR).unwrap();
 /// Number of connections to a single peer before logging an error
 pub const ESTABLISHED_LIMIT_UNWR: u32 = 10;
+
+/// Mainnet libp2p protocol identifiers. The snapshot tests below lock these down so a
+/// change that would partition mainnet (e.g. a stray `protocol_id_prefix` call) is caught.
+/// `None` for gossipsub means "do not call `protocol_id_prefix`" — libp2p's defaults
+/// (`/meshsub/1.1.0` and `/meshsub/1.0.0`) are then used.
+pub(crate) fn mainnet_gossipsub_prefix() -> Option<&'static str> {
+    None
+}
+
+pub(crate) fn mainnet_kad_protocol() -> StreamProtocol {
+    StreamProtocol::new("/ipfs/kad/1.0.0")
+}
+
+pub(crate) fn mainnet_direct_message_protocol() -> StreamProtocol {
+    StreamProtocol::new("/HotShot/direct_message/1.0")
+}
+
+/// Resolve the gossipsub `protocol_id_prefix` for the given network discriminator.
+/// `None` returns the mainnet value (the libp2p default).
+pub(crate) fn gossipsub_prefix(discriminator: Option<U256>) -> Option<String> {
+    match discriminator {
+        None => mainnet_gossipsub_prefix().map(String::from),
+        Some(d) => Some(format!("/HotShot/gossipsub/1.0/{d:#x}")),
+    }
+}
+
+/// Resolve the kademlia stream protocol for the given network discriminator.
+pub(crate) fn kad_protocol(discriminator: Option<U256>) -> Result<StreamProtocol, NetworkError> {
+    match discriminator {
+        None => Ok(mainnet_kad_protocol()),
+        Some(d) => StreamProtocol::try_from_owned(format!("/ipfs/kad/1.0.0/{d:#x}"))
+            .map_err(|err| NetworkError::ConfigError(format!("invalid kademlia protocol: {err}"))),
+    }
+}
+
+/// Resolve the direct-message stream protocol for the given network discriminator.
+pub(crate) fn direct_message_protocol(
+    discriminator: Option<U256>,
+) -> Result<StreamProtocol, NetworkError> {
+    match discriminator {
+        None => Ok(mainnet_direct_message_protocol()),
+        Some(d) => StreamProtocol::try_from_owned(format!("/HotShot/direct_message/1.0/{d:#x}"))
+            .map_err(|err| {
+                NetworkError::ConfigError(format!("invalid direct_message protocol: {err}"))
+            }),
+    }
+}
 
 /// Network definition
 #[derive(derive_more::Debug)]
@@ -215,7 +263,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             };
 
             // Derive a `Gossipsub` config from our gossip config
-            let gossipsub_config = GossipsubConfigBuilder::default()
+            let mut gossipsub_builder = GossipsubConfigBuilder::default();
+            if let Some(prefix) = gossipsub_prefix(config.network_discriminator) {
+                gossipsub_builder.protocol_id_prefix(prefix);
+            }
+            let gossipsub_config = gossipsub_builder
                 .message_id_fn(message_id_fn) // Use the (blake3) hash of a message as its ID
                 .validation_mode(ValidationMode::Strict) // Force all messages to have valid signatures
                 .heartbeat_interval(config.gossip_config.heartbeat_interval) // Time between gossip heartbeats
@@ -263,7 +315,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             let identify = IdentifyBehaviour::new(identify_cfg);
 
             // - Build DHT needed for peer discovery
-            let mut kconfig = Config::new(StreamProtocol::new("/ipfs/kad/1.0.0"));
+            let mut kconfig = Config::new(kad_protocol(config.network_discriminator)?);
             kconfig
                 .set_parallelism(NonZeroUsize::new(5).unwrap())
                 .set_provider_publication_interval(Some(kademlia_record_republication_interval))
@@ -303,7 +355,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 RequestResponse::with_codec(
                     cbor,
                     [(
-                        StreamProtocol::new("/HotShot/direct_message/1.0"),
+                        direct_message_protocol(config.network_discriminator)?,
                         ProtocolSupport::Full,
                     )],
                     rrconfig.clone(),
@@ -815,5 +867,32 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
     /// Get a reference to the network node's peer id.
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{U256, direct_message_protocol, gossipsub_prefix, kad_protocol};
+
+    fn snapshot_for(discriminator: Option<U256>) -> String {
+        format!(
+            "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}",
+            gossipsub_prefix(discriminator),
+            kad_protocol(discriminator).unwrap(),
+            direct_message_protocol(discriminator).unwrap(),
+        )
+    }
+
+    #[test]
+    fn mainnet_libp2p_protocol_identifiers() {
+        insta::assert_snapshot!("mainnet_libp2p_protocol_identifiers", snapshot_for(None));
+    }
+
+    #[test]
+    fn decaf_libp2p_protocol_identifiers() {
+        insta::assert_snapshot!(
+            "decaf_libp2p_protocol_identifiers",
+            snapshot_for(Some(U256::from(0xdecafu64)))
+        );
     }
 }
