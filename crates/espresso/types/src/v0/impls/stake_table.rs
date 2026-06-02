@@ -5043,6 +5043,55 @@ mod tests {
         }
     }
 
+    /// The twisted Edwards identity (0, 1): on-curve and in-subgroup but not a
+    /// valid key.
+    fn identity_schnorr() -> hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
+        hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::from(1),
+        }
+    }
+
+    #[test]
+    fn test_register_v1_identity_schnorr_excluded_from_active_set() {
+        let account = Address::random();
+        let bls: G2PointSol = BLSPubKey::generated_from_seed_indexed([8u8; 32], 0)
+            .0
+            .into();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::Register(ValidatorRegistered {
+                account,
+                blsVk: bls,
+                schnorrVk: identity_schnorr(),
+                commission: 0,
+            }))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(
+            !v.authenticated,
+            "validator with identity schnorr key must be unauthenticated"
+        );
+        assert!(v.state_ver_key.is_none());
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        match select_active_validator_set(state.validators()) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
     #[test]
     fn test_register_v1_invalid_schnorr_excluded_from_active_set() {
         let account = Address::random();
