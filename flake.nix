@@ -260,6 +260,7 @@
             python3
             ruff
             ty
+            uv
 
             go
             golangci-lint

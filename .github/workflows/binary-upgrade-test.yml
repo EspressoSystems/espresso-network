@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       base_tag:
-        description: "Base docker tag to start from (must exist in ghcr.io)"
+        description: "Base docker tag to start from (empty = latest YYYYMMDD tag)"
         required: false
-        default: "20260505"
+        default: ""
       upgrade_tag:
         description: "Upgrade docker tag to roll to (must exist in ghcr.io)"
         required: false
@@ -15,11 +15,22 @@ on:
 jobs:
   binary-upgrade-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - vanilla
+          - new-from-old-fs
+          - new-from-old-pg
+          - old-from-new-fs
+          - old-from-new-pg
+    name: binary-upgrade-test (${{ matrix.scenario }})
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
+      - uses: astral-sh/setup-uv@v8.1.0
 
       - name: Pull docker images
         env:
@@ -37,4 +48,14 @@ jobs:
           UPGRADE_PULL: "1"
         run: |
           set -o pipefail
-          timeout -v 1800 ./binary-upgrade-tests/run.py | sed -e 's/^/binary-upgrade: /;'
+          timeout -v 2400 ./binary-upgrade-tests/run.py --scenario ${{ matrix.scenario }} \
+            | sed -e "s/^/binary-upgrade(${{ matrix.scenario }}): /;"
+
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-logs-${{ matrix.scenario }}
+          path: tmp/compose-logs/
+          retention-days: 1
+          if-no-files-found: ignore
