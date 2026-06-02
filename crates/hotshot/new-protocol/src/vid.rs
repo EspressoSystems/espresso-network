@@ -123,6 +123,8 @@ pub struct VidReconstructor<T: NodeType> {
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<Result<VidReconstructOutput<T>, ()>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
+    /// Optional leader-event tracer (wired by the bench).
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
 impl<T: NodeType> VidReconstructor<T> {
@@ -132,7 +134,13 @@ impl<T: NodeType> VidReconstructor<T> {
             reconstructed: BTreeSet::new(),
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
+            tracer: None,
         }
+    }
+
+    /// Register a leader-event tracer. Production builds leave this `None`.
+    pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
+        self.tracer = tracer;
     }
 
     pub(crate) fn handle_vid_share<M>(&mut self, share: VidDisperseShare2<T>, metadata: M)
@@ -206,13 +214,29 @@ impl<T: NodeType> VidReconstructor<T> {
             return;
         };
         let epoch = accumulator.epoch.unwrap_or(EpochNumber::genesis());
+        crate::trace_leader_event!(
+            self.tracer,
+            view,
+            crate::leader_trace::LeaderEvent::ThresholdShareReachedVMinus1
+        );
+        let tracer = self.tracer.clone();
         let task = self.tasks.spawn_blocking(move || {
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1Start
+            );
             let Ok(result) = AvidmGf2Scheme::recover(&common, &shares) else {
                 // TODO: Handle error
                 return Err(());
             };
             let payload = T::BlockPayload::from_bytes(&result, &metadata);
             let tx_commitments = payload.transaction_commitments(&metadata);
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1End
+            );
             Ok(VidReconstructOutput {
                 view,
                 epoch,

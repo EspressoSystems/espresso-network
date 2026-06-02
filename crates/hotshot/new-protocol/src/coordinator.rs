@@ -351,10 +351,22 @@ where
                 }
                 Some(cert1) = self.vote1_collector.next() => {
                     finish_measurement(next_input);
+                    let view = cert1.view_number();
+                    crate::trace_leader_event!(
+                        self.consensus.tracer,
+                        view,
+                        crate::leader_trace::LeaderEvent::Cert1VMinus1InputDispatched
+                    );
                     return Ok(ConsensusInput::Certificate1(cert1))
                 }
                 Some(cert2) = self.vote2_collector.next() => {
                     finish_measurement(next_input);
+                    let view = cert2.view_number();
+                    crate::trace_leader_event!(
+                        self.consensus.tracer,
+                        view,
+                        crate::leader_trace::LeaderEvent::Cert2VMinus1InputDispatched
+                    );
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
@@ -539,6 +551,11 @@ where
                 payload,
                 metadata,
             } => {
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::NsDisperseStart
+                );
                 self.vid_disperser.request_vid_disperse(VidDisperseRequest {
                     view,
                     epoch,
@@ -577,12 +594,18 @@ where
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
 
+                let view = proposal.data.view_number();
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Proposal(
                         ProposalMessage::validated(proposal.clone()),
                     )),
                 };
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::ProposalBroadcastStart
+                );
                 if let Err(err) = self.network.broadcast(message.view_number(), &message) {
                     let err = CoordinatorError::from(err).context("proposal broadcast");
                     if err.severity == Severity::Critical {
@@ -591,8 +614,20 @@ where
                         warn!(%err, "network error while broadcasting proposal")
                     }
                 }
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::ProposalBroadcastEnd
+                );
             },
             ConsensusOutput::SendVidShares(vid_shares) => {
+                let trace_view: u64 =
+                    vid_shares.first().map(|s| *s.data.view_number()).unwrap_or(0);
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    trace_view,
+                    crate::leader_trace::LeaderEvent::VidSharesUnicastStart
+                );
                 for share in vid_shares {
                     let recipient = share.data.recipient_key.clone();
                     let message = Message {
@@ -611,6 +646,11 @@ where
                         }
                     }
                 }
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    trace_view,
+                    crate::leader_trace::LeaderEvent::VidSharesUnicastEnd
+                );
             },
             ConsensusOutput::SendTimeoutVote(vote, lock) => {
                 let message = Message {
@@ -646,13 +686,24 @@ where
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
             },
             ConsensusOutput::SendVote2(vote2) => {
+                let view = vote2.view_number();
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
                 };
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote2VMinus1BroadcastStart
+                );
                 self.network
                     .broadcast(message.view_number(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?;
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote2VMinus1BroadcastEnd
+                );
             },
             ConsensusOutput::SendEpochChange(epoch_change) => {
                 let message = Message {
@@ -666,6 +717,7 @@ where
                     .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
+                let view = cert1.view_number();
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Certificate1(
@@ -673,9 +725,19 @@ where
                         self.public_key.clone(),
                     )),
                 };
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Cert1VMinus1BroadcastStart
+                );
                 self.network
                     .broadcast(message.view_number(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?;
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Cert1VMinus1BroadcastEnd
+                );
             },
             ConsensusOutput::ProposalValidated { .. } => {},
             ConsensusOutput::ViewChanged(view, epoch) => {
@@ -765,6 +827,11 @@ where
                     None
                 },
                 ConsensusMessage::Vote1(vote1) => {
+                    crate::trace_leader_event!(
+                        self.consensus.tracer,
+                        vote1.vote.view_number(),
+                        crate::leader_trace::LeaderEvent::Vote1VMinus1Arrived
+                    );
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     if is_epoch_root(bn, epoch_height) {

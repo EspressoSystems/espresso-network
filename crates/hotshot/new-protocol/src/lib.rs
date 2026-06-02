@@ -6,6 +6,7 @@ pub mod cutover;
 pub mod epoch;
 pub mod epoch_root_vote_collector;
 pub mod helpers;
+pub mod leader_trace;
 pub mod logging;
 pub mod message;
 pub mod network;
