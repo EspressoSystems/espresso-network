@@ -6362,6 +6362,7 @@ dependencies = [
  "futures",
  "hotshot-example-types",
  "hotshot-types",
+ "insta",
  "lazy_static",
  "libp2p",
  "libp2p-identity",
@@ -6712,6 +6713,7 @@ name = "hotshot-types"
 version = "0.1.11"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "anyhow",
  "ark-bn254 0.5.0",
  "ark-ed-on-bn254",
@@ -6758,6 +6760,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tagged-base64",
+ "test-log",
  "test-utils",
  "thiserror 2.0.18",
  "time 0.3.47",
@@ -6771,6 +6774,7 @@ dependencies = [
  "vec1",
  "versions",
  "vid",
+ "zeroize",
 ]
 
 [[package]]
@@ -8535,6 +8539,7 @@ name = "light-client"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "anyhow",
  "async-lock 3.4.2",
  "async-trait",

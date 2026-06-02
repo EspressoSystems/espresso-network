@@ -14,7 +14,7 @@ use hotshot_types::{
     consensus::OuterConsensus,
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    event::Event,
+    event::{Event, EventType},
     message::UpgradeLock,
     simple_certificate::{NextEpochQuorumCertificate2, QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, NextEpochQuorumVote2, QuorumVote2, TimeoutVote2},
@@ -35,7 +35,7 @@ use self::handlers::{
 };
 use crate::{
     events::HotShotEvent,
-    helpers::{broadcast_view_change, validate_qc_and_next_epoch_qc},
+    helpers::{broadcast_event, broadcast_view_change, validate_qc_and_next_epoch_qc},
     vote_collection::{EpochRootVoteCollectorsMap, VoteCollectorsMap},
 };
 
@@ -261,6 +261,32 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> ConsensusTaskState<TYPES, I>
                     .await;
                 }
             },
+            HotShotEvent::Qc2Formed(either::Left(qc))
+                if self.upgrade_lock.new_protocol_active(self.cur_view)
+                    && !self.upgrade_lock.new_protocol_active(qc.view_number()) =>
+            {
+                // Cutover boundary only: the gated proposal path won't land this
+                // last-legacy QC in `high_qc`, so capture it here for
+                // `extract_pre_cutover_seed` to carry across. `update_high_qc` is
+                // monotone, so this is a no-op outside the cutover window.
+                let mut consensus_writer = self.consensus.write().await;
+                let _ = consensus_writer.update_high_qc(qc.clone());
+                drop(consensus_writer);
+                if let Err(e) = self.storage.update_high_qc2(qc.clone()).await {
+                    tracing::warn!("Failed to persist boundary high QC: {e}");
+                }
+                // Forward to the espresso bridge -> new-protocol coordinator, in case the
+                // cutover seed was snapshotted before this QC finished assembling. Only the
+                // cutover-view leader reaches this arm, so it lands exactly where needed.
+                broadcast_event(
+                    Event {
+                        view_number: qc.view_number(),
+                        event: EventType::LegacyHighQcFormed { qc: qc.clone() },
+                    },
+                    &self.output_event_stream,
+                )
+                .await;
+            },
             _ => {},
         }
 
@@ -279,7 +305,24 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for ConsensusTaskS
         _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
         if self.upgrade_lock.new_protocol_active(self.cur_view) {
-            return Ok(());
+            // Past cutover: still admit votes/QCs for strictly-pre-cutover views so
+            // the cutover leader can finish the last legacy QC; everything else
+            // (proposing, voting, view changes) stays shut down.
+            let admit = match event.as_ref() {
+                HotShotEvent::QuorumVoteRecv(vote) => {
+                    !self.upgrade_lock.new_protocol_active(vote.view_number())
+                },
+                HotShotEvent::EpochRootQuorumVoteRecv(vote) => {
+                    !self.upgrade_lock.new_protocol_active(vote.view_number())
+                },
+                HotShotEvent::Qc2Formed(either::Left(qc)) => {
+                    !self.upgrade_lock.new_protocol_active(qc.view_number())
+                },
+                _ => false,
+            };
+            if !admit {
+                return Ok(());
+            }
         }
         self.handle(event, sender.clone()).await
     }

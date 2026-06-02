@@ -392,16 +392,23 @@ impl<ApiVer: StaticVersionType> StateCatchup for StatePeers<ApiVer> {
         if first.block_header().version() >= NEW_PROTOCOL_VERSION {
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
+
+            // The chain terminates at the leaf the cert2 finalizes, so fetch that cert2 by its
+            // exact height
+            let cert2_height = leaf_chain
+                .last()
+                .ok_or_else(|| anyhow!("empty leaf chain returned for height {height}"))?
+                .height();
             let cert2 = self
                 .fetch(retry, |client| async move {
                     let cert2 = client
-                        .get::<Certificate2<SeqTypes>>(&format!("catchup/{height}/cert2"))
+                        .get::<Certificate2<SeqTypes>>(&format!("catchup/{cert2_height}/cert2"))
                         .send()
                         .await?;
                     anyhow::Ok(cert2)
                 })
                 .await
-                .with_context(|| format!("failed to fetch cert2 for height {height}"))?;
+                .with_context(|| format!("failed to fetch cert2 for height {cert2_height}"))?;
 
             verify_leaf_chain_with_cert2(
                 leaf_chain,
@@ -645,11 +652,8 @@ pub(crate) trait CatchupStorage: Sync {
         }
     }
 
-    /// Load the earliest cert2 whose finalized block height is at or above `height`.
-    ///
-    /// "Earliest" means the cert2 with the smallest finalized block height that is still greater
-    /// than or equal to the requested `height`.
-    fn load_earliest_cert2(
+    /// Load the cert2 stored at exactly `height`, if one exists.
+    fn load_cert2(
         &self,
         _height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Option<Certificate2<SeqTypes>>>> {
@@ -726,11 +730,8 @@ where
         self.inner().get_leaf_chain(height).await
     }
 
-    async fn load_earliest_cert2(
-        &self,
-        height: u64,
-    ) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
-        self.inner().load_earliest_cert2(height).await
+    async fn load_cert2(&self, height: u64) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        self.inner().load_cert2(height).await
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
