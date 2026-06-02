@@ -273,10 +273,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
             // The chain terminates at the leaf the cert2 finalizes, so request that cert2 by its
-            // exact height rather than the earliest cert2 at or above `height`. The earliest query
-            // is not stable across requests: concurrent consensus progress can shift it to a cert2
-            // finalizing a different leaf than the one ending the chain we already fetched
-            // ("cert2 does not match the newest leaf").
+            // exact height
             let cert2_height = leaf_chain
                 .last()
                 .ok_or_else(|| anyhow::anyhow!("empty leaf chain for height {height}"))?
