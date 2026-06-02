@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use hotshot::{traits::BlockPayload, types::BLSPubKey};
@@ -37,8 +37,8 @@ use tracing::{error, info, warn};
 use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{
-    config::NodeConfig, leader_trace::CsvLeaderTracer, membership::make_membership,
-    metrics::MetricsCollector,
+    config::NodeConfig, cpu_sampler::CpuSampler, leader_trace::CsvLeaderTracer,
+    membership::make_membership, metrics::MetricsCollector,
 };
 
 type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
@@ -57,6 +57,14 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     let trace_path = leader_trace_path(&cfg);
     let tracer = Arc::new(CsvLeaderTracer::new(cfg.node_id, trace_path));
 
+    // Start the CPU sampler (no-op on non-Linux). Outputs land in the same
+    // directory as the leader-trace CSV so analysis scripts can pick them up.
+    let cpu_out_dir = PathBuf::from(&cfg.output_file)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+    let cpu_sampler = CpuSampler::start(cfg.node_id, cpu_out_dir, Duration::from_millis(50));
+
     let coordinator = build_coordinator(
         public_key,
         private_key,
@@ -72,6 +80,7 @@ pub async fn run(cfg: NodeConfig) -> Result<()> {
     if let Err(err) = tracer.flush() {
         warn!(%err, "failed to flush leader trace");
     }
+    cpu_sampler.stop().await;
     result
 }
 
