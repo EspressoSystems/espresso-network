@@ -19,7 +19,7 @@ pub use error::NetworkError;
 pub use metrics::Metrics;
 pub use msg::Slot;
 pub use net::{
-    Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
+    CmdSender, Network, NetworkController, NetworkReceiver, RetryPolicy, SendAction, SendCommand,
     SendCommandBuilder,
 };
 

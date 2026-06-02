@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 pub use cliquenet::Config as CliquenetConfig;
 use cliquenet::{
@@ -20,7 +23,7 @@ use tracing::{error, info};
 
 use crate::{
     message::{Message, MessageType, Unchecked, Validated},
-    network::{Network, NetworkError, PeerRole},
+    network::{Network, NetworkError, NetworkSender, PeerRole},
 };
 
 pub struct Cliquenet<T: NodeType> {
@@ -92,8 +95,73 @@ impl<T: NodeType> Cliquenet<T> {
     }
 }
 
+impl<T: NodeType> Cliquenet<T> {
+    /// Snapshot a Clone-able send-only handle. Use this when you want to drive
+    /// fan-out from a `spawn_blocking` task without holding `&mut self` on
+    /// `Cliquenet` (which would block the main coordinator loop).
+    pub fn sender(&self) -> CliquenetSender<T> {
+        CliquenetSender {
+            my_keys: self.my_keys.clone(),
+            inner: self.inner.cmd_sender(),
+            peers: Arc::new(self.peers.clone()),
+            upgrade_lock: self.upgrade_lock.clone(),
+        }
+    }
+}
+
+/// Clone-able send-only handle for `Cliquenet<T>`.
+#[derive(Clone)]
+pub struct CliquenetSender<T: NodeType> {
+    my_keys: (T::SignatureKey, PublicKey),
+    inner: cliquenet::CmdSender,
+    /// `Arc<HashMap>` so each clone is cheap. Peer set is a snapshot at the
+    /// moment `sender()` was called; mutations on the parent `Cliquenet` (via
+    /// `add_peers`/`remove_peers`) don't propagate. That's acceptable for the
+    /// per-view share fan-out which only needs the active epoch's peers.
+    peers: Arc<HashMap<T::SignatureKey, PeerConnectInfo>>,
+    upgrade_lock: UpgradeLock<T>,
+}
+
+impl<T: NodeType> CliquenetSender<T> {
+    fn serialize(&self, m: &Message<T, Validated>) -> Result<Vec<u8>, NetworkError> {
+        if let MessageType::External(bytes) = &m.message_type {
+            return Ok(bytes.clone());
+        }
+        self.upgrade_lock
+            .serialize(m)
+            .map_err(|e| NetworkError::Io(format!("serialization error: {e}").into()))
+    }
+}
+
+impl<T: NodeType> NetworkSender<T> for CliquenetSender<T> {
+    fn unicast(
+        &self,
+        v: ViewNumber,
+        to: &T::SignatureKey,
+        m: &Message<T, Validated>,
+    ) -> Result<(), NetworkError> {
+        let target = if *to == self.my_keys.0 {
+            self.my_keys.1
+        } else if let Some(info) = self.peers.get(to) {
+            info.x25519_key.into()
+        } else {
+            error!(peer = %to, "unicast target not found");
+            return Ok(());
+        };
+        let bytes = self.serialize(m)?;
+        self.inner
+            .unicast(Slot::new(*v), target, bytes)
+            .map_err(to_network_error)
+    }
+}
+
 impl<T: NodeType> Network<T> for Cliquenet<T> {
     type PeerData = (PublicKey, NetAddr);
+    type Sender = CliquenetSender<T>;
+
+    fn sender(&self) -> Self::Sender {
+        Cliquenet::sender(self)
+    }
 
     fn unicast(
         &mut self,

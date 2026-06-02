@@ -10,8 +10,24 @@ use crate::message::{Message, Unchecked, Validated};
 
 type Result<T> = std::result::Result<T, NetworkError>;
 
+/// Clone-able send-only handle. Allows holding a network sender from a
+/// `spawn_blocking` worker (e.g. share fan-out) without keeping `&mut self`
+/// borrow on the network.
+pub trait NetworkSender<T: NodeType>: Send + Sync + Clone + 'static {
+    fn unicast(
+        &self,
+        v: ViewNumber,
+        to: &T::SignatureKey,
+        m: &Message<T, Validated>,
+    ) -> Result<()>;
+}
+
 pub trait Network<T: NodeType> {
     type PeerData;
+    type Sender: NetworkSender<T>;
+
+    /// Return a Clone-able send-only handle.
+    fn sender(&self) -> Self::Sender;
 
     fn broadcast(&mut self, v: ViewNumber, m: &Message<T, Validated>) -> Result<()>;
 
