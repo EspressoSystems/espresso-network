@@ -17,7 +17,14 @@ use jf_signature::{
     schnorr,
 };
 
-use crate::sol_types::{StakeTableV3, *};
+use crate::{
+    field_to_u256,
+    sol_types::{
+        StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
+        StakeTableV3, *,
+    },
+    u256_to_field,
+};
 
 // Allows us to implement From on existing Bytes type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,8 +84,19 @@ impl TryFrom<EdOnBN254PointSol> for StateVerKey {
     type Error = StakeTableSolError;
 
     fn try_from(value: EdOnBN254PointSol) -> Result<Self, Self::Error> {
-        let point: ark_ed_on_bn254::EdwardsAffine = value.into();
-        if !point.is_on_curve() || !point.is_in_correct_subgroup_assuming_on_curve() {
+        // 1) Coordinates must be canonical field elements. `u256_to_field` silently
+        // reduces mod p, so reject anything that isn't already its own reduced form.
+        let x: ark_ed_on_bn254::Fq = u256_to_field(value.x);
+        let y: ark_ed_on_bn254::Fq = u256_to_field(value.y);
+        if field_to_u256(x) != value.x || field_to_u256(y) != value.y {
+            return Err(StakeTableSolError::InvalidSchnorrKey);
+        }
+        // 2) on curve, 3) in the prime-order subgroup, 4) not the identity.
+        let point = ark_ed_on_bn254::EdwardsAffine::new_unchecked(x, y);
+        if point.is_zero()
+            || !point.is_on_curve()
+            || !point.is_in_correct_subgroup_assuming_on_curve()
+        {
             return Err(StakeTableSolError::InvalidSchnorrKey);
         }
         Ok(Self::from(point))
@@ -387,6 +405,39 @@ mod test {
             metadataUri: String::new(),
         };
         assert!(event.authenticate().is_err());
+    }
+
+    /// Coordinates outside the base field must be rejected; `u256_to_field`
+    /// would otherwise silently reduce them mod p.
+    #[test]
+    fn test_schnorr_verkey_out_of_range_is_err() {
+        let out_of_range = EdOnBN254PointSol {
+            x: U256::MAX,
+            y: U256::from(1),
+        };
+        assert!(StateVerKey::try_from(out_of_range).is_err());
+    }
+
+    /// The twisted Edwards identity (0, 1) is on-curve and in the prime-order
+    /// subgroup but is not a valid verification key and must be rejected.
+    #[test]
+    fn test_schnorr_identity_point_is_err() {
+        let identity = EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::from(1),
+        };
+        let point: ark_ed_on_bn254::EdwardsAffine = identity.into();
+        assert!(point.is_on_curve());
+        assert!(point.is_in_correct_subgroup_assuming_on_curve());
+        assert!(StateVerKey::try_from(identity).is_err());
+    }
+
+    /// A validly generated Schnorr key must round-trip through the conversion.
+    #[test]
+    fn test_valid_schnorr_verkey_roundtrips() {
+        let vk = StateKeyPair::generate().ver_key();
+        let sol: EdOnBN254PointSol = vk.clone().into();
+        assert_eq!(StateVerKey::try_from(sol).expect("valid key"), vk);
     }
 }
 
