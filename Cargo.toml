@@ -336,8 +336,8 @@ pretty_assertions = { version = "1.4", features = ["unstable"] }
 primitive-types = "0.13"
 priority-queue = "2"
 proc-macro2 = "1"
-procfs = "0.18"
 process-metrics = { path = "crates/process-metrics" }
+procfs = "0.18"
 prometheus = { version = "0.13", default-features = false }
 prometheus-parse = "0.2.5"
 proptest = "1"
