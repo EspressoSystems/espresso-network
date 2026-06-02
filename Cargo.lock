@@ -6150,6 +6150,7 @@ dependencies = [
  "futures",
  "hotshot-example-types",
  "hotshot-types",
+ "insta",
  "lazy_static",
  "libp2p",
  "libp2p-identity",

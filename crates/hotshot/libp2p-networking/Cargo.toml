@@ -38,6 +38,7 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 hotshot-example-types = { workspace = true }
+insta = { workspace = true }
 
 [lints]
 workspace = true
