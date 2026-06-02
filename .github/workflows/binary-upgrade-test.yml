@@ -30,7 +30,7 @@ jobs:
         with:
           fetch-tags: true
       - uses: taiki-e/install-action@just
-      - uses: astral-sh/setup-uv
+      - uses: astral-sh/setup-uv@v8.1.0
 
       - name: Pull docker images
         env:
