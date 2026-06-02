@@ -272,17 +272,23 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             // New protocol: pair the leaf range with its finalizing cert2 for verification.
             let upgrade_lock =
                 UpgradeLock::<SeqTypes>::new(versions::Upgrade::trivial(NEW_PROTOCOL_VERSION));
+            // The chain terminates at the leaf the cert2 finalizes, so request that cert2 by its
+            // exact height
+            let cert2_height = leaf_chain
+                .last()
+                .ok_or_else(|| anyhow::anyhow!("empty leaf chain for height {height}"))?
+                .height();
             let cert2 = self
                 .request_indefinitely(
-                    Request::Cert2(height),
+                    Request::Cert2(cert2_height),
                     RequestType::Batched,
                     move |_request: &Request, response: Response| async move {
                         let Response::Cert2(cert2) = response else {
                             return Err(anyhow::anyhow!("expected cert2 response"));
                         };
-                        if cert2.data.block_number < height {
+                        if cert2.data.block_number != cert2_height {
                             return Err(anyhow::anyhow!(
-                                "received cert2 at height {} below requested height {height}",
+                                "received cert2 at height {} but expected exactly {cert2_height}",
                                 cert2.data.block_number
                             ));
                         }
@@ -290,7 +296,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
                     },
                 )
                 .await
-                .with_context(|| format!("failed to request cert2 at or above height {height}"))?;
+                .with_context(|| format!("failed to request cert2 at height {cert2_height}"))?;
 
             verify_leaf_chain_with_cert2(
                 leaf_chain,
