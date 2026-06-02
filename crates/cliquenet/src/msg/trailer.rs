@@ -36,6 +36,9 @@ impl Trailer {
                 if trailer_len != 16 {
                     return None;
                 }
+                if len < 18 {
+                    return None;
+                }
                 let id = u64::from_be_bytes(bytes[len - 10..len - 2].try_into().ok()?);
                 let slot = u64::from_be_bytes(bytes[len - 18..len - 10].try_into().ok()?);
                 bytes.truncate(len - 18);
@@ -46,6 +49,9 @@ impl Trailer {
             },
             NO_ACK => {
                 if trailer_len != 8 {
+                    return None;
+                }
+                if len < 10 {
                     return None;
                 }
                 let slot = u64::from_be_bytes(bytes[len - 10..len - 2].try_into().ok()?);
@@ -107,7 +113,7 @@ mod tests {
     use bytes::Bytes;
     use quickcheck::{Arbitrary, Gen, quickcheck};
 
-    use super::{STD, Trailer};
+    use super::{NO_ACK, STD, Trailer};
     use crate::msg::{MsgId, Slot};
 
     impl Arbitrary for Trailer {
@@ -124,11 +130,46 @@ mod tests {
         }
     }
 
+    /// Trailer-shaped bytes: a short body plus a tail biased toward the type
+    /// and length bytes the parser recognises, so the short-input slicing
+    /// paths are hit on nearly every case (uniform `Vec<u8>` almost never is).
+    #[derive(Debug, Clone)]
+    struct TrailerLike(Vec<u8>);
+
+    impl Arbitrary for TrailerLike {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let body_len = usize::arbitrary(g) % 20;
+            let mut bytes: Vec<u8> = (0..body_len).map(|_| u8::arbitrary(g)).collect();
+
+            let rand_typ = u8::arbitrary(g);
+            let typ = *g.choose(&[STD, NO_ACK, rand_typ]).unwrap();
+            let rand_len = u8::arbitrary(g);
+            let trailer_len = *g.choose(&[16u8, 8, rand_len]).unwrap();
+            bytes.push(typ);
+            bytes.push(trailer_len);
+            TrailerLike(bytes)
+        }
+    }
+
     quickcheck! {
         fn prop_to_bytes_from_bytes_id(t1: Trailer) -> bool {
             let mut b = Bytes::copy_from_slice(t1.to_bytes().as_ref());
             let t2 = Trailer::from_bytes(&mut b);
             Some(t1) == t2
+        }
+
+        // `from_bytes` parses untrusted bytes, so it must never panic.
+        fn prop_from_bytes_arbitrary_does_not_panic(bytes: Vec<u8>) -> bool {
+            let mut b = Bytes::copy_from_slice(&bytes);
+            let _ = Trailer::from_bytes(&mut b);
+            true
+        }
+
+        // Same, with trailer-shaped inputs that hit the slicing paths.
+        fn prop_from_bytes_trailer_like_does_not_panic(t: TrailerLike) -> bool {
+            let mut b = Bytes::copy_from_slice(&t.0);
+            let _ = Trailer::from_bytes(&mut b);
+            true
         }
     }
 
