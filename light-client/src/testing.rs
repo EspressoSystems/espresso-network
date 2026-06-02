@@ -418,7 +418,7 @@ impl InnerTestClient {
             let validator: AuthenticatedValidator<PubKey> = RegisteredValidator {
                 account: Address::random(),
                 stake_table_key: Some(stake_table_key),
-                state_ver_key,
+                state_ver_key: Some(state_ver_key),
                 stake,
                 commission: 1,
                 delegators: [(Address::random(), stake)].into_iter().collect(),
@@ -442,7 +442,7 @@ impl InnerTestClient {
         for (_, validator) in quorum {
             validators.insert(validator.account, validator.clone().into());
             used_bls_keys.insert(*validator.stake_table_key());
-            used_schnorr_keys.insert(validator.state_ver_key.clone());
+            used_schnorr_keys.insert(validator.state_ver_key().clone());
         }
 
         let state = StakeTableState::new(
@@ -1048,7 +1048,7 @@ fn register_validator_events(
     events.push(StakeTableEvent::Register(ValidatorRegistered {
         account: validator.account,
         blsVk: (*validator.stake_table_key()).into(),
-        schnorrVk: validator.state_ver_key.clone().into(),
+        schnorrVk: validator.state_ver_key().clone().into(),
         commission: validator.commission,
     }));
     for (&delegator, &amount) in &validator.delegators {
@@ -1068,7 +1068,7 @@ pub fn random_validator() -> AuthenticatedValidator<PubKey> {
     RegisteredValidator {
         account,
         stake_table_key: Some(PubKey::generated_from_seed_indexed(seed, 0).0),
-        state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, 0).0,
+        state_ver_key: Some(SchnorrPubKey::generated_from_seed_indexed(seed, 0).0),
         stake,
         commission: 1,
         delegators: [(Address::random(), stake)].into_iter().collect(),
