@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["one_honest_threshold","supermajority_threshold","u256_to_field"],"struct":["HSStakeTable","StakeTableEntries","StakeTableEntry"]};
+window.SIDEBAR_ITEMS = {"fn":["one_honest_threshold","supermajority_threshold","u256_to_field"],"mod":["stake_table_entry_rlp"],"struct":["HSStakeTable","StakeTableEntries","StakeTableEntry"]};
