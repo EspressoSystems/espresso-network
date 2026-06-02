@@ -33,8 +33,11 @@ use espresso_types::{
     SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
+    v0_1::ChainId,
     v0_3::Fetcher,
 };
+
+pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
 pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
@@ -762,7 +765,7 @@ where
         info!("Initializing Libp2p network");
         // Mainnet keeps today's libp2p protocol strings byte-identical.
         let chain_id = genesis.chain_config.chain_id;
-        let network_discriminator = (chain_id.0 != U256::ONE).then_some(chain_id.0);
+        let network_discriminator = (chain_id != MAINNET_CHAIN_ID).then_some(chain_id.0);
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
