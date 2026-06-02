@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["generate_vote_commitment"],"struct":["VoteCollector"]};
+window.SIDEBAR_ITEMS = {"fn":["generate_vote_commitment"],"struct":["VoteCollector","VoteStats"]};

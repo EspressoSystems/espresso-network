@@ -18,7 +18,7 @@
 <a href=#18 id=18 data-nosnippet>18</a>    sync::mpsc::{<span class="self">self</span>},
 <a href=#19 id=19 data-nosnippet>19</a>    task::{AbortHandle, JoinSet},
 <a href=#20 id=20 data-nosnippet>20</a>};
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>tracing::{debug, instrument, warn};
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span>tracing::{debug, info, instrument, warn};
 <a href=#22 id=22 data-nosnippet>22</a>
 <a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::message::Vote1;
 <a href=#24 id=24 data-nosnippet>24</a>
@@ -210,36 +210,41 @@
 <a href=#210 id=210 data-nosnippet>210</a>            }
 <a href=#211 id=211 data-nosnippet>211</a>
 <a href=#212 id=212 data-nosnippet>212</a>            <span class="kw">if let </span>(<span class="prelude-val">Some</span>(q), <span class="prelude-val">Some</span>(s)) = (<span class="kw-2">&amp;</span>quorum_cert, <span class="kw-2">&amp;</span>state_cert) {
-<a href=#213 id=213 data-nosnippet>213</a>                <span class="kw">return </span>(q.clone(), s.clone());
-<a href=#214 id=214 data-nosnippet>214</a>            }
-<a href=#215 id=215 data-nosnippet>215</a>        }
-<a href=#216 id=216 data-nosnippet>216</a>        <span class="comment">// Channel closed without both certs forming; this task is effectively dead.
-<a href=#217 id=217 data-nosnippet>217</a>        // Await never returns — GC aborts via AbortHandle.
-<a href=#218 id=218 data-nosnippet>218</a>        </span>futures::future::pending::&lt;()&gt;().<span class="kw">await</span>;
-<a href=#219 id=219 data-nosnippet>219</a>        <span class="macro">unreachable!</span>()
-<a href=#220 id=220 data-nosnippet>220</a>    }
-<a href=#221 id=221 data-nosnippet>221</a>
-<a href=#222 id=222 data-nosnippet>222</a>    <span class="kw">pub fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber, epoch: EpochNumber) {
-<a href=#223 id=223 data-nosnippet>223</a>        <span class="kw">let </span>keep = <span class="self">self</span>.per_view.split_off(<span class="kw-2">&amp;</span>view);
-<a href=#224 id=224 data-nosnippet>224</a>        <span class="self">self</span>.completed = <span class="self">self</span>.completed.split_off(<span class="kw-2">&amp;</span>view);
-<a href=#225 id=225 data-nosnippet>225</a>        <span class="kw">for </span>(<span class="kw">_</span>, handle) <span class="kw">in </span><span class="self">self</span>.per_view.values_mut() {
-<a href=#226 id=226 data-nosnippet>226</a>            handle.abort();
-<a href=#227 id=227 data-nosnippet>227</a>        }
-<a href=#228 id=228 data-nosnippet>228</a>        <span class="self">self</span>.per_view = keep;
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="self">self</span>.membership_cache = <span class="self">self</span>.membership_cache.split_off(<span class="kw-2">&amp;</span>epoch);
-<a href=#230 id=230 data-nosnippet>230</a>    }
-<a href=#231 id=231 data-nosnippet>231</a>}
-<a href=#232 id=232 data-nosnippet>232</a>
-<a href=#233 id=233 data-nosnippet>233</a><span class="kw">fn </span>generate_vote_commitment&lt;T: NodeType, V: Vote&lt;T&gt;&gt;(
-<a href=#234 id=234 data-nosnippet>234</a>    vote: <span class="kw-2">&amp;</span>V,
-<a href=#235 id=235 data-nosnippet>235</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;T&gt;,
-<a href=#236 id=236 data-nosnippet>236</a>) -&gt; <span class="prelude-ty">Option</span>&lt;committable::Commitment&lt;VersionedVoteData&lt;T, V::Commitment&gt;&gt;&gt; {
-<a href=#237 id=237 data-nosnippet>237</a>    <span class="kw">match </span>VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock) {
-<a href=#238 id=238 data-nosnippet>238</a>        <span class="prelude-val">Ok</span>(data) =&gt; <span class="prelude-val">Some</span>(data.commit()),
-<a href=#239 id=239 data-nosnippet>239</a>        <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#240 id=240 data-nosnippet>240</a>            <span class="macro">tracing::warn!</span>(<span class="string">"Failed to generate versioned vote data: {e}"</span>);
-<a href=#241 id=241 data-nosnippet>241</a>            <span class="prelude-val">None
-<a href=#242 id=242 data-nosnippet>242</a>        </span>},
-<a href=#243 id=243 data-nosnippet>243</a>    }
-<a href=#244 id=244 data-nosnippet>244</a>}
+<a href=#213 id=213 data-nosnippet>213</a>                <span class="macro">info!</span>(
+<a href=#214 id=214 data-nosnippet>214</a>                    view = %q.view_number(),
+<a href=#215 id=215 data-nosnippet>215</a>                    epoch = %s.epoch,
+<a href=#216 id=216 data-nosnippet>216</a>                    <span class="string">"epoch-root certificates formed"
+<a href=#217 id=217 data-nosnippet>217</a>                </span>);
+<a href=#218 id=218 data-nosnippet>218</a>                <span class="kw">return </span>(q.clone(), s.clone());
+<a href=#219 id=219 data-nosnippet>219</a>            }
+<a href=#220 id=220 data-nosnippet>220</a>        }
+<a href=#221 id=221 data-nosnippet>221</a>        <span class="comment">// Channel closed without both certs forming; this task is effectively dead.
+<a href=#222 id=222 data-nosnippet>222</a>        // Await never returns — GC aborts via AbortHandle.
+<a href=#223 id=223 data-nosnippet>223</a>        </span>futures::future::pending::&lt;()&gt;().<span class="kw">await</span>;
+<a href=#224 id=224 data-nosnippet>224</a>        <span class="macro">unreachable!</span>()
+<a href=#225 id=225 data-nosnippet>225</a>    }
+<a href=#226 id=226 data-nosnippet>226</a>
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="kw">pub fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber, epoch: EpochNumber) {
+<a href=#228 id=228 data-nosnippet>228</a>        <span class="kw">let </span>keep = <span class="self">self</span>.per_view.split_off(<span class="kw-2">&amp;</span>view);
+<a href=#229 id=229 data-nosnippet>229</a>        <span class="self">self</span>.completed = <span class="self">self</span>.completed.split_off(<span class="kw-2">&amp;</span>view);
+<a href=#230 id=230 data-nosnippet>230</a>        <span class="kw">for </span>(<span class="kw">_</span>, handle) <span class="kw">in </span><span class="self">self</span>.per_view.values_mut() {
+<a href=#231 id=231 data-nosnippet>231</a>            handle.abort();
+<a href=#232 id=232 data-nosnippet>232</a>        }
+<a href=#233 id=233 data-nosnippet>233</a>        <span class="self">self</span>.per_view = keep;
+<a href=#234 id=234 data-nosnippet>234</a>        <span class="self">self</span>.membership_cache = <span class="self">self</span>.membership_cache.split_off(<span class="kw-2">&amp;</span>epoch);
+<a href=#235 id=235 data-nosnippet>235</a>    }
+<a href=#236 id=236 data-nosnippet>236</a>}
+<a href=#237 id=237 data-nosnippet>237</a>
+<a href=#238 id=238 data-nosnippet>238</a><span class="kw">fn </span>generate_vote_commitment&lt;T: NodeType, V: Vote&lt;T&gt;&gt;(
+<a href=#239 id=239 data-nosnippet>239</a>    vote: <span class="kw-2">&amp;</span>V,
+<a href=#240 id=240 data-nosnippet>240</a>    upgrade_lock: <span class="kw-2">&amp;</span>UpgradeLock&lt;T&gt;,
+<a href=#241 id=241 data-nosnippet>241</a>) -&gt; <span class="prelude-ty">Option</span>&lt;committable::Commitment&lt;VersionedVoteData&lt;T, V::Commitment&gt;&gt;&gt; {
+<a href=#242 id=242 data-nosnippet>242</a>    <span class="kw">match </span>VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock) {
+<a href=#243 id=243 data-nosnippet>243</a>        <span class="prelude-val">Ok</span>(data) =&gt; <span class="prelude-val">Some</span>(data.commit()),
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="prelude-val">Err</span>(e) =&gt; {
+<a href=#245 id=245 data-nosnippet>245</a>            <span class="macro">tracing::warn!</span>(<span class="string">"Failed to generate versioned vote data: {e}"</span>);
+<a href=#246 id=246 data-nosnippet>246</a>            <span class="prelude-val">None
+<a href=#247 id=247 data-nosnippet>247</a>        </span>},
+<a href=#248 id=248 data-nosnippet>248</a>    }
+<a href=#249 id=249 data-nosnippet>249</a>}
 </code></pre></div></section></main></body></html>
