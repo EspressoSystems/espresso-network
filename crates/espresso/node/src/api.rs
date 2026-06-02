@@ -965,7 +965,7 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + S
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
-        self.inner().load_earliest_cert2(height).await
+        self.inner().load_cert2(height).await
     }
 
     #[tracing::instrument(skip(self, instance))]
