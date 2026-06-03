@@ -8,11 +8,11 @@ use crate::{
     message::{Certificate1, EpochChangeMessage, Proposal},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
-        is_drb_result, is_header_created, is_leaf_decided, is_proposal,
-        is_request_block_and_header, is_request_vid_disperse, is_send_cert1, is_send_epoch_change,
-        is_send_timeout_vote, is_state_validated, is_timeout, is_timeout_cert,
-        is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1, is_vote2,
-        node_index_for_key,
+        is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
+        is_proposal_for_view, is_request_block_and_header, is_request_vid_disperse, is_send_cert1,
+        is_send_epoch_change, is_send_timeout_vote, is_state_validated, is_timeout,
+        is_timeout_cert, is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1,
+        is_vote2, node_index_for_key,
     },
 };
 
@@ -501,9 +501,16 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
 
     // After processing view 27 the leader for view 28 should propose
     // with the DRB result that was computed back in epoch 1.
+    // The proposal is emitted only once the block builder finishes (it sleeps
+    // before producing an empty block) and the resulting header for view 28 is
+    // applied
+    harness
+        .process_until(|inputs| any(inputs, |i| is_header_created_for_view(i, 28)))
+        .await;
     assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should propose in epoch 3 transition window using the computed DRB result"
+        any(harness.outputs(), |o| is_proposal_for_view(o, 28)),
+        "Leader should propose view 28 in epoch 3's transition window using the DRB result \
+         computed in epoch 1"
     );
 }
 
