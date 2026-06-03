@@ -56,7 +56,6 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let epoch_root_collector =
         EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
@@ -73,7 +72,6 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
-        100,
     );
 
     let vid_disperser = VidDisperser::new(membership.clone());
@@ -162,7 +160,6 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
-        .checkpoint_collector(checkpoint_collector)
         .epoch_root_collector(epoch_root_collector)
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)

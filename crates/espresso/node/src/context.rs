@@ -2,7 +2,6 @@ use std::{
     fmt::{Debug, Display},
     future::Future,
     marker::PhantomData,
-    num::NonZeroU64,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -126,7 +125,6 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
-        new_protocol_consensus_gc_interval: NonZeroU64,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -213,7 +211,6 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
-            .garbage_collection_interval(new_protocol_consensus_gc_interval.get())
             .metrics(metrics)
             .make();
 
