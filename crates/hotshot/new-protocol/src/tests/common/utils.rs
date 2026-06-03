@@ -760,7 +760,7 @@ impl MockBlock {
     pub fn new() -> Self {
         let block = TestBlockPayload::genesis();
         let metadata = TestMetadata {
-            num_transactions: 0,
+            num_transactions: 0, ..Default::default()
         };
         let payload_commitment = vid_commitment(
             &block.encode(),

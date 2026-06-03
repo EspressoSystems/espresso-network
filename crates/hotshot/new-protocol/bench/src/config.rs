@@ -38,6 +38,13 @@ pub struct NodeConfig {
     #[arg(long, default_value_t = 0)]
     pub block_size: usize,
 
+    /// Number of namespaces to split each block payload into. AvidmGf2Scheme's
+    /// `ns_disperse` and `recover` parallelize per-namespace via rayon, so
+    /// increasing this should reduce dispersal/recovery latency up to the
+    /// machine's core count. Default 1 = legacy single-namespace behaviour.
+    #[arg(long, default_value_t = 1)]
+    pub namespaces: u32,
+
     /// Period between CPU + network sampler ticks (milliseconds). 50ms is the
     /// default; lower values give finer resolution at the cost of more
     /// /proc reads per second.

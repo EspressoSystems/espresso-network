@@ -45,7 +45,7 @@ fn make_header_request(
     let parent_proposal: Proposal<TestTypes> = parent_view.proposal.data.clone();
     let block = TestBlockPayload::genesis();
     let metadata = TestMetadata {
-        num_transactions: 0,
+        num_transactions: 0, ..Default::default()
     };
     let payload_commitment = vid_commitment(
         &block.encode(),

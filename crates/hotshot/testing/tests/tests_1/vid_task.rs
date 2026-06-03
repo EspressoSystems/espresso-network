@@ -74,7 +74,7 @@ async fn test_vid_task() {
     let proposal: DaProposal<TestTypes> = DaProposal {
         encoded_transactions: encoded_transactions.clone(),
         metadata: TestMetadata {
-            num_transactions: encoded_transactions.len() as u64,
+            num_transactions: encoded_transactions.len() as u64, ..Default::default()
         },
         view_number: ViewNumber::new(2),
     };
@@ -96,7 +96,7 @@ async fn test_vid_task() {
             BlockRecv(PackedBundle::new(
                 encoded_transactions.clone(),
                 TestMetadata {
-                    num_transactions: transactions.len() as u64
+                    num_transactions: transactions.len() as u64, ..Default::default()
                 },
                 ViewNumber::new(2),
                 None,
@@ -118,7 +118,7 @@ async fn test_vid_task() {
                 payload_commitment,
                 builder_commitment,
                 TestMetadata {
-                    num_transactions: transactions.len() as u64,
+                    num_transactions: transactions.len() as u64, ..Default::default()
                 },
                 ViewNumber::new(2),
                 vec1![

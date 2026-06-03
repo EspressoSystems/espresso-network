@@ -311,7 +311,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
             if let ConsensusOutput::RequestBlockAndHeader(ref req) = output
                 && cfg.block_size > 0
             {
-                let block = build_test_block(cfg.block_size, cfg.total_nodes);
+                let block = build_test_block(cfg.block_size, cfg.total_nodes, cfg.namespaces);
                 let parent_leaf = req.parent_proposal.clone().into();
                 let version = bench_upgrade_lock().version_infallible(req.view);
                 let header = TestBlockHeader::new::<TestTypes>(
@@ -371,20 +371,26 @@ struct TestBlock {
     builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
-fn build_test_block(size: usize, num_nodes: usize) -> TestBlock {
+fn build_test_block(size: usize, num_nodes: usize, n_namespaces: u32) -> TestBlock {
     use hotshot_types::traits::EncodeBytes;
 
     let tx = TestTransaction::new(vec![0u8; size]);
     let block = TestBlockPayload {
         transactions: vec![tx],
     };
+    let encoded = block.encode();
+
+    // `TestMetadata` itself emits the namespace table when `num_transactions
+    // > 1` AND `payload_byte_len > 0`. The bench sets both so AvidM dispersal
+    // splits the payload into N evenly-sized namespaces and parallelizes
+    // per-namespace via rayon (same wire format as production `NsTable`).
+    let n = n_namespaces.max(1);
     let metadata = TestMetadata {
-        num_transactions: 1,
+        num_transactions: n as u64,
+        payload_byte_len: if n > 1 { encoded.len() as u64 } else { 0 },
     };
-    // Use the actual committee size so the commitment matches what
-    // VidDisperse::calculate_vid_disperse will produce.
     let payload_commitment = hotshot_types::data::vid_commitment(
-        &block.encode(),
+        &encoded,
         &metadata.encode(),
         num_nodes,
         versions::NEW_PROTOCOL_VERSION,

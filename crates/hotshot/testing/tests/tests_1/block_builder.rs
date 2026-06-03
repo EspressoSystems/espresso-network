@@ -100,7 +100,7 @@ async fn test_random_block_builder() {
                 transactions: vec![TestTransaction::new(vec![0; 1])],
             },
             &TestMetadata {
-                num_transactions: 1,
+                num_transactions: 1, ..Default::default()
             },
         );
 

@@ -103,7 +103,7 @@ async fn test_da_task() {
             BlockRecv(PackedBundle::new(
                 encoded_transactions.clone(),
                 TestMetadata {
-                    num_transactions: transactions.len() as u64
+                    num_transactions: transactions.len() as u64, ..Default::default()
                 },
                 ViewNumber::new(2),
                 None,
@@ -213,7 +213,7 @@ async fn test_da_task_storage_failure() {
             BlockRecv(PackedBundle::new(
                 encoded_transactions.clone(),
                 TestMetadata {
-                    num_transactions: transactions.len() as u64
+                    num_transactions: transactions.len() as u64, ..Default::default()
                 },
                 ViewNumber::new(2),
                 None,

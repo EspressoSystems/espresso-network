@@ -170,16 +170,44 @@ impl<TYPES: NodeType> TestableBlock<TYPES> for TestBlockPayload {
 }
 
 #[derive(
-    Debug, Display, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
+    Debug, Display, Clone, Copy, Default, Serialize, Deserialize,
+    PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
 #[display("{{num_transactions:{num_transactions}}}")]
 pub struct TestMetadata {
     pub num_transactions: u64,
+    /// Total encoded-payload byte length. When this is `> 0` and
+    /// `num_transactions > 1`, `EncodeBytes::encode` emits a well-formed
+    /// namespace table (in the wire format consumed by
+    /// `hotshot_types::data::ns_table::parse_ns_table`) that splits the
+    /// payload into `num_transactions` evenly-sized namespaces. The AvidM
+    /// dispersal pipeline then parallelizes per-namespace via rayon.
+    ///
+    /// Default `0` preserves the legacy single-namespace behaviour for
+    /// every existing call site that doesn't opt in.
+    #[serde(default)]
+    pub payload_byte_len: u64,
 }
 
 impl EncodeBytes for TestMetadata {
     fn encode(&self) -> Arc<[u8]> {
-        Arc::new([])
+        let n_ns = self.num_transactions;
+        let total = self.payload_byte_len as usize;
+        if n_ns <= 1 || total == 0 {
+            return Arc::new([]);
+        }
+        // Wire format consumed by `parse_ns_table`:
+        //   [u32_le num_nss] [u32_le ns_id | u32_le ns_end_offset] × num_nss
+        let n = n_ns as usize;
+        let chunk = total / n;
+        let mut buf = Vec::with_capacity(4 + n * 8);
+        buf.extend_from_slice(&(n_ns as u32).to_le_bytes());
+        for i in 0..n {
+            let end = if i + 1 == n { total } else { (i + 1) * chunk };
+            buf.extend_from_slice(&(i as u32).to_le_bytes()); // ns_id
+            buf.extend_from_slice(&(end as u32).to_le_bytes()); // ns_end_offset
+        }
+        buf.into()
     }
 }
 
@@ -205,6 +233,7 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
         let txns_vec: Vec<TestTransaction> = transactions.into_iter().collect();
         let metadata = TestMetadata {
             num_transactions: txns_vec.len() as u64,
+            ..Default::default()
         };
         Ok((
             Self {
@@ -240,6 +269,7 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
             Self::genesis(),
             TestMetadata {
                 num_transactions: 0,
+                ..Default::default()
             },
         )
     }

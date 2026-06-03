@@ -40,6 +40,7 @@ fn node_config(
             .into_owned(),
         block_size,
         sampler_tick_ms: 50,
+        namespaces: 1,
     }
 }
 

@@ -1195,6 +1195,7 @@ pub mod node_tests {
                     ),
                 metadata: TestMetadata {
                     num_transactions: 7, // arbitrary
+                    ..Default::default()
                 },
                 random: 1, // arbitrary
                 version: TEST_VERSIONS.test.base,
@@ -1398,6 +1399,7 @@ pub mod node_tests {
             &bytes,
             &TestMetadata {
                 num_transactions: 7, // arbitrary
+                    ..Default::default()
             },
         );
         assert_eq!(recovered, *block.payload());

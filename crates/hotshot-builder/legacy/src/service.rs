@@ -3582,7 +3582,7 @@ mod test {
                 BlockInfo {
                     block_payload: payload,
                     metadata: TestMetadata {
-                        num_transactions: 1,
+                        num_transactions: 1, ..Default::default()
                     },
                     vid_trigger: Arc::new(async_lock::RwLock::new(Some(vid_trigger_sender))),
                     offered_fee: 100,
@@ -3820,7 +3820,7 @@ mod test {
         let da_proposal = DaProposal2::<TestTypes> {
             encoded_transactions: Arc::new([1, 2, 3, 4, 5, 6]),
             metadata: TestMetadata {
-                num_transactions: 1,
+                num_transactions: 1, ..Default::default()
             }, // arbitrary
             view_number,
             epoch,
@@ -3879,7 +3879,7 @@ mod test {
         let da_proposal = DaProposal2::<TestTypes> {
             encoded_transactions: Arc::new([1, 2, 3, 4, 5, 6]),
             metadata: TestMetadata {
-                num_transactions: 1,
+                num_transactions: 1, ..Default::default()
             }, // arbitrary
             view_number,
             epoch,
@@ -3929,7 +3929,7 @@ mod test {
         let da_proposal = DaProposal2::<TestTypes> {
             encoded_transactions: Arc::new([1, 2, 3, 4, 5, 6]),
             metadata: TestMetadata {
-                num_transactions: 1,
+                num_transactions: 1, ..Default::default()
             }, // arbitrary
             view_number,
             epoch,

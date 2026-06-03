@@ -273,7 +273,7 @@ async fn progress_round_with_transactions(
         .expect("should sign encoded transactions hash successfully");
 
         let metadata = TestMetadata {
-            num_transactions: transactions.len() as u64,
+            num_transactions: transactions.len() as u64, ..Default::default()
         };
 
         da_proposal_sender
