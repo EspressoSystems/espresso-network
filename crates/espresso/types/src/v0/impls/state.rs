@@ -1143,7 +1143,7 @@ impl ValidatedState {
             UpgradeType::Fee { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
             UpgradeType::DrbAndHeader { chain_config } => chain_config,
-            UpgradeType::Da { chain_config } => chain_config,
+            UpgradeType::NewProtocol { chain_config } => chain_config,
             UpgradeType::EpochReward { chain_config } => chain_config,
         };
 

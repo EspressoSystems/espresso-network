@@ -37,8 +37,8 @@ version = "0.6"
 start_proposing_view = 600
 stop_proposing_view = 2000
 
-[upgrade.da]
-[upgrade.da.chain_config]
+[upgrade.new_protocol]
+[upgrade.new_protocol.chain_config]
 chain_id = 999999999
 max_block_size = "10mb"
 base_fee = "1 wei"
