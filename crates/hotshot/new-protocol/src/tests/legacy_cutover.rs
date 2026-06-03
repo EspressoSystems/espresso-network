@@ -253,7 +253,6 @@ async fn build_cutover_coordinator(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
-        100,
     );
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
@@ -298,7 +297,6 @@ async fn build_cutover_coordinator(
         .vote2_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_one_honest_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
-        .checkpoint_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .epoch_root_collector(EpochRootVoteCollector::new(
             membership.clone(),
             upgrade_lock.clone(),
