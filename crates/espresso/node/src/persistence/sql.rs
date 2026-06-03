@@ -1350,6 +1350,12 @@ impl Persistence {
                         .bind(to_view_i64),
                 )
                 .await?;
+                tx.execute(
+                    query("DELETE FROM decided_cert2 where view >= $1 AND view <= $2")
+                        .bind(from_view_i64)
+                        .bind(to_view_i64),
+                )
+                .await?;
 
                 // Clean up leaves, but do not delete the most recent one (all leaves with a view
                 // number less than the given value). This is necessary to ensure that, in case of
@@ -2946,25 +2952,18 @@ impl SequencerPersistence for Persistence {
         high_qc: NextEpochQuorumCertificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
         let qc2_bytes = bincode::serialize(&high_qc).context("serializing next epoch qc")?;
-        self.serializable_backoff
-            .retry_if(
-                is_serialization_error_with_diag(
-                    self.db.pool(),
-                    "store_next_epoch_quorum_certificate",
-                ),
-                || async {
-                    let mut tx = self.db.write().await?;
-                    tx.upsert(
-                        "next_epoch_quorum_certificate",
-                        ["id", "data"],
-                        ["id"],
-                        [(true, qc2_bytes.clone())],
-                    )
-                    .await?;
-                    tx.commit().await
-                },
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "next_epoch_quorum_certificate",
+                ["id", "data"],
+                ["id"],
+                [(true, qc2_bytes.clone())],
             )
-            .await
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_next_epoch_quorum_certificate(
