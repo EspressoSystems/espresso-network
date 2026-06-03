@@ -662,6 +662,11 @@ impl<T: NodeType> Consensus<T> {
                 self.proposals = self.proposals.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
             },
+            GcScope::Epoch(epoch) => {
+                let keep_from = EpochNumber::from(epoch.saturating_sub(1));
+                self.drb_results = self.drb_results.split_off(&keep_from);
+                self.state_certs = self.state_certs.split_off(&keep_from);
+            },
         }
     }
 
@@ -2028,6 +2033,16 @@ impl<T: NodeType> Consensus<T> {
     #[cfg(test)]
     pub(crate) fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<T>) {
         self.proposals.insert(view, proposal);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_drb_result_for_test(&mut self, epoch: EpochNumber, drb: DrbResult) {
+        self.drb_results.insert(epoch, drb);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drb_result_epochs(&self) -> Vec<u64> {
+        self.drb_results.keys().map(|e| e.u64()).collect()
     }
 }
 

@@ -1,6 +1,6 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{data::ViewNumber, traits::signature_key::SignatureKey};
 
 use super::common::utils::TestData;
 use crate::vid::VidReconstructor;
@@ -112,6 +112,28 @@ async fn test_mark_reconstructed_skips_reconstruction() {
             );
         },
     }
+}
+
+/// `gc(view)` must prune the `reconstructed` bookkeeping set for views below
+/// `view`. Otherwise the set grows by one entry per reconstructed view forever
+/// — a slow memory leak even though consensus keeps making progress.
+#[test]
+fn test_gc_prunes_reconstructed_bookkeeping() {
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+    for v in 0..10u64 {
+        reconstructor.mark_reconstructed(ViewNumber::new(v));
+    }
+    assert_eq!(reconstructor.reconstructed_views().len(), 10);
+
+    reconstructor.gc(ViewNumber::new(5));
+
+    let remaining = reconstructor.reconstructed_views();
+    assert_eq!(
+        remaining,
+        (5..10).map(ViewNumber::new).collect::<Vec<_>>(),
+        "gc should drop reconstructed bookkeeping for views below the gc view, keeping only views \
+         >= the gc view"
+    );
 }
 
 /// Shares arriving after reconstruction has already completed for a view

@@ -774,9 +774,14 @@ where
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
                 info!(%node, %view, %epoch, "view changed");
+                let prev_epoch = self.consensus.current_epoch();
                 self.consensus.set_view(view, epoch);
                 self.timer.reset_with_epoch(view, epoch);
                 self.gc(epoch, GcScope::Local(view))?;
+                // On epoch boundaries, prune epoch-keyed state for old epochs.
+                if prev_epoch != Some(epoch) {
+                    self.gc(epoch, GcScope::Epoch(epoch))?;
+                }
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;
@@ -1438,6 +1443,11 @@ where
                 self.storage.gc(view);
                 self.state_manager.gc(view);
             },
+            GcScope::Epoch(gc_epoch) => {
+                info!(node = %self.node_id, %gc_epoch, "epoch garbage collection");
+                // Epoch-keyed state (`drb_results`, `state_certs`) is pruned in
+                // `Consensus::gc` above; nothing coordinator-level to clean here.
+            },
         }
         Ok(())
     }
@@ -1452,6 +1462,10 @@ pub enum GcScope {
     Decided(ViewNumber),
     /// GC is invoked when reaching a checkpoint.
     Checkpoint(ViewNumber),
+    /// GC is invoked when entering a new epoch. Carries the epoch just
+    /// entered; cleans up epoch-keyed state for epochs older than the
+    /// previous one (e.g. entering epoch 4 cleans up epoch 2 and below).
+    Epoch(EpochNumber),
 }
 
 fn check_payload_commitment<T: NodeType>(

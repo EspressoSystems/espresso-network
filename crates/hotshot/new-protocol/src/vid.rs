@@ -232,6 +232,7 @@ impl<T: NodeType> VidReconstructor<T> {
         }
         self.calculations = keep;
         self.accumulators = self.accumulators.split_off(&view_number);
+        self.reconstructed = self.reconstructed.split_off(&view_number);
     }
 
     /// Mark `view` as already-reconstructed: drop accumulated shares, abort any
@@ -242,5 +243,10 @@ impl<T: NodeType> VidReconstructor<T> {
         if let Some(handle) = self.calculations.remove(&view) {
             handle.abort();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reconstructed_views(&self) -> Vec<ViewNumber> {
+        self.reconstructed.iter().copied().collect()
     }
 }

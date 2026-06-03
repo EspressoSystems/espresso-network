@@ -14,6 +14,7 @@ use hotshot_types::{
 use super::common::utils::TestData;
 use crate::{
     consensus::ConsensusInput,
+    coordinator::GcScope,
     helpers::proposal_commitment,
     message::Proposal,
     outbox::Outbox,
@@ -820,4 +821,32 @@ async fn test_decide_not_repeated_for_same_view() {
     harness.apply(test_data.views[1].cert2_input()).await;
 
     assert_eq!(1, count_matching(harness.outputs(), is_leaf_decided));
+}
+
+/// `GcScope::Epoch` must prune epoch-keyed state (`drb_results`, `state_certs`)
+/// for old epochs, keeping the current epoch and the one immediately before it.
+/// Without this, those maps grow by one entry per epoch forever — a slow leak.
+#[tokio::test]
+async fn test_epoch_gc_prunes_old_epoch_state() {
+    let mut harness = ConsensusHarness::new(0).await;
+
+    // Track DRB results for epochs 1..=4.
+    for e in 1..=4u64 {
+        harness
+            .consensus
+            .insert_drb_result_for_test(EpochNumber::new(e), [e as u8; 32]);
+    }
+    assert_eq!(harness.consensus.drb_result_epochs(), vec![1, 2, 3, 4]);
+
+    // Entering epoch 4 cleans up epoch 2 and below, keeping epochs 3 and 4.
+    harness.consensus.gc(GcScope::Epoch(EpochNumber::new(4)));
+    assert_eq!(
+        harness.consensus.drb_result_epochs(),
+        vec![3, 4],
+        "epoch gc should retain the current epoch and the one before it, dropping everything older"
+    );
+
+    // Idempotent: re-running at the same epoch changes nothing.
+    harness.consensus.gc(GcScope::Epoch(EpochNumber::new(4)));
+    assert_eq!(harness.consensus.drb_result_epochs(), vec![3, 4]);
 }
