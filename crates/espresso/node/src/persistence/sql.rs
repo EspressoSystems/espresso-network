@@ -437,6 +437,7 @@ impl From<SqliteOptions> for Options {
             lightweight: false,
             min_connections: 0,
             pool: None,
+            serializable_retry: SerializableRetryOptions::default(),
         }
     }
 }
@@ -1082,18 +1083,19 @@ impl Persistence {
                 };
                 tracing::debug!(?from_view, "generate decide event");
 
-            let mut parent = None;
-            let mut rows = query(
-                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view",
-            )
-            .bind(from_view)
-            .fetch(tx.as_mut());
-            let mut leaves: Vec<(Leaf2, CertificatePair<SeqTypes>)> = vec![];
-            let mut final_qc = None;
-            while let Some(row) = rows.next().await {
-                let row = match row {
-                    Ok(row) => row,
-                    Err(err) => {
+                let mut parent = None;
+                let mut rows = query(
+                    "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY \
+                     view",
+                )
+                .bind(from_view)
+                .fetch(tx.as_mut());
+                let mut leaves: Vec<(Leaf2, CertificatePair<SeqTypes>)> = vec![];
+                let mut final_qc = None;
+                while let Some(row) = rows.next().await {
+                    let row = match row {
+                        Ok(row) => row,
+                        Err(err) => {
                             if err.as_database_error().is_some_and(|e| {
                                 e.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE)
                             }) {
@@ -1102,10 +1104,10 @@ impl Persistence {
                             }
                             // If there's an error getting a row, try generating an event with
                             // the rows we do have.
-                        tracing::warn!("error loading row: {err:#}");
-                        break;
-                    },
-                };
+                            tracing::warn!("error loading row: {err:#}");
+                            break;
+                        },
+                    };
 
                     let leaf_data: Vec<u8> = row.get("leaf");
                     let leaf = bincode::deserialize::<Leaf2>(&leaf_data)?;
@@ -1119,25 +1121,25 @@ impl Persistence {
                     };
                     let height = leaf.block_header().block_number();
 
-                // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
-                // garbage collect any views for which we missed a leaf or decide event; at least
-                // not right away, in case we need to recover that data later.
-                if let Some(parent) = parent
-                    && height != parent + 1
-                {
-                    tracing::debug!(
-                        height,
-                        parent,
-                        "ending decide event at non-consecutive leaf"
-                    );
-                    break;
+                    // Ensure we are only dealing with a consecutive chain of leaves. We don't want to
+                    // garbage collect any views for which we missed a leaf or decide event; at least
+                    // not right away, in case we need to recover that data later.
+                    if let Some(parent) = parent
+                        && height != parent + 1
+                    {
+                        tracing::debug!(
+                            height,
+                            parent,
+                            "ending decide event at non-consecutive leaf"
+                        );
+                        break;
+                    }
+                    parent = Some(height);
+                    let cert = CertificatePair::new(qc, next_epoch_qc);
+                    final_qc = Some(cert.clone());
+                    leaves.push((leaf, cert));
                 }
-                parent = Some(height);
-                let cert = CertificatePair::new(qc, next_epoch_qc);
-                final_qc = Some(cert.clone());
-                leaves.push((leaf, cert));
-            }
-            drop(rows);
+                drop(rows);
 
                 let Some(final_qc) = final_qc else {
                     // End event processing when there are no more decided views.
@@ -1145,10 +1147,10 @@ impl Persistence {
                     return Ok(None);
                 };
 
-            // Find the range of views encompassed by this leaf chain. All data in this range can be
-            // processed by the consumer and then deleted.
-            let from_view = leaves[0].0.view_number();
-            let to_view = leaves[leaves.len() - 1].0.view_number();
+                // Find the range of views encompassed by this leaf chain. All data in this range can be
+                // processed by the consumer and then deleted.
+                let from_view = leaves[0].0.view_number();
+                let to_view = leaves[leaves.len() - 1].0.view_number();
 
                 // Collect VID shares for the decide event.
                 let vid_rows = tx
@@ -1199,14 +1201,13 @@ impl Persistence {
                         format!("load_state_certs from_view={from_view:?} to_view={to_view:?}")
                     })?;
 
-                let cert2_rows = tx
+                let cert2_row = tx
                     .fetch_optional(
                         query("SELECT data FROM decided_cert2 WHERE view = $1")
                             .bind(to_view.u64() as i64),
                     )
                     .await?;
-                let cert2 = cert2_rows
-                    .into_i
+                let cert2 = cert2_row
                     .map(|row| {
                         let bytes: Vec<u8> = row.get("data");
                         bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
@@ -1229,7 +1230,6 @@ impl Persistence {
             else {
                 return Ok(());
             };
-
 
             // Collate all the information by view number and construct a chain of leaves.
             let chain = leaves
@@ -2245,19 +2245,18 @@ impl SequencerPersistence for Persistence {
     ) -> anyhow::Result<()> {
         let data = bincode::serialize(&cert2).context("serializing cert2")?;
         let view_i64 = view.u64() as i64;
-        WRITE_BACKOFF
-            .retry_if(WRITE_RETRY_MAX, is_serialization_error, || async {
-                let mut tx = self.db.write().await?;
-                tx.upsert(
-                    "decided_cert2",
-                    ["view", "data"],
-                    ["view"],
-                    [(view_i64, data.clone())],
-                )
-                .await?;
-                tx.commit().await
-            })
-            .await
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            tx.upsert(
+                "decided_cert2",
+                ["view", "data"],
+                ["view"],
+                [(view_i64, data.clone())],
+            )
+            .await?;
+            tx.commit().await
+        })
+        .await
     }
 
     async fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
@@ -3588,35 +3587,34 @@ impl MembershipPersistence for Persistence {
     }
 
     async fn delete_stake_tables(&self) -> anyhow::Result<()> {
-        WRITE_BACKOFF
-            .retry_if(WRITE_RETRY_MAX, is_serialization_error, || async {
-                let mut tx = self.db.write().await?;
-                #[cfg(not(feature = "embedded-db"))]
-                query(
-                    "TRUNCATE stake_table_events, stake_table_events_l1_block, \
-                     epoch_drb_and_root, stake_table_validators",
-                )
-                .execute(tx.as_mut())
-                .await?;
-                #[cfg(feature = "embedded-db")]
-                {
-                    query("DELETE FROM stake_table_events")
-                        .execute(tx.as_mut())
-                        .await?;
-                    query("DELETE FROM stake_table_events_l1_block")
-                        .execute(tx.as_mut())
-                        .await?;
-                    query("DELETE FROM epoch_drb_and_root")
-                        .execute(tx.as_mut())
-                        .await?;
-                    query("DELETE FROM stake_table_validators")
-                        .execute(tx.as_mut())
-                        .await?;
-                }
-                tx.commit().await?;
-                Ok(())
-            })
-            .await
+        serializable_retry!(self, || async {
+            let mut tx = self.db.write().await?;
+            #[cfg(not(feature = "embedded-db"))]
+            query(
+                "TRUNCATE stake_table_events, stake_table_events_l1_block, epoch_drb_and_root, \
+                 stake_table_validators",
+            )
+            .execute(tx.as_mut())
+            .await?;
+            #[cfg(feature = "embedded-db")]
+            {
+                query("DELETE FROM stake_table_events")
+                    .execute(tx.as_mut())
+                    .await?;
+                query("DELETE FROM stake_table_events_l1_block")
+                    .execute(tx.as_mut())
+                    .await?;
+                query("DELETE FROM epoch_drb_and_root")
+                    .execute(tx.as_mut())
+                    .await?;
+                query("DELETE FROM stake_table_validators")
+                    .execute(tx.as_mut())
+                    .await?;
+            }
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
     }
 
     async fn store_all_validators(

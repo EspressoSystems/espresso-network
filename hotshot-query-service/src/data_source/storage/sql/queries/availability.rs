@@ -72,14 +72,6 @@ where
     }
 
     async fn get_block(&mut self, id: BlockId<Types>) -> QueryResult<BlockQueryData<Types>> {
-        let pruned_height: i64 = self
-            .load_pruned_height()
-            .await
-            .map_err(|err| QueryError::Error {
-                message: format!("{err:#}"),
-            })?
-            .map(|h| h as i64)
-            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -99,14 +91,6 @@ where
     }
 
     async fn get_payload(&mut self, id: BlockId<Types>) -> QueryResult<PayloadQueryData<Types>> {
-        let pruned_height: i64 = self
-            .load_pruned_height()
-            .await
-            .map_err(|err| QueryError::Error {
-                message: format!("{err:#}"),
-            })?
-            .map(|h| h as i64)
-            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -125,14 +109,6 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<PayloadMetadata<Types>> {
-        let pruned_height: i64 = self
-            .load_pruned_height()
-            .await
-            .map_err(|err| QueryError::Error {
-                message: format!("{err:#}"),
-            })?
-            .map(|h| h as i64)
-            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -158,14 +134,6 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<VidCommonQueryData<Types>> {
-        let pruned_height: i64 = self
-            .load_pruned_height()
-            .await
-            .map_err(|err| QueryError::Error {
-                message: format!("{err:#}"),
-            })?
-            .map(|h| h as i64)
-            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(
@@ -184,14 +152,6 @@ where
         &mut self,
         id: BlockId<Types>,
     ) -> QueryResult<VidCommonMetadata<Types>> {
-        let pruned_height: i64 = self
-            .load_pruned_height()
-            .await
-            .map_err(|err| QueryError::Error {
-                message: format!("{err:#}"),
-            })?
-            .map(|h| h as i64)
-            .unwrap_or(-1);
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id)?;
         let sql = format!(

@@ -18,11 +18,7 @@
 //! database connection, so that the updated state of the database can be queried midway through a
 //! transaction.
 
-use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, marker::PhantomData, time::Instant};
 
 use anyhow::{Context, bail};
 use async_trait::async_trait;
@@ -45,7 +41,6 @@ use itertools::Itertools;
 use jf_merkle_tree_compat::prelude::MerkleProof;
 pub use sqlx::Executor;
 use sqlx::{Encode, Execute, FromRow, QueryBuilder, Type, pool::Pool, query_builder::Separated};
-use tokio::time::sleep;
 use tracing::instrument;
 
 #[cfg(not(feature = "embedded-db"))]
@@ -517,9 +512,6 @@ impl Transaction<Prune> {
             .await
             .context("deleting transactions")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned transactions");
-        if let Some(d) = delay {
-            sleep(d).await;
-        }
 
         let res = query("DELETE FROM leaf2 WHERE height <= $1")
             .bind(height as i64)
@@ -527,9 +519,6 @@ impl Transaction<Prune> {
             .await
             .context("deleting leaf2")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned leaf2");
-        if let Some(d) = delay {
-            sleep(d).await;
-        }
 
         let res = query("DELETE FROM header WHERE height <= $1")
             .bind(height as i64)
@@ -537,47 +526,6 @@ impl Transaction<Prune> {
             .await
             .context("deleting headers")?;
         tracing::debug!(rows_affected = res.rows_affected(), "pruned headers");
-        if let Some(d) = delay {
-            sleep(d).await;
-        }
-
-        // Garbage-collect payloads and VID common that are no longer referenced by any header.
-        // We delete headers first so that the NOT EXISTS check is a simple orphan scan: a payload
-        // row is safe to remove iff no header row still points to it.  This avoids the need to
-        // reason about the prune range at all, correctly handles the case where multiple pruned
-        // blocks share the same payload, and under SSI creates per-payload predicate locks on
-        // header_payload_hash_ns_table_idx rather than a full-table scan, so concurrent inserts of
-        // unrelated blocks do not generate spurious serialization failures.
-        let res = query(
-            "DELETE FROM payload AS p
-              WHERE NOT EXISTS (
-                  SELECT 1 FROM header WHERE payload_hash = p.hash AND ns_table = p.ns_table
-              )",
-        )
-        .execute(self.as_mut())
-        .await
-        .context("garbage collecting payloads")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected payloads"
-        );
-        if let Some(d) = delay {
-            sleep(d).await;
-        }
-
-        let res = query(
-            "DELETE FROM vid_common AS v
-              WHERE NOT EXISTS (
-                  SELECT 1 FROM header WHERE payload_hash = v.hash
-              )",
-        )
-        .execute(self.as_mut())
-        .await
-        .context("garbage collecting VID common")?;
-        tracing::debug!(
-            rows_affected = res.rows_affected(),
-            "garbage collected VID common"
-        );
 
         let res = query(
             "DELETE FROM payload AS p
@@ -621,8 +569,6 @@ impl Transaction<Prune> {
         state_tables: Vec<String>,
         height: u64,
     ) -> anyhow::Result<()> {
-        let delay = prune_slow_delay();
-
         for state_table in state_tables {
             self.execute(
                 query(&format!(
@@ -639,9 +585,6 @@ impl Transaction<Prune> {
                 .bind(height as i64),
             )
             .await?;
-            if let Some(d) = delay {
-                sleep(d).await;
-            }
         }
 
         Ok(())

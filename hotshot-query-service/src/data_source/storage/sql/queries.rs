@@ -167,19 +167,7 @@ impl<Mode> Transaction<Mode> {
     pub async fn load_header<Types: NodeType>(
         &mut self,
         id: impl Into<BlockId<Types>> + Send,
-    ) -> QueryResult<Header<Types>>
-    where
-        Mode: TransactionMode,
-    {
-        let pruned_height: i64 = self
-            .load_pruned_height()
-            .await
-            .map_err(|err| QueryError::Error {
-                message: format!("{err:#}"),
-            })?
-            .map(|h| h as i64)
-            .unwrap_or(-1);
-
+    ) -> QueryResult<Header<Types>> {
         let mut query = QueryBuilder::default();
         let where_clause = query.header_where_clause(id.into())?;
         let sql = format!(
