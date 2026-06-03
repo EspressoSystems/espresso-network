@@ -5,6 +5,7 @@ use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
+    simple_certificate::QuorumCertificate2,
     simple_vote::TimeoutVote2,
     traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
     utils::StateAndDelta,
@@ -123,6 +124,14 @@ impl<T: NodeType> ClientApi<T> {
             .await
     }
 
+    /// Forward the last legacy view's QC so the first new-protocol leader can
+    /// propose on it even if the cutover seed was snapshotted before it formed.
+    pub async fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::SubmitLegacyHighQc { qc, respond }, rx)
+            .await
+    }
+
     /// Refresh the coordinator network's peer set for `epoch`.
     pub async fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
@@ -224,6 +233,10 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTimeoutVote {
         vote: TimeoutVote2<T>,
+        respond: oneshot::Sender<()>,
+    },
+    SubmitLegacyHighQc {
+        qc: QuorumCertificate2<T>,
         respond: oneshot::Sender<()>,
     },
     BumpNetworkEpoch {
