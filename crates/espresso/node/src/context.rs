@@ -219,6 +219,13 @@ where
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
+<<<<<<< HEAD
+||||||| parent of 1eba31b72e ([new-protocol] garbage collect consensus data for views less than decided view (#4415))
+            .garbage_collection_interval(new_protocol_consensus_gc_interval.get())
+            .metrics(metrics)
+=======
+            .metrics(metrics)
+>>>>>>> 1eba31b72e ([new-protocol] garbage collect consensus data for views less than decided view (#4415))
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();

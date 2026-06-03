@@ -179,36 +179,6 @@ pub struct Vote2Data<T: NodeType> {
     pub block_number: u64,
 }
 
-/// Data used .
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub struct CheckpointData {
-    pub view: ViewNumber,
-    pub epoch: EpochNumber,
-}
-
-impl Committable for CheckpointData {
-    fn commit(&self) -> Commitment<Self> {
-        committable::RawCommitmentBuilder::new("CheckpointData")
-            .u64(*self.view)
-            .u64(*self.epoch)
-            .finalize()
-    }
-}
-
-impl HasViewNumber for CheckpointData {
-    fn view_number(&self) -> ViewNumber {
-        self.view
-    }
-}
-
-impl HasEpoch for CheckpointData {
-    fn epoch(&self) -> Option<EpochNumber> {
-        Some(self.epoch)
-    }
-}
-
-impl QuorumMarker for CheckpointData {}
 impl<T: NodeType> QuorumMarker for Vote2Data<T> {}
 
 impl<T: NodeType> HasEpoch for Vote2Data<T> {

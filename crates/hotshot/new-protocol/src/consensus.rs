@@ -20,8 +20,8 @@ use hotshot_types::{
         check_qc_state_cert_correspondence,
     },
     simple_vote::{
-        CheckpointData, HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote,
-        TimeoutData2, TimeoutVote2, Vote2Data,
+        HasEpoch, LightClientStateUpdateVote2, QuorumData2, SimpleVote, TimeoutData2, TimeoutVote2,
+        Vote2Data,
     },
     stake_table::StakeTableEntries,
     traits::{
@@ -41,8 +41,16 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
+<<<<<<< HEAD
         Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal,
         ProposalFetchRequest, ProposalMessage, Validated, Vote1, Vote2,
+||||||| parent of 1eba31b72e ([new-protocol] garbage collect consensus data for views less than decided view (#4415))
+        Certificate1, Certificate2, CheckpointVote, EpochChangeMessage, Proposal,
+        ProposalFetchRequest, ProposalMessage, Validated, VidShareMessage, Vote1, Vote2,
+=======
+        Certificate1, Certificate2, EpochChangeMessage, Proposal, ProposalFetchRequest,
+        ProposalMessage, Validated, VidShareMessage, Vote1, Vote2,
+>>>>>>> 1eba31b72e ([new-protocol] garbage collect consensus data for views less than decided view (#4415))
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -84,8 +92,17 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
+<<<<<<< HEAD
     SendProposal(SignedProposal<T, Proposal<T>>, VidDisperse2<T>),
     SendCheckpointVote(CheckpointVote<T>),
+||||||| parent of 1eba31b72e ([new-protocol] garbage collect consensus data for views less than decided view (#4415))
+    SendProposal(SignedProposal<T, Proposal<T>>),
+    SendVidShares(Vec<VidShareMessage<T>>),
+    SendCheckpointVote(CheckpointVote<T>),
+=======
+    SendProposal(SignedProposal<T, Proposal<T>>),
+    SendVidShares(Vec<VidShareMessage<T>>),
+>>>>>>> 1eba31b72e ([new-protocol] garbage collect consensus data for views less than decided view (#4415))
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
@@ -158,7 +175,6 @@ pub struct Consensus<T: NodeType> {
     node_id: KeyPrefix,
     upgrade_lock: UpgradeLock<T>,
 
-    garbage_collection_interval: BlockNumber,
     pub(crate) epoch_height: BlockNumber,
 }
 
@@ -228,8 +244,13 @@ impl<T: NodeType> Consensus<T> {
             state_certs: BTreeMap::new(),
             upgrade_lock,
             vid_shares: BTreeMap::new(),
+<<<<<<< HEAD
             // TODO: make this configurable or Constant
             garbage_collection_interval: 100.into(),
+||||||| parent of 1eba31b72e ([new-protocol] garbage collect consensus data for views less than decided view (#4415))
+            garbage_collection_interval: garbage_collection_interval.into(),
+=======
+>>>>>>> 1eba31b72e ([new-protocol] garbage collect consensus data for views less than decided view (#4415))
             epoch_height: epoch_height.into(),
         }
     }
@@ -988,10 +1009,6 @@ impl<T: NodeType> Consensus<T> {
         }
         let new_decided_view = max(self.last_decided_view, leaf.view_number());
         let last_decided_leaf = leaf.clone();
-        let mut gc = None;
-        if leaf.block_header().block_number() % *self.garbage_collection_interval == 0 {
-            gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
-        }
         let mut decided = vec![leaf];
         let mut vid_shares = vec![self.signed_vid_share(view)];
 
@@ -1008,11 +1025,6 @@ impl<T: NodeType> Consensus<T> {
             let mut leaf: Leaf2<T> = proposal.clone().into();
             if let Some(payload) = self.blocks.get(&parent_view) {
                 leaf.fill_block_payload_unchecked(payload.clone());
-            }
-            if gc.is_none()
-                && leaf.block_header().block_number() % *self.garbage_collection_interval == 0
-            {
-                gc = Some((leaf.view_number(), leaf.justify_qc().epoch()));
             }
             vid_shares.push(self.signed_vid_share(parent_view));
             decided.push(leaf);
@@ -1032,26 +1044,6 @@ impl<T: NodeType> Consensus<T> {
             cert2: Some(cert2.clone()),
             vid_shares,
         });
-        if let Some(gc) = gc {
-            let gc_data = CheckpointData {
-                view: gc.0,
-                epoch: gc.1.unwrap_or_default(),
-            };
-            let vote = match SimpleVote::create_signed_vote(
-                gc_data,
-                view,
-                &self.public_key,
-                &self.private_key,
-                &self.upgrade_lock,
-            ) {
-                Ok(vote) => vote,
-                Err(err) => {
-                    warn!(%view, %err, "failed to create signed checkpoint vote");
-                    return;
-                },
-            };
-            outbox.push_back(ConsensusOutput::SendCheckpointVote(vote));
-        }
     }
 
     /// Build a `LightClientStateUpdateVote2` for an epoch-root leaf.
