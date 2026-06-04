@@ -424,6 +424,8 @@ pub mod metrics;
 pub mod migration;
 pub mod node;
 mod resolvable;
+#[cfg(feature = "sqlite-options")]
+pub mod sqlite_options;
 pub mod status;
 pub mod task;
 pub mod testing;

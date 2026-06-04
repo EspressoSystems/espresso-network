@@ -21,7 +21,7 @@ derive_builder = { workspace = true }
 derive_more = { workspace = true }
 espresso-types = { workspace = true }
 futures = { workspace = true }
-hotshot-query-service = { workspace = true }
+hotshot-query-service = { workspace = true, features = ["sqlite-options"] }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
