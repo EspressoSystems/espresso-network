@@ -371,19 +371,34 @@ struct TestBlock {
     builder_commitment: hotshot_types::utils::BuilderCommitment,
 }
 
+/// Per-transaction byte size when splitting the configured `--block-size` into
+/// many small transactions.  1 KiB matches realistic rollup-style traffic and
+/// — critically — turns `transaction_commitments` into a long Vec of small
+/// Keccak256 calls that `TestBlockPayload::transaction_commitments` parallelizes
+/// over the rayon pool, instead of one giant single-threaded Keccak.
+const BENCH_TX_BYTES: usize = 1024;
+
 fn build_test_block(size: usize, num_nodes: usize, n_namespaces: u32) -> TestBlock {
     use hotshot_types::traits::EncodeBytes;
 
-    let tx = TestTransaction::new(vec![0u8; size]);
-    let block = TestBlockPayload {
-        transactions: vec![tx],
-    };
+    // Split the configured payload into many BENCH_TX_BYTES-byte transactions.
+    // At least one tx so an empty `--block-size=0` config still produces a
+    // valid (small) payload.
+    let num_txs = (size / BENCH_TX_BYTES).max(1);
+    let transactions: Vec<TestTransaction> = (0..num_txs)
+        .map(|_| TestTransaction::new(vec![0u8; BENCH_TX_BYTES]))
+        .collect();
+    let block = TestBlockPayload { transactions };
     let encoded = block.encode();
 
     // `TestMetadata` itself emits the namespace table when `num_transactions
     // > 1` AND `payload_byte_len > 0`. The bench sets both so AvidM dispersal
     // splits the payload into N evenly-sized namespaces and parallelizes
     // per-namespace via rayon (same wire format as production `NsTable`).
+    //
+    // NOTE: `metadata.num_transactions` here is being repurposed as the
+    // namespace count for the wiring trick; it is independent of the actual
+    // `block.transactions.len()` (which is now ≈ size / 1 KiB).
     let n = n_namespaces.max(1);
     let metadata = TestMetadata {
         num_transactions: n as u64,

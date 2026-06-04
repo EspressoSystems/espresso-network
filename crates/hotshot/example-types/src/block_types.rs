@@ -299,6 +299,20 @@ impl<TYPES: NodeType> BlockPayload<TYPES> for TestBlockPayload {
         self.transactions.iter().cloned()
     }
 
+    /// Parallel override of the default serial map-then-collect.  The default
+    /// `transaction_commitments` walks `self.transactions(metadata).map(commit)`
+    /// which serializes the per-tx Keccak256 — the dominant tail in the
+    /// recover spawn_blocking task (see `recover_v_minus_1_decode_end →
+    /// recover_v_minus_1_end` interval).  With many small transactions, par_iter
+    /// distributes the hashes across all rayon workers.
+    fn transaction_commitments(
+        &self,
+        _metadata: &Self::Metadata,
+    ) -> Vec<Commitment<Self::Transaction>> {
+        use p3_maybe_rayon::prelude::*;
+        self.transactions.par_iter().map(|tx| tx.commit()).collect()
+    }
+
     fn txn_bytes(&self) -> usize {
         self.transactions.iter().map(|tx| tx.0.len()).sum()
     }

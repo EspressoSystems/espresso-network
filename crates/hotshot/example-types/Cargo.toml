@@ -25,6 +25,7 @@ hotshot-task-impls = { workspace = true }
 hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 jf-advz = { workspace = true }
+p3-maybe-rayon = { workspace = true, features = ["parallel"] }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
