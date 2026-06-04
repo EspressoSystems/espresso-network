@@ -170,8 +170,18 @@ impl<TYPES: NodeType> TestableBlock<TYPES> for TestBlockPayload {
 }
 
 #[derive(
-    Debug, Display, Clone, Copy, Default, Serialize, Deserialize,
-    PartialEq, Eq, PartialOrd, Ord, Hash,
+    Debug,
+    Display,
+    Clone,
+    Copy,
+    Default,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
 )]
 #[display("{{num_transactions:{num_transactions}}}")]
 pub struct TestMetadata {

@@ -54,7 +54,10 @@ impl SimulatedChainState {
         let num_transactions = transactions.len() as u64;
         let encoded_transactions = TestTransaction::encode(&transactions);
         let block_payload = TestBlockPayload { transactions };
-        let metadata = TestMetadata { num_transactions, ..Default::default() };
+        let metadata = TestMetadata {
+            num_transactions,
+            ..Default::default()
+        };
         let block_vid_commitment = vid_commitment(
             &encoded_transactions,
             &metadata.encode(),

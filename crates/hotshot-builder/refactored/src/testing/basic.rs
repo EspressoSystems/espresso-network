@@ -199,7 +199,8 @@ async fn test_pruning() {
                 &Default::default(),
                 TestBlockPayload::genesis(),
                 &TestMetadata {
-                    num_transactions: 0, ..Default::default()
+                    num_transactions: 0,
+                    ..Default::default()
                 },
                 TEST_VERSIONS.test.base,
             ),

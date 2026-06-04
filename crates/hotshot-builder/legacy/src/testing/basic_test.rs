@@ -151,7 +151,8 @@ mod tests {
                         timestamp: 0,
                         timestamp_millis: 0,
                         metadata: TestMetadata {
-                            num_transactions: 0, ..Default::default()
+                            num_transactions: 0,
+                            ..Default::default()
                         },
                         random: 1, // arbitrary
                         version: TEST_VERSIONS.test.base,
@@ -266,7 +267,8 @@ mod tests {
                     let da_proposal = DaProposal2 {
                         encoded_transactions: encoded_transactions.clone().into(),
                         metadata: TestMetadata {
-                            num_transactions: encoded_transactions.len() as u64, ..Default::default()
+                            num_transactions: encoded_transactions.len() as u64,
+                            ..Default::default()
                         },
                         view_number: ViewNumber::new(round as u64),
                         epoch: None, // TODO: check if this is okay

@@ -1399,7 +1399,7 @@ pub mod node_tests {
             &bytes,
             &TestMetadata {
                 num_transactions: 7, // arbitrary
-                    ..Default::default()
+                ..Default::default()
             },
         );
         assert_eq!(recovered, *block.payload());
