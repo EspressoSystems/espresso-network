@@ -87,6 +87,12 @@ pub enum LeaderEvent {
     Vote2VMinus1BroadcastEnd,
     Cert1VMinus1BroadcastStart,
     Cert1VMinus1BroadcastEnd,
+    /// This node's own Vote1 broadcast for the current view.  Vote1 carries
+    /// the per-recipient VID share, so this broadcast contributes meaningful
+    /// network bytes per recipient — comparable in size to one
+    /// `vid_shares_unicast` per share but reaching every peer at once.
+    Vote1BroadcastStart,
+    Vote1BroadcastEnd,
 }
 
 impl LeaderEvent {
@@ -135,6 +141,8 @@ impl LeaderEvent {
             Vote2VMinus1BroadcastEnd => "vote2_v_minus_1_broadcast_end",
             Cert1VMinus1BroadcastStart => "cert1_v_minus_1_broadcast_start",
             Cert1VMinus1BroadcastEnd => "cert1_v_minus_1_broadcast_end",
+            Vote1BroadcastStart => "vote1_broadcast_start",
+            Vote1BroadcastEnd => "vote1_broadcast_end",
         }
     }
 }

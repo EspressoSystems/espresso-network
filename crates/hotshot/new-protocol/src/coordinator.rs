@@ -756,9 +756,20 @@ where
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
                 };
-                self.network
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote1BroadcastStart
+                );
+                let r = self.network
                     .broadcast(message.view_number(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
+                    .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"));
+                crate::trace_leader_event!(
+                    self.consensus.tracer,
+                    view,
+                    crate::leader_trace::LeaderEvent::Vote1BroadcastEnd
+                );
+                r?
             },
             ConsensusOutput::SendVote2(vote2) => {
                 let view = vote2.view_number();
