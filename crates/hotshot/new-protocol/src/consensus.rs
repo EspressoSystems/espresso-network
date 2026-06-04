@@ -39,6 +39,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     block::BlockAndHeaderRequest,
+    coordinator::GcScope,
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -652,24 +653,35 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.get(view)
     }
 
-    pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
-        self.proposed_views = self.proposed_views.split_off(&view);
-        self.states_verified = self.states_verified.split_off(&view);
-        self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
-        self.blocks = self.blocks.split_off(&view);
-        self.certs = self.certs.split_off(&view);
-        self.certs2 = self.certs2.split_off(&view);
-        self.pending_certs1 = self.pending_certs1.split_off(&view);
-        self.pending_certs2 = self.pending_certs2.split_off(&view);
-        self.timeout_certs = self.timeout_certs.split_off(&view);
-        self.headers
-            .retain(|(header_view, _), _| *header_view >= view);
-        self.leaves = self.leaves.split_off(&view);
-        self.proposals = self.proposals.split_off(&view);
-        self.signed_proposals = self.signed_proposals.split_off(&view);
-        self.vid_shares = self.vid_shares.split_off(&view);
-        self.voted_1_views = self.voted_1_views.split_off(&view);
-        self.voted_2_views = self.voted_2_views.split_off(&view);
+    pub fn gc(&mut self, scope: GcScope) {
+        match scope {
+            GcScope::Local(view) => {
+                self.headers
+                    .retain(|(header_view, _), _| *header_view >= view);
+                self.proposed_views = self.proposed_views.split_off(&view);
+                self.states_verified = self.states_verified.split_off(&view);
+                self.timeout_certs = self.timeout_certs.split_off(&view);
+                self.voted_1_views = self.voted_1_views.split_off(&view);
+                self.voted_2_views = self.voted_2_views.split_off(&view);
+            },
+            GcScope::Decided(view) => {
+                self.blocks = self.blocks.split_off(&view);
+                self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
+                self.certs = self.certs.split_off(&view);
+                self.certs2 = self.certs2.split_off(&view);
+                self.leaves = self.leaves.split_off(&view);
+                self.pending_certs1 = self.pending_certs1.split_off(&view);
+                self.pending_certs2 = self.pending_certs2.split_off(&view);
+                self.proposals = self.proposals.split_off(&view);
+                self.signed_proposals = self.signed_proposals.split_off(&view);
+                self.vid_shares = self.vid_shares.split_off(&view);
+                if let Some(epoch) = self.current_epoch {
+                    let epoch = EpochNumber::new(epoch.saturating_sub(1));
+                    self.drb_results = self.drb_results.split_off(&epoch);
+                    self.state_certs = self.state_certs.split_off(&epoch);
+                }
+            },
+        }
     }
 
     /// Test-only: forcibly replace the proposal stored at `view`.

@@ -577,7 +577,7 @@ where
                 if let Some(newest) = leaves.first() {
                     let gc_view = newest.view_number();
                     let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
-                    self.gc(gc_view, gc_epoch)?;
+                    self.gc(gc_epoch, GcScope::Decided(gc_view))?;
                 }
                 for leaf in leaves {
                     self.epoch_manager.handle_leaf_decided(leaf);
@@ -748,6 +748,7 @@ where
                 info!(%node, %view, %epoch, "view changed");
                 self.consensus.set_view(view, epoch);
                 self.timer.reset_with_epoch(view, epoch);
+                self.gc(epoch, GcScope::Local(view))?;
                 let txns = self.block_builder.on_view_changed(view, epoch);
                 if !txns.is_empty() {
                     let next_view = view + 1;
@@ -1365,31 +1366,46 @@ where
             ));
     }
 
-    fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) -> Result<(), CoordinatorError> {
-        info!(node = %self.node_id, %view, "garbage collecting");
-        self.consensus.gc(view, epoch);
-        self.network.gc(view)?;
-        self.state_manager.gc(view);
-        self.vid_disperser.gc(view);
-        self.vid_reconstructor.gc(view);
-        self.vote1_collector.gc(view, epoch);
-        self.vote2_collector.gc(view, epoch);
-        self.timeout_collector.gc(view, epoch);
-        self.timeout_one_honest_collector.gc(view, epoch);
-        self.epoch_root_collector.gc(view, epoch);
-        self.epoch_manager.gc(epoch);
-        self.block_builder.gc(view);
-        self.pending_proposal_fetches.gc(view);
-        self.storage.gc(view);
-        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&view);
-        self.cached_vid_shares = self.cached_vid_shares.split_off(&view);
+    fn gc(&mut self, epoch: EpochNumber, scope: GcScope) -> Result<(), CoordinatorError> {
+        self.consensus.gc(scope);
+        match scope {
+            GcScope::Local(view) => {
+                self.block_builder.gc(view);
+                self.cached_validated_proposals = self.cached_validated_proposals.split_off(&view);
+                self.cached_vid_shares = self.cached_vid_shares.split_off(&view);
+                self.network.gc(view.saturating_sub(1).into())?;
+                self.timeout_collector.gc(view, epoch);
+                self.timeout_one_honest_collector.gc(view, epoch);
+                self.vid_disperser.gc(view);
+                self.vote1_collector.gc(view, epoch);
+                self.vote2_collector.gc(view, epoch);
+            },
+            GcScope::Decided(view) => {
+                self.epoch_manager.gc(epoch);
+                self.epoch_root_collector.gc(view, epoch);
+                self.pending_proposal_fetches.gc(view);
+                self.state_manager.gc(view);
+                self.storage.gc(view);
+                self.vid_reconstructor.gc(view);
+            },
+        }
         Ok(())
     }
 
+    /// Use the message view number if available, or the current one otherwise.
     fn view<U>(&self, m: &Message<T, U>) -> ViewNumber {
         m.view_number()
             .unwrap_or_else(|| self.consensus.current_view())
     }
+}
+
+/// Garbage collection scope.
+#[derive(Debug, Clone, Copy)]
+pub enum GcScope {
+    /// GC is invoked on local view changes.
+    Local(ViewNumber),
+    /// GC is invoked on local decided views.
+    Decided(ViewNumber),
 }
 
 fn check_payload_commitment<T: NodeType>(
