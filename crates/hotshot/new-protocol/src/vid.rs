@@ -230,6 +230,15 @@ impl<T: NodeType> VidReconstructor<T> {
                 // TODO: Handle error
                 return Err(());
             };
+            // Split the trace span: everything before this is parallel AvidM
+            // work (rayon par_iter over namespaces); everything after is
+            // single-threaded post-processing (from_bytes + Keccak256 of every
+            // transaction).  Two intervals make CPU-saturation analysis honest.
+            crate::trace_leader_event!(
+                tracer,
+                view,
+                crate::leader_trace::LeaderEvent::RecoverVMinus1DecodeEnd
+            );
             let payload = T::BlockPayload::from_bytes(&result, &metadata);
             let tx_commitments = payload.transaction_commitments(&metadata);
             crate::trace_leader_event!(

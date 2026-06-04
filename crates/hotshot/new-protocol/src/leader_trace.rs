@@ -56,6 +56,12 @@ pub enum LeaderEvent {
     VerifyBlockVMinus1End,
     ThresholdShareReachedVMinus1,
     RecoverVMinus1Start,
+    /// Emitted right after `AvidmGf2Scheme::recover` returns the decoded
+    /// payload bytes, BEFORE `from_bytes` and `transaction_commitments`.
+    /// The decode→end interval is the (single-threaded) `transaction_commitments`
+    /// Keccak256 of the payload — split out so the parallel AvidM work and the
+    /// serial post-processing can be measured separately.
+    RecoverVMinus1DecodeEnd,
     RecoverVMinus1End,
 
     // Phase 6 - cert1[V-1] formation gates Phase 7.
@@ -110,6 +116,7 @@ impl LeaderEvent {
             VerifyBlockVMinus1End => "verify_block_v_minus_1_end",
             ThresholdShareReachedVMinus1 => "threshold_share_reached_v_minus_1",
             RecoverVMinus1Start => "recover_v_minus_1_start",
+            RecoverVMinus1DecodeEnd => "recover_v_minus_1_decode_end",
             RecoverVMinus1End => "recover_v_minus_1_end",
             Cert1VMinus1ThresholdReached => "cert1_v_minus_1_threshold_reached",
             Cert1VMinus1Aggregated => "cert1_v_minus_1_aggregated",
