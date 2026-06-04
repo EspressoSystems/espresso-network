@@ -6,6 +6,7 @@ use std::{
 
 use async_broadcast::Sender;
 use bon::Builder;
+use cliquenet::noise::Protocol;
 use committable::Committable;
 use hotshot::types::{BLSPubKey, Event, EventType};
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
@@ -30,7 +31,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    consensus::ConsensusOutput,
+    consensus::{ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     helpers::test_upgrade_lock,
     network::{Network, cliquenet::Cliquenet},
@@ -103,6 +104,8 @@ pub struct TestRunner {
     #[builder(default)]
     node_changes: Vec<(u64, Vec<NodeChange>)>,
 
+    pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
+
     #[builder(skip = test_upgrade_lock())]
     upgrade_lock: UpgradeLock<TestTypes>,
 }
@@ -173,11 +176,6 @@ enum NodeEvent {
     TimedOut(ViewNumber),
 }
 
-/// Event with its originating node index and generation.
-///
-/// The generation is bumped each time a node is restarted so that events
-/// queued by the aborted task can be distinguished from events produced by
-/// the fresh task.
 struct TaggedEvent {
     idx: usize,
     generation: u64,
@@ -185,11 +183,6 @@ struct TaggedEvent {
 }
 
 impl TestRunner {
-    /// Compute the set of nodes that should be offline at test start.
-    ///
-    /// This is the union of permanently-down nodes (`down_nodes`) and any
-    /// node whose first action in `node_changes` is `Start` (meaning it
-    /// begins offline and is brought up later).
     fn initially_down_nodes(&self) -> BTreeSet<usize> {
         let mut down = self.down_nodes.clone();
         let mut first_action_seen: BTreeSet<usize> = BTreeSet::new();
@@ -229,15 +222,6 @@ impl TestRunner {
         result
     }
 
-    /// Run the integration test using the given network backend.
-    ///
-    /// Spins up `self.num_nodes` coordinators connected via `N`.  Each
-    /// coordinator self-starts via the genesis bootstrap (no side-channel
-    /// injection needed).
-    ///
-    /// When `node_changes` is non-empty, nodes are dynamically started,
-    /// restarted, or shut down at the specified views.  Verification is
-    /// adjusted to account for the dynamic topology.
     pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
 
@@ -268,7 +252,7 @@ impl TestRunner {
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
             let (membership, storage, client, external_events_tx) =
-                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key).await;
+                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key);
 
             let coord = build_test_coordinator(
                 i as u64,
@@ -278,6 +262,7 @@ impl TestRunner {
                 client,
                 self.epoch_height,
                 self.view_timeout,
+                self.pre_cutover_seed.clone(),
             )
             .await;
 
@@ -288,6 +273,18 @@ impl TestRunner {
             } else {
                 let (cancel_tx, cancel_rx) = oneshot::channel();
                 cancels.insert(i, cancel_tx);
+                let mut initial_commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
+                if let Some(seed) = &self.pre_cutover_seed {
+                    let anchor_view = seed.decided_anchor.view_number();
+                    let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
+                    for v in 1..*anchor_view {
+                        initial_commits.insert(ViewNumber::new(v), anchor_commit);
+                    }
+                    initial_commits.insert(anchor_view, anchor_commit);
+                    for leaf in &seed.undecided {
+                        initial_commits.insert(leaf.view_number(), leaf.commit().into());
+                    }
+                }
                 Some(tokio::spawn(run_node(
                     coord,
                     tx,
@@ -295,6 +292,7 @@ impl TestRunner {
                     generation,
                     external_events_tx,
                     cancel_rx,
+                    initial_commits,
                 )))
             });
         }
@@ -315,6 +313,21 @@ impl TestRunner {
             vec![BTreeMap::new(); self.num_nodes];
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
         let mut max_decided_view: u64 = 0;
+
+        // Seeded leaves never fire `LeafDecided`; pre-populate them.
+        if let Some(seed) = &self.pre_cutover_seed {
+            let anchor_view = seed.decided_anchor.view_number();
+            let anchor_commit: [u8; 32] = seed.decided_anchor.commit().into();
+            for commits in &mut node_commits {
+                for v in 1..*anchor_view {
+                    commits.insert(ViewNumber::new(v), anchor_commit);
+                }
+                commits.insert(anchor_view, anchor_commit);
+                for leaf in &seed.undecided {
+                    commits.insert(leaf.view_number(), leaf.commit().into());
+                }
+            }
+        }
 
         let deadline = Instant::now() + self.max_runtime;
         while node_commits
@@ -364,7 +377,6 @@ impl TestRunner {
                                         self.epoch_height,
                                         k,
                                     )
-                                    .await
                                 };
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
@@ -374,6 +386,7 @@ impl TestRunner {
                                     client,
                                     self.epoch_height,
                                     self.view_timeout,
+                                    self.pre_cutover_seed.clone(),
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -383,6 +396,9 @@ impl TestRunner {
                                 let generation = generations[change.idx];
                                 let (cancel_tx, cancel_rx) = oneshot::channel();
                                 cancels.insert(change.idx, cancel_tx);
+                                // Restarted nodes start with a fresh commits
+                                // map (mirroring the wipe at line ~404 below).
+                                let initial_commits = BTreeMap::new();
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
                                     tx,
@@ -390,6 +406,7 @@ impl TestRunner {
                                     generation,
                                     external_events_tx,
                                     cancel_rx,
+                                    initial_commits,
                                 )));
                                 currently_down.remove(&change.idx);
                                 node_commits[change.idx] = BTreeMap::new();
@@ -544,6 +561,7 @@ async fn create_network(
                 .iter()
                 .map(|(_, info)| (info.x25519_key.into(), info.p2p_addr.clone())),
         )
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let met = Box::new(NoMetrics);
@@ -553,11 +571,6 @@ async fn create_network(
         .unwrap()
 }
 
-/// Event loop for a single node.  Processes coordinator inputs, collects
-/// decided leaf commits, and forwards them to the test runner.  All events
-/// are tagged with the node's index and generation so the runner can
-/// multiplex a single receive channel across every node and drop events
-/// from tasks that have been superseded by a restart.
 async fn run_node<N: Network<TestTypes>>(
     mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
     output_tx: UnboundedSender<TaggedEvent>,
@@ -565,8 +578,9 @@ async fn run_node<N: Network<TestTypes>>(
     generation: u64,
     external_events_tx: Sender<Event<TestTypes>>,
     mut cancel: oneshot::Receiver<oneshot::Sender<()>>,
+    initial_commits: BTreeMap<ViewNumber, [u8; 32]>,
 ) {
-    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = BTreeMap::new();
+    let mut commits: BTreeMap<ViewNumber, [u8; 32]> = initial_commits;
     let mut last_view = ViewNumber::genesis();
     let send = |event: NodeEvent| {
         let _ = output_tx.send(TaggedEvent {

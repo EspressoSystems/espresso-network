@@ -113,7 +113,13 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2024"
 
 [workspace.dependencies]
-aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
+aide = { version = "0.15.1", features = [
+    "axum",
+    "axum-json",
+    "scalar",
+    "swagger",
+    "redoc",
+] }
 alloy = { version = "1.0", features = [
     "eips",
     "provider-ws",
@@ -124,6 +130,7 @@ alloy = { version = "1.0", features = [
     "signer-ledger",
 ] }
 alloy-compat = { path = "alloy-compat" }
+alloy-rlp = "0.3"
 anyhow = "1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"
@@ -143,7 +150,7 @@ async-trait = "0.1"
 atomic = "0.6"
 atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5" }
 automod = "1.0.14"
-axum = "0.8.8"
+axum = { version = "0.8.8", features = ["ws"] }
 backoff = "0.4"
 base64 = "0.22"
 base64-bytes = "0.1"
@@ -159,11 +166,11 @@ byteorder = { version = "1" }
 bytes = { version = "1.11.0", features = ["serde"] }
 bytesize = "1.3"
 cbor4ii = { version = "1.0", features = ["serde1"] }
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-broker", features = [
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-broker", features = [
     "global-permits",
 ] }
-cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-client" }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-marshal" }
+cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-client" }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-marshal" }
 chrono = { version = "0.4", features = ["serde"] }
 circular-buffer = "0.1.9"
 clap = { version = "4.5", features = ["derive", "env", "string"] }

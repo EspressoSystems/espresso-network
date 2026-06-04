@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${DOCKER:=docker}"
+: "${LABELS:=}"
+: "${TAGS:=}"
+
+args=()
+
+while IFS= read -r line; do
+  [[ -n "${line}" ]] || continue
+  args+=(--label "${line}")
+done <<< "${LABELS}"
+
+while IFS= read -r line; do
+  [[ -n "${line}" ]] || continue
+  args+=(--tag "${line}")
+done <<< "${TAGS}"
+
+exec "${DOCKER}" buildx build "${args[@]}" "$@"

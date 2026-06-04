@@ -263,13 +263,14 @@ impl StakeTableState {
         validator_exits: HashSet<Address>,
         used_bls_keys: HashSet<BLSPubKey>,
         used_schnorr_keys: HashSet<SchnorrPubKey>,
+        used_x25519_keys: HashSet<x25519::PublicKey>,
     ) -> Self {
         Self {
             validators,
             validator_exits,
             used_bls_keys,
             used_schnorr_keys,
-            used_x25519_keys: HashSet::new(),
+            used_x25519_keys,
         }
     }
 
@@ -1934,8 +1935,7 @@ mod tests {
     use pretty_assertions::assert_matches;
     use rstest::rstest;
     use versions::{
-        CLIQUENET_VERSION, DA_UPGRADE_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION,
-        VID2_UPGRADE_VERSION,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION,
     };
 
     use super::*;
@@ -3470,7 +3470,7 @@ mod tests {
         Ok(())
     }
 
-    // --- CLIQUENET_VERSION selection filter tests ---
+    // --- NEW_PROTOCOL_VERSION selection filter tests ---
 
     /// Construct a `RegisteredValidator` with both x25519_key and p2p_addr populated.
     fn complete_mock_validator() -> RegisteredValidator<BLSPubKey> {
@@ -3510,7 +3510,7 @@ mod tests {
         let complete = complete_mock_validator();
         map.insert(complete.account, complete.clone());
 
-        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
         assert!(!active.contains_key(&missing_x25519.account));
         assert!(active.contains_key(&complete.account));
     }
@@ -3527,7 +3527,7 @@ mod tests {
         let complete = complete_mock_validator();
         map.insert(complete.account, complete.clone());
 
-        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
         assert!(!active.contains_key(&missing_p2p.account));
         assert!(active.contains_key(&complete.account));
     }
@@ -3539,7 +3539,7 @@ mod tests {
         let complete = complete_mock_validator();
         map.insert(complete.account, complete.clone());
 
-        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
         assert!(active.contains_key(&complete.account));
     }
 
@@ -3553,7 +3553,7 @@ mod tests {
             map.insert(v.account, v);
         }
 
-        let result = select_active_validator_set(&map, CLIQUENET_VERSION);
+        let result = select_active_validator_set(&map, NEW_PROTOCOL_VERSION);
         assert_matches!(result, Err(StakeTableError::NoValidValidators));
     }
 
@@ -3583,7 +3583,7 @@ mod tests {
             }
         }
 
-        let active = select_active_validator_set(&map, CLIQUENET_VERSION).unwrap();
+        let active = select_active_validator_set(&map, NEW_PROTOCOL_VERSION).unwrap();
 
         assert!(
             active.len() <= MAX_VALIDATORS,
@@ -3601,8 +3601,8 @@ mod tests {
     }
 
     /// Verify the version boundary: the filter only kicks in at/after
-    /// `CLIQUENET_VERSION`. A validator missing the x25519 key must be retained at
-    /// every prior version and rejected at `CLIQUENET_VERSION`.
+    /// `NEW_PROTOCOL_VERSION`. A validator missing the x25519 key must be retained at
+    /// every prior version and rejected at `NEW_PROTOCOL_VERSION`.
     #[test]
     fn test_select_version_boundary() {
         let mut v = complete_mock_validator();
@@ -3613,8 +3613,7 @@ mod tests {
         for protocol_version in [
             EPOCH_VERSION,
             DRB_AND_HEADER_UPGRADE_VERSION,
-            DA_UPGRADE_VERSION,
-            VID2_UPGRADE_VERSION,
+            EPOCH_REWARD_VERSION,
         ] {
             let active = select_active_validator_set(&map, protocol_version).unwrap();
             assert!(
@@ -3624,7 +3623,7 @@ mod tests {
             );
         }
 
-        let result = select_active_validator_set(&map, CLIQUENET_VERSION);
+        let result = select_active_validator_set(&map, NEW_PROTOCOL_VERSION);
         assert_matches!(result, Err(StakeTableError::NoValidValidators));
     }
 
@@ -3651,7 +3650,7 @@ mod tests {
         assert!(pre.contains_key(&val.account));
 
         // Post-upgrade: the sole validator is filtered out, so selection fails.
-        let post = select_active_validator_set(state.validators(), CLIQUENET_VERSION);
+        let post = select_active_validator_set(state.validators(), NEW_PROTOCOL_VERSION);
         assert_matches!(post, Err(StakeTableError::NoValidValidators));
 
         Ok(())

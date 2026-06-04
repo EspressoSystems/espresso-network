@@ -18,7 +18,10 @@ use crate::{
     },
     error::HotShotError,
     message::{Proposal, convert_proposal},
-    simple_certificate::{CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate},
+    simple_certificate::{
+        CertificatePair, LightClientStateUpdateCertificateV2, QuorumCertificate, QuorumCertificate2,
+    },
+    simple_vote::TimeoutVote2,
     traits::{ValidatedState, node_implementation::NodeType},
     vote::HasViewNumber,
 };
@@ -262,6 +265,26 @@ pub enum EventType<TYPES: NodeType> {
         /// Serialized data of the message
         data: Vec<u8>,
     },
+
+    /// Emitted by the legacy consensus task whenever it signs and broadcasts a
+    /// `TimeoutVote2`. Used at the legacy → new-protocol upgrade boundary so
+    /// the espresso bridge can forward the same vote into the new-protocol
+    /// coordinator's vote collectors. The wire-level protocols differ but the
+    /// underlying `TimeoutVote2` type and its version-tagged signature
+    /// commitment are shared, so the same vote is valid in both systems.
+    LegacyTimeoutVoteEmitted {
+        /// The vote that was signed and broadcast on the legacy wire.
+        vote: TimeoutVote2<TYPES>,
+    },
+
+    /// QC for the last legacy view, formed by the cutover-view leader at the
+    /// legacy -> new-protocol boundary. Lets the espresso bridge forward it to the
+    /// new-protocol coordinator if the cutover seed was snapshotted before this QC
+    /// finished assembling.
+    LegacyHighQcFormed {
+        /// The QC for the last legacy view (`cutover_view - 1`).
+        qc: QuorumCertificate2<TYPES>,
+    },
 }
 
 impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
@@ -308,6 +331,12 @@ impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
             },
             Self::ExternalMessageReceived { .. } => {
                 write!(f, "ExternalMessageReceived")
+            },
+            Self::LegacyTimeoutVoteEmitted { vote } => {
+                write!(f, "LegacyTimeoutVoteEmitted: view={}", vote.view_number())
+            },
+            Self::LegacyHighQcFormed { qc } => {
+                write!(f, "LegacyHighQcFormed: view={}", qc.view_number())
             },
         }
     }
@@ -356,6 +385,20 @@ impl<TYPES: NodeType> EventType<TYPES> {
             },
             EventType::ExternalMessageReceived { sender, data } => {
                 LegacyEventType::ExternalMessageReceived { sender, data }
+            },
+            // Upgrade-bridging event: doesn't exist in the pre-epoch event
+            // surface. Convert to a no-op equivalent (drop) since legacy
+            // consumers wouldn't know what to do with it.
+            EventType::LegacyTimeoutVoteEmitted { .. } => {
+                anyhow::bail!(
+                    "LegacyTimeoutVoteEmitted is upgrade-bridging only and has no legacy \
+                     equivalent"
+                )
+            },
+            EventType::LegacyHighQcFormed { .. } => {
+                anyhow::bail!(
+                    "LegacyHighQcFormed is upgrade-bridging only and has no legacy equivalent"
+                )
             },
         })
     }

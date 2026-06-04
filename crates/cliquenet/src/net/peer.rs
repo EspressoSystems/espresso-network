@@ -18,13 +18,16 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 use crate::{
     Config, Metrics, PublicKey,
     connection::Connection,
     error::{Empty, NetworkError},
-    msg::{Ack, FrameType, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, Slot, Trailer},
+    msg::{
+        Ack, FrameType, Header, MAX_NOISE_MESSAGE_SIZE, MAX_PAYLOAD_SIZE, RESERVED_TAG_SIZE, Slot,
+        Trailer,
+    },
     net::{PeerMessage, RetryPolicy},
     queue::Queue,
     time::Countdown,
@@ -58,9 +61,6 @@ pub struct Peer {
 
     /// Receive notifications about changes to the GC threshold
     next_slot: watch::Receiver<Slot>,
-
-    /// Our current GC threshold.
-    lower_bound: Slot,
 
     /// The channel over which to deliver inbound messages to the application.
     tx: UnboundedSender<PeerMessage>,
@@ -107,11 +107,13 @@ impl Peer {
         metrics: Arc<dyn Metrics>,
     ) -> Self {
         Self {
-            max_message_size: config.max_message_size.get() + Trailer::MAX_SIZE,
+            max_message_size: config
+                .max_message_size
+                .get()
+                .saturating_add(Trailer::MAX_SIZE),
             conf: config.clone(),
             budget: Budget::new(budget),
             next_slot,
-            lower_bound: Slot::MIN,
             tx: inbound,
             conn: connection,
             retry: DelayQueue::new(config),
@@ -159,6 +161,7 @@ impl Peer {
             },
             Frame {
                 hdr: Header,
+                typ: FrameType,
                 off: usize,
                 buf: &'a mut Vec<u8>,
             },
@@ -219,11 +222,11 @@ impl Peer {
             return Err(NetworkError::PeerInterrupt);
         }
 
-        // Noise packages are limited to 64KiB.
-        //
-        // We retain one such buffer for reading and one for writing.
-        let mut rbuf = NoiseBuf::new([0; _]);
+        // Write buffer (Noise packages are limited to 64KiB).
         let mut wbuf = NoiseBuf::new([0; _]);
+
+        // Ack buffer.
+        let mut abuf = [0; size_of::<Ack>() + RESERVED_TAG_SIZE];
 
         // A frame buffer for reading before it is decrypted.
         let mut fbuf = Vec::new();
@@ -307,7 +310,7 @@ impl Peer {
                 // Once a peer has been interrupted, its connection needs to be
                 // replaced before calling start again.
                 _ = self.cancel.cancelled() => {
-                    trace!(name = %self.conf.name, peer = %self.conn.key, "interrupt");
+                    info!(name = %self.conf.name, peer = %self.conn.key, "peer interrupt");
                     return Err(NetworkError::PeerInterrupt)
                 }
 
@@ -318,8 +321,6 @@ impl Peer {
                         return Err(NetworkError::ChannelClosed)
                     }
                     let s = *self.next_slot.borrow_and_update();
-                    debug_assert!(s > self.lower_bound);
-                    self.lower_bound = s;
                     self.retry.gc(s);
                 }
 
@@ -483,15 +484,45 @@ impl Peer {
                                         continue
                                     }
                                     let hdr = Header::unvalidated(u32::from_be_bytes(*buf));
+                                    let typ = match hdr.frame_type() {
+                                        Ok(FrameType::Data) => FrameType::Data,
+                                        Ok(FrameType::Ack) => {
+                                            if hdr.is_partial() {
+                                                warn!(
+                                                    name = %self.conf.name,
+                                                    node = %self.conf.keypair.public_key(),
+                                                    peer = %self.conn.key,
+                                                    addr = %self.conn.addr,
+                                                    "ACK header marked as partial"
+                                                );
+                                                return Err(NetworkError::InvalidAck)
+                                            }
+                                            if hdr.len() as usize > abuf.len() {
+                                                warn!(
+                                                    name = %self.conf.name,
+                                                    node = %self.conf.keypair.public_key(),
+                                                    peer = %self.conn.key,
+                                                    addr = %self.conn.addr,
+                                                    len  = %hdr.len(),
+                                                    "ACK header length too large"
+                                                );
+                                                return Err(NetworkError::InvalidAck)
+                                            }
+                                            FrameType::Ack
+                                        }
+                                        Err(typ) => {
+                                            return Err(NetworkError::UnknownFrameType(typ))
+                                        }
+                                    };
                                     fbuf.resize(hdr.len().into(), 0);
-                                    rstate = ReadState::Frame { hdr, off: 0, buf: &mut fbuf }
+                                    rstate = ReadState::Frame { hdr, typ, off: 0, buf: &mut fbuf }
                                 }
                                 Err(e) => if e.kind() != io::ErrorKind::WouldBlock {
                                     return Err(e.into())
                                 }
                             }
                         }
-                        ReadState::Frame { hdr, off, buf } => {
+                        ReadState::Frame { hdr, typ, off, buf } => {
                             match self.conn.stream.try_read(&mut buf[*off..]) {
                                 Ok(0) => {
                                     let e = io::ErrorKind::UnexpectedEof.into();
@@ -503,13 +534,19 @@ impl Peer {
                                     if *off < buf.len() {
                                         continue
                                     }
-                                    match hdr.frame_type() {
-                                        Ok(FrameType::Data) => {
-                                            let n = self.conn.state.read_message(buf, &mut *rbuf)?;
-                                            ibound_msg.extend_from_slice(&rbuf[..n]);
+                                    match typ {
+                                        FrameType::Data => {
+                                            let n = buf.len();
+                                            let i = ibound_msg.len();
+                                            ibound_msg.resize(i + n, 0);
+
+                                            let n = self.conn.state.read_message(buf, &mut ibound_msg[i..])?;
+                                            ibound_msg.truncate(i + n);
+
                                             if ibound_msg.len() > self.max_message_size {
                                                 return Err(NetworkError::MessageTooLarge)
                                             }
+
                                             if !hdr.is_partial() { // message complete
                                                 let mut msg = mem::take(&mut ibound_msg).freeze();
                                                 let Some(t) = Trailer::from_bytes(&mut msg) else {
@@ -522,16 +559,11 @@ impl Peer {
                                                     );
                                                     return Err(NetworkError::InvalidTrailer);
                                                 };
-                                                let slot = match t {
-                                                    Trailer::Std { slot, id } => {
-                                                        obound_acks.push_back(Ack::from((slot, id)));
-                                                        Some(slot)
-                                                    }
-                                                    Trailer::NoAck { slot } => Some(slot),
-                                                    Trailer::Unknown => None
-                                                };
-                                                if let Some(s) = slot && s < self.lower_bound {
-                                                    continue
+                                                match t {
+                                                    Trailer::Std { slot, id } =>
+                                                        obound_acks.push_back(Ack::from((slot, id))),
+                                                    Trailer::NoAck { slot: _ } => (),
+                                                    Trailer::Unknown => ()
                                                 }
                                                 let p = read_permit.take();
                                                 debug_assert!(p.is_some());
@@ -548,20 +580,14 @@ impl Peer {
                                             }
                                             rstate = ReadState::Header { off: 0, buf: [0; _] };
                                         }
-                                        Ok(FrameType::Ack) if hdr.is_partial() => {
-                                            return Err(NetworkError::InvalidAck)
-                                        }
-                                        Ok(FrameType::Ack) => {
-                                            let n = self.conn.state.read_message(buf, &mut *rbuf)?;
-                                            let Ok(a) = Ack::try_from(&rbuf[..n]) else {
+                                        FrameType::Ack => {
+                                            let n = self.conn.state.read_message(buf, &mut abuf)?;
+                                            let Ok(a) = Ack::try_from(&abuf[..n]) else {
                                                 return Err(NetworkError::InvalidAck)
                                             };
                                             let (s, i) = a.into();
                                             self.retry.del(s, i);
                                             rstate = ReadState::Header { off: 0, buf: [0; _] };
-                                        }
-                                        Err(t) => {
-                                            return Err(NetworkError::UnknownFrameType(t))
                                         }
                                     }
                                 }

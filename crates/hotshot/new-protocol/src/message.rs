@@ -10,8 +10,8 @@ use hotshot_types::{
         OneHonestThreshold, SimpleCertificate, SuccessThreshold, TimeoutCertificate2,
     },
     simple_vote::{
-        CheckpointData, LightClientStateUpdateVote2, QuorumData2, QuorumVote2, SimpleVote,
-        TimeoutData2, TimeoutVote2, Vote2Data,
+        LightClientStateUpdateVote2, QuorumData2, QuorumVote2, SimpleVote, TimeoutData2,
+        TimeoutVote2, Vote2Data,
     },
     traits::{node_implementation::NodeType, signature_key::SignatureKey},
     vote::HasViewNumber,
@@ -19,8 +19,6 @@ use hotshot_types::{
 use serde::{Deserialize, Serialize};
 
 pub type Vote2<T> = SimpleVote<T, Vote2Data<T>>;
-pub type CheckpointVote<T> = SimpleVote<T, CheckpointData>;
-pub type CheckpointCertificate<T> = SimpleCertificate<T, CheckpointData, SuccessThreshold>;
 pub type Certificate1<T> = SimpleCertificate<T, QuorumData2<T>, SuccessThreshold>;
 pub type Certificate2<T> = SimpleCertificate<T, Vote2Data<T>, SuccessThreshold>;
 pub type TimeoutCertificate<T> = SimpleCertificate<T, TimeoutData2, SuccessThreshold>;
@@ -159,7 +157,6 @@ pub enum ConsensusMessage<T: NodeType, S> {
     TimeoutVote(TimeoutVoteMessage<T>),
     TimeoutCertificate(TimeoutCertificate2<T>),
     EpochChange(EpochChangeMessage<T>),
-    Checkpoint(CheckpointVote<T>),
     VidShare(VidShareMessage<T>),
 }
 
@@ -174,7 +171,6 @@ impl<T: NodeType, S> ConsensusMessage<T, S> {
             Self::Certificate2(c, k) => ConsensusMessage::Certificate2(c, k),
             Self::TimeoutVote(v) => ConsensusMessage::TimeoutVote(v),
             Self::TimeoutCertificate(c) => ConsensusMessage::TimeoutCertificate(c),
-            Self::Checkpoint(v) => ConsensusMessage::Checkpoint(v),
             Self::EpochChange(c) => ConsensusMessage::EpochChange(c),
             Self::VidShare(v) => ConsensusMessage::VidShare(v),
         }
@@ -191,7 +187,6 @@ impl<T: NodeType, S> HasViewNumber for ConsensusMessage<T, S> {
             Self::Certificate2(certificate, _) => certificate.view_number(),
             Self::TimeoutVote(msg) => msg.view_number(),
             Self::TimeoutCertificate(certificate) => certificate.view_number(),
-            Self::Checkpoint(vote) => vote.view_number(),
             Self::EpochChange(epoch_change) => epoch_change.cert1.view_number(),
             Self::VidShare(vid_share) => vid_share.data.view_number(),
         }
@@ -294,7 +289,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ProposalFetch(message) => message.view_number(),
-            MessageType::External(_) => ViewNumber::new(0), // TODO: This can become a problem
+            MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
         }
     }
 }

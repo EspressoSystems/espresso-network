@@ -47,12 +47,7 @@ impl Drop for BackgroundProcess {
 #[rstest::rstest]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_dev_node_test(
-    #[values(
-        DevNodeVersion::V0_3,
-        DevNodeVersion::V0_4,
-        DevNodeVersion::V0_5,
-        DevNodeVersion::V0_6
-    )]
+    #[values(DevNodeVersion::V0_3, DevNodeVersion::V0_4, DevNodeVersion::V0_5)]
     version: DevNodeVersion,
 ) {
     let builder_port = reserve_tcp_port().unwrap();

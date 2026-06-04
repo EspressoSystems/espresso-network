@@ -70,9 +70,9 @@ just demo-native                      # Full local network via process-compose
 - Use `forge fmt` before committing
 - Upgradeable contracts: V2 extends V1, never modify V1 storage
 - Events: Emit for all state changes that external systems need to track
-- Contract ABIs are supersets: V3 includes all V2 types, V2 includes all V1 types. Always use the
-  latest version's Rust bindings (`StakeTableV3`) for runtime code (contract calls, event decoding).
-  V1/V2 bindings are only needed in deploy/upgrade code.
+- Contract ABIs are supersets: V3 includes all V2 types, V2 includes all V1 types. Always use the latest version's Rust
+  bindings (`StakeTableV3`) for runtime code (contract calls, event decoding). V1/V2 bindings are only needed in
+  deploy/upgrade code.
 
 ## Architecture Overview
 
@@ -212,14 +212,14 @@ table sync.
 Versions in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` defines version pairs for network
 operation.
 
-| Version | Alias                        | Key Changes                                                                |
-| ------- | ---------------------------- | -------------------------------------------------------------------------- |
-| V0_1    | -                            | Base types: Header, ChainConfig, Transaction, ADVZ VID proofs              |
-| V0_2    | `FeeVersion`                 | Fee support (version marker)                                               |
-| V0_3    | `EpochVersion`               | PoS: stake_table_contract, reward_merkle_tree, AvidM VID proofs            |
-| V0_4    | `DrbAndHeaderUpgradeVersion` | Header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2 |
-| V0_5    | `DaUpgradeVersion`           | DA upgrade (version marker)                                                |
-| V0_6    | `Vid2UpgradeVersion`         | VID2 (AvidmGf2) proofs                                                     |
+| Version | Alias                        | Key Changes                                                                     |
+| ------- | ---------------------------- | ------------------------------------------------------------------------------- |
+| V0_1    | -                            | Base types: Header, ChainConfig, Transaction, ADVZ VID proofs                   |
+| V0_2    | `FeeVersion`                 | Fee support (version marker)                                                    |
+| V0_3    | `EpochVersion`               | PoS: stake_table_contract, reward_merkle_tree, AvidM VID proofs                 |
+| V0_4    | `DrbAndHeaderUpgradeVersion` | Header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2      |
+| V0_5    | `EpochRewardVersion`         | Epoch reward / DRB fix                                                          |
+| V0_6    | `NEW_PROTOCOL_VERSION`       | DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6) |
 
 ## Consensus Upgrades
 

@@ -64,12 +64,12 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn append_decided_leaves(
+    async fn persist_decided_leaves(
         &self,
         view_number: ViewNumber,
         leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
+        consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let leaves = leaves
             .into_iter()

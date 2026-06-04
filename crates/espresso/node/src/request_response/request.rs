@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use committable::Commitment;
 use espresso_types::{
     Certificate2, FeeAccount, FeeMerkleTree, Leaf2,
@@ -71,11 +70,10 @@ pub enum Response {
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response
 /// protocol how to validate the request and what the response type is.
-#[async_trait]
 impl RequestTrait for Request {
     type Response = Response;
 
-    async fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         // Right now, all requests are valid
         Ok(())
     }

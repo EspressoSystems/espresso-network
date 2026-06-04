@@ -4,6 +4,7 @@ use std::{
 
 use cliquenet::{
     Config, Network, RetryPolicy, SendAction, SendCommand, Slot,
+    noise::Protocol,
     x25519::{Keypair, PublicKey},
 };
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -125,8 +126,9 @@ async fn setup_echo() -> Echo {
         .parties([(pkb, addr_b.into())])
         .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
         .receive_timeout(Duration::from_secs(60))
-        .retry_delays(vec![1, 3])
-        .max_retry_delay(Duration::from_secs(5))
+        .connect_retry_delays(vec![1, 3])
+        .send_retry_delays(vec![1, 3])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let conf_b = Config::builder()
@@ -136,8 +138,9 @@ async fn setup_echo() -> Echo {
         .parties([(pka, addr_a.into())])
         .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
         .receive_timeout(Duration::from_secs(60))
-        .retry_delays(vec![1, 3])
-        .max_retry_delay(Duration::from_secs(5))
+        .connect_retry_delays(vec![1, 3])
+        .send_retry_delays(vec![1, 3])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let net_a = Network::create(conf_a).await.unwrap();
@@ -230,8 +233,9 @@ async fn setup_bidir() -> BiDir {
         .parties([(pkb, addr_b.into())])
         .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
         .receive_timeout(Duration::from_secs(60))
-        .retry_delays(vec![1, 3])
-        .max_retry_delay(Duration::from_secs(5))
+        .connect_retry_delays(vec![1, 3])
+        .send_retry_delays(vec![1, 3])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let conf_b = Config::builder()
@@ -241,8 +245,9 @@ async fn setup_bidir() -> BiDir {
         .parties([(pka, addr_a.into())])
         .max_message_size(NonZeroUsize::new(100 * MEBI).unwrap())
         .receive_timeout(Duration::from_secs(60))
-        .retry_delays(vec![1, 3])
-        .max_retry_delay(Duration::from_secs(5))
+        .connect_retry_delays(vec![1, 3])
+        .send_retry_delays(vec![1, 3])
+        .noise_protocols([(1.into(), Protocol::IK_25519_AesGcm_Blake2s)])
         .build();
 
     let net_a = Network::create(conf_a).await.unwrap();
