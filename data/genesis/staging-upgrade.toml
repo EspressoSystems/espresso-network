@@ -34,6 +34,8 @@ number = 0
 
 [[upgrade]]
 version = "0.6"
+start_voting_view = 1
+stop_voting_view = 9999999
 
 [upgrade.new_protocol]
 [upgrade.new_protocol.chain_config]

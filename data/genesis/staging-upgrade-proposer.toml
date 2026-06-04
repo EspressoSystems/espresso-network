@@ -36,6 +36,8 @@ number = 0
 version = "0.6"
 start_proposing_view = 6600
 stop_proposing_view = 8000
+start_voting_view = 1
+stop_voting_view = 9999999
 
 [upgrade.new_protocol]
 [upgrade.new_protocol.chain_config]
