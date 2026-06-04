@@ -615,7 +615,10 @@ where
                         ProposalMessage::validated(proposal.clone()),
                     )),
                 };
-                if let Err(err) = self.network.broadcast(self.view(&message), &message) {
+                if let Err(err) = self
+                    .network
+                    .broadcast(self.consensus.current_view(), &message)
+                {
                     let err = CoordinatorError::from(err).context("proposal broadcast");
                     if err.severity == Severity::Critical {
                         return Err(err);
@@ -634,7 +637,7 @@ where
                     };
                     if let Err(err) =
                         self.network
-                            .unicast(self.view(&message), &recipient, &message)
+                            .unicast(self.consensus.current_view(), &recipient, &message)
                     {
                         let err = CoordinatorError::from(err).context("vid share unicast");
                         if err.severity == Severity::Critical {
@@ -655,7 +658,7 @@ where
                     )),
                 };
                 self.network
-                    .broadcast(self.view(&message), &message)
+                    .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
             },
             ConsensusOutput::SendTimeoutCertificate(tc, view, epoch) => {
@@ -672,7 +675,7 @@ where
                         )),
                     };
                     self.network
-                        .unicast(self.view(&message), &leader, &message)
+                        .unicast(self.consensus.current_view(), &leader, &message)
                         .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
                 }
             },
@@ -688,7 +691,7 @@ where
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
                 };
                 self.network
-                    .broadcast(self.view(&message), &message)
+                    .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
             },
             ConsensusOutput::SendVote2(vote2) => {
@@ -698,7 +701,7 @@ where
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
                 };
                 self.network
-                    .broadcast(self.view(&message), &message)
+                    .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
             },
             ConsensusOutput::SendEpochChange(epoch_change) => {
@@ -715,7 +718,7 @@ where
                     )),
                 };
                 self.network
-                    .broadcast(self.view(&message), &message)
+                    .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
             ConsensusOutput::SendCertificate1(cert1) => {
@@ -733,7 +736,7 @@ where
                     )),
                 };
                 self.network
-                    .broadcast(self.view(&message), &message)
+                    .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
             },
             ConsensusOutput::ProposalValidated { proposal, sender } => {
@@ -967,8 +970,11 @@ where
                             Box::new(proposal),
                         )),
                     };
-
-                    if let Err(err) = self.network.unicast(view, &message.sender, &response) {
+                    if let Err(err) = self.network.unicast(
+                        self.consensus.current_view(),
+                        &message.sender,
+                        &response,
+                    ) {
                         let err = CoordinatorError::from(err).context("proposal response");
                         warn!(%node, %err, "network error while sending proposal response");
                     }
@@ -1081,7 +1087,7 @@ where
             message_type: MessageType::Block(msg),
         };
         self.network
-            .unicast(self.view(&message), &leader, &message)
+            .unicast(self.consensus.current_view(), &leader, &message)
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
 
@@ -1166,7 +1172,7 @@ where
                     };
 
                     self.network
-                        .broadcast(self.view(&message), &message)
+                        .broadcast(self.consensus.current_view(), &message)
                         .map_err(|err| {
                             CoordinatorError::from(err).context("broadcast proposal request")
                         })?;
@@ -1185,7 +1191,7 @@ where
                 };
                 let result = self
                     .network
-                    .unicast(self.view(&message), &recipient, &message)
+                    .unicast(self.consensus.current_view(), &recipient, &message)
                     .map_err(|err| {
                         CoordinatorError::from(err)
                             .context("send external message")
@@ -1278,7 +1284,10 @@ where
                         message::TimeoutVoteMessage { vote, lock: None },
                     )),
                 };
-                if let Err(err) = self.network.broadcast(self.view(&message), &message) {
+                if let Err(err) = self
+                    .network
+                    .broadcast(self.consensus.current_view(), &message)
+                {
                     tracing::warn!(%err, "failed to rebroadcast bridged timeout vote");
                 }
                 let _ = respond.send(());
@@ -1373,6 +1382,8 @@ where
                 self.block_builder.gc(view);
                 self.cached_validated_proposals = self.cached_validated_proposals.split_off(&view);
                 self.cached_vid_shares = self.cached_vid_shares.split_off(&view);
+                // When we enter a new view, we do not want to GC enqueued messages
+                // for the previous view yet:
                 self.network.gc(view.saturating_sub(1).into())?;
                 self.timeout_collector.gc(view, epoch);
                 self.timeout_one_honest_collector.gc(view, epoch);
@@ -1390,12 +1401,6 @@ where
             },
         }
         Ok(())
-    }
-
-    /// Use the message view number if available, or the current one otherwise.
-    fn view<U>(&self, m: &Message<T, U>) -> ViewNumber {
-        m.view_number()
-            .unwrap_or_else(|| self.consensus.current_view())
     }
 }
 

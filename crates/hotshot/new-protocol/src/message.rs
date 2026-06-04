@@ -274,15 +274,6 @@ impl<T: NodeType, S> Message<T, S> {
         matches!(self.message_type, MessageType::External(_))
     }
 
-    pub fn view_number(&self) -> Option<ViewNumber> {
-        match &self.message_type {
-            MessageType::Consensus(consensus_message) => Some(consensus_message.view_number()),
-            MessageType::Block(block_message) => Some(block_message.view_number()),
-            MessageType::ProposalFetch(message) => Some(message.view_number()),
-            MessageType::External(_) => None,
-        }
-    }
-
     #[cfg(test)]
     pub fn into_unchecked(self) -> Message<T, Unchecked> {
         Message {
