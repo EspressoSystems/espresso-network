@@ -42,9 +42,9 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, Certificate2, CheckpointCertificate, CheckpointVote, ConsensusMessage,
-        Message, MessageType, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest,
-        TransactionMessage, Unchecked, Vote2,
+        self, BlockMessage, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
+        ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
+        Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -78,7 +78,6 @@ pub struct Coordinator<T: NodeType, N, S> {
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
     timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
-    checkpoint_collector: VoteCollector<T, CheckpointVote<T>, CheckpointCertificate<T>>,
     epoch_root_collector: EpochRootVoteCollector<T>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
@@ -122,7 +121,6 @@ where
         stake_table_capacity: usize,
         timeout_duration: Duration,
         storage: S,
-        garbage_collection_interval: u64,
         metrics: &dyn Metrics,
     ) -> Self {
         let mut consensus = Consensus::new(
@@ -134,7 +132,6 @@ where
             upgrade_lock.clone(),
             initializer.anchor_leaf.clone(),
             initializer.epoch_height,
-            garbage_collection_interval,
         );
 
         let genesis_cert1 = initializer.high_qc.clone();
@@ -190,10 +187,6 @@ where
                 lock.clone(),
             ))
             .timeout_one_honest_collector(VoteCollector::new(
-                membership_coordinator.clone(),
-                lock.clone(),
-            ))
-            .checkpoint_collector(VoteCollector::new(
                 membership_coordinator.clone(),
                 lock.clone(),
             ))
@@ -425,14 +418,6 @@ where
                         return Err(CoordinatorError::regular(e).context("proposal validation"))
                     }
                 },
-                Some(cert) = self.checkpoint_collector.next() => {
-                    finish_measurement(next_input);
-                    let Some(epoch) = cert.epoch() else {
-                        let msg = format!("missing epoch in view {}", cert.view_number());
-                        return Err(CoordinatorError::critical(msg).context("gc certificate"))
-                    };
-                    self.gc(cert.view_number(), epoch);
-                }
                 Some(item) = self.block_builder.next() => match item {
                     Ok(block) => {
                         finish_measurement(next_input);
@@ -571,20 +556,6 @@ where
                 debug!(%node, %epoch, "request drb result");
                 self.epoch_manager.request_drb_result(epoch);
             },
-            ConsensusOutput::SendCheckpointVote(checkpoint_vote) => {
-                let view = checkpoint_vote.view_number();
-                let epoch = checkpoint_vote.data.epoch;
-                debug!(%node, %view, %epoch, "send checkpoint vote");
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::Consensus(ConsensusMessage::Checkpoint(
-                        checkpoint_vote,
-                    )),
-                };
-                self.network
-                    .broadcast(message.view_number(), &message)
-                    .map_err(|e| CoordinatorError::from(e).context("broadcast checkpoint vote"))?
-            },
             ConsensusOutput::LeafDecided {
                 leaves,
                 cert1,
@@ -600,6 +571,13 @@ where
                 );
                 if let Some(cert2) = cert2 {
                     self.storage.append_cert2(cert2.view_number, cert2.clone());
+                }
+                // `leaves` is ordered newest first
+                //  garbage collect the data for views < decided view
+                if let Some(newest) = leaves.first() {
+                    let gc_view = newest.view_number();
+                    let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
+                    self.gc(gc_view, gc_epoch);
                 }
                 for leaf in leaves {
                     self.epoch_manager.handle_leaf_decided(leaf);
@@ -939,16 +917,6 @@ where
                         "recv epoch change"
                     );
                     Some(ConsensusInput::EpochChange(epoch_change))
-                },
-                ConsensusMessage::Checkpoint(checkpoint) => {
-                    debug!(
-                        %node, %sender,
-                        view = %checkpoint.view_number(),
-                        epoch = %checkpoint.data.epoch,
-                        "recv checkpoint vote"
-                    );
-                    self.checkpoint_collector.accumulate_vote(checkpoint).await;
-                    None
                 },
             },
             MessageType::Block(msg) => {
@@ -1315,6 +1283,41 @@ where
                 }
                 let _ = respond.send(());
             },
+            ClientRequest::SubmitLegacyHighQc { qc, respond } => {
+                // QC certifies the last legacy view; cutover view is the next.
+                // Register idempotently so the smooth-start precondition holds
+                // regardless of arrival order vs. the cutover seed.
+                let qc_view = qc.view_number();
+                let cutover_view = qc_view + 1;
+                self.consensus.register_legacy_qc(&qc);
+
+                // Still parked on the last legacy view (seed landed without this
+                // QC, waiting out the timer) and not yet skipped via TC2: propose
+                // the cutover view on the real QC now. Self-idempotent — once
+                // started, `cur_view` advances past `qc_view` and `maybe_propose`
+                // dedups by `proposed_views`.
+                let cur_view = self.consensus.current_view();
+                if cur_view == qc_view
+                    && self.consensus.timeout_cert_at(cutover_view).is_none()
+                    && self.consensus.cert1_at(qc_view).is_some()
+                    && self.consensus.proposal_at(qc_view).is_some()
+                {
+                    tracing::info!(
+                        %cutover_view,
+                        "bridged late legacy high QC; proposing cutover view on it (no timeout)"
+                    );
+                    self.start();
+                    while let Some(output) = self.outbox.pop_front() {
+                        if let Err(err) = self.process_consensus_output(output) {
+                            tracing::warn!(
+                                %err,
+                                "error processing bridged-high-qc bootstrap output"
+                            );
+                        }
+                    }
+                }
+                let _ = respond.send(());
+            },
             ClientRequest::BumpNetworkEpoch { epoch, respond } => {
                 if let Err(err) = self
                     .network
@@ -1366,7 +1369,6 @@ where
     fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         info!(node = %self.node_id, %view, "garbage collecting");
         self.consensus.gc(view, epoch);
-        self.checkpoint_collector.gc(view, epoch);
         let _ = self.network.gc(view); // TODO
         self.state_manager.gc(view);
         self.vid_disperser.gc(view);

@@ -166,7 +166,8 @@ impl<TYPES: NodeType> ViewMessage<TYPES> for MessageKind<TYPES> {
                 ResponseMessage::Found(m) => m.view_number(),
                 ResponseMessage::NotFound | ResponseMessage::Denied => ViewNumber::new(1),
             },
-            MessageKind::External(_) => ViewNumber::new(1),
+            // TODO: change this once cliquenet has a Slot::MAX for external messages that is not garbage collected
+            MessageKind::External(_) => ViewNumber::new(u64::MAX),
         }
     }
 }
