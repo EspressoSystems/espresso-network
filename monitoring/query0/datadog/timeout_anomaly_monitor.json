@@ -1,0 +1,29 @@
+{
+  "name": "[query0] HotShot 'view timed out' rate above 24h baseline",
+  "type": "query alert",
+  "query": "avg(last_4h):anomalies(sum:espresso.query0.view_timed_out{*}.as_count(), 'agile', 2, direction='above', interval=3600, alert_window='last_1h', count_default_zero='true', seasonality='daily') >= 1",
+  "message": "{{#is_alert}}\n\ud83d\udd34 *query0 HotShot view-timeout rate is ABOVE its normal baseline.*\nThe number of `view timed out` events on the testnet/main **query0** node in the last hour is anomalously high vs its trailing baseline (~24h, daily seasonality).\n\nA single timeout = one view that missed its deadline. Escalation to watch for (`crates/hotshot/task-impls/src/view_sync.rs`):\n\u2022 `Starting view sync protocol` (error) \u2192 \u22652 consecutive timeouts, recovery engaged\n\u2022 `Too many consecutive timeouts! This shouldn't happen` (error) \u2192 \u22653 consecutive, liveness at risk\n\nLogs: https://app.datadoghq.com/logs?query=%40aws.awslogs.logGroup%3A%22%2Ftestnet%2Fmain%2F%22%20%40aws.awslogs.logStream%3A%2A0%2Fquery%2A%20%22view%20timed%20out%22\n{{/is_alert}}\n{{#is_recovery}}\n\u2705 query0 view-timeout rate is back within the normal baseline.\n{{/is_recovery}}\n\nNotify: @slack-REPLACE_WITH_YOUR_DD_SLACK_HANDLE",
+  "tags": [
+    "service:espresso",
+    "network:testnet-main",
+    "node:query0",
+    "team:espresso",
+    "managed-by:claude-query0-monitoring"
+  ],
+  "options": {
+    "thresholds": {
+      "critical": 1,
+      "critical_recovery": 0
+    },
+    "threshold_windows": {
+      "trigger_window": "last_1h",
+      "recovery_window": "last_15m"
+    },
+    "notify_no_data": false,
+    "renotify_interval": 0,
+    "new_group_delay": 60,
+    "include_tags": true,
+    "escalation_message": ""
+  },
+  "priority": 3
+}
