@@ -39,7 +39,6 @@ Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 - When work is ready, suggest an updated PR description capturing the final changeset.
 - Tell the reviewer where to focus.
 - Link the regression test or `reference` test when touching serializable types.
-- When work is ready suggest updated PR descriptions capturing the final changeset.
 
 ## Architecture
 
@@ -97,10 +96,9 @@ operation. **Mainnet currently runs V0_4.**
 - V0_4, `DrbAndHeaderUpgradeVersion`: header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2
   (**mainnet**)
 - V0_5, `EpochRewardVersion`: per-epoch rewards (**next upgrade**)
-- V0_6, `DaUpgradeVersion`: DA upgrade (planned)
-- V0_7, `Vid2UpgradeVersion`: VID2 / AvidmGf2 proofs (planned)
+- V0_6, `NEW_PROTOCOL_VERSION`: DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6)
 
-**Fast finality** (post-V0_5, see `crates/hotshot/new-protocol/` and `doc/stake-table-fast-finality.md`): replaces CDN +
+**Fast finality** (V0_6, see `crates/hotshot/new-protocol/` and `doc/stake-table-fast-finality.md`): replaces CDN +
 libp2p networking with `crates/cliquenet/` (fully-connected mesh, x25519-encrypted). Validators register `x25519_key`
 and `p2p_addr` on the StakeTable contract for peer discovery.
 

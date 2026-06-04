@@ -5,12 +5,17 @@ use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
+    simple_certificate::QuorumCertificate2,
+    simple_vote::TimeoutVote2,
     traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
     utils::StateAndDelta,
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{coordinator::error::CoordinatorError, message::Proposal, state::UpdateLeaf};
+use crate::{
+    consensus::PreCutoverSeed, coordinator::error::CoordinatorError, message::Proposal,
+    state::UpdateLeaf,
+};
 
 #[derive(Clone)]
 pub struct ClientApi<T: NodeType> {
@@ -112,6 +117,36 @@ impl<T: NodeType> ClientApi<T> {
         .await?
     }
 
+    /// Forward a legacy `TimeoutVote2` into the new-protocol timeout collectors.
+    pub async fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::SubmitTimeoutVote { vote, respond }, rx)
+            .await
+    }
+
+    /// Forward the last legacy view's QC so the first new-protocol leader can
+    /// propose on it even if the cutover seed was snapshotted before it formed.
+    pub async fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::SubmitLegacyHighQc { qc, respond }, rx)
+            .await
+    }
+
+    /// Refresh the coordinator network's peer set for `epoch`.
+    pub async fn bump_network_epoch(&self, epoch: EpochNumber) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::BumpNetworkEpoch { epoch, respond }, rx)
+            .await
+    }
+
+    /// Bridge legacy state into the coordinator at the cutover.
+    /// Idempotent at the consensus layer.
+    pub async fn seed_pre_cutover(&self, seed: PreCutoverSeed<T>) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::SeedPreCutover { seed, respond }, rx)
+            .await
+    }
+
     async fn call<A>(
         &self,
         request: ClientRequest<T>,
@@ -191,6 +226,22 @@ pub(crate) enum ClientRequest<T: NodeType> {
         payload: Vec<u8>,
         recipient: T::SignatureKey,
         respond: oneshot::Sender<Result<(), QueryError>>,
+    },
+    SeedPreCutover {
+        seed: PreCutoverSeed<T>,
+        respond: oneshot::Sender<()>,
+    },
+    SubmitTimeoutVote {
+        vote: TimeoutVote2<T>,
+        respond: oneshot::Sender<()>,
+    },
+    SubmitLegacyHighQc {
+        qc: QuorumCertificate2<T>,
+        respond: oneshot::Sender<()>,
+    },
+    BumpNetworkEpoch {
+        epoch: EpochNumber,
+        respond: oneshot::Sender<()>,
     },
 }
 

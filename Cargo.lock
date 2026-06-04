@@ -893,7 +893,7 @@ dependencies = [
  "rustls 0.23.39",
  "serde_json",
  "tokio",
- "tokio-tungstenite",
+ "tokio-tungstenite 0.28.0",
  "tracing",
  "url",
  "ws_stream_wasm",
@@ -2148,6 +2148,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core 0.5.6",
+ "base64 0.22.1",
  "bytes 1.11.1",
  "form_urlencoded",
  "futures-util",
@@ -2166,8 +2167,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1 0.10.6",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
@@ -2816,8 +2819,9 @@ dependencies = [
 [[package]]
 name = "cdn-broker"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=20260519-keep-alive#56a540d4f226146c38debb7d29edf2703bbe81de"
 dependencies = [
+ "anyhow",
  "cdn-proto",
  "clap 4.6.1",
  "console-subscriber",
@@ -2829,6 +2833,7 @@ dependencies = [
  "portpicker",
  "prometheus",
  "rand 0.8.6",
+ "reqwest 0.12.28",
  "rkyv",
  "tokio",
  "tracing",
@@ -2838,7 +2843,7 @@ dependencies = [
 [[package]]
 name = "cdn-client"
 version = "0.6.2"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=20260519-keep-alive#56a540d4f226146c38debb7d29edf2703bbe81de"
 dependencies = [
  "cdn-proto",
  "clap 4.6.1",
@@ -2854,7 +2859,7 @@ dependencies = [
 [[package]]
 name = "cdn-marshal"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=20260519-keep-alive#56a540d4f226146c38debb7d29edf2703bbe81de"
 dependencies = [
  "cdn-proto",
  "clap 4.6.1",
@@ -2867,7 +2872,7 @@ dependencies = [
 [[package]]
 name = "cdn-proto"
 version = "0.6.2-compat"
-source = "git+https://github.com/EspressoSystems/Push-CDN?tag=0.6.2-bcompat-patch2#4dd60c168fc90514b0f9c0cd33673768474baa53"
+source = "git+https://github.com/EspressoSystems/Push-CDN?tag=20260519-keep-alive#56a540d4f226146c38debb7d29edf2703bbe81de"
 dependencies = [
  "anyhow",
  "ark-serialize 0.5.0",
@@ -2889,6 +2894,7 @@ dependencies = [
  "rkyv",
  "rustls 0.23.39",
  "rustls-pki-types",
+ "socket2 0.6.3",
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
@@ -4654,12 +4660,14 @@ dependencies = [
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
+ "futures",
  "hex",
  "prost 0.14.3",
  "schemars 0.9.0",
  "serde",
  "serde_json",
  "serialization-api",
+ "thiserror 2.0.18",
  "tokio",
  "tonic 0.14.5",
  "tonic-build",
@@ -4883,6 +4891,7 @@ dependencies = [
  "tide-disco",
  "time 0.3.47",
  "tokio",
+ "tokio-tungstenite 0.28.0",
  "tokio-util",
  "toml",
  "tracing",
@@ -6353,6 +6362,7 @@ dependencies = [
  "futures",
  "hotshot-example-types",
  "hotshot-types",
+ "insta",
  "lazy_static",
  "libp2p",
  "libp2p-identity",
@@ -6364,6 +6374,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "tracing-test",
 ]
 
 [[package]]
@@ -6405,6 +6416,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "url",
+ "vec1",
  "versions",
 ]
 
@@ -6631,6 +6644,7 @@ dependencies = [
  "futures",
  "hotshot-builder-api",
  "hotshot-contract-adapter",
+ "hotshot-libp2p-networking",
  "hotshot-task",
  "hotshot-types",
  "hotshot-utils",
@@ -6699,6 +6713,7 @@ name = "hotshot-types"
 version = "0.1.11"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "anyhow",
  "ark-bn254 0.5.0",
  "ark-ed-on-bn254",
@@ -6745,10 +6760,12 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tagged-base64",
+ "test-log",
  "test-utils",
  "thiserror 2.0.18",
  "time 0.3.47",
  "tokio",
+ "tokio-util",
  "toml",
  "tracing",
  "typenum",
@@ -6757,6 +6774,7 @@ dependencies = [
  "vec1",
  "versions",
  "vid",
+ "zeroize",
 ]
 
 [[package]]
@@ -8521,6 +8539,7 @@ name = "light-client"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "anyhow",
  "async-lock 3.4.2",
  "async-trait",
@@ -13370,6 +13389,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite 0.29.0",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13818,6 +13849,22 @@ dependencies = [
  "sha1 0.10.6",
  "thiserror 2.0.18",
  "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+dependencies = [
+ "bytes 1.11.1",
+ "data-encoding",
+ "http 1.4.0",
+ "httparse",
+ "log",
+ "rand 0.9.4",
+ "sha1 0.10.6",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -22,6 +22,7 @@ use std::{
 #[cfg(feature = "hotshot-testing")]
 use std::{collections::HashMap, str::FromStr};
 
+use alloy::primitives::U256;
 use anyhow::{Context, anyhow};
 use async_lock::RwLock;
 use async_trait::async_trait;
@@ -39,6 +40,7 @@ use hotshot_libp2p_networking::{
             record::{Namespace, RecordKey, RecordValue},
             store::persistent::DhtPersistentStorage,
         },
+        log_summary::LogEvent,
         spawn_network_node,
         transport::construct_auth_message,
     },
@@ -74,7 +76,7 @@ use tokio::{
     },
     time::sleep,
 };
-use tracing::{error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{BroadcastDelay, EpochMembershipCoordinator};
 
@@ -406,6 +408,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
         pub_key: &T::SignatureKey,
         priv_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
         metrics: Libp2pMetricsValue,
+        network_discriminator: Option<U256>,
     ) -> anyhow::Result<Self> {
         // Try to take our Libp2p config from our broader network config
         let libp2p_config = config
@@ -455,7 +458,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
             .keypair(keypair)
             .replication_factor(replication_factor)
             .bind_address(Some(bind_address.clone()))
-            .announce_addresses(announce_addresses);
+            .announce_addresses(announce_addresses)
+            .network_discriminator(network_discriminator);
 
         // Connect to the provided bootstrap nodes
         config_builder.to_connect_addrs(HashSet::from_iter(libp2p_config.bootstrap_nodes.clone()));
@@ -609,7 +613,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
                 if latest_seen_view.load(Ordering::Relaxed) + THRESHOLD <= *view_number {
                     // look up
                     if let Err(err) = handle.lookup_node(&pk, dht_timeout).await {
-                        warn!("Failed to perform lookup for key {pk}: {err}");
+                        LogEvent::DhtLookupFailure.record();
+                        debug!("Failed to perform lookup for key {pk}: {err}");
                     };
                 }
             }

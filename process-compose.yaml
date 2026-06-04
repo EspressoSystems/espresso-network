@@ -578,7 +578,7 @@ processes:
 
   # A broker is the main message-routing unit of the CDN
   broker_0:
-    command: cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091
+    command: cdn-broker -d "redis://:changeme!@localhost:6379" -m 127.0.0.1:9091 --public-advertise-endpoint local_ip:1738
     depends_on:
       keydb:
         condition: process_healthy
@@ -626,6 +626,7 @@ processes:
     command: submit-transactions
     environment:
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=${ESPRESSO_SUBMIT_TRANSACTIONS_PUBLIC_PORT}
+      - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY=${ESPRESSO_SUBMIT_TRANSACTIONS_DELAY:-2s}
     depends_on:
       espresso-node-0:
         condition: process_healthy
@@ -643,7 +644,7 @@ processes:
     command: submit-transactions
     environment:
       - ESPRESSO_SUBMIT_TRANSACTIONS_PORT=${ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT}
-      - ESPRESSO_SUBMIT_TRANSACTIONS_SUBMIT_URL=http://localhost:${ESPRESSO_BUILDER_SERVER_PORT}/txn_submit
+      - ESPRESSO_SUBMIT_TRANSACTIONS_DELAY=${ESPRESSO_SUBMIT_TRANSACTIONS_DELAY:-2s}
     depends_on:
       espresso-node-0:
         condition: process_healthy

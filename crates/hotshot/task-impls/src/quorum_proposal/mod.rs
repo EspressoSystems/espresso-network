@@ -439,7 +439,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
 
     /// Update the latest proposed view number.
     #[instrument(skip_all, fields(id = self.id, latest_proposed_view = *self.latest_proposed_view), name = "Update latest proposed view", level = "error")]
-    async fn update_latest_proposed_view(&mut self, new_view: ViewNumber) -> bool {
+    fn update_latest_proposed_view(&mut self, new_view: ViewNumber) -> bool {
         if *self.latest_proposed_view < *new_view {
             tracing::debug!(
                 "Updating latest proposed view from {} to {}",
@@ -645,7 +645,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
             HotShotEvent::QuorumProposalPreliminarilyValidated(proposal) => {
                 let view_number = proposal.data.view_number();
                 // All nodes get the latest proposed view as a proxy of `cur_view` of old.
-                if !self.update_latest_proposed_view(view_number).await {
+                if !self.update_latest_proposed_view(view_number) {
                     tracing::trace!("Failed to update latest proposed view");
                 }
 
@@ -663,7 +663,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> QuorumProposalTaskState<TYPE
                 let view = proposal.data.view_number();
 
                 ensure!(
-                    self.update_latest_proposed_view(view).await,
+                    self.update_latest_proposed_view(view),
                     "Failed to update latest proposed view"
                 );
             },
@@ -759,6 +759,12 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState
         sender: &Sender<Arc<Self::Event>>,
         receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self
+            .upgrade_lock
+            .new_protocol_active(self.latest_proposed_view)
+        {
+            return Ok(());
+        }
         self.handle(event, receiver.clone(), sender.clone()).await
     }
 

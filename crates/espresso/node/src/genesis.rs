@@ -1448,8 +1448,8 @@ mod test {
             start_proposing_view = 1
             stop_proposing_view = 15
 
-            [upgrade.da]
-            [upgrade.da.chain_config]
+            [upgrade.new_protocol]
+            [upgrade.new_protocol.chain_config]
             chain_id = 12345
             max_block_size = 30000
             base_fee = 1
