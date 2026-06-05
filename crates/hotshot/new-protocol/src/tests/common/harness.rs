@@ -151,6 +151,7 @@ impl TestHarness {
             ))
             .public_key(public_key)
             .node_id(KeyPrefix::from(&public_key))
+            .upgrade_lock(upgrade_lock)
             .build();
         Self {
             coordinator,

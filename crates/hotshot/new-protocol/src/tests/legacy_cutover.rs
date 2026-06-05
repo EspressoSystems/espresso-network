@@ -317,6 +317,7 @@ async fn build_cutover_coordinator(
             hotshot_types::data::EpochNumber::genesis(),
         ))
         .public_key(public_key)
+        .upgrade_lock(upgrade_lock)
         .build()
 }
 

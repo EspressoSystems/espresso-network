@@ -95,11 +95,11 @@ impl<T: NodeType> Cliquenet<T> {
 impl<T: NodeType> Network<T> for Cliquenet<T> {
     type PeerData = (PublicKey, NetAddr);
 
-    fn unicast(
+    fn unicast_raw(
         &mut self,
         v: ViewNumber,
         to: &T::SignatureKey,
-        m: &Message<T, Validated>,
+        m: Vec<u8>,
     ) -> Result<(), NetworkError> {
         let target = if *to == self.my_keys.0 {
             self.my_keys.1
@@ -109,20 +109,28 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
             error!(peer = %to, "unicast target not found");
             return Ok(());
         };
-        let bytes = self.serialize(m)?;
         self.inner
-            .unicast(Slot::new(*v), target, bytes)
+            .unicast(Slot::new(*v), target, m)
             .map_err(to_network_error)?;
         Ok(())
     }
 
-    fn multicast(
+    fn unicast(
         &mut self,
         v: ViewNumber,
-        to: Vec<&T::SignatureKey>,
+        to: &T::SignatureKey,
         m: &Message<T, Validated>,
     ) -> Result<(), NetworkError> {
         let bytes = self.serialize(m)?;
+        self.unicast_raw(v, to, bytes)
+    }
+
+    fn multicast_raw(
+        &mut self,
+        v: ViewNumber,
+        to: Vec<&T::SignatureKey>,
+        m: Vec<u8>,
+    ) -> Result<(), NetworkError> {
         let mut targets = Vec::new();
         for t in to {
             if let Some(info) = self.peers.get(t) {
@@ -134,26 +142,49 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
             }
         }
         self.inner
-            .multicast(Slot::new(*v), targets, bytes)
+            .multicast(Slot::new(*v), targets, m)
+            .map_err(to_network_error)?;
+        Ok(())
+    }
+
+    fn multicast(
+        &mut self,
+        v: ViewNumber,
+        to: Vec<&T::SignatureKey>,
+        m: &Message<T, Validated>,
+    ) -> Result<(), NetworkError> {
+        let bytes = self.serialize(m)?;
+        self.multicast_raw(v, to, bytes)
+    }
+
+    fn broadcast_raw(&mut self, v: ViewNumber, m: Vec<u8>) -> Result<(), NetworkError> {
+        self.inner
+            .broadcast(Slot::new(*v), m)
             .map_err(to_network_error)?;
         Ok(())
     }
 
     fn broadcast(&mut self, v: ViewNumber, m: &Message<T, Validated>) -> Result<(), NetworkError> {
         let bytes = self.serialize(m)?;
-        self.inner
-            .broadcast(Slot::new(*v), bytes)
-            .map_err(to_network_error)?;
-        Ok(())
+        self.broadcast_raw(v, bytes)
     }
 
     async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
-        let (_src, bytes) = self
+        let (src, bytes) = self
             .inner
             .receive()
             .await
             .ok_or_else(|| NetworkError::Critical("cliquenet has shutdown".into()))?;
         let m = self.deserialize(&bytes)?;
+        let k = self.peers.get(&m.sender).map(|info| info.x25519_key);
+        let s = src.into();
+        if Some(s) != k {
+            return Err(NetworkError::InvalidSender {
+                sender: m.sender.to_string(),
+                configured: k,
+                actual: s,
+            });
+        }
         Ok(m)
     }
 

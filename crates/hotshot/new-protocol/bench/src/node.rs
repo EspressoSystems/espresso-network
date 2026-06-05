@@ -212,6 +212,7 @@ async fn build_coordinator(
         .outbox(Outbox::new())
         .timer(timer)
         .public_key(public_key)
+        .upgrade_lock(upgrade_lock)
         .build();
 
     // Emit initial ViewChanged and (for the leader) RequestBlockAndHeader.

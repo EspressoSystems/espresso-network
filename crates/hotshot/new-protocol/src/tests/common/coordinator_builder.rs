@@ -177,6 +177,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
             EpochNumber::genesis(),
         ))
         .public_key(public_key)
+        .upgrade_lock(upgrade_lock)
         .build();
 
     // Emit initial ViewChanged + RequestBlockAndHeader (if leader).

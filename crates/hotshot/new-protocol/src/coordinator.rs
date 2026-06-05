@@ -44,7 +44,7 @@ use crate::{
     message::{
         self, BlockMessage, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
         ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
-        Vote2,
+        Validated, Vote2,
     },
     network::Network,
     outbox::Outbox,
@@ -98,6 +98,7 @@ pub struct Coordinator<T: NodeType, N, S> {
     cached_validated_proposals: BTreeMap<ViewNumber, ValidatedProposal<T>>,
     #[builder(default)]
     cached_vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
+    upgrade_lock: UpgradeLock<T>,
     metrics: Option<metrics::Metrics>,
 }
 
@@ -167,7 +168,6 @@ where
         );
         consensus.seed_genesis(genesis_cert1, genesis_proposal);
 
-        let lock = upgrade_lock.clone();
         Self::builder()
             .consensus(consensus)
             .network(network)
@@ -176,23 +176,23 @@ where
             .vid_reconstructor(VidReconstructor::new())
             .vote1_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .vote2_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .timeout_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .timeout_one_honest_collector(VoteCollector::new(
                 membership_coordinator.clone(),
-                lock.clone(),
+                upgrade_lock.clone(),
             ))
             .epoch_root_collector(EpochRootVoteCollector::new(
                 membership_coordinator.clone(),
-                lock,
+                upgrade_lock.clone(),
             ))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
@@ -212,7 +212,7 @@ where
             .share_validator(VidShareValidator::new(
                 membership_coordinator.clone(),
                 initializer.epoch_height,
-                upgrade_lock,
+                upgrade_lock.clone(),
             ))
             .storage(Storage::new(storage, private_key))
             .membership_coordinator(membership_coordinator)
@@ -227,6 +227,7 @@ where
                     .is_recording()
                     .then(|| metrics::Metrics::new(metrics)),
             )
+            .upgrade_lock(upgrade_lock)
             .build()
     }
 
@@ -606,9 +607,6 @@ where
                 let block = proposal.data.block_header.block_number();
                 info!(%node, %view, %epoch, %block, "send proposal");
                 self.storage.append_proposal(proposal.data.clone());
-                // TODO: This may be done async in network so we do not spend
-                // too much time here in this loop.
-
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Proposal(
@@ -629,15 +627,33 @@ where
             },
             ConsensusOutput::SendVidShares(vid_shares) => {
                 debug!(%node, count = vid_shares.len(), "send vid shares");
-                for share in vid_shares {
-                    let recipient = share.data.recipient_key.clone();
-                    let message = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(ConsensusMessage::VidShare(share)),
+
+                use rayon::prelude::*;
+
+                for (recipient, message) in vid_shares
+                    .into_par_iter()
+                    .map(|share| {
+                        let r = share.data.recipient_key.clone();
+                        let c = ConsensusMessage::<T, Validated>::VidShare(share);
+                        let m = Message {
+                            sender: self.public_key.clone(),
+                            message_type: MessageType::Consensus(c),
+                        };
+                        (r, self.upgrade_lock.serialize(&m))
+                    })
+                    .collect::<Vec<_>>()
+                {
+                    let bytes = match message {
+                        Ok(bytes) => bytes,
+                        Err(err) => {
+                            warn!(%node, %err, "vid share serialization error");
+                            continue;
+                        },
                     };
+
                     if let Err(err) =
                         self.network
-                            .unicast(self.consensus.current_view(), &recipient, &message)
+                            .unicast_raw(self.consensus.current_view(), &recipient, bytes)
                     {
                         let err = CoordinatorError::from(err).context("vid share unicast");
                         if err.severity == Severity::Critical {
