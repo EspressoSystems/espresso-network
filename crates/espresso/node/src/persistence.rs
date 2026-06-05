@@ -22,32 +22,28 @@
 //! Under the new protocol, a node usually obtains a block payload by reconstructing it from VID
 //! shares carried in Vote1 broadcasts, and the result is written to storage *asynchronously* — so
 //! the payload can land on disk shortly after its view is decided, or (if the node's vote was not
-//! needed for quorum and it missed the share broadcasts) never. To keep the query service
-//! complete, the decide pipeline guarantees payload delivery in layers:
+//! needed for quorum and it missed the share broadcasts) never. Decide events are never delayed
+//! waiting for that data; instead, payload delivery is guaranteed in event-driven layers:
 //!
 //! 1. **In-memory decide data**: the decided leaves arrive with their payloads filled in and
 //!    VID shares attached; the decide event is built directly from them, with no dependence on
 //!    the asynchronous storage writes having landed. This is the normal path.
-//! 2. **Grace deferral** ([`DecideDataDeferral`]): decide events for views with missing
-//!    payload/VID data are deferred briefly (`decide-payload-grace`, default 10s), giving
-//!    in-flight reconstruction writes a chance to land.
+//! 2. **Late back-fill**: when a payload is reconstructed *after* its view was already decided,
+//!    the coordinator emits `BlockPayloadReconstructed`; the event loop persists the payload to
+//!    consensus storage (so restart replay and peers see it) and forwards it to the query
+//!    service, which back-fills the block.
 //! 3. **Peer recovery** ([`DecidePayloadRecovery`](espresso_types::v0::traits::DecidePayloadRecovery)):
-//!    once the grace period expires, the payload is requested from peers over the
-//!    request-response protocol and verified against the header's payload commitment. To make
+//!    when a decide event is emitted with the payload still missing (the node never received
+//!    enough shares to reconstruct it), the reported leaves are handed to a background task that
+//!    fetches the DA proposal from peers over the request-response protocol, verifies it against
+//!    the header's payload commitment, and delivers it through the same path as layer 2. To make
 //!    this possible, DA proposals and VID shares are *retained* after processing for the
 //!    consensus storage retention window (instead of being deleted at decide), so every node can
 //!    serve recently decided payloads.
-//! 4. **Late back-fill**: when a payload is reconstructed after its view was already processed,
-//!    the coordinator emits `BlockPayloadReconstructed`, which the event loop forwards straight
-//!    to the query service.
-//! 5. **Query service fetching**: as a final backstop, blocks stored without a payload are healed
+//! 4. **Query service fetching**: as a final backstop, blocks stored without a payload are healed
 //!    by the query service's own peer fetching.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Mutex,
-    time::{Duration, Instant},
-};
+use std::collections::HashMap;
 
 use alloy::primitives::{Address, U256};
 use anyhow::Context;
@@ -61,152 +57,6 @@ pub mod fs;
 pub mod no_storage;
 mod persistence_metrics;
 pub mod sql;
-
-/// Tracks views whose payload or VID data was missing when the decide processor first
-/// tried to emit their decide events.
-///
-/// Under the new protocol a node usually obtains a block payload by reconstructing it from
-/// VID shares, and the result is written to storage asynchronously — so the data may land
-/// on disk shortly *after* the corresponding view is decided. Instead of emitting a decide
-/// event without the payload (leaving a gap in the query service that can only be healed
-/// over the network), the decide processor defers the event for a grace period, giving
-/// in-flight writes a chance to land. Once the grace period expires the event is emitted
-/// without the missing data, restoring the old behavior.
-#[derive(Debug, Default)]
-pub(crate) struct DecideDataDeferral {
-    /// When each view was first observed with missing data.
-    since: Mutex<BTreeMap<u64, Instant>>,
-    /// Number of peer-recovery attempts made for each view's payload.
-    recovery_attempts: Mutex<BTreeMap<u64, u32>>,
-}
-
-/// Maximum number of peer-recovery attempts for a view's payload before its decide event
-/// is emitted without the payload.
-pub(crate) const MAX_PAYLOAD_RECOVERY_ATTEMPTS: u32 = 3;
-
-/// Maximum number of views whose payloads are recovered from peers in a single decide
-/// processing pass. Bounds the time a pass can spend on (potentially timing-out) network
-/// requests.
-pub(crate) const PAYLOAD_RECOVERY_BATCH: usize = 3;
-
-/// Only attempt peer recovery for views within this distance of the newest decided leaf.
-/// Peers retain DA proposals for their consensus storage retention window (about this many
-/// views by default); anything older is very unlikely to be recoverable over the consensus
-/// network and is left to the query service's peer fetching instead.
-pub(crate) const PAYLOAD_RECOVERY_HORIZON: u64 = 130000;
-
-impl DecideDataDeferral {
-    /// Whether the decide event for `view`, which is missing payload or VID data, should
-    /// be deferred. Records the first time each view is seen missing; returns `false` once
-    /// `grace` has elapsed since then.
-    pub fn should_defer(&self, view: u64, grace: Duration, now: Instant) -> bool {
-        let mut since = self.since.lock().expect("poisoned");
-        let first_seen = *since.entry(view).or_insert(now);
-        now.duration_since(first_seen) < grace
-    }
-
-    /// Record `views` as missing data now (if not already recorded), so a whole backlog's
-    /// grace periods run concurrently rather than expiring serially.
-    pub fn record_missing(&self, views: impl IntoIterator<Item = u64>, now: Instant) {
-        let mut since = self.since.lock().expect("poisoned");
-        for view in views {
-            since.entry(view).or_insert(now);
-        }
-    }
-
-    /// Whether peer recovery should still be attempted for `view`'s payload.
-    pub fn recovery_viable(&self, view: u64) -> bool {
-        let attempts = self.recovery_attempts.lock().expect("poisoned");
-        attempts.get(&view).copied().unwrap_or(0) < MAX_PAYLOAD_RECOVERY_ATTEMPTS
-    }
-
-    /// Record a peer-recovery attempt for `view`.
-    pub fn record_recovery_attempt(&self, view: u64) {
-        let mut attempts = self.recovery_attempts.lock().expect("poisoned");
-        *attempts.entry(view).or_insert(0) += 1;
-    }
-
-    /// Drop bookkeeping for views at or below `view`; they have been processed.
-    pub fn clear_through(&self, view: u64) {
-        let mut since = self.since.lock().expect("poisoned");
-        *since = since.split_off(&(view + 1));
-        drop(since);
-        let mut attempts = self.recovery_attempts.lock().expect("poisoned");
-        *attempts = attempts.split_off(&(view + 1));
-    }
-}
-
-#[cfg(test)]
-mod deferral_tests {
-    use super::*;
-
-    #[test]
-    fn test_should_defer_until_grace_expires() {
-        let deferral = DecideDataDeferral::default();
-        let grace = Duration::from_secs(10);
-        let t0 = Instant::now();
-
-        // First sighting starts the clock and defers.
-        assert!(deferral.should_defer(5, grace, t0));
-        // Still within grace.
-        assert!(deferral.should_defer(5, grace, t0 + Duration::from_secs(9)));
-        // Grace expired.
-        assert!(!deferral.should_defer(5, grace, t0 + Duration::from_secs(10)));
-        // Zero grace never defers.
-        assert!(!deferral.should_defer(6, Duration::ZERO, t0));
-    }
-
-    #[test]
-    fn test_record_missing_batches_grace() {
-        let deferral = DecideDataDeferral::default();
-        let grace = Duration::from_secs(10);
-        let t0 = Instant::now();
-
-        // A whole backlog is stamped at once...
-        deferral.record_missing([1, 2, 3], t0);
-        // ...so all views expire together, not serially.
-        let later = t0 + Duration::from_secs(10);
-        assert!(!deferral.should_defer(1, grace, later));
-        assert!(!deferral.should_defer(2, grace, later));
-        assert!(!deferral.should_defer(3, grace, later));
-
-        // Recording again does not reset an existing stamp.
-        deferral.record_missing([1], later);
-        assert!(!deferral.should_defer(1, grace, later));
-    }
-
-    #[test]
-    fn test_recovery_attempts_capped() {
-        let deferral = DecideDataDeferral::default();
-        for _ in 0..MAX_PAYLOAD_RECOVERY_ATTEMPTS {
-            assert!(deferral.recovery_viable(7));
-            deferral.record_recovery_attempt(7);
-        }
-        assert!(!deferral.recovery_viable(7));
-        // Other views are unaffected.
-        assert!(deferral.recovery_viable(8));
-    }
-
-    #[test]
-    fn test_clear_through_drops_bookkeeping() {
-        let deferral = DecideDataDeferral::default();
-        let grace = Duration::from_secs(10);
-        let t0 = Instant::now();
-        let much_later = t0 + Duration::from_secs(60);
-
-        deferral.record_missing([1, 2, 3], t0);
-        for _ in 0..MAX_PAYLOAD_RECOVERY_ATTEMPTS {
-            deferral.record_recovery_attempt(2);
-        }
-        deferral.clear_through(2);
-
-        // Views at or below the cleared view start from scratch...
-        assert!(deferral.should_defer(2, grace, much_later));
-        assert!(deferral.recovery_viable(2));
-        // ...while later views keep their original stamps.
-        assert!(!deferral.should_defer(3, grace, much_later));
-    }
-}
 
 /// RegisteredValidator without x25519_key/p2p_addr fields.
 /// Used for migrating data written before x25519 support was added.
@@ -337,8 +187,8 @@ mod tests {
         Event, Header, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, Payload, PubKey,
         SeqTypes, Transaction, ValidatedState,
         traits::{
-            DecideEventData, EventConsumer, EventsPersistenceRead, MembershipPersistence,
-            NullEventConsumer, PersistenceOptions, SequencerPersistence,
+            DecideEventData, DecidePayloadRecovery, EventConsumer, EventsPersistenceRead,
+            MembershipPersistence, NullEventConsumer, PersistenceOptions, SequencerPersistence,
         },
         v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
     };
@@ -370,6 +220,7 @@ mod tests {
         traits::{
             EncodeBytes,
             block_contents::{BlockHeader, BlockPayload},
+            metrics::NoMetrics,
         },
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
@@ -391,6 +242,7 @@ mod tests {
             test_helpers::{STAKE_TABLE_CAPACITY_FOR_TEST, TestNetwork, TestNetworkConfigBuilder},
         },
         catchup::NullStateCatchup,
+        context::recover_missing_payloads,
         testing::{TestConfigBuilder, staking_priv_keys},
     };
 
@@ -1635,7 +1487,7 @@ mod tests {
         // A failing consumer propagates the error and leaves the cursor un-advanced: nothing is
         // GC'd and the range is retried below.
         storage
-            .process_decided_events(ViewNumber::new(3), None, &FailConsumer, None, None)
+            .process_decided_events(ViewNumber::new(3), None, &FailConsumer, None)
             .await
             .unwrap_err();
         for i in 0..4 {
@@ -1651,14 +1503,19 @@ mod tests {
 
         // One process pass at the latest view drains the whole backlog, runs GC, and reports the
         // cursor it advanced to.
-        let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
+        let outcome = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None)
             .await
             .unwrap();
         assert_eq!(
-            processed,
+            outcome.processed,
             Some(ViewNumber::new(3)),
             "process_decided_events should report the highest processed view"
+        );
+        assert!(
+            outcome.missing_payload.is_empty(),
+            "no leaf should be reported missing its payload: {:?}",
+            outcome.missing_payload
         );
 
         // All four leaves delivered, with payloads and VID shares reconstructed from storage.
@@ -1696,7 +1553,7 @@ mod tests {
         // Re-processing with nothing new is a no-op.
         let consumer2 = EventCollector::default();
         storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer2, None, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer2, None)
             .await
             .unwrap();
         assert!(
@@ -1959,16 +1816,12 @@ mod tests {
     /// The in-memory data from the decide event alone is enough to emit complete decide
     /// events: with the consensus staging tables completely empty (as when a view is
     /// decided before consensus' asynchronous storage writes land), processing with the
-    /// live data attached emits every leaf with its payload and VID share, with no grace
-    /// deferral — and without ever writing the staging tables.
+    /// live data attached emits every leaf with its payload and VID share — without ever
+    /// reading or writing the staging tables, and with nothing reported missing.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_decide_from_memory<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
-        let mut opt = P::options(&tmp);
-        // A grace period long enough that it cannot expire mid-test: any progress past a
-        // view with missing data must come from the live decide data, not grace expiry.
-        opt.set_decide_payload_grace(Duration::from_secs(600));
-        let storage = opt.create().await.unwrap();
+        let storage = P::options(&tmp).create().await.unwrap();
 
         let (chain, payload, _) = mock_chain_with_txns(4).await;
 
@@ -1991,35 +1844,27 @@ mod tests {
             .await
             .unwrap();
 
-        // Without the live data, everything past genesis defers on the missing
-        // payload/VID data (this is the pre-existing behavior the live path bypasses).
-        let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
-            .await
-            .unwrap();
-        assert_eq!(
-            processed,
-            Some(ViewNumber::new(0)),
-            "without live data, views with missing data must defer"
-        );
-        assert_eq!(consumer.leaf_chain().await.len(), 1);
-
-        // With the live data, the same pass completes immediately.
+        // One pass with the live data completes immediately, with nothing missing.
         let live = live_decide_data(&chain, &payload, 0..4);
-        let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None, Some(&live))
+        let outcome = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer, Some(&live))
             .await
             .unwrap();
         assert_eq!(
-            processed,
+            outcome.processed,
             Some(ViewNumber::new(3)),
             "live data must allow processing without the staging tables"
         );
+        assert!(
+            outcome.missing_payload.is_empty(),
+            "no payload should be reported missing: {:?}",
+            outcome.missing_payload
+        );
 
         // Every post-genesis leaf was delivered exactly once, complete with the payload
-        // and VID share from memory. (Genesis was emitted in the live-less pass above via
-        // the canonical-empty-payload fast path; the fs backend may additionally re-emit
-        // it as its anchor, which consumers are required to tolerate idempotently.)
+        // and VID share from memory. (Genesis is special-cased — the canonical empty
+        // payload — and the fs backend may re-emit it as its anchor, which consumers are
+        // required to tolerate idempotently, so it is checked separately.)
         let leaf_chain = consumer.leaf_chain().await;
         for (leaf, _, vid, _) in chain.iter().skip(1) {
             let infos = leaf_chain
@@ -2074,9 +1919,7 @@ mod tests {
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_decide_from_memory_partial<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
-        let mut opt = P::options(&tmp);
-        opt.set_decide_payload_grace(Duration::from_secs(600));
-        let storage = opt.create().await.unwrap();
+        let storage = P::options(&tmp).create().await.unwrap();
 
         let (chain, payload, commit) = mock_chain_with_txns(4).await;
 
@@ -2110,11 +1953,16 @@ mod tests {
         // The live data covers only views 2 and 3 (e.g. an older signal was coalesced
         // away under processor lag); one pass still completes, mixing sources per view.
         let live = live_decide_data(&chain, &payload, 2..4);
-        let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None, Some(&live))
+        let outcome = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer, Some(&live))
             .await
             .unwrap();
-        assert_eq!(processed, Some(ViewNumber::new(3)));
+        assert_eq!(outcome.processed, Some(ViewNumber::new(3)));
+        assert!(
+            outcome.missing_payload.is_empty(),
+            "no payload should be reported missing: {:?}",
+            outcome.missing_payload
+        );
 
         let leaf_chain = consumer.leaf_chain().await;
         assert_eq!(leaf_chain.len(), 4, "{leaf_chain:#?}");
@@ -2146,24 +1994,26 @@ mod tests {
         }
     }
 
-    /// Decide events are deferred while VID data is missing from storage: the cursor
-    /// holds, nothing is emitted for the deferred views, and processing resumes
-    /// seamlessly once the data lands.
+    /// Missing data never delays the decide pipeline: a single pass emits every leaf
+    /// immediately, attaching whatever data is available. Leaves missing their payload
+    /// are reported in the outcome for background peer recovery; leaves missing only VID
+    /// data are emitted without it (the query service heals VID via peer fetching) and
+    /// NOT reported.
     #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_decide_defers_missing_data<P: TestablePersistence>(_p: PhantomData<P>) {
+    pub async fn test_decide_missing_data_emitted_and_reported<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) {
         let tmp = P::tmp_storage().await;
-        let mut opt = P::options(&tmp);
-        // A grace period long enough that it cannot expire mid-test.
-        opt.set_decide_payload_grace(Duration::from_secs(600));
-        let storage = opt.create().await.unwrap();
+        let storage = P::options(&tmp).create().await.unwrap();
 
-        let (chain, commit) = mock_chain(4).await;
+        let (chain, _payload, commit) = mock_chain_with_txns(4).await;
 
-        // DA proposals land for every view, but VID shares only for views 0 and 1.
-        for (_, _, _, da) in &chain {
+        // DA proposals land only for views 0 and 1; VID shares only for views 0-2. View 3
+        // is missing both, and views 2 and 3 are missing their payloads.
+        for (_, _, _, da) in chain.iter().take(2) {
             storage.append_da2(da, commit).await.unwrap();
         }
-        for (_, _, vid, _) in chain.iter().take(2) {
+        for (_, _, vid, _) in chain.iter().take(3) {
             storage
                 .append_vid(&convert_proposal(vid.clone()))
                 .await
@@ -2188,127 +2038,80 @@ mod tests {
             .await
             .unwrap();
 
-        // Only the views with complete data are processed; the rest are deferred.
-        let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
+        // One pass processes everything: nothing defers, the cursor reaches the newest
+        // decided view.
+        let outcome = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None)
             .await
             .unwrap();
         assert_eq!(
-            processed,
-            Some(ViewNumber::new(1)),
-            "only views with complete data should be processed"
+            outcome.processed,
+            Some(ViewNumber::new(3)),
+            "missing data must not hold the cursor back"
         );
-        assert_eq!(consumer.leaf_chain().await.len(), 2);
 
-        // Re-processing makes no progress while the data is still missing, and emits
-        // nothing twice.
-        let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
-            .await
-            .unwrap();
-        assert!(
-            processed <= Some(ViewNumber::new(1)),
-            "deferred views must not be processed while their data is missing"
+        // The leaves missing their payloads (views 2 and 3) are reported for recovery,
+        // oldest first; the leaf missing only its VID share is not.
+        assert_eq!(
+            outcome
+                .missing_payload
+                .iter()
+                .map(|leaf| leaf.view_number().u64())
+                .collect::<Vec<_>>(),
+            vec![2, 3],
+            "exactly the payload-less leaves must be reported, in view order"
         );
-        assert_eq!(consumer.leaf_chain().await.len(), 2);
 
-        // Once the missing VID shares land, processing resumes and completes with full
-        // data.
-        for (_, _, vid, _) in chain.iter().skip(2) {
-            storage
-                .append_vid(&convert_proposal(vid.clone()))
-                .await
-                .unwrap();
-        }
-        let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
-            .await
-            .unwrap();
-        assert_eq!(processed, Some(ViewNumber::new(3)));
+        // All four leaves were emitted, each with whatever data was available.
         let leaf_chain = consumer.leaf_chain().await;
         assert_eq!(leaf_chain.len(), 4, "{leaf_chain:#?}");
         for ((leaf, ..), info) in chain.iter().zip(leaf_chain.iter()) {
             assert_eq!(info.leaf, *leaf);
-            assert!(info.vid_share.is_some());
-            assert!(info.leaf.block_payload().is_some());
+            let view = leaf.view_number().u64();
+            assert_eq!(
+                info.leaf.block_payload().is_some(),
+                view < 2,
+                "only views with a stored DA proposal have payloads (view {view})"
+            );
+            assert_eq!(
+                info.vid_share.is_some(),
+                view < 3,
+                "only views with a stored share have VID data (view {view})"
+            );
         }
-    }
 
-    /// Once the grace period expires (and no peer recovery is available), decide events
-    /// are emitted without the missing data, restoring the old behavior; the query
-    /// service falls back to fetching the data from peers.
-    #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_decide_grace_expiry<P: TestablePersistence>(_p: PhantomData<P>) {
-        let tmp = P::tmp_storage().await;
-        let mut opt = P::options(&tmp);
-        opt.set_decide_payload_grace(Duration::from_millis(200));
-        let storage = opt.create().await.unwrap();
-
-        let (chain, commit) = mock_chain(2).await;
-
-        // DA proposals for both views; no VID share for view 1.
-        for (_, _, _, da) in &chain {
-            storage.append_da2(da, commit).await.unwrap();
-        }
-        storage
-            .append_vid(&convert_proposal(chain[0].2.clone()))
-            .await
-            .unwrap();
-
-        let consumer = EventCollector::default();
-        let leaf_chain = chain
-            .iter()
-            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
-            .collect::<Vec<_>>();
-        storage
-            .persist_decided_leaves(
-                ViewNumber::new(1),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
-                None,
-                &consumer,
-            )
-            .await
-            .unwrap();
-
-        // The first pass defers view 1 (missing VID share, within grace).
-        let processed = storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer, None, None)
-            .await
-            .unwrap();
-        assert_eq!(processed, Some(ViewNumber::new(0)));
-        assert_eq!(consumer.leaf_chain().await.len(), 1);
-
-        // After the grace period expires, the event is emitted without the VID share.
-        // (Use a fresh consumer: the fs backend may re-emit its anchor leaf, which
-        // consumers are required to tolerate idempotently.)
-        sleep(Duration::from_millis(400)).await;
+        // Re-processing with nothing new emits nothing and reports nothing: each leaf is
+        // reported missing its payload by exactly one successful pass, so background
+        // recovery is triggered exactly once per leaf.
         let consumer2 = EventCollector::default();
-        let processed = storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer2, None, None)
+        let outcome = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer2, None)
             .await
             .unwrap();
-        assert_eq!(processed, Some(ViewNumber::new(1)));
-        let leaf_chain = consumer2.leaf_chain().await;
-        let last = leaf_chain
-            .last()
-            .expect("an event should have been emitted");
-        assert_eq!(last.leaf, chain[1].0);
         assert!(
-            last.vid_share.is_none(),
-            "the grace-expired leaf is emitted without its VID share"
+            outcome.missing_payload.is_empty(),
+            "an already-processed leaf must not be reported again: {:?}",
+            outcome.missing_payload
+        );
+        // (The fs backend may re-emit its anchor leaf, which consumers are required to
+        // tolerate idempotently; nothing else is emitted.)
+        assert!(
+            consumer2
+                .leaf_chain()
+                .await
+                .iter()
+                .all(|info| info.leaf.view_number() == ViewNumber::new(3)),
+            "re-processing must not re-emit already-processed leaves"
         );
     }
 
-    /// Blocks with an empty namespace table don't wait for a DA proposal: their payload
-    /// is the canonical empty payload and is filled in directly.
+    /// Blocks with an empty namespace table don't need a DA proposal: their payload is
+    /// the canonical empty payload and is filled in directly, so they are not reported
+    /// as missing it.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_decide_empty_payload_fast_path<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
-        let mut opt = P::options(&tmp);
-        opt.set_decide_payload_grace(Duration::from_secs(600));
-        let storage = opt.create().await.unwrap();
+        let storage = P::options(&tmp).create().await.unwrap();
 
         let (chain, _) = mock_chain(2).await;
 
@@ -2338,12 +2141,18 @@ mod tests {
             .await
             .unwrap();
 
-        // Nothing defers: the empty payload is filled in and both leaves process.
-        let processed = storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer, None, None)
+        // The empty payload is filled in, both leaves process, and nothing is reported
+        // missing.
+        let outcome = storage
+            .process_decided_events(ViewNumber::new(1), None, &consumer, None)
             .await
             .unwrap();
-        assert_eq!(processed, Some(ViewNumber::new(1)));
+        assert_eq!(outcome.processed, Some(ViewNumber::new(1)));
+        assert!(
+            outcome.missing_payload.is_empty(),
+            "empty-namespace-table blocks must not be reported missing their payload: {:?}",
+            outcome.missing_payload
+        );
         let leaf_chain = consumer.leaf_chain().await;
         assert_eq!(leaf_chain.len(), 2);
         for info in &leaf_chain {
@@ -2352,6 +2161,117 @@ mod tests {
                 "empty-namespace-table blocks get the canonical empty payload"
             );
         }
+    }
+
+    /// Serves DA proposals for recovery from a fixed map, simulating peers that retained
+    /// them in their consensus storage.
+    #[derive(Debug, Default)]
+    struct MockPayloadRecovery {
+        proposals: BTreeMap<u64, Proposal<SeqTypes, DaProposal2<SeqTypes>>>,
+    }
+
+    #[async_trait]
+    impl DecidePayloadRecovery for MockPayloadRecovery {
+        async fn recover_payload(
+            &self,
+            leaf: &Leaf2,
+        ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal2<SeqTypes>>>> {
+            Ok(self.proposals.get(&leaf.view_number().u64()).cloned())
+        }
+    }
+
+    /// Records `BlockPayloadReconstructed` events, the delivery path shared by late local
+    /// reconstructions and peer-recovered payloads.
+    #[derive(Clone, Debug, Default)]
+    struct PayloadCollector {
+        payloads: Arc<RwLock<Vec<(ViewNumber, Payload)>>>,
+    }
+
+    #[async_trait]
+    impl EventConsumer for PayloadCollector {
+        async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()> {
+            if let CoordinatorEvent::BlockPayloadReconstructed { view, payload, .. } = event {
+                self.payloads.write().await.push((*view, payload.clone()));
+            }
+            Ok(())
+        }
+    }
+
+    /// A payload recovered from peers is delivered to *both* stores: the DA proposal is
+    /// persisted to consensus storage (where restart replay and other peers can see it)
+    /// and a `BlockPayloadReconstructed` event back-fills the query service.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_recovered_payload_delivered_to_both_stores<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) {
+        let tmp = P::tmp_storage().await;
+        let storage = Arc::new(P::options(&tmp).create().await.unwrap());
+
+        let (chain, payload, _) = mock_chain_with_txns(2).await;
+
+        // Decide both views with no payload data anywhere. View 1 is emitted without its
+        // payload and reported for recovery (view 0 is the genesis view, which is
+        // special-cased to the canonical empty payload).
+        let consumer = EventCollector::default();
+        let leaf_chain = chain
+            .iter()
+            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .persist_decided_leaves(
+                ViewNumber::new(1),
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                &consumer,
+            )
+            .await
+            .unwrap();
+        let outcome = storage
+            .process_decided_events(ViewNumber::new(1), None, &consumer, None)
+            .await
+            .unwrap();
+        assert_eq!(outcome.processed, Some(ViewNumber::new(1)));
+        assert_eq!(
+            outcome
+                .missing_payload
+                .iter()
+                .map(|leaf| leaf.view_number().u64())
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+
+        // Run recovery against a mock peer serving the DA proposal.
+        let recovery: Arc<dyn DecidePayloadRecovery> = Arc::new(MockPayloadRecovery {
+            proposals: [(1, chain[1].3.clone())].into_iter().collect(),
+        });
+        let collector = Arc::new(PayloadCollector::default());
+        let metrics = NoMetrics::boxed();
+        recover_missing_payloads(
+            recovery,
+            storage.clone(),
+            collector.clone(),
+            outcome.missing_payload,
+            metrics.create_counter("recovered".into(), None).into(),
+            metrics.create_counter("failures".into(), None).into(),
+        )
+        .await;
+
+        // The recovered DA proposal landed in consensus storage...
+        let stored = storage
+            .load_da_proposal(ViewNumber::new(1))
+            .await
+            .unwrap()
+            .expect("recovered DA proposal must be persisted to consensus storage");
+        assert_eq!(stored.data.encoded_transactions, payload.encode());
+
+        // ...and the payload reached the query-service consumer through the same event a
+        // late local reconstruction uses.
+        let delivered = collector.payloads.read().await.clone();
+        assert_eq!(delivered.len(), 1, "{delivered:?}");
+        assert_eq!(delivered[0].0, ViewNumber::new(1));
+        assert_eq!(delivered[0].1.encode(), payload.encode());
     }
 
     #[rstest_reuse::apply(persistence_types)]

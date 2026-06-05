@@ -484,9 +484,6 @@ pub trait PersistenceOptions: Clone + Send + Sync + Debug + 'static {
     type Persistence: SequencerPersistence + MembershipPersistence;
 
     fn set_view_retention(&mut self, view_retention: u64);
-    /// Set how long decide event generation waits for missing payload/VID data before
-    /// emitting the event without it. Backends without replayable storage ignore this.
-    fn set_decide_payload_grace(&mut self, _grace: std::time::Duration) {}
     async fn create(&mut self) -> anyhow::Result<Self::Persistence>;
     async fn reset(self) -> anyhow::Result<()>;
 }
@@ -928,7 +925,7 @@ pub trait SequencerPersistence:
         // Leaves are persisted; processing failures are non-fatal here and retried in production.
         // No in-memory event data is passed, so this form always exercises the storage path.
         if let Err(err) = self
-            .process_decided_events(decided_view, deciding_qc, consumer, None, None)
+            .process_decided_events(decided_view, deciding_qc, consumer, None)
             .await
         {
             tracing::warn!(?decided_view, "decide event processing failed: {err:#}");
@@ -959,25 +956,30 @@ pub trait SequencerPersistence:
     /// covered (restart replay, signals coalesced under processor lag, decides that never had
     /// the data).
     ///
-    /// Decide events for views whose data is in neither `live` nor storage may be deferred for a
-    /// grace period, and `recovery` (when provided) is used to fetch payloads from peers for
-    /// views whose grace expired with the payload still missing.
+    /// Events are never deferred waiting for missing data: a leaf whose payload is in neither
+    /// `live` nor storage is emitted without it, and reported in the returned outcome so the
+    /// caller can heal the gap asynchronously — by recovering the payload from peers and
+    /// delivering it to consensus storage and the query service the same way late
+    /// `BlockPayloadReconstructed` events are.
     ///
-    /// Returns the highest view confirmed processed (the cursor), or `None` if nothing was
-    /// processed, so the caller can track real progress. Errors are propagated; the failed range
-    /// is retried on the next call.
+    /// Returns a [`DecideProcessingOutcome`] carrying the highest view confirmed processed (the
+    /// cursor; `None` if nothing was processed) and the leaves emitted without payloads. Errors
+    /// are propagated; the failed range is retried on the next call.
     ///
-    /// Default returns `Some(decided_view)`: backends with no replayable storage (e.g. `NoStorage`)
-    /// forward events synchronously in `persist_decided_leaves` and are always caught up here.
+    /// Default returns `Some(decided_view)` with no missing payloads: backends with no replayable
+    /// storage (e.g. `NoStorage`) forward events synchronously in `persist_decided_leaves` and are
+    /// always caught up here.
     async fn process_decided_events(
         &self,
         decided_view: ViewNumber,
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
-        _recovery: Option<&dyn DecidePayloadRecovery>,
         _live: Option<&DecideEventData>,
-    ) -> anyhow::Result<Option<ViewNumber>> {
-        Ok(Some(decided_view))
+    ) -> anyhow::Result<DecideProcessingOutcome> {
+        Ok(DecideProcessingOutcome {
+            processed: Some(decided_view),
+            missing_payload: vec![],
+        })
     }
 
     async fn load_anchor_leaf(
@@ -1120,13 +1122,25 @@ pub trait EventConsumer: Debug + Send + Sync {
     async fn handle_event(&self, event: &CoordinatorEvent<SeqTypes>) -> anyhow::Result<()>;
 }
 
+/// Outcome of a decide processing pass
+/// ([`process_decided_events`](SequencerPersistence::process_decided_events)).
+#[derive(Debug, Default)]
+pub struct DecideProcessingOutcome {
+    /// Highest view confirmed processed (the cursor), or `None` if nothing was processed.
+    pub processed: Option<ViewNumber>,
+    /// Leaves whose decide events were emitted without a block payload, in view order.
+    /// Candidates for background payload recovery from peers.
+    pub missing_payload: Vec<Leaf2>,
+}
+
 /// Recover a missing block payload for a decided leaf from an external source.
 ///
 /// Under the new protocol a node can decide a view without ever obtaining its payload
 /// (e.g. it was not needed for quorum and missed the share-carrying Vote1 broadcasts).
-/// The decide processor uses this hook to fetch the payload from peers — who retain DA
-/// proposals for the consensus storage retention window — before emitting a decide event
-/// without it.
+/// When [`process_decided_events`](SequencerPersistence::process_decided_events) reports
+/// leaves emitted without payloads, a background task uses this hook to fetch them from
+/// peers — who retain DA proposals for the consensus storage retention window — and then
+/// delivers them to consensus storage and the query service.
 #[async_trait]
 pub trait DecidePayloadRecovery: Debug + Send + Sync {
     /// Try to fetch the DA proposal (block payload) for `leaf`. Implementations MUST

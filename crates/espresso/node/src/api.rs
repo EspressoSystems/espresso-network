@@ -3068,12 +3068,7 @@ mod api_tests {
         use hotshot_types::traits::block_contents::BlockPayload;
 
         let storage = D::create_storage().await;
-        // Disable the decide payload grace period: this test decides a leaf whose
-        // payload/VID data is intentionally missing, and nothing in the test retries
-        // deferred decide events, so deferral would block forever.
-        let mut persistence_options = D::persistence_options(&storage);
-        persistence_options.set_decide_payload_grace(std::time::Duration::ZERO);
-        let persistence = persistence_options.create().await.unwrap();
+        let persistence = D::persistence_options(&storage).create().await.unwrap();
         let data_source: Arc<StorageState<network::Memory, NoStorage, _>> =
             Arc::new(StorageState::new(
                 D::create(D::persistence_options(&storage), Default::default(), false)

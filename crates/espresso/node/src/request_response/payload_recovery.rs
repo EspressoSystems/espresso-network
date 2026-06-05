@@ -3,9 +3,11 @@
 //! Under the new protocol a node can decide a view without ever obtaining its payload:
 //! payloads are reconstructed from VID shares carried by Vote1 broadcasts, and a node
 //! whose vote is not needed for quorum (or that was restarted mid-view) may miss them
-//! entirely. The decide processor uses [`PayloadRecovery`] to fetch the DA proposal from
-//! peers — who retain DA proposals for their consensus storage retention window — and
-//! verifies the payload against the block header's payload commitment before trusting it.
+//! entirely. When the decide processor emits an event with the payload still missing, a
+//! background task uses [`PayloadRecovery`] to fetch the DA proposal from peers — who
+//! retain DA proposals for their consensus storage retention window — verifies the
+//! payload against the block header's payload commitment, and delivers it to consensus
+//! storage and the query service.
 
 use std::time::Duration;
 
@@ -30,9 +32,9 @@ use super::{
     request::{Request, Response},
 };
 
-/// How long to wait for a single payload-recovery request before giving up. A failed
-/// recovery is retried on later decide processing passes, up to a bounded number of
-/// attempts (see `MAX_PAYLOAD_RECOVERY_ATTEMPTS`).
+/// How long to wait for a single payload-recovery request before giving up. The caller
+/// retries a bounded number of times (see `PAYLOAD_RECOVERY_ATTEMPTS` in the decide
+/// processor) before leaving the gap to the query service's own fetching.
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Fetches DA proposals (block payloads) from peers over the request-response protocol

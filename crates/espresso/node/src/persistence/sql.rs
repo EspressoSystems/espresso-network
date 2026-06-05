@@ -20,7 +20,7 @@ use espresso_types::{
     parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{
-        DecideEventData, DecidePayloadRecovery, EventConsumer, PersistenceOptions,
+        DecideEventData, DecideProcessingOutcome, EventConsumer, PersistenceOptions,
         SequencerPersistence, StateCatchup,
     },
     v0_3::{
@@ -82,10 +82,7 @@ use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     api::RewardMerkleTreeV2Data,
     catchup::SqlStateCatchup,
-    persistence::{
-        DecideDataDeferral, PAYLOAD_RECOVERY_BATCH, PAYLOAD_RECOVERY_HORIZON,
-        migrate_network_config, persistence_metrics::PersistenceMetricsValue,
-    },
+    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
 
 /// Options for Postgres-backed persistence.
@@ -208,22 +205,6 @@ pub struct Options {
     /// Pruning parameters for ephemeral consensus storage.
     #[clap(flatten)]
     pub(crate) consensus_pruning: ConsensusPruningOptions,
-
-    /// How long to wait for missing block payload or VID data before emitting a decide
-    /// event without it.
-    ///
-    /// Under the new protocol, block payloads are reconstructed from VID shares and
-    /// written to storage asynchronously, so they may land on disk shortly after the
-    /// corresponding view is decided. Deferring the decide event briefly lets those writes
-    /// land, keeping the query service complete instead of leaving payload gaps that must
-    /// be healed over the network. Set to 0 to disable deferral.
-    #[clap(
-        long,
-        env = "ESPRESSO_NODE_DECIDE_PAYLOAD_GRACE",
-        value_parser = parse_duration,
-        default_value = "10s"
-    )]
-    pub(crate) decide_payload_grace: Duration,
 
     /// Specifies the maximum number of concurrent fetch requests allowed from peers.
     #[clap(long, env = "ESPRESSO_NODE_FETCH_RATE_LIMIT")]
@@ -442,7 +423,6 @@ impl From<SqliteOptions> for Options {
             prune: false,
             pruning: Default::default(),
             consensus_pruning: Default::default(),
-            decide_payload_grace: Duration::from_secs(10),
             fetch_rate_limit: None,
             active_fetch_delay: None,
             chunk_fetch_delay: None,
@@ -712,17 +692,11 @@ impl PersistenceOptions for Options {
         self.consensus_pruning.minimum_retention = view_retention;
     }
 
-    fn set_decide_payload_grace(&mut self, grace: Duration) {
-        self.decide_payload_grace = grace;
-    }
-
     async fn create(&mut self) -> anyhow::Result<Self::Persistence> {
         let config = (&*self).try_into()?;
         let persistence = Persistence {
             db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
             gc_opt: self.consensus_pruning,
-            payload_grace: self.decide_payload_grace,
-            missing_decide_data: Default::default(),
             internal_metrics: PersistenceMetricsValue::default(),
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
@@ -758,11 +732,6 @@ impl DataMigration {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
-    /// Grace period to wait for missing payload/VID data before emitting a decide event
-    /// without it.
-    payload_grace: Duration,
-    /// Tracks views with missing payload/VID data at decide time, for the grace period.
-    missing_decide_data: Arc<DecideDataDeferral>,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
 }
@@ -922,12 +891,15 @@ impl Persistence {
             .map(|row| ViewNumber::new(row.get::<i64, _>("last_processed_view") as u64)))
     }
 
+    /// Generate decide events for all unprocessed decided leaves, recording leaves whose
+    /// events were emitted without a block payload in `missing_payload` (so the caller can
+    /// recover them from peers in the background).
     async fn generate_decide_events(
         &self,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
-        recovery: Option<&dyn DecidePayloadRecovery>,
         live: Option<&DecideEventData>,
+        missing_payload: &mut Vec<Leaf2>,
     ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
             .db
@@ -1015,8 +987,8 @@ impl Persistence {
                 return Ok(());
             }
 
-            // Find the full range of new leaves; the data queries below cover the whole range,
-            // though the chain may be truncated below if data for some views is still missing.
+            // Find the range of views encompassed by this leaf chain. All data in this range can
+            // be processed by the consumer and then garbage collected.
             let from_view = leaves[0].0.view_number();
             let to_view = leaves[leaves.len() - 1].0.view_number();
 
@@ -1082,111 +1054,6 @@ impl Persistence {
                 BTreeMap::new()
             };
 
-            // Defer decide events for leaves whose payload or VID data has not landed on
-            // disk yet. Under the new protocol the payload is reconstructed from VID
-            // shares and written asynchronously, so it can arrive shortly after the view
-            // is decided; emitting the event without it would leave a permanent gap in
-            // the query service. Process only the prefix of the chain whose data is
-            // complete (or whose grace period has expired and whose payload could not be
-            // recovered from peers); the rest is retried on the next decide signal or
-            // retry tick.
-            let payload_known = |leaf: &Leaf2| {
-                let view = leaf.view_number();
-                // The genesis payload and blocks with an empty namespace table are always
-                // the canonical empty payload, so no DA proposal is needed for them.
-                view == ViewNumber::genesis()
-                    || leaf.block_header().ns_table().iter().next().is_none()
-                    || live_payload(view).is_some()
-                    || da_proposals.contains_key(&view)
-            };
-            let data_complete = |leaf: &Leaf2| {
-                let view = leaf.view_number();
-                let vid_ok = view == ViewNumber::genesis()
-                    || live_vid(view).is_some()
-                    || vid_shares.contains_key(&view);
-                payload_known(leaf) && vid_ok
-            };
-            // Whether it is still worth trying to fetch this leaf's payload from peers.
-            let recovery_viable = |leaf: &Leaf2| {
-                recovery.is_some()
-                    && !payload_known(leaf)
-                    && matches!(
-                        leaf.block_header().payload_commitment(),
-                        VidCommitment::V2(_)
-                    )
-                    && to_view.u64().saturating_sub(leaf.view_number().u64())
-                        <= PAYLOAD_RECOVERY_HORIZON
-                    && self
-                        .missing_decide_data
-                        .recovery_viable(leaf.view_number().u64())
-            };
-            let now = Instant::now();
-            let cut = leaves
-                .iter()
-                .position(|(leaf, _)| {
-                    !data_complete(leaf)
-                        && (self.missing_decide_data.should_defer(
-                            leaf.view_number().u64(),
-                            self.payload_grace,
-                            now,
-                        ) || recovery_viable(leaf))
-                })
-                .unwrap_or(leaves.len());
-            if cut == 0 {
-                // Nothing is processable yet. Start the grace period for every missing
-                // view at once, so a backlog (e.g. after catching up from downtime)
-                // expires as a single batch instead of serially.
-                self.missing_decide_data.record_missing(
-                    leaves.iter().filter_map(|(leaf, _)| {
-                        (!data_complete(leaf)).then_some(leaf.view_number().u64())
-                    }),
-                    now,
-                );
-
-                // For views whose grace period expired with the payload still missing, try
-                // to recover it from peers. Verified results land in `da_proposal2`; if
-                // anything was recovered, retry the pass right away so its decide event
-                // goes out without waiting for the next signal.
-                if let Some(recovery) = recovery {
-                    let candidates = leaves
-                        .iter()
-                        .filter(|(leaf, _)| {
-                            recovery_viable(leaf)
-                                && !self.missing_decide_data.should_defer(
-                                    leaf.view_number().u64(),
-                                    self.payload_grace,
-                                    now,
-                                )
-                        })
-                        .take(PAYLOAD_RECOVERY_BATCH)
-                        .map(|(leaf, _)| leaf.clone())
-                        .collect::<Vec<_>>();
-                    if self.recover_payloads(recovery, &candidates).await {
-                        continue;
-                    }
-                }
-
-                tracing::debug!(
-                    ?from_view,
-                    "deferring decide event: payload/VID data not yet on disk"
-                );
-                return Ok(());
-            }
-            if cut < leaves.len() {
-                // Start the grace period for every deferred view with missing data at
-                // once, so a backlog (e.g. after catching up from downtime) expires as a
-                // single batch instead of serially.
-                self.missing_decide_data.record_missing(
-                    leaves[cut..].iter().filter_map(|(leaf, _)| {
-                        (!data_complete(leaf)).then_some(leaf.view_number().u64())
-                    }),
-                    now,
-                );
-                leaves.truncate(cut);
-            }
-
-            // The range of views actually processed in this pass.
-            let to_view = leaves[leaves.len() - 1].0.view_number();
             let final_qc = leaves[leaves.len() - 1].1.clone();
 
             // Collect state certs for the decide event.
@@ -1220,68 +1087,68 @@ impl Persistence {
             drop(tx);
 
             // Collate all the information by view number and construct a chain of leaves.
-            let chain = leaves
-                .into_iter()
-                // Go in reverse chronological order, as expected by Decide events.
-                .rev()
-                .map(|(mut leaf, cert)| {
-                    let view = leaf.view_number();
+            // Go in reverse chronological order, as expected by Decide events.
+            let mut chain = Vec::with_capacity(leaves.len());
+            for (mut leaf, cert) in leaves.into_iter().rev() {
+                let view = leaf.view_number();
 
-                    // Include the VID share if available, preferring the in-memory copy from
-                    // the decide event over the asynchronously-written staging table.
-                    let vid_share = match live_vid(view) {
-                        Some(share) => {
-                            self.internal_metrics.decide_vid_from_memory.add(1);
-                            Some(share.clone())
-                        },
-                        None => vid_shares.remove(&view).map(|proposal| proposal.data),
-                    };
-                    if vid_share.is_none() && view != ViewNumber::genesis() {
-                        // The grace period expired without the share landing on disk; the
-                        // query service has to fetch the VID data from peers.
-                        tracing::warn!(?view, "VID share not available at decide");
-                        self.internal_metrics.decide_missing_vid.add(1);
-                    }
+                // Include the VID share if available, preferring the in-memory copy from
+                // the decide event over the asynchronously-written staging table.
+                let vid_share = match live_vid(view) {
+                    Some(share) => {
+                        self.internal_metrics.decide_vid_from_memory.add(1);
+                        Some(share.clone())
+                    },
+                    None => vid_shares.remove(&view).map(|proposal| proposal.data),
+                };
+                if vid_share.is_none() && view != ViewNumber::genesis() {
+                    // The share never reached this node and is not recoverable here; the
+                    // query service has to fetch the VID data from peers.
+                    tracing::warn!(?view, "VID share not available at decide");
+                    self.internal_metrics.decide_missing_vid.add(1);
+                }
 
-                    // Fill in the full block payload, preferring the in-memory copy from the
-                    // decide event; fall back to the DA proposal persisted in the staging
+                // Fill in the full block payload, preferring the in-memory copy from the
+                // decide event; fall back to the DA proposal persisted in the staging
+                // table.
+                if let Some(payload) = live_payload(view) {
+                    leaf.fill_block_payload_unchecked(payload.clone());
+                    self.internal_metrics.decide_payload_from_memory.add(1);
+                } else if let Some(proposal) = da_proposals.remove(&view) {
+                    let payload =
+                        Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
+                    leaf.fill_block_payload_unchecked(payload);
+                } else if view == ViewNumber::genesis()
+                    || leaf.block_header().ns_table().iter().next().is_none()
+                {
+                    // We don't get a DA proposal for the genesis view, but we know what the
+                    // payload always is; the same goes for any block with an empty namespace
                     // table.
-                    if let Some(payload) = live_payload(view) {
-                        leaf.fill_block_payload_unchecked(payload.clone());
-                        self.internal_metrics.decide_payload_from_memory.add(1);
-                    } else if let Some(proposal) = da_proposals.remove(&view) {
-                        let payload =
-                            Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
-                        leaf.fill_block_payload_unchecked(payload);
-                    } else if view == ViewNumber::genesis()
-                        || leaf.block_header().ns_table().iter().next().is_none()
-                    {
-                        // We don't get a DA proposal for the genesis view, but we know what the
-                        // payload always is; the same goes for any block with an empty namespace
-                        // table.
-                        leaf.fill_block_payload_unchecked(Payload::empty().0);
-                    } else {
-                        // The grace period expired and peer recovery failed; the query
-                        // service is left with a leaf-only block and has to fetch the
-                        // payload from peers.
-                        tracing::warn!(?view, "DA proposal not available at decide");
-                        self.internal_metrics.decide_missing_payload.add(1);
-                    }
+                    leaf.fill_block_payload_unchecked(Payload::empty().0);
+                } else {
+                    // The payload was not reconstructed before this view was decided. The
+                    // event is emitted without it, and the leaf is reported to the caller
+                    // so the payload can be recovered from peers in the background and
+                    // delivered to consensus storage and the query service late, the same
+                    // way `BlockPayloadReconstructed` events are.
+                    tracing::warn!(?view, "DA proposal not available at decide");
+                    self.internal_metrics.decide_missing_payload.add(1);
+                    missing_payload.push(leaf.clone());
+                }
 
-                    let state_cert = state_certs.get(&view).cloned();
+                let state_cert = state_certs.get(&view).cloned();
 
-                    let info = LeafInfo {
-                        leaf,
-                        vid_share,
-                        state_cert,
-                        // Note: the following fields are not used in Decide event processing,
-                        // and should be removed. For now, we just default them.
-                        state: Default::default(),
-                        delta: Default::default(),
-                    };
-                    DecidedLeaf { info, cert }
-                })
-                .collect();
+                let info = LeafInfo {
+                    leaf,
+                    vid_share,
+                    state_cert,
+                    // Note: the following fields are not used in Decide event processing,
+                    // and should be removed. For now, we just default them.
+                    state: Default::default(),
+                    delta: Default::default(),
+                };
+                chain.push(DecidedLeaf { info, cert });
+            }
 
             tracing::debug!(
                 ?from_view,
@@ -1376,50 +1243,8 @@ impl Persistence {
                     Ok(())
                 })
                 .await?;
-            // Processed through `to_view`; drop deferral bookkeeping for these views.
-            self.missing_decide_data.clear_through(to_view.u64());
             last_processed_view = Some(to_view_i64);
         }
-    }
-
-    /// Try to recover missing payloads for `leaves` from peers. Verified results are
-    /// persisted to `da_proposal2`, where the next decide processing pass picks them up
-    /// and emits complete decide events. Returns whether any payload was recovered and
-    /// stored.
-    async fn recover_payloads(
-        &self,
-        recovery: &dyn DecidePayloadRecovery,
-        leaves: &[Leaf2],
-    ) -> bool {
-        let mut recovered = false;
-        for leaf in leaves {
-            let view = leaf.view_number();
-            self.missing_decide_data.record_recovery_attempt(view.u64());
-            match recovery.recover_payload(leaf).await {
-                Ok(Some(proposal)) => {
-                    tracing::info!(?view, "recovered block payload from peers");
-                    self.internal_metrics.payloads_recovered.add(1);
-                    match self
-                        .append_da2(&proposal, leaf.block_header().payload_commitment())
-                        .await
-                    {
-                        Ok(()) => recovered = true,
-                        Err(err) => {
-                            tracing::warn!(?view, "failed to store recovered payload: {err:#}");
-                        },
-                    }
-                },
-                Ok(None) => {
-                    tracing::warn!(?view, "could not recover block payload from peers");
-                    self.internal_metrics.payload_recovery_failures.add(1);
-                },
-                Err(err) => {
-                    tracing::warn!(?view, "payload recovery failed: {err:#}");
-                    self.internal_metrics.payload_recovery_failures.add(1);
-                },
-            }
-        }
-        recovered
     }
 
     async fn load_state_certs(
@@ -1859,20 +1684,25 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
-        recovery: Option<&dyn DecidePayloadRecovery>,
         live: Option<&DecideEventData>,
-    ) -> anyhow::Result<Option<ViewNumber>> {
+    ) -> anyhow::Result<DecideProcessingOutcome> {
         // Generate events for the new leaves, then GC. On error `last_processed_view` is not
         // advanced past the failure point, so no data is lost and the range is retried.
-        self.generate_decide_events(deciding_qc, consumer, recovery, live)
+        let mut missing_payload = Vec::new();
+        self.generate_decide_events(deciding_qc, consumer, live, &mut missing_payload)
             .await?;
+        // Events are emitted newest-first within each batch; report missing leaves oldest-first.
+        missing_payload.sort_by_key(|leaf| leaf.view_number());
 
         // Best-effort GC of data not included in any decide event; runs again at the next decide.
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
 
-        self.load_processed_view().await
+        Ok(DecideProcessingOutcome {
+            processed: self.load_processed_view().await?,
+            missing_payload,
+        })
     }
 
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
@@ -3814,23 +3644,21 @@ mod testing {
         #[allow(refining_impl_trait)]
         fn options(db: &Self::Storage) -> Options {
             #[cfg(not(feature = "embedded-db"))]
-            let mut opt: Options = PostgresOptions {
-                port: Some(db.port()),
-                host: Some(db.host()),
-                user: Some("postgres".into()),
-                password: Some("password".into()),
-                ..Default::default()
+            {
+                PostgresOptions {
+                    port: Some(db.port()),
+                    host: Some(db.host()),
+                    user: Some("postgres".into()),
+                    password: Some("password".into()),
+                    ..Default::default()
+                }
+                .into()
             }
-            .into();
 
             #[cfg(feature = "embedded-db")]
-            let mut opt: Options = SqliteOptions { path: db.path() }.into();
-
-            // Most tests drive decides without persisting DA proposals or VID shares;
-            // disable the missing-data deferral so the immediate path stays exercised.
-            // Deferral tests opt in by overriding this.
-            opt.decide_payload_grace = Duration::ZERO;
-            opt
+            {
+                SqliteOptions { path: db.path() }.into()
+            }
         }
     }
 }

@@ -11,10 +11,10 @@ pub struct PersistenceMetricsValue {
     pub internal_append_da2_duration: Box<dyn Histogram>,
     /// Time taken by the underlying storage to execute the command that appends Quorum Proposal 2
     pub internal_append_quorum2_duration: Box<dyn Histogram>,
-    /// Decide events emitted without a block payload (grace period expired and recovery
-    /// failed); the query service is left with a leaf-only block for this height
+    /// Decide events emitted without a block payload; the leaf is reported for background
+    /// peer recovery, which back-fills the query service when it succeeds
     pub decide_missing_payload: Box<dyn Counter>,
-    /// Decide events emitted without VID data (grace period expired)
+    /// Decide events emitted without VID data; healed by the query service's peer fetching
     pub decide_missing_vid: Box<dyn Counter>,
     /// Block payloads filled into decide events from the in-memory decide data, without
     /// touching consensus storage (may count a view more than once across retry passes)
@@ -22,10 +22,6 @@ pub struct PersistenceMetricsValue {
     /// VID shares filled into decide events from the in-memory decide data, without
     /// touching consensus storage (may count a view more than once across retry passes)
     pub decide_vid_from_memory: Box<dyn Counter>,
-    /// Block payloads successfully recovered from peers by the decide processor
-    pub payloads_recovered: Box<dyn Counter>,
-    /// Failed peer-recovery attempts for block payloads
-    pub payload_recovery_failures: Box<dyn Counter>,
     /// Times decide event generation stopped at a non-consecutive leaf (a height gap in
     /// consensus storage; if it persists, the decide pipeline is stalled)
     pub decide_height_gaps: Box<dyn Counter>,
@@ -59,9 +55,6 @@ impl PersistenceMetricsValue {
                 .create_counter(String::from("decide_payload_from_memory"), None),
             decide_vid_from_memory: metrics
                 .create_counter(String::from("decide_vid_from_memory"), None),
-            payloads_recovered: metrics.create_counter(String::from("payloads_recovered"), None),
-            payload_recovery_failures: metrics
-                .create_counter(String::from("payload_recovery_failures"), None),
             decide_height_gaps: metrics.create_counter(String::from("decide_height_gaps"), None),
         }
     }
