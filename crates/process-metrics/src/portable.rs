@@ -43,7 +43,7 @@ impl ProcessMetrics {
         let start = Instant::now();
 
         // CPU count is process-invariant; set once and drop the periodic sample.
-        self.cpu_count.set(System::new().cpus().len());
+        self.cpu_count.set(cpu_count());
         self.linux.init();
 
         let mut system = System::new();
@@ -55,19 +55,48 @@ impl ProcessMetrics {
     }
 
     fn sample(&mut self, system: &mut System, pid: Pid, start: Instant) {
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[pid]),
-            true,
-            ProcessRefreshKind::nothing().with_memory(),
-        );
-        if let Some(process) = system.process(pid) {
-            self.resident_memory_bytes.set(process.memory() as usize);
-            self.virtual_memory_bytes
-                .set(process.virtual_memory() as usize);
+        if let Some((resident, virtual_)) = process_memory(system, pid) {
+            self.resident_memory_bytes.set(resident as usize);
+            self.virtual_memory_bytes.set(virtual_ as usize);
         }
         self.uptime_seconds
             .set(Instant::now().duration_since(start).as_secs() as usize);
 
         self.linux.sample();
+    }
+}
+
+fn cpu_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
+
+fn process_memory(system: &mut System, pid: Pid) -> Option<(u64, u64)> {
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_memory(),
+    );
+    let p = system.process(pid)?;
+    Some((p.memory(), p.virtual_memory()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_count_is_at_least_one() {
+        assert_eq!(System::new().cpus().len(), 0);
+        assert!(cpu_count() >= 1);
+    }
+
+    #[test]
+    fn process_memory_reports_current_process() {
+        let pid = sysinfo::get_current_pid().unwrap();
+        let (resident, virtual_) = process_memory(&mut System::new(), pid).unwrap();
+        assert!(resident > 0);
+        assert!(virtual_ > 0);
     }
 }
