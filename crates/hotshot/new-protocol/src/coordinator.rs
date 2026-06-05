@@ -12,7 +12,7 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewChangeEvidence2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
@@ -135,16 +135,29 @@ where
         );
 
         let genesis_cert1 = initializer.high_qc.clone();
+        let anchor_leaf = &initializer.anchor_leaf;
         let genesis_proposal = message::Proposal {
-            block_header: initializer.anchor_leaf.block_header().clone(),
-            view_number: ViewNumber::genesis(),
-            epoch: EpochNumber::genesis(),
-            justify_qc: genesis_cert1.clone(),
+            block_header: anchor_leaf.block_header().clone(),
+            view_number: anchor_leaf.view_number(),
+            epoch: anchor_leaf
+                .epoch(initializer.epoch_height)
+                .unwrap_or(EpochNumber::genesis()),
+            justify_qc: anchor_leaf.justify_qc(),
+            // The leaf's legacy `next_epoch_justify_qc` is signed over
+            // `NextEpochQuorumData2` and cannot be converted into a
+            // new-protocol `Certificate2` (signed over `Vote2Data`), so it is
+            // dropped here, as in `Consensus::apply_pre_cutover_seed`.
             next_epoch_justify_qc: None,
-            upgrade_certificate: None,
-            view_change_evidence: None,
-            next_drb_result: None,
-            state_cert: None,
+            upgrade_certificate: anchor_leaf.upgrade_certificate(),
+            view_change_evidence: anchor_leaf
+                .view_change_evidence
+                .clone()
+                .and_then(|e| match e {
+                    ViewChangeEvidence2::Timeout(tc) => Some(tc),
+                    ViewChangeEvidence2::ViewSync(_) => None,
+                }),
+            next_drb_result: anchor_leaf.next_drb_result,
+            state_cert: initializer.state_cert.clone(),
         };
         let mut state_manager = StateManager::new(
             Arc::new(initializer.instance_state.clone()),
@@ -155,17 +168,8 @@ where
             initializer.anchor_state.clone(),
             initializer.anchor_leaf.clone(),
         );
-        // The synthetic genesis proposal has a non-null justify_qc (the genesis
-        // cert1) so the leaf derived from it has a different commitment than
-        // the anchor leaf produced by `Leaf2::genesis`. `request_header` for
-        // view 1 looks up the parent state by the *proposal's* leaf
-        // commitment, so seed the same state under that commitment too.
-        state_manager.seed_state(
-            ViewNumber::genesis(),
-            initializer.anchor_state.clone(),
-            Leaf2::from(genesis_proposal.clone()),
-        );
-        consensus.seed_genesis(genesis_cert1, genesis_proposal);
+
+        consensus.seed(genesis_cert1, genesis_proposal);
 
         let lock = upgrade_lock.clone();
         Self::builder()

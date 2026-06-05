@@ -118,7 +118,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_genesis(genesis_cert1.clone(), genesis_proposal.clone());
+    consensus.seed(genesis_cert1.clone(), genesis_proposal.clone());
 
     if let Some(seed) = pre_cutover_seed {
         consensus.apply_pre_cutover_seed(seed);
