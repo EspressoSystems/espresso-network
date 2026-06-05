@@ -27,22 +27,26 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     // `Registry` deposited into `telemetry::REGISTRY` is `None`. The OTel logs
     // path starts here; the metrics push task is attached later via
     // `TelemetryHandle::attach_metrics_push` once the API setup has run.
-    let (mut telemetry_handle, telemetry_init_error) = match opt.key_set.clone().try_into() {
-        Ok(KeySet { staking, .. }) => match telemetry::init(
-            &opt.telemetry,
-            &staking,
-            opt.identity.node_name.as_deref(),
-            opt.identity.company_name.as_deref(),
-            telemetry::registry(),
-        ) {
-            Ok(h) => (h, None),
-            Err(e) => (None, Some(e.context("telemetry init failed"))),
-        },
-        // The keyset will surface its own error through the main flow below.
-        Err(_) => (None, None),
-    };
-    let otel_layer = telemetry_handle.as_ref().map(|h| h.tracing_layer());
+    let (mut telemetry_handle, deferred_warnings, telemetry_init_error) =
+        match opt.key_set.clone().try_into() {
+            Ok(KeySet { staking, .. }) => match telemetry::init(
+                &opt.telemetry,
+                &staking,
+                opt.identity.node_name.as_deref(),
+                opt.identity.company_name.as_deref(),
+                telemetry::registry(),
+            ) {
+                Ok((h, warns)) => (h, warns, None),
+                Err(e) => (None, Vec::new(), Some(e.context("telemetry init failed"))),
+            },
+            // The keyset will surface its own error through the main flow below.
+            Err(_) => (None, Vec::new(), None),
+        };
+    let otel_layer = telemetry_handle.as_ref().and_then(|h| h.tracing_layer());
     opt.logging.init_with_otel(otel_layer);
+    for w in deferred_warnings {
+        tracing::warn!("{w}");
+    }
     if let Some(e) = telemetry_init_error {
         tracing::error!("{e:#}; continuing without telemetry");
     }

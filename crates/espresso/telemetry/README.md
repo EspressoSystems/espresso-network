@@ -1,11 +1,12 @@
 # espresso-telemetry
 
-In-process node-operator telemetry. Opt-in via `--telemetry-enable` (default off).
+In-process node-operator telemetry. Opt-in per signal via `ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE` and
+`ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE` (both default off).
 
 ## What we send
 
 - **Logs**: every `tracing` event passing the OTel layer's `EnvFilter` (default `warn`;
-  `ESPRESSO_TELEMETRY_LOG=warn,hotshot=info` to widen). Bridged via `opentelemetry-appender-tracing`.
+  `ESPRESSO_NODE_TELEMETRY_LOG=warn,hotshot=info` to widen). Bridged via `opentelemetry-appender-tracing`.
 - **Metrics**: every series in the node's `prometheus::Registry` — counters, gauges, histograms (summary/untyped
   rejected at encode).
 - **Identity per request**: BLS-BN254 JWT signed by the staking key. Optional `node_name` / `company_name` claims.

@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Log a single ERROR on the first 429 observed by any telemetry pipeline.
 ///
 /// `flag` is the shared dedup latch; `env_filter` is the operator's resolved
-/// `ESPRESSO_TELEMETRY_LOG` value at startup; `retry_after_secs` is the parsed
+/// `ESPRESSO_NODE_TELEMETRY_LOG` value at startup; `retry_after_secs` is the parsed
 /// `Retry-After` header value when available (None when the header is missing
 /// or non-numeric).
 pub(crate) fn log_rate_limit_once(
@@ -34,9 +34,9 @@ pub(crate) fn log_rate_limit_once(
             telemetry_log = env_filter,
             retry_after = %retry,
             "telemetry rate limit hit (HTTP 429). The proxy capped this node's hourly byte budget. \
-             Your current ESPRESSO_TELEMETRY_LOG is \"{env_filter}\" — narrow it (e.g. \"warn\", \
-             or \"warn,hotshot=info\") or reduce metric cardinality. Retry-After: {retry}. \
-             This message is logged once per process."
+             Your current ESPRESSO_NODE_TELEMETRY_LOG is \"{env_filter}\": narrow it (e.g. \
+             \"warn\", or \"warn,hotshot=info\") or reduce metric cardinality. Retry-After: \
+             {retry}. This message is logged once per process."
         );
     }
 }

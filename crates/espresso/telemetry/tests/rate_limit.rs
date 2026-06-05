@@ -2,7 +2,7 @@
 //! crash, no resend, env-snapshot embedded in the message.
 
 // Tests serialize on a `std::sync::Mutex` so they can mutate
-// `ESPRESSO_TELEMETRY_LOG` without racing each other. The guard is held across
+// `ESPRESSO_NODE_TELEMETRY_LOG` without racing each other. The guard is held across
 // `await` points by design — only one test runs at a time, so deadlock is
 // impossible.
 #![allow(clippy::await_holding_lock)]
@@ -166,7 +166,8 @@ async fn start_stub(port: u16, mode: StubMode) -> StubState {
 
 fn opts(endpoint: Url) -> TelemetryOptions {
     TelemetryOptions {
-        enable: true,
+        logs_enable: true,
+        metrics_enable: true,
         endpoint: Some(endpoint),
         log_filter: "warn".to_owned(),
         // 1s -> push_task uses 1s after the immediate first tick is skipped.
@@ -213,7 +214,7 @@ async fn operator_error_once_fails() {
     // Explicit value so we can assert it appears verbatim.
     // SAFETY: tests in this file are serialized by `TEST_LOCK`.
     unsafe {
-        std::env::set_var("ESPRESSO_TELEMETRY_LOG", "warn");
+        std::env::set_var("ESPRESSO_NODE_TELEMETRY_LOG", "warn");
     }
 
     let port = reserve_port();
@@ -222,9 +223,9 @@ async fn operator_error_once_fails() {
 
     let registry = build_test_registry();
     let key = make_staking_key();
-    let handle = init(&opts(endpoint), &key, None, None, Some(registry))
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) =
+        init(&opts(endpoint), &key, None, None, Some(registry)).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
 
     // Wait for at least 3 push attempts so we know the dedup actually ran
     // across multiple ticks.
@@ -255,7 +256,7 @@ async fn operator_error_once_fails() {
         .expect("rate-limit error line");
     assert!(
         line.contains("\"warn\""),
-        "ERROR must embed ESPRESSO_TELEMETRY_LOG value (\"warn\"); got: {line}"
+        "ERROR must embed ESPRESSO_NODE_TELEMETRY_LOG value (\"warn\"); got: {line}"
     );
     assert!(
         line.contains("Retry-After: 42s"),
@@ -271,7 +272,7 @@ async fn operator_error_once_fails() {
 async fn operator_no_crash_ok() {
     let _g = lock();
     unsafe {
-        std::env::set_var("ESPRESSO_TELEMETRY_LOG", "warn");
+        std::env::set_var("ESPRESSO_NODE_TELEMETRY_LOG", "warn");
     }
 
     let port = reserve_port();
@@ -280,9 +281,9 @@ async fn operator_no_crash_ok() {
 
     let registry = build_test_registry();
     let key = make_staking_key();
-    let handle = init(&opts(endpoint), &key, None, None, Some(registry))
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) =
+        init(&opts(endpoint), &key, None, None, Some(registry)).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
 
     // Drive several ticks. If the task panicked we'd see metrics_calls
     // plateau early.
@@ -305,13 +306,13 @@ async fn operator_no_crash_ok() {
 
 // TEST:operator-env-unset-ok
 //
-// With `ESPRESSO_TELEMETRY_LOG` unset, the embedded filter value must default
+// With `ESPRESSO_NODE_TELEMETRY_LOG` unset, the embedded filter value must default
 // to `"warn"`.
 #[tokio::test(flavor = "multi_thread")]
 async fn operator_env_unset_ok() {
     let _g = lock();
     unsafe {
-        std::env::remove_var("ESPRESSO_TELEMETRY_LOG");
+        std::env::remove_var("ESPRESSO_NODE_TELEMETRY_LOG");
     }
 
     let port = reserve_port();
@@ -320,9 +321,9 @@ async fn operator_env_unset_ok() {
 
     let registry = build_test_registry();
     let key = make_staking_key();
-    let handle = init(&opts(endpoint), &key, None, None, Some(registry))
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) =
+        init(&opts(endpoint), &key, None, None, Some(registry)).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
 
     let started = std::time::Instant::now();
     while stub.metrics_calls.load(Ordering::SeqCst) < 1 {
@@ -356,7 +357,7 @@ async fn operator_env_unset_ok() {
 async fn operator_recovery_no_second_error_ok() {
     let _g = lock();
     unsafe {
-        std::env::set_var("ESPRESSO_TELEMETRY_LOG", "warn");
+        std::env::set_var("ESPRESSO_NODE_TELEMETRY_LOG", "warn");
     }
 
     let port = reserve_port();
@@ -365,9 +366,9 @@ async fn operator_recovery_no_second_error_ok() {
 
     let registry = build_test_registry();
     let key = make_staking_key();
-    let handle = init(&opts(endpoint), &key, None, None, Some(registry))
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) =
+        init(&opts(endpoint), &key, None, None, Some(registry)).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
 
     // Drive 4 pushes: 200, 429, 200, 200.
     let started = std::time::Instant::now();

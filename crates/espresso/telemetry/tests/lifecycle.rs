@@ -116,7 +116,8 @@ fn make_staking_key() -> SignKey {
 
 fn opts_with_endpoint(endpoint: Url, metrics_interval_secs: u64) -> TelemetryOptions {
     TelemetryOptions {
-        enable: true,
+        logs_enable: true,
+        metrics_enable: true,
         endpoint: Some(endpoint),
         log_filter: "info".to_owned(),
         metrics_interval_secs,
@@ -189,15 +190,14 @@ async fn telemetry_jwt_mint_ok() {
 
     let key = make_staking_key();
     let opts = opts_with_endpoint(endpoint, 60);
-    let handle: TelemetryHandle = init(&opts, &key, Some("node-42"), Some("acme"), None)
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) =
+        init(&opts, &key, Some("node-42"), Some("acme"), None).expect("init succeeds");
+    let handle: TelemetryHandle = handle.expect("telemetry enabled returns handle");
 
     // Use a scoped subscriber so the global default isn't touched (other
     // tests share that). Mirror the `FmtSubscriber` shape so the OTel
     // layer's `Layer<FmtSubscriber>` bound is satisfied.
-    let layer = handle.tracing_layer();
-    let subscriber = build_subscriber(std::io::sink, Some(layer));
+    let subscriber = build_subscriber(std::io::sink, handle.tracing_layer());
     tracing::subscriber::with_default(subscriber, || {
         tracing::info!("hello from test");
     });
@@ -257,12 +257,10 @@ async fn telemetry_log_retry_survives_transient_5xx() {
 
     let key = make_staking_key();
     let opts = opts_with_endpoint(endpoint, 60);
-    let handle = init(&opts, &key, None, None, None)
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) = init(&opts, &key, None, None, None).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
 
-    let layer = handle.tracing_layer();
-    let subscriber = build_subscriber(std::io::sink, Some(layer));
+    let subscriber = build_subscriber(std::io::sink, handle.tracing_layer());
     tracing::subscriber::with_default(subscriber, || {
         tracing::info!("retry-survives marker");
     });
@@ -282,7 +280,8 @@ async fn telemetry_log_retry_survives_transient_5xx() {
 fn telemetry_disabled_noop_ok() {
     let key = make_staking_key();
     let opts = TelemetryOptions {
-        enable: false,
+        logs_enable: false,
+        metrics_enable: false,
         endpoint: Some("http://does-not-exist.invalid".parse().unwrap()),
         log_filter: "info".to_owned(),
         metrics_interval_secs: 60,
@@ -290,8 +289,13 @@ fn telemetry_disabled_noop_ok() {
     // Even when a registry is supplied, disabled init must return None and
     // not spawn any push task.
     let registry = Arc::new(prometheus::Registry::new());
-    let h = init(&opts, &key, None, None, Some(registry)).expect("disabled init never errors");
+    let (h, warnings) =
+        init(&opts, &key, None, None, Some(registry)).expect("disabled init never errors");
     assert!(h.is_none(), "disabled init must return None");
+    assert!(
+        warnings.is_empty(),
+        "disabled init must not produce warnings; got: {warnings:?}"
+    );
 }
 
 // TEST:telemetry-bad-endpoint-fails
@@ -343,10 +347,11 @@ async fn telemetry_stderr_untouched_ok() {
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
     let key = make_staking_key();
     let opts = opts_with_endpoint(endpoint, 60);
-    let handle = init(&opts, &key, None, None, None).unwrap().unwrap();
+    let (handle, _warnings) = init(&opts, &key, None, None, None).unwrap();
+    let handle = handle.unwrap();
 
     let buf = BufWriter::default();
-    let subscriber = build_subscriber(buf.clone(), Some(handle.tracing_layer()));
+    let subscriber = build_subscriber(buf.clone(), handle.tracing_layer());
     tracing::subscriber::with_default(subscriber, || {
         tracing::info!("local fmt layer marker");
     });
@@ -356,6 +361,42 @@ async fn telemetry_stderr_untouched_ok() {
     assert!(
         captured.contains("local fmt layer marker"),
         "stderr fmt layer must still emit; got: {captured:?}"
+    );
+}
+
+// TEST:telemetry-invalid-log-filter-warns
+//
+// `EnvFilter::new` is lossy on invalid input. `init` validates the filter via
+// `try_new` and returns the parse error as a deferred warning so the caller
+// can replay it after installing the global subscriber. A directive of the
+// form `target=BOGUS_LEVEL` is one of the few inputs the permissive parser
+// rejects, since `BOGUS_LEVEL` won't match any `LevelFilter`.
+#[tokio::test(flavor = "multi_thread")]
+async fn telemetry_invalid_log_filter_warns() {
+    let port = reserve_port();
+    let _captured = start_mock_otlp(port).await;
+    let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
+    let key = make_staking_key();
+    let bogus = "hotshot=NOT_A_LEVEL";
+    let opts = TelemetryOptions {
+        logs_enable: true,
+        endpoint: Some(endpoint),
+        log_filter: bogus.to_owned(),
+        metrics_interval_secs: 60,
+        ..Default::default()
+    };
+
+    let (handle, warnings) = init(&opts, &key, None, None, None).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
+    handle.shutdown();
+
+    let has_filter_warning = warnings
+        .iter()
+        .any(|w| w.contains("log_filter") && w.contains(bogus));
+    assert!(
+        has_filter_warning,
+        "expected a deferred warning mentioning `log_filter` and the invalid value, got: \
+         {warnings:?}",
     );
 }
 
@@ -381,9 +422,9 @@ async fn metrics_remote_write_push_ok() {
     let key = make_staking_key();
     // 1s -> push_task uses 1s after skipping the immediate first tick.
     let opts = opts_with_endpoint(endpoint, 1);
-    let handle = init(&opts, &key, None, None, Some(registry.clone()))
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) =
+        init(&opts, &key, None, None, Some(registry.clone())).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
 
     let snap = wait_for_path(&captured, "/api/v1/write", 1, Duration::from_secs(8)).await;
     handle.shutdown();
@@ -458,13 +499,12 @@ async fn metrics_shared_jwt_ok() {
 
     let key = make_staking_key();
     let opts = opts_with_endpoint(endpoint, 1);
-    let handle = init(&opts, &key, None, None, Some(registry.clone()))
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) =
+        init(&opts, &key, None, None, Some(registry.clone())).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
 
     // Emit a log so the OTel batch processor has something to flush.
-    let layer = handle.tracing_layer();
-    let subscriber = build_subscriber(std::io::sink, Some(layer));
+    let subscriber = build_subscriber(std::io::sink, handle.tracing_layer());
     tracing::subscriber::with_default(subscriber, || {
         tracing::info!("shared-jwt test marker");
     });
@@ -530,9 +570,9 @@ async fn metrics_shutdown_flush_ok() {
     let key = make_staking_key();
     // Long interval so the only push that fires is the shutdown flush.
     let opts = opts_with_endpoint(endpoint, 600);
-    let handle = init(&opts, &key, None, None, Some(registry.clone()))
-        .expect("init succeeds")
-        .expect("telemetry enabled returns handle");
+    let (handle, _warnings) =
+        init(&opts, &key, None, None, Some(registry.clone())).expect("init succeeds");
+    let handle = handle.expect("telemetry enabled returns handle");
 
     // Give the task a moment to install the interval (which it skips).
     tokio::time::sleep(Duration::from_millis(200)).await;

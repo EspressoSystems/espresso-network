@@ -76,9 +76,21 @@ pub fn registry() -> Option<Arc<Registry>> {
 #[derive(Parser, Clone, Derivative)]
 #[derivative(Debug)]
 pub struct TelemetryOptions {
-    /// Master toggle. Telemetry is opt-in.
-    #[clap(long, env = "ESPRESSO_NODE_TELEMETRY_ENABLE", default_value = "false")]
-    pub enable: bool,
+    /// Enable the OTel logs pipeline.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE",
+        default_value = "false"
+    )]
+    pub logs_enable: bool,
+
+    /// Enable the Prometheus remote-write metrics pipeline.
+    #[clap(
+        long,
+        env = "ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE",
+        default_value = "false"
+    )]
+    pub metrics_enable: bool,
 
     /// OTLP/HTTP base URL. Defaults to the production aggregator if unset.
     #[clap(long, env = "ESPRESSO_NODE_TELEMETRY_ENDPOINT")]
@@ -88,7 +100,7 @@ pub struct TelemetryOptions {
     /// unaffected. Default `warn` keeps initial network bandwidth modest;
     /// operators can opt into `info` per-target via standard `EnvFilter`
     /// syntax (e.g. `warn,hotshot=info`).
-    #[clap(long, env = "ESPRESSO_TELEMETRY_LOG", default_value = "warn")]
+    #[clap(long, env = "ESPRESSO_NODE_TELEMETRY_LOG", default_value = "warn")]
     pub log_filter: String,
 
     /// Seconds between Prometheus remote-write pushes. Operators rarely tune
@@ -104,7 +116,8 @@ pub struct TelemetryOptions {
 impl Default for TelemetryOptions {
     fn default() -> Self {
         Self {
-            enable: false,
+            logs_enable: false,
+            metrics_enable: false,
             endpoint: None,
             log_filter: "warn".to_owned(),
             metrics_interval_secs: 60,
@@ -129,12 +142,15 @@ struct MetricsPushHandle {
 /// API setup has constructed the `Registry`. Logs and metrics share the JWT
 /// minted at `init` time.
 pub struct TelemetryHandle {
-    logger_provider: SdkLoggerProvider,
+    /// `None` when only metrics are enabled (logs pipeline disabled).
+    logger_provider: Option<SdkLoggerProvider>,
     log_filter: String,
     jwt: String,
     endpoint: String,
     metrics_interval: Duration,
     metrics_push: Option<MetricsPushHandle>,
+    /// Whether the metrics pipeline is enabled. When false, `attach_metrics_push` is a no-op.
+    metrics_enabled: bool,
     /// External labels stamped onto every pushed TimeSeries (e.g. `service`,
     /// `instance`). Mirrors the OTel `service.name` / `service.instance.id`
     /// resource attributes on the logs side so the aggregator can partition
@@ -144,7 +160,7 @@ pub struct TelemetryHandle {
     /// pipeline. Shared with the OTel log retry wrapper and the metrics push
     /// task so a single operator-facing ERROR is logged across all signals.
     rate_limit_warned: Arc<AtomicBool>,
-    /// Snapshot of `ESPRESSO_TELEMETRY_LOG` at startup (default `"warn"` if
+    /// Snapshot of `ESPRESSO_NODE_TELEMETRY_LOG` at startup (default `"warn"` if
     /// unset). Embedded in the rate-limit ERROR so operators can see exactly
     /// what filter their process is running with.
     telemetry_log_filter: Arc<String>,
@@ -164,29 +180,51 @@ impl TelemetryHandle {
     /// OTLP exporter. Filtered by the configured `log_filter`. Generic over the
     /// target subscriber so callers compose this with whatever stack they wire
     /// up (e.g. the `FmtSubscriber` produced by the consumer's logging init).
-    pub fn tracing_layer<S>(&self) -> impl Layer<S> + Send + Sync + 'static
+    /// Returns `None` when the logs pipeline is disabled.
+    pub fn tracing_layer<S>(&self) -> Option<impl Layer<S> + Send + Sync + 'static>
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
     {
-        let bridge = OpenTelemetryTracingBridge::new(&self.logger_provider);
-        bridge.with_filter(EnvFilter::new(self.log_filter.clone()))
+        let provider = self.logger_provider.as_ref()?;
+        let bridge = OpenTelemetryTracingBridge::new(provider);
+        Some(bridge.with_filter(EnvFilter::new(self.log_filter.clone())))
     }
 
     /// Spawn the periodic metrics push on its own thread with a dedicated
-    /// single-threaded tokio runtime. Idempotent: no-op if already attached.
+    /// single-threaded tokio runtime. Idempotent: no-op if already attached or
+    /// if metrics are disabled.
     /// Does not require the caller to be inside a tokio runtime.
     pub fn attach_metrics_push(&mut self, registry: Arc<Registry>) {
+        let mut deferred = Vec::new();
+        self.attach_metrics_push_buffered(registry, &mut deferred);
+        for w in deferred {
+            tracing::warn!("{w}");
+        }
+    }
+
+    /// Same as [`attach_metrics_push`], but appends warning strings to
+    /// `deferred` instead of emitting them via `tracing::warn!`. Used during
+    /// [`init`], before the global subscriber is installed; warnings would
+    /// otherwise be dropped.
+    fn attach_metrics_push_buffered(
+        &mut self,
+        registry: Arc<Registry>,
+        deferred: &mut Vec<String>,
+    ) {
+        if !self.metrics_enabled {
+            return;
+        }
         if self.metrics_push.is_some() {
             return;
         }
         let push_endpoint: Url = match self.endpoint.parse() {
             Ok(u) => u,
             Err(e) => {
-                tracing::warn!(
-                    endpoint = %self.endpoint,
-                    error = %e,
-                    "telemetry: cannot parse endpoint as URL; skipping metrics push"
-                );
+                deferred.push(format!(
+                    "telemetry: cannot parse endpoint {endpoint:?} as URL ({e}); skipping metrics \
+                     push",
+                    endpoint = self.endpoint,
+                ));
                 return;
             },
         };
@@ -225,7 +263,7 @@ impl TelemetryHandle {
             }) {
             Ok(t) => t,
             Err(e) => {
-                tracing::warn!(error = %e, "telemetry: cannot spawn metrics push thread");
+                deferred.push(format!("telemetry: cannot spawn metrics push thread: {e}"));
                 return;
             },
         };
@@ -258,27 +296,44 @@ impl TelemetryHandle {
                 tracing::warn!("telemetry: metrics push thread panicked");
             }
         }
-        let provider = self.logger_provider;
-        let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
-        let spawned = std::thread::Builder::new()
-            .name("espresso-telemetry-shutdown".into())
-            .spawn(move || {
-                if let Err(e) = provider.shutdown() {
-                    tracing::warn!(error = %e, "telemetry: logger provider shutdown error");
-                }
-                let _ = done_tx.send(());
-            });
-        match spawned {
-            Ok(_) => {
-                if done_rx.recv_timeout(LOGGER_SHUTDOWN_TIMEOUT).is_err() {
-                    tracing::warn!(
-                        timeout_secs = LOGGER_SHUTDOWN_TIMEOUT.as_secs(),
-                        "telemetry: logger provider shutdown timed out; detaching thread",
-                    );
-                }
-            },
-            Err(e) => tracing::warn!(error = %e, "telemetry: cannot spawn shutdown thread"),
+        if let Some(provider) = self.logger_provider {
+            let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
+            let spawned = std::thread::Builder::new()
+                .name("espresso-telemetry-shutdown".into())
+                .spawn(move || {
+                    if let Err(e) = provider.shutdown() {
+                        tracing::warn!(error = %e, "telemetry: logger provider shutdown error");
+                    }
+                    let _ = done_tx.send(());
+                });
+            match spawned {
+                Ok(_) => {
+                    if done_rx.recv_timeout(LOGGER_SHUTDOWN_TIMEOUT).is_err() {
+                        tracing::warn!(
+                            timeout_secs = LOGGER_SHUTDOWN_TIMEOUT.as_secs(),
+                            "telemetry: logger provider shutdown timed out; detaching thread",
+                        );
+                    }
+                },
+                Err(e) => tracing::warn!(error = %e, "telemetry: cannot spawn shutdown thread"),
+            }
         }
+    }
+
+    /// Returns true when the metrics push task has been spawned.
+    ///
+    /// Intended for integration test assertions only.
+    #[doc(hidden)]
+    pub fn metrics_push_active(&self) -> bool {
+        self.metrics_push.is_some()
+    }
+
+    /// Returns true when the metrics pipeline is enabled.
+    ///
+    /// Intended for integration test assertions only.
+    #[doc(hidden)]
+    pub fn metrics_enabled(&self) -> bool {
+        self.metrics_enabled
     }
 }
 
@@ -290,18 +345,36 @@ impl TelemetryHandle {
 /// [`TelemetryHandle::attach_metrics_push`] once the registry is built. Tests
 /// pass the registry directly.
 ///
-/// Returns `Ok(None)` when telemetry is disabled. Returns `Err` for misconfig
-/// (bad endpoint, JWT mint failure). The call site is expected to log and
-/// continue without telemetry.
+/// Returns `Ok((None, _))` when telemetry is disabled. Returns `Err` for
+/// misconfig (bad endpoint, JWT mint failure). The call site is expected to
+/// log and continue without telemetry.
+///
+/// The returned `Vec<String>` carries warnings produced before any global
+/// tracing subscriber has been installed (e.g. invalid `log_filter`, metrics
+/// push attach failures). Callers MUST replay them via `tracing::warn!` after
+/// installing the subscriber; otherwise they are lost.
 pub fn init(
     opts: &TelemetryOptions,
     staking_key: &SignKey,
     node_name: Option<&str>,
     company_name: Option<&str>,
     registry: Option<Arc<Registry>>,
-) -> anyhow::Result<Option<TelemetryHandle>> {
-    if !opts.enable {
-        return Ok(None);
+) -> anyhow::Result<(Option<TelemetryHandle>, Vec<String>)> {
+    let logs_on = opts.logs_enable;
+    let metrics_on = opts.metrics_enable;
+
+    if !logs_on && !metrics_on {
+        return Ok((None, Vec::new()));
+    }
+
+    let mut deferred: Vec<String> = Vec::new();
+
+    if logs_on && let Err(e) = EnvFilter::try_new(&opts.log_filter) {
+        deferred.push(format!(
+            "telemetry: invalid log_filter {filter:?} ({e}); falling back to lossy parse, some \
+             directives may be ignored",
+            filter = opts.log_filter,
+        ));
     }
 
     let jwt = UnauthenticatedToken::generate_with(staking_key, node_name, company_name)
@@ -330,17 +403,22 @@ pub fn init(
     // the rate-limit ERROR so operators can see exactly what the process was
     // configured with (env var, not the parsed `EnvFilter`). Default matches
     // the `TelemetryOptions::log_filter` default.
-    let telemetry_log_filter: Arc<String> =
-        Arc::new(std::env::var("ESPRESSO_TELEMETRY_LOG").unwrap_or_else(|_| "warn".to_string()));
+    let telemetry_log_filter: Arc<String> = Arc::new(
+        std::env::var("ESPRESSO_NODE_TELEMETRY_LOG").unwrap_or_else(|_| "warn".to_string()),
+    );
     let rate_limit_warned: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
-    let provider = build_logger_provider(
-        jwt.clone(),
-        &endpoint,
-        node_name,
-        rate_limit_warned.clone(),
-        telemetry_log_filter.clone(),
-    )?;
+    let logger_provider = if logs_on {
+        Some(build_logger_provider(
+            jwt.clone(),
+            &endpoint,
+            node_name,
+            rate_limit_warned.clone(),
+            telemetry_log_filter.clone(),
+        )?)
+    } else {
+        None
+    };
 
     let metrics_interval = Duration::from_secs(opts.metrics_interval_secs.max(1));
     let mut metrics_external_labels = vec![Label {
@@ -354,22 +432,23 @@ pub fn init(
         });
     }
     let mut handle = TelemetryHandle {
-        logger_provider: provider,
+        logger_provider,
         log_filter: opts.log_filter.clone(),
         jwt,
         endpoint,
         metrics_interval,
         metrics_push: None,
+        metrics_enabled: metrics_on,
         metrics_external_labels,
         rate_limit_warned,
         telemetry_log_filter,
     };
 
     if let Some(registry) = registry {
-        handle.attach_metrics_push(registry);
+        handle.attach_metrics_push_buffered(registry, &mut deferred);
     }
 
-    Ok(Some(handle))
+    Ok((Some(handle), deferred))
 }
 
 fn build_logger_provider(

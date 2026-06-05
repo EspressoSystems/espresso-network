@@ -146,6 +146,69 @@ fn metrics_histogram_buckets_ok() {
     assert_eq!(sum.samples[0].value, 0.5 + 3.0 + 7.0 + 20.0);
 }
 
+// TEST:metrics-histogram-explicit-plus-inf-bucket-ok
+//
+// Regression: prometheus accepts `f64::INFINITY` as a user-supplied bucket and
+// returns it verbatim from `get_bucket()`. Without dedup, the loop emits a
+// `le="+Inf"` series, then the trailing unconditional emit produces another,
+// colliding at the receiver. The fix in `build_write_request` skips infinite
+// upper bounds in the loop so only the trailing emit remains.
+#[test]
+fn metrics_histogram_explicit_plus_inf_bucket_ok() {
+    let registry = Registry::new();
+    let buckets = vec![1.0, 5.0, f64::INFINITY];
+    let hist = Histogram::with_opts(
+        HistogramOpts::new("plus_inf_seconds", "with explicit +Inf bucket")
+            .buckets(buckets.clone()),
+    )
+    .unwrap();
+    registry.register(Box::new(hist.clone())).unwrap();
+    hist.observe(0.5);
+    hist.observe(3.0);
+    hist.observe(99.0);
+
+    let families = registry.gather();
+    let req = build_write_request(&families).expect("encode succeeds");
+    let decoded = round_trip(&req);
+
+    let plus_inf_series: Vec<_> = decoded
+        .timeseries
+        .iter()
+        .filter(|s| {
+            name_of(s) == Some("plus_inf_seconds_bucket") && label_value(s, "le") == Some("+Inf")
+        })
+        .collect();
+    assert_eq!(
+        plus_inf_series.len(),
+        1,
+        "exactly one +Inf bucket series expected, got: {plus_inf_series:?}"
+    );
+    assert_eq!(
+        plus_inf_series[0].samples[0].value, 3.0,
+        "+Inf series value must equal sample_count"
+    );
+
+    let total_for_family: Vec<_> = decoded
+        .timeseries
+        .iter()
+        .filter(|s| {
+            name_of(s)
+                .map(|n| n.starts_with("plus_inf_seconds"))
+                .unwrap_or(false)
+        })
+        .collect();
+    // 2 finite buckets + 1 trailing +Inf + _sum + _count = 5.
+    assert_eq!(
+        total_for_family.len(),
+        5,
+        "expected 5 series for this histogram, got: {:?}",
+        total_for_family
+            .iter()
+            .map(|s| (name_of(s).unwrap_or(""), label_value(s, "le").unwrap_or("")))
+            .collect::<Vec<_>>()
+    );
+}
+
 // TEST:metrics-labels-sorted-ok
 // Prometheus remote-write 1.0 requires labels sorted by name within each
 // TimeSeries. Vector accepts unsorted in practice, but stricter receivers

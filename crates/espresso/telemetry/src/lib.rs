@@ -42,6 +42,12 @@ pub fn build_write_request(families: &[MetricFamily]) -> anyhow::Result<WriteReq
                 for metric in family.get_metric() {
                     let h = metric.get_histogram();
                     for bucket in h.get_bucket() {
+                        // Skip any user-configured +Inf bucket. The unconditional
+                        // emit below covers it via sample_count, so emitting both
+                        // would collide on `(name, le="+Inf")` at the receiver.
+                        if bucket.get_upper_bound().is_infinite() {
+                            continue;
+                        }
                         series.push(make_bucket_series(
                             &bucket_name,
                             metric.get_label(),
