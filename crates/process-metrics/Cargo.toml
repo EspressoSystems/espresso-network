@@ -1,0 +1,16 @@
+[package]
+name = "process-metrics"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+description = "Process-level Prometheus metrics (RSS, virtual memory, FDs, threads, uptime) and CI soak tooling."
+
+[dependencies]
+hotshot-types = { workspace = true }
+procfs = { workspace = true }
+sysinfo = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

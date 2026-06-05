@@ -18,13 +18,14 @@ use futures::{
 use hotshot_query_service::{
     ApiState as AppState, Error,
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{self, UpdateStatusData},
+    status::{self, HasMetrics, UpdateStatusData},
 };
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
     network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
+use process_metrics::ProcessMetrics;
 use tide_disco::{Api, App, Url, listener::RateLimitListener, method::ReadState};
 use vbs::version::StaticVersionType;
 
@@ -210,6 +211,7 @@ impl Options {
             // storage.
             let ds = MetricsDataSource::default();
             let metrics = ds.populate_metrics();
+            tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
             let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
                 ds,
                 state.clone(),
@@ -379,6 +381,8 @@ impl Options {
         // Get the inner storage from the data source
         let inner_storage = ds.inner();
 
+        tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
+
         let (metrics, ds, mut app) = self
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;
@@ -445,6 +449,7 @@ impl Options {
 
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
         let inner_storage = ds.inner();
+        tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
         let (metrics, ds, mut app) = self
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;
