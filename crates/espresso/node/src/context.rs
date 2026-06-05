@@ -11,7 +11,9 @@ use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
     NodeState, PubKey, Transaction, ValidatedState,
-    v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
+    v0::traits::{
+        DecidePayloadRecovery, EventConsumer as PersistenceEventConsumer, SequencerPersistence,
+    },
 };
 use futures::{
     future::join_all,
@@ -57,6 +59,7 @@ use crate::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
         network::Sender as RequestResponseSender,
+        payload_recovery::PayloadRecovery,
         recipient_source::RecipientSource,
     },
     startup_catchup::bootstrap_epoch_window,
@@ -258,7 +261,7 @@ where
             RequestResponseSender::new(outbound_message_sender),
             request_response_receiver,
             RecipientSource {
-                memberships: membership_coordinator,
+                memberships: membership_coordinator.clone(),
                 consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
             },
@@ -277,6 +280,15 @@ where
         // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
         // itself)
         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
+
+        // Payload recovery for the decide pipeline: fetches DA proposals from peers when a
+        // view is decided before its payload lands on disk, so decide events reach the
+        // query service complete.
+        let payload_recovery: Arc<dyn DecidePayloadRecovery> = Arc::new(PayloadRecovery::new(
+            request_response_protocol.clone(),
+            membership_coordinator.clone(),
+            epoch_height,
+        ));
 
         // Create the external event handler
         let mut tasks = TaskList::default();
@@ -303,6 +315,7 @@ where
             event_consumer,
             anchor_view,
             proposal_fetcher_cfg,
+            Some(payload_recovery),
             metrics,
         )
         .with_task_list(tasks))
@@ -323,6 +336,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
+        payload_recovery: Option<Arc<dyn DecidePayloadRecovery>>,
         metrics: &dyn Metrics,
     ) -> Self {
         let events = consensus_handle.event_stream();
@@ -364,6 +378,7 @@ where
                 event_consumer.clone(),
                 decide_rx,
                 anchor_view,
+                payload_recovery,
                 DecideProcessorMetrics::new(metrics),
             ),
         );
@@ -613,6 +628,20 @@ async fn handle_events<N, P, C>(
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
+            CoordinatorEvent::BlockPayloadReconstructed { .. } => {
+                // Forward reconstructed payloads to the event consumer (query service) so
+                // it can back-fill blocks that were decided before the payload was
+                // available. Spawned so a slow query-service write cannot stall the event
+                // loop; the write is idempotent, and if it fails the payload can still be
+                // recovered from peers.
+                let consumer = event_consumer.clone();
+                let event = event.clone();
+                spawn(async move {
+                    if let Err(err) = consumer.handle_event(&event).await {
+                        tracing::warn!("failed to store reconstructed payload: {err:#}");
+                    }
+                });
+            },
             _ => {},
         }
 
@@ -663,6 +692,7 @@ async fn process_decided_events_task<P, C>(
     consumer: Arc<C>,
     mut decide_rx: watch::Receiver<DecideSignal>,
     anchor_view: Option<ViewNumber>,
+    payload_recovery: Option<Arc<dyn DecidePayloadRecovery>>,
     metrics: DecideProcessorMetrics,
 ) where
     P: SequencerPersistence,
@@ -675,7 +705,7 @@ async fn process_decided_events_task<P, C>(
     // Process leaves persisted before a previous shutdown but not yet handled.
     if let Some(view) = anchor_view {
         match persistence
-            .process_decided_events(view, None, consumer.as_ref())
+            .process_decided_events(view, None, consumer.as_ref(), payload_recovery.as_deref())
             .await
         {
             Ok(processed) => {
@@ -714,7 +744,12 @@ async fn process_decided_events_task<P, C>(
 
         let start = Instant::now();
         let result = persistence
-            .process_decided_events(view, deciding_qc, consumer.as_ref())
+            .process_decided_events(
+                view,
+                deciding_qc,
+                consumer.as_ref(),
+                payload_recovery.as_deref(),
+            )
             .await;
         metrics.duration.add_point(start.elapsed().as_secs_f64());
 

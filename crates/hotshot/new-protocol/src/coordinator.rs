@@ -464,16 +464,18 @@ where
                             out.view,
                             out.epoch,
                             out.payload.clone(),
-                            out.metadata.clone(),
+                            out.metadata,
                             VidCommitment::V2(out.payload_commitment),
                         );
-                        if let Some(proposal) = self.consensus.proposal_at(out.view) {
-                            self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
-                                view: out.view,
-                                header: proposal.block_header.clone(),
-                                payload: out.payload,
-                            });
-                        }
+                        // Notify downstream consumers (e.g. the query service) of the
+                        // reconstructed payload. The header is carried through the
+                        // reconstructor, so this works even if the proposal has already
+                        // been garbage collected from consensus state.
+                        self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
+                            view: out.view,
+                            header: out.header,
+                            payload: out.payload,
+                        });
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
                     Err(()) => {
@@ -1050,15 +1052,9 @@ where
         self.storage
             .append_proposal(validated.message.proposal.data.clone());
 
-        let m = validated
-            .message
-            .proposal
-            .data
-            .block_header
-            .metadata()
-            .clone();
+        let header = validated.message.proposal.data.block_header.clone();
         self.vid_reconstructor
-            .handle_vid_share(vid_share.clone(), m);
+            .handle_vid_share(vid_share.clone(), header);
 
         // GC for the cache
         let view = validated.message.proposal.data.view_number();

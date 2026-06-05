@@ -3,7 +3,7 @@ use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::traits::signature_key::SignatureKey;
 
 use super::common::utils::TestData;
-use crate::vid::VidReconstructor;
+use crate::vid::{RECONSTRUCT_KEEP_HORIZON, VidReconstructor};
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
@@ -17,7 +17,7 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    // Feed the proposal share first (carries metadata required for reconstruction).
+    // Feed the proposal share first (carries the header required for reconstruction).
     let proposal_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
     let proposal_share = view
         .vid_shares
@@ -25,7 +25,7 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
         .find(|s| s.recipient_key == proposal_key)
         .unwrap()
         .clone();
-    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.metadata);
+    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.clone());
 
     // Feed remaining shares from other nodes — enough to exceed the threshold.
     for i in 1..view.vid_shares.len() as u64 {
@@ -85,7 +85,7 @@ async fn test_mark_reconstructed_skips_reconstruction() {
         .find(|s| s.recipient_key == proposal_key)
         .unwrap()
         .clone();
-    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.metadata);
+    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.clone());
     for i in 1..view.vid_shares.len() as u64 {
         let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
         let share = view
@@ -114,6 +114,45 @@ async fn test_mark_reconstructed_skips_reconstruction() {
     }
 }
 
+/// GC within the keep horizon must not abort an in-flight reconstruction: GC runs when
+/// views are decided, and the decided views' payloads are exactly what the decide
+/// pipeline still needs (e.g. a multi-leaf decide after a timeout).
+#[tokio::test]
+async fn test_gc_keeps_recent_reconstructions() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    // Feed threshold shares so a reconstruction task is in flight.
+    let proposal_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
+    let proposal_share = view
+        .vid_shares
+        .iter()
+        .find(|s| s.recipient_key == proposal_key)
+        .unwrap()
+        .clone();
+    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.clone());
+    for i in 1..THRESHOLD {
+        let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
+        let share = view
+            .vid_shares
+            .iter()
+            .find(|s| s.recipient_key == key)
+            .unwrap()
+            .clone();
+        reconstructor.handle_vid_share(share, None);
+    }
+
+    // GC at the edge of the keep horizon: the in-flight reconstruction for this view must
+    // survive and still produce a result.
+    reconstructor.gc(view.view_number + RECONSTRUCT_KEEP_HORIZON);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("reconstruction should complete despite GC within the keep horizon")
+        .expect("should produce a reconstruction result");
+    assert!(result.is_ok(), "reconstruction should succeed");
+}
+
 /// Shares arriving after reconstruction has already completed for a view
 /// should be silently dropped (the `reconstructed` set guards this path).
 #[tokio::test]
@@ -122,7 +161,7 @@ async fn test_shares_after_reconstruction_are_ignored() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    // Feed exactly threshold shares (with metadata on the first).
+    // Feed exactly threshold shares (with the header on the first).
     let first_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
     let first_share = view
         .vid_shares
@@ -130,7 +169,7 @@ async fn test_shares_after_reconstruction_are_ignored() {
         .find(|s| s.recipient_key == first_key)
         .unwrap()
         .clone();
-    reconstructor.handle_vid_share(first_share, view.proposal.data.block_header.metadata);
+    reconstructor.handle_vid_share(first_share, view.proposal.data.block_header.clone());
 
     for i in 1..THRESHOLD {
         let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
