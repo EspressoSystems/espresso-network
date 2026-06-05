@@ -28,6 +28,7 @@ use crate::{
 fn map_error(err: ApiError) -> Status {
     match err {
         ApiError::BadRequest(e) => Status::invalid_argument(e.to_string()),
+        ApiError::NotFound(e) => Status::not_found(e.to_string()),
         ApiError::Internal(e) => Status::internal(e.to_string()),
     }
 }

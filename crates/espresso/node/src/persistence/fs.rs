@@ -757,12 +757,12 @@ impl SequencerPersistence for Persistence {
         Ok(Some(ViewNumber::new(u64::from_le_bytes(bytes))))
     }
 
-    async fn append_decided_leaves(
+    async fn persist_decided_leaves(
         &self,
-        view: ViewNumber,
+        _view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
+        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let path = inner.decided_leaf2_path();
@@ -817,27 +817,34 @@ impl SequencerPersistence for Persistence {
             )?;
         }
 
-        match inner
-            .generate_decide_events(view, deciding_qc, consumer)
+        Ok(())
+    }
+
+    async fn process_decided_events(
+        &self,
+        view: ViewNumber,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        // On error, GC does not run over the failed range, so the leaves stay on disk and are
+        // retried; no data is lost.
+        let intervals = self
+            .inner
+            .write()
             .await
-        {
-            Err(err) => {
-                // Event processing failure is not an error, since by this point we have at least
-                // managed to persist the decided leaves successfully, and the event processing will
-                // just run again at the next decide.
-                tracing::warn!(?view, "event processing failed: {err:#}");
-            },
-            Ok(intervals) => {
-                if let Err(err) = inner.collect_garbage(view, &intervals) {
-                    // Similarly, garbage collection is not an error. We have done everything we
-                    // strictly needed to do, and GC will run again at the next decide. Log the
-                    // error but do not return it.
-                    tracing::warn!(?view, "GC failed: {err:#}");
-                }
-            },
+            .generate_decide_events(view, deciding_qc, consumer)
+            .await?;
+
+        // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
+        let processed = intervals.iter().map(|i| *i.end()).max();
+
+        // Best-effort GC; runs again at the next decide.
+        let res = self.inner.write().await.collect_garbage(view, &intervals);
+        if let Err(err) = res {
+            tracing::warn!(?view, "GC failed: {err:#}");
         }
 
-        Ok(())
+        Ok(processed)
     }
 
     async fn load_anchor_leaf(

@@ -9,7 +9,6 @@ use tokio::{
         watch,
     },
     task::{JoinHandle, JoinSet},
-    time::timeout,
 };
 use tokio_util::{sync::CancellationToken, task::JoinMap};
 use tracing::{debug, error, info, trace, warn};
@@ -22,6 +21,7 @@ use crate::{
     msg::{MsgId, Slot, Trailer, hello::Hello},
     net::{Command, PeerCommand, PeerMessage, RetryPolicy, SendAction, peer::Peer},
     queue::Queue,
+    util::until,
 };
 
 pub struct Server {
@@ -143,7 +143,7 @@ impl Server {
                             name = %self.conf.name,
                             node = %self.key,
                             %addr,
-                            "accepted new connection"
+                            "accepted new tcp connection"
                         );
                         self.spawn_accept(stream)
                     }
@@ -152,7 +152,7 @@ impl Server {
                             name = %self.conf.name,
                             node = %self.key,
                             %err,
-                            "error accepting connection"
+                            "error accepting tcp connection"
                         )
                     }
                 },
@@ -263,7 +263,7 @@ impl Server {
                             }
                             PeerState::Connected(cancel) => {
                                 if conn.key > self.key {
-                                    debug!(
+                                    info!(
                                         name = %self.conf.name,
                                         node = %self.key,
                                         peer = %conn.key,
@@ -338,7 +338,7 @@ impl Server {
                             }
                             PeerState::Connected(cancel) => {
                                 if conn.key < self.key {
-                                    debug!(
+                                    info!(
                                         name = %self.conf.name,
                                         node = %self.key,
                                         peer = %conn.key,
@@ -513,7 +513,7 @@ impl Server {
                                         name = %self.conf.name,
                                         node = %self.key,
                                         peer = %k,
-                                        role = ?role,
+                                        role = %role,
                                         "peer to assign role to not found"
                                     );
                                 }
@@ -667,21 +667,18 @@ impl Server {
             "spawning hello task"
         );
 
-        let duration = self.conf.handshake_timeout;
-
         self.metrics.add(&conn.key, "hellos", 1);
+
         self.hello_tasks.abort(&conn.key);
-        self.hello_tasks.spawn(conn.key, async move {
-            let future = async {
+        self.hello_tasks.spawn(
+            conn.key,
+            until(self.conf.handshake_timeout, async move {
                 let theirs = conn.recv_hello().await?;
                 conn.send_hello(ours.clone()).await?;
-                Ok((ours, conn, theirs))
-            };
-            match timeout(duration, future).await {
-                Ok(re) => re,
-                Err(_) => Err(NetworkError::Timeout),
-            }
-        });
+                Ok::<_, NetworkError>((ours, conn, theirs))
+            }),
+        );
+
         self.metrics
             .set(&self.key, "hello_tasks", self.hello_tasks.len());
     }

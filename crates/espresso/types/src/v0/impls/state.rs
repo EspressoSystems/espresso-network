@@ -1143,7 +1143,7 @@ impl ValidatedState {
             UpgradeType::Fee { chain_config } => chain_config,
             UpgradeType::Epoch { chain_config } => chain_config,
             UpgradeType::DrbAndHeader { chain_config } => chain_config,
-            UpgradeType::Da { chain_config } => chain_config,
+            UpgradeType::NewProtocol { chain_config } => chain_config,
             UpgradeType::EpochReward { chain_config } => chain_config,
         };
 
@@ -1589,14 +1589,12 @@ mod test {
                     timestamp_millis,
                     ..parent.clone()
                 }),
-                Header::V6(parent) | Header::V7(parent) | Header::V8(parent) => {
-                    Header::V6(v0_6::Header {
-                        height: parent.height + 1,
-                        timestamp,
-                        timestamp_millis,
-                        ..parent.clone()
-                    })
-                },
+                Header::V6(parent) => Header::V6(v0_6::Header {
+                    height: parent.height + 1,
+                    timestamp,
+                    timestamp_millis,
+                    ..parent.clone()
+                }),
             }
         }
         /// Replaces builder signature w/ invalid one.
@@ -1633,13 +1631,11 @@ mod test {
                     builder_signature: Some(sig),
                     ..header.clone()
                 }),
-                Header::V6(header) | Header::V7(header) | Header::V8(header) => {
-                    Header::V6(v0_6::Header {
-                        fee_info,
-                        builder_signature: Some(sig),
-                        ..header.clone()
-                    })
-                },
+                Header::V6(header) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..header.clone()
+                }),
             }
         }
 
@@ -1680,13 +1676,11 @@ mod test {
                     builder_signature: Some(sig),
                     ..parent.clone()
                 }),
-                Header::V6(parent) | Header::V7(parent) | Header::V8(parent) => {
-                    Header::V6(v0_6::Header {
-                        fee_info,
-                        builder_signature: Some(sig),
-                        ..parent.clone()
-                    })
-                },
+                Header::V6(parent) => Header::V6(v0_6::Header {
+                    fee_info,
+                    builder_signature: Some(sig),
+                    ..parent.clone()
+                }),
             }
         }
     }
@@ -2272,13 +2266,11 @@ mod test {
                 fee_info: FeeInfo::new(account, data),
                 ..header
             }),
-            Header::V6(header) | Header::V7(header) | Header::V8(header) => {
-                Header::V6(v0_6::Header {
-                    builder_signature: Some(sig),
-                    fee_info: FeeInfo::new(account, data),
-                    ..header
-                })
-            },
+            Header::V6(header) => Header::V6(v0_6::Header {
+                builder_signature: Some(sig),
+                fee_info: FeeInfo::new(account, data),
+                ..header
+            }),
         };
 
         validate_builder_fee(&header).unwrap();

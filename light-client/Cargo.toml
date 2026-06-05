@@ -5,8 +5,9 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = ["decaf"]
+default = ["decaf", "rlp"]
 decaf = []
+rlp = ["alloy-rlp", "hotshot-types/rlp"]
 testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand"]
 
 [dependencies]
@@ -31,10 +32,14 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 static_assertions = { workspace = true }
 surf-disco = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
+
+# RLP dependencies
+alloy-rlp = { workspace = true, optional = true }
 
 # Testing dependencies
 bitvec = { workspace = true, optional = true }
@@ -48,7 +53,6 @@ espresso-node = { workspace = true, default-features = false, features = [
 itertools = { workspace = true }
 light-client = { path = ".", features = ["testing"] }
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }
 test-log = { workspace = true }
 test-utils = { workspace = true }
 

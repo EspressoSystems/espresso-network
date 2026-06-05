@@ -8,11 +8,11 @@ use crate::{
     message::{Certificate1, EpochChangeMessage, Proposal},
     tests::common::assertions::{
         any, count_matching, is_block_built, is_block_reconstructed, is_cert1, is_cert2,
-        is_drb_result, is_header_created, is_leaf_decided, is_proposal,
-        is_request_block_and_header, is_request_vid_disperse, is_send_cert1, is_send_epoch_change,
-        is_send_timeout_vote, is_state_validated, is_timeout, is_timeout_cert,
-        is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1, is_vote2,
-        node_index_for_key,
+        is_drb_result, is_header_created, is_header_created_for_view, is_leaf_decided, is_proposal,
+        is_proposal_for_view, is_request_block_and_header, is_request_vid_disperse, is_send_cert1,
+        is_send_epoch_change, is_send_timeout_vote, is_state_validated, is_timeout,
+        is_timeout_cert, is_timeout_one_honest, is_vid_disperse, is_view_changed, is_vote1,
+        is_vote2, node_index_for_key,
     },
 };
 
@@ -279,11 +279,13 @@ async fn test_leader_proposes_after_timeout() {
     // Timeout cert for view 2 advances to view 3; we need to be leader of view 3
     let leader_for_view_3 = test_data.views[2].leader_public_key;
     let leader_index = node_index_for_key(&leader_for_view_3);
-    // Timer must be long enough for VID to complete (so the view 3 timeout
-    // doesn't kill the in-progress proposal), but short enough to actually
-    // fire for view 2 during the test.
+    // Timer must be long enough for the empty-block throttle sleep
+    // (BlockBuilder sleeps 500ms when its buffer is empty), VID disperse,
+    // and header creation to all complete before the view 3 timer fires.
+    // It must also be short enough to actually fire for view 2 during
+    // the test in a reasonable amount of time.
     let mut harness =
-        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(500)).await;
+        TestHarness::new_with_timer(leader_index, std::time::Duration::from_millis(1500)).await;
 
     // View 1: process fully to establish locked_qc
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &leader_for_view_3).await;
@@ -499,9 +501,16 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
 
     // After processing view 27 the leader for view 28 should propose
     // with the DRB result that was computed back in epoch 1.
+    // The proposal is emitted only once the block builder finishes (it sleeps
+    // before producing an empty block) and the resulting header for view 28 is
+    // applied
+    harness
+        .process_until(|inputs| any(inputs, |i| is_header_created_for_view(i, 28)))
+        .await;
     assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should propose in epoch 3 transition window using the computed DRB result"
+        any(harness.outputs(), |o| is_proposal_for_view(o, 28)),
+        "Leader should propose view 28 in epoch 3's transition window using the DRB result \
+         computed in epoch 1"
     );
 }
 

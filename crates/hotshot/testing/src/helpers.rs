@@ -165,7 +165,7 @@ where
 /// create certificate
 /// # Panics
 /// if we fail to sign the data
-pub async fn build_cert<
+pub fn build_cert<
     TYPES: NodeType,
     DATAType: Committable + Clone + Eq + Hash + Serialize + Debug + 'static,
     VOTE: Vote<TYPES, Commitment = DATAType>,
@@ -183,8 +183,7 @@ pub async fn build_cert<
         epoch_membership,
         view,
         upgrade_lock,
-    )
-    .await;
+    );
 
     let vote = SimpleVote::<TYPES, DATAType>::create_signed_vote(
         data,
@@ -225,7 +224,7 @@ pub fn vid_share<TYPES: NodeType>(
 /// create signature
 /// # Panics
 /// if fails to convert node id into keypair
-pub async fn build_assembled_sig<
+pub fn build_assembled_sig<
     TYPES: NodeType,
     VOTE: Vote<TYPES>,
     CERT: Certificate<TYPES, VOTE::Commitment, Voteable = VOTE::Commitment>,
@@ -236,12 +235,12 @@ pub async fn build_assembled_sig<
     view: ViewNumber,
     upgrade_lock: &UpgradeLock<TYPES>,
 ) -> <TYPES::SignatureKey as SignatureKey>::QcType {
-    let stake_table = CERT::stake_table(epoch_membership).await;
+    let stake_table = CERT::stake_table(epoch_membership);
     let stake_table_entries = StakeTableEntries::<TYPES>::from(stake_table.clone()).0;
     let real_qc_pp: <TYPES::SignatureKey as SignatureKey>::QcParams<'_> =
         <TYPES::SignatureKey as SignatureKey>::public_parameter(
             &stake_table_entries,
-            CERT::threshold(epoch_membership).await,
+            CERT::threshold(epoch_membership),
         );
 
     let total_nodes = stake_table.len();
@@ -363,7 +362,7 @@ pub async fn build_vid_proposal<TYPES: NodeType>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn build_da_certificate<TYPES: NodeType>(
+pub fn build_da_certificate<TYPES: NodeType>(
     membership: &EpochMembership<TYPES>,
     view_number: ViewNumber,
     epoch_number: Option<EpochNumber>,
@@ -400,17 +399,19 @@ pub async fn build_da_certificate<TYPES: NodeType>(
         epoch: epoch_number,
     };
 
-    anyhow::Ok(
-        build_cert::<TYPES, DaData2, DaVote2<TYPES>, DaCertificate2<TYPES>>(
-            da_data,
-            membership,
-            view_number,
-            public_key,
-            private_key,
-            upgrade_lock,
-        )
-        .await,
-    )
+    anyhow::Ok(build_cert::<
+        TYPES,
+        DaData2,
+        DaVote2<TYPES>,
+        DaCertificate2<TYPES>,
+    >(
+        da_data,
+        membership,
+        view_number,
+        public_key,
+        private_key,
+        upgrade_lock,
+    ))
 }
 
 /// This function permutes the provided input vector `inputs`, given some order provided within the

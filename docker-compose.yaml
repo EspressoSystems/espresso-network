@@ -86,6 +86,26 @@ services:
       deploy-prover-contracts:
         condition: service_completed_successfully
 
+  # Wait for the prover to push the LC past the first epoch root before upgrading
+  # to V3. Otherwise the LCv2 -> v3 transition can interrupt the epoch-root update
+  # and leave the contract permanently stuck. Epochs are 1-indexed (genesis is
+  # epoch 1), so we wait for epoch 2.
+  wait-for-lc-epoch-2:
+    image: badouralix/curl-jq
+    command: /scripts/wait-for-light-client-epoch 2
+    environment:
+      - ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS
+      - L1_PROVIDER=http://demo-l1-network:${ESPRESSO_L1_PORT}
+    volumes:
+      - ./scripts:/scripts:ro
+    depends_on:
+      demo-l1-network:
+        condition: service_healthy
+      wait-for-v4:
+        condition: service_completed_successfully
+      prover-one-shot:
+        condition: service_started
+
   deploy-lcv3-upgrade:
     image: ghcr.io/espressosystems/espresso-network/deploy:${DOCKER_TAG:-main}
     command: deploy --upgrade-light-client-v3 --use-mock
@@ -106,7 +126,7 @@ services:
     depends_on:
       demo-l1-network:
         condition: service_healthy
-      wait-for-v4:
+      wait-for-lc-epoch-2:
         condition: service_completed_successfully
 
   deploy-pos-contracts-upgrades:
@@ -182,6 +202,8 @@ services:
       - ACCOUNT_INDEX=$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX
       - ESP_TOKEN_CONTRACT_ADDRESS=$ESP_TOKEN_PROXY_ADDRESS
       - STAKE_TABLE_ADDRESS=$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS
+      - DELEGATION_CONFIG
+      - NUM_DELEGATORS_PER_VALIDATOR
       - ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_0
       - ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_1
       - ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_2
