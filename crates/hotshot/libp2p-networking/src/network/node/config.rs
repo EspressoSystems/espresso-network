@@ -6,6 +6,7 @@
 
 use std::{collections::HashSet, num::NonZeroUsize, time::Duration};
 
+use alloy::primitives::U256;
 use libp2p::{Multiaddr, identity::Keypair};
 use libp2p_identity::PeerId;
 
@@ -70,6 +71,10 @@ pub struct NetworkNodeConfig {
     #[builder(default)]
     /// The timeout for DHT lookups.
     pub dht_timeout: Option<Duration>,
+
+    /// `None` is the legacy value, used for mainnet.
+    #[builder(default)]
+    pub network_discriminator: Option<U256>,
 }
 
 impl Clone for NetworkNodeConfig {
@@ -87,6 +92,7 @@ impl Clone for NetworkNodeConfig {
             dht_file_path: self.dht_file_path.clone(),
             auth_message: self.auth_message.clone(),
             dht_timeout: self.dht_timeout,
+            network_discriminator: self.network_discriminator,
         }
     }
 }
