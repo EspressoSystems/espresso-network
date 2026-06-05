@@ -175,7 +175,7 @@
 <a href=#175 id=175 data-nosnippet>175</a>        genesis_state,
 <a href=#176 id=176 data-nosnippet>176</a>        Leaf2::from(genesis_proposal.clone()),
 <a href=#177 id=177 data-nosnippet>177</a>    );
-<a href=#178 id=178 data-nosnippet>178</a>    consensus.seed_genesis(genesis_cert1, genesis_proposal);
+<a href=#178 id=178 data-nosnippet>178</a>    consensus.seed_parent(genesis_cert1, genesis_proposal);
 <a href=#179 id=179 data-nosnippet>179</a>
 <a href=#180 id=180 data-nosnippet>180</a>    <span class="kw">let </span>proposal_validator =
 <a href=#181 id=181 data-nosnippet>181</a>        ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
