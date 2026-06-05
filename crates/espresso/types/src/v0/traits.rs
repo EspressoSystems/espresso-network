@@ -42,7 +42,7 @@ use super::{
 };
 use crate::{
     AuthenticatedValidatorMap, BlockMerkleTree, FeeAccount, FeeAccountProof, FeeMerkleCommitment,
-    Leaf2, NetworkConfig, PubKey, SeqTypes,
+    Leaf2, NetworkConfig, Payload, PubKey, SeqTypes,
     v0::impls::{StakeTableHash, ValidatedState},
     v0_3::{
         ChainConfig, RegisteredValidator, RewardAccountProofV1, RewardAccountV1, RewardAmount,
@@ -792,17 +792,20 @@ pub trait SequencerPersistence:
     }
 
     /// Decode a consensus decide event and persist its leaves, for the consensus event loop.
-    /// Returns `Some((decided_view, deciding_qc))` on a decide so the caller can wake a background
-    /// task to run [`process_decided_events`](Self::process_decided_events); `None` otherwise.
+    /// Returns a [`PendingDecide`] on a decide so the caller can wake a background task to run
+    /// [`process_decided_events`](Self::process_decided_events); `None` otherwise.
     ///
     /// This is the persist-only half of a decide: query-service ingestion and GC are deferred to
-    /// [`process_decided_events`](Self::process_decided_events). Tests that want the synchronous
-    /// persist-then-process behavior use [`append_decided_leaves`](Self::append_decided_leaves).
+    /// [`process_decided_events`](Self::process_decided_events). The returned [`PendingDecide`]
+    /// carries the in-memory payload/VID/cert2 data from the event, so the processor can emit
+    /// complete decide events without waiting for consensus' asynchronous storage writes to land.
+    /// Tests that want the synchronous persist-then-process behavior use
+    /// [`append_decided_leaves`](Self::append_decided_leaves).
     async fn persist_event(
         &self,
         event: &CoordinatorEvent<SeqTypes>,
         consumer: &(impl EventConsumer + 'static),
-    ) -> Option<(ViewNumber, Option<Arc<CertificatePair<SeqTypes>>>)> {
+    ) -> Option<PendingDecide> {
         match event {
             CoordinatorEvent::LegacyEvent(hotshot_event) => {
                 let EventType::Decide {
@@ -834,10 +837,16 @@ pub trait SequencerPersistence:
                     );
                     return None;
                 }
-                Some((decided_view, deciding_qc.clone()))
+                Some(PendingDecide {
+                    view: decided_view,
+                    deciding_qc: deciding_qc.clone(),
+                    data: Arc::new(DecideEventData::new(leaf_chain.iter(), None)),
+                })
             },
             CoordinatorEvent::NewDecide {
-                leaf_infos, cert1, ..
+                leaf_infos,
+                cert1,
+                cert2,
             } => {
                 let first = leaf_infos.first()?;
                 let decided_view = first.leaf.view_number();
@@ -864,7 +873,15 @@ pub trait SequencerPersistence:
                     );
                     return None;
                 }
-                Some((decided_view, None))
+                Some(PendingDecide {
+                    view: decided_view,
+                    deciding_qc: None,
+                    data: Arc::new(DecideEventData::new(
+                        leaf_infos.iter(),
+                        // `cert2` certifies the newest decided leaf.
+                        cert2.clone().map(|cert2| (decided_view, cert2)),
+                    )),
+                })
             },
             _ => None,
         }
@@ -909,8 +926,9 @@ pub trait SequencerPersistence:
         self.persist_decided_leaves(decided_view, leaf_chain, deciding_qc.clone(), consumer)
             .await?;
         // Leaves are persisted; processing failures are non-fatal here and retried in production.
+        // No in-memory event data is passed, so this form always exercises the storage path.
         if let Err(err) = self
-            .process_decided_events(decided_view, deciding_qc, consumer, None)
+            .process_decided_events(decided_view, deciding_qc, consumer, None, None)
             .await
         {
             tracing::warn!(?decided_view, "decide event processing failed: {err:#}");
@@ -934,9 +952,16 @@ pub trait SequencerPersistence:
     /// Cursor-driven (e.g. `last_processed_view`): advances only on success, so it may lag
     /// consensus without losing data.
     ///
-    /// Decide events for views whose payload or VID data has not landed on disk yet may be
-    /// deferred for a grace period, and `recovery` (when provided) is used to fetch
-    /// payloads from peers for views whose grace expired with the payload still missing.
+    /// `live` carries the payload/VID/cert2 data from the in-memory decide event. It is the
+    /// preferred source when building the events: under the new protocol, consensus writes this
+    /// data to storage asynchronously, so a just-decided view's data may not have landed on disk
+    /// yet, while the decide event already carries it. Storage is the fallback for views not
+    /// covered (restart replay, signals coalesced under processor lag, decides that never had
+    /// the data).
+    ///
+    /// Decide events for views whose data is in neither `live` nor storage may be deferred for a
+    /// grace period, and `recovery` (when provided) is used to fetch payloads from peers for
+    /// views whose grace expired with the payload still missing.
     ///
     /// Returns the highest view confirmed processed (the cursor), or `None` if nothing was
     /// processed, so the caller can track real progress. Errors are propagated; the failed range
@@ -950,6 +975,7 @@ pub trait SequencerPersistence:
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
         _recovery: Option<&dyn DecidePayloadRecovery>,
+        _live: Option<&DecideEventData>,
     ) -> anyhow::Result<Option<ViewNumber>> {
         Ok(Some(decided_view))
     }
@@ -1111,6 +1137,80 @@ pub trait DecidePayloadRecovery: Debug + Send + Sync {
         &self,
         leaf: &Leaf2,
     ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal2<SeqTypes>>>>;
+}
+
+/// Payload, VID, and cert2 data captured in memory from a decide event, keyed by view.
+///
+/// Under the new protocol, consensus writes DA proposals, VID shares, and cert2s to storage
+/// asynchronously, off the critical path, so a view can be decided before its data lands on
+/// disk. The decide event itself already carries this data, though: the decided leaves come
+/// with their payloads filled in and their VID shares attached. Capturing it here lets
+/// [`process_decided_events`](SequencerPersistence::process_decided_events) build complete
+/// query-service decide events without reading — and racing — the consensus staging tables.
+/// Storage remains the fallback for views not covered (restart replay, signals coalesced
+/// under processor lag, decides that never had the data in the first place).
+#[derive(Clone, Debug, Default)]
+pub struct DecideEventData {
+    /// Block payloads from the decided leaves.
+    payloads: BTreeMap<ViewNumber, Payload>,
+    /// VID shares attached to the decide event.
+    vid_shares: BTreeMap<ViewNumber, VidDisperseShare<SeqTypes>>,
+    /// cert2s certifying decided leaves, keyed by the view they certify.
+    cert2s: BTreeMap<ViewNumber, Certificate2<SeqTypes>>,
+}
+
+impl DecideEventData {
+    /// Capture the in-memory data from a decide event's leaf chain. `cert2`, when present,
+    /// is keyed by the view it certifies (the newest decided view).
+    pub fn new<'a>(
+        leaf_infos: impl IntoIterator<Item = &'a LeafInfo<SeqTypes>>,
+        cert2: Option<(ViewNumber, Certificate2<SeqTypes>)>,
+    ) -> Self {
+        let mut payloads = BTreeMap::new();
+        let mut vid_shares = BTreeMap::new();
+        for info in leaf_infos {
+            let view = info.leaf.view_number();
+            if let Some(payload) = info.leaf.block_payload() {
+                payloads.insert(view, payload);
+            }
+            if let Some(share) = &info.vid_share {
+                vid_shares.insert(view, share.clone());
+            }
+        }
+        Self {
+            payloads,
+            vid_shares,
+            cert2s: cert2.into_iter().collect(),
+        }
+    }
+
+    /// The block payload of the leaf decided at `view`, if the decide event carried it.
+    pub fn payload(&self, view: ViewNumber) -> Option<&Payload> {
+        self.payloads.get(&view)
+    }
+
+    /// This node's VID share for `view`, if the decide event carried it.
+    pub fn vid_share(&self, view: ViewNumber) -> Option<&VidDisperseShare<SeqTypes>> {
+        self.vid_shares.get(&view)
+    }
+
+    /// The cert2 certifying the leaf decided at `view`, if the decide event carried it.
+    pub fn cert2(&self, view: ViewNumber) -> Option<&Certificate2<SeqTypes>> {
+        self.cert2s.get(&view)
+    }
+}
+
+/// A decide persisted by [`persist_event`](SequencerPersistence::persist_event) and pending
+/// background processing.
+#[derive(Clone, Debug)]
+pub struct PendingDecide {
+    /// The newest decided view.
+    pub view: ViewNumber,
+    /// The QC deciding `view` (legacy epoch decides only).
+    pub deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+    /// In-memory data from the decide event, for live query-service ingestion. Shared via
+    /// `Arc` so cloning the signal (e.g. out of a `watch` channel) stays cheap.
+    pub data: Arc<DecideEventData>,
 }
 
 #[async_trait]

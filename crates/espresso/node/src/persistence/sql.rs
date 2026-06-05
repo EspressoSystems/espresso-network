@@ -20,8 +20,8 @@ use espresso_types::{
     parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{
-        DecidePayloadRecovery, EventConsumer, PersistenceOptions, SequencerPersistence,
-        StateCatchup,
+        DecideEventData, DecidePayloadRecovery, EventConsumer, PersistenceOptions,
+        SequencerPersistence, StateCatchup,
     },
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
@@ -927,6 +927,7 @@ impl Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
         recovery: Option<&dyn DecidePayloadRecovery>,
+        live: Option<&DecideEventData>,
     ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
             .db
@@ -1019,9 +1020,22 @@ impl Persistence {
             let from_view = leaves[0].0.view_number();
             let to_view = leaves[leaves.len() - 1].0.view_number();
 
-            // Collect VID shares for the decide event.
-            let mut vid_shares = tx
-                .fetch_all(
+            // Data carried in memory on the decide event itself. This is the preferred source:
+            // under the new protocol, the staging tables below are written asynchronously, so a
+            // just-decided view's data may not have landed on disk yet, while the decide event
+            // already carries it. Storage is only the fallback for views not covered here.
+            let live_payload = |view: ViewNumber| live.and_then(|data| data.payload(view));
+            let live_vid = |view: ViewNumber| live.and_then(|data| data.vid_share(view));
+
+            // Collect VID shares for the decide event, skipping the read when the in-memory
+            // event data already covers every view. (Any view not covered may still use the
+            // stored share, even where one is not required for completeness, so the gate
+            // must mirror the fill below exactly.)
+            let need_vid_query = leaves
+                .iter()
+                .any(|(leaf, _)| live_vid(leaf.view_number()).is_none());
+            let mut vid_shares = if need_vid_query {
+                tx.fetch_all(
                     query("SELECT view, data FROM vid_share2 where view >= $1 AND view <= $2")
                         .bind(from_view.u64() as i64)
                         .bind(to_view.u64() as i64),
@@ -1036,11 +1050,20 @@ impl Persistence {
                     >(&data)?;
                     Ok((view as u64, vid_proposal))
                 })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?
+            } else {
+                BTreeMap::new()
+            };
 
-            // Collect DA proposals for the decide event.
-            let mut da_proposals = tx
-                .fetch_all(
+            // Collect DA proposals for the decide event, skipping the read when the in-memory
+            // event data already covers every view. (Same as above: a view not covered may
+            // still use the stored proposal, even where the canonical empty payload would do,
+            // so the gate must mirror the fill below exactly.)
+            let need_da_query = leaves
+                .iter()
+                .any(|(leaf, _)| live_payload(leaf.view_number()).is_none());
+            let mut da_proposals = if need_da_query {
+                tx.fetch_all(
                     query("SELECT view, data FROM da_proposal2 where view >= $1 AND view <= $2")
                         .bind(from_view.u64() as i64)
                         .bind(to_view.u64() as i64),
@@ -1054,7 +1077,10 @@ impl Persistence {
                         bincode::deserialize::<Proposal<SeqTypes, DaProposal2<SeqTypes>>>(&data)?;
                     Ok((view as u64, da_proposal.data))
                 })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?
+            } else {
+                BTreeMap::new()
+            };
 
             // Defer decide events for leaves whose payload or VID data has not landed on
             // disk yet. Under the new protocol the payload is reconstructed from VID
@@ -1070,11 +1096,14 @@ impl Persistence {
                 // the canonical empty payload, so no DA proposal is needed for them.
                 view == ViewNumber::genesis()
                     || leaf.block_header().ns_table().iter().next().is_none()
+                    || live_payload(view).is_some()
                     || da_proposals.contains_key(&view)
             };
             let data_complete = |leaf: &Leaf2| {
                 let view = leaf.view_number();
-                let vid_ok = view == ViewNumber::genesis() || vid_shares.contains_key(&view);
+                let vid_ok = view == ViewNumber::genesis()
+                    || live_vid(view).is_some()
+                    || vid_shares.contains_key(&view);
                 payload_known(leaf) && vid_ok
             };
             // Whether it is still worth trying to fetch this leaf's payload from peers.
@@ -1171,18 +1200,23 @@ impl Persistence {
                     );
                 })?;
 
-            let cert2 = tx
-                .fetch_optional(
-                    query("SELECT data FROM decided_cert2 WHERE view = $1")
-                        .bind(to_view.u64() as i64),
-                )
-                .await?
-                .map(|row| {
-                    let bytes: Vec<u8> = row.get("data");
-                    bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
-                        .context("deserializing decided cert2")
-                })
-                .transpose()?;
+            // The cert2 certifying the newest leaf, preferring the in-memory copy from the
+            // decide event over the asynchronously-written `decided_cert2` table.
+            let cert2 = match live.and_then(|data| data.cert2(to_view)) {
+                Some(cert2) => Some(cert2.clone()),
+                None => tx
+                    .fetch_optional(
+                        query("SELECT data FROM decided_cert2 WHERE view = $1")
+                            .bind(to_view.u64() as i64),
+                    )
+                    .await?
+                    .map(|row| {
+                        let bytes: Vec<u8> = row.get("data");
+                        bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
+                            .context("deserializing decided cert2")
+                    })
+                    .transpose()?,
+            };
             drop(tx);
 
             // Collate all the information by view number and construct a chain of leaves.
@@ -1193,18 +1227,29 @@ impl Persistence {
                 .map(|(mut leaf, cert)| {
                     let view = leaf.view_number();
 
-                    // Include the VID share if available.
-                    let vid_proposal = vid_shares.remove(&view);
-                    if vid_proposal.is_none() && view != ViewNumber::genesis() {
+                    // Include the VID share if available, preferring the in-memory copy from
+                    // the decide event over the asynchronously-written staging table.
+                    let vid_share = match live_vid(view) {
+                        Some(share) => {
+                            self.internal_metrics.decide_vid_from_memory.add(1);
+                            Some(share.clone())
+                        },
+                        None => vid_shares.remove(&view).map(|proposal| proposal.data),
+                    };
+                    if vid_share.is_none() && view != ViewNumber::genesis() {
                         // The grace period expired without the share landing on disk; the
                         // query service has to fetch the VID data from peers.
                         tracing::warn!(?view, "VID share not available at decide");
                         self.internal_metrics.decide_missing_vid.add(1);
                     }
-                    let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
 
-                    // Fill in the full block payload using the DA proposals we had persisted.
-                    if let Some(proposal) = da_proposals.remove(&view) {
+                    // Fill in the full block payload, preferring the in-memory copy from the
+                    // decide event; fall back to the DA proposal persisted in the staging
+                    // table.
+                    if let Some(payload) = live_payload(view) {
+                        leaf.fill_block_payload_unchecked(payload.clone());
+                        self.internal_metrics.decide_payload_from_memory.add(1);
+                    } else if let Some(proposal) = da_proposals.remove(&view) {
                         let payload =
                             Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
                         leaf.fill_block_payload_unchecked(payload);
@@ -1815,10 +1860,11 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
         recovery: Option<&dyn DecidePayloadRecovery>,
+        live: Option<&DecideEventData>,
     ) -> anyhow::Result<Option<ViewNumber>> {
         // Generate events for the new leaves, then GC. On error `last_processed_view` is not
         // advanced past the failure point, so no data is lost and the range is retried.
-        self.generate_decide_events(deciding_qc, consumer, recovery)
+        self.generate_decide_events(deciding_qc, consumer, recovery, live)
             .await?;
 
         // Best-effort GC of data not included in any decide event; runs again at the next decide.

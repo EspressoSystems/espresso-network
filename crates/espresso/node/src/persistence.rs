@@ -12,9 +12,12 @@
 //!
 //! The query service is fed exclusively by the decide pipeline implemented here: the consensus
 //! event loop persists decided leaves (`persist_event`), and a background task
-//! (`process_decided_events`) regenerates decide events from disk — joining the persisted leaves
-//! with DA proposals and VID shares — and hands them to the event consumer, advancing a cursor
-//! only on success.
+//! (`process_decided_events`) builds decide events from the persisted leaf spine and hands them
+//! to the event consumer, advancing a cursor only on success. The payload, VID share, and cert2
+//! attached to each event come first from the in-memory decide data captured by `persist_event`
+//! ([`DecideEventData`](espresso_types::v0::traits::DecideEventData)), falling back to the
+//! consensus staging tables (DA proposals, VID shares) for views not covered — restart replay,
+//! signals coalesced under processor lag, or decides that never had the data.
 //!
 //! Under the new protocol, a node usually obtains a block payload by reconstructing it from VID
 //! shares carried in Vote1 broadcasts, and the result is written to storage *asynchronously* — so
@@ -22,19 +25,22 @@
 //! needed for quorum and it missed the share broadcasts) never. To keep the query service
 //! complete, the decide pipeline guarantees payload delivery in layers:
 //!
-//! 1. **Grace deferral** ([`DecideDataDeferral`]): decide events for views with missing
+//! 1. **In-memory decide data**: the decided leaves arrive with their payloads filled in and
+//!    VID shares attached; the decide event is built directly from them, with no dependence on
+//!    the asynchronous storage writes having landed. This is the normal path.
+//! 2. **Grace deferral** ([`DecideDataDeferral`]): decide events for views with missing
 //!    payload/VID data are deferred briefly (`decide-payload-grace`, default 10s), giving
 //!    in-flight reconstruction writes a chance to land.
-//! 2. **Peer recovery** ([`DecidePayloadRecovery`](espresso_types::v0::traits::DecidePayloadRecovery)):
+//! 3. **Peer recovery** ([`DecidePayloadRecovery`](espresso_types::v0::traits::DecidePayloadRecovery)):
 //!    once the grace period expires, the payload is requested from peers over the
 //!    request-response protocol and verified against the header's payload commitment. To make
 //!    this possible, DA proposals and VID shares are *retained* after processing for the
 //!    consensus storage retention window (instead of being deleted at decide), so every node can
 //!    serve recently decided payloads.
-//! 3. **Late back-fill**: when a payload is reconstructed after its view was already processed,
+//! 4. **Late back-fill**: when a payload is reconstructed after its view was already processed,
 //!    the coordinator emits `BlockPayloadReconstructed`, which the event loop forwards straight
 //!    to the query service.
-//! 4. **Query service fetching**: as a final backstop, blocks stored without a payload are healed
+//! 5. **Query service fetching**: as a final backstop, blocks stored without a payload are healed
 //!    by the query service's own peer fetching.
 
 use std::{
@@ -328,10 +334,11 @@ mod tests {
         network_config::light_client_genesis_from_stake_table,
     };
     use espresso_types::{
-        Event, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, PubKey, SeqTypes, ValidatedState,
+        Event, Header, L1Client, L1ClientOptions, Leaf, Leaf2, NodeState, Payload, PubKey,
+        SeqTypes, Transaction, ValidatedState,
         traits::{
-            EventConsumer, EventsPersistenceRead, MembershipPersistence, NullEventConsumer,
-            PersistenceOptions, SequencerPersistence,
+            DecideEventData, EventConsumer, EventsPersistenceRead, MembershipPersistence,
+            NullEventConsumer, PersistenceOptions, SequencerPersistence,
         },
         v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
     };
@@ -348,7 +355,8 @@ mod tests {
     use hotshot_types::{
         data::{
             DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-            ViewNumber, ns_table::parse_ns_table, vid_commitment, vid_disperse::AvidMDisperseShare,
+            VidDisperseShare, ViewNumber, ns_table::parse_ns_table, vid_commitment,
+            vid_disperse::AvidMDisperseShare,
         },
         event::{EventType, HotShotAction, LeafInfo},
         light_client::StateKeyPair,
@@ -359,7 +367,10 @@ mod tests {
             UpgradeCertificate,
         },
         simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
-        traits::{EncodeBytes, block_contents::BlockHeader},
+        traits::{
+            EncodeBytes,
+            block_contents::{BlockHeader, BlockPayload},
+        },
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
         vote::HasViewNumber,
@@ -1624,7 +1635,7 @@ mod tests {
         // A failing consumer propagates the error and leaves the cursor un-advanced: nothing is
         // GC'd and the range is retried below.
         storage
-            .process_decided_events(ViewNumber::new(3), None, &FailConsumer, None)
+            .process_decided_events(ViewNumber::new(3), None, &FailConsumer, None, None)
             .await
             .unwrap_err();
         for i in 0..4 {
@@ -1641,7 +1652,7 @@ mod tests {
         // One process pass at the latest view drains the whole backlog, runs GC, and reports the
         // cursor it advanced to.
         let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -1685,7 +1696,7 @@ mod tests {
         // Re-processing with nothing new is a no-op.
         let consumer2 = EventCollector::default();
         storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer2, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer2, None, None)
             .await
             .unwrap();
         assert!(
@@ -1805,6 +1816,336 @@ mod tests {
         (chain, commit)
     }
 
+    type MockChain = Vec<(
+        Leaf2,
+        QuorumCertificate2<SeqTypes>,
+        Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
+        Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+    )>;
+
+    /// Build a mock chain like [`mock_chain`], but whose blocks carry a real (non-empty)
+    /// payload, so the decide pipeline genuinely needs a payload source — the in-memory
+    /// decide data or a persisted DA proposal; the empty-namespace-table fast path does
+    /// not apply.
+    async fn mock_chain_with_txns(len: u64) -> (MockChain, Payload, VidCommitment) {
+        let (payload, ns_table) = Payload::from_transactions(
+            [Transaction::new(1_u32.into(), vec![1, 2, 3])],
+            &ValidatedState::default(),
+            &NodeState::mock(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            ns_table.iter().next().is_some(),
+            "test payload must have a non-empty namespace table"
+        );
+        let header = Header::genesis(
+            &NodeState::mock(),
+            payload.clone(),
+            &ns_table,
+            MOCK_UPGRADE.base,
+        );
+        let payload_bytes = payload.encode();
+
+        let avidm_param = init_avidm_param(2).unwrap();
+        let weights = vec![1u32; 2];
+        let avidm_ns_table = parse_ns_table(payload.byte_len().as_usize(), &ns_table.encode());
+        let (payload_commitment, shares) =
+            AvidMScheme::ns_disperse(&avidm_param, &weights, &payload_bytes, avidm_ns_table)
+                .unwrap();
+
+        let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
+        let mut vid = AvidMDisperseShare::<SeqTypes> {
+            view_number: ViewNumber::new(0),
+            payload_commitment,
+            share: shares[0].clone(),
+            recipient_key: pubkey,
+            epoch: Some(EpochNumber::new(0)),
+            target_epoch: Some(EpochNumber::new(0)),
+            common: avidm_param,
+        }
+        .to_proposal(&privkey)
+        .unwrap()
+        .clone();
+        let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
+            proposal: QuorumProposal2::<SeqTypes> {
+                block_header: header,
+                view_number: ViewNumber::genesis(),
+                justify_qc: QuorumCertificate::genesis(
+                    &ValidatedState::default(),
+                    &NodeState::mock(),
+                    TEST_VERSIONS.test,
+                )
+                .await
+                .to_qc2(),
+                upgrade_certificate: None,
+                view_change_evidence: None,
+                next_drb_result: None,
+                next_epoch_justify_qc: None,
+                epoch: None,
+                state_cert: None,
+            },
+        };
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+
+        let block_payload_signature =
+            BLSPubKey::sign(&privkey, &payload_bytes).expect("Failed to sign block payload");
+        let mut da_proposal = Proposal {
+            data: DaProposal2::<SeqTypes> {
+                encoded_transactions: payload_bytes.clone(),
+                metadata: ns_table.clone(),
+                view_number: ViewNumber::new(0),
+                epoch: Some(EpochNumber::new(0)),
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            },
+            signature: block_payload_signature,
+            _pd: Default::default(),
+        };
+
+        let commit = vid_commitment(
+            &payload_bytes,
+            &ns_table.encode(),
+            2,
+            TEST_VERSIONS.test.base,
+        );
+
+        let mut chain = vec![];
+        for i in 0..len {
+            quorum_proposal.proposal.view_number = ViewNumber::new(i);
+            let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
+            qc.view_number = leaf.view_number();
+            qc.data.leaf_commit = Committable::commit(&leaf);
+            vid.data.view_number = leaf.view_number();
+            da_proposal.data.view_number = leaf.view_number();
+            chain.push((leaf.clone(), qc.clone(), vid.clone(), da_proposal.clone()));
+        }
+        (chain, payload, commit)
+    }
+
+    /// Capture the in-memory decide data for `views` of the chain, the way `persist_event`
+    /// does in production: the decided leaves come with their payloads filled in and their
+    /// VID shares attached.
+    fn live_decide_data(
+        chain: &MockChain,
+        payload: &Payload,
+        views: impl IntoIterator<Item = u64>,
+    ) -> DecideEventData {
+        let views = views.into_iter().collect::<Vec<_>>();
+        let infos = chain
+            .iter()
+            .filter(|(leaf, ..)| views.contains(&leaf.view_number().u64()))
+            .map(|(leaf, _, vid, _)| {
+                let mut leaf = leaf.clone();
+                leaf.fill_block_payload_unchecked(payload.clone());
+                let share: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
+                    convert_proposal(vid.clone());
+                LeafInfo {
+                    leaf,
+                    vid_share: Some(share.data),
+                    state: Default::default(),
+                    delta: None,
+                    state_cert: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        DecideEventData::new(infos.iter(), None)
+    }
+
+    /// The in-memory data from the decide event alone is enough to emit complete decide
+    /// events: with the consensus staging tables completely empty (as when a view is
+    /// decided before consensus' asynchronous storage writes land), processing with the
+    /// live data attached emits every leaf with its payload and VID share, with no grace
+    /// deferral — and without ever writing the staging tables.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_decide_from_memory<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let mut opt = P::options(&tmp);
+        // A grace period long enough that it cannot expire mid-test: any progress past a
+        // view with missing data must come from the live decide data, not grace expiry.
+        opt.set_decide_payload_grace(Duration::from_secs(600));
+        let storage = opt.create().await.unwrap();
+
+        let (chain, payload, _) = mock_chain_with_txns(4).await;
+
+        // Persist all four decided leaves. Nothing is written to the staging tables: the
+        // background DA/VID writes have not landed yet.
+        let consumer = EventCollector::default();
+        let leaf_chain = chain
+            .iter()
+            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .persist_decided_leaves(
+                ViewNumber::new(3),
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                &consumer,
+            )
+            .await
+            .unwrap();
+
+        // Without the live data, everything past genesis defers on the missing
+        // payload/VID data (this is the pre-existing behavior the live path bypasses).
+        let processed = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            processed,
+            Some(ViewNumber::new(0)),
+            "without live data, views with missing data must defer"
+        );
+        assert_eq!(consumer.leaf_chain().await.len(), 1);
+
+        // With the live data, the same pass completes immediately.
+        let live = live_decide_data(&chain, &payload, 0..4);
+        let processed = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None, Some(&live))
+            .await
+            .unwrap();
+        assert_eq!(
+            processed,
+            Some(ViewNumber::new(3)),
+            "live data must allow processing without the staging tables"
+        );
+
+        // Every post-genesis leaf was delivered exactly once, complete with the payload
+        // and VID share from memory. (Genesis was emitted in the live-less pass above via
+        // the canonical-empty-payload fast path; the fs backend may additionally re-emit
+        // it as its anchor, which consumers are required to tolerate idempotently.)
+        let leaf_chain = consumer.leaf_chain().await;
+        for (leaf, _, vid, _) in chain.iter().skip(1) {
+            let infos = leaf_chain
+                .iter()
+                .filter(|info| info.leaf.view_number() == leaf.view_number())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                infos.len(),
+                1,
+                "each post-genesis view must be delivered exactly once: {leaf_chain:#?}"
+            );
+            let info = infos[0];
+            assert_eq!(info.leaf, *leaf);
+            assert_eq!(
+                info.leaf.block_payload().unwrap().encode(),
+                payload.encode(),
+                "the payload must be the one carried by the decide event"
+            );
+            let expected: Proposal<SeqTypes, VidDisperseShare<SeqTypes>> =
+                convert_proposal(vid.clone());
+            assert_eq!(
+                info.vid_share.as_ref().unwrap(),
+                &expected.data,
+                "the VID share must be the one carried by the decide event"
+            );
+        }
+
+        // The staging tables were never involved: nothing read them and nothing wrote
+        // them, proving the data came from memory.
+        for i in 0..4 {
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "the live path must not populate the DA staging table"
+            );
+            assert!(
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "the live path must not populate the VID staging table"
+            );
+        }
+    }
+
+    /// Views not covered by the in-memory decide data fall back to the consensus staging
+    /// tables: a single pass emits storage-sourced and memory-sourced leaves side by side.
+    #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_decide_from_memory_partial<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let mut opt = P::options(&tmp);
+        opt.set_decide_payload_grace(Duration::from_secs(600));
+        let storage = opt.create().await.unwrap();
+
+        let (chain, payload, commit) = mock_chain_with_txns(4).await;
+
+        // Views 0 and 1 have their artifacts on disk (the background writes landed);
+        // views 2 and 3 do not.
+        for (_, _, vid, da) in chain.iter().take(2) {
+            storage.append_da2(da, commit).await.unwrap();
+            storage
+                .append_vid(&convert_proposal(vid.clone()))
+                .await
+                .unwrap();
+        }
+
+        let consumer = EventCollector::default();
+        let leaf_chain = chain
+            .iter()
+            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .persist_decided_leaves(
+                ViewNumber::new(3),
+                leaf_chain
+                    .iter()
+                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                &consumer,
+            )
+            .await
+            .unwrap();
+
+        // The live data covers only views 2 and 3 (e.g. an older signal was coalesced
+        // away under processor lag); one pass still completes, mixing sources per view.
+        let live = live_decide_data(&chain, &payload, 2..4);
+        let processed = storage
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None, Some(&live))
+            .await
+            .unwrap();
+        assert_eq!(processed, Some(ViewNumber::new(3)));
+
+        let leaf_chain = consumer.leaf_chain().await;
+        assert_eq!(leaf_chain.len(), 4, "{leaf_chain:#?}");
+        for info in &leaf_chain {
+            assert_eq!(
+                info.leaf.block_payload().unwrap().encode(),
+                payload.encode()
+            );
+            assert!(info.vid_share.is_some());
+        }
+
+        // Views 2 and 3 were only ever in memory; the staging tables still don't know
+        // them.
+        for i in 2..4 {
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
     /// Decide events are deferred while VID data is missing from storage: the cursor
     /// holds, nothing is emitted for the deferred views, and processing resumes
     /// seamlessly once the data lands.
@@ -1849,7 +2190,7 @@ mod tests {
 
         // Only the views with complete data are processed; the rest are deferred.
         let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
             .await
             .unwrap();
         assert_eq!(
@@ -1862,7 +2203,7 @@ mod tests {
         // Re-processing makes no progress while the data is still missing, and emits
         // nothing twice.
         let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
             .await
             .unwrap();
         assert!(
@@ -1880,7 +2221,7 @@ mod tests {
                 .unwrap();
         }
         let processed = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer, None, None)
             .await
             .unwrap();
         assert_eq!(processed, Some(ViewNumber::new(3)));
@@ -1933,7 +2274,7 @@ mod tests {
 
         // The first pass defers view 1 (missing VID share, within grace).
         let processed = storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(1), None, &consumer, None, None)
             .await
             .unwrap();
         assert_eq!(processed, Some(ViewNumber::new(0)));
@@ -1945,7 +2286,7 @@ mod tests {
         sleep(Duration::from_millis(400)).await;
         let consumer2 = EventCollector::default();
         let processed = storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer2, None)
+            .process_decided_events(ViewNumber::new(1), None, &consumer2, None, None)
             .await
             .unwrap();
         assert_eq!(processed, Some(ViewNumber::new(1)));
@@ -1999,7 +2340,7 @@ mod tests {
 
         // Nothing defers: the empty payload is filled in and both leaves process.
         let processed = storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(1), None, &consumer, None, None)
             .await
             .unwrap();
         assert_eq!(processed, Some(ViewNumber::new(1)));

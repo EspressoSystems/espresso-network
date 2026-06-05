@@ -12,7 +12,8 @@ use derivative::Derivative;
 use espresso_types::{
     NodeState, PubKey, Transaction, ValidatedState,
     v0::traits::{
-        DecidePayloadRecovery, EventConsumer as PersistenceEventConsumer, SequencerPersistence,
+        DecidePayloadRecovery, EventConsumer as PersistenceEventConsumer, PendingDecide,
+        SequencerPersistence,
     },
 };
 use futures::{
@@ -32,7 +33,6 @@ use hotshot_types::{
     message::UpgradeLock,
     network::NetworkConfig,
     new_protocol::CoordinatorEvent,
-    simple_certificate::CertificatePair,
     storage_metrics::StorageMetricsValue,
     traits::{
         metrics::{Counter, Gauge, Histogram, Metrics},
@@ -557,9 +557,12 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
     }
 }
 
-/// Latest decided view and its (optional) deciding QC, sent from the event loop to the background
-/// decide processor. `None` is the initial/no-op value of the `watch` channel.
-type DecideSignal = Option<(ViewNumber, Option<Arc<CertificatePair<SeqTypes>>>)>;
+/// Latest decide, sent from the event loop to the background decide processor along with the
+/// in-memory event data (payloads, VID shares, cert2) used for live query-service ingestion.
+/// `None` is the initial/no-op value of the `watch` channel. Under processor lag the channel
+/// coalesces and intermediate values are dropped; their views are regenerated from storage,
+/// which by then has had time to catch up.
+type DecideSignal = Option<PendingDecide>;
 
 /// Metrics for the background decide processor. `backlog` (decided - processed) is the key signal:
 /// sustained growth means staging tables accumulate (no data lost, but disk grows).
@@ -702,10 +705,17 @@ async fn process_decided_events_task<P, C>(
     // cursor reported below raises it.
     let mut last_processed = anchor_view.map(|v| v.u64()).unwrap_or(0);
 
-    // Process leaves persisted before a previous shutdown but not yet handled.
+    // Process leaves persisted before a previous shutdown but not yet handled. No in-memory
+    // decide data survives a restart, so this pass runs purely from storage.
     if let Some(view) = anchor_view {
         match persistence
-            .process_decided_events(view, None, consumer.as_ref(), payload_recovery.as_deref())
+            .process_decided_events(
+                view,
+                None,
+                consumer.as_ref(),
+                payload_recovery.as_deref(),
+                None,
+            )
             .await
         {
             Ok(processed) => {
@@ -733,10 +743,10 @@ async fn process_decided_events_task<P, C>(
             Err(_) => {}, // Timed out; fall through to retry `latest`.
         }
 
-        let Some((view, deciding_qc)) = latest.clone() else {
+        let Some(pending) = latest.clone() else {
             continue;
         };
-        let decided = view.u64();
+        let decided = pending.view.u64();
         metrics.last_decided.set(decided as usize);
         metrics
             .backlog
@@ -745,10 +755,14 @@ async fn process_decided_events_task<P, C>(
         let start = Instant::now();
         let result = persistence
             .process_decided_events(
-                view,
-                deciding_qc,
+                pending.view,
+                pending.deciding_qc.clone(),
                 consumer.as_ref(),
                 payload_recovery.as_deref(),
+                // The in-memory data from the decide event, so events for just-decided
+                // views don't depend on consensus' asynchronous storage writes having
+                // landed. Retries reuse it; views it doesn't cover fall back to storage.
+                Some(&pending.data),
             )
             .await;
         metrics.duration.add_point(start.elapsed().as_secs_f64());
@@ -761,8 +775,8 @@ async fn process_decided_events_task<P, C>(
                     last_processed = last_processed.max(v.u64());
                 }
                 // reset latest if we have processed all the decided leaves
-                if let Some((view, _)) = latest.clone()
-                    && last_processed >= view.u64()
+                if let Some(pending) = &latest
+                    && last_processed >= pending.view.u64()
                 {
                     latest = None;
                 }
@@ -774,7 +788,10 @@ async fn process_decided_events_task<P, C>(
             Err(err) => {
                 // Cursor not advanced, so this range is retried next iteration; no data is lost.
                 metrics.failures.add(1);
-                tracing::warn!(?view, "deferred decide processing failed: {err:#}");
+                tracing::warn!(
+                    view = ?pending.view,
+                    "deferred decide processing failed: {err:#}"
+                );
             },
         }
     }

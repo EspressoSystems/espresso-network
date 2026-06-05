@@ -16,6 +16,12 @@ pub struct PersistenceMetricsValue {
     pub decide_missing_payload: Box<dyn Counter>,
     /// Decide events emitted without VID data (grace period expired)
     pub decide_missing_vid: Box<dyn Counter>,
+    /// Block payloads filled into decide events from the in-memory decide data, without
+    /// touching consensus storage (may count a view more than once across retry passes)
+    pub decide_payload_from_memory: Box<dyn Counter>,
+    /// VID shares filled into decide events from the in-memory decide data, without
+    /// touching consensus storage (may count a view more than once across retry passes)
+    pub decide_vid_from_memory: Box<dyn Counter>,
     /// Block payloads successfully recovered from peers by the decide processor
     pub payloads_recovered: Box<dyn Counter>,
     /// Failed peer-recovery attempts for block payloads
@@ -49,6 +55,10 @@ impl PersistenceMetricsValue {
             decide_missing_payload: metrics
                 .create_counter(String::from("decide_missing_payload"), None),
             decide_missing_vid: metrics.create_counter(String::from("decide_missing_vid"), None),
+            decide_payload_from_memory: metrics
+                .create_counter(String::from("decide_payload_from_memory"), None),
+            decide_vid_from_memory: metrics
+                .create_counter(String::from("decide_vid_from_memory"), None),
             payloads_recovered: metrics.create_counter(String::from("payloads_recovered"), None),
             payload_recovery_failures: metrics
                 .create_counter(String::from("payload_recovery_failures"), None),

@@ -26,11 +26,13 @@ const MAX_APPEND_ATTEMPTS: usize = 100;
 
 /// How many views below the GC view in-flight storage writes are allowed to keep running.
 ///
-/// Writes for just-decided views must be allowed to complete: the decide pipeline reads
-/// this data back from disk to build query-service decide events, so aborting them right
-/// at the decide would lose data that was still in flight (e.g. a VID reconstruction that
-/// finished just before its view was decided). Aborting below the horizon is only a
-/// backstop against leaking stuck tasks; bounded retries terminate them anyway.
+/// Writes for just-decided views must be allowed to complete: the decide pipeline normally
+/// builds query-service decide events from the in-memory decide data, but falls back to
+/// reading this data from disk (restart replay, coalesced signals), and peers fetch it for
+/// their own recovery — so aborting writes right at the decide would lose data that was
+/// still in flight (e.g. a VID reconstruction that finished just before its view was
+/// decided). Aborting below the horizon is only a backstop against leaking stuck tasks;
+/// bounded retries terminate them anyway.
 const GC_ABORT_HORIZON: u64 = 100;
 
 /// New protocol storage extension for data that is not part of the legacy HotShot storage trait.

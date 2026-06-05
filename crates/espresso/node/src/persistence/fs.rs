@@ -17,7 +17,10 @@ use espresso_types::{
     AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
     SeqTypes, StakeTableHash, parse_duration,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{DecidePayloadRecovery, EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{
+        DecideEventData, DecidePayloadRecovery, EventConsumer, PersistenceOptions,
+        SequencerPersistence,
+    },
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
@@ -500,6 +503,7 @@ impl Inner {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
         recovery_enabled: bool,
+        live: Option<&DecideEventData>,
         metrics: &PersistenceMetricsValue,
     ) -> anyhow::Result<(Vec<RangeInclusive<ViewNumber>>, Vec<Leaf2>)> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -515,18 +519,30 @@ impl Inner {
                 fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
-            // Include the VID share if available.
-            let vid_proposal = self.load_vid_share(v)?;
-            if vid_proposal.is_none() {
+            // Include the VID share if available, preferring the in-memory copy from the
+            // decide event: under the new protocol the share file is written
+            // asynchronously, so it may not have landed on disk yet, while the decide
+            // event already carries the share.
+            let vid_share = match live.and_then(|data| data.vid_share(v)) {
+                Some(share) => {
+                    metrics.decide_vid_from_memory.add(1);
+                    Some(share.clone())
+                },
+                None => self.load_vid_share(v)?.map(|proposal| proposal.data),
+            };
+            if vid_share.is_none() {
                 tracing::debug!(?v, "VID share not available at decide");
             }
-            let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
 
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
 
-            // Fill in the full block payload using the DA proposals we had persisted.
-            if let Some(proposal) = self.load_da_proposal(v)? {
+            // Fill in the full block payload, preferring the in-memory copy from the
+            // decide event; fall back to the DA proposal file.
+            if let Some(payload) = live.and_then(|data| data.payload(v)) {
+                leaf.fill_block_payload_unchecked(payload.clone());
+                metrics.decide_payload_from_memory.add(1);
+            } else if let Some(proposal) = self.load_da_proposal(v)? {
                 let payload = Payload::from_bytes(
                     &proposal.data.encoded_transactions,
                     &proposal.data.metadata,
@@ -656,7 +672,12 @@ impl Inner {
             }
 
             let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
-                let cert2 = self.load_cert2(view)?;
+                // Prefer the in-memory cert2 from the decide event over the
+                // asynchronously-written file.
+                let cert2 = match live.and_then(|data| data.cert2(view)) {
+                    Some(cert2) => Some(cert2.clone()),
+                    None => self.load_cert2(view)?,
+                };
                 // One event per view. cert2 is only stored for the
                 // directly finalized view
                 // ancestors get `cert2: None`,
@@ -1006,6 +1027,7 @@ impl SequencerPersistence for Persistence {
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
         recovery: Option<&dyn DecidePayloadRecovery>,
+        live: Option<&DecideEventData>,
     ) -> anyhow::Result<Option<ViewNumber>> {
         // On error, GC does not run over the failed range, so the leaves stay on disk and are
         // retried; no data is lost.
@@ -1018,6 +1040,7 @@ impl SequencerPersistence for Persistence {
                 deciding_qc,
                 consumer,
                 recovery.is_some(),
+                live,
                 &self.metrics,
             )
             .await?;
