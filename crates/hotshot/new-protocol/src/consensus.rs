@@ -272,20 +272,16 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Seed the genesis state so that the view-1 leader can propose without
-    /// any external bootstrap injection.
-    ///
-    /// Stores a genesis certificate and proposal at view 0, sets the locked
-    /// certificate, and sets the current epoch.  After calling this, a
-    /// subsequent `apply` that triggers `maybe_propose(view=1)` will find the
+    /// Seed a parent certificate and proposal so the leader of the *next* view
+    /// can propose without any external bootstrap injection.
+    /// Sets the locked certificate and current epoch. After calling this, a
+    /// subsequent `apply` that triggers `maybe_propose` will find the
     /// parent cert and proposal it needs.
-    pub fn seed_genesis(&mut self, genesis_cert1: Certificate1<T>, genesis_proposal: Proposal<T>) {
-        self.current_epoch = Some(genesis_proposal.epoch);
-        self.certs
-            .insert(ViewNumber::genesis(), genesis_cert1.clone());
-        self.locked_cert = Some(genesis_cert1);
-        self.proposals
-            .insert(ViewNumber::genesis(), genesis_proposal);
+    pub fn seed_parent(&mut self, cert1: Certificate1<T>, proposal: Proposal<T>) {
+        self.current_epoch = Some(proposal.epoch);
+        self.certs.insert(cert1.view_number(), cert1.clone());
+        self.locked_cert = Some(cert1);
+        self.proposals.insert(proposal.view_number, proposal);
     }
 
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
