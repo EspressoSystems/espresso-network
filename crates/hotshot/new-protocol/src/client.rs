@@ -100,14 +100,12 @@ impl<T: NodeType> ClientApi<T> {
 
     pub async fn send_external_message(
         &self,
-        view: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(
             ClientRequest::SendExternalMessage {
-                view,
                 payload,
                 recipient,
                 respond,
@@ -222,7 +220,6 @@ pub(crate) enum ClientRequest<T: NodeType> {
         respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
     },
     SendExternalMessage {
-        view: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
         respond: oneshot::Sender<Result<(), QueryError>>,
@@ -278,24 +275,24 @@ impl<T: NodeType> ClientLeafFetcherNetwork<T> {
 impl<T: NodeType> LeafFetcherNetwork<T> for ClientLeafFetcherNetwork<T> {
     async fn send_leaf_request(
         &self,
-        view: ViewNumber,
+        _: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> anyhow::Result<()> {
         self.client
-            .send_external_message(view, payload, recipient)
+            .send_external_message(payload, recipient)
             .await?;
         Ok(())
     }
 
     async fn send_leaf_response(
         &self,
-        view: ViewNumber,
+        _: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> anyhow::Result<()> {
         self.client
-            .send_external_message(view, payload, recipient)
+            .send_external_message(payload, recipient)
             .await?;
         Ok(())
     }
