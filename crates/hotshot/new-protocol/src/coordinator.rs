@@ -134,38 +134,41 @@ where
             initializer.epoch_height,
         );
 
-        let genesis_cert1 = initializer.high_qc.clone();
-        let genesis_proposal = message::Proposal {
-            block_header: initializer.anchor_leaf.block_header().clone(),
-            view_number: ViewNumber::genesis(),
-            epoch: EpochNumber::genesis(),
-            justify_qc: genesis_cert1.clone(),
+        let anchor_leaf = &initializer.anchor_leaf;
+        let anchor_view = anchor_leaf.view_number();
+        let anchor_epoch = anchor_leaf
+            .epoch(initializer.epoch_height)
+            .unwrap_or(EpochNumber::genesis());
+        let cert1 = initializer.high_qc.clone();
+        let parent_proposal = message::Proposal {
+            block_header: anchor_leaf.block_header().clone(),
+            view_number: anchor_view,
+            epoch: anchor_epoch,
+            justify_qc: anchor_leaf.justify_qc(),
             next_epoch_justify_qc: None,
-            upgrade_certificate: None,
-            view_change_evidence: None,
-            next_drb_result: None,
+            upgrade_certificate: anchor_leaf.upgrade_certificate(),
+            view_change_evidence: anchor_leaf
+                .view_change_evidence
+                .clone()
+                .and_then(|e| match e {
+                    hotshot_types::data::ViewChangeEvidence2::Timeout(tc) => Some(tc),
+                    hotshot_types::data::ViewChangeEvidence2::ViewSync(_) => None,
+                }),
+            next_drb_result: anchor_leaf.next_drb_result,
             state_cert: None,
         };
+
         let mut state_manager = StateManager::new(
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
         );
         state_manager.seed_state(
-            initializer.anchor_leaf.view_number(),
+            anchor_view,
             initializer.anchor_state.clone(),
-            initializer.anchor_leaf.clone(),
+            anchor_leaf.clone(),
         );
-        // The synthetic genesis proposal has a non-null justify_qc (the genesis
-        // cert1) so the leaf derived from it has a different commitment than
-        // the anchor leaf produced by `Leaf2::genesis`. `request_header` for
-        // view 1 looks up the parent state by the *proposal's* leaf
-        // commitment, so seed the same state under that commitment too.
-        state_manager.seed_state(
-            ViewNumber::genesis(),
-            initializer.anchor_state.clone(),
-            Leaf2::from(genesis_proposal.clone()),
-        );
-        consensus.seed_genesis(genesis_cert1, genesis_proposal);
+        consensus.seed_parent(cert1, parent_proposal);
+        consensus.set_view(anchor_view, anchor_epoch);
 
         let lock = upgrade_lock.clone();
         Self::builder()
