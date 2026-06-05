@@ -97,7 +97,30 @@ jobs:
             Mergiraf left conflict markers in these backport PRs:
             ${{ steps.resolve.outputs.needs_claude }}
 
-            For each PR: check it out, resolve the markers, run `just fmt`, commit, push, then `gh pr ready <pr>`.
+            For each PR: check it out, resolve the markers, run `just fmt`, commit, push. Do not use the `gh` CLI.
 
             Commit attribution: only create new commits authored by the current git identity (the bot). Do not use --amend, --author=, --reuse-message=, git rebase, or `git cherry-pick --continue`; those preserve the original PR author's identity, which must never happen here.
           claude_args: "--model claude-opus-4-6"
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.resolve.outputs.needs_claude != ''
+        with:
+          prefix-key: v3-rust
+          shared-key: backport-claude
+
+      - name: Verify Claude-resolved backports compile, label, mark ready
+        if: steps.resolve.outputs.needs_claude != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create claude-resolved --color FF6B35 --description "Backport conflicts resolved by Claude" 2>/dev/null || true
+          for pr in ${{ steps.resolve.outputs.needs_claude }}; do
+            branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
+            git fetch origin "$branch"
+            git checkout "origin/$branch"
+            gh pr edit "$pr" --add-label claude-resolved
+            cargo check --tests --examples
+            gh pr ready "$pr"
+          done
