@@ -35,7 +35,11 @@ use crate::{
 /// transitions to subsequent stake tables. Thus, this genesis must be configured correctly (i.e.
 /// matching the genesis state of honest HotShot nodes) or else the light client may not operate
 /// correctly.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(
+    feature = "rlp",
+    derive(alloy_rlp::RlpEncodable, alloy_rlp::RlpDecodable)
+)]
 pub struct Genesis {
     /// The number of blocks in an epoch.
     pub epoch_height: u64,
@@ -849,7 +853,7 @@ mod test {
     use hotshot_types::{addr::NetAddr, x25519};
     use itertools::izip;
     use pretty_assertions::assert_eq;
-    use versions::{CLIQUENET_VERSION, DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+    use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::*;
     use crate::{
@@ -1356,7 +1360,7 @@ mod test {
 
         let epoch = genesis.first_epoch_with_dynamic_stake_table;
         let root_height = root_block_in_epoch(*epoch - 1, 10);
-        client.set_upgrade(root_height, CLIQUENET_VERSION).await;
+        client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).await;
 
         lc.quorum_for_epoch(epoch).await.unwrap();
 
@@ -1400,13 +1404,13 @@ mod test {
             lower_bound_epoch,
             &prev_state,
             DRB_AND_HEADER_UPGRADE_VERSION,
-            CLIQUENET_VERSION,
+            NEW_PROTOCOL_VERSION,
         )
         .await
         .unwrap();
 
         client
-            .set_upgrade(target_epoch_root, CLIQUENET_VERSION)
+            .set_upgrade(target_epoch_root, NEW_PROTOCOL_VERSION)
             .await;
 
         let err = lc.quorum_for_epoch(target_epoch).await.unwrap_err();
@@ -1450,7 +1454,7 @@ mod test {
         .await
         .unwrap();
 
-        client.set_upgrade(root_height, CLIQUENET_VERSION).await;
+        client.set_upgrade(root_height, NEW_PROTOCOL_VERSION).await;
 
         let expected = client.quorum_for_epoch(target_epoch).await.into();
         assert_eq!(*lc.quorum_for_epoch(target_epoch).await.unwrap(), expected);
@@ -1498,7 +1502,7 @@ mod test {
         );
 
         let epoch = genesis.first_epoch_with_dynamic_stake_table + 1;
-        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, CLIQUENET_VERSION)
+        db.insert_stake_table(epoch, &state, NEW_PROTOCOL_VERSION, NEW_PROTOCOL_VERSION)
             .await
             .unwrap();
 
@@ -1672,5 +1676,37 @@ mod test {
             err.to_string().contains("invalid namespace proof"),
             "{err:#}"
         );
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_test {
+    use alloy::primitives::U256;
+    use alloy_rlp::{Decodable, Encodable};
+    use hotshot_types::traits::signature_key::SignatureKey;
+
+    use super::*;
+
+    #[test_log::test]
+    fn rlp_genesis_round_trip() {
+        let genesis = Genesis {
+            epoch_height: 1000,
+            first_epoch_with_dynamic_stake_table: EpochNumber::new(3),
+            stake_table: vec![StakeTableEntry {
+                stake_key: PubKey::generated_from_seed_indexed(
+                    Default::default(),
+                    Default::default(),
+                )
+                .0,
+                stake_amount: U256::MAX,
+            }],
+        };
+
+        let mut buf = vec![];
+        genesis.encode(&mut buf);
+
+        let mut buf = buf.as_slice();
+        assert_eq!(genesis, Genesis::decode(&mut buf).unwrap());
+        assert!(buf.is_empty());
     }
 }

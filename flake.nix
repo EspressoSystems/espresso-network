@@ -258,8 +258,10 @@
             # scripts
             bc
             python3
+            uv
             ruff
             ty
+            uv
 
             go
             golangci-lint
@@ -277,6 +279,9 @@
             # Prevent cargo aliases from using programs in `~/.cargo` to avoid conflicts
             # with rustup installations.
             export CARGO_HOME=$HOME/.cargo-nix
+
+            # Let uv-installed binary wheels (matplotlib/numpy/...) find libstdc++ on NixOS.
+            export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.zlib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
             ${pre-commit.shellHook}
           '';

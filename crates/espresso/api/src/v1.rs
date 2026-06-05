@@ -6,5 +6,5 @@
 pub mod availability;
 pub mod reward_state_v2;
 
-pub use availability::AvailabilityApi;
+pub use availability::{AvailabilityApi, BlockId, HotShotAvailabilityApi, LeafId, PayloadId};
 pub use reward_state_v2::RewardApi;

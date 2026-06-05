@@ -788,55 +788,56 @@ pub trait SequencerPersistence:
         ))
     }
 
-    /// Update storage based on an event from consensus.
-    async fn handle_event(
+    /// Decode a consensus decide event and persist its leaves, for the consensus event loop.
+    /// Returns `Some((decided_view, deciding_qc))` on a decide so the caller can wake a background
+    /// task to run [`process_decided_events`](Self::process_decided_events); `None` otherwise.
+    ///
+    /// This is the persist-only half of a decide: query-service ingestion and GC are deferred to
+    /// [`process_decided_events`](Self::process_decided_events). Tests that want the synchronous
+    /// persist-then-process behavior use [`append_decided_leaves`](Self::append_decided_leaves).
+    async fn persist_event(
         &self,
         event: &CoordinatorEvent<SeqTypes>,
         consumer: &(impl EventConsumer + 'static),
-    ) {
+    ) -> Option<(ViewNumber, Option<Arc<CertificatePair<SeqTypes>>>)> {
         match event {
             CoordinatorEvent::LegacyEvent(hotshot_event) => {
-                if let EventType::Decide {
+                let EventType::Decide {
                     leaf_chain,
                     committing_qc,
                     deciding_qc,
                     ..
                 } = &hotshot_event.event
+                else {
+                    return None;
+                };
+                let LeafInfo { leaf, .. } = leaf_chain.first()?;
+                let decided_view = leaf.view_number();
+
+                let chain = leaf_chain.iter().zip(
+                    std::iter::once((**committing_qc).clone()).chain(
+                        leaf_chain
+                            .iter()
+                            .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
+                    ),
+                );
+
+                if let Err(err) = self
+                    .persist_decided_leaves(decided_view, chain, deciding_qc.clone(), consumer)
+                    .await
                 {
-                    let Some(LeafInfo { leaf, .. }) = leaf_chain.first() else {
-                        return;
-                    };
-
-                    let chain = leaf_chain.iter().zip(
-                        std::iter::once((**committing_qc).clone()).chain(
-                            leaf_chain
-                                .iter()
-                                .map(|leaf| CertificatePair::for_parent(&leaf.leaf)),
-                        ),
+                    tracing::error!(
+                        "failed to save decided leaves, chain may not be up to date: {err:#}"
                     );
-
-                    if let Err(err) = self
-                        .append_decided_leaves(
-                            leaf.view_number(),
-                            chain,
-                            deciding_qc.clone(),
-                            consumer,
-                        )
-                        .await
-                    {
-                        tracing::error!(
-                            "failed to save decided leaves, chain may not be up to date: {err:#}"
-                        );
-                    }
+                    return None;
                 }
+                Some((decided_view, deciding_qc.clone()))
             },
             CoordinatorEvent::NewDecide {
                 leaf_infos, cert1, ..
             } => {
-                let Some(first) = leaf_infos.first() else {
-                    return;
-                };
-                let view_number = first.leaf.view_number();
+                let first = leaf_infos.first()?;
+                let decided_view = first.leaf.view_number();
 
                 // `cert1` certifies the newest leaf; each newer leaf's justify_qc certifies the
                 // next older leaf.
@@ -846,8 +847,8 @@ pub trait SequencerPersistence:
                     .map(CertificatePair::non_epoch_change);
 
                 if let Err(err) = self
-                    .append_decided_leaves(
-                        view_number,
+                    .persist_decided_leaves(
+                        decided_view,
                         leaf_infos.iter().zip(certifying_qcs),
                         None,
                         consumer,
@@ -858,9 +859,11 @@ pub trait SequencerPersistence:
                         "failed to save decided leaves from new protocol, chain may not be up to \
                          date: {err:#}"
                     );
+                    return None;
                 }
+                Some((decided_view, None))
             },
-            _ => {},
+            _ => None,
         }
     }
 
@@ -889,13 +892,59 @@ pub trait SequencerPersistence:
     /// This functionality is useful for keeping a separate view of the blockchain in sync with the
     /// consensus storage. For example, the `consumer` could be used for moving data from consensus
     /// storage to long-term archival storage.
+    ///
+    /// Convenience combinator: [`persist_decided_leaves`](Self::persist_decided_leaves) then
+    /// [`process_decided_events`](Self::process_decided_events). Production drives the two halves on
+    /// separate tasks; tests and back-compat callers use this synchronous form.
     async fn append_decided_leaves(
         &self,
         decided_view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<()> {
+        self.persist_decided_leaves(decided_view, leaf_chain, deciding_qc.clone(), consumer)
+            .await?;
+        // Leaves are persisted; processing failures are non-fatal here and retried in production.
+        if let Err(err) = self
+            .process_decided_events(decided_view, deciding_qc, consumer)
+            .await
+        {
+            tracing::warn!(?decided_view, "decide event processing failed: {err:#}");
+        }
+        Ok(())
+    }
+
+    /// Persist decided leaves only (the critical, must-not-lag half of a decide; also the
+    /// anchor for restart recovery). Query-service ingestion and GC are deferred to
+    /// [`process_decided_events`](Self::process_decided_events). Backends with no replayable storage
+    /// (e.g. `NoStorage`) may instead forward decide events to `consumer` here.
+    async fn persist_decided_leaves(
+        &self,
+        decided_view: ViewNumber,
+        leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
+
+    /// Generate decide events for `consumer` from persisted leaves, then GC processed data.
+    /// Cursor-driven (e.g. `last_processed_view`): advances only on success, so it may lag
+    /// consensus without losing data.
+    ///
+    /// Returns the highest view confirmed processed (the cursor), or `None` if nothing was
+    /// processed, so the caller can track real progress. Errors are propagated; the failed range
+    /// is retried on the next call.
+    ///
+    /// Default returns `Some(decided_view)`: backends with no replayable storage (e.g. `NoStorage`)
+    /// forward events synchronously in `persist_decided_leaves` and are always caught up here.
+    async fn process_decided_events(
+        &self,
+        decided_view: ViewNumber,
+        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        _consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        Ok(Some(decided_view))
+    }
 
     async fn load_anchor_leaf(
         &self,

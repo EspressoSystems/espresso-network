@@ -5,9 +5,9 @@ use chrono::{Months, NaiveDate, NaiveDateTime, NaiveTime};
 use espresso_types::{v0_1::ChainId, v0_3::RewardAmount};
 use serde::Deserialize;
 
-const SCHEDULE_TOML: &str = include_str!("../../../../../data/token-unlock-schedule.toml");
+use crate::MAINNET_CHAIN_ID;
 
-pub(crate) const MAINNET_CHAIN_ID: u64 = 1;
+const SCHEDULE_TOML: &str = include_str!("../../../../../data/token-unlock-schedule.toml");
 
 #[derive(Deserialize)]
 struct UnlockEntry {
@@ -120,7 +120,7 @@ impl SupplyCalculator {
     /// Tokens still locked on L1 per the unlock schedule.
     /// Mainnet: `initial_supply - unlocked(now)`. Non-mainnet: `0`.
     fn locked(&self) -> U256 {
-        if self.chain_id == U256::from(MAINNET_CHAIN_ID) {
+        if self.chain_id == MAINNET_CHAIN_ID.0 {
             self.initial_supply
                 .saturating_sub(unlocked_amount_at(self.now_secs))
         } else {
@@ -245,7 +245,7 @@ mod tests {
     // --- SupplyCalculator tests ---
 
     fn mainnet_id() -> ChainId {
-        ChainId(U256::from(MAINNET_CHAIN_ID))
+        MAINNET_CHAIN_ID
     }
 
     fn testnet_id() -> ChainId {
