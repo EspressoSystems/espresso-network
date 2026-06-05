@@ -278,11 +278,10 @@ impl<T: NodeType> Consensus<T> {
     /// subsequent `apply` that triggers `maybe_propose` will find the
     /// parent cert and proposal it needs.
     pub fn seed_parent(&mut self, cert1: Certificate1<T>, proposal: Proposal<T>) {
-        let view = cert1.view_number();
         self.current_epoch = Some(proposal.epoch);
-        self.certs.insert(view, cert1.clone());
+        self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
-        self.proposals.insert(view, proposal);
+        self.proposals.insert(proposal.view_number, proposal);
     }
 
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
