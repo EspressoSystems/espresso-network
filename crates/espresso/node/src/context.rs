@@ -461,8 +461,8 @@ where
                 .await;
         } else {
             // the network config was loaded from storage or fetched from
-            // peers, so there is no orchestrated start to wait for. This is the normal path
-            // for a node rejoining an existing network.
+            // peers, so there is no need of orchestrator
+            // This is the normal path for a node rejoining an existing network.
             tracing::info!("no orchestrator configured");
         }
         tracing::warn!("starting consensus");
