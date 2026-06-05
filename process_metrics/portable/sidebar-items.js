@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SAMPLE_INTERVAL"],"fn":["cpu_count","process_memory"],"struct":["ProcessMetrics"]};
