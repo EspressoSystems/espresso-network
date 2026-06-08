@@ -181,6 +181,9 @@ pub struct Consensus<T: NodeType> {
     /// arrived.  They are retried when new epoch data becomes available.
     pending_certs1: BTreeMap<ViewNumber, Certificate1<T>>,
     pending_certs2: BTreeMap<ViewNumber, Certificate2<T>>,
+    /// Timeout certificates deferred for the same reason, keyed by the view
+    /// they certify as timed out.
+    pending_timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
 
     timeout_view: ViewNumber,
     current_view: ViewNumber,
@@ -262,6 +265,7 @@ impl<T: NodeType> Consensus<T> {
             pre_cutover_views: BTreeSet::new(),
             pending_certs1: BTreeMap::new(),
             pending_certs2: BTreeMap::new(),
+            pending_timeout_certs: BTreeMap::new(),
             private_key,
             state_private_key,
             stake_table_capacity,
@@ -684,6 +688,7 @@ impl<T: NodeType> Consensus<T> {
                 self.leaves = self.leaves.split_off(&view);
                 self.pending_certs1 = self.pending_certs1.split_off(&view);
                 self.pending_certs2 = self.pending_certs2.split_off(&view);
+                self.pending_timeout_certs = self.pending_timeout_certs.split_off(&view);
                 self.proposals = self.proposals.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
                 self.vid_shares = self.vid_shares.split_off(&view);
@@ -1050,6 +1055,22 @@ impl<T: NodeType> Consensus<T> {
             warn!(view = %certificate.view_number(), "timeout certificate has no epoch number");
             return Protocol::Abort;
         };
+        // Verify the threshold signature before acting on the certificate.
+        // Matches `handle_certificate1`/`handle_certificate2`.
+        match self.try_verify_cert(&certificate, epoch) {
+            CertVerification::Valid => {},
+            CertVerification::Invalid => {
+                warn!(%view, %epoch, "timeout certificate not verified");
+                return Protocol::Abort;
+            },
+            CertVerification::EpochUnavailable => {
+                debug!(%view, %epoch, "timeout certificate deferred (epoch unavailable)");
+                self.pending_timeout_certs
+                    .insert(certificate.view_number(), certificate);
+                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch));
+                return Protocol::Continue;
+            },
+        }
         self.timeout_certs.insert(view, certificate.clone());
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
@@ -1857,6 +1878,11 @@ impl<T: NodeType> Consensus<T> {
             self.handle_certificate2(cert.clone(), outbox);
             self.maybe_decide(view, outbox);
             self.maybe_propose(view, outbox);
+        }
+
+        let pending = std::mem::take(&mut self.pending_timeout_certs);
+        for (_view, cert) in pending {
+            self.handle_timeout_certificate(cert, outbox);
         }
     }
 
