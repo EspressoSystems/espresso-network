@@ -715,7 +715,7 @@ impl Server {
                     %err,
                     "peer failure"
                 );
-                metrics.add(peer.public_key(), "errors", 1)
+                metrics.add(peer.public_key(), ERRORS, 1)
             }
             peer
         });
@@ -783,6 +783,9 @@ const CONNECT_ATTEMPTS: &str = "connect_attempts";
 
 /// Current number of connect tasks.
 const CONNECT_TASKS: &str = "connect_tasks";
+
+/// Total number of peer errors.
+const ERRORS: &str = "errors";
 
 /// Total number of hello exchanges.
 const HELLOS: &str = "hellos";
