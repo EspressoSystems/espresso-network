@@ -181,11 +181,6 @@ fn series_name(series: &TimeSeries) -> Option<&str> {
 async fn telemetry_jwt_mint_ok() {
     let port = reserve_port();
     let captured = start_mock_otlp(port).await;
-    // Schedule delay short so the batch exporter flushes within the test window.
-    // Safe in tests: we don't share env with other tests in the same process.
-    unsafe {
-        std::env::set_var("OTEL_BLRP_SCHEDULE_DELAY", "100");
-    }
     let endpoint = format!("http://127.0.0.1:{port}").parse::<Url>().unwrap();
 
     let key = make_staking_key();
@@ -250,9 +245,6 @@ async fn telemetry_log_retry_survives_transient_5xx() {
     // First two POSTs to /v1/logs fail with 503; the retry wrapper should
     // bounce up to 4 times so we expect a final 200 within the same batch.
     let captured = start_mock_otlp_with_failures(port, 2).await;
-    unsafe {
-        std::env::set_var("OTEL_BLRP_SCHEDULE_DELAY", "100");
-    }
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
 
     let key = make_staking_key();
@@ -405,9 +397,6 @@ async fn telemetry_invalid_log_filter_warns() {
 async fn metrics_remote_write_push_ok() {
     let port = reserve_port();
     let captured = start_mock_otlp(port).await;
-    unsafe {
-        std::env::set_var("OTEL_BLRP_SCHEDULE_DELAY", "100");
-    }
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
 
     let registry = Arc::new(prometheus::Registry::new());
@@ -483,9 +472,6 @@ async fn metrics_remote_write_push_ok() {
 async fn metrics_shared_jwt_ok() {
     let port = reserve_port();
     let captured = start_mock_otlp(port).await;
-    unsafe {
-        std::env::set_var("OTEL_BLRP_SCHEDULE_DELAY", "100");
-    }
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
 
     let registry = Arc::new(prometheus::Registry::new());
@@ -553,9 +539,6 @@ async fn metrics_shared_jwt_ok() {
 async fn metrics_shutdown_flush_ok() {
     let port = reserve_port();
     let captured = start_mock_otlp(port).await;
-    unsafe {
-        std::env::set_var("OTEL_BLRP_SCHEDULE_DELAY", "100");
-    }
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
 
     let registry = Arc::new(prometheus::Registry::new());

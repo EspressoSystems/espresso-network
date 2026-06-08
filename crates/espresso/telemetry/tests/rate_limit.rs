@@ -1,10 +1,9 @@
 //! 429 rate-limit handling: a single shared ERROR across logs+metrics, no
-//! crash, no resend, env-snapshot embedded in the message.
+//! crash, no resend, configured filter embedded in the message.
 
-// Tests serialize on a `std::sync::Mutex` so they can mutate
-// `ESPRESSO_NODE_TELEMETRY_LOG` without racing each other. The guard is held across
-// `await` points by design — only one test runs at a time, so deadlock is
-// impossible.
+// Tests share the global tracing subscriber + capture buffer, so they run
+// sequentially via `TEST_LOCK`. The guard is held across `await` points by
+// design: only one test runs at a time, so deadlock is impossible.
 #![allow(clippy::await_holding_lock)]
 
 use std::{
@@ -12,7 +11,7 @@ use std::{
     net::TcpListener,
     sync::{
         Arc, Mutex, MutexGuard, OnceLock,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -35,8 +34,8 @@ use tracing_subscriber::{
 };
 use url::Url;
 
-// Tests in this file mutate process-global state (env vars + global tracing
-// subscriber). Run them sequentially via this mutex.
+// Tests in this file share the global tracing subscriber. Run them
+// sequentially via this mutex.
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 // Captured ERROR/WARN/INFO log lines. The global subscriber appends here.
@@ -206,16 +205,11 @@ fn captured_lines() -> Vec<String> {
 // TEST:operator-error-once-fails
 //
 // Stub returns 429 for every metrics push. We tick the push task ~3 times,
-// then shut it down. Exactly one ERROR with the env value embedded must
-// appear, regardless of how many 429s landed.
+// then shut it down. Exactly one ERROR must appear, regardless of how many
+// 429s landed.
 #[tokio::test(flavor = "multi_thread")]
 async fn operator_error_once_fails() {
     let _g = lock();
-    // Explicit value so we can assert it appears verbatim.
-    // SAFETY: tests in this file are serialized by `TEST_LOCK`.
-    unsafe {
-        std::env::set_var("ESPRESSO_NODE_TELEMETRY_LOG", "warn");
-    }
 
     let port = reserve_port();
     let stub = start_stub(port, StubMode::Always429).await;
@@ -271,9 +265,6 @@ async fn operator_error_once_fails() {
 #[tokio::test(flavor = "multi_thread")]
 async fn operator_no_crash_ok() {
     let _g = lock();
-    unsafe {
-        std::env::set_var("ESPRESSO_NODE_TELEMETRY_LOG", "warn");
-    }
 
     let port = reserve_port();
     let stub = start_stub(port, StubMode::Always429).await;
@@ -304,25 +295,23 @@ async fn operator_no_crash_ok() {
     handle.shutdown();
 }
 
-// TEST:operator-env-unset-ok
+// TEST:operator-custom-filter-embedded-ok
 //
-// With `ESPRESSO_NODE_TELEMETRY_LOG` unset, the embedded filter value must default
-// to `"warn"`.
+// The configured `log_filter` is embedded verbatim in the rate-limit ERROR.
 #[tokio::test(flavor = "multi_thread")]
-async fn operator_env_unset_ok() {
+async fn operator_custom_filter_embedded_ok() {
     let _g = lock();
-    unsafe {
-        std::env::remove_var("ESPRESSO_NODE_TELEMETRY_LOG");
-    }
 
     let port = reserve_port();
     let stub = start_stub(port, StubMode::Always429).await;
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
 
+    let mut opts = opts(endpoint);
+    opts.log_filter = "warn,hotshot=info".to_owned();
+
     let registry = build_test_registry();
     let key = make_staking_key();
-    let (handle, _warnings) =
-        init(&opts(endpoint), &key, None, None, Some(registry)).expect("init succeeds");
+    let (handle, _warnings) = init(&opts, &key, None, None, Some(registry)).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     let started = std::time::Instant::now();
@@ -343,8 +332,8 @@ async fn operator_env_unset_ok() {
         .find(|l| l.contains("telemetry rate limit hit"))
         .expect("rate-limit error line");
     assert!(
-        line.contains("\"warn\""),
-        "default `warn` filter must be embedded when env var is unset; got: {line}"
+        line.contains("warn,hotshot=info"),
+        "configured filter must be embedded verbatim; got: {line}"
     );
 }
 
@@ -356,9 +345,6 @@ async fn operator_env_unset_ok() {
 #[tokio::test(flavor = "multi_thread")]
 async fn operator_recovery_no_second_error_ok() {
     let _g = lock();
-    unsafe {
-        std::env::set_var("ESPRESSO_NODE_TELEMETRY_LOG", "warn");
-    }
 
     let port = reserve_port();
     let stub = start_stub(port, StubMode::OkThen429ThenOk).await;
@@ -391,13 +377,4 @@ async fn operator_recovery_no_second_error_ok() {
         "single ERROR across recovery sequence; got: {:?}",
         captured_lines()
     );
-}
-
-// Ensure the rate-limit warned latch isn't statically `true` by accident.
-// Sanity check on the test harness — the latch is per-handle, so each test
-// starts fresh.
-#[test]
-fn _assert_send_sync() {
-    fn is_send_sync<T: Send + Sync>() {}
-    is_send_sync::<Arc<AtomicBool>>();
 }

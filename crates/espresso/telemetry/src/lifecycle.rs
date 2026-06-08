@@ -160,9 +160,8 @@ pub struct TelemetryHandle {
     /// pipeline. Shared with the OTel log retry wrapper and the metrics push
     /// task so a single operator-facing ERROR is logged across all signals.
     rate_limit_warned: Arc<AtomicBool>,
-    /// Snapshot of `ESPRESSO_NODE_TELEMETRY_LOG` at startup (default `"warn"` if
-    /// unset). Embedded in the rate-limit ERROR so operators can see exactly
-    /// what filter their process is running with.
+    /// The configured `log_filter` string. Embedded in the rate-limit ERROR so
+    /// operators can see exactly what filter their process is running with.
     telemetry_log_filter: Arc<String>,
 }
 
@@ -399,13 +398,9 @@ pub fn init(
         );
     }
 
-    // Resolve the operator's filter once at startup. We embed it verbatim in
-    // the rate-limit ERROR so operators can see exactly what the process was
-    // configured with (env var, not the parsed `EnvFilter`). Default matches
-    // the `TelemetryOptions::log_filter` default.
-    let telemetry_log_filter: Arc<String> = Arc::new(
-        std::env::var("ESPRESSO_NODE_TELEMETRY_LOG").unwrap_or_else(|_| "warn".to_string()),
-    );
+    // Embedded verbatim in the rate-limit ERROR so operators see the configured
+    // filter (the raw string, not the parsed `EnvFilter`).
+    let telemetry_log_filter: Arc<String> = Arc::new(opts.log_filter.clone());
     let rate_limit_warned: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let logger_provider = if logs_on {

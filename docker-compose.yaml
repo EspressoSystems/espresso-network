@@ -376,13 +376,9 @@ services:
       deploy-prover-contracts:
         condition: service_completed_successfully
 
-  # Local telemetry collector. Receives OTel logs and Prometheus remote-write
-  # metrics from the telemetry-enabled nodes (see crates/espresso/telemetry/demo/vector.yaml).
   vector:
     image: timberio/vector:0.55.0-alpine
     command: --config /etc/vector/vector.yaml
-    # Published to the host so the native (process-compose) demo can reach the
-    # collector on localhost; the dockerized demo uses the `vector` hostname.
     ports:
       - "${ESPRESSO_DEMO_TELEMETRY_OTLP_PORT}:4318"
       - "${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}:9009"
@@ -396,9 +392,6 @@ services:
     # Run the full API server with all modules, Postgres storage
     command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config
     environment:
-      # Telemetry: both signals, pointed at an unreachable endpoint (the host
-      # name makes intentional failures obvious in the logs) to confirm
-      # misconfig is non-fatal and not log-spammy.
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://not-a-telemetry-endpoint
@@ -465,7 +458,6 @@ services:
       - "$ESPRESSO_NODE_1_API_PORT:$ESPRESSO_NODE_1_API_PORT"
     command: espresso-node -- storage-sql -- http -- config -- query -- explorer
     environment:
-      # Telemetry: metrics only, pushed to the local Vector remote-write source.
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}
       - ESPRESSO_NODE_EMBEDDED_DB=false
@@ -585,7 +577,6 @@ services:
       - "$ESPRESSO_NODE_3_API_PORT:$ESPRESSO_NODE_3_API_PORT"
     command: espresso-node -- http -- config -- query -- storage-fs
     environment:
-      # Telemetry: logs only, sent to the local Vector OTLP source.
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_OTLP_PORT}
       - ESPRESSO_NODE_TELEMETRY_LOG=info
