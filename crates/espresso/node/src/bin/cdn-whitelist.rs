@@ -69,7 +69,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     tracing::info!("Received config from orchestrator");
 
     // Extrapolate the state_ver_keys from the config and convert them to a compatible format
-    let mut whitelist: Vec<Arc<[u8]>> = config
+    let mut whitelist: Vec<Arc<Vec<u8>>> = config
         .config
         .known_nodes_with_stake
         .iter()
