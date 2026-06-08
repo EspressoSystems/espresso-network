@@ -175,7 +175,7 @@ async fn build_coordinator(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_parent(genesis_cert1, genesis_proposal);
+    consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
