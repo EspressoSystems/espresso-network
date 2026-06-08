@@ -159,6 +159,7 @@ impl Server {
 
                 Some(h) = self.accept_tasks.join_next() => match h {
                     Ok(Ok(conn)) => {
+                        self.metrics.set(&self.key, ACCEPT_TASKS, self.accept_tasks.len());
                         if conn.key == self.key {
                             warn!(
                                 name = %self.conf.name,
@@ -195,9 +196,11 @@ impl Server {
                         self.spawn_hello(conn, Hello::Ok);
                     }
                     Ok(Err(err)) => {
+                        self.metrics.set(&self.key, ACCEPT_TASKS, self.accept_tasks.len());
                         warn!(name = %self.conf.name, node = %self.key, %err, "handshake failed")
                     }
                     Err(err) => {
+                        self.metrics.set(&self.key, ACCEPT_TASKS, self.accept_tasks.len());
                         if !err.is_cancelled() {
                             error!(
                                 name = %self.conf.name,
@@ -211,6 +214,7 @@ impl Server {
 
                 Some(r) = self.hello_tasks.join_next() => match r {
                     (_, Ok(Ok((our_hello, conn, their_hello)))) => {
+                        self.metrics.set(&self.key, HELLO_TASKS, self.hello_tasks.len());
                         if conn.key == self.key {
                             // This case has been addressed already by rejecting the peer,
                             // i.e. we told the peer to backoff forever.
@@ -282,6 +286,7 @@ impl Server {
                         }
                     }
                     (key, Ok(Err(err))) => {
+                        self.metrics.set(&self.key, HELLO_TASKS, self.hello_tasks.len());
                         warn!(
                             name = %self.conf.name,
                             node = %self.key,
@@ -291,6 +296,7 @@ impl Server {
                         )
                     }
                     (key, Err(err)) => {
+                        self.metrics.set(&self.key, HELLO_TASKS, self.hello_tasks.len());
                         if !err.is_cancelled() {
                             error!(
                                 name = %self.conf.name,
@@ -305,6 +311,7 @@ impl Server {
 
                 Some(x) = self.connect_tasks.join_next() => match x {
                     (_, Ok(conn)) => {
+                        self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
                         let Some(party) = self.parties.get_mut(&conn.key) else {
                             debug!(
                                 name = %self.conf.name,
@@ -357,6 +364,7 @@ impl Server {
                         }
                     }
                     (key, Err(err)) => {
+                        self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
                         if !err.is_cancelled() {
                             error!(
                                 name = %self.conf.name,
@@ -371,6 +379,7 @@ impl Server {
 
                 Some(p) = self.peer_tasks.join_next() => match p {
                     (key, Ok(mut peer)) => {
+                        self.metrics.set(&self.key, PEER_TASKS, self.peer_tasks.len());
                         if self.ibound.is_closed() {
                             return
                         }
@@ -396,6 +405,7 @@ impl Server {
                         }
                     }
                     (key, Err(err)) => {
+                        self.metrics.set(&self.key, PEER_TASKS, self.peer_tasks.len());
                         if !err.is_cancelled() {
                             error!(
                                 name = %self.conf.name,
@@ -423,14 +433,14 @@ impl Server {
                     let s = *self.next_slot.borrow_and_update();
                     debug_assert!(s > self.lower_bound); // ensured by controller
                     self.lower_bound = s;
-                    self.metrics.set(&self.key, "lower_bound", u64::from(s) as usize);
+                    self.metrics.set(&self.key, LOWER_BOUND, u64::from(s) as usize);
                     for party in self.parties.values() {
                         party.outbox.gc(s)
                     }
                 }
 
                 cmd = self.obound.recv() => {
-                    self.metrics.set(&self.key, "channel_size", self.obound.len());
+                    self.metrics.set(&self.key, CHANNEL_SIZE, self.obound.len());
                     match cmd {
                         Some(Command::Peer(PeerCommand::Add(role, parties))) => {
                             for (k, a) in parties {
@@ -645,9 +655,9 @@ impl Server {
         );
         let conn = Connection::connect(self.conf.clone(), key, addr);
         self.connect_tasks.spawn(key, conn);
-        self.metrics.add(&key, "connect_attempts", 1);
+        self.metrics.add(&key, CONNECT_ATTEMPTS, 1);
         self.metrics
-            .set(&self.key, "connect_tasks", self.connect_tasks.len());
+            .set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
     }
 
     fn spawn_accept(&mut self, stream: TcpStream) {
@@ -655,7 +665,7 @@ impl Server {
         let conn = Connection::accept(self.conf.clone(), stream);
         self.accept_tasks.spawn(conn);
         self.metrics
-            .set(&self.key, "accept_tasks", self.accept_tasks.len());
+            .set(&self.key, ACCEPT_TASKS, self.accept_tasks.len());
     }
 
     fn spawn_hello(&mut self, mut conn: Connection, ours: Hello) {
@@ -667,7 +677,7 @@ impl Server {
             "spawning hello task"
         );
 
-        self.metrics.add(&conn.key, "hellos", 1);
+        self.metrics.add(&conn.key, HELLOS, 1);
 
         self.hello_tasks.abort(&conn.key);
         self.hello_tasks.spawn(
@@ -680,7 +690,7 @@ impl Server {
         );
 
         self.metrics
-            .set(&self.key, "hello_tasks", self.hello_tasks.len());
+            .set(&self.key, HELLO_TASKS, self.hello_tasks.len());
     }
 
     fn spawn_peer(&mut self, key: PublicKey, mut peer: Peer) {
@@ -710,7 +720,7 @@ impl Server {
             peer
         });
         self.metrics
-            .set(&self.key, "peer_tasks", self.peer_tasks.len());
+            .set(&self.key, PEER_TASKS, self.peer_tasks.len());
     }
 
     fn next_msgid(&mut self) -> MsgId {
@@ -759,3 +769,29 @@ fn remove_trailer(mut bytes: Bytes) -> Bytes {
     debug_assert!(_t.is_some());
     bytes
 }
+
+// Metrics labels /////////////////////////////////////////////////////////////
+
+/// Current number of accept tasks.
+const ACCEPT_TASKS: &str = "accept_tasks";
+
+/// Current number of channel items.
+const CHANNEL_SIZE: &str = "channel_size";
+
+/// Total number of connect attempts.
+const CONNECT_ATTEMPTS: &str = "connect_attempts";
+
+/// Current number of connect tasks.
+const CONNECT_TASKS: &str = "connect_tasks";
+
+/// Total number of hello exchanges.
+const HELLOS: &str = "hellos";
+
+/// Current number of hello tasks.
+const HELLO_TASKS: &str = "hello_tasks";
+
+/// Current GC lower bound.
+const LOWER_BOUND: &str = "lower_bound";
+
+/// Current number of peer tasks.
+const PEER_TASKS: &str = "peer_tasks";
