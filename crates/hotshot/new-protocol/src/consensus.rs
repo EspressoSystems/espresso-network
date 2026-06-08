@@ -279,27 +279,25 @@ impl<T: NodeType> Consensus<T> {
     /// Sets the locked certificate and current epoch. After calling this, a
     /// subsequent `apply` that triggers `maybe_propose` will find the
     /// parent cert and proposal it needs.
-    pub fn seed_parent(&mut self, cert1: Certificate1<T>, proposal: Proposal<T>) {
+    ///
+    /// `reconstructed` are `(view, V2 commitment)` pairs to record as
+    /// already reconstructed blocks. During normal operation this set is
+    /// populated as VID shares arrive; on restart it starts empty, but the
+    /// persisted leaf and proposals correspond to blocks this node had already
+    /// reconstructed in the previous process. Seeding them lets a restarted
+    /// leader satisfy the `parent_block_reconstructed` check for its first
+    /// proposal/vote instead of stalling.
+    pub fn seed_parent(
+        &mut self,
+        cert1: Certificate1<T>,
+        proposal: Proposal<T>,
+        reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
+    ) {
         self.current_epoch = Some(proposal.epoch);
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
         self.proposals.insert(proposal.view_number, proposal);
-    }
-
-    /// Insert `(view, V2 commitment)` pairs into the set of blocks whose payload
-    /// has been reconstructed from VID shares.
-    ///
-    /// During normal operation this set is populated as shares arrive.
-    /// On restart that in memory set
-    /// is empty, but a node's persisted leaf and proposals correspond to blocks
-    /// it had already reconstructed in the previous process. Seeding them lets a
-    /// restarted leader satisfy the `parent_block_reconstructed` check for
-    /// its first proposal/vote instead of stalling
-    pub fn seed_reconstructed_blocks(
-        &mut self,
-        blocks: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
-    ) {
-        for (view, commitment) in blocks {
+        for (view, commitment) in reconstructed {
             self.blocks_reconstructed.insert((view, commitment));
         }
     }

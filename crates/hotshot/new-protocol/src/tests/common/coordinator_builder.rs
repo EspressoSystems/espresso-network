@@ -118,7 +118,11 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_parent(genesis_cert1.clone(), genesis_proposal.clone());
+    consensus.seed_parent(
+        genesis_cert1.clone(),
+        genesis_proposal.clone(),
+        std::iter::empty(),
+    );
 
     if let Some(seed) = pre_cutover_seed {
         consensus.apply_pre_cutover_seed(seed);
