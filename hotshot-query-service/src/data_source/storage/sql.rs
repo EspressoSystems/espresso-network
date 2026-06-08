@@ -758,6 +758,7 @@ impl SerializableRetryConfig {
     /// `should_retry` returns `true` for the error. `f` is re-run from scratch on each attempt.
     async fn retry_if<F, Fut, T, E>(
         &self,
+        op: &'static str,
         mut should_retry: impl FnMut(&E) -> bool,
         f: F,
     ) -> Result<T, E>
@@ -766,11 +767,12 @@ impl SerializableRetryConfig {
         Fut: Future<Output = Result<T, E>>,
     {
         let mut delay = self.base;
-        for i in 0u32.. {
+        for i in 0..=self.retry_max {
             match f().await {
                 Ok(res) => return Ok(res),
                 Err(err) if i < self.retry_max && should_retry(&err) => {
                     tracing::warn!(
+                        op,
                         attempt = i + 1,
                         max_retries = self.retry_max,
                         delay_ms = delay.as_millis(),
@@ -790,9 +792,12 @@ impl SerializableRetryConfig {
         if delay >= self.max {
             return self.max;
         }
-        let ms = (delay * self.factor).as_millis() as u64;
+        let ms = delay
+            .saturating_mul(self.factor)
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
         let (jitter_num, jitter_den) = self.jitter;
-        let jitter = if jitter_num == 0 {
+        let jitter = if jitter_num == 0 || jitter_den == 0 {
             0
         } else {
             let mut rng = rand::thread_rng();
@@ -917,12 +922,11 @@ impl SerializableRetry for SqlStorage {
     {
         if self.serializable_retry_config.pg_stat_diag {
             self.serializable_retry_config
-                .retry_if(serialization_conflict_with_diag(self.pool(), op), f)
+                .retry_if(op, serialization_conflict_with_diag(self.pool(), op), f)
                 .await
         } else {
-            let _ = op;
             self.serializable_retry_config
-                .retry_if(is_serialization_conflict_err, f)
+                .retry_if(op, is_serialization_conflict_err, f)
                 .await
         }
     }
@@ -974,7 +978,7 @@ mod serializable_retry_tests {
         let calls_clone = calls.clone();
 
         let result: anyhow::Result<()> = TEST_RETRY
-            .retry_if(is_serialization_conflict_err, || {
+            .retry_if("test", is_serialization_conflict_err, || {
                 let calls = calls_clone.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
@@ -994,7 +998,7 @@ mod serializable_retry_tests {
 
         // The closure fails twice with a serialization error, then succeeds on the third attempt.
         let result: anyhow::Result<()> = TEST_RETRY
-            .retry_if(is_serialization_conflict_err, || {
+            .retry_if("test", is_serialization_conflict_err, || {
                 let calls = calls_clone.clone();
                 async move {
                     let n = calls.fetch_add(1, Ordering::SeqCst);
@@ -1018,7 +1022,7 @@ mod serializable_retry_tests {
 
         // The closure always fails; retry must give up after TEST_RETRY.retry_max (5) retries.
         let result: anyhow::Result<()> = TEST_RETRY
-            .retry_if(is_serialization_conflict_err, || {
+            .retry_if("test", is_serialization_conflict_err, || {
                 let calls = calls_clone.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
@@ -1039,7 +1043,7 @@ mod serializable_retry_tests {
 
         // Non-serialization errors must not be retried.
         let result: anyhow::Result<()> = TEST_RETRY
-            .retry_if(is_serialization_conflict_err, || {
+            .retry_if("test", is_serialization_conflict_err, || {
                 let calls = calls_clone.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
