@@ -826,8 +826,6 @@ where
             get(stream_namespace_proofs),
         )
         // Merklized state: block-state.
-        // Order matters: the literal `block-height` and `commit/...` segments must be
-        // registered before the catch-all `{height}/{key}` so axum matches them first.
         .route(
             routes::v1::BLOCK_STATE_HEIGHT_ROUTE,
             get(get_block_state_height),
