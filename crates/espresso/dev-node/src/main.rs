@@ -656,7 +656,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     .config(Default::default())
     .explorer(Default::default())
     .query_sql(Default::default(), sql)
-    .hotshot_events(Default::default());
+    .hotshot_events(Default::default())
+    .light_client(Default::default());
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
