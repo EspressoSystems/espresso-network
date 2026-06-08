@@ -1,0 +1,77 @@
+repo_root := `git rev-parse --show-toplevel`
+script_dir := source_directory() / "scripts"
+
+duration       := env_var_or_default("DURATION_SECONDS",             "300")
+genesis        := env_var_or_default("ESPRESSO_NODE_GENESIS_FILE",   "genesis/demo-drb-header.toml")
+output         := env_var_or_default("OUTPUT_DIR",                   "./soak-samples")
+delegation     := env_var_or_default("DELEGATION_CONFIG",            "multiple-delegators")
+delegators     := env_var_or_default("NUM_DELEGATORS_PER_VALIDATOR", "100")
+smoke_timeout  := env_var_or_default("SMOKE_TIMEOUT",                "600")
+logs_dir       := env_var_or_default("SOAK_LOGS_DIR",                "./soak-logs")
+
+default:
+    just --list --justfile {{justfile()}}
+
+# Bring up the docker demo with soak config and gate readiness on smoke-test-demo.
+up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{repo_root}}
+    export ESPRESSO_NODE_GENESIS_FILE={{genesis}}
+    export DELEGATION_CONFIG={{delegation}}
+    export NUM_DELEGATORS_PER_VALIDATOR={{delegators}}
+    docker compose pull --policy missing
+    docker compose up --pull never &
+    set -o pipefail
+    timeout -v {{smoke_timeout}} scripts/smoke-test-demo | sed -e 's/^/smoke-test: /;'
+
+# Sample docker stats + each node's /v0/status/metrics into $output for $duration seconds.
+sample *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{repo_root}}
+    export DURATION_SECONDS={{duration}}
+    export OUTPUT_DIR={{output}}
+    uv run {{script_dir}}/soak.py sample {{args}}
+
+# Render summary.md + rss-over-time.png + Mermaid chart from $output.
+render *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{repo_root}}
+    export ESPRESSO_NODE_GENESIS_FILE={{genesis}}
+    export OUTPUT_DIR={{output}}
+    uv run {{script_dir}}/soak.py render {{args}}
+
+# Dump compose logs and ps for triage.
+logs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{repo_root}}
+    mkdir -p {{logs_dir}}
+    docker compose logs --no-color > {{logs_dir}}/compose.log 2>&1 || true
+    docker compose ps > {{logs_dir}}/compose-ps.txt 2>&1 || true
+
+# Tear down compose stack and volumes.
+down *args:
+    #!/usr/bin/env bash
+    cd {{repo_root}} && docker compose down -v {{args}}
+
+# End-to-end: up -> sample -> render. Does not auto-down (mirrors `just demo`).
+run: up sample render
+
+# Unit tests for render_summary.
+test *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{script_dir}}
+    uv run --with click --with humanize --with matplotlib --with pandas --with prometheus-client --with python-dotenv \
+        python3 -m unittest {{ if args == "" { "test_soak" } else { args } }}
+
+# Format Python sources with ruff.
+fmt *args:
+    ruff format {{script_dir}} {{args}}
+
+# Lint Python sources with ruff.
+lint *args:
+    ruff check {{script_dir}} {{args}}

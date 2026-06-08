@@ -39,6 +39,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     block::BlockAndHeaderRequest,
+    coordinator::GcScope,
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -271,20 +272,16 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Seed the genesis state so that the view-1 leader can propose without
-    /// any external bootstrap injection.
-    ///
-    /// Stores a genesis certificate and proposal at view 0, sets the locked
-    /// certificate, and sets the current epoch.  After calling this, a
-    /// subsequent `apply` that triggers `maybe_propose(view=1)` will find the
+    /// Seed a parent certificate and proposal so the leader of the *next* view
+    /// can propose without any external bootstrap injection.
+    /// Sets the locked certificate and current epoch. After calling this, a
+    /// subsequent `apply` that triggers `maybe_propose` will find the
     /// parent cert and proposal it needs.
-    pub fn seed_genesis(&mut self, genesis_cert1: Certificate1<T>, genesis_proposal: Proposal<T>) {
-        self.current_epoch = Some(genesis_proposal.epoch);
-        self.certs
-            .insert(ViewNumber::genesis(), genesis_cert1.clone());
-        self.locked_cert = Some(genesis_cert1);
-        self.proposals
-            .insert(ViewNumber::genesis(), genesis_proposal);
+    pub fn seed_parent(&mut self, cert1: Certificate1<T>, proposal: Proposal<T>) {
+        self.current_epoch = Some(proposal.epoch);
+        self.certs.insert(cert1.view_number(), cert1.clone());
+        self.locked_cert = Some(cert1);
+        self.proposals.insert(proposal.view_number, proposal);
     }
 
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
@@ -652,24 +649,35 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.get(view)
     }
 
-    pub fn gc(&mut self, view: ViewNumber, _epoch: EpochNumber) {
-        self.proposed_views = self.proposed_views.split_off(&view);
-        self.states_verified = self.states_verified.split_off(&view);
-        self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
-        self.blocks = self.blocks.split_off(&view);
-        self.certs = self.certs.split_off(&view);
-        self.certs2 = self.certs2.split_off(&view);
-        self.pending_certs1 = self.pending_certs1.split_off(&view);
-        self.pending_certs2 = self.pending_certs2.split_off(&view);
-        self.timeout_certs = self.timeout_certs.split_off(&view);
-        self.headers
-            .retain(|(header_view, _), _| *header_view >= view);
-        self.leaves = self.leaves.split_off(&view);
-        self.proposals = self.proposals.split_off(&view);
-        self.signed_proposals = self.signed_proposals.split_off(&view);
-        self.vid_shares = self.vid_shares.split_off(&view);
-        self.voted_1_views = self.voted_1_views.split_off(&view);
-        self.voted_2_views = self.voted_2_views.split_off(&view);
+    pub fn gc(&mut self, scope: GcScope) {
+        match scope {
+            GcScope::Local(view) => {
+                self.headers
+                    .retain(|(header_view, _), _| *header_view >= view);
+                self.proposed_views = self.proposed_views.split_off(&view);
+                self.states_verified = self.states_verified.split_off(&view);
+                self.timeout_certs = self.timeout_certs.split_off(&view);
+                self.voted_1_views = self.voted_1_views.split_off(&view);
+                self.voted_2_views = self.voted_2_views.split_off(&view);
+            },
+            GcScope::Decided(view) => {
+                self.blocks = self.blocks.split_off(&view);
+                self.blocks_reconstructed = self.blocks_reconstructed.split_off(&view);
+                self.certs = self.certs.split_off(&view);
+                self.certs2 = self.certs2.split_off(&view);
+                self.leaves = self.leaves.split_off(&view);
+                self.pending_certs1 = self.pending_certs1.split_off(&view);
+                self.pending_certs2 = self.pending_certs2.split_off(&view);
+                self.proposals = self.proposals.split_off(&view);
+                self.signed_proposals = self.signed_proposals.split_off(&view);
+                self.vid_shares = self.vid_shares.split_off(&view);
+                if let Some(epoch) = self.current_epoch {
+                    let epoch = EpochNumber::new(epoch.saturating_sub(1));
+                    self.drb_results = self.drb_results.split_off(&epoch);
+                    self.state_certs = self.state_certs.split_off(&epoch);
+                }
+            },
+        }
     }
 
     /// Test-only: forcibly replace the proposal stored at `view`.
@@ -895,6 +903,14 @@ impl<T: NodeType> Consensus<T> {
         epoch: EpochNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
+        if view < self.current_view {
+            debug!(
+                %view,
+                current_view = %self.current_view,
+                "ignoring timeout for stale view"
+            );
+            return Protocol::Abort;
+        }
         let we_were_leader = self.is_leader(view, epoch);
         if we_were_leader {
             if self.proposed_views.contains(&view) {
@@ -1003,6 +1019,14 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = certificate.view_number() + 1;
+        if view < self.current_view {
+            debug!(
+                %view,
+                current_view = %self.current_view,
+                "ignoring stale timeout certificate"
+            );
+            return Protocol::Abort;
+        }
         if self.timeout_certs.contains_key(&view) {
             return Protocol::Continue;
         }
@@ -1056,6 +1080,20 @@ impl<T: NodeType> Consensus<T> {
             cert2,
             proposal,
         } = epoch_change;
+        // Compare epochs (not views) so a node that timed out past a boundary
+        // it never saw can still recover via a genuinely new epoch change.
+        if self
+            .current_epoch
+            .is_some_and(|current| cert2.data.epoch < current)
+        {
+            debug!(
+                view = %cert2.view_number(),
+                epoch = %cert2.data.epoch,
+                current_epoch = ?self.current_epoch.map(|e| *e),
+                "ignoring stale epoch change for an epoch we have already entered"
+            );
+            return Protocol::Abort;
+        }
         // Check if this epoch change is new
         if self
             .locked_cert
