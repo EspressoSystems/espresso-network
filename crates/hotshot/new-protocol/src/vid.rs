@@ -35,10 +35,11 @@ pub struct VidDisperseRequest<T: NodeType> {
     pub epoch: EpochNumber,
     pub block: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    pub payload_commitment: VidCommitment2,
 }
 
 pub struct VidDisperser<T: NodeType> {
-    calculations: BTreeMap<ViewNumber, AbortHandle>,
+    calculations: BTreeMap<(ViewNumber, VidCommitment2), AbortHandle>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
     tasks: JoinSet<Result<VidDisperseOutput<T>, ()>>,
 }
@@ -53,15 +54,18 @@ impl<T: NodeType> VidDisperser<T> {
     }
 
     pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
-        let view = vid_disperse_request.view;
-        if self.calculations.contains_key(&view) {
+        let key = (
+            vid_disperse_request.view,
+            vid_disperse_request.payload_commitment,
+        );
+        if self.calculations.contains_key(&key) {
             return;
         }
         let handle = self.tasks.spawn(Self::handle_vid_disperse_request(
             self.epoch_membership_coordinator.clone(),
             vid_disperse_request,
         ));
-        self.calculations.insert(view, handle);
+        self.calculations.insert(key, handle);
     }
 
     pub async fn next(&mut self) -> Option<Result<VidDisperseOutput<T>, ()>> {
@@ -98,7 +102,9 @@ impl<T: NodeType> VidDisperser<T> {
         })
     }
     pub fn gc(&mut self, view_number: ViewNumber) {
-        let keep = self.calculations.split_off(&view_number);
+        let keep = self
+            .calculations
+            .split_off(&(view_number, VidCommitment2::default()));
         for handle in self.calculations.values_mut() {
             handle.abort();
         }
