@@ -101,6 +101,15 @@ enum Pending<T: NodeType> {
     Header(HeaderRequest<T>),
 }
 
+impl<T: NodeType> Pending<T> {
+    fn view(&self) -> ViewNumber {
+        match self {
+            Pending::State(r) => r.view,
+            Pending::Header(r) => r.view,
+        }
+    }
+}
+
 enum Completed<T: NodeType> {
     State {
         response: StateResponse<T>,
@@ -370,13 +379,28 @@ impl<T: NodeType> StateManager<T> {
     pub fn gc(&mut self, view_number: ViewNumber) {
         self.validated_states
             .retain(|_, entry| entry.leaf.view_number() >= view_number);
+
         for (task, view) in self.state_requests.values() {
             if *view < view_number {
                 task.abort();
             }
         }
+
         self.state_requests
             .retain(|_, (_, view)| *view >= view_number);
+
+        self.header_requests.retain(|(view, _), handle| {
+            let keep = *view >= view_number;
+            if !keep {
+                handle.abort();
+            }
+            keep
+        });
+
+        self.pending_requests.retain(|_, pending| {
+            pending.retain(|p| p.view() >= view_number);
+            !pending.is_empty()
+        });
     }
 
     fn start_pending(&mut self, finished_commitment: Commitment<Leaf2<T>>) {

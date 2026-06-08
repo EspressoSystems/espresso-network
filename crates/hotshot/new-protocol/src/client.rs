@@ -5,6 +5,7 @@ use committable::Commitment;
 use hotshot_types::{
     data::{EpochNumber, Leaf2, ViewNumber},
     message::Proposal as SignedProposal,
+    simple_certificate::QuorumCertificate2,
     simple_vote::TimeoutVote2,
     traits::{leaf_fetcher_network::LeafFetcherNetwork, node_implementation::NodeType},
     utils::StateAndDelta,
@@ -99,14 +100,12 @@ impl<T: NodeType> ClientApi<T> {
 
     pub async fn send_external_message(
         &self,
-        view: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(
             ClientRequest::SendExternalMessage {
-                view,
                 payload,
                 recipient,
                 respond,
@@ -120,6 +119,14 @@ impl<T: NodeType> ClientApi<T> {
     pub async fn submit_timeout_vote(&self, vote: TimeoutVote2<T>) -> Result<(), QueryError> {
         let (respond, rx) = oneshot::channel();
         self.call(ClientRequest::SubmitTimeoutVote { vote, respond }, rx)
+            .await
+    }
+
+    /// Forward the last legacy view's QC so the first new-protocol leader can
+    /// propose on it even if the cutover seed was snapshotted before it formed.
+    pub async fn submit_legacy_high_qc(&self, qc: QuorumCertificate2<T>) -> Result<(), QueryError> {
+        let (respond, rx) = oneshot::channel();
+        self.call(ClientRequest::SubmitLegacyHighQc { qc, respond }, rx)
             .await
     }
 
@@ -213,7 +220,6 @@ pub(crate) enum ClientRequest<T: NodeType> {
         respond: oneshot::Sender<Result<SignedProposal<T, Proposal<T>>, QueryError>>,
     },
     SendExternalMessage {
-        view: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
         respond: oneshot::Sender<Result<(), QueryError>>,
@@ -224,6 +230,10 @@ pub(crate) enum ClientRequest<T: NodeType> {
     },
     SubmitTimeoutVote {
         vote: TimeoutVote2<T>,
+        respond: oneshot::Sender<()>,
+    },
+    SubmitLegacyHighQc {
+        qc: QuorumCertificate2<T>,
         respond: oneshot::Sender<()>,
     },
     BumpNetworkEpoch {
@@ -265,24 +275,24 @@ impl<T: NodeType> ClientLeafFetcherNetwork<T> {
 impl<T: NodeType> LeafFetcherNetwork<T> for ClientLeafFetcherNetwork<T> {
     async fn send_leaf_request(
         &self,
-        view: ViewNumber,
+        _: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> anyhow::Result<()> {
         self.client
-            .send_external_message(view, payload, recipient)
+            .send_external_message(payload, recipient)
             .await?;
         Ok(())
     }
 
     async fn send_leaf_response(
         &self,
-        view: ViewNumber,
+        _: ViewNumber,
         payload: Vec<u8>,
         recipient: T::SignatureKey,
     ) -> anyhow::Result<()> {
         self.client
-            .send_external_message(view, payload, recipient)
+            .send_external_message(payload, recipient)
             .await?;
         Ok(())
     }

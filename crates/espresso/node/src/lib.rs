@@ -19,7 +19,7 @@ pub mod state_cert;
 pub mod state_signature;
 pub mod util;
 
-use std::{fmt::Debug, marker::PhantomData, num::NonZeroU64, sync::Arc, time::Duration};
+use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
@@ -33,8 +33,11 @@ use espresso_types::{
     SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
+    v0_1::ChainId,
     v0_3::Fetcher,
 };
+
+pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
 pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
@@ -133,8 +136,6 @@ pub struct NetworkParams {
     /// Per-step timeout for the startup stake-table catchup walk
     /// (`bootstrap_epoch_window`).
     pub bootstrap_epoch_catchup_timeout: Duration,
-    /// Number of blocks between new-protocol consensus garbage collection passes.
-    pub new_protocol_consensus_gc_interval: NonZeroU64,
     /// The address to advertise as our public API's URL
     pub public_api_url: Option<Url>,
     /// Cliquenet network address.
@@ -760,6 +761,9 @@ where
 
     let combined_network = {
         info!("Initializing Libp2p network");
+        // Mainnet keeps today's libp2p protocol strings byte-identical.
+        let chain_id = genesis.chain_config.chain_id;
+        let network_discriminator = (chain_id != MAINNET_CHAIN_ID).then_some(chain_id.0);
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
@@ -772,6 +776,7 @@ where
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
             &validator_config.private_key,
             hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
+            network_discriminator,
         )
         .await
         .with_context(|| {
@@ -801,7 +806,7 @@ where
     // use. They should share a single lock so upgrade certificate updates
     // are visible to both.
     let cliquenet = Cliquenet::create(
-        "espresso",
+        &format!("espresso-{}", genesis.chain_config.chain_id),
         pub_key,
         network_params.x25519_secret_key.into(),
         network_params.cliquenet_bind_addr.clone(),
@@ -830,7 +835,6 @@ where
         event_consumer,
         proposal_fetcher_config,
         network_params.bootstrap_epoch_catchup_timeout,
-        network_params.new_protocol_consensus_gc_interval,
     )
     .await?;
 
@@ -1660,7 +1664,6 @@ pub mod testing {
                 event_consumer,
                 Default::default(),
                 Duration::from_secs(2),
-                NonZeroU64::new(100).unwrap(),
             )
             .await
             .unwrap()

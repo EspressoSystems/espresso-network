@@ -51,7 +51,7 @@ use versions::{NEW_PROTOCOL_VERSION, Upgrade, version};
 use crate::{
     consensus::ConsensusOutput,
     coordinator::{Coordinator, CoordinatorOutput, error::Severity, timer::Timer},
-    cutover::{CutoverGate, forward_legacy_timeout_votes},
+    cutover::{CutoverGate, forward_legacy_high_qc, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
     network::cliquenet::Cliquenet,
     outbox::Outbox,
@@ -253,7 +253,6 @@ async fn build_cutover_coordinator(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
-        100,
     );
 
     let mut state_manager = StateManager::new(instance.clone(), upgrade_lock.clone());
@@ -276,7 +275,7 @@ async fn build_cutover_coordinator(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_genesis(genesis_cert1, genesis_proposal);
+    consensus.seed_parent(genesis_cert1, genesis_proposal);
 
     let block_builder = BlockBuilder::new(
         instance.clone(),
@@ -298,7 +297,6 @@ async fn build_cutover_coordinator(
         .vote2_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .timeout_one_honest_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
-        .checkpoint_collector(VoteCollector::new(membership.clone(), upgrade_lock.clone()))
         .epoch_root_collector(EpochRootVoteCollector::new(
             membership.clone(),
             upgrade_lock.clone(),
@@ -421,10 +419,13 @@ async fn spawn_node(
     let legacy_event_rx = legacy.read().await.event_stream_known_impl().deactivate();
     bg_handles.push(
         tokio::spawn(forward_legacy_timeout_votes(
-            legacy_event_rx,
+            legacy_event_rx.clone(),
             client_api.clone(),
         ))
         .abort_handle(),
+    );
+    bg_handles.push(
+        tokio::spawn(forward_legacy_high_qc(legacy_event_rx, client_api.clone())).abort_handle(),
     );
 
     let (decision_tx, decision_rx) = mpsc::unbounded_channel::<DecisionEvent>();
@@ -670,14 +671,16 @@ const PREDICTED_CUTOVER_VIEW: u64 = UPGRADE_VIEW + 20;
 /// subset of `{V-2, V-1, V, V+1, V+2}`.
 const V: u64 = PREDICTED_CUTOVER_VIEW - 1;
 
-/// Happy path. `cutover_view - 1` reliably has no QC at cutover, so
-/// the new protocol skips it via TC2.
+/// Happy path. The QC for `cutover_view - 1` forms in the legacy protocol and
+/// rides into the new protocol via the cutover seed's `high_qc`, so the first
+/// leader proposes directly on it (no TC2 skip, no timer wait) and every view
+/// is decided.
 #[tokio::test(flavor = "multi_thread")]
 async fn legacy_runs_upgrade_then_new_protocol_takes_over() {
     run_cutover_test(
         4,
         6,
-        views([PREDICTED_CUTOVER_VIEW - 1]),
+        BTreeSet::new(),
         Duration::from_secs(180),
         DEFAULT_NEW_PROTO_VIEW_TIMEOUT,
         Vec::new(),

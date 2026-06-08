@@ -57,6 +57,62 @@ impl<K: SignatureKey> std::fmt::Debug for StakeTableEntry<K> {
     }
 }
 
+#[cfg(feature = "rlp")]
+mod stake_table_entry_rlp {
+    use alloy_rlp::{Decodable, Encodable, RlpDecodable, RlpEncodable};
+    use ark_serialize::SerializationError;
+
+    use super::*;
+
+    /// Intermediate type for serializing [`StakeTableEntry`], using [`SignatureKey::to_bytes`] for
+    /// the key.
+    #[derive(Clone, Debug, RlpDecodable, RlpEncodable)]
+    pub(super) struct StakeTableEntryRlp {
+        pub(super) stake_key: Vec<u8>,
+        pub(super) stake_amount: U256,
+    }
+
+    impl<K: SignatureKey> From<&StakeTableEntry<K>> for StakeTableEntryRlp {
+        fn from(e: &StakeTableEntry<K>) -> Self {
+            Self {
+                stake_key: e.stake_key.to_bytes(),
+                stake_amount: e.stake_amount,
+            }
+        }
+    }
+
+    impl<K: SignatureKey> TryFrom<StakeTableEntryRlp> for StakeTableEntry<K> {
+        type Error = SerializationError;
+
+        fn try_from(e: StakeTableEntryRlp) -> Result<Self, Self::Error> {
+            Ok(Self {
+                stake_key: K::from_bytes(&e.stake_key)?,
+                stake_amount: e.stake_amount,
+            })
+        }
+    }
+
+    impl<K: SignatureKey> Encodable for StakeTableEntry<K> {
+        fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
+            StakeTableEntryRlp::from(self).encode(out)
+        }
+
+        fn length(&self) -> usize {
+            StakeTableEntryRlp::from(self).length()
+        }
+    }
+
+    impl<K: SignatureKey> Decodable for StakeTableEntry<K> {
+        fn decode(buf: &mut &[u8]) -> alloy_rlp::Result<Self> {
+            let rlp = StakeTableEntryRlp::decode(buf)?;
+            rlp.try_into().map_err(|err| {
+                tracing::warn!("malformed StakeTableEntry: {err:#}");
+                alloy_rlp::Error::Custom("input is valid RLP but not a valid StakeTableEntry")
+            })
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Deref, DerefMut)]
 pub struct HSStakeTable<TYPES: NodeType>(pub Vec<PeerConfig<TYPES>>);
 
@@ -192,5 +248,69 @@ impl<'a, T: NodeType> FromIterator<&'a PeerConfig<T>> for StakeTableEntries<T> {
                 .map(|peer| peer.stake_table_entry.clone())
                 .collect(),
         )
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_test {
+    use alloy_rlp::{Decodable, Encodable};
+    use zeroize::Zeroize;
+
+    use super::*;
+    use crate::{signature_key::BLSPubKey, stake_table::stake_table_entry_rlp::StakeTableEntryRlp};
+
+    #[test_log::test]
+    fn bls_stake_table_entry_rlp_round_trip_random() {
+        let entry = StakeTableEntry {
+            stake_key: BLSPubKey::generated_from_seed_indexed(
+                Default::default(),
+                Default::default(),
+            )
+            .0,
+            stake_amount: U256::ONE,
+        };
+
+        let mut bytes = vec![];
+        entry.encode(&mut bytes);
+        assert_eq!(bytes.len(), entry.length());
+
+        let mut buf = bytes.as_slice();
+        assert_eq!(entry, StakeTableEntry::decode(&mut buf).unwrap());
+        assert!(buf.is_empty());
+    }
+
+    #[test_log::test]
+    fn bls_stake_table_entry_rlp_round_trip_zero() {
+        let mut stake_key =
+            BLSPubKey::generated_from_seed_indexed(Default::default(), Default::default()).0;
+        stake_key.zeroize();
+        let entry = StakeTableEntry {
+            stake_key,
+            stake_amount: U256::ZERO,
+        };
+
+        let mut bytes = vec![];
+        entry.encode(&mut bytes);
+        assert_eq!(bytes.len(), entry.length());
+
+        let mut buf = bytes.as_slice();
+        assert_eq!(entry, StakeTableEntry::decode(&mut buf).unwrap());
+        assert!(buf.is_empty());
+    }
+
+    #[test_log::test]
+    fn bls_stake_table_entry_invalid_malformed_key() {
+        let entry = StakeTableEntryRlp {
+            stake_key: "not a key".as_bytes().to_vec(),
+            stake_amount: U256::ZERO,
+        };
+
+        let mut buf = vec![];
+        entry.encode(&mut buf);
+        let err = StakeTableEntry::<BLSPubKey>::decode(&mut buf.as_slice()).unwrap_err();
+        assert_eq!(
+            err,
+            alloy_rlp::Error::Custom("input is valid RLP but not a valid StakeTableEntry"),
+        );
     }
 }

@@ -1959,10 +1959,6 @@ fn payload_id_to_hs(
     }
 }
 
-// ============================================================================
-// v1::BlockStateApi and v1::FeeStateApi implementations
-// ============================================================================
-
 fn classify_query_error(err: hotshot_query_service::QueryError) -> anyhow::Error {
     use hotshot_query_service::QueryError;
     match err {

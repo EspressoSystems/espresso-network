@@ -35,6 +35,7 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/process-metrics",
     "crates/serialization/api",
     "crates/versions",
     "hotshot-events-service",
@@ -90,6 +91,7 @@ default-members = [
     "light-client",
     "light-client-query-service",
     "node-metrics",
+    "crates/process-metrics",
     "request-response",
     "sdks/crypto-helper",
     "crates/serialization/api",
@@ -113,7 +115,13 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2024"
 
 [workspace.dependencies]
-aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
+aide = { version = "0.15.1", features = [
+    "axum",
+    "axum-json",
+    "scalar",
+    "swagger",
+    "redoc",
+] }
 alloy = { version = "1.0", features = [
     "eips",
     "provider-ws",
@@ -124,6 +132,7 @@ alloy = { version = "1.0", features = [
     "signer-ledger",
 ] }
 alloy-compat = { path = "alloy-compat" }
+alloy-rlp = "0.3"
 anyhow = "1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"
@@ -327,6 +336,8 @@ pretty_assertions = { version = "1.4", features = ["unstable"] }
 primitive-types = "0.13"
 priority-queue = "2"
 proc-macro2 = "1"
+process-metrics = { path = "crates/process-metrics" }
+procfs = "0.18"
 prometheus = { version = "0.13", default-features = false }
 prometheus-parse = "0.2.5"
 proptest = "1"
