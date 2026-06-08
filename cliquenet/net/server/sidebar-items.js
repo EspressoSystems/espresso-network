@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["PeerState"],"fn":["append_trailer","remove_trailer"],"struct":["Party","Server"]};
+window.SIDEBAR_ITEMS = {"constant":["ACCEPT_TASKS","CHANNEL_SIZE","CONNECT_ATTEMPTS","CONNECT_TASKS","ERRORS","HELLOS","HELLO_TASKS","LOWER_BOUND","PEER_TASKS"],"enum":["PeerState"],"fn":["append_trailer","remove_trailer"],"struct":["Party","Server"]};
