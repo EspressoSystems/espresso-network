@@ -72,47 +72,53 @@ where
 
         let nodes: Vec<Node> = rows.into_iter().map(|r| r.into()).collect();
 
-        // On postgres, fall back to legacy tables for any traversal-path nodes not yet backfilled.
+        // On postgres, the backfill moves Merkle rows from the legacy table into the `*_bigint`
+        // table by `created` (block height), low heights first. Mid-migration a single path's
+        // versions are split across both tables, so the latest version <= `created` for a path may
+        // live in either one. Query the legacy table for every path and keep, per path, the row
+        // with the greatest `created` across both tables. (Once the contract phase drops the legacy
+        // table and renames `*_bigint`, `state_type` no longer ends in `_bigint` and this is skipped.)
         #[cfg(not(feature = "embedded-db"))]
-        let nodes = {
-            let found: HashSet<String> = nodes.iter().map(|n| n.path.to_string()).collect();
-            let missing: Vec<serde_json::Value> =
-                traversal_path_values(&traversal_path, tree_height)
-                    .into_iter()
-                    .filter(|p| !found.contains(&p.to_string()))
-                    .collect();
+        let nodes = if let Some(legacy_table) = state_type.strip_suffix("_bigint") {
+            let mut query = QueryBuilder::default();
+            let paths_param = query.bind(traversal_path_values(&traversal_path, tree_height))?;
+            let created_param = query.bind(created)?;
+            let sql = format!(
+                "SELECT n.path, n.created, n.hash_id::BIGINT AS hash_id, n.children, \
+                 n.children_bitvec, n.idx, n.entry FROM unnest({paths_param}::jsonb[]) AS \
+                 p(path), LATERAL (SELECT * FROM {legacy_table} WHERE {legacy_table}.path = \
+                 p.path AND {legacy_table}.created <= {created_param} ORDER BY \
+                 {legacy_table}.path DESC, {legacy_table}.created DESC LIMIT 1) AS n"
+            );
+            let legacy_rows = query
+                .query(&sql)
+                .fetch_all(self.as_mut())
+                .await
+                .map_err(|e| QueryError::Error {
+                    message: format!("merkle path fallback lookup failed: {e}"),
+                })?;
 
-            if missing.is_empty() {
-                nodes
-            } else {
-                let legacy_table = state_type.strip_suffix("_bigint").unwrap_or(state_type);
-                let mut query = QueryBuilder::default();
-                let paths_param = query.bind(missing)?;
-                let created_param = query.bind(created)?;
-                let sql = format!(
-                    "SELECT n.path, n.created, n.hash_id::BIGINT AS hash_id, n.children, \
-                     n.children_bitvec, n.idx, n.entry FROM unnest({paths_param}::jsonb[]) AS \
-                     p(path), LATERAL (SELECT * FROM {legacy_table} WHERE {legacy_table}.path = \
-                     p.path AND {legacy_table}.created <= {created_param} ORDER BY \
-                     {legacy_table}.path DESC, {legacy_table}.created DESC LIMIT 1) AS n ORDER BY \
-                     n.path DESC"
-                );
-                let legacy_rows =
-                    query
-                        .query(&sql)
-                        .fetch_all(self.as_mut())
-                        .await
-                        .map_err(|e| QueryError::Error {
-                            message: format!("merkle path fallback lookup failed: {e}"),
-                        })?;
-                let mut nodes = nodes;
-                nodes.extend(legacy_rows.into_iter().map(Node::from));
-                // Sort leaf-first (longer paths first).
-                nodes.sort_by_key(|n| {
-                    std::cmp::Reverse(n.path.as_array().map(|v| v.len()).unwrap_or(0))
-                });
-                nodes
+            let mut latest: HashMap<String, Node> = HashMap::new();
+            for node in nodes
+                .into_iter()
+                .chain(legacy_rows.into_iter().map(Node::from))
+            {
+                let key = node.path.to_string();
+                if latest
+                    .get(&key)
+                    .is_none_or(|cur| node.created > cur.created)
+                {
+                    latest.insert(key, node);
+                }
             }
+            let mut nodes: Vec<Node> = latest.into_values().collect();
+            // Sort leaf-first (longer paths first) for proof reconstruction.
+            nodes.sort_by_key(|n| {
+                std::cmp::Reverse(n.path.as_array().map(|v| v.len()).unwrap_or(0))
+            });
+            nodes
+        } else {
+            nodes
         };
 
         // insert all the hash ids to a hashset which is used to query later
