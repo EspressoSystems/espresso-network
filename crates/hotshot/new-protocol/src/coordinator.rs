@@ -751,6 +751,14 @@ where
                 );
             },
             ConsensusOutput::ViewChanged(view, epoch) => {
+                let current_view = self.consensus.current_view();
+                if view < current_view {
+                    warn!(
+                        %node, %view, %epoch, %current_view,
+                        "ignoring view change to stale view"
+                    );
+                    return Ok(());
+                }
                 info!(%node, %view, %epoch, "view changed");
                 self.consensus.set_view(view, epoch);
                 self.timer.reset_with_epoch(view, epoch);
@@ -894,6 +902,14 @@ where
                 },
                 ConsensusMessage::TimeoutVote(timeout_msg) => {
                     let view = timeout_msg.vote.view_number();
+                    let current_view = self.consensus.current_view();
+                    if view < current_view {
+                        debug!(
+                            %node, %sender, %view, %current_view,
+                            "ignoring timeout vote for stale view"
+                        );
+                        return None;
+                    }
                     debug!(
                         %node, %sender, %view,
                         has_lock = timeout_msg.lock.is_some(),
@@ -1203,6 +1219,16 @@ where
                 let _ = respond.send(result);
             },
             ClientRequest::SeedPreCutover { seed, respond } => {
+                let current_view = self.consensus.current_view();
+                if seed.cutover_view > ViewNumber::genesis() && current_view >= seed.cutover_view {
+                    tracing::info!(
+                        %current_view,
+                        cutover_view = *seed.cutover_view,
+                        "coordinator: ignoring pre-cutover seed; already past the cutover",
+                    );
+                    let _ = respond.send(());
+                    return Ok(());
+                }
                 tracing::info!(
                     undecided = seed.undecided.len(),
                     anchor_view = *seed.decided_anchor.view_number(),
@@ -1276,6 +1302,16 @@ where
                 let _ = respond.send(());
             },
             ClientRequest::SubmitTimeoutVote { vote, respond } => {
+                let view = vote.view_number();
+                let current_view = self.consensus.current_view();
+                if view < current_view {
+                    debug!(
+                        %view, %current_view,
+                        "ignoring bridged timeout vote for stale view"
+                    );
+                    let _ = respond.send(());
+                    return Ok(());
+                }
                 self.timeout_collector.accumulate_vote(vote.clone()).await;
                 self.timeout_one_honest_collector
                     .accumulate_vote(vote.clone())
