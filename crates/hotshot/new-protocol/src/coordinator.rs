@@ -98,6 +98,8 @@ pub struct Coordinator<T: NodeType, N, S> {
     cached_validated_proposals: BTreeMap<(ViewNumber, VidCommitment2), ValidatedProposal<T>>,
     #[builder(default)]
     cached_vid_shares: BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>,
+    #[builder(skip)]
+    da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
 }
 
@@ -429,13 +431,20 @@ where
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
-                        self.storage.append_da(
-                            block.view,
-                            block.epoch,
-                            block.payload.payload.clone(),
-                            block.payload.metadata.clone(),
-                            block.payload_commitment,
-                        );
+                        // Retain the payload and persist it when consensus proposes this
+                        // exact block (cf. SendProposal):
+                        if let VidCommitment::V2(commit) = block.payload_commitment {
+                            self.da_payloads.insert(
+                                (block.view, commit),
+                                PendingDa {
+                                    epoch: block.epoch,
+                                    payload: block.payload.payload.clone(),
+                                    metadata: block.payload.metadata.clone(),
+                                },
+                            );
+                        } else {
+                            warn!(view = %block.view, "block payload commitment is not V2");
+                        }
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.mark_reconstructed(block.view);
                         self.unicast_to_leader(
@@ -612,6 +621,21 @@ where
                 let block = proposal.data.block_header.block_number();
                 info!(%node, %view, %epoch, %block, "send proposal");
                 self.storage.append_proposal(proposal.data.clone());
+                // Two blocks can be built for one view. Here we know which one
+                // wins and we persist just that one:
+                if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
+                    if let Some(da) = self.da_payloads.remove(&(view, commit)) {
+                        self.storage.append_da(
+                            view,
+                            da.epoch,
+                            da.payload,
+                            da.metadata,
+                            VidCommitment::V2(commit),
+                        );
+                    } else {
+                        warn!(%node, %view, "no payload for proposed block");
+                    }
+                }
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
 
@@ -1448,6 +1472,9 @@ where
                 self.state_manager.gc(view);
                 self.storage.gc(view);
                 self.vid_reconstructor.gc(view);
+                self.da_payloads = self
+                    .da_payloads
+                    .split_off(&(view, VidCommitment2::default()));
             },
         }
         Ok(())
@@ -1461,6 +1488,13 @@ pub enum GcScope {
     Local(ViewNumber),
     /// GC is invoked on local decided views.
     Decided(ViewNumber),
+}
+
+/// A payload built locally and awaiting DA persistence.
+struct PendingDa<T: NodeType> {
+    epoch: EpochNumber,
+    payload: T::BlockPayload,
+    metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
 }
 
 type ProposalFetchResponseSender<T> =
