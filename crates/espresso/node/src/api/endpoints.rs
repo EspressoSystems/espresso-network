@@ -1126,7 +1126,7 @@ where
     Ok(api)
 }
 
-fn get_public_env_vars() -> Result<Vec<String>> {
+pub(super) fn get_public_env_vars() -> Result<Vec<String>> {
     let toml: toml::Value = toml::from_str(include_str!("../../api/public-env-vars.toml"))?;
 
     let keys = toml

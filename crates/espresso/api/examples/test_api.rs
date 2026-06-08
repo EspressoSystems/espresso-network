@@ -354,6 +354,134 @@ impl v1::FeeStateApi for TestApi {
     }
 }
 
+#[async_trait]
+impl v1::StatusApi for TestApi {
+    async fn block_height(&self) -> Result<u64> {
+        Ok(0)
+    }
+    async fn success_rate(&self) -> Result<f64> {
+        Ok(1.0)
+    }
+    async fn time_since_last_decide(&self) -> Result<u64> {
+        Ok(0)
+    }
+    async fn metrics(&self) -> Result<String> {
+        Ok(String::new())
+    }
+}
+
+#[async_trait]
+impl v1::ConfigApi for TestApi {
+    type HotShotConfig = serde_json::Value;
+    type RuntimeConfig = serde_json::Value;
+
+    async fn hotshot_config(&self) -> Result<Self::HotShotConfig> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn env(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+    async fn runtime_config(&self) -> Result<Self::RuntimeConfig> {
+        Ok(serde_json::Value::Null)
+    }
+}
+
+#[async_trait]
+impl v1::NodeApi for TestApi {
+    type VidShare = serde_json::Value;
+    type SyncStatus = serde_json::Value;
+    type HeaderWindow = serde_json::Value;
+    type Limits = serde_json::Value;
+    type StakeTable = serde_json::Value;
+    type StakeTableCurrent = serde_json::Value;
+    type Validators = serde_json::Value;
+    type AllValidators = serde_json::Value;
+    type Participation = serde_json::Value;
+    type BlockReward = serde_json::Value;
+    type Block = serde_json::Value;
+    type Leaf = serde_json::Value;
+
+    async fn block_height(&self) -> Result<u64> {
+        Ok(0)
+    }
+    async fn count_transactions(
+        &self,
+        _from: Option<u64>,
+        _to: Option<u64>,
+        _namespace: Option<u32>,
+    ) -> Result<u64> {
+        Ok(0)
+    }
+    async fn payload_size(
+        &self,
+        _from: Option<u64>,
+        _to: Option<u64>,
+        _namespace: Option<u32>,
+    ) -> Result<u64> {
+        Ok(0)
+    }
+    async fn get_vid_share(&self, _id: v1::VidShareId) -> Result<Self::VidShare> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn sync_status(&self) -> Result<Self::SyncStatus> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_header_window(
+        &self,
+        _start: v1::HeaderWindowStart,
+        _end: u64,
+    ) -> Result<Self::HeaderWindow> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn limits(&self) -> Result<Self::Limits> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn stake_table(&self, _epoch: u64) -> Result<Self::StakeTable> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn stake_table_current(&self) -> Result<Self::StakeTableCurrent> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn da_stake_table(&self, _epoch: u64) -> Result<Self::StakeTable> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn da_stake_table_current(&self) -> Result<Self::StakeTableCurrent> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_validators(&self, _epoch: u64) -> Result<Self::Validators> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_all_validators(
+        &self,
+        _epoch: u64,
+        _offset: u64,
+        _limit: u64,
+    ) -> Result<Self::AllValidators> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn current_proposal_participation(&self) -> Result<Self::Participation> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn proposal_participation(&self, _epoch: u64) -> Result<Self::Participation> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn current_vote_participation(&self) -> Result<Self::Participation> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn vote_participation(&self, _epoch: u64) -> Result<Self::Participation> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_block_reward(&self, _epoch: Option<u64>) -> Result<Self::BlockReward> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn get_oldest_block(&self) -> Result<Option<Self::Block>> {
+        Ok(None)
+    }
+    async fn get_oldest_leaf(&self) -> Result<Option<Self::Leaf>> {
+        Ok(None)
+    }
+}
+
 // Implement v2::RewardApi (simplified API - latest-only for claim/balance/proof)
 #[async_trait]
 impl v2::RewardApi for TestApi {

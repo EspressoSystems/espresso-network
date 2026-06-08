@@ -174,6 +174,9 @@ where
         + v1::HotShotAvailabilityApi
         + v1::BlockStateApi
         + v1::FeeStateApi
+        + v1::StatusApi
+        + v1::ConfigApi
+        + v1::NodeApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi
@@ -196,6 +199,9 @@ where
         + v1::HotShotAvailabilityApi
         + v1::BlockStateApi
         + v1::FeeStateApi
+        + v1::StatusApi
+        + v1::ConfigApi
+        + v1::NodeApi
         + Clone
         + Send
         + Sync
@@ -676,6 +682,320 @@ where
             .map_err(classify_availability_error)
     };
 
+    let status_block_height = |State(state): State<S>| async move {
+        <S as v1::StatusApi>::block_height(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let status_success_rate = |State(state): State<S>| async move {
+        state
+            .success_rate()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let status_time_since_last_decide = |State(state): State<S>| async move {
+        state
+            .time_since_last_decide()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let status_metrics = |State(state): State<S>| async move {
+        match <S as v1::StatusApi>::metrics(&state).await {
+            Ok(text) => Ok((
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8",
+                )],
+                text,
+            )),
+            Err(e) => Err(ApiError::Internal(e)),
+        }
+    };
+
+    let config_hotshot = |State(state): State<S>| async move {
+        <S as v1::ConfigApi>::hotshot_config(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let config_env = |State(state): State<S>| async move {
+        <S as v1::ConfigApi>::env(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let config_runtime = |State(state): State<S>| async move {
+        <S as v1::ConfigApi>::runtime_config(&state)
+            .await
+            .map(Json)
+            .map_err(classify_availability_error)
+    };
+
+    let node_block_height = |State(state): State<S>| async move {
+        <S as v1::NodeApi>::block_height(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_count_txs = |State(state): State<S>| async move {
+        state
+            .count_transactions(None, None, None)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_count_txs_to = |State(state): State<S>, Path(to): Path<u64>| async move {
+        state
+            .count_transactions(None, Some(to), None)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_count_txs_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
+        state
+            .count_transactions(Some(from), Some(to), None)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_count_txs_ns = |State(state): State<S>, Path(namespace): Path<u32>| async move {
+        state
+            .count_transactions(None, None, Some(namespace))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_count_txs_ns_to = |State(state): State<S>, Path((namespace, to)): Path<(u32, u64)>| async move {
+        state
+            .count_transactions(None, Some(to), Some(namespace))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_count_txs_ns_from_to =
+        |State(state): State<S>, Path((namespace, from, to)): Path<(u32, u64, u64)>| async move {
+            state
+                .count_transactions(Some(from), Some(to), Some(namespace))
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let node_payload_size = |State(state): State<S>| async move {
+        state
+            .payload_size(None, None, None)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_payload_size_to = |State(state): State<S>, Path(to): Path<u64>| async move {
+        state
+            .payload_size(None, Some(to), None)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_payload_size_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
+        state
+            .payload_size(Some(from), Some(to), None)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_payload_size_ns = |State(state): State<S>, Path(namespace): Path<u32>| async move {
+        state
+            .payload_size(None, None, Some(namespace))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_payload_size_ns_to =
+        |State(state): State<S>, Path((namespace, to)): Path<(u32, u64)>| async move {
+            state
+                .payload_size(None, Some(to), Some(namespace))
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let node_payload_size_ns_from_to =
+        |State(state): State<S>, Path((namespace, from, to)): Path<(u32, u64, u64)>| async move {
+            state
+                .payload_size(Some(from), Some(to), Some(namespace))
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let node_vid_share_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
+        state
+            .get_vid_share(v1::VidShareId::Height(height))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_vid_share_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
+        state
+            .get_vid_share(v1::VidShareId::Hash(hash))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_vid_share_by_payload_hash =
+        |State(state): State<S>, Path(payload_hash): Path<String>| async move {
+            state
+                .get_vid_share(v1::VidShareId::PayloadHash(payload_hash))
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let node_sync_status = |State(state): State<S>| async move {
+        state
+            .sync_status()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_header_window_time = |State(state): State<S>, Path((start, end)): Path<(u64, u64)>| async move {
+        state
+            .get_header_window(v1::HeaderWindowStart::Time(start), end)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_header_window_height =
+        |State(state): State<S>, Path((height, end)): Path<(u64, u64)>| async move {
+            state
+                .get_header_window(v1::HeaderWindowStart::Height(height), end)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+    let node_header_window_hash =
+        |State(state): State<S>, Path((hash, end)): Path<(String, u64)>| async move {
+            state
+                .get_header_window(v1::HeaderWindowStart::Hash(hash), end)
+                .await
+                .map(Json)
+                .map_err(ApiError::Internal)
+        };
+
+    let node_limits = |State(state): State<S>| async move {
+        <S as v1::NodeApi>::limits(&state)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_stake_table_current = |State(state): State<S>| async move {
+        state
+            .stake_table_current()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_stake_table = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .stake_table(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_da_stake_table_current = |State(state): State<S>| async move {
+        state
+            .da_stake_table_current()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_da_stake_table = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .da_stake_table(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_validators = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_validators(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_all_validators =
+        |State(state): State<S>, Path((epoch, offset, limit)): Path<(u64, u64, u64)>| async move {
+            state
+                .get_all_validators(epoch, offset, limit)
+                .await
+                .map(Json)
+                .map_err(ApiError::BadRequest)
+        };
+
+    let node_proposal_participation_current = |State(state): State<S>| async move {
+        state
+            .current_proposal_participation()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_proposal_participation = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .proposal_participation(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_vote_participation_current = |State(state): State<S>| async move {
+        state
+            .current_vote_participation()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_vote_participation = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .vote_participation(epoch)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_block_reward = |State(state): State<S>| async move {
+        state
+            .get_block_reward(None)
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_block_reward_epoch = |State(state): State<S>, Path(epoch): Path<u64>| async move {
+        state
+            .get_block_reward(Some(epoch))
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
+    let node_oldest_block = |State(state): State<S>| async move {
+        state
+            .get_oldest_block()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+    let node_oldest_leaf = |State(state): State<S>| async move {
+        state
+            .get_oldest_leaf()
+            .await
+            .map(Json)
+            .map_err(ApiError::Internal)
+    };
+
     // Build plain Axum router without OpenAPI (for v1 - internal types)
     Router::new()
         .route(
@@ -855,6 +1175,127 @@ where
             routes::v1::FEE_STATE_PATH_BY_HEIGHT_ROUTE,
             get(get_fee_state_path_by_height),
         )
+        // Status routes
+        .route(routes::v1::STATUS_BLOCK_HEIGHT_ROUTE, get(status_block_height))
+        .route(routes::v1::STATUS_SUCCESS_RATE_ROUTE, get(status_success_rate))
+        .route(
+            routes::v1::STATUS_TIME_SINCE_LAST_DECIDE_ROUTE,
+            get(status_time_since_last_decide),
+        )
+        .route(routes::v1::STATUS_METRICS_ROUTE, get(status_metrics))
+        // Config routes
+        .route(routes::v1::CONFIG_HOTSHOT_ROUTE, get(config_hotshot))
+        .route(routes::v1::CONFIG_ENV_ROUTE, get(config_env))
+        .route(routes::v1::CONFIG_RUNTIME_ROUTE, get(config_runtime))
+        // Node routes
+        .route(routes::v1::NODE_BLOCK_HEIGHT_ROUTE, get(node_block_height))
+        .route(routes::v1::NODE_TRANSACTIONS_COUNT_ROUTE, get(node_count_txs))
+        .route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_NS_ROUTE,
+            get(node_count_txs_ns),
+        )
+        .route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE,
+            get(node_count_txs_ns_to),
+        )
+        .route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE,
+            get(node_count_txs_ns_from_to),
+        )
+        .route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_TO_ROUTE,
+            get(node_count_txs_to),
+        )
+        .route(
+            routes::v1::NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE,
+            get(node_count_txs_from_to),
+        )
+        .route(routes::v1::NODE_PAYLOADS_SIZE_ROUTE, get(node_payload_size))
+        .route(
+            routes::v1::NODE_PAYLOADS_TOTAL_SIZE_ROUTE,
+            get(node_payload_size),
+        )
+        .route(
+            routes::v1::NODE_PAYLOADS_SIZE_NS_ROUTE,
+            get(node_payload_size_ns),
+        )
+        .route(
+            routes::v1::NODE_PAYLOADS_SIZE_NS_TO_ROUTE,
+            get(node_payload_size_ns_to),
+        )
+        .route(
+            routes::v1::NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE,
+            get(node_payload_size_ns_from_to),
+        )
+        .route(
+            routes::v1::NODE_PAYLOADS_SIZE_TO_ROUTE,
+            get(node_payload_size_to),
+        )
+        .route(
+            routes::v1::NODE_PAYLOADS_SIZE_FROM_TO_ROUTE,
+            get(node_payload_size_from_to),
+        )
+        .route(
+            routes::v1::NODE_VID_SHARE_BY_HASH_ROUTE,
+            get(node_vid_share_by_hash),
+        )
+        .route(
+            routes::v1::NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE,
+            get(node_vid_share_by_payload_hash),
+        )
+        .route(
+            routes::v1::NODE_VID_SHARE_BY_HEIGHT_ROUTE,
+            get(node_vid_share_by_height),
+        )
+        .route(routes::v1::NODE_SYNC_STATUS_ROUTE, get(node_sync_status))
+        .route(
+            routes::v1::NODE_HEADER_WINDOW_HASH_ROUTE,
+            get(node_header_window_hash),
+        )
+        .route(
+            routes::v1::NODE_HEADER_WINDOW_HEIGHT_ROUTE,
+            get(node_header_window_height),
+        )
+        .route(
+            routes::v1::NODE_HEADER_WINDOW_TIME_ROUTE,
+            get(node_header_window_time),
+        )
+        .route(routes::v1::NODE_LIMITS_ROUTE, get(node_limits))
+        .route(
+            routes::v1::NODE_STAKE_TABLE_CURRENT_ROUTE,
+            get(node_stake_table_current),
+        )
+        .route(routes::v1::NODE_STAKE_TABLE_ROUTE, get(node_stake_table))
+        .route(
+            routes::v1::NODE_DA_STAKE_TABLE_CURRENT_ROUTE,
+            get(node_da_stake_table_current),
+        )
+        .route(routes::v1::NODE_DA_STAKE_TABLE_ROUTE, get(node_da_stake_table))
+        .route(routes::v1::NODE_VALIDATORS_ROUTE, get(node_validators))
+        .route(routes::v1::NODE_ALL_VALIDATORS_ROUTE, get(node_all_validators))
+        .route(
+            routes::v1::NODE_PROPOSAL_PARTICIPATION_CURRENT_ROUTE,
+            get(node_proposal_participation_current),
+        )
+        .route(
+            routes::v1::NODE_PROPOSAL_PARTICIPATION_ROUTE,
+            get(node_proposal_participation),
+        )
+        .route(
+            routes::v1::NODE_VOTE_PARTICIPATION_CURRENT_ROUTE,
+            get(node_vote_participation_current),
+        )
+        .route(
+            routes::v1::NODE_VOTE_PARTICIPATION_ROUTE,
+            get(node_vote_participation),
+        )
+        .route(routes::v1::NODE_BLOCK_REWARD_ROUTE, get(node_block_reward))
+        .route(
+            routes::v1::NODE_BLOCK_REWARD_EPOCH_ROUTE,
+            get(node_block_reward_epoch),
+        )
+        .route(routes::v1::NODE_OLDEST_BLOCK_ROUTE, get(node_oldest_block))
+        .route(routes::v1::NODE_OLDEST_LEAF_ROUTE, get(node_oldest_leaf))
         .with_state(state)
 }
 

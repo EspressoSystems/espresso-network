@@ -7734,6 +7734,35 @@ mod test {
         Ok(())
     }
 
+    /// Assert both tide-disco and axum return a 2xx for the path. Used for endpoints whose
+    /// content varies between calls (e.g. wall-clock-dependent fields, live metrics).
+    async fn compare_endpoints_ok(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        let tide = http
+            .get(format!("http://localhost:{api_port}/v1/{path}"))
+            .send()
+            .await?
+            .status();
+        let axum = http
+            .get(format!("http://localhost:{axum_port}/v1/{path}"))
+            .send()
+            .await?
+            .status();
+        assert!(
+            tide.is_success(),
+            "v1/{path}: tide returned {tide}, expected 2xx"
+        );
+        assert!(
+            axum.is_success(),
+            "v1/{path}: axum returned {axum}, expected 2xx"
+        );
+        Ok(())
+    }
+
     /// Connect to both tide-disco and axum WebSocket endpoints, collect up to 10 messages each,
     /// and assert that at least 2 messages appear in both streams.
     async fn compare_ws_endpoints(api_port: u16, axum_port: u16, path: &str) -> anyhow::Result<()> {
@@ -7809,7 +7838,9 @@ mod test {
                 .try_into()
                 .unwrap();
 
-            let mut api_opts = Options::with_port(api_port).catchup(Default::default());
+            let mut api_opts = Options::with_port(api_port)
+                .catchup(Default::default())
+                .config(Default::default());
             api_opts.http.axum_port = Some(axum_port);
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
@@ -8420,6 +8451,159 @@ mod test {
                     &format!("fee-state/fee-balance/latest/{fee_account}"),
                 )
                 .await?;
+
+                // Status parity. Block height and success rate are stable since consensus is
+                // stopped; time-since-last-decide and metrics vary by wall-clock so we only
+                // check that both servers return 2xx.
+                compare_endpoints(&http, api_port, axum_port, "status/block-height").await?;
+                compare_endpoints(&http, api_port, axum_port, "status/success-rate").await?;
+                compare_endpoints_ok(&http, api_port, axum_port, "status/time-since-last-decide")
+                    .await?;
+                compare_endpoints_ok(&http, api_port, axum_port, "status/metrics").await?;
+
+                // Config parity. /hotshot and /env are derived from process-level state shared
+                // by both servers; /runtime returns 404 in both because no PublicNodeConfig was
+                // configured for this test.
+                compare_endpoints(&http, api_port, axum_port, "config/hotshot").await?;
+                compare_endpoints(&http, api_port, axum_port, "config/env").await?;
+                compare_error_endpoints(&http, api_port, axum_port, "config/runtime", 404).await?;
+
+                // Node parity. All endpoints share the same data source so byte-equal responses
+                // are expected once consensus is stopped.
+                compare_endpoints(&http, api_port, axum_port, "node/block-height").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/transactions/count").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/0/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/namespace/{avail_ns}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/namespace/{avail_ns}/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/transactions/count/namespace/{avail_ns}/0/{avail_block}"),
+                )
+                .await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/payloads/size").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/payloads/total-size").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/0/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/namespace/{avail_ns}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/namespace/{avail_ns}/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/payloads/size/namespace/{avail_ns}/0/{avail_block}"),
+                )
+                .await?;
+
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/vid/share/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/vid/share/hash/{block_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/vid/share/payload-hash/{payload_hash}"),
+                )
+                .await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/sync-status").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/limits").await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/stake-table/current").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/stake-table/1").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/current")
+                    .await?;
+                compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/1").await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/validators/1").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/all-validators/1/0/100")
+                    .await?;
+
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "node/participation/proposal/current",
+                )
+                .await?;
+                compare_endpoints(&http, api_port, axum_port, "node/participation/proposal/1")
+                    .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "node/participation/vote/current",
+                )
+                .await?;
+                compare_endpoints(&http, api_port, axum_port, "node/participation/vote/1").await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/block-reward").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/block-reward/epoch/1").await?;
+
+                compare_endpoints(&http, api_port, axum_port, "node/oldest-block").await?;
+                compare_endpoints(&http, api_port, axum_port, "node/oldest-leaf").await?;
 
                 // Error equivalence: both tide-disco and Axum must return the same
                 // HTTP status codes for common failure cases that clients encounter.

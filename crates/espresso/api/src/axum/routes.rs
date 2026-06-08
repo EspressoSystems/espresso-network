@@ -103,6 +103,72 @@ pub mod v1 {
     pub const FEE_STATE_PATH_BY_COMMIT_ROUTE: &str = "/v1/fee-state/commit/{commit}/{key}";
     pub const FEE_STATE_HEIGHT_ROUTE: &str = "/v1/fee-state/block-height";
     pub const FEE_STATE_BALANCE_LATEST_ROUTE: &str = "/v1/fee-state/fee-balance/latest/{address}";
+
+    pub const STATUS_BLOCK_HEIGHT_ROUTE: &str = "/v1/status/block-height";
+    pub const STATUS_SUCCESS_RATE_ROUTE: &str = "/v1/status/success-rate";
+    pub const STATUS_TIME_SINCE_LAST_DECIDE_ROUTE: &str = "/v1/status/time-since-last-decide";
+    pub const STATUS_METRICS_ROUTE: &str = "/v1/status/metrics";
+
+    pub const CONFIG_HOTSHOT_ROUTE: &str = "/v1/config/hotshot";
+    pub const CONFIG_ENV_ROUTE: &str = "/v1/config/env";
+    pub const CONFIG_RUNTIME_ROUTE: &str = "/v1/config/runtime";
+
+    pub const NODE_BLOCK_HEIGHT_ROUTE: &str = "/v1/node/block-height";
+
+    pub const NODE_TRANSACTIONS_COUNT_ROUTE: &str = "/v1/node/transactions/count";
+    pub const NODE_TRANSACTIONS_COUNT_TO_ROUTE: &str = "/v1/node/transactions/count/{to}";
+    pub const NODE_TRANSACTIONS_COUNT_FROM_TO_ROUTE: &str =
+        "/v1/node/transactions/count/{from}/{to}";
+    pub const NODE_TRANSACTIONS_COUNT_NS_ROUTE: &str =
+        "/v1/node/transactions/count/namespace/{namespace}";
+    pub const NODE_TRANSACTIONS_COUNT_NS_TO_ROUTE: &str =
+        "/v1/node/transactions/count/namespace/{namespace}/{to}";
+    pub const NODE_TRANSACTIONS_COUNT_NS_FROM_TO_ROUTE: &str =
+        "/v1/node/transactions/count/namespace/{namespace}/{from}/{to}";
+
+    pub const NODE_PAYLOADS_SIZE_ROUTE: &str = "/v1/node/payloads/size";
+    pub const NODE_PAYLOADS_SIZE_TO_ROUTE: &str = "/v1/node/payloads/size/{to}";
+    pub const NODE_PAYLOADS_SIZE_FROM_TO_ROUTE: &str = "/v1/node/payloads/size/{from}/{to}";
+    pub const NODE_PAYLOADS_TOTAL_SIZE_ROUTE: &str = "/v1/node/payloads/total-size";
+    pub const NODE_PAYLOADS_SIZE_NS_ROUTE: &str = "/v1/node/payloads/size/namespace/{namespace}";
+    pub const NODE_PAYLOADS_SIZE_NS_TO_ROUTE: &str =
+        "/v1/node/payloads/size/namespace/{namespace}/{to}";
+    pub const NODE_PAYLOADS_SIZE_NS_FROM_TO_ROUTE: &str =
+        "/v1/node/payloads/size/namespace/{namespace}/{from}/{to}";
+
+    pub const NODE_VID_SHARE_BY_HEIGHT_ROUTE: &str = "/v1/node/vid/share/{height}";
+    pub const NODE_VID_SHARE_BY_HASH_ROUTE: &str = "/v1/node/vid/share/hash/{hash}";
+    pub const NODE_VID_SHARE_BY_PAYLOAD_HASH_ROUTE: &str =
+        "/v1/node/vid/share/payload-hash/{payload_hash}";
+
+    pub const NODE_SYNC_STATUS_ROUTE: &str = "/v1/node/sync-status";
+
+    pub const NODE_HEADER_WINDOW_TIME_ROUTE: &str = "/v1/node/header/window/{start}/{end}";
+    pub const NODE_HEADER_WINDOW_HEIGHT_ROUTE: &str = "/v1/node/header/window/from/{height}/{end}";
+    pub const NODE_HEADER_WINDOW_HASH_ROUTE: &str = "/v1/node/header/window/from/hash/{hash}/{end}";
+
+    pub const NODE_LIMITS_ROUTE: &str = "/v1/node/limits";
+
+    pub const NODE_STAKE_TABLE_CURRENT_ROUTE: &str = "/v1/node/stake-table/current";
+    pub const NODE_STAKE_TABLE_ROUTE: &str = "/v1/node/stake-table/{epoch_number}";
+    pub const NODE_DA_STAKE_TABLE_CURRENT_ROUTE: &str = "/v1/node/da-stake-table/current";
+    pub const NODE_DA_STAKE_TABLE_ROUTE: &str = "/v1/node/da-stake-table/{epoch_number}";
+
+    pub const NODE_VALIDATORS_ROUTE: &str = "/v1/node/validators/{epoch_number}";
+    pub const NODE_ALL_VALIDATORS_ROUTE: &str =
+        "/v1/node/all-validators/{epoch_number}/{offset}/{limit}";
+
+    pub const NODE_PROPOSAL_PARTICIPATION_CURRENT_ROUTE: &str =
+        "/v1/node/participation/proposal/current";
+    pub const NODE_PROPOSAL_PARTICIPATION_ROUTE: &str = "/v1/node/participation/proposal/{epoch}";
+    pub const NODE_VOTE_PARTICIPATION_CURRENT_ROUTE: &str = "/v1/node/participation/vote/current";
+    pub const NODE_VOTE_PARTICIPATION_ROUTE: &str = "/v1/node/participation/vote/{epoch}";
+
+    pub const NODE_BLOCK_REWARD_ROUTE: &str = "/v1/node/block-reward";
+    pub const NODE_BLOCK_REWARD_EPOCH_ROUTE: &str = "/v1/node/block-reward/epoch/{epoch_number}";
+
+    pub const NODE_OLDEST_BLOCK_ROUTE: &str = "/v1/node/oldest-block";
+    pub const NODE_OLDEST_LEAF_ROUTE: &str = "/v1/node/oldest-leaf";
 }
 
 pub mod v2 {

@@ -542,8 +542,12 @@ impl Options {
         // Spawn new Axum and gRPC servers if ports are configured
         if let Some(axum_port) = self.http.axum_port {
             let ds_for_axum = ds.clone();
+            let env_vars = endpoints::get_public_env_vars().unwrap_or_default();
+            let node_cfg = self.public_node_config.as_deref().cloned();
             tasks.spawn("Axum API server", async move {
-                let state = NodeApiStateImpl::new(ds_for_axum);
+                let state = NodeApiStateImpl::new(ds_for_axum)
+                    .with_env_vars(env_vars)
+                    .with_public_node_config(node_cfg);
                 if let Err(e) = espresso_api::serve_axum(axum_port, state).await {
                     tracing::error!("Axum server error: {}", e);
                 }

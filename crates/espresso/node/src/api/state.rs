@@ -62,11 +62,30 @@ use super::{
 #[derive(Clone)]
 pub struct NodeApiStateImpl<D> {
     data_source: D,
+    env_vars: std::sync::Arc<Vec<String>>,
+    public_node_config: Option<std::sync::Arc<crate::options::PublicNodeConfig>>,
 }
 
 impl<D> NodeApiStateImpl<D> {
     pub fn new(data_source: D) -> Self {
-        Self { data_source }
+        Self {
+            data_source,
+            env_vars: std::sync::Arc::new(Vec::new()),
+            public_node_config: None,
+        }
+    }
+
+    pub fn with_env_vars(mut self, env_vars: Vec<String>) -> Self {
+        self.env_vars = std::sync::Arc::new(env_vars);
+        self
+    }
+
+    pub fn with_public_node_config(
+        mut self,
+        config: Option<crate::options::PublicNodeConfig>,
+    ) -> Self {
+        self.public_node_config = config.map(std::sync::Arc::new);
+        self
     }
 
     /// Convert RewardAccountProofV2 to proto
@@ -2127,3 +2146,306 @@ where
         Ok(path.elem().copied())
     }
 }
+
+// ============================================================================
+// v1::StatusApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v1::StatusApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::status::StatusDataSource + Send + Sync,
+{
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        let ds = &*self.data_source;
+        let h = hotshot_query_service::status::StatusDataSource::block_height(ds)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(h as u64)
+    }
+
+    async fn success_rate(&self) -> anyhow::Result<f64> {
+        let ds = &*self.data_source;
+        hotshot_query_service::status::StatusDataSource::success_rate(ds)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    async fn time_since_last_decide(&self) -> anyhow::Result<u64> {
+        let ds = &*self.data_source;
+        hotshot_query_service::status::StatusDataSource::elapsed_time_since_last_decide(ds)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    async fn metrics(&self) -> anyhow::Result<String> {
+        use hotshot_query_service::status::HasMetrics;
+        use tide_disco::metrics::Metrics as _;
+        let ds = &*self.data_source;
+        ds.metrics().export().map_err(|e| anyhow::anyhow!("{e}"))
+    }
+}
+
+// ============================================================================
+// v1::ConfigApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v1::ConfigApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: super::data_source::HotShotConfigDataSource + Send + Sync,
+{
+    type HotShotConfig = espresso_types::config::PublicNetworkConfig;
+    type RuntimeConfig = crate::options::PublicNodeConfig;
+
+    async fn hotshot_config(&self) -> anyhow::Result<Self::HotShotConfig> {
+        use super::data_source::HotShotConfigDataSource as _;
+        let ds = &*self.data_source;
+        Ok(ds.get_config().await)
+    }
+
+    async fn env(&self) -> anyhow::Result<Vec<String>> {
+        Ok((*self.env_vars).clone())
+    }
+
+    async fn runtime_config(&self) -> anyhow::Result<Self::RuntimeConfig> {
+        self.public_node_config.as_deref().cloned().ok_or_else(|| {
+            espresso_api::error::AvailabilityError::NotFound(
+                "runtime config not available".to_string(),
+            )
+            .into()
+        })
+    }
+}
+
+// ============================================================================
+// v1::NodeApi implementation
+// ============================================================================
+
+#[async_trait]
+impl<D> espresso_api::v1::NodeApi for NodeApiStateImpl<D>
+where
+    D: std::ops::Deref + Clone + Send + Sync + 'static,
+    D::Target: hotshot_query_service::node::NodeDataSource<espresso_types::SeqTypes>
+        + super::data_source::StakeTableDataSource<espresso_types::SeqTypes>
+        + super::data_source::PruningDataSource
+        + Send
+        + Sync,
+{
+    type VidShare = hotshot_types::data::VidShare;
+    type SyncStatus = hotshot_query_service::node::SyncStatusQueryData;
+    type HeaderWindow = hotshot_query_service::node::TimeWindowQueryData<
+        hotshot_query_service::Header<espresso_types::SeqTypes>,
+    >;
+    type Limits = hotshot_query_service::node::Limits;
+    type StakeTable = Vec<hotshot_types::PeerConfig<espresso_types::SeqTypes>>;
+    type StakeTableCurrent =
+        super::data_source::StakeTableWithEpochNumber<espresso_types::SeqTypes>;
+    type Validators = indexmap::IndexMap<
+        alloy::primitives::Address,
+        espresso_types::v0_3::AuthenticatedValidator<espresso_types::PubKey>,
+    >;
+    type AllValidators = Vec<espresso_types::v0_3::RegisteredValidator<espresso_types::PubKey>>;
+    type Participation = std::collections::HashMap<espresso_types::PubKey, f64>;
+    type BlockReward = Option<espresso_types::v0_3::RewardAmount>;
+    type Block = hotshot_query_service::availability::BlockQueryData<espresso_types::SeqTypes>;
+    type Leaf = hotshot_query_service::availability::LeafQueryData<espresso_types::SeqTypes>;
+
+    async fn block_height(&self) -> anyhow::Result<u64> {
+        let ds = &*self.data_source;
+        let h = hotshot_query_service::node::NodeDataSource::block_height(ds)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(h as u64)
+    }
+
+    async fn count_transactions(
+        &self,
+        from: Option<u64>,
+        to: Option<u64>,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<u64> {
+        use std::ops::Bound;
+        let ds = &*self.data_source;
+        let from = match from {
+            Some(f) => Bound::Included(f as usize),
+            None => Bound::Unbounded,
+        };
+        let to = match to {
+            Some(t) => Bound::Included(t as usize),
+            None => Bound::Unbounded,
+        };
+        let ns = namespace.map(|n| espresso_types::NamespaceId::from(n as u64));
+        let count = ds
+            .count_transactions_in_range((from, to), ns)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(count as u64)
+    }
+
+    async fn payload_size(
+        &self,
+        from: Option<u64>,
+        to: Option<u64>,
+        namespace: Option<u32>,
+    ) -> anyhow::Result<u64> {
+        use std::ops::Bound;
+        let ds = &*self.data_source;
+        let from = match from {
+            Some(f) => Bound::Included(f as usize),
+            None => Bound::Unbounded,
+        };
+        let to = match to {
+            Some(t) => Bound::Included(t as usize),
+            None => Bound::Unbounded,
+        };
+        let ns = namespace.map(|n| espresso_types::NamespaceId::from(n as u64));
+        let size = ds
+            .payload_size_in_range((from, to), ns)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(size as u64)
+    }
+
+    async fn get_vid_share(
+        &self,
+        id: espresso_api::v1::VidShareId,
+    ) -> anyhow::Result<Self::VidShare> {
+        let ds = &*self.data_source;
+        let node_id: HsBlockId<espresso_types::SeqTypes> = match id {
+            espresso_api::v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
+            espresso_api::v1::VidShareId::Hash(h) => HsBlockId::Hash(
+                h.parse()
+                    .map_err(|_| anyhow::anyhow!("invalid block hash: {h}"))?,
+            ),
+            espresso_api::v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
+                h.parse()
+                    .map_err(|_| anyhow::anyhow!("invalid payload hash: {h}"))?,
+            ),
+        };
+        hotshot_query_service::node::NodeDataSource::vid_share(ds, node_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
+        let ds = &*self.data_source;
+        hotshot_query_service::node::NodeDataSource::sync_status(ds)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    async fn get_header_window(
+        &self,
+        start: espresso_api::v1::HeaderWindowStart,
+        end: u64,
+    ) -> anyhow::Result<Self::HeaderWindow> {
+        use hotshot_query_service::node::WindowStart;
+        let ds = &*self.data_source;
+        let start: WindowStart<espresso_types::SeqTypes> = match start {
+            espresso_api::v1::HeaderWindowStart::Time(t) => WindowStart::Time(t),
+            espresso_api::v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
+            espresso_api::v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
+                h.parse()
+                    .map_err(|_| anyhow::anyhow!("invalid block hash: {h}"))?,
+            ),
+        };
+        ds.get_header_window(start, end, NODE_WINDOW_LIMIT)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    async fn limits(&self) -> anyhow::Result<Self::Limits> {
+        Ok(hotshot_query_service::node::Limits {
+            window_limit: NODE_WINDOW_LIMIT,
+        })
+    }
+
+    async fn stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
+        let ds = &*self.data_source;
+        ds.get_stake_table(Some(hotshot_types::data::EpochNumber::new(epoch)))
+            .await
+    }
+
+    async fn stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent> {
+        let ds = &*self.data_source;
+        ds.get_stake_table_current().await
+    }
+
+    async fn da_stake_table(&self, epoch: u64) -> anyhow::Result<Self::StakeTable> {
+        let ds = &*self.data_source;
+        ds.get_da_stake_table(Some(hotshot_types::data::EpochNumber::new(epoch)))
+            .await
+    }
+
+    async fn da_stake_table_current(&self) -> anyhow::Result<Self::StakeTableCurrent> {
+        let ds = &*self.data_source;
+        ds.get_da_stake_table_current().await
+    }
+
+    async fn get_validators(&self, epoch: u64) -> anyhow::Result<Self::Validators> {
+        let ds = &*self.data_source;
+        ds.get_validators(hotshot_types::data::EpochNumber::new(epoch))
+            .await
+    }
+
+    async fn get_all_validators(
+        &self,
+        epoch: u64,
+        offset: u64,
+        limit: u64,
+    ) -> anyhow::Result<Self::AllValidators> {
+        if limit > 1000 {
+            return Err(anyhow::anyhow!("Limit cannot be greater than 1000"));
+        }
+        let ds = &*self.data_source;
+        ds.get_all_validators(hotshot_types::data::EpochNumber::new(epoch), offset, limit)
+            .await
+    }
+
+    async fn current_proposal_participation(&self) -> anyhow::Result<Self::Participation> {
+        let ds = &*self.data_source;
+        Ok(ds.current_proposal_participation().await)
+    }
+
+    async fn proposal_participation(&self, epoch: u64) -> anyhow::Result<Self::Participation> {
+        let ds = &*self.data_source;
+        Ok(ds
+            .proposal_participation(hotshot_types::data::EpochNumber::new(epoch))
+            .await)
+    }
+
+    async fn current_vote_participation(&self) -> anyhow::Result<Self::Participation> {
+        let ds = &*self.data_source;
+        Ok(ds.current_vote_participation().await)
+    }
+
+    async fn vote_participation(&self, epoch: u64) -> anyhow::Result<Self::Participation> {
+        let ds = &*self.data_source;
+        Ok(ds
+            .vote_participation(hotshot_types::data::EpochNumber::new(epoch))
+            .await)
+    }
+
+    async fn get_block_reward(&self, epoch: Option<u64>) -> anyhow::Result<Self::BlockReward> {
+        let ds = &*self.data_source;
+        ds.get_block_reward(epoch.map(hotshot_types::data::EpochNumber::new))
+            .await
+    }
+
+    async fn get_oldest_block(&self) -> anyhow::Result<Option<Self::Block>> {
+        use super::data_source::PruningDataSource as _;
+        let ds = &*self.data_source;
+        ds.get_oldest_block().await
+    }
+
+    async fn get_oldest_leaf(&self) -> anyhow::Result<Option<Self::Leaf>> {
+        use super::data_source::PruningDataSource as _;
+        let ds = &*self.data_source;
+        ds.get_oldest_leaf().await
+    }
+}
+
+const NODE_WINDOW_LIMIT: usize = 500;
