@@ -30,7 +30,7 @@ use hotshot_types::{
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
     data::{DaProposal2, Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    message::{Proposal, UpgradeLock},
+    message::{Proposal, UpgradeLock, convert_proposal},
     network::NetworkConfig,
     new_protocol::CoordinatorEvent,
     storage_metrics::StorageMetricsValue,
@@ -712,6 +712,44 @@ async fn handle_events<N, P, C>(
                         tracing::warn!(
                             ?view,
                             "failed to store reconstructed payload in query service: {err:#}"
+                        );
+                    }
+                });
+            },
+            CoordinatorEvent::VidShareValidated { view, share, .. } => {
+                // A VID share validated after its view was decided. Make sure it
+                // lands in both stores: consensus storage, so restart replay and
+                // peer recovery can serve it (consensus' own write is asynchronous
+                // and may be lost on a crash), and the query service, which
+                // back-fills the VID data the block was decided without. Spawned so
+                // slow writes cannot stall the event loop; both writes are
+                // idempotent.
+                let persistence = persistence.clone();
+                let consumer = event_consumer.clone();
+                let private_key = private_key.clone();
+                let event = event.clone();
+                let view = *view;
+                let share = share.clone();
+                spawn(async move {
+                    // Placeholder signature, matching consensus' own asynchronous
+                    // VID writes; readers verify shares against the header's
+                    // payload commitment, not this signature.
+                    match share.to_proposal(&private_key) {
+                        Some(proposal) => {
+                            if let Err(err) =
+                                persistence.append_vid(&convert_proposal(proposal)).await
+                            {
+                                tracing::warn!(?view, "failed to persist late VID share: {err:#}");
+                            }
+                        },
+                        None => {
+                            tracing::warn!(?view, "failed to sign late VID share proposal");
+                        },
+                    }
+                    if let Err(err) = consumer.handle_event(&event).await {
+                        tracing::warn!(
+                            ?view,
+                            "failed to store late VID share in query service: {err:#}"
                         );
                     }
                 });

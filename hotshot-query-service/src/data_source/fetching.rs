@@ -871,6 +871,23 @@ where
         block.notify(&self.fetcher.notifiers).await;
         Ok(())
     }
+
+    /// Append VID data for a block whose leaf was already decided without it.
+    ///
+    /// In the new protocol, decide events can arrive before this node's VID
+    /// share does, so [`append`](Self::append) may persist a leaf with no VID
+    /// data attached. The VID common data and share are then back-filled here
+    /// once they become available, leaving the rest of the block info untouched.
+    async fn append_vid(
+        &self,
+        common: VidCommonQueryData<Types>,
+        share: Option<VidShare>,
+    ) -> anyhow::Result<()> {
+        // Write to storage and notify any pending fetchers waiting on this height.
+        self.fetcher.store(&(common.clone(), share)).await;
+        common.notify(&self.fetcher.notifiers).await;
+        Ok(())
+    }
 }
 
 impl<Types, S, P> VersionedDataSource for FetchingDataSource<Types, S, P>

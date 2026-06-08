@@ -306,4 +306,18 @@ pub trait UpdateAvailabilityData<Types: NodeType> {
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async { Ok(()) }
     }
+
+    /// Append VID data for a block whose leaf was already decided without it.
+    ///
+    /// Decide events in the new protocol may arrive before this node's VID share does. When the
+    /// share eventually becomes available the data source uses this method to fill in the VID
+    /// common data and share, notifying any pending fetchers. Implementations that don't track
+    /// VID data (e.g. metrics-only) may leave the default no-op.
+    fn append_vid(
+        &self,
+        _common: VidCommonQueryData<Types>,
+        _share: Option<VidShare>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async { Ok(()) }
+    }
 }

@@ -332,6 +332,14 @@ where
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         self.data_source.append_payload(block).await
     }
+
+    async fn append_vid(
+        &self,
+        common: VidCommonQueryData<Types>,
+        share: Option<VidShare>,
+    ) -> anyhow::Result<()> {
+        self.data_source.append_vid(common, share).await
+    }
 }
 
 #[async_trait]

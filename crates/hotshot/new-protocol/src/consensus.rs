@@ -151,6 +151,14 @@ pub enum ConsensusOutput<T: NodeType> {
         header: T::BlockHeader,
         payload: T::BlockPayload,
     },
+    /// Emitted when this node's VID share becomes available for a view that was
+    /// already decided without one. Notifies downstream consumers (e.g. the query
+    /// service) so they can back-fill the VID data missing from the decide event.
+    VidShareValidated {
+        view: ViewNumber,
+        header: T::BlockHeader,
+        share: VidDisperseShare2<T>,
+    },
 }
 
 pub struct Consensus<T: NodeType> {

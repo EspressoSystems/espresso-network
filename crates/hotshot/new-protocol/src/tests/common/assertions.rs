@@ -16,6 +16,10 @@ pub(crate) fn is_leaf_decided(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::LeafDecided { .. })
 }
 
+pub(crate) fn is_vid_share_validated(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::VidShareValidated { .. })
+}
+
 pub(crate) fn is_request_state(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::RequestState(_))
 }

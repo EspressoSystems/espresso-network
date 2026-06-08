@@ -1,5 +1,5 @@
 use crate::{
-    data::ViewNumber,
+    data::{VidDisperseShare2, ViewNumber},
     event::{Event, LeafInfo},
     message::Proposal as SignedProposal,
     new_protocol::Proposal,
@@ -37,6 +37,14 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
         header: TYPES::BlockHeader,
         payload: TYPES::BlockPayload,
     },
+    /// Emitted when a node's VID share becomes available for a view that was
+    /// already decided without one. Lets downstream consumers (e.g. query
+    /// service) fill in VID data that was missing from the decide event.
+    VidShareValidated {
+        view: ViewNumber,
+        header: TYPES::BlockHeader,
+        share: VidDisperseShare2<TYPES>,
+    },
 }
 
 impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
@@ -64,6 +72,9 @@ impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
             },
             Self::BlockPayloadReconstructed { view, .. } => {
                 write!(f, "BlockPayloadReconstructed: view={view}")
+            },
+            Self::VidShareValidated { view, .. } => {
+                write!(f, "VidShareValidated: view={view}")
             },
         }
     }
