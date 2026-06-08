@@ -903,6 +903,14 @@ impl<T: NodeType> Consensus<T> {
         epoch: EpochNumber,
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
+        if view < self.current_view {
+            debug!(
+                %view,
+                current_view = %self.current_view,
+                "ignoring timeout for stale view"
+            );
+            return Protocol::Abort;
+        }
         let we_were_leader = self.is_leader(view, epoch);
         if we_were_leader {
             if self.proposed_views.contains(&view) {
@@ -1011,6 +1019,14 @@ impl<T: NodeType> Consensus<T> {
         outbox: &mut Outbox<ConsensusOutput<T>>,
     ) -> Protocol {
         let view = certificate.view_number() + 1;
+        if view < self.current_view {
+            debug!(
+                %view,
+                current_view = %self.current_view,
+                "ignoring stale timeout certificate"
+            );
+            return Protocol::Abort;
+        }
         if self.timeout_certs.contains_key(&view) {
             return Protocol::Continue;
         }
@@ -1064,6 +1080,20 @@ impl<T: NodeType> Consensus<T> {
             cert2,
             proposal,
         } = epoch_change;
+        // Compare epochs (not views) so a node that timed out past a boundary
+        // it never saw can still recover via a genuinely new epoch change.
+        if self
+            .current_epoch
+            .is_some_and(|current| cert2.data.epoch < current)
+        {
+            debug!(
+                view = %cert2.view_number(),
+                epoch = %cert2.data.epoch,
+                current_epoch = ?self.current_epoch.map(|e| *e),
+                "ignoring stale epoch change for an epoch we have already entered"
+            );
+            return Protocol::Abort;
+        }
         // Check if this epoch change is new
         if self
             .locked_cert
