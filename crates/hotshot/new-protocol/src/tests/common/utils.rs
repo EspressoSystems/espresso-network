@@ -766,7 +766,7 @@ impl MockBlock {
             &block.encode(),
             &metadata.encode(),
             10,
-            TEST_VERSIONS.test.base,
+            versions::NEW_PROTOCOL_VERSION,
         );
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
@@ -930,6 +930,7 @@ impl ConsensusHarness {
                         epoch: req.epoch,
                         payload: mock_block.block,
                         metadata: mock_block.metadata,
+                        payload_commitment: mock_block.payload_commitment,
                     },
                     outbox,
                 );
@@ -939,6 +940,7 @@ impl ConsensusHarness {
                 epoch,
                 payload,
                 metadata,
+                payload_commitment: _,
             } => {
                 let vid_disperse = VidDisperse::calculate_vid_disperse(
                     payload,

@@ -386,6 +386,7 @@ impl<T: NodeType> From<BlockBuilderOutput<T>> for ConsensusInput<T> {
             epoch: output.epoch,
             payload: output.payload.payload,
             metadata: output.payload.metadata,
+            payload_commitment: output.payload_commitment,
         }
     }
 }
