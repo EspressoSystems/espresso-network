@@ -43,7 +43,6 @@ use url::Url;
 
 use crate::{UnauthenticatedToken, push_task, remote_write::Label, retry::RetryingLogExporter};
 
-const DEFAULT_OTLP_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 const SERVICE_NAME: &str = "espresso-node";
 const LOGGER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -92,7 +91,8 @@ pub struct TelemetryOptions {
     )]
     pub metrics_enable: bool,
 
-    /// OTLP/HTTP base URL. Defaults to the production aggregator if unset.
+    /// OTLP/HTTP base URL override. When unset, the caller selects the default
+    /// endpoint (the node picks it by chain ID).
     #[clap(long, env = "ESPRESSO_NODE_TELEMETRY_ENDPOINT")]
     pub endpoint: Option<Url>,
 
@@ -357,6 +357,7 @@ pub fn init(
     staking_key: &SignKey,
     node_name: Option<&str>,
     company_name: Option<&str>,
+    endpoint: &Url,
     registry: Option<Arc<Registry>>,
 ) -> anyhow::Result<(Option<TelemetryHandle>, Vec<String>)> {
     let logs_on = opts.logs_enable;
@@ -380,23 +381,15 @@ pub fn init(
         .context("mint telemetry JWT")?
         .encode();
 
-    let endpoint = opts
-        .endpoint
-        .as_ref()
-        .map(|u| u.as_str().to_owned())
-        .unwrap_or_else(|| DEFAULT_OTLP_ENDPOINT.to_owned());
-
-    // Both signals share this base URL. Reject non-http(s) once here so the
-    // metrics push can't silently no-op later; the logs path used to do this
-    // check, the metrics path used to skip it.
-    let parsed =
-        Url::parse(&endpoint).with_context(|| format!("invalid telemetry endpoint: {endpoint}"))?;
-    let scheme = parsed.scheme();
+    // Both signals share this base URL. Reject non-http(s) so the metrics push
+    // can't silently no-op later.
+    let scheme = endpoint.scheme();
     if scheme != "http" && scheme != "https" {
         anyhow::bail!(
             "telemetry endpoint must use http or https scheme, got {scheme:?}: {endpoint}"
         );
     }
+    let endpoint = endpoint.as_str().to_owned();
 
     // Embedded verbatim in the rate-limit ERROR so operators see the configured
     // filter (the raw string, not the parsed `EnvFilter`).

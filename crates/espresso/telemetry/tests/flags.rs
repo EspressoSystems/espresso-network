@@ -45,11 +45,11 @@ fn all_flags_off_returns_none() {
     let opts = TelemetryOptions {
         logs_enable: false,
         metrics_enable: false,
-        endpoint: Some(local_endpoint(reserve_port())),
         ..Default::default()
     };
+    let endpoint = local_endpoint(reserve_port());
     let (handle, warnings) =
-        init(&opts, &key, None, None, None).expect("disabled init never errors");
+        init(&opts, &key, None, None, &endpoint, None).expect("disabled init never errors");
     assert!(handle.is_none(), "all flags off must return None");
     assert!(warnings.is_empty(), "no warnings when disabled");
 }
@@ -62,13 +62,13 @@ async fn both_flags_enabled() {
     let _g = lock();
     let key = make_staking_key();
     let port = reserve_port();
+    let endpoint = local_endpoint(port);
     let opts = TelemetryOptions {
         logs_enable: true,
         metrics_enable: true,
-        endpoint: Some(local_endpoint(port)),
         ..Default::default()
     };
-    let (handle, _) = init(&opts, &key, None, None, None).expect("init ok");
+    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).expect("init ok");
     let handle = handle.expect("both flags returns handle");
 
     // Tracing layer must be present (logs pipeline on).
@@ -95,13 +95,13 @@ async fn logs_enable_only() {
     let _g = lock();
     let key = make_staking_key();
     let port = reserve_port();
+    let endpoint = local_endpoint(port);
     let opts = TelemetryOptions {
         logs_enable: true,
         metrics_enable: false,
-        endpoint: Some(local_endpoint(port)),
         ..Default::default()
     };
-    let (handle, _) = init(&opts, &key, None, None, None).expect("init ok");
+    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).expect("init ok");
     let mut handle = handle.expect("logs_enable returns handle");
 
     assert!(
@@ -135,13 +135,13 @@ async fn metrics_enable_only() {
     let _g = lock();
     let key = make_staking_key();
     let port = reserve_port();
+    let endpoint = local_endpoint(port);
     let opts = TelemetryOptions {
         logs_enable: false,
         metrics_enable: true,
-        endpoint: Some(local_endpoint(port)),
         ..Default::default()
     };
-    let (handle, _) = init(&opts, &key, None, None, None).expect("init ok");
+    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).expect("init ok");
     let mut handle = handle.expect("metrics_enable returns handle");
 
     assert!(

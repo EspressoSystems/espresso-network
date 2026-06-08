@@ -114,13 +114,13 @@ fn make_staking_key() -> SignKey {
         .0
 }
 
-fn opts_with_endpoint(endpoint: Url, metrics_interval_secs: u64) -> TelemetryOptions {
+fn telemetry_opts(metrics_interval_secs: u64) -> TelemetryOptions {
     TelemetryOptions {
         logs_enable: true,
         metrics_enable: true,
-        endpoint: Some(endpoint),
         log_filter: "info".to_owned(),
         metrics_interval_secs,
+        ..Default::default()
     }
 }
 
@@ -184,9 +184,9 @@ async fn telemetry_jwt_mint_ok() {
     let endpoint = format!("http://127.0.0.1:{port}").parse::<Url>().unwrap();
 
     let key = make_staking_key();
-    let opts = opts_with_endpoint(endpoint, 60);
+    let opts = telemetry_opts(60);
     let (handle, _warnings) =
-        init(&opts, &key, Some("node-42"), Some("acme"), None).expect("init succeeds");
+        init(&opts, &key, Some("node-42"), Some("acme"), &endpoint, None).expect("init succeeds");
     let handle: TelemetryHandle = handle.expect("telemetry enabled returns handle");
 
     // Use a scoped subscriber so the global default isn't touched (other
@@ -248,8 +248,9 @@ async fn telemetry_log_retry_survives_transient_5xx() {
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
 
     let key = make_staking_key();
-    let opts = opts_with_endpoint(endpoint, 60);
-    let (handle, _warnings) = init(&opts, &key, None, None, None).expect("init succeeds");
+    let opts = telemetry_opts(60);
+    let (handle, _warnings) =
+        init(&opts, &key, None, None, &endpoint, None).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     let subscriber = build_subscriber(std::io::sink, handle.tracing_layer());
@@ -274,15 +275,16 @@ fn telemetry_disabled_noop_ok() {
     let opts = TelemetryOptions {
         logs_enable: false,
         metrics_enable: false,
-        endpoint: Some("http://does-not-exist.invalid".parse().unwrap()),
         log_filter: "info".to_owned(),
         metrics_interval_secs: 60,
+        ..Default::default()
     };
+    let endpoint: Url = "http://does-not-exist.invalid".parse().unwrap();
     // Even when a registry is supplied, disabled init must return None and
     // not spawn any push task.
     let registry = Arc::new(prometheus::Registry::new());
-    let (h, warnings) =
-        init(&opts, &key, None, None, Some(registry)).expect("disabled init never errors");
+    let (h, warnings) = init(&opts, &key, None, None, &endpoint, Some(registry))
+        .expect("disabled init never errors");
     assert!(h.is_none(), "disabled init must return None");
     assert!(
         warnings.is_empty(),
@@ -297,8 +299,8 @@ fn telemetry_bad_endpoint_fails() {
     // `build_logger_provider`. OTLP/HTTP only ever speaks http/https.
     let key = make_staking_key();
     let bad: Url = "ftp://example.com".parse().unwrap();
-    let opts = opts_with_endpoint(bad, 60);
-    let err = init(&opts, &key, None, None, None).expect_err("bad endpoint must fail");
+    let opts = telemetry_opts(60);
+    let err = init(&opts, &key, None, None, &bad, None).expect_err("bad endpoint must fail");
     let msg = format!("{err:#}").to_lowercase();
     assert!(
         msg.contains("endpoint") || msg.contains("scheme"),
@@ -338,8 +340,8 @@ async fn telemetry_stderr_untouched_ok() {
     let _captured = start_mock_otlp(port).await;
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
     let key = make_staking_key();
-    let opts = opts_with_endpoint(endpoint, 60);
-    let (handle, _warnings) = init(&opts, &key, None, None, None).unwrap();
+    let opts = telemetry_opts(60);
+    let (handle, _warnings) = init(&opts, &key, None, None, &endpoint, None).unwrap();
     let handle = handle.unwrap();
 
     let buf = BufWriter::default();
@@ -372,13 +374,12 @@ async fn telemetry_invalid_log_filter_warns() {
     let bogus = "hotshot=NOT_A_LEVEL";
     let opts = TelemetryOptions {
         logs_enable: true,
-        endpoint: Some(endpoint),
         log_filter: bogus.to_owned(),
         metrics_interval_secs: 60,
         ..Default::default()
     };
 
-    let (handle, warnings) = init(&opts, &key, None, None, None).expect("init succeeds");
+    let (handle, warnings) = init(&opts, &key, None, None, &endpoint, None).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
     handle.shutdown();
 
@@ -410,9 +411,9 @@ async fn metrics_remote_write_push_ok() {
 
     let key = make_staking_key();
     // 1s -> push_task uses 1s after skipping the immediate first tick.
-    let opts = opts_with_endpoint(endpoint, 1);
+    let opts = telemetry_opts(1);
     let (handle, _warnings) =
-        init(&opts, &key, None, None, Some(registry.clone())).expect("init succeeds");
+        init(&opts, &key, None, None, &endpoint, Some(registry.clone())).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     let snap = wait_for_path(&captured, "/api/v1/write", 1, Duration::from_secs(8)).await;
@@ -484,9 +485,9 @@ async fn metrics_shared_jwt_ok() {
     counter.inc();
 
     let key = make_staking_key();
-    let opts = opts_with_endpoint(endpoint, 1);
+    let opts = telemetry_opts(1);
     let (handle, _warnings) =
-        init(&opts, &key, None, None, Some(registry.clone())).expect("init succeeds");
+        init(&opts, &key, None, None, &endpoint, Some(registry.clone())).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     // Emit a log so the OTel batch processor has something to flush.
@@ -552,9 +553,9 @@ async fn metrics_shutdown_flush_ok() {
 
     let key = make_staking_key();
     // Long interval so the only push that fires is the shutdown flush.
-    let opts = opts_with_endpoint(endpoint, 600);
+    let opts = telemetry_opts(600);
     let (handle, _warnings) =
-        init(&opts, &key, None, None, Some(registry.clone())).expect("init succeeds");
+        init(&opts, &key, None, None, &endpoint, Some(registry.clone())).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     // Give the task a moment to install the interval (which it skips).

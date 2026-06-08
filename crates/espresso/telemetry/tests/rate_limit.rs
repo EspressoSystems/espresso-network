@@ -163,14 +163,14 @@ async fn start_stub(port: u16, mode: StubMode) -> StubState {
     state
 }
 
-fn opts(endpoint: Url) -> TelemetryOptions {
+fn opts() -> TelemetryOptions {
     TelemetryOptions {
         logs_enable: true,
         metrics_enable: true,
-        endpoint: Some(endpoint),
         log_filter: "warn".to_owned(),
         // 1s -> push_task uses 1s after the immediate first tick is skipped.
         metrics_interval_secs: 1,
+        ..Default::default()
     }
 }
 
@@ -218,7 +218,7 @@ async fn operator_error_once_fails() {
     let registry = build_test_registry();
     let key = make_staking_key();
     let (handle, _warnings) =
-        init(&opts(endpoint), &key, None, None, Some(registry)).expect("init succeeds");
+        init(&opts(), &key, None, None, &endpoint, Some(registry)).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     // Wait for at least 3 push attempts so we know the dedup actually ran
@@ -273,7 +273,7 @@ async fn operator_no_crash_ok() {
     let registry = build_test_registry();
     let key = make_staking_key();
     let (handle, _warnings) =
-        init(&opts(endpoint), &key, None, None, Some(registry)).expect("init succeeds");
+        init(&opts(), &key, None, None, &endpoint, Some(registry)).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     // Drive several ticks. If the task panicked we'd see metrics_calls
@@ -306,12 +306,13 @@ async fn operator_custom_filter_embedded_ok() {
     let stub = start_stub(port, StubMode::Always429).await;
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
 
-    let mut opts = opts(endpoint);
+    let mut opts = opts();
     opts.log_filter = "warn,hotshot=info".to_owned();
 
     let registry = build_test_registry();
     let key = make_staking_key();
-    let (handle, _warnings) = init(&opts, &key, None, None, Some(registry)).expect("init succeeds");
+    let (handle, _warnings) =
+        init(&opts, &key, None, None, &endpoint, Some(registry)).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     let started = std::time::Instant::now();
@@ -353,7 +354,7 @@ async fn operator_recovery_no_second_error_ok() {
     let registry = build_test_registry();
     let key = make_staking_key();
     let (handle, _warnings) =
-        init(&opts(endpoint), &key, None, None, Some(registry)).expect("init succeeds");
+        init(&opts(), &key, None, None, &endpoint, Some(registry)).expect("init succeeds");
     let handle = handle.expect("telemetry enabled returns handle");
 
     // Drive 4 pushes: 200, 429, 200, 200.

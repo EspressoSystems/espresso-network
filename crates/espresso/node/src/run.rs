@@ -4,6 +4,7 @@ use espresso_telemetry as telemetry;
 use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
+use url::Url;
 
 use super::{
     Genesis, L1Params, NetworkParams,
@@ -13,10 +14,22 @@ use super::{
     options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
-use crate::keyset::KeySet;
+use crate::{default_telemetry_endpoint, keyset::KeySet};
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let opt = Options::parse();
+
+    // Genesis carries the chain ID, which selects the default telemetry
+    // endpoint. Load it before telemetry init; the genesis log line is emitted
+    // later, once the subscriber is installed.
+    let genesis = Genesis::from_file(&opt.genesis_file)?;
+    let telemetry_endpoint: Option<Url> = opt.telemetry.endpoint.clone().or_else(|| {
+        default_telemetry_endpoint(genesis.chain_config.chain_id).map(|s| {
+            s.parse()
+                .expect("default telemetry endpoint is a valid URL")
+        })
+    });
+    let telemetry_enabled = opt.telemetry.logs_enable || opt.telemetry.metrics_enable;
 
     // Build the telemetry pipeline before logging so its layer can be attached
     // to the global subscriber. We need the staking key, so eagerly load the
@@ -28,19 +41,31 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     // path starts here; the metrics push task is attached later via
     // `TelemetryHandle::attach_metrics_push` once the API setup has run.
     let (mut telemetry_handle, deferred_warnings, telemetry_init_error) =
-        match opt.key_set.clone().try_into() {
-            Ok(KeySet { staking, .. }) => match telemetry::init(
+        match (opt.key_set.clone().try_into(), telemetry_endpoint.as_ref()) {
+            (Ok(KeySet { staking, .. }), Some(endpoint)) => match telemetry::init(
                 &opt.telemetry,
                 &staking,
                 opt.identity.node_name.as_deref(),
                 opt.identity.company_name.as_deref(),
+                endpoint,
                 telemetry::registry(),
             ) {
                 Ok((h, warns)) => (h, warns, None),
                 Err(e) => (None, Vec::new(), Some(e.context("telemetry init failed"))),
             },
-            // The keyset will surface its own error through the main flow below.
-            Err(_) => (None, Vec::new(), None),
+            // Telemetry requested but no endpoint resolved (unknown chain, no
+            // override). Stay off and warn so the misconfig is visible.
+            (Ok(_), None) if telemetry_enabled => (
+                None,
+                vec![format!(
+                    "telemetry enabled but no endpoint resolved for chain {}; set \
+                     ESPRESSO_NODE_TELEMETRY_ENDPOINT",
+                    genesis.chain_config.chain_id
+                )],
+                None,
+            ),
+            // Keyset error (surfaced later) or telemetry not requested.
+            _ => (None, Vec::new(), None),
         };
     let otel_layer = telemetry_handle.as_ref().and_then(|h| h.tracing_layer());
     opt.logging.init_with_otel(otel_layer);
@@ -57,7 +82,6 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     let public_node_config = PublicNodeConfig::new(&opt, &modules);
 
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
     tracing::warn!(?genesis, "genesis");
 
     let result = if let Some(storage) = modules.storage_fs.take() {
