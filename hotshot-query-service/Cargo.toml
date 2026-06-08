@@ -32,7 +32,7 @@ file-system-data-source = ["atomic_store"]
 metrics-data-source = []
 
 # Enable the availability data source backed by a Postgres database.
-sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log"]
+sql-data-source = ["include_dir", "refinery", "refinery-core", "sqlx", "log", "rand"]
 
 testing = [
     "espresso-macros",

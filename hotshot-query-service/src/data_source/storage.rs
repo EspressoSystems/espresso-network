@@ -89,6 +89,61 @@ use crate::{
     types::HeightIndexed,
 };
 
+/// Retry a fallible storage operation whenever it fails due to a transient serialization conflict.
+///
+/// Under PostgreSQL `SERIALIZABLE` isolation, concurrent transactions can abort with SQLSTATE
+/// `40001` ("could not serialize access"). These aborts are expected and safe to retry from
+/// scratch, so every read or write should run inside this harness rather than calling
+/// [`read`](VersionedDataSource::read) / [`write`](VersionedDataSource::write) directly.
+///
+/// `f` is re-invoked from scratch on each attempt, so it must (re)open its own transaction.
+/// Backends that cannot produce serialization conflicts (e.g. the file system) implement this as a
+/// single pass-through call.
+///
+/// The operation is generic over its error type `E` (e.g. [`QueryError`], `anyhow::Error`, or an
+/// explorer error); conflicts are detected from the error's [`Display`](std::fmt::Display) output.
+#[async_trait]
+pub trait SerializableRetry {
+    /// Run `f`, retrying on serialization conflicts according to the backend's retry policy.
+    ///
+    /// `op` is a short, static label for the operation (used in diagnostic logging); the
+    /// [`serializable_retry!`](crate::serializable_retry) macro fills it in automatically with the
+    /// name of the enclosing function.
+    async fn serializable_retry<T, E, F, Fut>(&self, op: &'static str, f: F) -> Result<T, E>
+    where
+        T: Send,
+        E: std::fmt::Display + Send,
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<T, E>> + Send;
+}
+
+/// Expands to the unqualified name of the enclosing function/method as a `&'static str`.
+#[macro_export]
+macro_rules! function_name {
+    () => {{
+        fn __f() {}
+        fn type_name_of<T>(_: T) -> &'static str {
+            ::std::any::type_name::<T>()
+        }
+        let full: &'static str = type_name_of(__f);
+        // Strip the trailing "::__f" (5 bytes) and take the last "::" segment.
+        let trimmed: &'static str = &full[..full.len() - 5];
+        match trimmed.rfind("::") {
+            Some(idx) => &trimmed[idx + 2..],
+            None => trimmed,
+        }
+    }};
+}
+
+/// Calls [`SerializableRetry::serializable_retry`] with `op` set to the unqualified name of the
+/// enclosing function via [`function_name!`](crate::function_name).
+#[macro_export]
+macro_rules! serializable_retry {
+    ($self:expr, $f:expr) => {
+        $self.serializable_retry($crate::function_name!(), $f)
+    };
+}
+
 pub mod fail_storage;
 pub mod fs;
 mod ledger_log;

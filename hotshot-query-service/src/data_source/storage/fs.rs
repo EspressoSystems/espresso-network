@@ -38,7 +38,7 @@ use snafu::OptionExt;
 
 use super::{
     Aggregate, AggregatesStorage, AvailabilityStorage, NodeStorage, PayloadMetadata,
-    UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
+    SerializableRetry, UpdateAggregatesStorage, UpdateAvailabilityStorage, VidCommonMetadata,
     ledger_log::{Iter, LedgerLog},
     pruning::{PruneStorage, PrunedHeightStorage, PrunerConfig},
 };
@@ -439,6 +439,26 @@ where
         })
     }
 }
+
+#[async_trait]
+impl<Types: NodeType> SerializableRetry for FileSystemStorage<Types>
+where
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+{
+    /// The file system backend has no serializable isolation and so cannot produce serialization
+    /// conflicts; this simply runs `f` once.
+    async fn serializable_retry<T, E, F, Fut>(&self, _op: &'static str, f: F) -> Result<T, E>
+    where
+        T: Send,
+        E: std::fmt::Display + Send,
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<T, E>> + Send,
+    {
+        f().await
+    }
+}
+
 fn range_iter<T>(
     mut iter: Iter<'_, T>,
     range: impl RangeBounds<usize>,

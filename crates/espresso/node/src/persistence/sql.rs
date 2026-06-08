@@ -38,11 +38,11 @@ use hotshot_query_service::{
     data_source::{
         Transaction as _, VersionedDataSource,
         storage::{
-            AvailabilityStorage,
+            AvailabilityStorage, SerializableRetry,
             pruning::PrunerCfg,
             sql::{
-                Config, Db, Read, SqlStorage, StorageConnectionType, Transaction, Write,
-                include_migrations, query_as, syntax_helpers::MAX_FN,
+                Config, Db, Read, SerializableRetryConfig, SqlStorage, StorageConnectionType,
+                Transaction, Write, include_migrations, query_as, syntax_helpers::MAX_FN,
             },
         },
     },
@@ -51,6 +51,7 @@ use hotshot_query_service::{
         request::{PayloadRequest, VidCommonRequest},
     },
     merklized_state::MerklizedState,
+    serializable_retry,
 };
 use hotshot_types::{
     data::{
@@ -523,6 +524,8 @@ impl TryFrom<&Options> for Config {
             cfg = cfg.archive();
         }
 
+        cfg = cfg.serializable_retry(opt.serializable_retry.to_retry_config());
+
         Ok(cfg)
     }
 }
@@ -749,13 +752,15 @@ impl Default for SerializableRetryOptions {
 }
 
 impl SerializableRetryOptions {
-    fn backoff(&self) -> BackoffParams {
-        BackoffParams::new(
+    /// Convert these CLI/env options into the storage-layer retry policy.
+    fn to_retry_config(self) -> SerializableRetryConfig {
+        SerializableRetryConfig::new(
             self.backoff_base,
             self.backoff_max,
             self.backoff_factor,
-            self.backoff_jitter,
+            self.backoff_jitter.into(),
             self.retry_max,
+            self.pg_stat_diag,
         )
     }
 }
@@ -774,8 +779,6 @@ impl PersistenceOptions for Options {
         let persistence = Persistence {
             db: SqlStorage::connect(config, StorageConnectionType::Sequencer).await?,
             gc_opt: self.consensus_pruning,
-            serializable_backoff: self.serializable_retry.backoff(),
-            serializable_pg_stat_diag: self.serializable_retry.pg_stat_diag,
             internal_metrics: PersistenceMetricsValue::default(),
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
@@ -811,12 +814,6 @@ impl DataMigration {
 pub struct Persistence {
     db: SqlStorage,
     gc_opt: ConsensusPruningOptions,
-    /// Backoff parameters for retrying transactions aborted by PostgreSQL
-    /// serialization conflicts (error 40001).
-    serializable_backoff: BackoffParams,
-    /// When true, retried serialization conflicts trigger a background `pg_stat_activity` /
-    /// `pg_locks` snapshot for diagnostics.
-    serializable_pg_stat_diag: bool,
     /// A reference to the internal metrics
     internal_metrics: PersistenceMetricsValue,
 }
@@ -824,37 +821,6 @@ pub struct Persistence {
 /// PostgreSQL error code for serialization failures under SERIALIZABLE isolation.
 /// Transactions that fail with this code are safe to retry from scratch.
 const PG_SERIALIZATION_FAILURE_CODE: &str = "40001";
-
-/// Expands to the unqualified name of the enclosing function/method as a `&'static str`.
-/// Useful as the `op` argument to [`Persistence::serializable_retry`].
-///
-/// Implementation note: defines an inner `fn`, asks `std::any::type_name` for the path of its
-/// function-item type (something like `crate::module::Persistence::is_migration_complete::__f`),
-/// then strips the trailing `::__f` and takes the last `::` segment.
-macro_rules! function_name {
-    () => {{
-        fn __f() {}
-        fn type_name_of<T>(_: T) -> &'static str {
-            ::std::any::type_name::<T>()
-        }
-        let full: &'static str = type_name_of(__f);
-        // Strip the trailing "::__f" (5 bytes) and take the last "::" segment.
-        let trimmed: &'static str = &full[..full.len() - 5];
-        let name: &'static str = match trimmed.rfind("::") {
-            Some(idx) => &trimmed[idx + 2..],
-            None => trimmed,
-        };
-        name
-    }};
-}
-
-/// Calls [`Persistence::serializable_retry`] with `op` set to the unqualified name of the
-/// enclosing function via [`function_name!`].
-macro_rules! serializable_retry {
-    ($self:expr, $f:expr) => {
-        $self.serializable_retry(function_name!(), $f)
-    };
-}
 
 #[derive(Debug)]
 struct DecidedLeaf {
@@ -926,27 +892,14 @@ fn decide_events_from_chain(
 }
 
 impl Persistence {
-    /// Run `f` under our `serializable_backoff` retry policy, retrying only on PostgreSQL
-    /// serialization conflicts.  When `serializable_pg_stat_diag` is enabled, each retried
-    /// conflict spawns a background `pg_stat_activity` / `pg_locks` snapshot tagged with `op`;
-    /// otherwise the predicate is a plain stateless check and `op` is unused at runtime.
-    ///
-    /// Most callers should use the [`serializable_retry!`] macro, which auto-fills `op`.
+    /// Run `f` under the database's serialization-conflict retry policy.
     async fn serializable_retry<F, Fut, T>(&self, op: &'static str, f: F) -> anyhow::Result<T>
     where
-        F: Fn() -> Fut,
-        Fut: Future<Output = anyhow::Result<T>>,
+        T: Send,
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = anyhow::Result<T>> + Send,
     {
-        if self.serializable_pg_stat_diag {
-            self.serializable_backoff
-                .retry_if(is_serialization_error_with_diag(self.db.pool(), op), f)
-                .await
-        } else {
-            let _ = op;
-            self.serializable_backoff
-                .retry_if(is_serialization_error, f)
-                .await
-        }
+        self.db.serializable_retry(op, f).await
     }
 
     /// Ensure the `leaf_hash` column is populated for all existing quorum proposals.
@@ -1057,8 +1010,7 @@ impl Persistence {
             // - begin a write transaction to delete the data and update the event stream.
 
             // Retry the entire read section on serialization failures (40001) via
-            // `serializable_retry!`, which inherits the configured exponential backoff and
-            // retry-max from `serializable_backoff`. The closure returns `None` when there is no
+            // `serializable_retry!`. The closure returns `None` when there is no
             // more work to do, which we propagate out of the outer function.
             let Some((
                 from_view,
@@ -1460,121 +1412,6 @@ impl Persistence {
             tx.commit().await
         })
         .await
-    }
-}
-
-fn is_serialization_error(err: &anyhow::Error) -> bool {
-    err.chain()
-        .filter_map(|e| e.downcast_ref::<sqlx::Error>())
-        .filter_map(|e| e.as_database_error())
-        .any(|e| e.code().as_deref() == Some(PG_SERIALIZATION_FAILURE_CODE))
-}
-
-/// Diagnostics for PostgreSQL serialization conflicts.
-///
-/// Enable targeted logging with `RUST_LOG=sequencer::persistence::sql::pg_stat_diag=debug`.
-mod pg_stat_diag {
-    /// Spawn a background task that queries `pg_stat_activity` and `pg_locks` to identify
-    /// connections and predicate locks involved in a serialization conflict.
-    /// Best-effort; failures are silently ignored.
-    #[cfg(not(feature = "embedded-db"))]
-    pub(super) fn spawn_pg_stat_activity_log(pool: sqlx::Pool<super::Db>, op: &'static str) {
-        use sqlx::Row as _;
-        tokio::spawn(async move {
-            // Log concurrent sessions
-            match sqlx::query(
-                "SELECT pid, COALESCE(state, 'unknown') AS state, left(COALESCE(query, ''), 200) \
-                 AS query FROM pg_stat_activity WHERE pid != pg_backend_pid() AND state IS \
-                 DISTINCT FROM 'idle'",
-            )
-            .fetch_all(&pool)
-            .await
-            {
-                Ok(rows) if rows.is_empty() => {
-                    tracing::debug!(op, "serialization conflict: no other non-idle DB sessions");
-                },
-                Ok(rows) => {
-                    for row in &rows {
-                        let pid: i32 = row.try_get("pid").unwrap_or(-1);
-                        let state: String = row.try_get("state").unwrap_or_default();
-                        let query_text: String = row.try_get("query").unwrap_or_default();
-                        tracing::debug!(
-                            op,
-                            pid,
-                            state,
-                            "serialization conflict: concurrent session: {query_text}",
-                        );
-                    }
-                },
-                Err(e) => {
-                    tracing::debug!(op, "failed to query pg_stat_activity: {e:#}");
-                },
-            }
-
-            // Log SSI predicate locks held by all non-idle sessions
-            match sqlx::query(
-                "SELECT l.pid, l.locktype, CASE WHEN l.relation IS NOT NULL THEN c.relname ELSE \
-                 NULL END AS relation, l.page, l.tuple, left(COALESCE(a.query, ''), 100) AS query \
-                 FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid LEFT JOIN pg_class c ON \
-                 c.oid = l.relation WHERE l.mode = 'SIReadLock' AND a.state IS DISTINCT FROM \
-                 'idle' AND l.pid != pg_backend_pid() ORDER BY l.pid, c.relname",
-            )
-            .fetch_all(&pool)
-            .await
-            {
-                Ok(rows) if rows.is_empty() => {
-                    tracing::debug!(op, "serialization conflict: no SIReadLocks held");
-                },
-                Ok(rows) => {
-                    for row in &rows {
-                        let pid: i32 = row.try_get("pid").unwrap_or(-1);
-                        let locktype: String = row.try_get("locktype").unwrap_or_default();
-                        let relation: Option<String> = row.try_get("relation").unwrap_or(None);
-                        let page: Option<i32> = row.try_get("page").unwrap_or(None);
-                        let tuple: Option<i16> = row.try_get("tuple").unwrap_or(None);
-                        let query_text: String = row.try_get("query").unwrap_or_default();
-                        tracing::debug!(
-                            op,
-                            pid,
-                            locktype,
-                            relation,
-                            page,
-                            tuple,
-                            "serialization conflict: SIReadLock: {query_text}",
-                        );
-                    }
-                },
-                Err(e) => {
-                    tracing::debug!(op, "failed to query pg_locks: {e:#}");
-                },
-            }
-        });
-    }
-}
-
-/// Like [`is_serialization_error`] but also logs concurrent DB sessions for diagnostics.
-///
-/// On the first serialization failure per `retry_if` invocation, spawns a background task that
-/// queries `pg_stat_activity` and logs any non-idle sessions, helping identify which transaction
-/// caused the conflict. Subsequent retries within the same invocation skip the diagnostic to
-/// avoid log spam.
-fn is_serialization_error_with_diag(
-    pool: sqlx::Pool<Db>,
-    op: &'static str,
-) -> impl Fn(&anyhow::Error) -> bool {
-    let first = std::sync::atomic::AtomicBool::new(true);
-    move |err| {
-        if is_serialization_error(err) {
-            #[cfg(not(feature = "embedded-db"))]
-            if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                pg_stat_diag::spawn_pg_stat_activity_log(pool.clone(), op);
-            }
-            #[cfg(feature = "embedded-db")]
-            let _ = (&pool, op, &first);
-            true
-        } else {
-            false
-        }
     }
 }
 
@@ -3883,8 +3720,6 @@ mod testing {
 
 #[cfg(test)]
 mod test {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
     use committable::{Commitment, CommitmentBoundsArkless};
     use espresso_types::{Header, Leaf, NodeState, ValidatedState, traits::NullEventConsumer};
     use futures::stream::TryStreamExt;
@@ -4785,183 +4620,6 @@ mod test {
                 (Some(EventsPersistenceRead::UntilL1Block(i)), vec![])
             );
         }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Tests for retry_if / is_serialization_error
-    // ---------------------------------------------------------------------------
-
-    /// Minimal `DatabaseError` implementation that lets tests construct a
-    /// `sqlx::Error::Database(...)` with an arbitrary SQLSTATE code without
-    /// needing a live database connection.
-    #[derive(Debug)]
-    struct MockDatabaseError {
-        code: &'static str,
-    }
-
-    impl std::fmt::Display for MockDatabaseError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "mock db error (code {})", self.code)
-        }
-    }
-
-    impl std::error::Error for MockDatabaseError {}
-
-    impl sqlx::error::DatabaseError for MockDatabaseError {
-        fn message(&self) -> &str {
-            "mock db error"
-        }
-
-        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
-            Some(std::borrow::Cow::Borrowed(self.code))
-        }
-
-        fn kind(&self) -> sqlx::error::ErrorKind {
-            sqlx::error::ErrorKind::Other
-        }
-
-        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
-            self
-        }
-
-        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
-            self
-        }
-
-        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
-            self
-        }
-    }
-
-    fn mock_serialization_error() -> anyhow::Error {
-        anyhow::Error::from(sqlx::Error::Database(Box::new(MockDatabaseError {
-            code: "40001",
-        })))
-    }
-
-    /// Backoff parameters for the retry-mechanism unit tests below.  These mirror the production
-    /// defaults of `SerializableRetryOptions` but live here so the tests are independent of any
-    /// production-side refactoring of those defaults.
-    const TEST_BACKOFF: BackoffParams = BackoffParams::new(
-        Duration::from_millis(10),
-        Duration::from_millis(500),
-        2,
-        Ratio {
-            numerator: 5,
-            denominator: 10,
-        },
-        100,
-    );
-
-    #[test]
-    fn test_is_serialization_error() {
-        // PostgreSQL error code 40001 must be recognised as a serialization failure.
-        assert!(is_serialization_error(&mock_serialization_error()));
-
-        // Any other database error code must NOT match.
-        let unique_violation =
-            anyhow::Error::from(sqlx::Error::Database(Box::new(MockDatabaseError {
-                code: "23505",
-            })));
-        assert!(!is_serialization_error(&unique_violation));
-
-        // Non-database errors must not match.
-        assert!(!is_serialization_error(&anyhow::anyhow!("plain error")));
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry_if_succeeds_immediately() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = calls.clone();
-
-        let result = TEST_BACKOFF
-            .retry_if(is_serialization_error, || {
-                let calls = calls_clone.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                }
-            })
-            .await;
-
-        assert!(result.is_ok());
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry_if_retries_on_serialization_error() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = calls.clone();
-
-        // The closure fails twice with a serialization error, then succeeds on the third attempt.
-        let result = TEST_BACKOFF
-            .retry_if(is_serialization_error, || {
-                let calls = calls_clone.clone();
-                async move {
-                    let n = calls.fetch_add(1, Ordering::SeqCst);
-                    if n < 2 {
-                        Err(mock_serialization_error())
-                    } else {
-                        Ok(())
-                    }
-                }
-            })
-            .await;
-
-        assert!(result.is_ok());
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry_if_exhausts_retries() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = calls.clone();
-
-        // The closure always fails; retry must give up after TEST_BACKOFF.retry_max retries.
-        let result: anyhow::Result<()> = TEST_BACKOFF
-            .retry_if(is_serialization_error, || {
-                let calls = calls_clone.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Err(mock_serialization_error())
-                }
-            })
-            .await;
-
-        assert!(result.is_err());
-        // 1 initial attempt + 5 retries = 6 total calls.
-        assert_eq!(calls.load(Ordering::SeqCst), 6);
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_retry_if_no_retry_on_other_errors() {
-        let calls = Arc::new(AtomicU32::new(0));
-        let calls_clone = calls.clone();
-
-        // Non-serialization errors must not be retried.
-        let result: anyhow::Result<()> = TEST_BACKOFF
-            .retry_if(is_serialization_error, || {
-                let calls = calls_clone.clone();
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    Err(anyhow::anyhow!("unrelated error"))
-                }
-            })
-            .await;
-
-        assert!(result.is_err());
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    /// Verify that [`function_name!`] resolves to the unqualified name of the enclosing
-    /// function, both from a nested helper and from the test fn itself.
-    #[test]
-    fn test_function_name_macro() {
-        fn outer_test_fn() -> &'static str {
-            function_name!()
-        }
-        assert_eq!(outer_test_fn(), "outer_test_fn");
-        assert_eq!(function_name!(), "test_function_name_macro");
     }
 }
 
