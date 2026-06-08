@@ -2000,16 +2000,16 @@ where
             espresso_api::v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("failed to parse commit param"))?;
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
                 let commit = (&tb64)
                     .try_into()
-                    .map_err(|_| anyhow::anyhow!("failed to parse commit param"))?;
+                    .map_err(|_| bad_request("failed to parse commit param"))?;
                 HsSnapshot::Commit(commit)
             },
         };
         let key: u64 = key
             .parse()
-            .map_err(|_| anyhow::anyhow!("failed to parse Key param"))?;
+            .map_err(|_| bad_request("failed to parse Key param"))?;
         let ds = &*self.data_source;
         MerklizedStateDataSource::<
             espresso_types::SeqTypes,
