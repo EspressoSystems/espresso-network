@@ -2060,6 +2060,9 @@ where
             MerklizedStateDataSource, Snapshot as HsSnapshot,
         };
 
+        let hs_snapshot = match snapshot {
+            espresso_api::v1::Snapshot::Height(h) => HsSnapshot::Index(h),
+            espresso_api::v1::Snapshot::Commit(c) => {
                 let tb64: TaggedBase64 = c
                     .parse()
                     .map_err(|_| bad_request("failed to parse commit param"))?;
