@@ -29,6 +29,9 @@ where
         + v1::HotShotAvailabilityApi
         + v1::BlockStateApi
         + v1::FeeStateApi
+        + v1::StatusApi
+        + v1::ConfigApi
+        + v1::NodeApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi
