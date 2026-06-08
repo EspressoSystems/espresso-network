@@ -283,11 +283,27 @@ impl<T: NodeType> Consensus<T> {
     /// Sets the locked certificate and current epoch. After calling this, a
     /// subsequent `apply` that triggers `maybe_propose` will find the
     /// parent cert and proposal it needs.
-    pub fn seed_parent(&mut self, cert1: Certificate1<T>, proposal: Proposal<T>) {
+    ///
+    /// `reconstructed` are `(view, V2 commitment)` pairs to record as
+    /// already reconstructed blocks. During normal operation this set is
+    /// populated as VID shares arrive; on restart it starts empty, but the
+    /// persisted leaf and proposals correspond to blocks this node had already
+    /// reconstructed in the previous process. Seeding them lets a restarted
+    /// leader satisfy the `parent_block_reconstructed` check for its first
+    /// proposal/vote instead of stalling.
+    pub fn seed_parent(
+        &mut self,
+        cert1: Certificate1<T>,
+        proposal: Proposal<T>,
+        reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
+    ) {
         self.current_epoch = Some(proposal.epoch);
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
         self.proposals.insert(proposal.view_number, proposal);
+        for (view, commitment) in reconstructed {
+            self.blocks_reconstructed.insert((view, commitment));
+        }
     }
 
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new

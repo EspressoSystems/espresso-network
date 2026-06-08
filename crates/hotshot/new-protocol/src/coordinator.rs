@@ -169,7 +169,22 @@ where
             initializer.anchor_state.clone(),
             anchor_leaf.clone(),
         );
-        consensus.seed_parent(cert1, parent_proposal);
+        // The anchor leaf and persisted proposals are blocks this node had
+        // reconstructed before it went down, so treat them as reconstructed on
+        // restart
+        let reconstructed_blocks =
+            std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
+                .chain(
+                    initializer
+                        .saved_proposals
+                        .iter()
+                        .map(|(view, p)| (*view, p.data.block_header().clone())),
+                )
+                .filter_map(|(view, header)| match header.payload_commitment() {
+                    VidCommitment::V2(commitment) => Some((view, commitment)),
+                    _ => None,
+                });
+        consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
         consensus.set_view(anchor_view, anchor_epoch);
 
         let lock = upgrade_lock.clone();
