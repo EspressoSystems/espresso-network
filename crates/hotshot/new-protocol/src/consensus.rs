@@ -286,6 +286,24 @@ impl<T: NodeType> Consensus<T> {
         self.proposals.insert(proposal.view_number, proposal);
     }
 
+    /// Insert `(view, V2 commitment)` pairs into the set of blocks whose payload
+    /// has been reconstructed from VID shares.
+    ///
+    /// During normal operation this set is populated as shares arrive.
+    /// On restart that in memory set
+    /// is empty, but a node's persisted leaf and proposals correspond to blocks
+    /// it had already reconstructed in the previous process. Seeding them lets a
+    /// restarted leader satisfy the `parent_block_reconstructed` check for
+    /// its first proposal/vote instead of stalling
+    pub fn seed_reconstructed_blocks(
+        &mut self,
+        blocks: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
+    ) {
+        for (view, commitment) in blocks {
+            self.blocks_reconstructed.insert((view, commitment));
+        }
+    }
+
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
     /// protocol. Performs the four operations the seed describes
     /// atomically: anchor the decided view, install the undecided

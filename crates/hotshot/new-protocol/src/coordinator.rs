@@ -172,6 +172,22 @@ where
         consensus.seed_parent(cert1, parent_proposal);
         consensus.set_view(anchor_view, anchor_epoch);
 
+        // The anchor leaf and persisted proposals are blocks this node had
+        // reconstructed before it went down, so treat them as reconstructed on
+        // restart
+        let seeded_blocks = std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
+            .chain(
+                initializer
+                    .saved_proposals
+                    .iter()
+                    .map(|(view, p)| (*view, p.data.block_header().clone())),
+            )
+            .filter_map(|(view, header)| match header.payload_commitment() {
+                VidCommitment::V2(commitment) => Some((view, commitment)),
+                _ => None,
+            });
+        consensus.seed_reconstructed_blocks(seeded_blocks);
+
         let lock = upgrade_lock.clone();
         Self::builder()
             .consensus(consensus)
