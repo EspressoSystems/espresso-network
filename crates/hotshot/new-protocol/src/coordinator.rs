@@ -505,6 +505,11 @@ where
                         self.timeout_one_honest_collector.retry_pending_votes().await;
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
+                    Ok(EpochRootResult::EpochRootAdded(epoch)) => {
+                        finish_measurement(next_input);
+                        debug!(%epoch, "epoch root added to membership");
+                        continue;
+                    }
                     Err(failure) => {
                         finish_measurement(next_input);
                         // Catchup/compute failed. The epoch manager clears
