@@ -26,6 +26,12 @@ services:
       # the wiped node a faster-indexing fallback so it converges.
       ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT,http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT
       ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT,http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT
+      # The proactive scanner is the only thing that backfills historical
+      # payload gaps; its default interval is 8h. A wiped node scans its empty
+      # DB once at boot, finds no gap, then sleeps, so payloads never backfill
+      # and the transaction-count aggregator (smoke test) stalls. Scan often so
+      # the wiped node fills payload gaps within the test window.
+      ESPRESSO_SEQUENCER_PROACTIVE_SCAN_INTERVAL: 2s
 
   # Add `status` (only requires `http`) so roll_node can poll node 2's block
   # height; it has no `query` module to expose /node/block-height.
@@ -58,6 +64,18 @@ services:
       ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
     volumes:
       - espresso-node-4-storage:/var/lib/espresso
+
+  # node-5 (old-from-new scenarios) joins after boot and is never in the
+  # orchestrator's known_nodes_with_stake, so the initial cdn-whitelist run
+  # excludes it from the CDN whitelist. Provide its BLS public key so the
+  # re-run (RewhitelistCdn, on the upgrade image) admits node-5. The base-tag
+  # binary lacks the flag and ignores this env var.
+  # This is the public key of node-5's ESPRESSO_SEQUENCER_PRIVATE_STAKING_KEY
+  # in compose.node-5-{fs,pg}.yaml. If that key changes, re-derive with:
+  #   pub-key --scheme bls  (ESPRESSO_NODE_PRIVATE_STAKING_KEY=<node-5 key>)
+  cdn-whitelist:
+    environment:
+      ESPRESSO_CDN_WHITELIST_EXTRA_KEYS: BLS_VER_KEY~gVR9aoaGyX8mriVh0Z0zq540bArFGSg4FnppGsBN7Rjx-jSWackeVSkl9-7p-Gzqsi-0hKRsFxXxRMo5wVbRDxo9Q6wwK5lAfffI3VDBJu_5liNc5HiC_Yz535dn_1sRsoFJ9DrwF_8kCdtsTvKnzzOmsaPkZmBFdEFgdDRuEKmz
 
 volumes:
   espresso-node-2-storage:

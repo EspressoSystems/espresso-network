@@ -107,6 +107,11 @@ class UpgradeSupportServices:
 
 
 @dataclass(frozen=True)
+class RewhitelistCdn:
+    pass
+
+
+@dataclass(frozen=True)
 class AssertImagesUpgraded:
     pass
 
@@ -117,7 +122,13 @@ class SmokeTest:
 
 
 Action = (
-    Roll | Wipe | JoinNode | UpgradeSupportServices | AssertImagesUpgraded | SmokeTest
+    Roll
+    | Wipe
+    | JoinNode
+    | UpgradeSupportServices
+    | RewhitelistCdn
+    | AssertImagesUpgraded
+    | SmokeTest
 )
 
 # ---------------------------------------------------------------------------
@@ -169,6 +180,7 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(4),
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
+        RewhitelistCdn(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_FS_OVERLAY),
         SmokeTest(),
     ],
@@ -181,6 +193,7 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(4),
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
+        RewhitelistCdn(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_PG_OVERLAY),
         SmokeTest(),
     ],
@@ -857,6 +870,12 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
         case UpgradeSupportServices():
             log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
             compose.bulk_upgrade_remaining(config.upgrade_tag)
+
+        case RewhitelistCdn():
+            log.info(
+                f"Re-running cdn-whitelist on tag {config.upgrade_tag} to include extra keys"
+            )
+            compose.run("run", "--rm", "cdn-whitelist", docker_tag=config.upgrade_tag)
 
         case AssertImagesUpgraded():
             log.info(

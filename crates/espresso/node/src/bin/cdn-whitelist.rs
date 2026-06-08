@@ -7,7 +7,7 @@ use std::{str::FromStr, sync::Arc};
 use anyhow::{Context, Result};
 use cdn_broker::reexports::discovery::{DiscoveryClient, Embedded, Redis};
 use clap::Parser;
-use espresso_types::SeqTypes;
+use espresso_types::{PubKey, SeqTypes};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{network::NetworkConfig, traits::signature_key::SignatureKey};
 use surf_disco::Url;
@@ -29,6 +29,12 @@ struct Args {
     /// Whether or not to use the local discovery client
     #[arg(short, long)]
     local_discovery: bool,
+
+    /// Extra BLS public keys to add to the CDN whitelist, in addition to
+    /// keys read from the orchestrator. Comma-separated strings of the form
+    /// `BLS_VER_KEY~...`. Useful to admit non-registered follower nodes.
+    #[arg(long, env = "ESPRESSO_CDN_WHITELIST_EXTRA_KEYS", value_delimiter = ',')]
+    extra_whitelist_keys: Vec<String>,
 }
 
 fn main() -> Result<()> {
@@ -63,12 +69,24 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     tracing::info!("Received config from orchestrator");
 
     // Extrapolate the state_ver_keys from the config and convert them to a compatible format
-    let whitelist = config
+    let mut whitelist: Vec<Arc<[u8]>> = config
         .config
         .known_nodes_with_stake
         .iter()
         .map(|k| Arc::from(k.stake_table_entry.stake_key.to_bytes()))
         .collect();
+
+    if !args.extra_whitelist_keys.is_empty() {
+        tracing::info!(
+            "Adding {} extra key(s) to CDN whitelist",
+            args.extra_whitelist_keys.len()
+        );
+    }
+    for raw in &args.extra_whitelist_keys {
+        let key =
+            PubKey::from_str(raw).with_context(|| format!("parsing extra whitelist key {raw}"))?;
+        whitelist.push(Arc::from(key.to_bytes()));
+    }
 
     if args.local_discovery {
         <Embedded as DiscoveryClient>::new(args.discovery_endpoint, None)
