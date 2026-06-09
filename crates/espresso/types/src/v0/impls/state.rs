@@ -71,6 +71,14 @@ pub enum BuilderValidationError {
     FeeAmountOutOfRange(FeeAmount),
     #[error("Invalid Builder Signature")]
     InvalidBuilderSignature,
+    #[error(
+        "Fee info / builder signature count mismatch: fee_count={fee_count}, \
+         signature_count={signature_count}"
+    )]
+    FeeAndSignatureCountMismatch {
+        fee_count: usize,
+        signature_count: usize,
+    },
 }
 
 /// Possible proposal validation failures
@@ -681,7 +689,7 @@ impl<'a> ValidatedTransition<'a> {
     /// verifying signatures. Signatures are identified by index of fee `Vec`.
     fn validate_builder_fee(&self) -> Result<(), ProposalValidationError> {
         // TODO move logic from stand alone fn to here.
-        if let Err(err) = validate_builder_fee(self.proposal.header) {
+        if let Err(err) = validate_builder_fee(self.proposal.header, self.version) {
             return Err(ProposalValidationError::BuilderValidationError(err));
         }
         Ok(())
@@ -926,13 +934,22 @@ impl From<MerkleTreeError> for FeeError {
 
 /// Validate builder accounts by verifying signatures. All fees are
 /// verified against signature by index.
-fn validate_builder_fee(proposed_header: &Header) -> Result<(), BuilderValidationError> {
+fn validate_builder_fee(
+    proposed_header: &Header,
+    version: Version,
+) -> Result<(), BuilderValidationError> {
+    let fee_info = proposed_header.fee_info();
+    let builder_signature = proposed_header.builder_signature();
+
+    if version >= EPOCH_REWARD_VERSION && fee_info.len() != builder_signature.len() {
+        return Err(BuilderValidationError::FeeAndSignatureCountMismatch {
+            fee_count: fee_info.len(),
+            signature_count: builder_signature.len(),
+        });
+    }
+
     // TODO since we are iterating, should we include account/amount in errors?
-    for (fee_info, signature) in proposed_header
-        .fee_info()
-        .iter()
-        .zip(proposed_header.builder_signature())
-    {
+    for (fee_info, signature) in fee_info.iter().zip(builder_signature) {
         // check that `amount` fits in a u64
         fee_info
             .amount()
@@ -2273,7 +2290,8 @@ mod test {
             }),
         };
 
-        validate_builder_fee(&header).unwrap();
+        let version = header.version();
+        validate_builder_fee(&header, version).unwrap();
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
