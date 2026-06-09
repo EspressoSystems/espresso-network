@@ -35,8 +35,8 @@ pub(crate) fn log_rate_limit_once(
             retry_after = %retry,
             "telemetry rate limit hit (HTTP 429). The proxy capped this node's hourly byte budget. \
              Your current ESPRESSO_NODE_TELEMETRY_LOG is \"{env_filter}\": narrow it (e.g. \
-             \"warn\", or \"warn,hotshot=info\") or reduce metric cardinality. Retry-After: \
-             {retry}. This message is logged once per process."
+             \"warn\", or \"warn,hotshot=info\"). Retry-After: {retry}. This message is logged \
+             once per process."
         );
     }
 }

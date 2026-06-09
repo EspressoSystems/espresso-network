@@ -38,7 +38,6 @@ use espresso_types::{
 };
 
 pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
-pub(crate) const DECAF_CHAIN_ID: ChainId = ChainId(U256::from_limbs([0xdecaf, 0, 0, 0]));
 pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
 pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
     "https://telemetry.decaf.testnet.espresso.network";
@@ -48,7 +47,7 @@ pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
 pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static str> {
     if chain_id == MAINNET_CHAIN_ID {
         Some(MAINNET_TELEMETRY_ENDPOINT)
-    } else if chain_id == DECAF_CHAIN_ID {
+    } else if chain_id == ChainId(U256::from(0xdecafu64)) {
         Some(DECAF_TELEMETRY_ENDPOINT)
     } else {
         None
@@ -1780,8 +1779,8 @@ mod test {
     #[test]
     fn telemetry_endpoint_defaults_by_chain() {
         use super::{
-            ChainId, DECAF_CHAIN_ID, DECAF_TELEMETRY_ENDPOINT, MAINNET_CHAIN_ID,
-            MAINNET_TELEMETRY_ENDPOINT, U256, default_telemetry_endpoint,
+            ChainId, DECAF_TELEMETRY_ENDPOINT, MAINNET_CHAIN_ID, MAINNET_TELEMETRY_ENDPOINT, U256,
+            default_telemetry_endpoint,
         };
 
         assert_eq!(
@@ -1789,7 +1788,7 @@ mod test {
             Some(MAINNET_TELEMETRY_ENDPOINT)
         );
         assert_eq!(
-            default_telemetry_endpoint(DECAF_CHAIN_ID),
+            default_telemetry_endpoint(ChainId(U256::from(0xdecafu64))),
             Some(DECAF_TELEMETRY_ENDPOINT)
         );
         // Unknown chains (e.g. the demo chain) get no default.
