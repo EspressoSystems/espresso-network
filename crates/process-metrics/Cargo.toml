@@ -7,10 +7,12 @@ description = "Process-level Prometheus metrics (RSS, virtual memory, FDs, threa
 
 [dependencies]
 hotshot-types = { workspace = true }
-procfs = { workspace = true }
 sysinfo = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procfs = { workspace = true }
 
 [lints]
 workspace = true
