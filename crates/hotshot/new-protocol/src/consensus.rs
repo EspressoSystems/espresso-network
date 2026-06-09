@@ -183,6 +183,9 @@ pub struct Consensus<T: NodeType> {
     /// arrived.  They are retried when new epoch data becomes available.
     pending_certs1: BTreeMap<ViewNumber, Certificate1<T>>,
     pending_certs2: BTreeMap<ViewNumber, Certificate2<T>>,
+    /// Timeout certificates deferred for the same reason, keyed by the view
+    /// they certify as timed out.
+    pending_timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
 
     timeout_view: ViewNumber,
     current_view: ViewNumber,
@@ -264,6 +267,7 @@ impl<T: NodeType> Consensus<T> {
             pre_cutover_views: BTreeSet::new(),
             pending_certs1: BTreeMap::new(),
             pending_certs2: BTreeMap::new(),
+            pending_timeout_certs: BTreeMap::new(),
             private_key,
             state_private_key,
             stake_table_capacity,
@@ -279,11 +283,27 @@ impl<T: NodeType> Consensus<T> {
     /// Sets the locked certificate and current epoch. After calling this, a
     /// subsequent `apply` that triggers `maybe_propose` will find the
     /// parent cert and proposal it needs.
-    pub fn seed_parent(&mut self, cert1: Certificate1<T>, proposal: Proposal<T>) {
+    ///
+    /// `reconstructed` are `(view, V2 commitment)` pairs to record as
+    /// already reconstructed blocks. During normal operation this set is
+    /// populated as VID shares arrive; on restart it starts empty, but the
+    /// persisted leaf and proposals correspond to blocks this node had already
+    /// reconstructed in the previous process. Seeding them lets a restarted
+    /// leader satisfy the `parent_block_reconstructed` check for its first
+    /// proposal/vote instead of stalling.
+    pub fn seed_parent(
+        &mut self,
+        cert1: Certificate1<T>,
+        proposal: Proposal<T>,
+        reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
+    ) {
         self.current_epoch = Some(proposal.epoch);
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
         self.proposals.insert(proposal.view_number, proposal);
+        for (view, commitment) in reconstructed {
+            self.blocks_reconstructed.insert((view, commitment));
+        }
     }
 
     /// Record, for each `(view, payload_commitment)`, that the block for `view`
@@ -699,6 +719,7 @@ impl<T: NodeType> Consensus<T> {
                 self.leaves = self.leaves.split_off(&view);
                 self.pending_certs1 = self.pending_certs1.split_off(&view);
                 self.pending_certs2 = self.pending_certs2.split_off(&view);
+                self.pending_timeout_certs = self.pending_timeout_certs.split_off(&view);
                 self.proposals = self.proposals.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
                 self.vid_shares = self.vid_shares.split_off(&view);
@@ -1060,6 +1081,22 @@ impl<T: NodeType> Consensus<T> {
             warn!(view = %certificate.view_number(), "timeout certificate has no epoch number");
             return Protocol::Abort;
         };
+        // Verify the threshold signature before acting on the certificate.
+        // Matches `handle_certificate1`/`handle_certificate2`.
+        match self.try_verify_cert(&certificate, epoch) {
+            CertVerification::Valid => {},
+            CertVerification::Invalid => {
+                warn!(%view, %epoch, "timeout certificate not verified");
+                return Protocol::Abort;
+            },
+            CertVerification::EpochUnavailable => {
+                debug!(%view, %epoch, "timeout certificate deferred (epoch unavailable)");
+                self.pending_timeout_certs
+                    .insert(certificate.view_number(), certificate);
+                outbox.push_back(ConsensusOutput::RequestDrbResult(epoch));
+                return Protocol::Continue;
+            },
+        }
         self.timeout_certs.insert(view, certificate.clone());
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
@@ -1872,6 +1909,11 @@ impl<T: NodeType> Consensus<T> {
             self.handle_certificate2(cert.clone(), outbox);
             self.maybe_decide(view, outbox);
             self.maybe_propose(view, outbox);
+        }
+
+        let pending = std::mem::take(&mut self.pending_timeout_certs);
+        for (_view, cert) in pending {
+            self.handle_timeout_certificate(cert, outbox);
         }
     }
 
