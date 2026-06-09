@@ -306,27 +306,6 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Record, for each `(view, payload_commitment)`, that the block for `view`
-    /// is "reconstructed" — i.e. mark its V2 VID commitment as known.
-    ///
-    /// On restart the per-view VID reconstruction state is lost and is only
-    /// rebuilt from VID shares received live over the network. Reconstruction
-    /// requires a quorum of shares, so a node that restarts below quorum can
-    /// never re-reconstruct the parent block of the view it must vote on, and
-    /// consensus stalls at `parent_block_reconstructed`. Seeding the commitments
-    /// of already-known (persisted / decided) blocks here lets a restarted node
-    /// satisfy that gate for blocks it had already seen, without needing live
-    /// shares. This mirrors the commitment-only bookkeeping that non-leader
-    /// reconstruction performs via `ConsensusInput::BlockReconstructed`.
-    pub fn seed_reconstructed_blocks(
-        &mut self,
-        blocks: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
-    ) {
-        for (view, commitment) in blocks {
-            self.blocks_reconstructed.insert((view, commitment));
-        }
-    }
-
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
     /// protocol. Performs the four operations the seed describes
     /// atomically: anchor the decided view, install the undecided

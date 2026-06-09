@@ -32,16 +32,6 @@ slow-timeout = { period = "2m", terminate-after = 5 }
 filter = 'test(test_light_client_completeness)'
 slow-timeout = { period = "2m", terminate-after = 15 }
 
-# New-protocol (V6) restart tests rebuild merklized state on restart, which is
-# much slower than legacy catchup — especially for below-quorum restarts where a
-# majority must cold-recover. Give them a longer window than the legacy restart
-# tests. This more-specific filter must precede the general `slow_test_restart`
-# override below (nextest applies the first matching override).
-[[profile.default.overrides]]
-filter = 'test(slow_test_restart_new_protocol)'
-slow-timeout = { period = "2m", terminate-after = 4 }
-threads-required = 'num-cpus'
-
 # The restart tests run an entire sequencing network, and so are quite resource intensive.
 [[profile.default.overrides]]
 filter = 'test(slow_test_restart)'

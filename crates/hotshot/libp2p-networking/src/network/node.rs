@@ -875,11 +875,9 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         self.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
 
         DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
-        // Keep the task's `JoinHandle` so callers can await the swarm loop
-        // actually ending on shutdown. The swarm owns the listening (QUIC/UDP)
-        // socket; if we drop the handle and don't await it, `shut_down` can
-        // return while the socket is still bound, and a subsequent restart
-        // fails to re-bind the same port ("failed to listen for Libp2p").
+        // Keep the `JoinHandle` so shutdown can await the swarm loop ending and
+        // its listening socket closing; otherwise a restart may fail to re-bind
+        // the same port.
         let task = spawn(
             async move {
                 loop {

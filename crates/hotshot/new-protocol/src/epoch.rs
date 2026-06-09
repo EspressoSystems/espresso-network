@@ -16,9 +16,6 @@ use tracing::error;
 
 pub enum EpochRootResult {
     DrbResult(EpochNumber, DrbResult),
-    /// The epoch root header for `epoch` was pushed into membership (building
-    /// that epoch's stake table). Carries no payload; the side effect on
-    /// membership is the point.
     EpochRootAdded(EpochNumber),
 }
 
@@ -76,9 +73,6 @@ impl<T: NodeType> EpochManager<T> {
                             self.completed_drb_requests.insert(epoch);
                             return Some(Ok(root));
                         },
-                        // The epoch root was pushed into membership (its stake
-                        // table is now available). Surface it so the coordinator
-                        // can retry votes that were buffered awaiting membership.
                         Ok(root @ EpochRootResult::EpochRootAdded(_)) => {
                             return Some(Ok(root));
                         },
@@ -111,11 +105,7 @@ impl<T: NodeType> EpochManager<T> {
             };
 
             // Push the epoch root into membership directly from the decided
-            // header, the way legacy HotShot does (`add_epoch_root`). This
-            // proactively builds the stake table for `epoch + 2` instead of
-            // relying on a later `get_epoch_root` -> `fetch_leaf` catchup, which
-            // can't be served after a restart (the decided leaf may not be in
-            // the queryable store), wedging epoch transitions.
+            // header
             let target_epoch = epoch + 2;
             let membership_coordinator = self.membership_coordinator.clone();
             let header = leaf.block_header().clone();

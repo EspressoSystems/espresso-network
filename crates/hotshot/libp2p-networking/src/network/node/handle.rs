@@ -147,11 +147,8 @@ impl<T: NodeType> NetworkNodeHandle<T> {
     pub async fn shutdown(&self) -> Result<(), NetworkError> {
         self.send_request(ClientRequest::Shutdown)?;
 
-        // Wait for the swarm event-loop task to actually finish, so its
-        // listening socket is released before we return. Without this, a
-        // restart can fail to re-bind the same port. Bounded by a timeout so a
-        // wedged swarm can't hang shutdown indefinitely; if the request channel
-        // was already closed the task may have ended on its own.
+        // Wait for the swarm event loop task to actually finish, so its
+        // listening socket is released before we return.
         let task = self.swarm_task.lock().take();
         if let Some(task) = task {
             match timeout(Duration::from_secs(5), task).await {

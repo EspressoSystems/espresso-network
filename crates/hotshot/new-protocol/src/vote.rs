@@ -29,10 +29,9 @@ pub struct VoteStats {
 pub struct VoteCollector<T: NodeType, V, C> {
     // NOTE: `tasks` is declared before `accumulators` so that on drop the
     // JoinSet aborts running tasks before the channel senders in
-    // `accumulators` are closed.  A per-view task may still observe a closed
-    // channel (e.g. on `gc` or shutdown) before forming a cert; in that case
-    // `run_per_view` returns `None` rather than panicking.
-    tasks: JoinSet<Option<C>>,
+    // `accumulators` are closed.  This prevents `run_per_view` from
+    // observing a closed channel and hitting `unreachable!()`.
+    tasks: JoinSet<C>,
     accumulators: BTreeMap<ViewNumber, (mpsc::Sender<V>, AbortHandle)>,
     completed_certificates: BTreeSet<ViewNumber>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
@@ -93,18 +92,12 @@ where
     pub async fn next(&mut self) -> Option<C> {
         loop {
             match self.tasks.join_next().await {
-                Some(Ok(Some(cert))) => {
+                Some(Ok(cert)) => {
                     if self.completed_certificates.contains(&cert.view_number()) {
                         continue;
                     }
                     self.completed_certificates.insert(cert.view_number());
                     return Some(cert);
-                },
-                // A per-view task ended without forming a cert (its vote channel
-                // closed via `gc`/shutdown before reaching threshold). Not an
-                // error — just move on to the next finished task.
-                Some(Ok(None)) => {
-                    debug!("Vote collection task ended without forming a certificate");
                 },
                 Some(Err(e)) if e.is_cancelled() => {
                     debug!("Vote collection task cancelled: {e}");
@@ -174,19 +167,13 @@ where
     }
 
     #[instrument(level = "debug", skip_all, fields(view = %_view))]
-    /// Accumulate votes for a single view until a valid certificate forms.
-    ///
-    /// Returns `Some(cert)` once a threshold of valid votes is reached. Returns
-    /// `None` if the vote channel closes first — this happens legitimately when
-    /// the view is garbage-collected or the collector shuts down before the view
-    /// reaches threshold (e.g. a view that times out), so it must not panic.
     async fn run_per_view(
         _view: ViewNumber,
         mut rx: mpsc::Receiver<V>,
         mut accumulator: VoteAccumulator<T, V, C>,
         membership: EpochMembership<T>,
         upgrade_lock: UpgradeLock<T>,
-    ) -> Option<C> {
+    ) -> C {
         let mut votes = Vec::new();
 
         while let Some(vote) = rx.recv().await {
@@ -204,7 +191,7 @@ where
                             cert = std::any::type_name::<C>(),
                             "certificate formed"
                         );
-                        return Some(cert);
+                        return cert;
                     },
                     Err(e) => {
                         warn!("Invalid certificate formed: {e}");
@@ -229,7 +216,7 @@ where
                                     cert = std::any::type_name::<C>(),
                                     "certificate formed (after recovery)"
                                 );
-                                return Some(cert);
+                                return cert;
                             }
                         }
                     },
@@ -238,9 +225,7 @@ where
                 votes.push(vote);
             }
         }
-        // Channel closed before a cert formed (view GC'd or collector shut
-        // down). The caller (`next`) treats this as a no-op.
-        None
+        unreachable!()
     }
     pub fn gc(&mut self, view: ViewNumber, epoch: EpochNumber) {
         let keep = self.accumulators.split_off(&view);
@@ -733,30 +718,6 @@ mod tests {
         assert_eq!(cert.view_number(), view);
 
         // Confirm no second certificate
-        assert_no_certs(&mut task).await;
-    }
-
-    /// A sub-threshold view whose vote channel closes (here via `gc`) must not
-    /// panic the per-view task. Regression test for a previously-reachable
-    /// `unreachable!()` in `run_per_view`: when `rx.recv()` returns `None`
-    /// before a cert forms, the task returns `None` instead of panicking, and
-    /// `next()` reports no certificate.
-    #[tokio::test]
-    async fn test_cert2_gc_below_threshold_no_panic() {
-        let mut task = setup_cert2_task();
-        let view = ViewNumber::new(1);
-
-        // Fewer than threshold votes, so no certificate can form.
-        for i in 0..3 {
-            task.accumulate_vote(make_vote2(i, view)).await;
-        }
-
-        // Garbage-collect past the view. This tears down the view's accumulator
-        // (and, on shutdown, its sender), so the per-view task observes a closed
-        // channel without ever reaching threshold.
-        task.gc(ViewNumber::new(2), EpochNumber::genesis());
-
-        // The collector must remain healthy: no panic, and no spurious cert.
         assert_no_certs(&mut task).await;
     }
 
