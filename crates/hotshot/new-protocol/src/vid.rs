@@ -22,9 +22,8 @@ pub struct VidReconstructOutput<T: NodeType> {
     pub payload_commitment: VidCommitment2,
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
-    /// Header of the block this payload belongs to, captured from the proposal. Carried
-    /// through reconstruction so consumers don't depend on the proposal still being in
-    /// consensus state (it may have been garbage collected by the time we finish).
+    /// Block header, carried through reconstruction so consumers don't need the proposal (which
+    /// may have been GC'd from consensus state by the time we finish).
     pub header: T::BlockHeader,
     pub tx_commitments: Vec<Commitment<T::Transaction>>,
 }
@@ -129,9 +128,8 @@ impl<T: NodeType> VidShareAccumulator<T> {
     }
 }
 
-/// Number of views below the GC view for which in-flight reconstructions and share
-/// accumulators are kept alive, so that payloads for just-decided views can still be
-/// reconstructed and delivered to the decide pipeline / query service.
+/// Views below the GC view for which in-flight reconstructions and accumulators are kept alive,
+/// so payloads for just-decided views can still be reconstructed for the decide pipeline.
 pub(crate) const RECONSTRUCT_KEEP_HORIZON: u64 = 5;
 
 #[derive(Default)]
@@ -246,12 +244,10 @@ impl<T: NodeType> VidReconstructor<T> {
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        // GC runs when views are decided, but the decided views' payloads are exactly what
-        // the decide pipeline still needs: a multi-leaf decide (e.g. after a timeout)
-        // would otherwise abort the reconstructions for the older leaves in the batch and
-        // lose their payloads. Keep a small horizon of views alive below the GC view; far
-        // below it, accumulators can no longer make progress anyway (Vote1 messages
-        // carrying shares stop arriving once the network moves on).
+        // GC runs at decide, but those views' payloads are what the decide pipeline still needs:
+        // a multi-leaf decide would otherwise abort the older leaves' reconstructions and lose
+        // their payloads. Keep a small horizon below the GC view alive; further below, accumulators
+        // can't make progress anyway (the share-carrying Vote1 messages stop arriving).
         let horizon = ViewNumber::new(view_number.saturating_sub(RECONSTRUCT_KEEP_HORIZON));
         let keep = self.calculations.split_off(&horizon);
         for handle in self.calculations.values_mut() {

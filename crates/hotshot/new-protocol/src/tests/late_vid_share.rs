@@ -1,9 +1,6 @@
-//! Tests for storing VID shares that become available after their view was
-//! decided without one (e.g. the proposal entered consensus via an epoch
-//! change message, so the share never paired with it). A late share is
-//! validated, persisted, and surfaced as [`ConsensusOutput::VidShareValidated`]
-//! so downstream consumers (the query service) can back-fill the VID data
-//! missing from the decide event.
+//! Tests for VID shares that become available after their view was decided without one. A late
+//! share is validated, persisted, and surfaced as [`ConsensusOutput::VidShareValidated`] so the
+//! query service can back-fill the missing VID data.
 
 use std::time::Duration;
 

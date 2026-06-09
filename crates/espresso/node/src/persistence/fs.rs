@@ -56,7 +56,10 @@ use itertools::Itertools;
 use super::RegisteredValidatorNoX25519;
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    persistence::{
+        PAYLOAD_RETENTION_VIEWS, migrate_network_config,
+        persistence_metrics::PersistenceMetricsValue,
+    },
 };
 
 /// Deserialize a stake table from bytes, trying current and legacy formats.
@@ -369,12 +372,13 @@ impl Inner {
     ) -> anyhow::Result<()> {
         let prune_view = ViewNumber::new(decided_view.saturating_sub(self.view_retention));
 
-        // DA proposals and VID shares are deliberately retained for the full retention
-        // window (not deleted as soon as their views are processed) so that this node —
-        // and its peers, via the request-response protocol — can still recover payloads
-        // for views that were decided before their data landed on disk.
-        self.prune_files(self.da2_dir_path(), prune_view, None, &[])?;
-        self.prune_files(self.vid2_dir_path(), prune_view, None, &[])?;
+        // DA proposals and VID shares are retained after processing so peers can recover recent
+        // payloads, but they dominate storage, so they're pruned on a short window (a few hours,
+        // or the general retention if shorter) — separate from the smaller leaf spine below.
+        let payload_retention = self.view_retention.min(PAYLOAD_RETENTION_VIEWS);
+        let payload_prune_view = ViewNumber::new(decided_view.saturating_sub(payload_retention));
+        self.prune_files(self.da2_dir_path(), payload_prune_view, None, &[])?;
+        self.prune_files(self.vid2_dir_path(), payload_prune_view, None, &[])?;
         self.prune_files(
             self.quorum_proposals2_dir_path(),
             prune_view,
@@ -388,9 +392,8 @@ impl Inner {
             prune_intervals,
         )?;
 
-        // Save the most recent *processed* leaf: it is our anchor point if the node
-        // restarts, and the next processing pass relies on the oldest remaining leaf
-        // having already been included in a previous decide event.
+        // Keep the most recent *processed* leaf as the restart anchor; the next pass relies on the
+        // oldest remaining leaf having been included in a previous decide event.
         let keep_leaf = prune_intervals
             .iter()
             .map(|interval| *interval.end())
@@ -484,10 +487,7 @@ impl Inner {
                 fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
-            // Include the VID share if available, preferring the in-memory copy from the
-            // decide event: under the new protocol the share file is written
-            // asynchronously, so it may not have landed on disk yet, while the decide
-            // event already carries the share.
+            // VID share: in-memory first (the share file is written asynchronously), then disk.
             let vid_share = match live.and_then(|data| data.vid_share(v)) {
                 Some(share) => {
                     metrics.decide_vid_from_memory.add(1);
@@ -502,8 +502,7 @@ impl Inner {
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
 
-            // Fill in the full block payload, preferring the in-memory copy from the
-            // decide event; fall back to the DA proposal file.
+            // Block payload: in-memory first, then the DA proposal file.
             if let Some(payload) = live.and_then(|data| data.payload(v)) {
                 leaf.fill_block_payload_unchecked(payload.clone());
                 metrics.decide_payload_from_memory.add(1);
@@ -516,9 +515,8 @@ impl Inner {
             } else if v == ViewNumber::genesis()
                 || leaf.block_header().ns_table().iter().next().is_none()
             {
-                // We don't get a DA proposal for the genesis view, but we know what the
-                // payload always is; the same goes for any block with an empty namespace
-                // table.
+                // No DA proposal for the genesis view (or any empty-namespace-table block), but
+                // the payload is always the canonical empty one.
                 leaf.fill_block_payload_unchecked(Payload::empty().0);
             } else {
                 tracing::debug!(?v, "DA proposal not available at decide");
@@ -554,11 +552,8 @@ impl Inner {
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            // Missing data is not waited for: the event is emitted as-is. A missing
-            // payload is reported to the caller so it can be recovered from peers in the
-            // background and delivered to consensus storage and the query service late,
-            // the same way `BlockPayloadReconstructed` events are; missing VID data is
-            // left to the query service's own peer fetching.
+            // Missing data isn't waited for: emit as-is. A missing payload is reported for
+            // background peer recovery; missing VID is left to the query service's fetching.
             if leaf.leaf.block_payload().is_none() {
                 tracing::warn!(?view, "DA proposal not available at decide");
                 metrics.decide_missing_payload.add(1);
@@ -570,8 +565,7 @@ impl Inner {
             }
 
             let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
-                // Prefer the in-memory cert2 from the decide event over the
-                // asynchronously-written file.
+                // cert2: in-memory first, then the file.
                 let cert2 = match live.and_then(|data| data.cert2(view)) {
                     Some(cert2) => Some(cert2.clone()),
                     None => self.load_cert2(view)?,

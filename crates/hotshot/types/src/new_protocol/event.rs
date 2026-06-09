@@ -6,6 +6,7 @@ use crate::{
     simple_certificate::{SimpleCertificate, SuccessThreshold},
     simple_vote::{QuorumData2, Vote2Data},
     traits::node_implementation::NodeType,
+    vid::avidm_gf2::AvidmGf2Common,
 };
 
 /// High-level event emitted by the coordinator adapter. Covers both legacy HotShot
@@ -45,6 +46,16 @@ pub enum CoordinatorEvent<TYPES: NodeType> {
         header: TYPES::BlockHeader,
         share: VidDisperseShare2<TYPES>,
     },
+    /// Emitted (by the decide pipeline's payload recovery) when VID common has been
+    /// regenerated from a recovered block payload for a view decided without it. Lets
+    /// downstream consumers (e.g. query service) back-fill the VID common without waiting
+    /// on their own VID fetching. Carries no per-node share — only the common, which is
+    /// all that is needed to serve VID common queries.
+    VidCommonRecovered {
+        view: ViewNumber,
+        header: TYPES::BlockHeader,
+        common: AvidmGf2Common,
+    },
 }
 
 impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
@@ -75,6 +86,9 @@ impl<TYPES: NodeType> std::fmt::Display for CoordinatorEvent<TYPES> {
             },
             Self::VidShareValidated { view, .. } => {
                 write!(f, "VidShareValidated: view={view}")
+            },
+            Self::VidCommonRecovered { view, .. } => {
+                write!(f, "VidCommonRecovered: view={view}")
             },
         }
     }

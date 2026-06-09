@@ -29,6 +29,7 @@ use hotshot_types::{
         storage::Storage,
     },
     utils::genesis_epoch_from_version,
+    vid::avidm_gf2::AvidmGf2Common,
     vote::HasViewNumber,
 };
 use indexmap::IndexMap;
@@ -788,15 +789,11 @@ pub trait SequencerPersistence:
         ))
     }
 
-    /// Decode a consensus decide event and persist its leaves, for the consensus event loop.
-    /// Returns a [`PendingDecide`] on a decide so the caller can wake a background task to run
-    /// [`process_decided_events`](Self::process_decided_events); `None` otherwise.
-    ///
-    /// This is the persist-only half of a decide: query-service ingestion and GC are deferred to
-    /// [`process_decided_events`](Self::process_decided_events). The returned [`PendingDecide`]
-    /// carries the in-memory payload/VID/cert2 data from the event, so the processor can emit
-    /// complete decide events without waiting for consensus' asynchronous storage writes to land.
-    /// Tests that want the synchronous persist-then-process behavior use
+    /// Decode a consensus decide event and persist its leaves, for the consensus event loop. This
+    /// is the persist-only half of a decide; query-service ingestion and GC are deferred to
+    /// [`process_decided_events`](Self::process_decided_events). On a decide, returns a
+    /// [`PendingDecide`] (carrying the in-memory decide data) to wake that background task;
+    /// `None` otherwise. Tests wanting synchronous persist-then-process use
     /// [`append_decided_leaves`](Self::append_decided_leaves).
     async fn persist_event(
         &self,
@@ -949,26 +946,19 @@ pub trait SequencerPersistence:
     /// Cursor-driven (e.g. `last_processed_view`): advances only on success, so it may lag
     /// consensus without losing data.
     ///
-    /// `live` carries the payload/VID/cert2 data from the in-memory decide event. It is the
-    /// preferred source when building the events: under the new protocol, consensus writes this
-    /// data to storage asynchronously, so a just-decided view's data may not have landed on disk
-    /// yet, while the decide event already carries it. Storage is the fallback for views not
-    /// covered (restart replay, signals coalesced under processor lag, decides that never had
-    /// the data).
+    /// `live` is the in-memory payload/VID/cert2 from the decide event, preferred over storage:
+    /// the new protocol writes that data to storage asynchronously, so a just-decided view's data
+    /// may not have landed yet. Storage is the fallback for views `live` doesn't cover (restart
+    /// replay, signals coalesced under processor lag).
     ///
-    /// Events are never deferred waiting for missing data: a leaf whose payload is in neither
-    /// `live` nor storage is emitted without it, and reported in the returned outcome so the
-    /// caller can heal the gap asynchronously — by recovering the payload from peers and
-    /// delivering it to consensus storage and the query service the same way late
-    /// `BlockPayloadReconstructed` events are.
+    /// Events are never deferred for missing data: a leaf whose payload is in neither `live` nor
+    /// storage is emitted without it and reported in the outcome, so the caller can heal it
+    /// asynchronously via peer recovery.
     ///
-    /// Returns a [`DecideProcessingOutcome`] carrying the highest view confirmed processed (the
-    /// cursor; `None` if nothing was processed) and the leaves emitted without payloads. Errors
-    /// are propagated; the failed range is retried on the next call.
-    ///
-    /// Default returns `Some(decided_view)` with no missing payloads: backends with no replayable
-    /// storage (e.g. `NoStorage`) forward events synchronously in `persist_decided_leaves` and are
-    /// always caught up here.
+    /// Returns the cursor (highest view processed, `None` if none) and the payload-less leaves.
+    /// Errors propagate; the failed range is retried. The default reports `decided_view` with no
+    /// missing payloads, for backends (e.g. `NoStorage`) that forward synchronously in
+    /// `persist_decided_leaves`.
     async fn process_decided_events(
         &self,
         decided_view: ViewNumber,
@@ -1133,36 +1123,33 @@ pub struct DecideProcessingOutcome {
     pub missing_payload: Vec<Leaf2>,
 }
 
-/// Recover a missing block payload for a decided leaf from an external source.
-///
-/// Under the new protocol a node can decide a view without ever obtaining its payload
-/// (e.g. it was not needed for quorum and missed the share-carrying Vote1 broadcasts).
-/// When [`process_decided_events`](SequencerPersistence::process_decided_events) reports
-/// leaves emitted without payloads, a background task uses this hook to fetch them from
-/// peers — who retain DA proposals for the consensus storage retention window — and then
-/// delivers them to consensus storage and the query service.
+/// A block payload recovered for a decided leaf, plus the VID common recomputed from it (a
+/// deterministic function of the payload), so one recovery heals both.
+#[derive(Clone, Debug)]
+pub struct RecoveredPayload {
+    /// The recovered DA proposal (block payload), verified against the leaf's payload commitment.
+    pub proposal: Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+    /// VID common recomputed from the recovered payload, consistent with that same commitment.
+    pub vid_common: AvidmGf2Common,
+}
+
+/// Recover a block payload for a leaf decided without one, from peers (who retain DA proposals
+/// for the retention window). Used by the background task that heals the gaps
+/// [`process_decided_events`](SequencerPersistence::process_decided_events) reports.
 #[async_trait]
 pub trait DecidePayloadRecovery: Debug + Send + Sync {
-    /// Try to fetch the DA proposal (block payload) for `leaf`. Implementations MUST
-    /// verify the returned payload against the leaf's payload commitment; a `Some` result
-    /// is trusted by the caller. Returns `Ok(None)` if the payload could not be recovered
-    /// (the attempt may be retried later).
-    async fn recover_payload(
-        &self,
-        leaf: &Leaf2,
-    ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal2<SeqTypes>>>>;
+    /// Try to fetch the DA proposal for `leaf`. Implementations MUST verify it against the leaf's
+    /// payload commitment; a `Some` result (and its [`RecoveredPayload::vid_common`]) is trusted.
+    /// `Ok(None)` means not recovered (may be retried later).
+    async fn recover_payload(&self, leaf: &Leaf2) -> anyhow::Result<Option<RecoveredPayload>>;
 }
 
 /// Payload, VID, and cert2 data captured in memory from a decide event, keyed by view.
 ///
-/// Under the new protocol, consensus writes DA proposals, VID shares, and cert2s to storage
-/// asynchronously, off the critical path, so a view can be decided before its data lands on
-/// disk. The decide event itself already carries this data, though: the decided leaves come
-/// with their payloads filled in and their VID shares attached. Capturing it here lets
-/// [`process_decided_events`](SequencerPersistence::process_decided_events) build complete
-/// query-service decide events without reading — and racing — the consensus staging tables.
-/// Storage remains the fallback for views not covered (restart replay, signals coalesced
-/// under processor lag, decides that never had the data in the first place).
+/// The new protocol writes DA proposals, VID shares, and cert2s to storage asynchronously, so a
+/// view can be decided before its data lands on disk — but the decide event already carries it.
+/// Capturing it here lets [`process_decided_events`](SequencerPersistence::process_decided_events)
+/// build complete decide events without racing the staging tables, which remain the fallback.
 #[derive(Clone, Debug, Default)]
 pub struct DecideEventData {
     /// Block payloads from the decided leaves.

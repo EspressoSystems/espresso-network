@@ -10,10 +10,10 @@ use anyhow::Context;
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    NodeState, Payload, PrivKey, PubKey, Transaction, ValidatedState,
+    NodeState, Payload, PubKey, Transaction, ValidatedState,
     v0::traits::{
         DecidePayloadRecovery, EventConsumer as PersistenceEventConsumer, PendingDecide,
-        SequencerPersistence,
+        RecoveredPayload, SequencerPersistence,
     },
 };
 use futures::{
@@ -28,20 +28,17 @@ use hotshot_types::{
     PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
-    data::{DaProposal2, Leaf2, VidCommitment, ViewNumber},
+    data::{Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    message::{Proposal, UpgradeLock, convert_proposal},
+    message::UpgradeLock,
     network::NetworkConfig,
     new_protocol::CoordinatorEvent,
     storage_metrics::StorageMetricsValue,
     traits::{
-        EncodeBytes,
-        block_contents::{BlockHeader, BlockPayload},
+        block_contents::BlockPayload,
         metrics::{Counter, Gauge, Histogram, Metrics},
         network::ConnectedNetwork,
-        signature_key::SignatureKey,
     },
-    utils::{EpochTransitionIndicator, option_epoch_from_block_number},
 };
 use parking_lot::Mutex;
 use request_response::RequestResponseConfig;
@@ -58,6 +55,7 @@ use crate::{
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
+    persistence::PAYLOAD_RETENTION_VIEWS,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
         RequestResponseProtocol,
@@ -285,9 +283,7 @@ where
         // itself)
         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
 
-        // Payload recovery for the decide pipeline: fetches DA proposals from peers when a
-        // view is decided before its payload lands on disk, so decide events reach the
-        // query service complete.
+        // Recovers DA proposals from peers for views decided before their payload landed.
         let payload_recovery: Arc<dyn DecidePayloadRecovery> = Arc::new(PayloadRecovery::new(
             request_response_protocol.clone(),
             membership_coordinator.clone(),
@@ -395,7 +391,6 @@ where
                 node_id,
                 events,
                 persistence,
-                ctx.validator_config.private_key.clone(),
                 ctx.state_signer.clone(),
                 external_event_handler,
                 Some(event_streamer.clone()),
@@ -565,11 +560,9 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
     }
 }
 
-/// Latest decide, sent from the event loop to the background decide processor along with the
-/// in-memory event data (payloads, VID shares, cert2) used for live query-service ingestion.
-/// `None` is the initial/no-op value of the `watch` channel. Under processor lag the channel
-/// coalesces and intermediate values are dropped; their views are regenerated from storage,
-/// which by then has had time to catch up.
+/// Latest decide, sent from the event loop to the background processor with the in-memory event
+/// data for live ingestion. `None` is the `watch` channel's initial value. Under lag the channel
+/// coalesces; dropped views are regenerated from storage.
 type DecideSignal = Option<PendingDecide>;
 
 /// Metrics for the background decide processor. `backlog` (decided - processed) is the key signal:
@@ -620,7 +613,6 @@ async fn handle_events<N, P, C>(
     node_id: u64,
     mut events: impl Stream<Item = CoordinatorEvent<SeqTypes>> + Unpin,
     persistence: Arc<P>,
-    private_key: PrivKey,
     state_signer: Arc<RwLock<StateSigner<SequencerApiVersion>>>,
     external_event_handler: ExternalEventHandler,
     events_streamer: Option<Arc<RwLock<EventsStreamer<SeqTypes>>>>,
@@ -650,64 +642,14 @@ async fn handle_events<N, P, C>(
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
-            CoordinatorEvent::BlockPayloadReconstructed {
-                view,
-                header,
-                payload,
-            } => {
-                // A payload reconstructed after its view was decided. Make sure it lands
-                // in both stores: consensus storage, so restart replay and peer recovery
-                // can serve it (consensus' own write is asynchronous and may be lost on a
-                // crash), and the query service, which back-fills the block. Spawned so
-                // slow writes cannot stall the event loop; both writes are idempotent.
-                let persistence = persistence.clone();
+            CoordinatorEvent::BlockPayloadReconstructed { view, .. } => {
+                // The coordinator already persisted this to consensus storage (with retries);
+                // forward it to the query service to back-fill the block. Spawned so a slow write
+                // can't stall the event loop; idempotent.
                 let consumer = event_consumer.clone();
-                let consensus_handle = consensus_handle.clone();
-                let private_key = private_key.clone();
                 let event = event.clone();
                 let view = *view;
-                let header = header.clone();
-                let payload = payload.clone();
                 spawn(async move {
-                    // Placeholder signature, matching consensus' own asynchronous DA
-                    // writes; readers verify payloads against the header's payload
-                    // commitment, not this signature.
-                    match PubKey::sign(&private_key, &[]) {
-                        Ok(signature) => {
-                            let epoch_height = consensus_handle.epoch_height().await;
-                            let proposal = Proposal {
-                                data: DaProposal2::<SeqTypes> {
-                                    encoded_transactions: payload.encode(),
-                                    metadata: header.metadata().clone(),
-                                    view_number: view,
-                                    epoch: option_epoch_from_block_number(
-                                        true,
-                                        header.block_number(),
-                                        epoch_height,
-                                    ),
-                                    epoch_transition_indicator:
-                                        EpochTransitionIndicator::NotInTransition,
-                                },
-                                signature,
-                                _pd: PhantomData,
-                            };
-                            if let Err(err) = persistence
-                                .append_da2(&proposal, header.payload_commitment())
-                                .await
-                            {
-                                tracing::warn!(
-                                    ?view,
-                                    "failed to persist reconstructed payload: {err:#}"
-                                );
-                            }
-                        },
-                        Err(err) => {
-                            tracing::warn!(
-                                ?view,
-                                "failed to sign reconstructed DA proposal: {err:#}"
-                            );
-                        },
-                    }
                     if let Err(err) = consumer.handle_event(&event).await {
                         tracing::warn!(
                             ?view,
@@ -716,36 +658,14 @@ async fn handle_events<N, P, C>(
                     }
                 });
             },
-            CoordinatorEvent::VidShareValidated { view, share, .. } => {
-                // A VID share validated after its view was decided. Make sure it
-                // lands in both stores: consensus storage, so restart replay and
-                // peer recovery can serve it (consensus' own write is asynchronous
-                // and may be lost on a crash), and the query service, which
-                // back-fills the VID data the block was decided without. Spawned so
-                // slow writes cannot stall the event loop; both writes are
-                // idempotent.
-                let persistence = persistence.clone();
+            CoordinatorEvent::VidShareValidated { view, .. } => {
+                // The coordinator already persisted this (with retries); forward it to the query
+                // service to back-fill the missing VID. Spawned so a slow write can't stall the
+                // event loop; idempotent.
                 let consumer = event_consumer.clone();
-                let private_key = private_key.clone();
                 let event = event.clone();
                 let view = *view;
-                let share = share.clone();
                 spawn(async move {
-                    // Placeholder signature, matching consensus' own asynchronous
-                    // VID writes; readers verify shares against the header's
-                    // payload commitment, not this signature.
-                    match share.to_proposal(&private_key) {
-                        Some(proposal) => {
-                            if let Err(err) =
-                                persistence.append_vid(&convert_proposal(proposal)).await
-                            {
-                                tracing::warn!(?view, "failed to persist late VID share: {err:#}");
-                            }
-                        },
-                        None => {
-                            tracing::warn!(?view, "failed to sign late VID share proposal");
-                        },
-                    }
                     if let Err(err) = consumer.handle_event(&event).await {
                         tracing::warn!(
                             ?view,
@@ -869,9 +789,8 @@ async fn process_decided_events_task<P, C>(
                 pending.view,
                 pending.deciding_qc.clone(),
                 consumer.as_ref(),
-                // The in-memory data from the decide event, so events for just-decided
-                // views don't depend on consensus' asynchronous storage writes having
-                // landed. Retries reuse it; views it doesn't cover fall back to storage.
+                // In-memory decide data, so just-decided views don't wait on the async storage
+                // writes. Retries reuse it; uncovered views fall back to storage.
                 Some(&pending.data),
             )
             .await;
@@ -884,9 +803,8 @@ async fn process_decided_events_task<P, C>(
                 if let Some(v) = outcome.processed {
                     last_processed = last_processed.max(v.u64());
                 }
-                // Recover payloads for leaves whose decide events were emitted without one,
-                // in the background. Results are delivered straight to consensus storage and
-                // the query service, so the cursor never waits on the network.
+                // Recover payloads for leaves emitted without one, in the background, so the
+                // cursor never waits on the network.
                 spawn_payload_recovery(
                     &payload_recovery,
                     &persistence,
@@ -919,19 +837,17 @@ async fn process_decided_events_task<P, C>(
 }
 
 /// Only attempt peer recovery for views within this distance of the newest decided view.
-/// Peers retain DA proposals for their consensus storage retention window (about this many
-/// views by default); anything older is very unlikely to be recoverable over the consensus
-/// network and is left to the query service's peer fetching instead.
-const PAYLOAD_RECOVERY_HORIZON: u64 = 130000;
+/// Peers retain DA proposals for [`PAYLOAD_RETENTION_VIEWS`] (a few hours); anything older has
+/// likely been pruned everywhere and is left to the query service's peer fetching instead. Set
+/// equal to the retention window so we never request payloads peers no longer have.
+pub(crate) const PAYLOAD_RECOVERY_HORIZON: u64 = PAYLOAD_RETENTION_VIEWS;
 
 /// Number of attempts to recover a view's payload from peers before giving up and leaving
 /// the gap to the query service's own fetching.
 const PAYLOAD_RECOVERY_ATTEMPTS: u32 = 3;
 
-/// Spawn a background task recovering the payloads of `missing` — leaves whose decide
-/// events were emitted without one — from peers. Each leaf is reported by exactly one
-/// successful processing pass (the cursor advances past it), so recovery is attempted once
-/// per leaf, with a bounded number of request retries.
+/// Spawn background recovery of `missing` leaves' payloads from peers. Each leaf is reported by
+/// exactly one successful pass (the cursor advances past it), so recovery runs once per leaf.
 fn spawn_payload_recovery<P, C>(
     payload_recovery: &Option<Arc<dyn DecidePayloadRecovery>>,
     persistence: &Arc<P>,
@@ -970,10 +886,8 @@ fn spawn_payload_recovery<P, C>(
     ));
 }
 
-/// Fetch missing block payloads from peers and deliver each one the same way a late
-/// `BlockPayloadReconstructed` event is delivered: persist the DA proposal to consensus
-/// storage (so restart replay and peers see it), then forward the payload to the query
-/// service, which back-fills the block decided without it.
+/// Fetch missing block payloads from peers, persist each to consensus storage, then forward it
+/// (and the regenerated VID common) to the query service.
 pub(crate) async fn recover_missing_payloads<P, C>(
     recovery: Arc<dyn DecidePayloadRecovery>,
     persistence: Arc<P>,
@@ -987,11 +901,11 @@ pub(crate) async fn recover_missing_payloads<P, C>(
 {
     for leaf in leaves {
         let view = leaf.view_number();
-        let mut proposal = None;
+        let mut recovered_payload = None;
         for attempt in 1..=PAYLOAD_RECOVERY_ATTEMPTS {
             match recovery.recover_payload(&leaf).await {
                 Ok(Some(found)) => {
-                    proposal = Some(found);
+                    recovered_payload = Some(found);
                     break;
                 },
                 Ok(None) => {
@@ -1002,7 +916,11 @@ pub(crate) async fn recover_missing_payloads<P, C>(
                 },
             }
         }
-        let Some(proposal) = proposal else {
+        let Some(RecoveredPayload {
+            proposal,
+            vid_common,
+        }) = recovered_payload
+        else {
             failures.add(1);
             continue;
         };
@@ -1018,19 +936,33 @@ pub(crate) async fn recover_missing_payloads<P, C>(
             tracing::warn!(?view, "failed to store recovered payload: {err:#}");
         }
 
-        // Then the query service, through the same event the coordinator emits for late
-        // local reconstructions.
+        // Then the query service: the payload, through the same event the coordinator emits
+        // for late local reconstructions, ...
         let payload =
             Payload::from_bytes(&proposal.data.encoded_transactions, &proposal.data.metadata);
-        let event = CoordinatorEvent::BlockPayloadReconstructed {
+        let payload_event = CoordinatorEvent::BlockPayloadReconstructed {
             view,
             header: leaf.block_header().clone(),
             payload,
         };
-        if let Err(err) = consumer.handle_event(&event).await {
+        if let Err(err) = consumer.handle_event(&payload_event).await {
             tracing::warn!(
                 ?view,
                 "failed to store recovered payload in query service: {err:#}"
+            );
+        }
+
+        // ... and the VID common regenerated from that payload, so VID-common queries are
+        // served without waiting on the query service's own VID fetching.
+        let vid_event = CoordinatorEvent::VidCommonRecovered {
+            view,
+            header: leaf.block_header().clone(),
+            common: vid_common,
+        };
+        if let Err(err) = consumer.handle_event(&vid_event).await {
+            tracing::warn!(
+                ?view,
+                "failed to store recovered VID common in query service: {err:#}"
             );
         }
     }

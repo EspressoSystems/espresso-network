@@ -10,38 +10,23 @@
 //!
 //! # Payload delivery to the query service
 //!
-//! The query service is fed exclusively by the decide pipeline implemented here: the consensus
-//! event loop persists decided leaves (`persist_event`), and a background task
-//! (`process_decided_events`) builds decide events from the persisted leaf spine and hands them
-//! to the event consumer, advancing a cursor only on success. The payload, VID share, and cert2
-//! attached to each event come first from the in-memory decide data captured by `persist_event`
-//! ([`DecideEventData`](espresso_types::v0::traits::DecideEventData)), falling back to the
-//! consensus staging tables (DA proposals, VID shares) for views not covered — restart replay,
-//! signals coalesced under processor lag, or decides that never had the data.
+//! The query service is fed by the decide pipeline: `persist_event` persists decided leaves and a
+//! background task (`process_decided_events`) builds decide events from them, advancing a cursor
+//! only on success. Under the new protocol a payload is reconstructed from VID shares and written
+//! to storage *asynchronously*, so it can land after its view is decided — or never, if this node
+//! never gathered enough shares. Decide events are never delayed for it; instead the payload is
+//! delivered through whichever of these layers fires first:
 //!
-//! Under the new protocol, a node usually obtains a block payload by reconstructing it from VID
-//! shares carried in Vote1 broadcasts, and the result is written to storage *asynchronously* — so
-//! the payload can land on disk shortly after its view is decided, or (if the node's vote was not
-//! needed for quorum and it missed the share broadcasts) never. Decide events are never delayed
-//! waiting for that data; instead, payload delivery is guaranteed in event-driven layers:
-//!
-//! 1. **In-memory decide data**: the decided leaves arrive with their payloads filled in and
-//!    VID shares attached; the decide event is built directly from them, with no dependence on
-//!    the asynchronous storage writes having landed. This is the normal path.
-//! 2. **Late back-fill**: when a payload is reconstructed *after* its view was already decided,
-//!    the coordinator emits `BlockPayloadReconstructed`; the event loop persists the payload to
-//!    consensus storage (so restart replay and peers see it) and forwards it to the query
-//!    service, which back-fills the block.
-//! 3. **Peer recovery** ([`DecidePayloadRecovery`](espresso_types::v0::traits::DecidePayloadRecovery)):
-//!    when a decide event is emitted with the payload still missing (the node never received
-//!    enough shares to reconstruct it), the reported leaves are handed to a background task that
-//!    fetches the DA proposal from peers over the request-response protocol, verifies it against
-//!    the header's payload commitment, and delivers it through the same path as layer 2. To make
-//!    this possible, DA proposals and VID shares are *retained* after processing for the
-//!    consensus storage retention window (instead of being deleted at decide), so every node can
-//!    serve recently decided payloads.
-//! 4. **Query service fetching**: as a final backstop, blocks stored without a payload are healed
-//!    by the query service's own peer fetching.
+//! 1. **In-memory decide data** ([`DecideEventData`](espresso_types::v0::traits::DecideEventData)):
+//!    the decided leaves arrive with payloads and VID shares attached. The normal path.
+//! 2. **Storage fallback**: the consensus staging tables, for views the in-memory data doesn't
+//!    cover (restart replay, signals coalesced under processor lag).
+//! 3. **Late back-fill / peer recovery**: a payload reconstructed after its view was decided
+//!    arrives via `BlockPayloadReconstructed`; one still missing is fetched from peers
+//!    ([`DecidePayloadRecovery`](espresso_types::v0::traits::DecidePayloadRecovery)) and verified
+//!    against the header commitment. DA proposals and VID shares are retained after processing (not
+//!    deleted at decide) so peers can serve this.
+//! 4. **Query service fetching**: the final backstop for any block still stored without a payload.
 
 use std::collections::HashMap;
 
@@ -57,6 +42,19 @@ pub mod fs;
 pub mod no_storage;
 mod persistence_metrics;
 pub mod sql;
+
+/// Number of views for which decided block payloads (DA proposals) and VID shares are retained
+/// in consensus storage so peers can recover payloads for recently-decided views (see
+/// [`PAYLOAD_RECOVERY_HORIZON`](crate::context::PAYLOAD_RECOVERY_HORIZON)).
+///
+/// These dominate consensus storage, so the window is short — a few hours — and independent of
+/// the general consensus retention period (which is kept long for fork/offline recovery of the
+/// much smaller leaf spine). Recovery of a just-decided view runs within seconds, so a few hours
+/// is ample margin for a peer that briefly fell behind. The recovery horizon is set to match, so
+/// nodes never request payloads peers have already pruned.
+///
+/// 5400 views ≈ 3 hours at an average view time of 2s.
+pub(crate) const PAYLOAD_RETENTION_VIEWS: u64 = 5400;
 
 /// RegisteredValidator without x25519_key/p2p_addr fields.
 /// Used for migrating data written before x25519 support was added.
@@ -188,7 +186,8 @@ mod tests {
         SeqTypes, Transaction, ValidatedState,
         traits::{
             DecideEventData, DecidePayloadRecovery, EventConsumer, EventsPersistenceRead,
-            MembershipPersistence, NullEventConsumer, PersistenceOptions, SequencerPersistence,
+            MembershipPersistence, NullEventConsumer, PersistenceOptions, RecoveredPayload,
+            SequencerPersistence,
         },
         v0_3::{AuthenticatedValidator, EventKey, Fetcher, RegisteredValidator, StakeTableEvent},
     };
@@ -223,7 +222,10 @@ mod tests {
             metrics::NoMetrics,
         },
         utils::EpochTransitionIndicator,
-        vid::avidm::{AvidMScheme, init_avidm_param},
+        vid::{
+            avidm::{AvidMScheme, init_avidm_param},
+            avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        },
         vote::HasViewNumber,
     };
     use indexmap::IndexMap;
@@ -863,9 +865,7 @@ mod tests {
             ViewNumber::new(2)
         );
 
-        // DA proposals and VID shares are retained after processing (for the consensus
-        // storage retention window) so payloads remain recoverable by this node and its
-        // peers; only the retention-based pruner removes them.
+        // DA proposals and VID shares are retained after processing (pruned only by retention).
         for i in 0..=2 {
             assert!(
                 storage
@@ -956,8 +956,7 @@ mod tests {
         let info = &leaf_chain[0];
         assert_eq!(info.leaf, leaves[3]);
 
-        // Quorum proposals are GCed at decide; DA proposals and VID shares are retained
-        // for the retention window so payloads remain recoverable.
+        // Quorum proposals are GCed at decide; DA proposals and VID shares are retained.
         assert!(
             storage
                 .load_da_proposal(ViewNumber::new(3))
@@ -1273,9 +1272,7 @@ mod tests {
             )
             .await
             .unwrap();
-        // DA proposals and VID shares are retained after processing (for the consensus
-        // storage retention window) so payloads remain recoverable by this node and its
-        // peers; only the retention-based pruner removes them.
+        // DA proposals and VID shares are retained after processing (pruned only by retention).
         for i in 0..4 {
             tracing::info!(i, "check proposal retained");
             assert!(
@@ -1528,9 +1525,7 @@ mod tests {
             assert!(info.leaf.block_payload().is_some());
         }
 
-        // DA proposals and VID shares are retained after processing (for the consensus
-        // storage retention window) so payloads remain recoverable by this node and its
-        // peers; they are only removed by the retention-based pruner.
+        // DA proposals and VID shares are retained after processing (pruned only by retention).
         for i in 0..4 {
             assert!(
                 storage
@@ -1680,10 +1675,8 @@ mod tests {
         Proposal<SeqTypes, DaProposal2<SeqTypes>>,
     )>;
 
-    /// Build a mock chain like [`mock_chain`], but whose blocks carry a real (non-empty)
-    /// payload, so the decide pipeline genuinely needs a payload source — the in-memory
-    /// decide data or a persisted DA proposal; the empty-namespace-table fast path does
-    /// not apply.
+    /// Build a mock chain like [`mock_chain`] but with a real (non-empty) payload, so the decide
+    /// pipeline needs an actual payload source (the empty-namespace-table fast path doesn't apply).
     async fn mock_chain_with_txns(len: u64) -> (MockChain, Payload, VidCommitment) {
         let (payload, ns_table) = Payload::from_transactions(
             [Transaction::new(1_u32.into(), vec![1, 2, 3])],
@@ -1813,11 +1806,9 @@ mod tests {
         DecideEventData::new(infos.iter(), None)
     }
 
-    /// The in-memory data from the decide event alone is enough to emit complete decide
-    /// events: with the consensus staging tables completely empty (as when a view is
-    /// decided before consensus' asynchronous storage writes land), processing with the
-    /// live data attached emits every leaf with its payload and VID share — without ever
-    /// reading or writing the staging tables, and with nothing reported missing.
+    /// In-memory decide data alone suffices: with the staging tables empty (view decided before
+    /// the async writes land), processing emits every leaf with its payload and VID share, touches
+    /// no staging table, and reports nothing missing.
     #[rstest_reuse::apply(persistence_types)]
     pub async fn test_decide_from_memory<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
@@ -1825,8 +1816,7 @@ mod tests {
 
         let (chain, payload, _) = mock_chain_with_txns(4).await;
 
-        // Persist all four decided leaves. Nothing is written to the staging tables: the
-        // background DA/VID writes have not landed yet.
+        // Persist all four decided leaves; the staging tables stay empty (async writes unlanded).
         let consumer = EventCollector::default();
         let leaf_chain = chain
             .iter()
@@ -1861,10 +1851,8 @@ mod tests {
             outcome.missing_payload
         );
 
-        // Every post-genesis leaf was delivered exactly once, complete with the payload
-        // and VID share from memory. (Genesis is special-cased — the canonical empty
-        // payload — and the fs backend may re-emit it as its anchor, which consumers are
-        // required to tolerate idempotently, so it is checked separately.)
+        // Every post-genesis leaf is delivered exactly once with its payload and VID share from
+        // memory. (Genesis is checked separately: the fs backend may re-emit it as its anchor.)
         let leaf_chain = consumer.leaf_chain().await;
         for (leaf, _, vid, _) in chain.iter().skip(1) {
             let infos = leaf_chain
@@ -1892,8 +1880,7 @@ mod tests {
             );
         }
 
-        // The staging tables were never involved: nothing read them and nothing wrote
-        // them, proving the data came from memory.
+        // The staging tables were never touched, proving the data came from memory.
         for i in 0..4 {
             assert!(
                 storage
@@ -2038,8 +2025,7 @@ mod tests {
             .await
             .unwrap();
 
-        // One pass processes everything: nothing defers, the cursor reaches the newest
-        // decided view.
+        // One pass processes everything: nothing defers, the cursor reaches the newest view.
         let outcome = storage
             .process_decided_events(ViewNumber::new(3), None, &consumer, None)
             .await
@@ -2080,9 +2066,8 @@ mod tests {
             );
         }
 
-        // Re-processing with nothing new emits nothing and reports nothing: each leaf is
-        // reported missing its payload by exactly one successful pass, so background
-        // recovery is triggered exactly once per leaf.
+        // Re-processing emits and reports nothing: each leaf is reported missing by exactly one
+        // successful pass, so recovery is triggered once per leaf.
         let consumer2 = EventCollector::default();
         let outcome = storage
             .process_decided_events(ViewNumber::new(3), None, &consumer2, None)
@@ -2172,11 +2157,26 @@ mod tests {
 
     #[async_trait]
     impl DecidePayloadRecovery for MockPayloadRecovery {
-        async fn recover_payload(
-            &self,
-            leaf: &Leaf2,
-        ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal2<SeqTypes>>>> {
-            Ok(self.proposals.get(&leaf.view_number().u64()).cloned())
+        async fn recover_payload(&self, leaf: &Leaf2) -> anyhow::Result<Option<RecoveredPayload>> {
+            let Some(proposal) = self.proposals.get(&leaf.view_number().u64()).cloned() else {
+                return Ok(None);
+            };
+            // The VID common is not asserted on by these tests; compute a well-formed one from
+            // the payload bytes so the recovered result has the shape production delivers.
+            let param = init_avidm_gf2_param(2).unwrap();
+            let (_, common) = AvidmGf2Scheme::commit(
+                &param,
+                &proposal.data.encoded_transactions,
+                parse_ns_table(
+                    proposal.data.encoded_transactions.len(),
+                    &proposal.data.metadata.encode(),
+                ),
+            )
+            .unwrap();
+            Ok(Some(RecoveredPayload {
+                proposal,
+                vid_common: common,
+            }))
         }
     }
 
@@ -2209,9 +2209,8 @@ mod tests {
 
         let (chain, payload, _) = mock_chain_with_txns(2).await;
 
-        // Decide both views with no payload data anywhere. View 1 is emitted without its
-        // payload and reported for recovery (view 0 is the genesis view, which is
-        // special-cased to the canonical empty payload).
+        // Decide both views with no payload data anywhere. View 1 is emitted without its payload
+        // and reported for recovery (view 0 is genesis, special-cased to the empty payload).
         let consumer = EventCollector::default();
         let leaf_chain = chain
             .iter()

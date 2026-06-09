@@ -1,13 +1,10 @@
 //! Peer-based recovery of block payloads for the decide pipeline.
 //!
-//! Under the new protocol a node can decide a view without ever obtaining its payload:
-//! payloads are reconstructed from VID shares carried by Vote1 broadcasts, and a node
-//! whose vote is not needed for quorum (or that was restarted mid-view) may miss them
-//! entirely. When the decide processor emits an event with the payload still missing, a
-//! background task uses [`PayloadRecovery`] to fetch the DA proposal from peers — who
-//! retain DA proposals for their consensus storage retention window — verifies the
-//! payload against the block header's payload commitment, and delivers it to consensus
-//! storage and the query service.
+//! Under the new protocol a node can decide a view without ever obtaining its payload (its vote
+//! wasn't needed for quorum, or it restarted mid-view). When the decide processor reports such a
+//! leaf, [`PayloadRecovery`] fetches the DA proposal from peers, verifies it against the header's
+//! payload commitment, and delivers it (with the recomputed VID common) to consensus storage and
+//! the query service.
 
 use std::time::Duration;
 
@@ -15,14 +12,14 @@ use anyhow::{Context, bail, ensure};
 use async_trait::async_trait;
 use espresso_types::{
     Leaf2, PubKey, SeqTypes,
-    v0::traits::{DecidePayloadRecovery, SequencerPersistence},
+    v0::traits::{DecidePayloadRecovery, RecoveredPayload, SequencerPersistence},
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
-    data::{DaProposal2, VidCommitment, vid_commitment, vid_disperse::vid_total_weight},
+    data::{VidCommitment, ns_table::parse_ns_table, vid_disperse::vid_total_weight},
     epoch_membership::EpochMembershipCoordinator,
-    message::Proposal,
     traits::{EncodeBytes, network::ConnectedNetwork},
+    vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
 };
 use request_response::RequestType;
 use tokio::time::timeout;
@@ -37,10 +34,8 @@ use super::{
 /// processor) before leaving the gap to the query service's own fetching.
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Fetches DA proposals (block payloads) from peers over the request-response protocol
-/// for views that were decided before this node obtained their payload. Responses are
-/// verified against the block header's payload commitment, recomputing the VID commitment
-/// with the same parameters the disperser used.
+/// Fetches DA proposals from peers for views decided before this node obtained their payload,
+/// verifying each response against the header's payload commitment.
 pub struct PayloadRecovery<I, N, P>
 where
     I: NodeImplementation<SeqTypes>,
@@ -91,10 +86,7 @@ where
     N: ConnectedNetwork<PubKey>,
     P: SequencerPersistence,
 {
-    async fn recover_payload(
-        &self,
-        leaf: &Leaf2,
-    ) -> anyhow::Result<Option<Proposal<SeqTypes, DaProposal2<SeqTypes>>>> {
+    async fn recover_payload(&self, leaf: &Leaf2) -> anyhow::Result<Option<RecoveredPayload>> {
         let header = leaf.block_header();
         let expected = header.payload_commitment();
         // Recovery is only supported for new-protocol (V2) commitments; older versions
@@ -105,8 +97,8 @@ where
         }
         let view = leaf.view_number();
 
-        // Derive the VID parameters exactly as the disperser did — from the leaf epoch's
-        // stake table — so the recomputed commitment matches.
+        // Derive the VID parameters from the leaf epoch's stake table, as the disperser did, so
+        // the recomputed commitment and VID common match.
         let epoch = leaf.epoch(self.epoch_height);
         let total_weight = vid_total_weight::<SeqTypes, _>(
             self.membership
@@ -118,7 +110,6 @@ where
             epoch,
         );
 
-        let version = header.version();
         let ns_table = header.ns_table().clone();
 
         let result = timeout(
@@ -140,17 +131,29 @@ where
                             proposal.data.metadata == ns_table,
                             "namespace table mismatch in DA proposal response"
                         );
-                        let computed = vid_commitment(
+                        // Recompute commitment and VID common; trust the response only if the
+                        // commitment matches the header's.
+                        let param = init_avidm_gf2_param(total_weight)
+                            .map_err(|err| anyhow::anyhow!("failed to init VID params: {err}"))?;
+                        let (commit, common) = AvidmGf2Scheme::commit(
+                            &param,
                             &proposal.data.encoded_transactions,
-                            &proposal.data.metadata.encode(),
-                            total_weight,
-                            version,
-                        );
+                            parse_ns_table(
+                                proposal.data.encoded_transactions.len(),
+                                &proposal.data.metadata.encode(),
+                            ),
+                        )
+                        .map_err(|err| {
+                            anyhow::anyhow!("failed to compute VID commitment: {err}")
+                        })?;
                         ensure!(
-                            computed == expected,
+                            VidCommitment::V2(commit) == expected,
                             "payload commitment mismatch in DA proposal response"
                         );
-                        Ok(*proposal)
+                        Ok(RecoveredPayload {
+                            proposal: *proposal,
+                            vid_common: common,
+                        })
                     }
                 },
             ),
@@ -158,7 +161,7 @@ where
         .await;
 
         match result {
-            Ok(Ok(proposal)) => Ok(Some(proposal)),
+            Ok(Ok(recovered)) => Ok(Some(recovered)),
             Ok(Err(err)) => Err(err).context("payload recovery request failed"),
             // Timed out waiting for a valid response; the caller may retry later.
             Err(_) => Ok(None),

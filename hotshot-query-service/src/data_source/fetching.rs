@@ -859,12 +859,9 @@ where
         Ok(())
     }
 
-    /// Append a payload for a block whose leaf was already decided without one.
-    ///
-    /// In the new protocol, decide events can arrive before VID reconstruction
-    /// has produced the block payload, so [`append`](Self::append) may persist
-    /// a leaf with no payload attached. The payload is then back-filled here
-    /// once it becomes available, leaving the rest of the block info untouched.
+    /// Append a payload for a block whose leaf was already decided without one (the new protocol
+    /// can decide before VID reconstruction produces the payload). Back-fills it, leaving the rest
+    /// of the block info untouched.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
         // Write to storage and notify any pending fetchers waiting on this height.
         self.fetcher.store(&block).await;
@@ -872,12 +869,9 @@ where
         Ok(())
     }
 
-    /// Append VID data for a block whose leaf was already decided without it.
-    ///
-    /// In the new protocol, decide events can arrive before this node's VID
-    /// share does, so [`append`](Self::append) may persist a leaf with no VID
-    /// data attached. The VID common data and share are then back-filled here
-    /// once they become available, leaving the rest of the block info untouched.
+    /// Append VID data for a block whose leaf was already decided without it (the new protocol can
+    /// decide before this node's VID share arrives). Back-fills the common and share, leaving the
+    /// rest of the block info untouched.
     async fn append_vid(
         &self,
         common: VidCommonQueryData<Types>,

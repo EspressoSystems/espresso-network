@@ -108,10 +108,9 @@ pub struct Coordinator<T: NodeType, N, S> {
     metrics: Option<metrics::Metrics>,
 }
 
-/// Number of views below the newest decided view for which a VID share arriving
-/// late (after its view was decided without one) is still accepted and stored.
-/// Beyond this window late shares are very unlikely to arrive over the consensus
-/// network, and the query service's own peer fetching covers the gap instead.
+/// Views below the newest decided view for which a late VID share (arriving after its view was
+/// decided without one) is still accepted. Beyond it, the query service's peer fetching covers
+/// the gap.
 pub const LATE_VID_SHARE_HORIZON: u64 = 100;
 
 #[bon]
@@ -390,11 +389,9 @@ where
                     Ok(vid_share) => {
                         finish_measurement(next_input);
                         let view = vid_share.view_number();
-                        // The view was already decided without this share, so the
-                        // proposal pairing path below will never deliver it. Persist
-                        // it and notify downstream consumers directly. The event is
-                        // flushed from the outbox once the next consensus input
-                        // arrives.
+                        // Already decided without this share, so the pairing path below won't
+                        // deliver it; persist and notify consumers directly (flushed from the
+                        // outbox on the next input).
                         if self.decided_missing_vid_shares.contains_key(&view) {
                             self.deliver_late_vid_share(vid_share);
                             continue;
@@ -500,10 +497,9 @@ where
                             out.metadata,
                             VidCommitment::V2(out.payload_commitment),
                         );
-                        // Notify downstream consumers (e.g. the query service) of the
-                        // reconstructed payload. The header is carried through the
-                        // reconstructor, so this works even if the proposal has already
-                        // been garbage collected from consensus state.
+                        // Notify consumers of the reconstructed payload. The header is carried
+                        // through the reconstructor, so this works even if the proposal was
+                        // already GC'd from consensus state.
                         self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
                             view: out.view,
                             header: out.header,
@@ -616,11 +612,9 @@ where
                     let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
                     self.gc(gc_epoch, GcScope::Decided(gc_view))?;
                 }
-                // Track leaves decided without this node's VID share (`vid_shares`
-                // is parallel to `leaves`) so a late share can still be persisted
-                // and delivered to downstream consumers. A share that already
-                // arrived but never paired with its proposal (e.g. the proposal
-                // came via an epoch change message) is delivered right away.
+                // Track leaves decided without this node's VID share (`vid_shares` parallels
+                // `leaves`) so a late share can still be persisted and delivered. One that already
+                // arrived but never paired with its proposal is delivered right away.
                 for (leaf, vid_share) in leaves.iter().zip(&vid_shares) {
                     if vid_share.is_some() {
                         continue;
@@ -917,10 +911,8 @@ where
                 ConsensusMessage::VidShare(share) => {
                     let view = share.data.view_number();
                     debug!(%node, %sender, %view, "recv vid share");
-                    // Also accept shares for views that were already decided
-                    // without one, so they can be stored late. Only this node's
-                    // own share is of any use there (`deliver_late_vid_share`
-                    // re-checks this authoritatively).
+                    // Also accept this node's own share for a view already decided without one, so
+                    // it can be stored late (`deliver_late_vid_share` re-checks authoritatively).
                     if self.consensus.wants_proposal_for_view(&view)
                         || (self.decided_missing_vid_shares.contains_key(&view)
                             && share.data.recipient_key == self.public_key)
@@ -1142,22 +1134,17 @@ where
             .insert((share.view_number(), share.payload_commitment), share);
     }
 
-    /// Persist a VID share that became available after its view was decided
-    /// without one, and notify downstream consumers (e.g. the query service)
-    /// so they can back-fill the VID data missing from the decide event. The
-    /// event flows through the outbox like [`ConsensusOutput::BlockPayloadReconstructed`].
-    /// No-op unless the view is tracked in `decided_missing_vid_shares`, the
-    /// share is addressed to this node, and it matches the header the view was
-    /// decided with.
+    /// Persist a VID share that arrived after its view was decided without one, and notify
+    /// consumers (via the outbox) to back-fill the missing VID. No-op unless the view is tracked
+    /// in `decided_missing_vid_shares`, the share is ours, and it matches the decided header.
     fn deliver_late_vid_share(&mut self, share: VidDisperseShare2<T>) {
         let view = share.view_number();
         let Some(header) = self.decided_missing_vid_shares.get(&view) else {
             return;
         };
-        // Externally only this node's own share matters (the query service
-        // serves it as ours), and the leader's envelope signature covers the
-        // payload commitment, not the recipient — any node's share for this
-        // view validates. Keep waiting for our share if this isn't it.
+        // Only this node's own share matters here (the query service serves it as ours); the
+        // leader's signature covers the commitment, not the recipient, so keep waiting if this
+        // isn't ours.
         if share.recipient_key != self.public_key {
             warn!(%view, "late vid share not addressed to this node, share discarded");
             return;

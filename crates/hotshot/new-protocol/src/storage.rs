@@ -24,15 +24,10 @@ const RETRY_DELAY: Duration = Duration::from_millis(300);
 /// [`RETRY_DELAY`] this bounds the lifetime of a persistently failing write task to ~30s.
 const MAX_APPEND_ATTEMPTS: usize = 100;
 
-/// How many views below the GC view in-flight storage writes are allowed to keep running.
-///
-/// Writes for just-decided views must be allowed to complete: the decide pipeline normally
-/// builds query-service decide events from the in-memory decide data, but falls back to
-/// reading this data from disk (restart replay, coalesced signals), and peers fetch it for
-/// their own recovery — so aborting writes right at the decide would lose data that was
-/// still in flight (e.g. a VID reconstruction that finished just before its view was
-/// decided). Aborting below the horizon is only a backstop against leaking stuck tasks;
-/// bounded retries terminate them anyway.
+/// How many views below the GC view in-flight storage writes may keep running. Writes for
+/// just-decided views must finish — the decide pipeline's storage fallback and peer recovery read
+/// them back — so aborting at the decide would lose data still in flight. Aborting below the
+/// horizon is only a backstop against leaked tasks; bounded retries terminate them anyway.
 const GC_ABORT_HORIZON: u64 = 100;
 
 /// New protocol storage extension for data that is not part of the legacy HotShot storage trait.
@@ -219,9 +214,8 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             !handles.is_empty()
         });
 
-        // Abort only tasks far below the GC view, as a backstop against leaks. Writes for
-        // recently decided views are left running: the decide pipeline still needs to read
-        // that data back from disk to build query-service decide events.
+        // Abort only tasks far below the GC view (backstop against leaks); writes for recently
+        // decided views are left running for the decide pipeline's storage fallback.
         let horizon = ViewNumber::new(view_number.saturating_sub(GC_ABORT_HORIZON));
         let keep = self.handles.split_off(&horizon);
         for handles in self.handles.values() {
