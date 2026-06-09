@@ -44,7 +44,7 @@ pub use self::{
     node::{
         DEFAULT_REPLICATION_FACTOR, GossipConfig, NetworkNode, NetworkNodeConfig,
         NetworkNodeConfigBuilder, NetworkNodeConfigBuilderError, NetworkNodeHandle,
-        NetworkNodeReceiver, RequestResponseConfig, spawn_network_node,
+        NetworkNodeReceiver, RequestResponseConfig, SwarmTaskHandle, spawn_network_node,
     },
 };
 

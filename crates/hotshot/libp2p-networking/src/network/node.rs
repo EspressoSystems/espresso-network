@@ -81,6 +81,9 @@ use crate::network::{
     log_summary::LogEvent,
 };
 
+/// Join handle for the spawned swarm event-loop task.
+pub type SwarmTaskHandle = JoinHandle<Result<(), NetworkError>>;
+
 /// Maximum size of a message
 pub const MAX_GOSSIP_MSG_SIZE: usize = 2_000_000_000;
 
@@ -864,7 +867,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         (
             UnboundedSender<ClientRequest>,
             UnboundedReceiver<NetworkEvent>,
-            JoinHandle<Result<(), NetworkError>>,
+            SwarmTaskHandle,
         ),
         NetworkError,
     > {
@@ -875,9 +878,11 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         self.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
 
         DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
-        // Keep the `JoinHandle` so shutdown can await the swarm loop ending and
-        // its listening socket closing; otherwise a restart may fail to re-bind
-        // the same port.
+        // Keep the task's `JoinHandle` so callers can await the swarm loop
+        // actually ending on shutdown. The swarm owns the listening (QUIC/UDP)
+        // socket; if we drop the handle and don't await it, `shut_down` can
+        // return while the socket is still bound, and a subsequent restart
+        // fails to re-bind the same port ("failed to listen for Libp2p").
         let task = spawn(
             async move {
                 loop {

@@ -15,13 +15,12 @@ use libp2p_identity::PeerId;
 use parking_lot::Mutex;
 use tokio::{
     sync::mpsc::{Receiver, UnboundedReceiver, UnboundedSender},
-    task::JoinHandle,
     time::{sleep, timeout},
 };
 use tracing::{debug, info, instrument};
 
 use crate::network::{
-    ClientRequest, NetworkEvent, NetworkNode, NetworkNodeConfig,
+    ClientRequest, NetworkEvent, NetworkNode, NetworkNodeConfig, SwarmTaskHandle,
     behaviours::dht::{
         record::{Namespace, RecordKey, RecordValue},
         store::persistent::DhtPersistentStorage,
@@ -55,7 +54,7 @@ pub struct NetworkNodeHandle<T: NodeType> {
     /// Handle to the spawned swarm event-loop task. Awaited on [`shutdown`] so
     /// the swarm's listening socket is released before shutdown returns (so a
     /// restart can re-bind the same port). `Option` so it can be taken once.
-    swarm_task: Arc<Mutex<Option<JoinHandle<Result<(), NetworkError>>>>>,
+    swarm_task: Arc<Mutex<Option<SwarmTaskHandle>>>,
 }
 
 /// internal network node receiver
@@ -147,8 +146,11 @@ impl<T: NodeType> NetworkNodeHandle<T> {
     pub async fn shutdown(&self) -> Result<(), NetworkError> {
         self.send_request(ClientRequest::Shutdown)?;
 
-        // Wait for the swarm event loop task to actually finish, so its
-        // listening socket is released before we return.
+        // Wait for the swarm event-loop task to actually finish, so its
+        // listening socket is released before we return. Without this, a
+        // restart can fail to re-bind the same port. Bounded by a timeout so a
+        // wedged swarm can't hang shutdown indefinitely; if the request channel
+        // was already closed the task may have ended on its own.
         let task = self.swarm_task.lock().take();
         if let Some(task) = task {
             match timeout(Duration::from_secs(5), task).await {
