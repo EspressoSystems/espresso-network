@@ -300,7 +300,7 @@ impl<T: NodeType> Consensus<T> {
         self.locked_cert = Some(cert1);
         self.proposals.insert(proposal.view_number, proposal);
         for (view, commitment) in reconstructed {
-            self.blocks_reconstructed.insert((view, commitment));
+            self.blocks_reconstructed.insert(view, commitment);
         }
     }
 
