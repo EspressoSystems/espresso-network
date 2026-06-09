@@ -77,7 +77,9 @@ pub fn build_write_request(families: &[MetricFamily]) -> anyhow::Result<WriteReq
                 }
             },
             other => {
-                anyhow::bail!("unsupported metric type {other:?} for family {name}");
+                tracing::warn!(
+                    "telemetry: skipping unsupported metric type {other:?} for family {name}"
+                );
             },
         }
     }

@@ -1,8 +1,5 @@
 use espresso_telemetry::{build_write_request, remote_write::WriteRequest};
-use prometheus::{
-    Counter, Gauge, Histogram, HistogramOpts, Opts, Registry,
-    proto::{Metric, MetricFamily, MetricType},
-};
+use prometheus::{Counter, Gauge, Histogram, HistogramOpts, Opts, Registry, proto::MetricFamily};
 use prost::Message;
 
 const NAME_LABEL: &str = "__name__";
@@ -141,21 +138,5 @@ fn metrics_labels_sorted_ok() {
     assert_eq!(
         encode(&registry.gather()),
         r#"zebra_total{app="espresso",region="use",zone="us-east-1"} 1"#
-    );
-}
-
-#[test]
-fn metrics_unsupported_type_fails() {
-    let mut family = MetricFamily::default();
-    family.set_name("widget_summary".to_owned());
-    family.set_help("a summary".to_owned());
-    family.set_field_type(MetricType::SUMMARY);
-    family.set_metric(vec![Metric::default()]);
-
-    let err = build_write_request(&[family]).expect_err("summary should fail");
-    let msg = format!("{err:#}").to_lowercase();
-    assert!(
-        msg.contains("summary") || msg.contains("unsupported"),
-        "expected summary/unsupported in error, got: {msg}"
     );
 }
