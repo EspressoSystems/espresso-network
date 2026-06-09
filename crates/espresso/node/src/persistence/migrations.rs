@@ -368,10 +368,11 @@ mod tests {
         write_fee_merkle_proofs(&mut tx, &tree, &[account], 2).await;
         tx.commit().await.unwrap();
 
-        // Reproduce the mid-migration split: the backfill has moved the low
-        // `created` range (height 1) into *_bigint but not yet the high range
-        // (height 2), which still lives in the legacy table. Copy all hashes into
-        // legacy `hash` so the legacy table's hash_id FK resolves.
+        // End-state of the mid-migration split, constructed in reverse: both
+        // writes went to *_bigint above, now move the height-2 row across to
+        // legacy. The natural flow is legacy → *_bigint by ascending `created`,
+        // but the resulting (older in *_bigint, newer in legacy) shape is the
+        // same. Also seed legacy `hash` so the legacy table's hash_id FK resolves.
         let mut tx = storage.write().await.unwrap();
         sqlx::query(
             "INSERT INTO hash (id, value) SELECT id::INT, value FROM hash_bigint ON CONFLICT DO \
