@@ -324,10 +324,7 @@ async fn operator_custom_filter_embedded_ok() {
     }
     handle.shutdown();
 
-    assert!(
-        stub.metrics_calls.load(Ordering::SeqCst) >= 1,
-        "stub should have received the first push"
-    );
+    assert!(stub.metrics_calls.load(Ordering::SeqCst) >= 1);
     let line = captured_lines()
         .into_iter()
         .find(|l| l.contains("telemetry rate limit hit"))

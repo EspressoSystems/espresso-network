@@ -1,24 +1,12 @@
 //! Unit tests for per-signal telemetry enable flags.
-//!
-//! Tests serialize on `TEST_LOCK` (same pattern as `rate_limit.rs`) because
-//! `init` reads process-global env vars.
 
-use std::{
-    net::TcpListener,
-    sync::{Arc, Mutex, MutexGuard},
-};
+use std::{net::TcpListener, sync::Arc};
 
 use espresso_telemetry::{TelemetryOptions, init};
 use jf_signature::{
     SignatureScheme,
     bls_over_bn254::{BLSOverBN254CurveSignatureScheme, SignKey},
 };
-
-static TEST_LOCK: Mutex<()> = Mutex::new(());
-
-fn lock<'a>() -> MutexGuard<'a, ()> {
-    TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}
 
 fn make_staking_key() -> SignKey {
     BLSOverBN254CurveSignatureScheme::key_gen(&(), &mut rand::thread_rng())
@@ -40,7 +28,6 @@ fn local_endpoint(port: u16) -> url::Url {
 // With both flags false, `init` must return `Ok(None)`.
 #[test]
 fn all_flags_off_returns_none() {
-    let _g = lock();
     let key = make_staking_key();
     let opts = TelemetryOptions {
         logs_enable: false,
@@ -50,8 +37,8 @@ fn all_flags_off_returns_none() {
     let endpoint = local_endpoint(reserve_port());
     let (handle, warnings) =
         init(&opts, &key, None, None, &endpoint, None).expect("disabled init never errors");
-    assert!(handle.is_none(), "all flags off must return None");
-    assert!(warnings.is_empty(), "no warnings when disabled");
+    assert!(handle.is_none());
+    assert!(warnings.is_empty());
 }
 
 // TEST:flags-both-enabled
@@ -59,10 +46,8 @@ fn all_flags_off_returns_none() {
 // Both flags on: `tracing_layer() == Some` and `metrics_enabled == true`.
 #[tokio::test(flavor = "multi_thread")]
 async fn both_flags_enabled() {
-    let _g = lock();
     let key = make_staking_key();
-    let port = reserve_port();
-    let endpoint = local_endpoint(port);
+    let endpoint = local_endpoint(reserve_port());
     let opts = TelemetryOptions {
         logs_enable: true,
         metrics_enable: true,
@@ -71,31 +56,23 @@ async fn both_flags_enabled() {
     let (handle, _) = init(&opts, &key, None, None, &endpoint, None).expect("init ok");
     let handle = handle.expect("both flags returns handle");
 
-    // Tracing layer must be present (logs pipeline on).
     assert!(
         handle
             .tracing_layer::<tracing_subscriber::Registry>()
-            .is_some(),
-        "both flags: tracing_layer must be Some"
+            .is_some()
     );
-    // Metrics pipeline enabled.
-    assert!(
-        handle.metrics_enabled(),
-        "both flags: metrics_enabled must be true"
-    );
+    assert!(handle.metrics_enabled());
     handle.shutdown();
 }
 
 // TEST:flags-logs-only
 //
-// `logs_enable=true` alone: tracing_layer Some, metrics_push stays None after
-// attach_metrics_push (no-op because metrics_enabled=false).
+// `logs_enable=true` alone: tracing_layer Some, attach_metrics_push is a no-op
+// because metrics are disabled.
 #[tokio::test(flavor = "multi_thread")]
 async fn logs_enable_only() {
-    let _g = lock();
     let key = make_staking_key();
-    let port = reserve_port();
-    let endpoint = local_endpoint(port);
+    let endpoint = local_endpoint(reserve_port());
     let opts = TelemetryOptions {
         logs_enable: true,
         metrics_enable: false,
@@ -107,21 +84,12 @@ async fn logs_enable_only() {
     assert!(
         handle
             .tracing_layer::<tracing_subscriber::Registry>()
-            .is_some(),
-        "logs_enable: tracing_layer must be Some"
+            .is_some()
     );
-    assert!(
-        !handle.metrics_enabled(),
-        "logs_enable only: metrics_enabled must be false"
-    );
+    assert!(!handle.metrics_enabled());
 
-    // attach_metrics_push is a no-op when metrics disabled.
-    let registry = Arc::new(prometheus::Registry::new());
-    handle.attach_metrics_push(registry);
-    assert!(
-        !handle.metrics_push_active(),
-        "attach_metrics_push must be no-op when metrics_enabled=false"
-    );
+    handle.attach_metrics_push(Arc::new(prometheus::Registry::new()));
+    assert!(!handle.metrics_push_active());
 
     handle.shutdown();
 }
@@ -132,10 +100,8 @@ async fn logs_enable_only() {
 // Registry activates the push task.
 #[tokio::test(flavor = "multi_thread")]
 async fn metrics_enable_only() {
-    let _g = lock();
     let key = make_staking_key();
-    let port = reserve_port();
-    let endpoint = local_endpoint(port);
+    let endpoint = local_endpoint(reserve_port());
     let opts = TelemetryOptions {
         logs_enable: false,
         metrics_enable: true,
@@ -147,25 +113,13 @@ async fn metrics_enable_only() {
     assert!(
         handle
             .tracing_layer::<tracing_subscriber::Registry>()
-            .is_none(),
-        "metrics_enable only: tracing_layer must be None"
+            .is_none()
     );
-    assert!(
-        handle.metrics_enabled(),
-        "metrics_enable: metrics_enabled must be true"
-    );
-    assert!(
-        !handle.metrics_push_active(),
-        "metrics push not yet attached before attach_metrics_push"
-    );
+    assert!(handle.metrics_enabled());
+    assert!(!handle.metrics_push_active());
 
-    // After attaching a registry the push task activates.
-    let registry = Arc::new(prometheus::Registry::new());
-    handle.attach_metrics_push(registry);
-    assert!(
-        handle.metrics_push_active(),
-        "metrics_push must be active after attach_metrics_push"
-    );
+    handle.attach_metrics_push(Arc::new(prometheus::Registry::new()));
+    assert!(handle.metrics_push_active());
 
     handle.shutdown();
 }

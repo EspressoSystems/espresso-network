@@ -1,6 +1,5 @@
 //! Periodic push of `prometheus::Registry` snapshots to a remote-write endpoint.
 //!
-//! Mirrors the canonical loop in the espresso-node-telemetry mock-node.
 //! `tokio::select!` between the interval tick and a shutdown signal; on shutdown
 //! drive one final scrape-and-flush so the last interval's samples aren't lost.
 //! Errors are `warn!`-logged and never panic / never block consensus. HTTP 429

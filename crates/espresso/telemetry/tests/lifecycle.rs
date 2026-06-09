@@ -202,11 +202,11 @@ async fn telemetry_jwt_mint_ok() {
 
     // Poll briefly for delivery.
     let snap = wait_for(&captured, 1, Duration::from_secs(5)).await;
-    assert!(!snap.is_empty(), "expected at least one OTLP export");
+    assert!(!snap.is_empty());
 
     let (path, headers, body) = &snap[0];
     assert_eq!(path, "/v1/logs");
-    assert!(!body.is_empty(), "empty OTLP body");
+    assert!(!body.is_empty());
 
     assert_eq!(
         headers
@@ -214,7 +214,6 @@ async fn telemetry_jwt_mint_ok() {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default(),
         "gzip",
-        "logs body must be gzip-encoded"
     );
     let mut decoder = flate2::read::GzDecoder::new(body.as_slice());
     let mut decompressed = Vec::new();
@@ -285,11 +284,8 @@ fn telemetry_disabled_noop_ok() {
     let registry = Arc::new(prometheus::Registry::new());
     let (h, warnings) = init(&opts, &key, None, None, &endpoint, Some(registry))
         .expect("disabled init never errors");
-    assert!(h.is_none(), "disabled init must return None");
-    assert!(
-        warnings.is_empty(),
-        "disabled init must not produce warnings; got: {warnings:?}"
-    );
+    assert!(h.is_none());
+    assert!(warnings.is_empty(), "got: {warnings:?}");
 }
 
 // TEST:telemetry-bad-endpoint-fails
@@ -418,10 +414,7 @@ async fn metrics_remote_write_push_ok() {
 
     let snap = wait_for_path(&captured, "/api/v1/write", 1, Duration::from_secs(8)).await;
     handle.shutdown();
-    assert!(
-        !snap.is_empty(),
-        "expected at least one /api/v1/write request"
-    );
+    assert!(!snap.is_empty());
 
     let mut found_metric = false;
     let mut saw_jwt = false;
@@ -461,11 +454,8 @@ async fn metrics_remote_write_push_ok() {
             }
         }
     }
-    assert!(saw_jwt, "metrics push must include authorization header");
-    assert!(
-        found_metric,
-        "expected espresso_node_test_counter_total in remote-write payload"
-    );
+    assert!(saw_jwt);
+    assert!(found_metric);
 }
 
 // TEST:metrics-shared-jwt-ok
@@ -511,11 +501,8 @@ async fn metrics_shared_jwt_ok() {
         .into_iter()
         .filter(|(p, ..)| p == "/api/v1/write")
         .collect::<Vec<_>>();
-    assert!(!logs.is_empty(), "expected at least one /v1/logs export");
-    assert!(
-        !metrics.is_empty(),
-        "expected at least one /api/v1/write export"
-    );
+    assert!(!logs.is_empty());
+    assert!(!metrics.is_empty());
 
     let logs_auth = logs[0]
         .1
@@ -529,10 +516,7 @@ async fn metrics_shared_jwt_ok() {
         .and_then(|v| v.to_str().ok())
         .expect("metrics auth header")
         .to_owned();
-    assert_eq!(
-        logs_auth, metrics_auth,
-        "logs and metrics must share the same JWT (single mint at startup)"
-    );
+    assert_eq!(logs_auth, metrics_auth);
 }
 
 // TEST:metrics-shutdown-flush-ok
@@ -564,8 +548,5 @@ async fn metrics_shutdown_flush_ok() {
 
     // After shutdown, the receiver must have at least one /api/v1/write.
     let snap = wait_for_path(&captured, "/api/v1/write", 1, Duration::from_secs(5)).await;
-    assert!(
-        !snap.is_empty(),
-        "shutdown flush should deliver at least one final metrics push"
-    );
+    assert!(!snap.is_empty());
 }
