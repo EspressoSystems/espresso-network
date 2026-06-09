@@ -12,7 +12,7 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
@@ -95,9 +95,11 @@ pub struct Coordinator<T: NodeType, N, S> {
     #[builder(skip)]
     pending_proposal_fetches: PendingProposalFetches<T>,
     #[builder(default)]
-    cached_validated_proposals: BTreeMap<ViewNumber, ValidatedProposal<T>>,
+    cached_validated_proposals: BTreeMap<(ViewNumber, VidCommitment2), ValidatedProposal<T>>,
     #[builder(default)]
-    cached_vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
+    cached_vid_shares: BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>,
+    #[builder(skip)]
+    da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
 }
 
@@ -392,14 +394,12 @@ where
                     Ok(vid_share) => {
                         finish_measurement(next_input);
                         let view = vid_share.view_number();
-                        let Some(validated) = self.cached_validated_proposals.remove(&view) else {
+                        let key = (view, vid_share.payload_commitment);
+                        let Some(validated) = self.cached_validated_proposals.remove(&key) else {
                             // Wait for the proposal
-                            self.cached_vid_shares.insert(view, vid_share);
+                            self.cached_vid_shares.insert(key, vid_share);
                             continue;
                         };
-                        if !check_payload_commitment(&validated.message.proposal, &vid_share) {
-                            continue;
-                        }
                         return self.on_proposal_and_vid_share(validated, vid_share)
                     },
                     Err(e) => {
@@ -420,15 +420,18 @@ where
                         }
 
                         let view = validated.message.proposal.data.view_number();
-                        let Some(vid_share) = self.cached_vid_shares.remove(&view) else {
-                            // Wait for the vid share
-                            self.cached_validated_proposals.insert(view, validated);
+                        let VidCommitment::V2(commit) =
+                            validated.message.proposal.data.block_header.payload_commitment()
+                        else {
+                            warn!(%view, "proposal payload commitment is not V2, discarding");
                             continue;
                         };
-                        // Check for commitment correspondence
-                        if !check_payload_commitment(&validated.message.proposal, &vid_share) {
+                        let key = (view, commit);
+                        let Some(vid_share) = self.cached_vid_shares.remove(&key) else {
+                            // Wait for the vid share describing this payload.
+                            self.cached_validated_proposals.insert(key, validated);
                             continue;
-                        }
+                        };
                         return self.on_proposal_and_vid_share(validated, vid_share)
                     }
                     Err(e) => {
@@ -443,13 +446,20 @@ where
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
-                        self.storage.append_da(
-                            block.view,
-                            block.epoch,
-                            block.payload.payload.clone(),
-                            block.payload.metadata.clone(),
-                            block.payload_commitment,
-                        );
+                        // Retain the payload and persist it when consensus proposes this
+                        // exact block (cf. SendProposal):
+                        if let VidCommitment::V2(commit) = block.payload_commitment {
+                            self.da_payloads.insert(
+                                (block.view, commit),
+                                PendingDa {
+                                    epoch: block.epoch,
+                                    payload: block.payload.payload.clone(),
+                                    metadata: block.payload.metadata.clone(),
+                                },
+                            );
+                        } else {
+                            warn!(view = %block.view, "block payload commitment is not V2");
+                        }
                         // We built this block; skip reconstructing it from our own loopback share.
                         self.vid_reconstructor.mark_reconstructed(block.view);
                         self.unicast_to_leader(
@@ -566,6 +576,7 @@ where
                 epoch,
                 payload,
                 metadata,
+                payload_commitment,
             } => {
                 debug!(%node, %view, %epoch, "request vid disperse");
                 self.vid_disperser.request_vid_disperse(VidDisperseRequest {
@@ -573,6 +584,7 @@ where
                     epoch,
                     block: payload,
                     metadata,
+                    payload_commitment,
                 });
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
@@ -629,6 +641,21 @@ where
                 let block = proposal.data.block_header.block_number();
                 info!(%node, %view, %epoch, %block, "send proposal");
                 self.storage.append_proposal(proposal.data.clone());
+                // Two blocks can be built for one view. Here we know which one
+                // wins and we persist just that one:
+                if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
+                    if let Some(da) = self.da_payloads.remove(&(view, commit)) {
+                        self.storage.append_da(
+                            view,
+                            da.epoch,
+                            da.payload,
+                            da.metadata,
+                            VidCommitment::V2(commit),
+                        );
+                    } else {
+                        warn!(%node, %view, "no payload for proposed block");
+                    }
+                }
                 // TODO: This may be done async in network so we do not spend
                 // too much time here in this loop.
 
@@ -1101,8 +1128,12 @@ where
 
         // GC for the cache
         let view = validated.message.proposal.data.view_number();
-        self.cached_vid_shares = self.cached_vid_shares.split_off(&(view + 1));
-        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(view + 1));
+        self.cached_vid_shares = self
+            .cached_vid_shares
+            .split_off(&(view + 1, VidCommitment2::default()));
+        self.cached_validated_proposals = self
+            .cached_validated_proposals
+            .split_off(&(view + 1, VidCommitment2::default()));
 
         Ok(ConsensusInput::ProposalWithVidShare(
             validated.sender,
@@ -1439,8 +1470,12 @@ where
         match scope {
             GcScope::Local(view) => {
                 self.block_builder.gc(view);
-                self.cached_validated_proposals = self.cached_validated_proposals.split_off(&view);
-                self.cached_vid_shares = self.cached_vid_shares.split_off(&view);
+                self.cached_validated_proposals = self
+                    .cached_validated_proposals
+                    .split_off(&(view, VidCommitment2::default()));
+                self.cached_vid_shares = self
+                    .cached_vid_shares
+                    .split_off(&(view, VidCommitment2::default()));
                 // When we enter a new view, we do not want to GC enqueued messages
                 // for the previous view yet:
                 self.network.gc(view.saturating_sub(1).into())?;
@@ -1457,6 +1492,9 @@ where
                 self.state_manager.gc(view);
                 self.storage.gc(view);
                 self.vid_reconstructor.gc(view);
+                self.da_payloads = self
+                    .da_payloads
+                    .split_off(&(view, VidCommitment2::default()));
             },
         }
         Ok(())
@@ -1472,25 +1510,11 @@ pub enum GcScope {
     Decided(ViewNumber),
 }
 
-fn check_payload_commitment<T: NodeType>(
-    proposal: &SignedProposal<T, Proposal<T>>,
-    vid_share: &VidDisperseShare2<T>,
-) -> bool {
-    let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() else {
-        warn!(
-            "unexpected payload commitment type in view {}, proposal discarded",
-            proposal.data.view_number
-        );
-        return false;
-    };
-    if commit != vid_share.payload_commitment {
-        warn!(
-            "payload commitment mismatch in view {}, discard the proposal",
-            proposal.data.view_number
-        );
-        return false;
-    }
-    true
+/// A payload built locally and awaiting DA persistence.
+struct PendingDa<T: NodeType> {
+    epoch: EpochNumber,
+    payload: T::BlockPayload,
+    metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
 }
 
 type ProposalFetchResponseSender<T> =

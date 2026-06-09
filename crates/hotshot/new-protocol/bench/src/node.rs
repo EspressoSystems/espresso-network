@@ -286,6 +286,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     epoch: req.epoch,
                     payload: block.block,
                     metadata: block.metadata,
+                    payload_commitment: block.payload_commitment,
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);
