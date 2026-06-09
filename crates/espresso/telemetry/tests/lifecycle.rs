@@ -21,9 +21,8 @@ use tracing_subscriber::{
 };
 use url::Url;
 
-// Build a subscriber stack mirroring the production layout (fmt over Registry)
-// so the OTel layer composes cleanly. The OTel layer is generic over the
-// subscriber, so any `Layered<_, Registry>` works here.
+// Mirror the production subscriber layout (fmt over Registry) so the OTel layer
+// composes the same way.
 type FmtSubscriber = tracing_subscriber::layer::Layered<
     Box<dyn Layer<TracingRegistry> + Send + Sync + 'static>,
     TracingRegistry,
@@ -176,7 +175,6 @@ fn series_name(series: &TimeSeries) -> Option<&str> {
         .map(|l| l.value.as_str())
 }
 
-// TEST:telemetry-jwt-mint-ok
 #[tokio::test(flavor = "multi_thread")]
 async fn telemetry_jwt_mint_ok() {
     let port = reserve_port();
@@ -189,9 +187,7 @@ async fn telemetry_jwt_mint_ok() {
         init(&opts, &key, Some("node-42"), Some("acme"), &endpoint, None).expect("init succeeds");
     let handle: TelemetryHandle = handle.expect("telemetry enabled returns handle");
 
-    // Use a scoped subscriber so the global default isn't touched (other
-    // tests share that). Mirror the `FmtSubscriber` shape so the OTel
-    // layer's `Layer<FmtSubscriber>` bound is satisfied.
+    // Scoped subscriber so the global default (shared across tests) isn't touched.
     let subscriber = build_subscriber(std::io::sink, handle.tracing_layer());
     tracing::subscriber::with_default(subscriber, || {
         tracing::info!("hello from test");
@@ -237,7 +233,6 @@ async fn telemetry_jwt_mint_ok() {
     assert_eq!(authed.company_name(), Some("acme"));
 }
 
-// TEST:telemetry-log-retry-survives-transient-5xx
 #[tokio::test(flavor = "multi_thread")]
 async fn telemetry_log_retry_survives_transient_5xx() {
     let port = reserve_port();
@@ -267,7 +262,6 @@ async fn telemetry_log_retry_survives_transient_5xx() {
     );
 }
 
-// TEST:telemetry-disabled-noop-ok
 #[test]
 fn telemetry_disabled_noop_ok() {
     let key = make_staking_key();
@@ -288,7 +282,6 @@ fn telemetry_disabled_noop_ok() {
     assert!(warnings.is_empty(), "got: {warnings:?}");
 }
 
-// TEST:telemetry-bad-endpoint-fails
 #[test]
 fn telemetry_bad_endpoint_fails() {
     // Non-http(s) scheme: rejected by the explicit scheme check in
@@ -304,8 +297,6 @@ fn telemetry_bad_endpoint_fails() {
     );
 }
 
-// TEST:telemetry-stderr-untouched-ok
-//
 // Sanity-check that wiring the OTel layer alongside the existing stderr fmt
 // layer doesn't suppress stderr output.
 #[tokio::test(flavor = "multi_thread")]
@@ -354,13 +345,6 @@ async fn telemetry_stderr_untouched_ok() {
     );
 }
 
-// TEST:telemetry-invalid-log-filter-warns
-//
-// `EnvFilter::new` is lossy on invalid input. `init` validates the filter via
-// `try_new` and returns the parse error as a deferred warning so the caller
-// can replay it after installing the global subscriber. A directive of the
-// form `target=BOGUS_LEVEL` is one of the few inputs the permissive parser
-// rejects, since `BOGUS_LEVEL` won't match any `LevelFilter`.
 #[tokio::test(flavor = "multi_thread")]
 async fn telemetry_invalid_log_filter_warns() {
     let port = reserve_port();
@@ -389,7 +373,6 @@ async fn telemetry_invalid_log_filter_warns() {
     );
 }
 
-// TEST:metrics-remote-write-push-ok
 #[tokio::test(flavor = "multi_thread")]
 async fn metrics_remote_write_push_ok() {
     let port = reserve_port();
@@ -458,7 +441,6 @@ async fn metrics_remote_write_push_ok() {
     assert!(found_metric);
 }
 
-// TEST:metrics-shared-jwt-ok
 #[tokio::test(flavor = "multi_thread")]
 async fn metrics_shared_jwt_ok() {
     let port = reserve_port();
@@ -519,7 +501,6 @@ async fn metrics_shared_jwt_ok() {
     assert_eq!(logs_auth, metrics_auth);
 }
 
-// TEST:metrics-shutdown-flush-ok
 #[tokio::test(flavor = "multi_thread")]
 async fn metrics_shutdown_flush_ok() {
     let port = reserve_port();
@@ -536,7 +517,7 @@ async fn metrics_shutdown_flush_ok() {
     counter.inc();
 
     let key = make_staking_key();
-    // Long interval so the only push that fires is the shutdown flush.
+    // only fire shutdown flush
     let opts = telemetry_opts(600);
     let (handle, _warnings) =
         init(&opts, &key, None, None, &endpoint, Some(registry.clone())).expect("init succeeds");

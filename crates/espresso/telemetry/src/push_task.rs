@@ -1,9 +1,6 @@
 //! Periodic push of `prometheus::Registry` snapshots to a remote-write endpoint.
-//!
-//! `tokio::select!` between the interval tick and a shutdown signal; on shutdown
-//! drive one final scrape-and-flush so the last interval's samples aren't lost.
-//! Errors are `warn!`-logged and never panic / never block consensus. HTTP 429
-//! triggers a single shared ERROR via [`crate::rate_limit::log_rate_limit_once`].
+//! A final flush runs on shutdown. Errors are `warn!`-logged, never fatal; HTTP
+//! 429 triggers one shared ERROR via [`crate::rate_limit::log_rate_limit_once`].
 
 use std::{
     sync::{Arc, atomic::AtomicBool},
@@ -24,10 +21,8 @@ use crate::{
     remote_write::{Label, WriteRequest},
 };
 
-/// Stamp push-time labels (e.g. `service`, `instance`) onto every TimeSeries.
-/// Preserves any label the metric already carries — registry-provided labels
-/// win. Re-sorts each series so the resulting protobuf stays remote-write 1.0
-/// compliant (labels sorted by name).
+/// Stamp push-time labels onto every TimeSeries (existing labels win), then
+/// re-sort to stay remote-write 1.0 compliant.
 fn apply_external_labels(request: &mut WriteRequest, external: &[Label]) {
     if external.is_empty() {
         return;
@@ -42,11 +37,8 @@ fn apply_external_labels(request: &mut WriteRequest, external: &[Label]) {
     }
 }
 
-/// Spawn the periodic push loop. Owns the HTTP client; reuses it across ticks.
-///
-/// Runs until `shutdown` resolves. On shutdown drives one final flush, then
-/// returns. If the HTTP client cannot be built (rare; usually only TLS init
-/// failures), logs and returns immediately — the task end is the failure mode.
+/// Run the periodic push loop until `shutdown` resolves, driving one final flush
+/// on the way out. Returns early if the HTTP client can't be built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run(
     registry: Arc<Registry>,
@@ -73,7 +65,7 @@ pub(crate) async fn run(
 
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    // First tick fires immediately; skip it so we don't push an empty initial scrape.
+    // Skip the immediate first tick so the first push isn't an empty scrape.
     ticker.tick().await;
 
     loop {

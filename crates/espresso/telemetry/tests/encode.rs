@@ -47,7 +47,6 @@ fn encode(families: &[MetricFamily]) -> String {
     render(&round_trip(&req))
 }
 
-// TEST:metrics-counter-encode-ok
 #[test]
 fn metrics_counter_encode_ok() {
     let registry = Registry::new();
@@ -58,7 +57,6 @@ fn metrics_counter_encode_ok() {
     assert_eq!(encode(&registry.gather()), "blocks_synced_total 3");
 }
 
-// TEST:metrics-gauge-encode-ok
 #[test]
 fn metrics_gauge_encode_ok() {
     let registry = Registry::new();
@@ -69,10 +67,6 @@ fn metrics_gauge_encode_ok() {
     assert_eq!(encode(&registry.gather()), "peer_count 8");
 }
 
-// TEST:metrics-histogram-buckets-ok
-//
-// A histogram expands to one cumulative series per finite bucket, a trailing
-// +Inf bucket carrying sample_count, then _sum and _count.
 #[test]
 fn metrics_histogram_buckets_ok() {
     let registry = Registry::new();
@@ -96,8 +90,6 @@ block_seconds_count 4"#
     );
 }
 
-// TEST:metrics-histogram-explicit-plus-inf-bucket-ok
-//
 // Regression: prometheus accepts `f64::INFINITY` as a user-supplied bucket and
 // returns it verbatim from `get_bucket()`. Without dedup, the loop emits a
 // `le="+Inf"` series, then the trailing unconditional emit produces another,
@@ -129,11 +121,7 @@ plus_inf_seconds_count 3"#
     );
 }
 
-// TEST:metrics-labels-sorted-ok
-//
-// Prometheus remote-write 1.0 requires labels sorted by name within each
-// series. The rendered braces show the encoded order, so sorted const labels
-// (app, region, zone) prove the property directly.
+// Prometheus remote-write 1.0 requires labels sorted by name within each series.
 #[test]
 fn metrics_labels_sorted_ok() {
     let registry = Registry::new();
@@ -156,7 +144,6 @@ fn metrics_labels_sorted_ok() {
     );
 }
 
-// TEST:metrics-unsupported-type-fails
 #[test]
 fn metrics_unsupported_type_fails() {
     let mut family = MetricFamily::default();

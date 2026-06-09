@@ -1,5 +1,5 @@
-//! 429 rate-limit handling: a single shared ERROR across logs+metrics, no
-//! crash, no resend, configured filter embedded in the message.
+//! 429 rate-limit handling on the metrics push: one ERROR, no crash, no resend,
+//! configured filter embedded in the message.
 
 // Tests share the global tracing subscriber + capture buffer, so they run
 // sequentially via `TEST_LOCK`. The guard is held across `await` points by
@@ -202,8 +202,6 @@ fn captured_lines() -> Vec<String> {
     captured().lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-// TEST:operator-error-once-fails
-//
 // Stub returns 429 for every metrics push. We tick the push task ~3 times,
 // then shut it down. Exactly one ERROR must appear, regardless of how many
 // 429s landed.
@@ -258,8 +256,6 @@ async fn operator_error_once_fails() {
     );
 }
 
-// TEST:operator-no-crash-ok
-//
 // Same harness as above; assert the metrics-push thread keeps making
 // progress past the 429 (no panic, no early exit) and shuts down cleanly.
 #[tokio::test(flavor = "multi_thread")]
@@ -295,8 +291,6 @@ async fn operator_no_crash_ok() {
     handle.shutdown();
 }
 
-// TEST:operator-custom-filter-embedded-ok
-//
 // The configured `log_filter` is embedded verbatim in the rate-limit ERROR.
 #[tokio::test(flavor = "multi_thread")]
 async fn operator_custom_filter_embedded_ok() {
@@ -335,8 +329,6 @@ async fn operator_custom_filter_embedded_ok() {
     );
 }
 
-// TEST:operator-recovery-no-second-error-ok
-//
 // Stub returns 200 -> 429 -> 200 -> ... The first 429 must fire ERROR; the
 // preceding 200 and the trailing 200s must not unset the dedup latch and
 // no second ERROR may fire even if another 429 happened to arrive.

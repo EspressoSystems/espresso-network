@@ -1,25 +1,16 @@
-//! In-process OTel logs export with a BLS-signed JWT, plus a periodic Prometheus
-//! remote-write push for metrics.
-//!
-//! Tracing events flow through an OpenTelemetry log appender + OTLP/HTTP batch
-//! exporter; an externally-supplied `prometheus::Registry` is scraped on a
-//! tokio interval and POSTed to `/api/v1/write` as snappy-compressed protobuf.
-//! Both pipelines share the same six-month BLS-BN254 JWT minted from the
-//! staking key.
+//! In-process OTel logs export plus a periodic Prometheus remote-write push for
+//! metrics. Both pipelines share one six-month BLS-BN254 JWT minted from the
+//! staking key. Tracing events go through an OTLP/HTTP batch exporter; an
+//! externally supplied `prometheus::Registry` is scraped on a tokio interval and
+//! POSTed to `/api/v1/write` as snappy-compressed protobuf.
 //!
 //! Failure modes:
-//! - Proxy/aggregator down: `BatchLogProcessor` queue fills (~2k records) then
-//!   drops. Metrics push logs at `warn!` and retries on the next tick.
-//!   Neither path uses disk; neither blocks consensus.
-//! - JWT misconfig at startup: [`init`] returns `Err`; the caller logs and
-//!   continues without telemetry.
-//! - Token TTL expires mid-process: not handled here. Operators restart often
-//!   enough for a six-month TTL to be fine.
-//!
-//! Registry threading: callers that build the `prometheus::Registry` after
-//! [`init`] (e.g. the API setup runs deep inside the run path) use
-//! [`set_registry`] / [`registry`] to hand it off, then
-//! [`TelemetryHandle::attach_metrics_push`] to spawn the push task.
+//! - Proxy down: `BatchLogProcessor` queue fills (~2k records) then drops;
+//!   metrics push `warn!`s and retries next tick. Neither uses disk nor blocks
+//!   consensus.
+//! - JWT misconfig: [`init`] returns `Err`; the caller continues without telemetry.
+//! - Token TTL expiry mid-process is not handled; the six-month TTL outlasts
+//!   typical restart cadence.
 
 use std::{
     collections::HashMap,
@@ -48,14 +39,10 @@ const LOGGER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Global handoff for the prometheus `Registry` populated by HotShot.
 ///
-/// Callers that build the `Registry` after [`init`] (e.g. the API setup runs
-/// deep inside the run path and the data source's `Registry` is not exposed
-/// through the closure that wires consensus and telemetry) deposit a clone
-/// into this `OnceLock` and the run path reads it back when calling [`init`].
-/// Single writer (API setup), single reader (telemetry init), strictly ordered
-/// by node startup.
-///
-/// Tests do not use this static; they pass the registry directly into [`init`].
+/// The API setup builds the `Registry` after [`init`] and can't reach the
+/// telemetry wiring, so it deposits a clone here for the run path to read back.
+/// Single writer, single reader, ordered by node startup. Tests pass the
+/// registry directly into [`init`] instead.
 static REGISTRY: OnceLock<Arc<Registry>> = OnceLock::new();
 
 /// Deposit the `Registry`. Idempotent: subsequent calls are no-ops, since
@@ -64,9 +51,8 @@ pub fn set_registry(registry: Arc<Registry>) {
     let _ = REGISTRY.set(registry);
 }
 
-/// Read the registry deposited by [`set_registry`]. Returns `None` if no API
-/// setup has run yet — common in tests and CLI tools that don't spin up the
-/// HTTP module.
+/// Read the registry deposited by [`set_registry`]. `None` if no API setup has
+/// run yet (tests, CLI tools without the HTTP module).
 pub fn registry() -> Option<Arc<Registry>> {
     REGISTRY.get().cloned()
 }
@@ -96,15 +82,13 @@ pub struct TelemetryOptions {
     #[clap(long, env = "ESPRESSO_NODE_TELEMETRY_ENDPOINT")]
     pub endpoint: Option<Url>,
 
-    /// `EnvFilter` applied to the OTel log layer only. Local stderr layer is
-    /// unaffected. Default `warn` keeps initial network bandwidth modest;
-    /// operators can opt into `info` per-target via standard `EnvFilter`
-    /// syntax (e.g. `warn,hotshot=info`).
+    /// `EnvFilter` for the OTel log layer only; the local stderr layer is
+    /// unaffected. Default `warn`; per-target syntax works (e.g.
+    /// `warn,hotshot=info`).
     #[clap(long, env = "ESPRESSO_NODE_TELEMETRY_LOG", default_value = "warn")]
     pub log_filter: String,
 
-    /// Seconds between Prometheus remote-write pushes. Operators rarely tune
-    /// this; the aggregator handles arbitrary cadences.
+    /// Seconds between Prometheus remote-write pushes.
     #[clap(
         long,
         env = "ESPRESSO_NODE_TELEMETRY_METRICS_INTERVAL",
@@ -125,22 +109,17 @@ impl Default for TelemetryOptions {
     }
 }
 
-/// Handle to the metrics push thread. Owns a dedicated single-threaded tokio
-/// runtime so the push loop is isolated from the node's main runtime — a slow
-/// or hung proxy can't starve a consensus worker. Drops the shutdown sender +
-/// joins the thread on `TelemetryHandle::shutdown`.
+/// Handle to the metrics push thread. The thread owns a dedicated
+/// single-threaded runtime so a slow proxy can't starve a consensus worker.
 struct MetricsPushHandle {
     shutdown: oneshot::Sender<()>,
     thread: std::thread::JoinHandle<()>,
 }
 
-/// Owns the OTel logger provider + (optionally) the metrics push task, so both
-/// can be flushed on graceful shutdown.
-///
-/// The handle stashes the JWT and resolved endpoint so the metrics push task
-/// can be spawned later via [`TelemetryHandle::attach_metrics_push`], once the
-/// API setup has constructed the `Registry`. Logs and metrics share the JWT
-/// minted at `init` time.
+/// Owns the OTel logger provider and, optionally, the metrics push task, so
+/// both flush on graceful shutdown. Stashes the JWT and endpoint so the push
+/// task can be spawned later via [`TelemetryHandle::attach_metrics_push`] once
+/// the API setup has built the `Registry`.
 pub struct TelemetryHandle {
     /// `None` when only metrics are enabled (logs pipeline disabled).
     logger_provider: Option<SdkLoggerProvider>,
@@ -149,19 +128,19 @@ pub struct TelemetryHandle {
     endpoint: String,
     metrics_interval: Duration,
     metrics_push: Option<MetricsPushHandle>,
-    /// Whether the metrics pipeline is enabled. When false, `attach_metrics_push` is a no-op.
+    /// When false, `attach_metrics_push` is a no-op.
     metrics_enabled: bool,
-    /// External labels stamped onto every pushed TimeSeries (e.g. `service`,
-    /// `instance`). Mirrors the OTel `service.name` / `service.instance.id`
-    /// resource attributes on the logs side so the aggregator can partition
-    /// metrics and logs consistently.
+    /// Labels stamped onto every pushed TimeSeries (e.g. `service`, `instance`),
+    /// mirroring the OTel resource attributes so the aggregator partitions logs
+    /// and metrics consistently.
     metrics_external_labels: Vec<Label>,
-    /// Process-wide latch flipped on the first observed HTTP 429 from either
-    /// pipeline. Shared with the OTel log retry wrapper and the metrics push
-    /// task so a single operator-facing ERROR is logged across all signals.
+    /// Latch flipped on the first HTTP 429 from the metrics push, so the
+    /// operator-facing ERROR is logged once per process across push ticks. The
+    /// logs pipeline retries 429s via opentelemetry-otlp's built-in
+    /// `experimental-http-retry` and does not surface them here.
     rate_limit_warned: Arc<AtomicBool>,
-    /// The configured `log_filter` string. Embedded in the rate-limit ERROR so
-    /// operators can see exactly what filter their process is running with.
+    /// `log_filter` embedded verbatim in the rate-limit ERROR so operators see
+    /// their active filter.
     telemetry_log_filter: Arc<String>,
 }
 
@@ -175,11 +154,8 @@ impl std::fmt::Debug for TelemetryHandle {
 }
 
 impl TelemetryHandle {
-    /// Build a `tracing_subscriber::Layer` that bridges tracing events into the
-    /// OTLP exporter. Filtered by the configured `log_filter`. Generic over the
-    /// target subscriber so callers compose this with whatever stack they wire
-    /// up (e.g. the `FmtSubscriber` produced by the consumer's logging init).
-    /// Returns `None` when the logs pipeline is disabled.
+    /// Layer bridging tracing events into the OTLP exporter, filtered by
+    /// `log_filter`. `None` when the logs pipeline is disabled.
     pub fn tracing_layer<S>(&self) -> Option<impl Layer<S> + Send + Sync + 'static>
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
@@ -189,10 +165,8 @@ impl TelemetryHandle {
         Some(bridge.with_filter(EnvFilter::new(self.log_filter.clone())))
     }
 
-    /// Spawn the periodic metrics push on its own thread with a dedicated
-    /// single-threaded tokio runtime. Idempotent: no-op if already attached or
-    /// if metrics are disabled.
-    /// Does not require the caller to be inside a tokio runtime.
+    /// Spawn the periodic metrics push on its own thread. Idempotent: no-op if
+    /// already attached or if metrics are disabled. No ambient runtime required.
     pub fn attach_metrics_push(&mut self, registry: Arc<Registry>) {
         let mut deferred = Vec::new();
         self.attach_metrics_push_buffered(registry, &mut deferred);
@@ -201,10 +175,9 @@ impl TelemetryHandle {
         }
     }
 
-    /// Same as [`attach_metrics_push`], but appends warning strings to
-    /// `deferred` instead of emitting them via `tracing::warn!`. Used during
-    /// [`init`], before the global subscriber is installed; warnings would
-    /// otherwise be dropped.
+    /// Like [`attach_metrics_push`], but buffers warnings into `deferred`
+    /// instead of emitting them, for use during [`init`] before a subscriber is
+    /// installed.
     fn attach_metrics_push_buffered(
         &mut self,
         registry: Arc<Registry>,
@@ -272,22 +245,10 @@ impl TelemetryHandle {
         });
     }
 
-    /// Signal the push thread, await its final flush, then shut down the OTel
-    /// logger provider. Best-effort; failures are logged but never bubbled.
-    ///
-    /// The metrics-push thread runs its own dedicated runtime, so joining it
-    /// from any tokio flavor (or no runtime at all) is safe — the joined
-    /// thread doesn't depend on the caller's runtime to make progress. The
-    /// `push_task::run` final flush is bounded by the inner reqwest 10s
-    /// timeout.
-    ///
-    /// `SdkLoggerProvider::shutdown` forwards to `BatchLogProcessor::shutdown`,
-    /// which the upstream rustdoc warns is deadlock-prone when called from a
-    /// tokio current-thread runtime's main thread (see
-    /// <https://docs.rs/opentelemetry_sdk/0.32.0/opentelemetry_sdk/logs/struct.BatchLogProcessor.html>).
-    /// It's therefore offloaded to a fresh OS thread. If the call deadlocks,
-    /// the thread is detached after [`LOGGER_SHUTDOWN_TIMEOUT`] so process
-    /// exit isn't blocked.
+    /// Flush the push thread, then shut down the OTel logger provider.
+    /// Best-effort; failures are logged, never bubbled. The provider shutdown
+    /// can deadlock on a current-thread runtime, so it runs on a detached OS
+    /// thread bounded by [`LOGGER_SHUTDOWN_TIMEOUT`].
     pub fn shutdown(self) {
         if let Some(MetricsPushHandle { shutdown, thread }) = self.metrics_push {
             let _ = shutdown.send(());
@@ -319,39 +280,28 @@ impl TelemetryHandle {
         }
     }
 
-    /// Returns true when the metrics push task has been spawned.
-    ///
-    /// Intended for integration test assertions only.
+    /// True once the metrics push task is spawned.
     #[doc(hidden)]
     pub fn metrics_push_active(&self) -> bool {
         self.metrics_push.is_some()
     }
 
-    /// Returns true when the metrics pipeline is enabled.
-    ///
-    /// Intended for integration test assertions only.
+    /// True when the metrics pipeline is enabled.
     #[doc(hidden)]
     pub fn metrics_enabled(&self) -> bool {
         self.metrics_enabled
     }
 }
 
-/// Initialize the OTel logger pipeline and (when `registry` is `Some`) spawn
-/// the periodic Prometheus remote-write push task immediately.
+/// Initialize the OTel logger pipeline and, when `registry` is `Some`, spawn the
+/// metrics push immediately. Production passes `None` (the `Registry` isn't built
+/// yet) and later calls [`TelemetryHandle::attach_metrics_push`]; tests pass it
+/// directly.
 ///
-/// In production, the `Registry` isn't available at logs-init time (the API
-/// setup runs later). The call site passes `None` here and later calls
-/// [`TelemetryHandle::attach_metrics_push`] once the registry is built. Tests
-/// pass the registry directly.
-///
-/// Returns `Ok((None, _))` when telemetry is disabled. Returns `Err` for
-/// misconfig (bad endpoint, JWT mint failure). The call site is expected to
-/// log and continue without telemetry.
-///
-/// The returned `Vec<String>` carries warnings produced before any global
-/// tracing subscriber has been installed (e.g. invalid `log_filter`, metrics
-/// push attach failures). Callers MUST replay them via `tracing::warn!` after
-/// installing the subscriber; otherwise they are lost.
+/// `Ok((None, _))` when telemetry is disabled; `Err` on misconfig (bad endpoint,
+/// JWT mint failure). The returned warnings are produced before any subscriber is
+/// installed; callers MUST replay them via `tracing::warn!` afterward or they are
+/// lost.
 pub fn init(
     opts: &TelemetryOptions,
     staking_key: &SignKey,
@@ -391,8 +341,6 @@ pub fn init(
     }
     let endpoint = endpoint.as_str().to_owned();
 
-    // Embedded verbatim in the rate-limit ERROR so operators see the configured
-    // filter (the raw string, not the parsed `EnvFilter`).
     let telemetry_log_filter: Arc<String> = Arc::new(opts.log_filter.clone());
     let rate_limit_warned: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
@@ -443,10 +391,7 @@ fn build_logger_provider(
     let mut headers = HashMap::new();
     headers.insert("authorization".to_string(), format!("Bearer {jwt}"));
 
-    // Gzip the OTLP body. Logs are highly compressible (repeated field names,
-    // span attributes, message templates); without this the BatchLogProcessor's
-    // 2k-record queue translates to multi-MB payloads on a flush. Transient
-    // failures are retried by opentelemetry-otlp's `experimental-http-retry`.
+    // Logs are highly compressible; gzip keeps flush payloads small.
     let exporter = LogExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)
@@ -458,9 +403,7 @@ fn build_logger_provider(
 
     let mut resource = Resource::builder().with_service_name(SERVICE_NAME);
     if let Some(name) = node_name {
-        // service.instance.id distinguishes individual operators in the
-        // aggregator. The JWT also carries node_name, but resource attributes
-        // ride on every log record so triage doesn't need a join.
+        // service.instance.id distinguishes individual operators in the aggregator.
         resource = resource.with_attribute(KeyValue::new("service.instance.id", name.to_owned()));
     }
 

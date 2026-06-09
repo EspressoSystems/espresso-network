@@ -41,11 +41,7 @@ impl Config {
         self.install_panic_hook();
     }
 
-    /// Like `init`, but also attaches an additional tracing `Layer` (e.g. an
-    /// OpenTelemetry bridge). Pass `None` for the default behavior.
-    ///
-    /// The layer must implement `Layer<FmtSubscriber>`; a polymorphic layer
-    /// like `OpenTelemetryTracingBridge` works directly without erasure.
+    /// Like `init`, but also attaches an extra tracing `Layer` (e.g. an OTel bridge).
     pub fn init_with_otel<L>(&self, otel_layer: Option<L>)
     where
         L: Layer<FmtSubscriber> + Send + Sync + 'static,

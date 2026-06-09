@@ -23,8 +23,6 @@ fn local_endpoint(port: u16) -> url::Url {
     format!("http://127.0.0.1:{port}").parse().unwrap()
 }
 
-// TEST:flags-all-off-returns-none
-//
 // With both flags false, `init` must return `Ok(None)`.
 #[test]
 fn all_flags_off_returns_none() {
@@ -41,8 +39,6 @@ fn all_flags_off_returns_none() {
     assert!(warnings.is_empty());
 }
 
-// TEST:flags-both-enabled
-//
 // Both flags on: `tracing_layer() == Some` and `metrics_enabled == true`.
 #[tokio::test(flavor = "multi_thread")]
 async fn both_flags_enabled() {
@@ -65,8 +61,6 @@ async fn both_flags_enabled() {
     handle.shutdown();
 }
 
-// TEST:flags-logs-only
-//
 // `logs_enable=true` alone: tracing_layer Some, attach_metrics_push is a no-op
 // because metrics are disabled.
 #[tokio::test(flavor = "multi_thread")]
@@ -94,8 +88,6 @@ async fn logs_enable_only() {
     handle.shutdown();
 }
 
-// TEST:flags-metrics-only
-//
 // `metrics_enable=true` alone: tracing_layer None, attach_metrics_push with a
 // Registry activates the push task.
 #[tokio::test(flavor = "multi_thread")]

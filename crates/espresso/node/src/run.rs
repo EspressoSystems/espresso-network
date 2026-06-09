@@ -31,15 +31,9 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     });
     let telemetry_enabled = opt.telemetry.logs_enable || opt.telemetry.metrics_enable;
 
-    // Build the telemetry pipeline before logging so its layer can be attached
-    // to the global subscriber. We need the staking key, so eagerly load the
-    // keyset; the run path below consumes it via `opt.key_set.try_into()` again
-    // (cheap clone).
-    //
-    // Note: at this point the API setup hasn't run yet, so the prometheus
-    // `Registry` deposited into `telemetry::REGISTRY` is `None`. The OTel logs
-    // path starts here; the metrics push task is attached later via
-    // `TelemetryHandle::attach_metrics_push` once the API setup has run.
+    // Build telemetry before logging so its layer attaches to the global
+    // subscriber. The registry is still `None` here (the API setup runs later);
+    // the metrics push is attached then via `attach_metrics_push`.
     let (mut telemetry_handle, deferred_warnings, telemetry_init_error) =
         match (opt.key_set.clone().try_into(), telemetry_endpoint.as_ref()) {
             (Ok(KeySet { staking, .. }), Some(endpoint)) => match telemetry::init(

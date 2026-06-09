@@ -1,23 +1,13 @@
-//! Single-shot ERROR log on first HTTP 429 from the telemetry proxy.
-//!
-//! The proxy applies a per-node hourly byte budget and returns 429 once the
-//! budget is exhausted. Both telemetry pipelines (OTLP/HTTP logs and Prometheus
-//! remote-write metrics) can observe the rejection. We want exactly one
-//! operator-facing ERROR per process, regardless of which pipeline saw it
-//! first or how many subsequent rejections fire.
-//!
-//! The `Arc<AtomicBool>` is owned by the `TelemetryHandle` and shared with both
-//! pipelines so dedup is process-wide. `compare_exchange` guarantees only the
-//! first observer logs.
+//! Single-shot ERROR on the first HTTP 429 from the telemetry proxy, which caps
+//! each node's hourly byte budget. Only the metrics push observes 429 (logs
+//! retry via opentelemetry-otlp's `experimental-http-retry`); `compare_exchange`
+//! on the shared latch keeps it to one ERROR per process.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Log a single ERROR on the first 429 observed by any telemetry pipeline.
-///
-/// `flag` is the shared dedup latch; `env_filter` is the operator's resolved
-/// `ESPRESSO_NODE_TELEMETRY_LOG` value at startup; `retry_after_secs` is the parsed
-/// `Retry-After` header value when available (None when the header is missing
-/// or non-numeric).
+/// Log a single ERROR on the first 429, deduped via `flag`. `env_filter` is the
+/// active `ESPRESSO_NODE_TELEMETRY_LOG`; `retry_after_secs` is the parsed
+/// `Retry-After` header, if numeric.
 pub(crate) fn log_rate_limit_once(
     flag: &AtomicBool,
     env_filter: &str,
