@@ -224,12 +224,15 @@ mod tests {
         data_source::{
             Transaction as _, VersionedDataSource,
             sql::Config,
-            storage::sql::{
-                SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
-                testing::TmpDb,
+            storage::{
+                MerklizedStateStorage,
+                sql::{
+                    SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
+                    testing::TmpDb,
+                },
             },
         },
-        merklized_state::UpdateStateData,
+        merklized_state::{Snapshot, UpdateStateData},
     };
     use jf_merkle_tree_compat::{
         LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
@@ -283,6 +286,150 @@ mod tests {
         )
         .await
         .expect("insert_merkle_nodes_batch");
+    }
+
+    fn membership_proof(
+        tree: &FeeMerkleTree,
+        account: &FeeAccount,
+    ) -> <FeeMerkleTree as MerkleTreeScheme>::MembershipProof {
+        match tree.universal_lookup(account) {
+            LookupResult::Ok(_, p) => p,
+            _ => panic!("account not in tree"),
+        }
+    }
+
+    /// Seed a `header` row carrying `commit` as its `fee_merkle_tree_root`.
+    ///
+    /// The root is read back by `snapshot_info` to verify the reconstructed proof.
+    async fn insert_fee_header(
+        tx: &mut SqlTransaction<Write>,
+        height: i64,
+        commit: <FeeMerkleTree as MerkleTreeScheme>::Commitment,
+    ) {
+        let data = serde_json::json!({
+            "fee_merkle_tree_root": serde_json::to_value(commit).unwrap(),
+            // Non-null filler for the other generated root column.
+            "block_merkle_tree_root": "0",
+        });
+        sqlx::query(
+            "INSERT INTO header (height, hash, payload_hash, timestamp, ns_table, data) VALUES \
+             ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(height)
+        .bind(format!("hash{height}"))
+        .bind("payload")
+        .bind(0i64)
+        .bind("ns")
+        .bind(data)
+        .execute(tx.as_mut())
+        .await
+        .expect("insert header");
+    }
+
+    /// Regression test: reads during the backfill window must return the latest
+    /// version of a node, not a stale one.
+    ///
+    /// Each Merkle node row is keyed `(path, created)` where `created` is the block
+    /// height at which the node changed, so a single path accumulates one row per
+    /// such height. The backfill moves rows by ascending `created`, so mid-migration
+    /// a path's history is split: an older `created` lives in `*_bigint` while a
+    /// newer `created` still lives in the legacy table.
+    ///
+    /// `get_path`'s legacy fallback keys on whether the path exists in `*_bigint` at
+    /// all, not on `created`. With any older version present in `*_bigint` the path
+    /// counts as "found", legacy is never consulted, and the snapshot read returns
+    /// the stale older version. The reconstructed commitment then fails to match the
+    /// header root and `get_path` errors (or, absent that check, returns wrong data).
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn read_during_backfill_returns_latest_version() {
+        let db = TmpDb::init().await;
+        let opt = tmp_options(&db);
+        let cfg = Config::try_from(&opt).expect("config");
+        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
+            .await
+            .expect("connect");
+
+        let account = FeeAccount::from(Address::repeat_byte(0x42));
+        let mut tree = FeeMerkleTree::new(FEE_MERKLE_TREE_HEIGHT);
+
+        // Height 1: account = 100. Live write goes to the *_bigint tables.
+        tree.update(account, FeeAmount::from(100u64)).unwrap();
+        let proof_v1 = membership_proof(&tree, &account);
+        let commit_v1 = tree.commitment();
+        let mut tx = storage.write().await.unwrap();
+        write_fee_merkle_proofs(&mut tx, &tree, &[account], 1).await;
+        tx.commit().await.unwrap();
+
+        // Height 2: account = 200. Also written to the *_bigint tables.
+        tree.update(account, FeeAmount::from(200u64)).unwrap();
+        let proof_v2 = membership_proof(&tree, &account);
+        let commit_v2 = tree.commitment();
+        let mut tx = storage.write().await.unwrap();
+        write_fee_merkle_proofs(&mut tx, &tree, &[account], 2).await;
+        tx.commit().await.unwrap();
+
+        // Reproduce the mid-migration split: the backfill has moved the low
+        // `created` range (height 1) into *_bigint but not yet the high range
+        // (height 2), which still lives in the legacy table. Copy all hashes into
+        // legacy `hash` so the legacy table's hash_id FK resolves.
+        let mut tx = storage.write().await.unwrap();
+        sqlx::query(
+            "INSERT INTO hash (id, value) SELECT id::INT, value FROM hash_bigint ON CONFLICT DO \
+             NOTHING",
+        )
+        .execute(tx.as_mut())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO fee_merkle_tree (path, created, hash_id, children, children_bitvec, idx, \
+             entry) SELECT path, created, hash_id::INT, children, children_bitvec::BIT(256), idx, \
+             entry FROM fee_merkle_tree_bigint WHERE created = 2",
+        )
+        .execute(tx.as_mut())
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM fee_merkle_tree_bigint WHERE created = 2")
+            .execute(tx.as_mut())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // Seed headers carrying each height's fee root, and mark height 2 decided.
+        let mut tx = storage.write().await.unwrap();
+        insert_fee_header(&mut tx, 1, commit_v1).await;
+        insert_fee_header(&mut tx, 2, commit_v2).await;
+        UpdateStateData::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::set_last_state_height(
+            &mut tx, 2,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        // Control: height 1 is served from the *_bigint row and is correct.
+        let mut tx = storage.read().await.unwrap();
+        let got_v1 = tx
+            .get_path(
+                Snapshot::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::Index(1),
+                account,
+            )
+            .await
+            .expect("get_path at height 1");
+        assert_eq!(got_v1, proof_v1, "height 1 should return the V1 proof");
+
+        // Bug: height 2's latest node lives in legacy, but *_bigint still holds the
+        // height-1 version of the same path, so the fallback returns it stale.
+        let mut tx = storage.read().await.unwrap();
+        let got_v2 = tx
+            .get_path(
+                Snapshot::<SeqTypes, FeeMerkleTree, { FeeMerkleTree::ARITY }>::Index(2),
+                account,
+            )
+            .await
+            .expect("get_path at height 2 (latest version is in the legacy table)");
+        assert_eq!(
+            got_v2, proof_v2,
+            "height 2 must return the latest (V2) proof, not the stale V1 row from *_bigint"
+        );
     }
 
     /// Regression test for the FK race between `BackfillHash` and live writes
