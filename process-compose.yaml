@@ -234,7 +234,7 @@ processes:
     environment:
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
-      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://not-a-telemetry-endpoint
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
       - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_0_AXUM_PORT}
