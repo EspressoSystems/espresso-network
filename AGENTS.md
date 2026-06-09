@@ -1,364 +1,143 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents when working with code in this repository.
+Guidance for AI coding agents working in this repository.
 
 ## Overview
 
-Espresso Network is the **global confirmation layer** for Ethereum rollups. Rollups post their blocks to Espresso for
-fast finality and cross-rollup composability. This repo contains:
+Espresso Network is a confirmation layer for Ethereum rollups, providing fast finality and cross-rollup composability.
 
-- **Espresso node** (`crates/espresso/node/`): Rust binary for running consensus and serving APIs
+- **Espresso node** (`crates/espresso/node/`): Rust binary running consensus and serving APIs
 - **HotShot** (`crates/hotshot/`): BFT consensus library
-- **Contracts** (`contracts/`): Solidity contracts for L1 integration (light client, staking, fees, rewards)
+- **Contracts** (`contracts/`): Solidity L1 integration (light client, staking, fees, rewards)
 - **Types** (`crates/espresso/types/`): Domain types shared across crates
 
-## Critical Rules
+## Where to look
 
-**MUST:**
+- `doc/agents/rust.md`
+- `doc/agents/solidity.md`
 
-- Use `-p <package>` for all cargo commands during development (full workspace builds cause OOM)
-- Update ALL THREE storage backends (PostgreSQL, SQLite, filesystem) when changing persistence
-- Run `cargo test -p espresso-types reference` after modifying any serializable type
-- Run `cargo fmt` and `cargo check -p <package>` after making changes
-- Write tests that prove correctness, not just exercise code paths
+## Writing Reviewable Code
 
-**NEVER:**
+Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 
-- Modify V1 contract storage layout (V2 inherits V1; changing V1 breaks upgrades)
-- Combine `embedded-db` feature with default features (sqlx feature conflict)
-- Use `just test` during iteration (compiles everything; use `cargo test -p <package>`)
-- Read from non-finalized L1 blocks (reorg risk)
+### Diff shape
 
-## Commands
+- Each PR is one self-contained change. Split larger work into a stack.
+- Separate refactors and renames from behavior changes. Every commit compiles and passes tests.
+- Delete code in its own commit.
+- Don't spread small edits across many files when one file would do.
 
-```bash
-# Rust - ALWAYS use package-specific commands
-cargo fmt
-cargo check -p <package> --tests
-cargo clippy -p <package> --tests
-cargo nextest run -p <package> -- <test_name>
+### Reading flow
 
-# Full workspace (pre-commit only)
-just check                            # Check postgres + embedded-db variants
-just lint                             # Clippy with -D warnings
+- Order code top-down: public API first, helpers below. Reviewers read in declaration order.
+- Each function fits on one screen. Extract named sub-steps; don't use comments to mark sections.
+- Comment the _why_ only when it isn't visible from types or code. Don't narrate the _what_.
 
-# Solidity contracts
-forge fmt
-forge test                            # Unit tests only
-just sol-test                         # Full test suite
-just gen-bindings                     # Regenerate Rust bindings
+### Commits and PRs
 
-# E2E integration tests
-just test-demo base                   # Basic integration
-just test-demo pos-base               # PoS integration
+- Subject: imperative, scoped, under 70 chars (`feat(stake-table): ...`).
+- When work is ready, suggest an updated PR description capturing the final changeset.
+- Tell the reviewer where to focus.
+- Link the regression test or `reference` test when touching serializable types.
 
-# Running locally
-just demo-native                      # Full local network via process-compose
-```
+## Architecture
 
-## Code Style
+### HotShot vs Espresso Network
 
-**Rust:**
-
-- Imports: `use module::Type` for types, `module::func()` for function calls
-- Errors: `anyhow` for binaries/applications, `thiserror` for libraries
-- Async: Prefer `async_trait` for trait definitions with async methods
-- Testing: `#[cfg(test)]` modules in same file, integration tests in `tests/`
-
-**Solidity:**
-
-- Use `forge fmt` before committing
-- Upgradeable contracts: V2 extends V1, never modify V1 storage
-- Events: Emit for all state changes that external systems need to track
-- Contract ABIs are supersets: V3 includes all V2 types, V2 includes all V1 types. Always use the latest version's Rust
-  bindings (`StakeTableV3`) for runtime code (contract calls, event decoding). V1/V2 bindings are only needed in
-  deploy/upgrade code.
-
-## Architecture Overview
-
-### HotShot vs Espresso Network Separation
-
-The codebase separates **consensus** (HotShot) from **application logic** (Espresso Network):
-
-- **HotShot** (`crates/hotshot/`): Generic BFT consensus library. Defines traits like `NodeType`, handles view-based
-  voting, leader election, certificates, and network communication. Application-agnostic.
-
-- **Espresso Network** (`crates/espresso/node/`, `crates/espresso/types/`): Espresso-specific application built on
-  HotShot. Implements `NodeType` via `SeqTypes` in `crates/espresso/types/src/v0/mod.rs`, defining concrete types for
-  headers, payloads, transactions, and validated state. Handles L1 integration, namespaces, fees, and rollup-specific
+- **HotShot** (`crates/hotshot/`): generic BFT consensus. Defines `NodeType`, view-based voting, leader election,
+  certificates, networking. Application-agnostic.
+- **Espresso Network** (`crates/espresso/node/`, `crates/espresso/types/`): application built on HotShot. Implements
+  `NodeType` via `SeqTypes` in `crates/espresso/types/src/v0/mod.rs`. Handles L1 integration, namespaces, fees, rollup
   logic.
 
-### Espresso Network Internal Architecture
+### Transaction and block flow
 
-The Espresso node is built around `SequencerContext` (`context.rs`), which wraps HotShot's `SystemContextHandle`. Key
-components:
+- **Submission:** Client POSTs `/submit/submit`. Node validates size, broadcasts to DA committee. Builders accumulate
+  transactions.
+- **Proposal (leader):** queries builder URLs, selects best block by fee, creates `QuorumProposal`, broadcasts.
+- **Validation (all validators):** `ValidatedState::validate_and_apply_header()` computes state transition (fees, L1
+  deposits, rewards); validates timestamps, builder signature, height, chain config, size, fees; validates merkle roots
+  (fee, block, reward); validates L1 references non-decreasing; if valid, votes.
 
-- **Node struct** (`lib.rs`): Generic over network (`N: ConnectedNetwork`) and persistence (`P: SequencerPersistence`)
-- **ValidatedState** (`state.rs`): Manages three merkle trees - fee accounts, block commitments, and validator rewards
-- **API** (`api/`): Tide-disco HTTP server with modular endpoints (query, submit, status, catchup, light_client,
-  explorer)
-- **Persistence** (`persistence/`): Pluggable storage backends implementing `SequencerPersistence`
+### L1 integration
 
-### Transaction and Block Flow
+Uses **finalized L1 blocks** to avoid reorgs.
 
-**Transaction Submission:**
+- Headers carry `l1_finalized` referencing latest finalized L1 block. Proposal validation enforces non-decreasing.
+- Data read from L1: fee deposits (FeeContract), stake table events (ValidatorRegistered, Delegated, etc.).
 
-1. Client submits via HTTP POST to `/submit/submit`
-2. Espresso node validates size, broadcasts to DA committee via P2P network
-3. Builders listen to the network and accumulate transactions
+### Stake table events
 
-**Block Proposal (Leader only):**
+`StakeTable` contract events that affect consensus membership:
 
-1. Leader queries configured builder URLs for available blocks
-2. Selects best block (by fee), creates `QuorumProposal`, broadcasts to validators
+- `ValidatorRegistered`/`Exit`, `Delegated`/`Undelegated`, `ConsensusKeysUpdated`
 
-**Block Validation (All validators):**
+A fetcher polls finalized L1 blocks, validates signatures, builds a `ValidatorMap`; `select_active_validator_set()`
+picks top 100 by stake. Effective from the next epoch boundary.
 
-1. `ValidatedState::validate_and_apply_header()` performs application-level validation
-2. Computes state transition: fee charges, L1 deposits, block rewards
-3. Validates: timestamps, builder signature, height, chain config, block size, fees
-4. Validates merkle roots: fee tree, block tree, reward tree
-5. Validates L1 references are non-decreasing
-6. If valid, validator votes on the proposal
+### Reward claims
 
-### HotShot Internal Architecture
+Rewards accumulate in `RewardMerkleTreeV2` (160-level binary tree keyed by Ethereum address). Root is committed in each
+header as part of `auth_root`.
 
-`SystemContext` (`crates/hotshot/hotshot/src/lib.rs`) is the main entry point. Key abstractions:
+1. Query `reward-state-v2/reward-claim-input/{block_height}/{address}` for merkle proof
+2. Call `RewardClaim.claimRewards(lifetimeRewards, authData)` on L1
+3. Contract verifies proof against `lightClient.authRoot()`
+4. Mints `lifetimeRewards - alreadyClaimed` ESP tokens
 
-- **NodeType trait**: Defines types for View, Epoch, BlockHeader, BlockPayload, SignatureKey, Transaction,
-  ValidatedState, Membership
-- **Tasks**: Spawned via `ConsensusTaskRegistry`, communicate through broadcast channels using `HotShotEvent` variants
-- **View-based consensus**: Each view has a deterministic leader. Leader collects QC, fetches transactions via builder,
-  creates DA/Quorum proposals. Replicas validate and vote.
-- **Epoch membership**: `EpochMembershipCoordinator` manages stake tables per epoch. Epoch transitions occur at block
-  boundaries.
+### Protocol versions
 
-### L1 Integration
+Defined in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` pairs versions for network
+operation. **Mainnet currently runs V0_4.**
 
-The Espresso node uses **only finalized L1 blocks** to avoid reorg issues:
+- V0_1: base Header, ChainConfig, Transaction, ADVZ VID proofs (shipped)
+- V0_2, `FeeVersion`: fee support (shipped)
+- V0_3, `EpochVersion`: PoS, stake_table_contract, reward_merkle_tree, AvidM VID proofs (shipped)
+- V0_4, `DrbAndHeaderUpgradeVersion`: header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2
+  (**mainnet**)
+- V0_5, `EpochRewardVersion`: per-epoch rewards (**next upgrade**)
+- V0_6, `NEW_PROTOCOL_VERSION`: DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6)
 
-- **L1Client** (`crates/espresso/types/src/v0/impls/l1.rs`): Tracks L1 `head` and `finalized` block numbers. Uses
-  `BlockId::finalized()` for all reads.
-- **Block headers**: Every Espresso header contains `l1_finalized` referencing the latest finalized L1 block. Proposal
-  validation enforces this is non-decreasing.
-- **Data read from L1**: Fee deposits (FeeContract), stake table events (ValidatorRegistered, Delegated, etc.)
+**Fast finality** (V0_6, see `crates/hotshot/new-protocol/` and `doc/stake-table-fast-finality.md`): replaces CDN +
+libp2p networking with `crates/cliquenet/` (fully-connected mesh, x25519-encrypted). Validators register `x25519_key`
+and `p2p_addr` on the StakeTable contract for peer discovery.
 
-### Stake Table Events
+### Consensus upgrades
 
-The StakeTable contract emits events that affect consensus membership:
+HotShot upgrades via `UpgradeProposal`. See `doc/upgrades.md`.
 
-- `ValidatorRegistered/Exit` - Validator registration/deregistration
-- `Delegated/Undelegated` - Stake delegation changes
-- `ConsensusKeysUpdated` - Key rotation
+1. `UpgradeProposal` broadcast several views before upgrade
+2. Validators vote; enough votes form an `UpgradeCertificate`
+3. Certificate attached to subsequent `QuorumProposal`s until network upgrades
 
-The `Fetcher` (`crates/espresso/types/src/v0/impls/stake_table.rs`) polls finalized L1 blocks, fetches events, validates
-signatures. Events transform into a `ValidatorMap`, then `select_active_validator_set()` picks top 100 validators by
-stake. Changes affect consensus starting from the next epoch boundary.
+Configuration in genesis TOML, view-based (`start_proposing_view`, `stop_proposing_view`, `start_voting_view`,
+`stop_voting_view`) or time-based (same fields as Unix timestamps).
 
-### Reward Claims
+## Inspecting live chains
 
-Rewards accumulate in a `RewardMerkleTreeV2` (160-level binary tree keyed by Ethereum address). The tree root is
-committed in each block header as part of `auth_root`.
+Public query-service base URLs:
 
-**Claim flow:**
+- Mainnet: `https://query.main.net.espresso.network`
+- Decaf testnet: `https://query.decaf.testnet.espresso.network`
 
-1. User queries API at `reward-state-v2/reward-claim-input/{block_height}/{address}` for merkle proof
-2. Calls `RewardClaim.claimRewards(lifetimeRewards, authData)` on L1
-3. Contract verifies merkle proof matches `lightClient.authRoot()`
-4. On success, mints `lifetimeRewards - alreadyClaimed` ESP tokens
+Useful paths (append to either base URL):
 
-### Catchup
+- `/status/block-height` - current block height
+- `/status/version` - running protocol version
+- `/availability/header/{height}` - block header (check `version`, `l1_finalized`, `timestamp_millis`)
+- `/availability/leaf/{height}` - leaf at height
+- `/node/transactions/count` - total tx count
+- `/v0/config/hotshot` - HotShot config including `libp2p_config.bootstrap_nodes`
+- `/catchup/{height}/...` - state proofs (schema: `crates/espresso/node/api/catchup.toml`)
 
-Nodes use sparse merkle trees (storing only necessary paths). When validating blocks, missing proofs are fetched
-on-demand.
+## Logs
 
-**Triggered during** `ValidatedState::apply_header()` when fee accounts or block frontier entries are missing.
+See ./nix/pup/README.md
 
-**Providers** (`crates/espresso/node/src/catchup.rs`):
+## Key files
 
-- `SqlStateCatchup` - Local database lookup
-- `StatePeers` - Remote peer HTTP fetch with reliability scoring
-- `ParallelStateCatchup` - Tries local first, falls back to peers
-
-**Data fetched:** Fee account proofs, reward account proofs, block merkle frontier, chain config, leaf chain for stake
-table sync.
-
-**API:** Endpoints under `/catchup/` serve proof data to peers (schema in `crates/espresso/node/api/catchup.toml`).
-
-### Key Crates
-
-| Crate                                     | Purpose                                                    |
-| ----------------------------------------- | ---------------------------------------------------------- |
-| `espresso-node`                           | Main node binary, API, persistence                         |
-| `espresso-types` (crates/espresso/types/) | Domain types: Header, Payload, Transaction, ValidatedState |
-| `hotshot`                                 | BFT consensus implementation                               |
-| `hotshot-query-service`                   | Query APIs for blocks and availability data                |
-| `hotshot-state-prover`                    | ZK proof generation for light client updates               |
-| `hotshot-contract-adapter`                | Rust-Solidity type bridge                                  |
-| `staking-cli`                             | CLI for stake table contract interaction                   |
-
-### Key Contracts (`contracts/src/`)
-
-| Contract                              | Purpose                                                 |
-| ------------------------------------- | ------------------------------------------------------- |
-| `LightClient.sol`                     | Verifies HotShot state proofs, stores block commitments |
-| `StakeTable.sol` / `StakeTableV2.sol` | Validator staking, delegations, withdrawals             |
-| `FeeContract.sol`                     | Builder fee deposits                                    |
-| `EspToken.sol`                        | ESP token (ERC20)                                       |
-| `RewardClaim.sol`                     | Validator reward distribution                           |
-
-### Protocol Versions
-
-Versions in `crates/espresso/types/src/v0/mod.rs`. `SequencerVersions<Base, Upgrade>` defines version pairs for network
-operation.
-
-| Version | Alias                        | Key Changes                                                                     |
-| ------- | ---------------------------- | ------------------------------------------------------------------------------- |
-| V0_1    | -                            | Base types: Header, ChainConfig, Transaction, ADVZ VID proofs                   |
-| V0_2    | `FeeVersion`                 | Fee support (version marker)                                                    |
-| V0_3    | `EpochVersion`               | PoS: stake_table_contract, reward_merkle_tree, AvidM VID proofs                 |
-| V0_4    | `DrbAndHeaderUpgradeVersion` | Header adds timestamp_millis, total_reward_distributed, RewardMerkleTreeV2      |
-| V0_5    | `EpochRewardVersion`         | Epoch reward / DRB fix                                                          |
-| V0_6    | `NEW_PROTOCOL_VERSION`       | DA upgrade + VID2 (AvidmGf2) proofs + cliquenet + new protocol (bundled at 0.6) |
-
-## Consensus Upgrades
-
-HotShot supports protocol upgrades via an `UpgradeProposal` mechanism. See `doc/upgrades.md` for full details.
-
-**How upgrades work:**
-
-1. An `UpgradeProposal` is broadcast several views before the upgrade
-2. Validators vote on the proposal; once enough votes are collected, an `UpgradeCertificate` is formed
-3. The certificate is attached to subsequent `QuorumProposal`s until the network upgrades
-
-**Configuration** (in genesis TOML):
-
-- View-based: `start_proposing_view`, `stop_proposing_view`, `start_voting_view`, `stop_voting_view`
-- Time-based: Same parameters but with Unix timestamps
-
-## Feature Flags
-
-| Feature       | Default | Purpose        |
-| ------------- | ------- | -------------- |
-| `embedded-db` | No      | SQLite backend |
-
-**IMPORTANT:** `embedded-db` requires sqlx with different features than PostgreSQL. Since Rust features are additive and
-global to compilation, use `espresso-node-sqlite` crate for SQLite builds.
-
-## Testing
-
-**This is blockchain infrastructure. Bugs can cause irreversible financial losses.**
-
-### Testing Philosophy
-
-- **Correctness over coverage**: Tests must prove the code is correct, not just hit line counts
-- **Requirements traceability**: Each requirement should have corresponding test(s)
-- **Edge cases are mandatory**: Boundary conditions, error paths, adversarial inputs
-- **Regression tests first**: When fixing bugs, write a failing test before the fix
-
-Agents make writing tests fast. There is no excuse for untested code.
-
-### Test Structure
-
-| Layer                   | Location                                       | Purpose                                   | Command                                  |
-| ----------------------- | ---------------------------------------------- | ----------------------------------------- | ---------------------------------------- |
-| Unit tests              | Within crate modules                           | Test individual functions/modules         | `cargo test -p <crate>`                  |
-| Reference/Serialization | `crates/espresso/types/src/reference_tests.rs` | Verify serialization compatibility        | `cargo test -p espresso-types reference` |
-| HotShot tests           | `crates/hotshot/testing/tests/`                | Consensus task tests, network simulations | `just hotshot::test <test_name>`         |
-| Integration (E2E)       | `tests/`                                       | Full system tests                         | `cargo nextest run -p tests`             |
-| Slow tests              | `slow-tests/`                                  | Long-running tests                        | `just test-slow`                         |
-| Contract tests          | `contracts/test/`                              | Solidity unit/fuzz/invariant tests        | `just sol-test`                          |
-
-### Serialization Compatibility Tests
-
-**IMPORTANT:** The `crates/espresso/types/src/reference_tests.rs` module ensures backward compatibility. If you change a
-serializable type:
-
-1. Run `cargo test -p espresso-types reference`
-2. If tests fail and change is intentional, update reference files in `/data/` and commitment constants
-3. If unintentional, revert your changes
-
-## Storage Layer
-
-For node operator details, see https://docs.espressosys.com/network/guides/node-operators/running-a-sequencer-node
-
-### Storage Backends
-
-| Backend    | Module                   | Production Use          | Merklized State | Pruning |
-| ---------- | ------------------------ | ----------------------- | --------------- | ------- |
-| PostgreSQL | `sql.rs`                 | Yes (DA/Archival)       | Yes             | Yes     |
-| Filesystem | `fs.rs`                  | Yes (non-DA validators) | No              | Limited |
-| SQLite     | `sql.rs` + `embedded-db` | Not yet                 | Yes             | Yes     |
-
-### Storage Migrations
-
-**IMPORTANT:** When adding storage functionality, ALL THREE backends must be updated.
-
-**SQL Migrations (PostgreSQL and SQLite):**
-
-- Uses [Refinery](https://github.com/rust-db/refinery) migration framework
-- Naming: `V{version}__{description}.sql` (e.g., `V501__epoch_tables.sql`)
-- Locations: `crates/espresso/node/api/migrations/{postgres,sqlite}/`,
-  `hotshot-query-service/migrations/{postgres,sqlite}/`
-- Version numbering: hotshot-query-service uses multiples of 100 (V100, V200...) leaving gaps for applications
-
-**Filesystem Migrations (`crates/espresso/node/src/persistence/fs.rs`):**
-
-- Code-based migrations tracked via `migrated` HashSet
-- Requirements: Must be recoverable, use atomic file operations, be tested
-
-**Adding storage functionality checklist:**
-
-1. Add PostgreSQL migration: `crates/espresso/node/api/migrations/postgres/V{next}__{name}.sql`
-2. Add SQLite migration: `crates/espresso/node/api/migrations/sqlite/V{next}__{name}.sql`
-3. Update filesystem persistence if data format changes
-4. Update `SequencerPersistence` trait implementation for all backends
-5. Test: `cargo test -p espresso-node persistence`
-
-### Large Data Migrations and the Deferred Backfill Pattern
-
-Refinery migrations run synchronously at startup before the node joins consensus, so they must be fast
-and schema-only. Any migration whose work scales with database size must use the `DataBackfill` pattern
-(background task, runs after startup) instead.
-
-**Before writing a migration that touches existing rows, read [`doc/agents/refinery-migrations.md`](doc/agents/refinery-migrations.md).**
-It covers the safe/unsafe operation list and the full `DataBackfill` implementation checklist.
-
-## API Development
-
-APIs use [tide-disco](https://github.com/EspressoSystems/tide-disco) with TOML schema definitions.
-
-**Schema files:** `crates/espresso/node/api/*.toml`, `hotshot-query-service/api/*.toml`
-
-**Adding a new endpoint:**
-
-1. Add route to `.toml` file with `PATH`, parameter types, `METHOD`, and `DOC`
-2. Implement handler in corresponding Rust module (e.g., `crates/espresso/node/src/api/endpoints.rs`)
-3. Register handler with `.get("route_name", handler)` or `.at("route_name", handler)`
-4. Ensure data source trait has required method
-
-## Debugging
-
-**Compilation slow or OOM:** Use `-p <package>` for all cargo commands. For HotShot tests, use
-`just hotshot::test <name>`.
-
-**Tests fail after type changes:** Run `cargo test -p espresso-types reference`. Update `/data/` if change is
-intentional.
-
-**Storage migration failures:** Verify all three backends updated. Check version numbers don't conflict.
-
-**Datadog logs/metrics/monitors:** Use `pup` (available in the dev shell) to query logs. See `nix/pup/README.md`
-
-## Key Files
-
-- `justfile` - All build/test/deploy commands
-- `Cargo.toml` - Workspace definition and default members
-- `data/genesis/*.toml` - Genesis configurations
-- `data/v1/`, `data/v2/`, etc. - Reference serialization test vectors
-- `doc/upgrades.md` - Upgrade mechanism documentation
-- `crates/espresso/node/api/*.toml` - API schema definitions
-
-## Maintaining This Document
-
-**Keep this file up to date.** When making changes that affect build/test commands, architecture, storage backends,
-feature flags, or API definitions, update the relevant section.
+- `justfile` - build/test/deploy commands
+- `data/genesis/*.toml` - genesis configurations
+- `data/v1/`, `data/v2/`, etc. - reference serialization test vectors
+- `doc/upgrades.md` - upgrade mechanism
+- `crates/espresso/node/api/*.toml` - API schemas

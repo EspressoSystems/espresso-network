@@ -175,7 +175,7 @@ async fn build_coordinator(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_genesis(genesis_cert1, genesis_proposal);
+    consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
@@ -286,6 +286,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     epoch: req.epoch,
                     payload: block.block,
                     metadata: block.metadata,
+                    payload_commitment: block.payload_commitment,
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);
