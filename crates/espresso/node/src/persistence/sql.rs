@@ -1630,10 +1630,15 @@ impl SequencerPersistence for Persistence {
         // advanced past the failure point, so no data is lost and the range is retried.
         self.generate_decide_events(deciding_qc, consumer).await?;
 
+        // TEMP: pruning disabled to test whether GC of the consensus store is what removes the
+        // epoch-root leaf chain needed for catchup after a below-quorum restart (f+1/2f wedge on
+        // `/catchup/{height}/leafchain`). Re-enable (or replace with a durable decided-leaf table)
+        // once confirmed.
+        let _ = view;
         // Best-effort GC of data not included in any decide event; runs again at the next decide.
-        if let Err(err) = self.prune(view).await {
-            tracing::warn!(?view, "pruning failed: {err:#}");
-        }
+        // if let Err(err) = self.prune(view).await {
+        //     tracing::warn!(?view, "pruning failed: {err:#}");
+        // }
 
         self.load_processed_view().await
     }

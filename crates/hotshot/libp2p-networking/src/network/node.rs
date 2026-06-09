@@ -49,6 +49,7 @@ use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    task::JoinHandle,
 };
 use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
@@ -863,6 +864,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         (
             UnboundedSender<ClientRequest>,
             UnboundedReceiver<NetworkEvent>,
+            JoinHandle<Result<(), NetworkError>>,
         ),
         NetworkError,
     > {
@@ -873,7 +875,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         self.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
 
         DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
-        spawn(
+        // Keep the task's `JoinHandle` so callers can await the swarm loop
+        // actually ending on shutdown. The swarm owns the listening (QUIC/UDP)
+        // socket; if we drop the handle and don't await it, `shut_down` can
+        // return while the socket is still bound, and a subsequent restart
+        // fails to re-bind the same port ("failed to listen for Libp2p").
+        let task = spawn(
             async move {
                 loop {
                     select! {
@@ -894,11 +901,14 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         }
                     }
                 }
+                // Drop the swarm before returning so its listening socket is
+                // released by the time anyone awaiting this handle observes it.
+                drop(self.swarm);
                 Ok::<(), NetworkError>(())
             }
             .instrument(info_span!("Libp2p NetworkBehaviour Handler")),
         );
-        Ok((s_input, r_output))
+        Ok((s_input, r_output, task))
     }
 
     /// Get a reference to the network node's peer id.

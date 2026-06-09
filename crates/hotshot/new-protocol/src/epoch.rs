@@ -7,7 +7,7 @@ use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2},
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
+    traits::{block_contents::BlockHeader, election::Membership, node_implementation::NodeType},
     utils::{is_epoch_root, is_transition_block},
 };
 use hotshot_utils::anytrace;
@@ -16,6 +16,10 @@ use tracing::error;
 
 pub enum EpochRootResult {
     DrbResult(EpochNumber, DrbResult),
+    /// The epoch root header for `epoch` was pushed into membership (building
+    /// that epoch's stake table). Carries no payload; the side effect on
+    /// membership is the point.
+    EpochRootAdded(EpochNumber),
 }
 
 /// Epoch + error for the Err path so retries can re-kick the task.
@@ -72,6 +76,12 @@ impl<T: NodeType> EpochManager<T> {
                             self.completed_drb_requests.insert(epoch);
                             return Some(Ok(root));
                         },
+                        // The epoch root was pushed into membership (its stake
+                        // table is now available). Surface it so the coordinator
+                        // can retry votes that were buffered awaiting membership.
+                        Ok(root @ EpochRootResult::EpochRootAdded(_)) => {
+                            return Some(Ok(root));
+                        },
                         Err(error) => {
                             // Clear the guard so a subsequent call can retry.
                             self.pending_drb_requests.remove(&epoch);
@@ -99,7 +109,28 @@ impl<T: NodeType> EpochManager<T> {
                 error!("Leaf has no epoch");
                 return;
             };
-            self.request_drb_result(epoch + 2);
+
+            // Push the epoch root into membership directly from the decided
+            // header, the way legacy HotShot does (`add_epoch_root`). This
+            // proactively builds the stake table for `epoch + 2` instead of
+            // relying on a later `get_epoch_root` -> `fetch_leaf` catchup, which
+            // can't be served after a restart (the decided leaf may not be in
+            // the queryable store), wedging epoch transitions.
+            let target_epoch = epoch + 2;
+            let membership_coordinator = self.membership_coordinator.clone();
+            let header = leaf.block_header().clone();
+            let handles = self.handles.entry(target_epoch).or_default();
+            handles.push(self.tasks.spawn(async move {
+                let result = membership_coordinator
+                    .membership()
+                    .add_epoch_root(header)
+                    .await
+                    .map(|()| EpochRootResult::EpochRootAdded(target_epoch))
+                    .map_err(|e| EpochManagerError::EpochRoot(anyhow::anyhow!("{e}")));
+                (target_epoch, result)
+            }));
+
+            self.request_drb_result(target_epoch);
         }
 
         // If this is the transition block of an epoch feed the DRB result to the coordinator.

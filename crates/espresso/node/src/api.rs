@@ -3258,8 +3258,8 @@ mod test {
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
     use versions::{
-        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
-        version,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
+        NEW_PROTOCOL_VERSION, Upgrade, version,
     };
 
     use self::{
@@ -5078,6 +5078,128 @@ mod test {
                 break;
             }
         }
+
+        Ok(())
+    }
+
+    /// Run a `TestNetwork` whose base protocol version is the new protocol
+    /// (`NEW_PROTOCOL_VERSION`, a.k.a. V0_6) and verify it produces blocks.
+    ///
+    /// Unlike the other version tests, this does *not* go through an
+    /// `UpgradeProposal` -> cutover dance. With `base == target ==
+    /// NEW_PROTOCOL_VERSION`, every view is at or past the cutover boundary, so
+    /// `ConsensusHandle` routes consensus to the `hotshot-new-protocol`
+    /// coordinator (over the cliquenet coordinator network) from genesis. The
+    /// legacy `SystemContext` is never the active consensus engine.
+    ///
+    /// Because the new protocol builds on epochs (it is `>= EPOCH_VERSION`),
+    /// the PoS stake table contract must be deployed (`pos_hook`) and the chain
+    /// config must carry its address; we use a V3 stake table since new-protocol
+    /// validators advertise x25519 keys and p2p addresses.
+    ///
+    /// We use a large epoch height so that reaching the target block height
+    /// crosses at most one or two epoch boundaries. Within an epoch the
+    /// coordinator decides views in well under a second, but each epoch
+    /// transition currently pauses on stake-table / DRB catchup (a coordinator
+    /// view-timeout's worth, ~10s, sometimes more). A small epoch height would
+    /// turn "produce 100 blocks" into "survive 10 slow epoch transitions",
+    /// which is a different (and much slower) thing to test.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_produces_blocks() -> anyhow::Result<()> {
+        // Large enough that TARGET_BLOCK_HEIGHT is reached within ~1 epoch.
+        const EPOCH_HEIGHT: u64 = 100;
+        const NUM_NODES: usize = 5;
+        // Number of blocks the network must produce for the test to pass.
+        const TARGET_BLOCK_HEIGHT: u64 = 100;
+
+        // Base the network directly on the new protocol version (V0_6).
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            // Epoch mode active from genesis (no pre-epoch fee-only prefix).
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            // Deploy PoS contracts. New-protocol validators advertise x25519 +
+            // p2p addresses, which the V3 stake table contract supports.
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+
+        // Stream decided leaves and confirm the network produces at least
+        // TARGET_BLOCK_HEIGHT of them. Driving the assertion off the stream
+        // (rather than polling height then fetching leaf 1) means we naturally
+        // wait for block production instead of racing it.
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .expect("subscribe to leaf stream");
+
+        let mut height = 0;
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.expect("leaf stream yielded an error");
+            let header = leaf.header();
+            height = header.height();
+
+            // Every non-genesis block must be produced by the new protocol.
+            // (The genesis leaf at height 0 carries the base version too, but
+            // assert on the blocks the coordinator actually proposed.)
+            if height > 0 {
+                assert_eq!(
+                    header.version(),
+                    NEW_PROTOCOL_VERSION,
+                    "block {height} should be produced under the new protocol version",
+                );
+            }
+
+            if height >= TARGET_BLOCK_HEIGHT {
+                break;
+            }
+        }
+
+        assert!(
+            height >= TARGET_BLOCK_HEIGHT,
+            "expected at least {TARGET_BLOCK_HEIGHT} blocks, got {height} (leaf stream ended \
+             early)",
+        );
 
         Ok(())
     }

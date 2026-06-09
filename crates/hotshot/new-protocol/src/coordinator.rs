@@ -172,6 +172,26 @@ where
         consensus.seed_parent(cert1, parent_proposal);
         consensus.set_view(anchor_view, anchor_epoch);
 
+        // Seed the "reconstructed" commitments of blocks we persisted before
+        // restarting. Without this, a node that restarts below quorum can never
+        // re-reconstruct the parent block (reconstruction needs a quorum of
+        // live VID shares) and consensus stalls at `parent_block_reconstructed`.
+        // The anchor leaf and the persisted proposal headers carry the V2 VID
+        // commitments we need. (Pre-cutover blocks use V0/V1 VID and aren't
+        // gated on V2 reconstruction, so they are skipped.)
+        let seeded_blocks = std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
+            .chain(
+                initializer
+                    .saved_proposals
+                    .iter()
+                    .map(|(view, p)| (*view, p.data.block_header().clone())),
+            )
+            .filter_map(|(view, header)| match header.payload_commitment() {
+                VidCommitment::V2(commitment) => Some((view, commitment)),
+                _ => None,
+            });
+        consensus.seed_reconstructed_blocks(seeded_blocks);
+
         let lock = upgrade_lock.clone();
         Self::builder()
             .consensus(consensus)
@@ -504,6 +524,18 @@ where
                         self.timeout_collector.retry_pending_votes().await;
                         self.timeout_one_honest_collector.retry_pending_votes().await;
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
+                    }
+                    Ok(EpochRootResult::EpochRootAdded(epoch)) => {
+                        finish_measurement(next_input);
+                        // The stake table for this epoch is now in membership
+                        // (pushed from the decided epoch-root header). Retry
+                        // votes that were buffered awaiting that membership.
+                        debug!(%epoch, "epoch root added to membership");
+                        self.vote1_collector.retry_pending_votes().await;
+                        self.vote2_collector.retry_pending_votes().await;
+                        self.timeout_collector.retry_pending_votes().await;
+                        self.timeout_one_honest_collector.retry_pending_votes().await;
+                        continue;
                     }
                     Err(failure) => {
                         finish_measurement(next_input);

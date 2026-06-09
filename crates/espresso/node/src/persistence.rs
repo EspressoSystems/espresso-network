@@ -1852,7 +1852,11 @@ mod tests {
             .map(|i| StateKeyPair::generate_from_seed_indexed([2; 32], i as u64))
             .collect::<Vec<_>>();
 
-        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 20);
+        // This test exercises stake-table fetching/persistence, not the
+        // new-protocol coordinator network, so the per-node coordinator
+        // addresses are irrelevant; pass none and let registration fall back to
+        // the placeholder address.
+        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, &[], 20);
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))

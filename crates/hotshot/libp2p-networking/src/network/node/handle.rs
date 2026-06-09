@@ -15,6 +15,7 @@ use libp2p_identity::PeerId;
 use parking_lot::Mutex;
 use tokio::{
     sync::mpsc::{Receiver, UnboundedReceiver, UnboundedSender},
+    task::JoinHandle,
     time::{sleep, timeout},
 };
 use tracing::{debug, info, instrument};
@@ -50,6 +51,11 @@ pub struct NetworkNodeHandle<T: NodeType> {
 
     /// human readable id
     id: usize,
+
+    /// Handle to the spawned swarm event-loop task. Awaited on [`shutdown`] so
+    /// the swarm's listening socket is released before shutdown returns (so a
+    /// restart can re-bind the same port). `Option` so it can be taken once.
+    swarm_task: Arc<Mutex<Option<JoinHandle<Result<(), NetworkError>>>>>,
 }
 
 /// internal network node receiver
@@ -112,7 +118,7 @@ pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
     })?;
     // pin here to force the future onto the heap since it can be large
     // in the case of flume
-    let (send_chan, recv_chan) = network.spawn_listeners().map_err(|err| {
+    let (send_chan, recv_chan, swarm_task) = network.spawn_listeners().map_err(|err| {
         NetworkError::ListenError(format!("failed to spawn listeners for Libp2p: {err}"))
     })?;
     log_summary::spawn_summary_task();
@@ -128,6 +134,7 @@ pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
         listen_addr,
         peer_id,
         id,
+        swarm_task: Arc::new(Mutex::new(Some(swarm_task))),
     };
     Ok((receiver, handle))
 }
@@ -139,6 +146,22 @@ impl<T: NodeType> NetworkNodeHandle<T> {
     #[instrument]
     pub async fn shutdown(&self) -> Result<(), NetworkError> {
         self.send_request(ClientRequest::Shutdown)?;
+
+        // Wait for the swarm event-loop task to actually finish, so its
+        // listening socket is released before we return. Without this, a
+        // restart can fail to re-bind the same port. Bounded by a timeout so a
+        // wedged swarm can't hang shutdown indefinitely; if the request channel
+        // was already closed the task may have ended on its own.
+        let task = self.swarm_task.lock().take();
+        if let Some(task) = task {
+            match timeout(Duration::from_secs(5), task).await {
+                Ok(Ok(_)) => {},
+                Ok(Err(e)) => debug!("swarm task ended with error during shutdown: {e}"),
+                Err(_) => {
+                    debug!("timed out waiting for swarm task to finish during shutdown");
+                },
+            }
+        }
         Ok(())
     }
     /// Notify the network to begin the bootstrap process
