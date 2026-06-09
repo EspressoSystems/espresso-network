@@ -331,7 +331,7 @@ num_enum = "0.7"
 openssl = { version = "0.10", features = ["vendored"] }
 opentelemetry = "0.32"
 opentelemetry-appender-tracing = "0.32"
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "logs", "gzip-http"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "logs", "gzip-http", "experimental-http-retry"] }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["logs"] }
 p3-maybe-rayon = "0.2"
 parking_lot = { version = "0.12", features = ["send_guard"] }

@@ -41,7 +41,7 @@ use tracing::Subscriber;
 use tracing_subscriber::{EnvFilter, Layer, registry::LookupSpan};
 use url::Url;
 
-use crate::{UnauthenticatedToken, push_task, remote_write::Label, retry::RetryingLogExporter};
+use crate::{UnauthenticatedToken, push_task, remote_write::Label};
 
 const SERVICE_NAME: &str = "espresso-node";
 const LOGGER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -397,13 +397,7 @@ pub fn init(
     let rate_limit_warned: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     let logger_provider = if logs_on {
-        Some(build_logger_provider(
-            jwt.clone(),
-            &endpoint,
-            node_name,
-            rate_limit_warned.clone(),
-            telemetry_log_filter.clone(),
-        )?)
+        Some(build_logger_provider(jwt.clone(), &endpoint, node_name)?)
     } else {
         None
     };
@@ -443,8 +437,6 @@ fn build_logger_provider(
     jwt: String,
     endpoint: &str,
     node_name: Option<&str>,
-    rate_limit_warned: Arc<AtomicBool>,
-    telemetry_log_filter: Arc<String>,
 ) -> anyhow::Result<SdkLoggerProvider> {
     let logs_endpoint = format!("{}/v1/logs", endpoint.trim_end_matches('/'));
 
@@ -453,7 +445,8 @@ fn build_logger_provider(
 
     // Gzip the OTLP body. Logs are highly compressible (repeated field names,
     // span attributes, message templates); without this the BatchLogProcessor's
-    // 2k-record queue translates to multi-MB payloads on a flush.
+    // 2k-record queue translates to multi-MB payloads on a flush. Transient
+    // failures are retried by opentelemetry-otlp's `experimental-http-retry`.
     let exporter = LogExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)
@@ -473,10 +466,6 @@ fn build_logger_provider(
 
     Ok(SdkLoggerProvider::builder()
         .with_resource(resource.build())
-        .with_batch_exporter(RetryingLogExporter::new(
-            exporter,
-            rate_limit_warned,
-            telemetry_log_filter,
-        ))
+        .with_batch_exporter(exporter)
         .build())
 }

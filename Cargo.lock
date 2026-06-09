@@ -9575,6 +9575,7 @@ checksum = "9966929966d17620d7c316c643ba62631826e10021409357772d5eea84f62c35"
 dependencies = [
  "flate2",
  "http 1.4.0",
+ "httpdate",
  "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-proto",
@@ -9582,6 +9583,7 @@ dependencies = [
  "prost 0.14.3",
  "reqwest 0.13.3",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -9609,6 +9611,8 @@ dependencies = [
  "portable-atomic",
  "rand 0.9.4",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

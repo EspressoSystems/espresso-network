@@ -242,8 +242,8 @@ async fn telemetry_jwt_mint_ok() {
 #[tokio::test(flavor = "multi_thread")]
 async fn telemetry_log_retry_survives_transient_5xx() {
     let port = reserve_port();
-    // First two POSTs to /v1/logs fail with 503; the retry wrapper should
-    // bounce up to 4 times so we expect a final 200 within the same batch.
+    // First two POSTs to /v1/logs fail with 503; opentelemetry-otlp's built-in
+    // retry (experimental-http-retry) should retry so a final 200 lands.
     let captured = start_mock_otlp_with_failures(port, 2).await;
     let endpoint: Url = format!("http://127.0.0.1:{port}").parse().unwrap();
 
