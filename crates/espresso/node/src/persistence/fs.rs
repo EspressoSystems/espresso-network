@@ -488,6 +488,7 @@ impl Inner {
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
             // VID share: in-memory first (the share file is written asynchronously), then disk.
+            // A missing share is logged (with a metric) in the emit loop below.
             let vid_share = match live.and_then(|data| data.vid_share(v)) {
                 Some(share) => {
                     metrics.decide_vid_from_memory.add(1);
@@ -495,9 +496,6 @@ impl Inner {
                 },
                 None => self.load_vid_share(v)?.map(|proposal| proposal.data),
             };
-            if vid_share.is_none() {
-                tracing::debug!(?v, "VID share not available at decide");
-            }
 
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
@@ -518,9 +516,9 @@ impl Inner {
                 // No DA proposal for the genesis view (or any empty-namespace-table block), but
                 // the payload is always the canonical empty one.
                 leaf.fill_block_payload_unchecked(Payload::empty().0);
-            } else {
-                tracing::debug!(?v, "DA proposal not available at decide");
             }
+            // A leaf left without a payload is logged (with a metric) and reported for peer
+            // recovery in the emit loop below.
 
             let info = LeafInfo {
                 leaf,
@@ -603,7 +601,16 @@ impl Inner {
                     *current_height += 1;
                     *end = view;
                 } else {
-                    // Otherwise, end the current interval and start a new one.
+                    // A height gap means a decided leaf was never persisted (its decide event
+                    // was dropped before the event loop). End the current interval and start a
+                    // new one, leaving the hole for the query service's leaf fetching to heal.
+                    // Recurring gaps mean leaves lost before persistence.
+                    tracing::error!(
+                        height,
+                        parent = *current_height,
+                        "non-consecutive decided leaf; skipping the gap"
+                    );
+                    metrics.decide_height_gaps.add(1);
                     intervals.push(*start..=*end);
                     current_interval = Some((view, view, height));
                 }
