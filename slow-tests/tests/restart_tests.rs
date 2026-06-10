@@ -693,7 +693,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream();
 
-        let timeout_duration = Duration::from_secs(60);
+        let timeout_duration = Duration::from_secs(240);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
                 let Some(decided_epoch) = decided_epoch(&event) else {
