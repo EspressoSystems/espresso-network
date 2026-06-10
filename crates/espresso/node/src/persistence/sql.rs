@@ -894,11 +894,12 @@ impl Persistence {
             .map(|row| ViewNumber::new(row.get::<i64, _>("last_processed_view") as u64)))
     }
 
-    /// Generate decide events for all unprocessed decided leaves, recording leaves whose
-    /// events were emitted without a block payload in `missing_payload` (so the caller can
-    /// recover them from peers in the background).
+    /// Generate decide events for all unprocessed decided leaves up to and including
+    /// `decided_view`, recording leaves whose events were emitted without a block payload in
+    /// `missing_payload` (so the caller can recover them from peers in the background).
     async fn generate_decide_events(
         &self,
+        decided_view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
         live: Option<&DecideEventData>,
@@ -930,11 +931,17 @@ impl Persistence {
             };
             tracing::debug!(?from_view, "generate decide event");
 
+            // Bound the scan at the signaled view: leaves from a decide committed while this
+            // signal is being processed belong to the next signal, whose in-memory data covers
+            // them (processing them here would emit them payload-less if their async staging
+            // writes haven't landed yet).
             let mut parent = None;
             let mut rows = query(
-                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view",
+                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 AND view <= $2 \
+                 ORDER BY view",
             )
             .bind(from_view)
+            .bind(decided_view.u64() as i64)
             .fetch(tx.as_mut());
             let mut leaves: Vec<(Leaf2, CertificatePair<SeqTypes>)> = vec![];
             while let Some(row) = rows.next().await {
@@ -1745,7 +1752,7 @@ impl SequencerPersistence for Persistence {
         // advanced past the failure point, so no data is lost and the range is retried.
         let mut missing_payload = Vec::new();
         let result = self
-            .generate_decide_events(deciding_qc, consumer, live, &mut missing_payload)
+            .generate_decide_events(view, deciding_qc, consumer, live, &mut missing_payload)
             .await;
         // Events are emitted newest-first within each batch; report missing leaves oldest-first.
         missing_payload.sort_by_key(|leaf| leaf.view_number());
