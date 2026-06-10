@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, marker::PhantomData, time::Duration};
+use std::{collections::BTreeMap, future::Future, marker::PhantomData, time::Duration};
 
 use async_trait::async_trait;
 use hotshot::{traits::BlockPayload, types::SignatureKey};
@@ -28,7 +28,31 @@ const MAX_APPEND_ATTEMPTS: usize = 100;
 /// just-decided views must finish — the decide pipeline's storage fallback and peer recovery read
 /// them back — so aborting at the decide would lose data still in flight. Aborting below the
 /// horizon is only a backstop against leaked tasks; bounded retries terminate them anyway.
+///
+/// Invariant: the horizon's wall-clock (~2s per view) must stay comfortably above a write task's
+/// maximum lifetime, `MAX_APPEND_ATTEMPTS * RETRY_DELAY` (~30s), or healthy retries get aborted.
 const GC_ABORT_HORIZON: u64 = 100;
+
+/// Retry `op` up to [`MAX_APPEND_ATTEMPTS`] times with [`RETRY_DELAY`] between attempts,
+/// logging and giving up after the last. `what` names the data being written, for the logs.
+async fn append_with_retries<F, Fut>(what: &str, op: F)
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
+    for attempt in 1..=MAX_APPEND_ATTEMPTS {
+        match op().await {
+            Ok(()) => return,
+            Err(err) if attempt == MAX_APPEND_ATTEMPTS => {
+                error!(%err, "failed to append {what} after {MAX_APPEND_ATTEMPTS} attempts, giving up");
+            },
+            Err(err) => {
+                warn!(%err, "failed to append {what}, retrying");
+                sleep(RETRY_DELAY).await;
+            },
+        }
+    }
+}
 
 /// New protocol storage extension for data that is not part of the legacy HotShot storage trait.
 #[async_trait]
@@ -61,18 +85,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 error!("failed to sign VID share for storage");
                 return;
             };
-            for attempt in 1..=MAX_APPEND_ATTEMPTS {
-                match storage.append_vid(&proposal).await {
-                    Ok(()) => return,
-                    Err(err) if attempt == MAX_APPEND_ATTEMPTS => {
-                        error!(%err, "failed to append VID share after {MAX_APPEND_ATTEMPTS} attempts, giving up");
-                    },
-                    Err(err) => {
-                        warn!(%err, "failed to append VID share, retrying");
-                        sleep(RETRY_DELAY).await;
-                    },
-                }
-            }
+            append_with_retries("VID share", || storage.append_vid(&proposal)).await;
         });
         self.handles.entry(view).or_default().push(handle);
     }
@@ -104,18 +117,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 signature,
                 _pd: PhantomData,
             };
-            for attempt in 1..=MAX_APPEND_ATTEMPTS {
-                match storage.append_da2(&proposal, vid_commit).await {
-                    Ok(()) => return,
-                    Err(err) if attempt == MAX_APPEND_ATTEMPTS => {
-                        error!(%err, "failed to append DA proposal after {MAX_APPEND_ATTEMPTS} attempts, giving up");
-                    },
-                    Err(err) => {
-                        warn!(%err, "failed to append DA proposal, retrying");
-                        sleep(RETRY_DELAY).await;
-                    },
-                }
-            }
+            append_with_retries("DA proposal", || storage.append_da2(&proposal, vid_commit)).await;
         });
         self.handles.entry(view_number).or_default().push(handle);
     }
@@ -123,18 +125,10 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     pub fn append_cert2(&mut self, view: ViewNumber, cert2: Certificate2<T>) {
         let storage = self.storage.clone();
         let handle = spawn(async move {
-            for attempt in 1..=MAX_APPEND_ATTEMPTS {
-                match storage.append_cert2(view, cert2.clone()).await {
-                    Ok(()) => return,
-                    Err(err) if attempt == MAX_APPEND_ATTEMPTS => {
-                        error!(%err, %view, "failed to append cert2 after {MAX_APPEND_ATTEMPTS} attempts, giving up");
-                    },
-                    Err(err) => {
-                        warn!(%err, %view, "failed to append cert2, retrying");
-                        sleep(RETRY_DELAY).await;
-                    },
-                }
-            }
+            append_with_retries(&format!("cert2 for view {view}"), || {
+                storage.append_cert2(view, cert2.clone())
+            })
+            .await;
         });
         self.handles.entry(view).or_default().push(handle);
     }
@@ -146,18 +140,11 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     ) {
         let storage = self.storage.clone();
         let handle = spawn(async move {
-            for attempt in 1..=MAX_APPEND_ATTEMPTS {
-                match storage.update_state_cert(state_cert.clone()).await {
-                    Ok(()) => return,
-                    Err(err) if attempt == MAX_APPEND_ATTEMPTS => {
-                        error!(%err, epoch = %state_cert.epoch, "failed to append state cert after {MAX_APPEND_ATTEMPTS} attempts, giving up");
-                    },
-                    Err(err) => {
-                        warn!(%err, epoch = %state_cert.epoch, "failed to append state cert, retrying");
-                        sleep(RETRY_DELAY).await;
-                    },
-                }
-            }
+            append_with_retries(
+                &format!("state cert for epoch {}", state_cert.epoch),
+                || storage.update_state_cert(state_cert.clone()),
+            )
+            .await;
         });
         self.handles.entry(view).or_default().push(handle);
     }
@@ -191,18 +178,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 signature,
                 _pd: PhantomData,
             };
-            for attempt in 1..=MAX_APPEND_ATTEMPTS {
-                match storage.append_proposal_wrapper(&signed).await {
-                    Ok(()) => return,
-                    Err(err) if attempt == MAX_APPEND_ATTEMPTS => {
-                        error!(%err, "failed to append proposal after {MAX_APPEND_ATTEMPTS} attempts, giving up");
-                    },
-                    Err(err) => {
-                        warn!(%err, "failed to append proposal, retrying");
-                        sleep(RETRY_DELAY).await;
-                    },
-                }
-            }
+            append_with_retries("proposal", || storage.append_proposal_wrapper(&signed)).await;
         });
         self.handles.entry(view).or_default().push(handle);
     }
