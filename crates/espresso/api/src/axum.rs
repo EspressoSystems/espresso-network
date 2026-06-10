@@ -689,15 +689,13 @@ where
             .map_err(ApiError::Internal)
     };
     let status_success_rate = |State(state): State<S>| async move {
-        state
-            .success_rate()
+        <S as v1::StatusApi>::success_rate(&state)
             .await
             .map(Json)
             .map_err(ApiError::Internal)
     };
     let status_time_since_last_decide = |State(state): State<S>| async move {
-        state
-            .time_since_last_decide()
+        <S as v1::StatusApi>::time_since_last_decide(&state)
             .await
             .map(Json)
             .map_err(ApiError::Internal)
@@ -835,14 +833,14 @@ where
             .get_vid_share(v1::VidShareId::Height(height))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_vid_share_by_hash = |State(state): State<S>, Path(hash): Path<String>| async move {
         state
             .get_vid_share(v1::VidShareId::Hash(hash))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_vid_share_by_payload_hash =
         |State(state): State<S>, Path(payload_hash): Path<String>| async move {
@@ -850,7 +848,7 @@ where
                 .get_vid_share(v1::VidShareId::PayloadHash(payload_hash))
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let node_sync_status = |State(state): State<S>| async move {
