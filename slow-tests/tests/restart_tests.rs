@@ -392,6 +392,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             query: Some(Default::default()),
             storage_fs: opt.storage_fs,
             storage_sql: opt.storage_sql,
+            light_client: Some(Default::default()),
             ..Default::default()
         };
         if node.is_da {
