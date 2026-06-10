@@ -98,17 +98,27 @@ where
         let view = leaf.view_number();
 
         // Derive the VID parameters from the leaf epoch's stake table, as the disperser did, so
-        // the recomputed commitment and VID common match.
+        // the recomputed commitment and VID common match. Wait for catchup if the epoch's
+        // snapshot is missing: the synchronous lookup fails instantly in that case, which would
+        // burn every recovery attempt before catchup has a chance to land.
         let epoch = leaf.epoch(self.epoch_height);
-        let total_weight = vid_total_weight::<SeqTypes, _>(
-            self.membership
-                .stake_table_for_epoch(epoch)
-                .map_err(|err| {
-                    anyhow::anyhow!("failed to get stake table for epoch {epoch:?}: {err:#}")
-                })?
-                .stake_table(),
-            epoch,
-        );
+        let membership = match epoch {
+            Some(e) => {
+                match timeout(RECOVERY_TIMEOUT, self.membership.wait_for_stake_table(e)).await {
+                    Ok(Ok(membership)) => membership,
+                    Ok(Err(err)) => {
+                        bail!("failed to get stake table for epoch {epoch:?}: {err:#}")
+                    },
+                    // Catchup didn't finish in time; the caller may retry later.
+                    Err(_) => return Ok(None),
+                }
+            },
+            None => self
+                .membership
+                .stake_table_for_epoch(None)
+                .map_err(|err| anyhow::anyhow!("failed to get pre-epoch stake table: {err:#}"))?,
+        };
+        let total_weight = vid_total_weight::<SeqTypes, _>(membership.stake_table(), epoch);
 
         let ns_table = header.ns_table().clone();
 

@@ -46,6 +46,7 @@ use tokio::{
     spawn,
     sync::{mpsc::channel, watch},
     task::JoinHandle,
+    time::sleep,
 };
 use tracing::{Instrument, Level};
 use url::Url;
@@ -846,6 +847,10 @@ pub(crate) const PAYLOAD_RECOVERY_HORIZON: u64 = PAYLOAD_RETENTION_VIEWS;
 /// the gap to the query service's own fetching.
 const PAYLOAD_RECOVERY_ATTEMPTS: u32 = 3;
 
+/// Pause between payload-recovery attempts, so a fast-failing error (e.g. stake table catchup
+/// still in flight) doesn't burn every attempt within milliseconds.
+const PAYLOAD_RECOVERY_RETRY_DELAY: Duration = Duration::from_secs(1);
+
 /// Spawn background recovery of `missing` leaves' payloads from peers. Each leaf is reported by
 /// exactly one successful pass (the cursor advances past it), so recovery runs once per leaf.
 fn spawn_payload_recovery<P, C>(
@@ -903,6 +908,9 @@ pub(crate) async fn recover_missing_payloads<P, C>(
         let view = leaf.view_number();
         let mut recovered_payload = None;
         for attempt in 1..=PAYLOAD_RECOVERY_ATTEMPTS {
+            if attempt > 1 {
+                sleep(PAYLOAD_RECOVERY_RETRY_DELAY).await;
+            }
             match recovery.recover_payload(&leaf).await {
                 Ok(Some(found)) => {
                     recovered_payload = Some(found);
