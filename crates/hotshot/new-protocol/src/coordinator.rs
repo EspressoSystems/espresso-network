@@ -137,62 +137,11 @@ where
             initializer.epoch_height,
         );
 
-        let anchor_leaf = &initializer.anchor_leaf;
-        let anchor_view = anchor_leaf.view_number();
-        let anchor_epoch = anchor_leaf
-            .epoch(initializer.epoch_height)
-            .unwrap_or(EpochNumber::genesis());
-        let cert1 = initializer.high_qc.clone();
-        let parent_proposal = message::Proposal {
-            block_header: anchor_leaf.block_header().clone(),
-            view_number: anchor_view,
-            epoch: anchor_epoch,
-            justify_qc: anchor_leaf.justify_qc(),
-            next_epoch_justify_qc: None,
-            upgrade_certificate: anchor_leaf.upgrade_certificate(),
-            view_change_evidence: anchor_leaf
-                .view_change_evidence
-                .clone()
-                .and_then(|e| match e {
-                    hotshot_types::data::ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                    hotshot_types::data::ViewChangeEvidence2::ViewSync(_) => None,
-                }),
-            next_drb_result: anchor_leaf.next_drb_result,
-            state_cert: None,
-        };
-
         let mut state_manager = StateManager::new(
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
         );
-        state_manager.seed_state(
-            anchor_view,
-            initializer.anchor_state.clone(),
-            anchor_leaf.clone(),
-        );
-        // The anchor leaf and persisted proposals are blocks this node had
-        // reconstructed before it went down, so treat them as reconstructed on
-        // restart
-        let reconstructed_blocks =
-            std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
-                .chain(
-                    initializer
-                        .saved_proposals
-                        .iter()
-                        .map(|(view, p)| (*view, p.data.block_header().clone())),
-                )
-                .filter_map(|(view, header)| match header.payload_commitment() {
-                    VidCommitment::V2(commitment) => Some((view, commitment)),
-                    _ => None,
-                });
-        consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
-        consensus.set_view(anchor_view, anchor_epoch);
-        consensus.seed_restart_guard(initializer.start_view, initializer.last_actioned_view);
-        // If the anchor is an epoch-root block, extending it requires the
-        // matching state certificate (epoch-root atomicity invariant).
-        if let Some(state_cert) = initializer.state_cert.clone() {
-            consensus.seed_state_cert(state_cert);
-        }
+        seed_from_initializer(&mut consensus, &mut state_manager, initializer);
 
         let lock = upgrade_lock.clone();
         Self::builder()
@@ -298,10 +247,8 @@ where
         if let Some(leader) = self.leader(next_view, epoch)
             && leader == self.public_key
         {
-            // When resuming past the anchor (restart view > anchor view)
-            // there is no proposal for `cur_view`; skip the block request and
-            // let the view time out so the TC path re-proposes from the
-            // locked certificate.
+            // No proposal exists for `cur_view` when resuming past the
+            // anchor; let the view time out so the TC path re-proposes.
             let Some(parent_proposal) = self.consensus.proposal_at(cur_view) else {
                 info!(
                     node = %self.node_id,
@@ -655,8 +602,7 @@ where
                 let epoch = proposal.data.epoch;
                 let block = proposal.data.block_header.block_number();
                 info!(%node, %view, %epoch, %block, "send proposal");
-                self.storage
-                    .record_action(view, epoch, HotShotAction::Propose);
+                self.storage.record_action(view, HotShotAction::Propose);
                 self.storage.append_proposal(proposal.data.clone());
                 // Two blocks can be built for one view. Here we know which one
                 // wins and we persist just that one:
@@ -753,13 +699,7 @@ where
                     epoch_root = vote1.state_vote.is_some(),
                     "send vote1"
                 );
-                self.storage.record_action(
-                    view,
-                    self.consensus
-                        .current_epoch()
-                        .unwrap_or(EpochNumber::genesis()),
-                    HotShotAction::Vote,
-                );
+                self.storage.record_action(view, HotShotAction::Vote);
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
@@ -770,13 +710,8 @@ where
             },
             ConsensusOutput::SendVote2(vote2) => {
                 debug!(%node, view = %vote2.view_number(), "send vote2");
-                self.storage.record_action(
-                    vote2.view_number(),
-                    self.consensus
-                        .current_epoch()
-                        .unwrap_or(EpochNumber::genesis()),
-                    HotShotAction::Vote,
-                );
+                self.storage
+                    .record_action(vote2.view_number(), HotShotAction::Vote);
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
@@ -1529,6 +1464,68 @@ where
             },
         }
         Ok(())
+    }
+}
+
+/// Seed `consensus` and `state_manager` with the persisted chain state from
+/// `initializer`: the anchor as the parent to extend, the restart guard,
+/// and the state certificate (required to extend an epoch-root anchor).
+pub(crate) fn seed_from_initializer<T: NodeType>(
+    consensus: &mut Consensus<T>,
+    state_manager: &mut StateManager<T>,
+    initializer: &HotShotInitializer<T>,
+) {
+    let anchor_leaf = &initializer.anchor_leaf;
+    let anchor_view = anchor_leaf.view_number();
+    let anchor_epoch = anchor_leaf
+        .epoch(initializer.epoch_height)
+        .unwrap_or(EpochNumber::genesis());
+    let parent_proposal = message::Proposal {
+        block_header: anchor_leaf.block_header().clone(),
+        view_number: anchor_view,
+        epoch: anchor_epoch,
+        justify_qc: anchor_leaf.justify_qc(),
+        next_epoch_justify_qc: None,
+        upgrade_certificate: anchor_leaf.upgrade_certificate(),
+        view_change_evidence: anchor_leaf
+            .view_change_evidence
+            .clone()
+            .and_then(|e| match e {
+                hotshot_types::data::ViewChangeEvidence2::Timeout(tc) => Some(tc),
+                hotshot_types::data::ViewChangeEvidence2::ViewSync(_) => None,
+            }),
+        next_drb_result: anchor_leaf.next_drb_result,
+        state_cert: None,
+    };
+
+    state_manager.seed_state(
+        anchor_view,
+        initializer.anchor_state.clone(),
+        anchor_leaf.clone(),
+    );
+    // The anchor leaf and persisted proposals are blocks this node had
+    // reconstructed before it went down, so treat them as reconstructed on
+    // restart
+    let reconstructed_blocks = std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
+        .chain(
+            initializer
+                .saved_proposals
+                .iter()
+                .map(|(view, p)| (*view, p.data.block_header().clone())),
+        )
+        .filter_map(|(view, header)| match header.payload_commitment() {
+            VidCommitment::V2(commitment) => Some((view, commitment)),
+            _ => None,
+        });
+    consensus.seed_parent(
+        initializer.high_qc.clone(),
+        parent_proposal,
+        reconstructed_blocks,
+    );
+    consensus.set_view(anchor_view, anchor_epoch);
+    consensus.seed_restart_guard(initializer.start_view, initializer.last_actioned_view);
+    if let Some(state_cert) = initializer.state_cert.clone() {
+        consensus.seed_state_cert(state_cert);
     }
 }
 

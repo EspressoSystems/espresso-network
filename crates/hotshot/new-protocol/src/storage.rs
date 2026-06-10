@@ -44,11 +44,12 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
     /// Record that this node acted (voted or proposed) in `view` so that a
     /// restarted node never re-enters a view it already acted in.
-    pub fn record_action(&mut self, view: ViewNumber, epoch: EpochNumber, action: HotShotAction) {
+    /// Persistence keys the restart watermarks by view only, hence no epoch.
+    pub fn record_action(&mut self, view: ViewNumber, action: HotShotAction) {
         let storage = self.storage.clone();
         let handle = spawn(async move {
             loop {
-                match storage.record_action(view, Some(epoch), action).await {
+                match storage.record_action(view, None, action).await {
                     Ok(()) => return,
                     Err(err) => {
                         warn!(%err, %view, ?action, "failed to record action, retrying");

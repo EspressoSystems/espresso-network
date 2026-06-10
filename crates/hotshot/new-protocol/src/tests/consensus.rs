@@ -859,17 +859,16 @@ async fn test_stale_timeout_ignored() {
     );
 }
 
-/// Restart guard: after `seed_restart_guard`, vote1 never fires for views at
-/// or below the persisted last actioned view, while later views still vote.
+/// Vote1 never fires for views at or below the persisted last actioned
+/// view, while later views still vote.
 #[tokio::test]
 async fn test_restart_guard_blocks_vote1() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(4).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
-    // The node voted through view 2 before the restart. Keep start_view at
-    // genesis so the replayed views are still processed (the `proposed at V
-    // but never voted` restart shape).
+    // Voted through view 2 before the restart; start_view stays at genesis
+    // so the replayed views are still processed.
     harness
         .consensus
         .seed_restart_guard(ViewNumber::genesis(), ViewNumber::new(2));
@@ -892,7 +891,6 @@ async fn test_restart_guard_blocks_vote1() {
         "vote1 must not fire for views at or below the last actioned view"
     );
 
-    // A view past the guard still votes.
     harness
         .apply(test_data.views[2].proposal_input_consensus(&node_key))
         .await;
@@ -902,9 +900,8 @@ async fn test_restart_guard_blocks_vote1() {
     );
 }
 
-/// Restart guard: a leader never proposes in a view at or below the
-/// persisted last actioned view (it may have proposed a different block
-/// there before the restart).
+/// A leader never proposes in a view at or below the persisted last
+/// actioned view.
 #[tokio::test]
 async fn test_restart_guard_blocks_propose() {
     let test_data = TestData::new(4).await;
@@ -916,8 +913,6 @@ async fn test_restart_guard_blocks_propose() {
         .consensus
         .seed_restart_guard(ViewNumber::genesis(), ViewNumber::new(2));
 
-    // Same flow that makes the leader propose view 2 in
-    // `test_leader_sends_proposal` — here suppressed by the guard.
     harness
         .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
         .await;
@@ -929,36 +924,31 @@ async fn test_restart_guard_blocks_propose() {
     );
 }
 
-/// Restart guard view math: genesis is a no-op, the resumed view is
-/// `start_view - 1`, the guard never regresses, and it max-composes with
+/// Genesis guard is a no-op, the resumed view is `start_view - 1`, the
+/// guard never regresses, and it max-composes with
 /// `apply_pre_cutover_seed` in either order.
 #[tokio::test]
 async fn test_restart_guard_view_math_and_cutover_composition() {
     let mut harness = ConsensusHarness::new(0).await;
 
-    // Fresh node: genesis guard is a no-op (enters view 1 as before).
     harness
         .consensus
         .seed_restart_guard(ViewNumber::genesis(), ViewNumber::genesis());
     assert_eq!(harness.consensus.current_view(), ViewNumber::genesis());
     assert_eq!(harness.consensus.timeout_view(), ViewNumber::genesis());
 
-    // Voted through view 3 → restart view 4: resume at current_view 3 so
-    // the coordinator enters view 4; refuse to act in views <= 3.
     harness
         .consensus
         .seed_restart_guard(ViewNumber::new(4), ViewNumber::new(3));
     assert_eq!(harness.consensus.current_view(), ViewNumber::new(3));
     assert_eq!(harness.consensus.timeout_view(), ViewNumber::new(3));
 
-    // Older values never regress the guard.
     harness
         .consensus
         .seed_restart_guard(ViewNumber::new(2), ViewNumber::new(1));
     assert_eq!(harness.consensus.current_view(), ViewNumber::new(3));
     assert_eq!(harness.consensus.timeout_view(), ViewNumber::new(3));
 
-    // Max-composes with the pre-cutover seed in either order.
     let seed = |anchor: Leaf2<TestTypes>| PreCutoverSeed {
         decided_anchor: anchor,
         undecided: vec![],

@@ -22,8 +22,7 @@ use crate::{
     },
 };
 
-/// A cliquenet instance with no peers, for coordinator tests that never
-/// expect a message to be delivered.
+/// A cliquenet instance with no peers.
 async fn lone_network(node_index: u64) -> Cliquenet<TestTypes> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let keypair = hotshot_types::x25519::Keypair::derive_from::<BLSPubKey>(&private_key)
@@ -44,18 +43,16 @@ async fn lone_network(node_index: u64) -> Cliquenet<TestTypes> {
 }
 
 /// A node restarting past its anchor has no parent proposal for the resumed
-/// view. `start()` must not panic — even when the node is the leader of the
-/// entered view — and the node must resume at the persisted restart view.
+/// view; `start()` must not panic, even as the leader of the entered view.
 #[tokio::test]
 async fn restart_past_anchor_as_leader_does_not_panic() {
-    // Pick the leader of view 5 so `start()` takes the leader path, where
-    // the missing parent proposal used to be an `expect`.
+    // Leader of view 5, so `start()` takes the formerly panicking path.
     let test_data = TestData::new(5).await;
     let leader_of_view_5 = test_data.views[4].leader_public_key;
     let node_index = node_index_for_key(&leader_of_view_5);
 
     let storage = TestStorage::<TestTypes>::default();
-    // Simulate a previous run that voted through view 4 → restart view 5.
+    // A previous run voted through view 4 → restart view 5.
     storage
         .record_action(ViewNumber::new(4), None, HotShotAction::Vote)
         .await
@@ -83,8 +80,7 @@ async fn restart_past_anchor_as_leader_does_not_panic() {
     );
 }
 
-/// Sending vote1/vote2/proposal records the action to storage, so the next
-/// restart resumes past those views.
+/// Sending vote1/vote2/proposal records the action to storage.
 #[tokio::test]
 async fn actions_recorded_on_send() {
     let node_index = 0u64;
@@ -141,8 +137,7 @@ async fn actions_recorded_on_send() {
     wait_for_recorded_views(&storage, ViewNumber::new(3), ViewNumber::new(4)).await;
 }
 
-/// Poll the storage until the recorded action watermarks match; recording is
-/// fire-and-forget so the write lands shortly after the send.
+/// Poll until the recorded action watermarks match (recording is async).
 async fn wait_for_recorded_views(
     storage: &TestStorage<TestTypes>,
     last_actioned: ViewNumber,
@@ -164,10 +159,8 @@ async fn wait_for_recorded_views(
     );
 }
 
-/// 5 nodes, node 2 restarts at view 8 keeping its storage. The runner
-/// verifies — for every test — that no node sends vote1 twice for the same
-/// view across restarts (`verify_no_revotes`); this test exercises that
-/// check with a restart early in the run, away from epoch boundaries.
+/// 5 nodes, node 2 restarts at view 8, exercising the runner's
+/// `verify_no_revotes` check away from epoch boundaries.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_after_vote_does_not_revote() {
     TestRunner::builder()
@@ -191,12 +184,9 @@ async fn restart_after_vote_does_not_revote() {
 // Restart with persisted actions (with epochs)
 // ---------------------------------------------------------------------------
 
-/// 10 nodes, 1 restarts at view 11, epoch_height=10.
-///
-/// The restarted node keeps its action storage (so it resumes at its
-/// persisted restart view) but no chain state. Verifies that it catches up
-/// and participates across epoch boundaries while the rest of the network
-/// continues.
+/// 10 nodes, 1 restarts at view 11, epoch_height=10. The restarted node
+/// keeps its action storage but no chain state; it must catch up and
+/// participate across epoch boundaries.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_one_node_with_epochs() {
     TestRunner::builder()
@@ -254,15 +244,9 @@ async fn restart_f_nodes_with_epochs() {
         .unwrap();
 }
 
-/// 5 nodes all restart simultaneously at view 15, epoch_height=10.
-///
-/// Every node keeps its action storage, so each resumes past the views it
-/// acted in and the runner verifies nothing is vote1'd twice. Restarted
-/// nodes are seeded with the network's last decided leaf (tracked by the
-/// runner, standing in for production's persisted anchor), so after
-/// converging via timeouts the network continues the same chain from the
-/// anchor. The undecided convergence window around the restart is detected
-/// and tolerated by the runner.
+/// 5 nodes all restart simultaneously at view 15, epoch_height=10. After
+/// converging via timeouts the network must continue the same chain from
+/// the seeded anchor, with nothing vote1'd twice.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_all_nodes_with_epochs() {
     TestRunner::builder()

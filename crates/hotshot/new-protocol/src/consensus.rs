@@ -384,35 +384,24 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Seed a persisted light-client state certificate on restart. Proposing
-    /// on an epoch-root parent QC requires the matching state_cert (the
-    /// epoch-root atomicity invariant), so a node restarting with an
-    /// epoch-root anchor cannot extend it without this.
+    /// Seed a persisted state certificate on restart: extending an
+    /// epoch-root anchor requires it (epoch-root atomicity invariant).
     pub fn seed_state_cert(&mut self, cert: LightClientStateUpdateCertificateV2<T>) {
         self.state_certs.insert(cert.epoch, cert);
     }
 
-    /// Restart guard: resume from the persisted restart view and refuse to
-    /// vote1/propose in any view this node acted in before the restart, so
-    /// that replaying undecided views cannot lead to equivocation.
-    ///
-    /// `start_view` is the first view to enter (the persisted restart view,
-    /// already clamped to the anchor by `load_consensus_state`);
-    /// `last_actioned_view` is the highest view this node voted or proposed
-    /// in. Raising `timeout_view` reuses the existing vote1/propose guards.
-    ///
-    /// Idempotent; max-composes with [`Self::apply_pre_cutover_seed`].
+    /// Restart guard: enter `start_view` on startup and refuse to
+    /// vote1/propose in views at or below `last_actioned_view` (raising
+    /// `timeout_view` reuses the existing guards), so that replaying
+    /// undecided views cannot lead to equivocation. Idempotent;
+    /// max-composes with [`Self::apply_pre_cutover_seed`].
     pub fn seed_restart_guard(&mut self, start_view: ViewNumber, last_actioned_view: ViewNumber) {
-        // The coordinator enters `current_view + 1` on startup, so to enter
-        // `start_view` set current_view = start_view - 1 (saturating for the
-        // fresh-node case where start_view is genesis).
-        let resume = ViewNumber::new(start_view.saturating_sub(1));
-        if resume > self.current_view {
-            self.current_view = resume;
-        }
-        if last_actioned_view > self.timeout_view {
-            self.timeout_view = last_actioned_view;
-        }
+        // The coordinator enters `current_view + 1` on startup.
+        self.current_view = max(
+            self.current_view,
+            ViewNumber::new(start_view.saturating_sub(1)),
+        );
+        self.timeout_view = max(self.timeout_view, last_actioned_view);
     }
 
     /// Register `justify_qc` as Cert1 for its parent view (idempotent)
@@ -750,13 +739,13 @@ impl<T: NodeType> Consensus<T> {
     /// formed for the first but a later overwrite landed in the proposals
     /// map).  No production code should ever do this.
     #[cfg(test)]
-    pub(crate) fn timeout_view(&self) -> ViewNumber {
-        self.timeout_view
+    pub(crate) fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<T>) {
+        self.proposals.insert(view, proposal);
     }
 
     #[cfg(test)]
-    pub(crate) fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<T>) {
-        self.proposals.insert(view, proposal);
+    pub(crate) fn timeout_view(&self) -> ViewNumber {
+        self.timeout_view
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1269,11 +1258,9 @@ impl<T: NodeType> Consensus<T> {
         if self.proposed_views.contains(&view) {
             return;
         }
-        // A timed-out view is only ever exited forward (its TC enables
-        // `view + 1`), so proposing in a view we already timed out is never
-        // legitimate. `proposed_views` is in-memory only; after a restart this
-        // guard (seeded from the persisted last actioned view) is what
-        // prevents proposing a different block in a view we already acted in.
+        // A timed-out view is only ever exited forward, and after a restart
+        // (where `proposed_views` is empty) this guard is what prevents
+        // proposing a different block in a view we already acted in.
         if view <= self.timeout_view {
             return;
         }

@@ -55,11 +55,8 @@ pub struct NodeChange {
 /// Actions that can be applied to a node during a test.
 #[derive(Clone, Debug)]
 pub enum NodeAction {
-    /// Restart: shut down the node and create a fresh coordinator. The node
-    /// keeps its storage (so it resumes from its persisted restart view and
-    /// never re-votes a view it acted in before) and is re-anchored at the
-    /// network's last decided leaf tracked by the runner, standing in for
-    /// production's persisted chain state.
+    /// Restart: a fresh coordinator that keeps its storage and is
+    /// re-anchored at the network's last decided leaf.
     Restart,
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
@@ -191,13 +188,11 @@ enum NodeEvent {
     Decided(BTreeMap<ViewNumber, [u8; 32]>),
     TimedOut(ViewNumber),
     Voted1(ViewNumber),
-    /// Newest decided leaf and the Certificate1 over it. The runner keeps
-    /// the highest-view one as the restart anchor, playing the role of
-    /// production's persisted anchor leaf + high QC.
+    /// Newest decided leaf and the Certificate1 over it; the highest-view
+    /// one becomes the restart anchor.
     Anchor(Box<(Leaf2<TestTypes>, Certificate1<TestTypes>)>),
-    /// A decided epoch-root or epoch-transition leaf. The runner keeps
-    /// these to reseed the stake table and DRB pipeline of restarted nodes,
-    /// playing the role of production's persisted epoch info.
+    /// A decided epoch-root or epoch-transition leaf, kept to reseed the
+    /// stake table and DRB pipeline of restarted nodes.
     EpochLeaf(Box<Leaf2<TestTypes>>),
 }
 
@@ -271,8 +266,6 @@ impl TestRunner {
             })
             .collect::<Vec<_>>();
 
-        // Per-node storage, kept across restarts so a restarted node sees
-        // its previously recorded actions (like production persistence).
         let storages: Vec<TestStorage<TestTypes>> = (0..self.num_nodes)
             .map(|_| TestStorage::default())
             .collect();
@@ -350,13 +343,9 @@ impl TestRunner {
         let mut node_commits: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
             vec![BTreeMap::new(); self.num_nodes];
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
-        // Vote1 views per node, keyed by generation. Used to verify that a
-        // restarted node never votes again in a view it acted in before.
+        // Vote1 views per node, keyed by generation, for `verify_no_revotes`.
         let mut node_vote1_views: Vec<BTreeMap<u64, BTreeSet<ViewNumber>>> =
             vec![BTreeMap::new(); self.num_nodes];
-        // Highest decided leaf (and its Certificate1) seen from any node,
-        // plus all decided epoch-root and epoch-transition leaves: together
-        // they anchor restarted nodes like production persistence would.
         let mut network_anchor: Option<(Leaf2<TestTypes>, Certificate1<TestTypes>)> = None;
         let mut epoch_leaves: BTreeMap<u64, Leaf2<TestTypes>> = BTreeMap::new();
         let mut max_decided_view: u64 = 0;
@@ -376,12 +365,9 @@ impl TestRunner {
             }
         }
 
-        // When a change batch restarts every live node at once, nobody is
-        // left to report decisions: views above the minimum of the restarted
-        // nodes' last reported decided views may have reached only some
-        // nodes, and the network then times out an unpredictable window of
-        // views while it converges. Views past this point are exempt from
-        // the decided-by-quorum check (chain divergence is still verified).
+        // When a change batch restarts every live node at once, the network
+        // times out an unpredictable window of views; views past this point
+        // are exempt from the decided-by-quorum check (not divergence).
         let mut undecided_gap_after: Option<u64> = None;
 
         let deadline = Instant::now() + self.max_runtime;
@@ -439,9 +425,6 @@ impl TestRunner {
                                     handle.abort();
                                     let _ = handle.await;
                                 }
-                                // Create a fresh coordinator reusing the
-                                // node's storage so it resumes from its
-                                // persisted restart view.
                                 let net =
                                     create_network(change.idx, &parties, &self.upgrade_lock).await;
                                 let (membership, storage, client, external_events_tx) = {
@@ -453,12 +436,8 @@ impl TestRunner {
                                         storages[change.idx].clone(),
                                     )
                                 };
-                                // Restarted nodes are seeded with the
-                                // network's last decided leaf and epoch
-                                // roots, like a production node loading its
-                                // anchor and epoch info from persistence.
-                                // Late-starting nodes model a brand-new node
-                                // and start from genesis.
+                                // Late-starting nodes model a brand-new
+                                // node and start from genesis.
                                 let anchor = if matches!(change.action, NodeAction::Restart) {
                                     network_anchor.clone().map(|(leaf, cert1)| RestartAnchor {
                                         leaf,
@@ -487,11 +466,8 @@ impl TestRunner {
                                 let generation = generations[change.idx];
                                 let (cancel_tx, cancel_rx) = oneshot::channel();
                                 cancels.insert(change.idx, cancel_tx);
-                                // Restarted nodes keep their decided views:
-                                // the restart guard (plus quorum
-                                // intersection) guarantees no view can be
-                                // decided again with a different leaf, so
-                                // pre-restart commits stay valid.
+                                // Pre-restart commits stay valid: no view
+                                // can be decided again with a different leaf.
                                 let initial_commits = node_commits[change.idx].clone();
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
@@ -524,38 +500,30 @@ impl TestRunner {
             let Ok(Some(tagged)) = timeout(remaining, event_rx.recv()).await else {
                 return Err(TestError::Timeout);
             };
-            // Track vote1 views before the generation filter: votes sent by
-            // an earlier generation are real network messages and must count
-            // when checking for re-votes after a restart.
-            if let NodeEvent::Voted1(view) = tagged.event {
-                node_vote1_views[tagged.idx]
-                    .entry(tagged.generation)
-                    .or_default()
-                    .insert(view);
-                continue;
-            }
-            // A decided leaf is final regardless of which generation
-            // reported it; keep the highest-view one as the restart anchor.
-            if let NodeEvent::Anchor(anchor) = tagged.event {
-                if network_anchor
-                    .as_ref()
-                    .is_none_or(|(leaf, _)| leaf.view_number() < anchor.0.view_number())
-                {
-                    network_anchor = Some(*anchor);
-                }
-                continue;
-            }
-            if let NodeEvent::EpochLeaf(leaf) = tagged.event {
-                epoch_leaves.entry(leaf.height()).or_insert(*leaf);
-                continue;
-            }
-            if tagged.generation != generations[tagged.idx] {
-                continue;
-            }
-            if node_commits[tagged.idx].len() >= self.target_decisions {
-                continue;
-            }
             match tagged.event {
+                // Vote1/anchor/epoch-leaf events count regardless of
+                // generation: pre-restart votes are real network messages
+                // and decided leaves are final.
+                NodeEvent::Voted1(view) => {
+                    node_vote1_views[tagged.idx]
+                        .entry(tagged.generation)
+                        .or_default()
+                        .insert(view);
+                },
+                NodeEvent::Anchor(anchor) => {
+                    if network_anchor
+                        .as_ref()
+                        .is_none_or(|(leaf, _)| leaf.view_number() < anchor.0.view_number())
+                    {
+                        network_anchor = Some(*anchor);
+                    }
+                },
+                NodeEvent::EpochLeaf(leaf) => {
+                    epoch_leaves.entry(leaf.height()).or_insert(*leaf);
+                },
+                // Stale generation, or the node already hit its target.
+                _ if tagged.generation != generations[tagged.idx]
+                    || node_commits[tagged.idx].len() >= self.target_decisions => {},
                 NodeEvent::Decided(commits) => {
                     if let Some(&max_v) = commits.keys().last() {
                         let v: u64 = *max_v;
@@ -568,8 +536,6 @@ impl TestRunner {
                 NodeEvent::TimedOut(view) => {
                     node_timeouts[tagged.idx].insert(view);
                 },
-                // Handled before the generation filter above.
-                NodeEvent::Voted1(_) | NodeEvent::Anchor(_) | NodeEvent::EpochLeaf(_) => {},
             }
         }
 
@@ -584,11 +550,8 @@ impl TestRunner {
         )
     }
 
-    /// Verify that no node voted (vote1) in a view at or below a view it had
-    /// already voted in before a restart: every vote1 view of a later
-    /// generation must be strictly greater than all vote1 views of earlier
-    /// generations. Within a generation the in-memory `voted_1_views` set
-    /// already prevents duplicates.
+    /// Every vote1 view of a later generation must be strictly greater than
+    /// all vote1 views of earlier generations.
     fn verify_no_revotes(
         node_vote1_views: &[BTreeMap<u64, BTreeSet<ViewNumber>>],
     ) -> Result<(), TestError> {
@@ -666,9 +629,8 @@ impl TestRunner {
                     }
                 }
                 if decided_count < threshold {
-                    // In the convergence window after a restart-all, views go
-                    // undecided (or were decided by only some nodes before
-                    // they went down). Divergence was still checked above.
+                    // Views in the convergence window after a restart-all
+                    // may go undecided; divergence was still checked above.
                     if undecided_gap_after.is_some_and(|gap| *view > gap) {
                         continue;
                     }

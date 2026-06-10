@@ -1,17 +1,14 @@
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use committable::Committable;
-use hotshot::types::BLSPubKey;
+use hotshot::{HotShotInitializer, types::BLSPubKey};
 use hotshot_example_types::{
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
     storage_types::TestStorage,
 };
 use hotshot_types::{
-    data::{
-        EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        ViewChangeEvidence2, ViewNumber,
-    },
+    data::{EpochNumber, Leaf2, QuorumProposal2, QuorumProposalWrapper, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     light_client::StateKeyPair,
     message::Proposal as SignedProposal,
@@ -27,7 +24,7 @@ use crate::{
     block::{BlockBuilder, BlockBuilderConfig},
     client::CoordinatorClient,
     consensus::{Consensus, PreCutoverSeed},
-    coordinator::{Coordinator, timer::Timer},
+    coordinator::{Coordinator, seed_from_initializer, timer::Timer},
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::test_upgrade_lock,
@@ -41,10 +38,8 @@ use crate::{
 };
 
 /// Chain state for a restarted node, tracked by the test runner from decide
-/// events. Plays the role of production persistence: `leaf`/`cert1` stand in
-/// for `HotShotInitializer::{anchor_leaf, high_qc}` and `epoch_roots` for
-/// the persisted epoch info (`load_start_epoch_info`) — without them, DRBs
-/// for epochs whose roots were decided before the restart are unrecoverable.
+/// events; stands in for production persistence. Without `epoch_leaves`,
+/// pre-restart DRBs are unrecoverable.
 #[derive(Clone)]
 pub struct RestartAnchor {
     pub leaf: Leaf2<TestTypes>,
@@ -152,21 +147,15 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         consensus.apply_pre_cutover_seed(seed);
     }
 
-    // Seed the network's last decided leaf as the consensus anchor,
-    // mirroring how `Coordinator::maker` seeds `initializer.anchor_leaf` /
-    // `initializer.high_qc` from production persistence. The test runner
-    // tracks the anchor from `LeafDecided` events instead.
     if let Some(RestartAnchor {
         leaf: anchor_leaf,
         cert1: anchor_cert,
         epoch_leaves,
     }) = restart_anchor
     {
-        // Replay decided epoch-root and epoch-transition leaves into the
-        // fresh membership, mirroring `EpochManager::handle_leaf_decided`,
-        // so the stake tables and DRBs for epochs established before the
-        // restart are available again (production loads these via
-        // `load_start_epoch_info`).
+        // Replay decided epoch leaves into the fresh membership, mirroring
+        // `EpochManager::handle_leaf_decided`, to restore the stake tables
+        // and DRBs of epochs established before the restart.
         for leaf in &epoch_leaves {
             let block_number = BlockHeader::<TestTypes>::block_number(leaf.block_header());
             let epoch = leaf.epoch(epoch_height).expect("epoch leaf has an epoch");
@@ -183,58 +172,38 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
                 membership.supply_drb(epoch + 1, drb);
             }
         }
-        let anchor_view = anchor_leaf.view_number();
-        let anchor_epoch = anchor_leaf
-            .epoch(epoch_height)
-            .unwrap_or(EpochNumber::genesis());
-        let anchor_proposal = Proposal {
-            block_header: anchor_leaf.block_header().clone(),
-            view_number: anchor_view,
-            epoch: anchor_epoch,
-            justify_qc: anchor_leaf.justify_qc(),
-            next_epoch_justify_qc: None,
-            upgrade_certificate: anchor_leaf.upgrade_certificate(),
-            view_change_evidence: anchor_leaf
-                .view_change_evidence
-                .clone()
-                .and_then(|e| match e {
-                    ViewChangeEvidence2::Timeout(tc) => Some(tc),
-                    ViewChangeEvidence2::ViewSync(_) => None,
-                }),
-            next_drb_result: anchor_leaf.next_drb_result,
-            state_cert: None,
-        };
-        state_manager.seed_state(
-            anchor_view,
-            Arc::new(
+        let initializer = HotShotInitializer::<TestTypes> {
+            instance_state: (*instance).clone(),
+            epoch_height,
+            epoch_start_block: 0,
+            anchor_state: Arc::new(
                 <TestValidatedState as ValidatedState<TestTypes>>::from_header(
                     anchor_leaf.block_header(),
                 ),
             ),
-            anchor_leaf.clone(),
+            anchor_state_delta: None,
+            start_view: storage.restart_view().await,
+            last_actioned_view: storage.last_actioned_view().await,
+            start_epoch: anchor_leaf.epoch(epoch_height),
+            high_qc: anchor_cert,
+            next_epoch_high_qc: None,
+            saved_proposals: Default::default(),
+            decided_upgrade_certificate: None,
+            undecided_leaves: Default::default(),
+            undecided_state: Default::default(),
+            saved_vid_shares: Default::default(),
+            state_cert: storage.state_cert_cloned().await,
+            start_epoch_info: vec![],
+            anchor_leaf,
+        };
+        seed_from_initializer(&mut consensus, &mut state_manager, &initializer);
+    } else {
+        // A fresh storage holds genesis views, making this a no-op.
+        consensus.seed_restart_guard(
+            storage.restart_view().await,
+            storage.last_actioned_view().await,
         );
-        // If the anchor is an epoch-root block, extending it requires the
-        // matching state certificate (epoch-root atomicity invariant); the
-        // node's storage persisted it when the root was decided.
-        if let Some(state_cert) = storage.state_cert_cloned().await {
-            consensus.seed_state_cert(state_cert);
-        }
-        let reconstructed =
-            match BlockHeader::<TestTypes>::payload_commitment(anchor_leaf.block_header()) {
-                VidCommitment::V2(commitment) => Some((anchor_view, commitment)),
-                _ => None,
-            };
-        consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
-        consensus.set_view(anchor_view, anchor_epoch);
     }
-
-    // Resume from the persisted restart view, mirroring production where
-    // `Coordinator::maker` seeds the guard from the `HotShotInitializer`.
-    // A fresh storage holds genesis views, making this a no-op.
-    consensus.seed_restart_guard(
-        storage.restart_view().await,
-        storage.last_actioned_view().await,
-    );
 
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2 {

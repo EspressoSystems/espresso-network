@@ -596,8 +596,7 @@ pub fn mock_membership_with_client(
     )
 }
 
-/// Like [`mock_membership_with_client`] but reusing an existing storage, so a
-/// restarted test node keeps its persisted state (e.g. recorded actions).
+/// Like [`mock_membership_with_client`] but reusing an existing storage.
 pub fn mock_membership_with_client_and_storage(
     num_nodes: usize,
     epoch_height: u64,
