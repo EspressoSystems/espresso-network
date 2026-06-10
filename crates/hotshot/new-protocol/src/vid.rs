@@ -240,6 +240,13 @@ impl<T: NodeType> VidReconstructor<T> {
         self.accumulators = self.accumulators.split_off(&view_number);
     }
 
+    pub fn discard_view(&mut self, view: ViewNumber) {
+        self.accumulators.remove(&view);
+        if let Some(handle) = self.calculations.remove(&view) {
+            handle.abort();
+        }
+    }
+
     /// Mark `view` as already-reconstructed: drop accumulated shares, abort any
     /// in-flight reconstruction task, and ignore later shares for this view.
     pub fn mark_reconstructed(&mut self, view: ViewNumber) {

@@ -831,6 +831,14 @@ where
                     self.epoch_manager.request_drb_result(next_epoch);
                 }
             },
+            ConsensusOutput::ViewTimedOut(view) => {
+                debug!(%node, %view, "view timed out");
+                let epoch = self
+                    .consensus
+                    .current_epoch()
+                    .unwrap_or_else(EpochNumber::genesis);
+                self.gc(epoch, GcScope::Timeout(view))?;
+            },
             ConsensusOutput::BlockPayloadReconstructed { .. } => {},
         }
         Ok(())
@@ -1469,13 +1477,11 @@ where
         self.consensus.gc(scope);
         match scope {
             GcScope::Local(view) => {
+                let vc = VidCommitment2::default();
                 self.block_builder.gc(view);
-                self.cached_validated_proposals = self
-                    .cached_validated_proposals
-                    .split_off(&(view, VidCommitment2::default()));
-                self.cached_vid_shares = self
-                    .cached_vid_shares
-                    .split_off(&(view, VidCommitment2::default()));
+                self.cached_validated_proposals =
+                    self.cached_validated_proposals.split_off(&(view, vc));
+                self.cached_vid_shares = self.cached_vid_shares.split_off(&(view, vc));
                 // When we enter a new view, we do not want to GC enqueued messages
                 // for the previous view yet:
                 self.network.gc(view.saturating_sub(1).into())?;
@@ -1492,9 +1498,15 @@ where
                 self.state_manager.gc(view);
                 self.storage.gc(view);
                 self.vid_reconstructor.gc(view);
-                self.da_payloads = self
-                    .da_payloads
-                    .split_off(&(view, VidCommitment2::default()));
+                let vc = VidCommitment2::default();
+                self.da_payloads = self.da_payloads.split_off(&(view, vc));
+            },
+            GcScope::Timeout(view) => {
+                self.vid_reconstructor.discard_view(view);
+                let vc = VidCommitment2::default();
+                self.da_payloads
+                    .extract_if((view, vc)..(view + 1, vc), |_, _| true)
+                    .for_each(drop);
             },
         }
         Ok(())
@@ -1508,6 +1520,8 @@ pub enum GcScope {
     Local(ViewNumber),
     /// GC is invoked on local decided views.
     Decided(ViewNumber),
+    /// GC is invoked on a view that advanced via timeout certificate.
+    Timeout(ViewNumber),
 }
 
 /// A payload built locally and awaiting DA persistence.
