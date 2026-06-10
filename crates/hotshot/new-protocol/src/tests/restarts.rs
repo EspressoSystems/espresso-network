@@ -252,34 +252,39 @@ async fn restart_f_nodes_with_epochs() {
         .unwrap();
 }
 
-// TODO: Restarted test nodes now keep their action storage (restart view,
-// last actioned view) but still rebuild the chain from genesis because the
-// test runner does not persist chain state (anchor leaf, certificates).
-// Once it does, all nodes can restart simultaneously and resume from their
-// last decided state instead of starting a fresh chain.
-//
-// #[tokio::test(flavor = "multi_thread")]
-// async fn restart_all_nodes_with_epochs() {
-//     TestRunner {
-//         num_nodes: 5,
-//         target_decisions: 30,
-//         max_runtime: Duration::from_secs(300),
-//         epoch_height: 10,
-//         node_changes: vec![(
-//             15,
-//             (0..5)
-//                 .map(|i| NodeChange {
-//                     idx: i,
-//                     action: NodeAction::Restart,
-//                 })
-//                 .collect(),
-//         )],
-//         ..Default::default()
-//     }
-//     .run::<MemoryTestNetwork>()
-//     .await
-//     .unwrap();
-// }
+/// 5 nodes all restart simultaneously at view 15, epoch_height=10.
+///
+/// Every node keeps its action storage, so each resumes past the views it
+/// acted in and the runner verifies nothing is vote1'd twice. The test
+/// runner does not persist chain state (anchor leaf, certificates), so the
+/// network converges via timeouts and then rebuilds a fresh chain — anchored
+/// at genesis via the locked certificate — at the resumed view numbers.
+/// Views decided before the restart stay decided; the runner detects the
+/// restart-all and tolerates the undecided convergence window.
+///
+/// TODO: Once the test runner persists chain state, the restarted nodes
+/// should resume from their last decided state instead of re-anchoring the
+/// chain at genesis.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_all_nodes_with_epochs() {
+    TestRunner::builder()
+        .num_nodes(5)
+        .target_decisions(30)
+        .epoch_height(10)
+        .node_changes(vec![(
+            15,
+            (0..5)
+                .map(|i| NodeChange {
+                    idx: i,
+                    action: NodeAction::Restart,
+                })
+                .collect(),
+        )])
+        .build()
+        .run()
+        .await
+        .unwrap();
+}
 
 // ---------------------------------------------------------------------------
 // Late start (with epochs)

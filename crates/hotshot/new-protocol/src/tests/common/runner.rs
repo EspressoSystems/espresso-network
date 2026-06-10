@@ -357,6 +357,14 @@ impl TestRunner {
             }
         }
 
+        // When a change batch restarts every live node at once, nobody is
+        // left to report decisions: views above the minimum of the restarted
+        // nodes' last reported decided views may have reached only some
+        // nodes, and the network then times out an unpredictable window of
+        // views while it converges. Views past this point are exempt from
+        // the decided-by-quorum check (chain divergence is still verified).
+        let mut undecided_gap_after: Option<u64> = None;
+
         let deadline = Instant::now() + self.max_runtime;
         while node_commits
             .iter()
@@ -375,6 +383,23 @@ impl TestRunner {
                     .collect();
                 for view in views_to_apply {
                     let changes = pending_changes.remove(&view).unwrap();
+                    let restarted: BTreeSet<usize> = changes
+                        .iter()
+                        .filter(|c| matches!(c.action, NodeAction::Restart))
+                        .map(|c| c.idx)
+                        .collect();
+                    let live: BTreeSet<usize> = (0..self.num_nodes)
+                        .filter(|i| !currently_down.contains(i))
+                        .collect();
+                    if !restarted.is_empty() && restarted.is_superset(&live) {
+                        let gap = restarted
+                            .iter()
+                            .map(|i| node_commits[*i].keys().last().map_or(0, |v| **v))
+                            .min()
+                            .unwrap_or(0);
+                        undecided_gap_after = Some(undecided_gap_after.map_or(gap, |g| g.min(gap)));
+                        info!(gap, "restart-all: tolerating undecided views past the gap");
+                    }
                     for change in &changes {
                         info!(
                             node = change.idx,
@@ -427,9 +452,12 @@ impl TestRunner {
                                 let generation = generations[change.idx];
                                 let (cancel_tx, cancel_rx) = oneshot::channel();
                                 cancels.insert(change.idx, cancel_tx);
-                                // Restarted nodes start with a fresh commits
-                                // map (mirroring the wipe at line ~404 below).
-                                let initial_commits = BTreeMap::new();
+                                // Restarted nodes keep their decided views:
+                                // the restart guard (plus quorum
+                                // intersection) guarantees no view can be
+                                // decided again with a different leaf, so
+                                // pre-restart commits stay valid.
+                                let initial_commits = node_commits[change.idx].clone();
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
                                     tx,
@@ -440,7 +468,6 @@ impl TestRunner {
                                     initial_commits,
                                 )));
                                 currently_down.remove(&change.idx);
-                                node_commits[change.idx] = BTreeMap::new();
                             },
                             // NodeAction::Shutdown => {
                             //     if let Some(handle) = node_handles[change.idx].take() {
@@ -502,6 +529,7 @@ impl TestRunner {
             &all_expected_failures,
             self.target_decisions,
             &currently_down,
+            undecided_gap_after,
         )
     }
 
@@ -537,6 +565,7 @@ impl TestRunner {
         expected_failed_views: &BTreeSet<ViewNumber>,
         target_decisions: usize,
         down_nodes: &BTreeSet<usize>,
+        undecided_gap_after: Option<u64>,
     ) -> Result<(), TestError> {
         let num_nodes = node_commits.len();
         let live_nodes = num_nodes - down_nodes.len();
@@ -586,6 +615,12 @@ impl TestRunner {
                     }
                 }
                 if decided_count < threshold {
+                    // In the convergence window after a restart-all, views go
+                    // undecided (or were decided by only some nodes before
+                    // they went down). Divergence was still checked above.
+                    if undecided_gap_after.is_some_and(|gap| *view > gap) {
+                        continue;
+                    }
                     return Err(TestError::NotEnoughDecided {
                         view,
                         decided_count,
