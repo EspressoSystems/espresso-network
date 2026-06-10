@@ -384,6 +384,14 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Seed a persisted light-client state certificate on restart. Proposing
+    /// on an epoch-root parent QC requires the matching state_cert (the
+    /// epoch-root atomicity invariant), so a node restarting with an
+    /// epoch-root anchor cannot extend it without this.
+    pub fn seed_state_cert(&mut self, cert: LightClientStateUpdateCertificateV2<T>) {
+        self.state_certs.insert(cert.epoch, cert);
+    }
+
     /// Restart guard: resume from the persisted restart view and refuse to
     /// vote1/propose in any view this node acted in before the restart, so
     /// that replaying undecided views cannot lead to equivocation.

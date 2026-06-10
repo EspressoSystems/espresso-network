@@ -188,6 +188,11 @@ where
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
         consensus.set_view(anchor_view, anchor_epoch);
         consensus.seed_restart_guard(initializer.start_view, initializer.last_actioned_view);
+        // If the anchor is an epoch-root block, extending it requires the
+        // matching state certificate (epoch-root atomicity invariant).
+        if let Some(state_cert) = initializer.state_cert.clone() {
+            consensus.seed_state_cert(state_cert);
+        }
 
         let lock = upgrade_lock.clone();
         Self::builder()
