@@ -72,6 +72,7 @@ async fn restart_past_anchor_as_leader_does_not_panic() {
         100,
         Duration::from_secs(30),
         None,
+        None,
     )
     .await;
 
@@ -98,6 +99,7 @@ async fn actions_recorded_on_send() {
         client,
         100,
         Duration::from_secs(30),
+        None,
         None,
     )
     .await;
@@ -255,16 +257,12 @@ async fn restart_f_nodes_with_epochs() {
 /// 5 nodes all restart simultaneously at view 15, epoch_height=10.
 ///
 /// Every node keeps its action storage, so each resumes past the views it
-/// acted in and the runner verifies nothing is vote1'd twice. The test
-/// runner does not persist chain state (anchor leaf, certificates), so the
-/// network converges via timeouts and then rebuilds a fresh chain — anchored
-/// at genesis via the locked certificate — at the resumed view numbers.
-/// Views decided before the restart stay decided; the runner detects the
-/// restart-all and tolerates the undecided convergence window.
-///
-/// TODO: Once the test runner persists chain state, the restarted nodes
-/// should resume from their last decided state instead of re-anchoring the
-/// chain at genesis.
+/// acted in and the runner verifies nothing is vote1'd twice. Restarted
+/// nodes are seeded with the network's last decided leaf (tracked by the
+/// runner, standing in for production's persisted anchor), so after
+/// converging via timeouts the network continues the same chain from the
+/// anchor. The undecided convergence window around the restart is detected
+/// and tolerated by the runner.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_all_nodes_with_epochs() {
     TestRunner::builder()

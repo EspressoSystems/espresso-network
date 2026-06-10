@@ -13,9 +13,10 @@ use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 use hotshot_types::{
     PeerConnectInfo,
     addr::NetAddr,
-    data::ViewNumber,
+    data::{Leaf2, ViewNumber},
     message::UpgradeLock,
     traits::{metrics::NoMetrics, signature_key::SignatureKey},
+    utils::{is_epoch_root, is_transition_block},
     vote::HasViewNumber,
     x25519::Keypair,
 };
@@ -34,9 +35,11 @@ use crate::{
     consensus::{ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     helpers::test_upgrade_lock,
+    message::Certificate1,
     network::{Network, cliquenet::Cliquenet},
     tests::common::{
-        coordinator_builder::build_test_coordinator, utils::mock_membership_with_client_and_storage,
+        coordinator_builder::{RestartAnchor, build_test_coordinator},
+        utils::mock_membership_with_client_and_storage,
     },
 };
 
@@ -53,9 +56,10 @@ pub struct NodeChange {
 #[derive(Clone, Debug)]
 pub enum NodeAction {
     /// Restart: shut down the node and create a fresh coordinator. The node
-    /// keeps its storage, so it resumes from its persisted restart view and
-    /// never re-votes a view it acted in before (chain state is not yet
-    /// persisted; the node still rebuilds the chain from genesis).
+    /// keeps its storage (so it resumes from its persisted restart view and
+    /// never re-votes a view it acted in before) and is re-anchored at the
+    /// network's last decided leaf tracked by the runner, standing in for
+    /// production's persisted chain state.
     Restart,
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
@@ -187,6 +191,14 @@ enum NodeEvent {
     Decided(BTreeMap<ViewNumber, [u8; 32]>),
     TimedOut(ViewNumber),
     Voted1(ViewNumber),
+    /// Newest decided leaf and the Certificate1 over it. The runner keeps
+    /// the highest-view one as the restart anchor, playing the role of
+    /// production's persisted anchor leaf + high QC.
+    Anchor(Box<(Leaf2<TestTypes>, Certificate1<TestTypes>)>),
+    /// A decided epoch-root or epoch-transition leaf. The runner keeps
+    /// these to reseed the stake table and DRB pipeline of restarted nodes,
+    /// playing the role of production's persisted epoch info.
+    EpochLeaf(Box<Leaf2<TestTypes>>),
 }
 
 struct TaggedEvent {
@@ -287,6 +299,7 @@ impl TestRunner {
                 self.epoch_height,
                 self.view_timeout,
                 self.pre_cutover_seed.clone(),
+                None,
             )
             .await;
 
@@ -317,6 +330,7 @@ impl TestRunner {
                     external_events_tx,
                     cancel_rx,
                     initial_commits,
+                    self.epoch_height,
                 )))
             });
         }
@@ -340,6 +354,11 @@ impl TestRunner {
         // restarted node never votes again in a view it acted in before.
         let mut node_vote1_views: Vec<BTreeMap<u64, BTreeSet<ViewNumber>>> =
             vec![BTreeMap::new(); self.num_nodes];
+        // Highest decided leaf (and its Certificate1) seen from any node,
+        // plus all decided epoch-root and epoch-transition leaves: together
+        // they anchor restarted nodes like production persistence would.
+        let mut network_anchor: Option<(Leaf2<TestTypes>, Certificate1<TestTypes>)> = None;
+        let mut epoch_leaves: BTreeMap<u64, Leaf2<TestTypes>> = BTreeMap::new();
         let mut max_decided_view: u64 = 0;
 
         // Seeded leaves never fire `LeafDecided`; pre-populate them.
@@ -434,6 +453,21 @@ impl TestRunner {
                                         storages[change.idx].clone(),
                                     )
                                 };
+                                // Restarted nodes are seeded with the
+                                // network's last decided leaf and epoch
+                                // roots, like a production node loading its
+                                // anchor and epoch info from persistence.
+                                // Late-starting nodes model a brand-new node
+                                // and start from genesis.
+                                let anchor = if matches!(change.action, NodeAction::Restart) {
+                                    network_anchor.clone().map(|(leaf, cert1)| RestartAnchor {
+                                        leaf,
+                                        cert1,
+                                        epoch_leaves: epoch_leaves.values().cloned().collect(),
+                                    })
+                                } else {
+                                    None
+                                };
                                 let coord = build_test_coordinator(
                                     change.idx as u64,
                                     net,
@@ -443,6 +477,7 @@ impl TestRunner {
                                     self.epoch_height,
                                     self.view_timeout,
                                     self.pre_cutover_seed.clone(),
+                                    anchor,
                                 )
                                 .await;
                                 // Bump the generation so stale events queued
@@ -466,6 +501,7 @@ impl TestRunner {
                                     external_events_tx,
                                     cancel_rx,
                                     initial_commits,
+                                    self.epoch_height,
                                 )));
                                 currently_down.remove(&change.idx);
                             },
@@ -498,6 +534,21 @@ impl TestRunner {
                     .insert(view);
                 continue;
             }
+            // A decided leaf is final regardless of which generation
+            // reported it; keep the highest-view one as the restart anchor.
+            if let NodeEvent::Anchor(anchor) = tagged.event {
+                if network_anchor
+                    .as_ref()
+                    .is_none_or(|(leaf, _)| leaf.view_number() < anchor.0.view_number())
+                {
+                    network_anchor = Some(*anchor);
+                }
+                continue;
+            }
+            if let NodeEvent::EpochLeaf(leaf) = tagged.event {
+                epoch_leaves.entry(leaf.height()).or_insert(*leaf);
+                continue;
+            }
             if tagged.generation != generations[tagged.idx] {
                 continue;
             }
@@ -518,7 +569,7 @@ impl TestRunner {
                     node_timeouts[tagged.idx].insert(view);
                 },
                 // Handled before the generation filter above.
-                NodeEvent::Voted1(_) => {},
+                NodeEvent::Voted1(_) | NodeEvent::Anchor(_) | NodeEvent::EpochLeaf(_) => {},
             }
         }
 
@@ -672,6 +723,7 @@ async fn create_network(
         .unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_node<N: Network<TestTypes>>(
     mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
     output_tx: UnboundedSender<TaggedEvent>,
@@ -680,6 +732,7 @@ async fn run_node<N: Network<TestTypes>>(
     external_events_tx: Sender<Event<TestTypes>>,
     mut cancel: oneshot::Receiver<oneshot::Sender<()>>,
     initial_commits: BTreeMap<ViewNumber, [u8; 32]>,
+    epoch_height: u64,
 ) {
     let mut commits: BTreeMap<ViewNumber, [u8; 32]> = initial_commits;
     let mut last_view = ViewNumber::genesis();
@@ -708,7 +761,7 @@ async fn run_node<N: Network<TestTypes>>(
         }
 
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let ConsensusOutput::LeafDecided { leaves, .. } = &output {
+            if let ConsensusOutput::LeafDecided { leaves, cert1, .. } = &output {
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
                     let view = leaf.view_number();
@@ -720,6 +773,17 @@ async fn run_node<N: Network<TestTypes>>(
                             height = %leaf.height(),
                             "decided leaf"
                         );
+                    }
+                }
+                // `leaves` is newest first and `cert1` certifies the newest.
+                if let Some(newest) = leaves.first() {
+                    send(NodeEvent::Anchor(Box::new((newest.clone(), cert1.clone()))));
+                }
+                for leaf in leaves {
+                    if is_epoch_root(leaf.height(), epoch_height)
+                        || is_transition_block(leaf.height(), epoch_height)
+                    {
+                        send(NodeEvent::EpochLeaf(Box::new(leaf.clone())));
                     }
                 }
                 send(NodeEvent::Decided(commits.clone()));
