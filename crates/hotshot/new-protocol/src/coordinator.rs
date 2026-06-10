@@ -489,10 +489,14 @@ where
                 Some(item) = self.vid_disperser.next() => match item {
                     Ok(out) => {
                         finish_measurement(next_input);
+                        // Dispersal finished: if none remain in flight, release
+                        // any reconstructions that were deferred during it.
+                        self.sync_reconstruction_gate();
                         return Ok(ConsensusInput::VidDisperseCreated(out.view, out.disperse))
                     }
                     Err(()) => {
                         finish_measurement(next_input);
+                        self.sync_reconstruction_gate();
                         return Err(CoordinatorError::unspecified().context("vid disperse"))
                     }
                 },
@@ -603,6 +607,10 @@ where
                     metadata,
                     payload_commitment,
                 });
+                // Dispersal is now in flight on this (leader) node — defer
+                // reconstruction so it doesn't steal rayon workers from the
+                // cycle-critical dispersal compute.
+                self.sync_reconstruction_gate();
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 debug!(%node, %epoch, "request drb result");
@@ -1013,6 +1021,9 @@ where
                     // `None` when the sender was the leader of view+1 and
                     // skipped its own share (next-leader bandwidth optimization).
                     if let Some(share) = vote1.vid_share {
+                        // Park the recover if a dispersal is in flight on this
+                        // node; otherwise reconstruct immediately.
+                        self.sync_reconstruction_gate();
                         self.vid_reconstructor.handle_vid_share(share, None);
                     }
                     None
@@ -1197,6 +1208,16 @@ where
         }
     }
 
+    /// Keep the reconstruction-deferral flag in sync with dispersal state:
+    /// reconstruct immediately unless this node currently has a dispersal in
+    /// flight (i.e. it's the leader of the current view), in which case hold
+    /// reconstruction so it doesn't share the rayon pool with the cycle-
+    /// critical dispersal. Clearing the flag flushes any deferred views.
+    fn sync_reconstruction_gate(&mut self) {
+        self.vid_reconstructor
+            .set_defer(self.vid_disperser.is_dispersing());
+    }
+
     fn on_proposal_and_vid_share(
         &mut self,
         validated: ValidatedProposal<T>,
@@ -1217,6 +1238,9 @@ where
             .block_header
             .metadata()
             .clone();
+        // Park the recover if a dispersal is in flight on this node; otherwise
+        // reconstruct immediately.
+        self.sync_reconstruction_gate();
         self.vid_reconstructor
             .handle_vid_share(vid_share.clone(), m);
 

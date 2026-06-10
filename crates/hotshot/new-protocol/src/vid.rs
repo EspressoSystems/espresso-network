@@ -74,6 +74,13 @@ impl<T: NodeType> VidDisperser<T> {
         }
     }
 
+    /// True while at least one dispersal computation is still running. The
+    /// reconstructor defers its (rayon-heavy) work while this holds so the
+    /// leader's cycle-critical dispersal gets the full thread pool.
+    pub fn is_dispersing(&self) -> bool {
+        !self.tasks.is_empty()
+    }
+
     async fn handle_vid_disperse_request(
         epoch_membership_coordinator: EpochMembershipCoordinator<T>,
         vid_disperse_request: VidDisperseRequest<T>,
@@ -131,6 +138,13 @@ pub struct VidReconstructor<T: NodeType> {
     calculations: BTreeMap<ViewNumber, AbortHandle>,
     /// Optional leader-event tracer (wired by the bench).
     tracer: Option<crate::leader_trace::LeaderTracerHandle>,
+    /// When set, reached-threshold views are parked in `pending` instead of
+    /// spawning a recover task, so the leader's cycle-critical dispersal isn't
+    /// slowed by reconstruction sharing the rayon pool.
+    defer: bool,
+    /// Views that hit the share threshold while `defer` was set, with the
+    /// payload commitment to reconstruct against. Flushed when `defer` clears.
+    pending: BTreeMap<ViewNumber, VidCommitment2>,
 }
 
 impl<T: NodeType> VidReconstructor<T> {
@@ -141,6 +155,21 @@ impl<T: NodeType> VidReconstructor<T> {
             tasks: JoinSet::new(),
             calculations: BTreeMap::new(),
             tracer: None,
+            defer: false,
+            pending: BTreeMap::new(),
+        }
+    }
+
+    /// Set whether reconstruction is deferred. Transitioning to `false`
+    /// flushes any views that reached threshold while deferred.
+    pub fn set_defer(&mut self, defer: bool) {
+        self.defer = defer;
+        if !defer && !self.pending.is_empty() {
+            for (view, commit) in std::mem::take(&mut self.pending) {
+                // `try_reconstruct` no-ops if the view was gc'd, already
+                // reconstructed, or already has a task in flight.
+                self.try_reconstruct(view, commit);
+            }
         }
     }
 
@@ -183,7 +212,11 @@ impl<T: NodeType> VidReconstructor<T> {
             accumulator.shares.push(share.share);
         }
         if accumulator.has_enough_shares() {
-            self.try_reconstruct(view, payload_commitment);
+            if self.defer {
+                self.pending.insert(view, payload_commitment);
+            } else {
+                self.try_reconstruct(view, payload_commitment);
+            }
         }
     }
 
@@ -271,6 +304,7 @@ impl<T: NodeType> VidReconstructor<T> {
         }
         self.calculations = keep;
         self.accumulators = self.accumulators.split_off(&view_number);
+        self.pending = self.pending.split_off(&view_number);
     }
 
     /// Mark `view` as already-reconstructed: drop accumulated shares, abort any
@@ -278,6 +312,7 @@ impl<T: NodeType> VidReconstructor<T> {
     pub fn mark_reconstructed(&mut self, view: ViewNumber) {
         self.reconstructed.insert(view);
         self.accumulators.remove(&view);
+        self.pending.remove(&view);
         if let Some(handle) = self.calculations.remove(&view) {
             handle.abort();
         }
