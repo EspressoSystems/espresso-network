@@ -1766,7 +1766,16 @@ impl<T: NodeType> Consensus<T> {
 
         let vote = Vote1 {
             vote: inner_vote,
-            vid_share: vid_share.clone(),
+            // Skip carrying our own share when we're the leader of view+1:
+            // we're about to fan out view+1's shares, so omitting this share
+            // halves our outbound bandwidth during the leader-duty window.
+            // The cert1 threshold counts the signature, and the other N-1
+            // replicas still cross-broadcast their shares for reconstruction.
+            vid_share: if self.is_leader(view + 1, epoch) {
+                None
+            } else {
+                Some(vid_share.clone())
+            },
             state_vote,
         };
         outbox.push_back(ConsensusOutput::SendVote1(vote));

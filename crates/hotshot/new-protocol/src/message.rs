@@ -70,7 +70,13 @@ pub type VidShareMessage<T> = SignedProposal<T, VidDisperseShare2<T>>;
 #[serde(bound(deserialize = ""))]
 pub struct Vote1<T: NodeType> {
     pub vote: QuorumVote2<T>,
-    pub vid_share: VidDisperseShare2<T>,
+    /// Per-recipient VID share. `None` is the next-leader bandwidth
+    /// optimization: when the sender is the leader of `view + 1`, it omits its
+    /// own share to avoid contending with its share fan-out during its
+    /// leader-duty window. Cert1 threshold counts the `vote` signature, not the
+    /// share, so this is safety-neutral; reconstruction still has the other
+    /// N-1 shares (N-1 >= recovery_threshold).
+    pub vid_share: Option<VidDisperseShare2<T>>,
     /// Populated only when voting on an epoch-root leaf. Required there; absent otherwise.
     pub state_vote: Option<LightClientStateUpdateVote2<T>>,
 }

@@ -215,7 +215,7 @@ impl TestView {
             sender: self.leader_public_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote1(Vote1 {
                 vote,
-                vid_share,
+                vid_share: Some(vid_share),
                 state_vote,
             })),
         }

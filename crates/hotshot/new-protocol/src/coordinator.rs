@@ -1008,8 +1008,11 @@ where
                             .accumulate_vote(vote1.vote.clone())
                             .await;
                     }
-                    self.vid_reconstructor
-                        .handle_vid_share(vote1.vid_share, None);
+                    // `None` when the sender was the leader of view+1 and
+                    // skipped its own share (next-leader bandwidth optimization).
+                    if let Some(share) = vote1.vid_share {
+                        self.vid_reconstructor.handle_vid_share(share, None);
+                    }
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
