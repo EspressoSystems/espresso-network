@@ -32,6 +32,14 @@ where
         + v1::StatusApi
         + v1::ConfigApi
         + v1::NodeApi
+        + v1::CatchupApi
+        + v1::SubmitApi
+        + v1::StateSignatureApi
+        + v1::HotShotEventsApi
+        + v1::LightClientApi
+        + v1::ExplorerApi
+        + v1::TokenApi
+        + v1::DatabaseApi
         + v2::RewardApi
         + v2::DataApi
         + v2::ConsensusApi

@@ -169,6 +169,108 @@ pub mod v1 {
 
     pub const NODE_OLDEST_BLOCK_ROUTE: &str = "/v1/node/oldest-block";
     pub const NODE_OLDEST_LEAF_ROUTE: &str = "/v1/node/oldest-leaf";
+
+    // Catchup routes (under /v1/catchup)
+    pub const CATCHUP_ACCOUNT_ROUTE: &str = "/v1/catchup/{height}/{view}/account/{address}";
+    pub const CATCHUP_ACCOUNTS_ROUTE: &str = "/v1/catchup/{height}/{view}/accounts";
+    pub const CATCHUP_BLOCKS_ROUTE: &str = "/v1/catchup/{height}/{view}/blocks";
+    pub const CATCHUP_CHAINCONFIG_ROUTE: &str = "/v1/catchup/chain-config/{commitment}";
+    pub const CATCHUP_LEAFCHAIN_ROUTE: &str = "/v1/catchup/{height}/leafchain";
+    pub const CATCHUP_CERT2_ROUTE: &str = "/v1/catchup/{height}/cert2";
+    pub const CATCHUP_REWARD_ACCOUNT_ROUTE: &str =
+        "/v1/catchup/{height}/{view}/reward-account/{address}";
+    pub const CATCHUP_REWARD_ACCOUNTS_ROUTE: &str = "/v1/catchup/{height}/{view}/reward-accounts";
+    pub const CATCHUP_REWARD_ACCOUNT_V2_ROUTE: &str =
+        "/v1/catchup/{height}/{view}/reward-account-v2/{address}";
+    pub const CATCHUP_REWARD_ACCOUNTS_V2_ROUTE: &str =
+        "/v1/catchup/{height}/{view}/reward-accounts-v2";
+    pub const CATCHUP_REWARD_AMOUNTS_ROUTE: &str =
+        "/v1/catchup/{height}/reward-amounts/{limit}/{offset}";
+    pub const CATCHUP_REWARD_MERKLE_TREE_V2_ROUTE: &str =
+        "/v1/catchup/reward-merkle-tree-v2/{height}/{view}";
+    pub const CATCHUP_STATE_CERT_ROUTE: &str = "/v1/catchup/{epoch}/state-cert";
+
+    // Submit
+    pub const SUBMIT_ROUTE: &str = "/v1/submit/submit";
+
+    // State signature
+    pub const STATE_SIGNATURE_BLOCK_ROUTE: &str = "/v1/state-signature/block/{height}";
+
+    // HotShot events
+    pub const HOTSHOT_EVENTS_STREAM_ROUTE: &str = "/v1/hotshot-events/events";
+    pub const HOTSHOT_EVENTS_STARTUP_ROUTE: &str = "/v1/hotshot-events/startup_info";
+
+    // Light client
+    pub const LC_LEAF_BY_HEIGHT_ROUTE: &str = "/v1/light-client/leaf/{height}";
+    pub const LC_LEAF_BY_HEIGHT_FINALIZED_ROUTE: &str =
+        "/v1/light-client/leaf/{height}/{finalized}";
+    pub const LC_LEAF_BY_HASH_ROUTE: &str = "/v1/light-client/leaf/hash/{hash}";
+    pub const LC_LEAF_BY_HASH_FINALIZED_ROUTE: &str =
+        "/v1/light-client/leaf/hash/{hash}/{finalized}";
+    pub const LC_LEAF_BY_BLOCK_HASH_ROUTE: &str = "/v1/light-client/leaf/block-hash/{block_hash}";
+    pub const LC_LEAF_BY_BLOCK_HASH_FINALIZED_ROUTE: &str =
+        "/v1/light-client/leaf/block-hash/{block_hash}/{finalized}";
+    pub const LC_LEAF_BY_PAYLOAD_HASH_ROUTE: &str =
+        "/v1/light-client/leaf/payload-hash/{payload_hash}";
+    pub const LC_LEAF_BY_PAYLOAD_HASH_FINALIZED_ROUTE: &str =
+        "/v1/light-client/leaf/payload-hash/{payload_hash}/{finalized}";
+
+    pub const LC_HEADER_BY_HEIGHT_ROUTE: &str = "/v1/light-client/header/{root}/{height}";
+    pub const LC_HEADER_BY_HASH_ROUTE: &str = "/v1/light-client/header/{root}/hash/{hash}";
+    pub const LC_HEADER_BY_PAYLOAD_HASH_ROUTE: &str =
+        "/v1/light-client/header/{root}/payload-hash/{payload_hash}";
+
+    pub const LC_STAKE_TABLE_ROUTE: &str = "/v1/light-client/stake-table/{epoch}";
+
+    pub const LC_PAYLOAD_ROUTE: &str = "/v1/light-client/payload/{height}";
+    pub const LC_PAYLOAD_RANGE_ROUTE: &str = "/v1/light-client/payload/{start}/{end}";
+
+    pub const LC_NAMESPACE_ROUTE: &str = "/v1/light-client/namespace/{height}/{namespace}";
+    pub const LC_NAMESPACE_RANGE_ROUTE: &str =
+        "/v1/light-client/namespace/{start}/{end}/{namespace}";
+
+    // Explorer
+    pub const EXPLORER_BLOCK_DETAIL_BY_HEIGHT_ROUTE: &str = "/v1/explorer/block/{height}";
+    pub const EXPLORER_BLOCK_DETAIL_BY_HASH_ROUTE: &str = "/v1/explorer/block/hash/{hash}";
+    pub const EXPLORER_BLOCK_SUMMARIES_LATEST_ROUTE: &str = "/v1/explorer/blocks/latest/{limit}";
+    pub const EXPLORER_BLOCK_SUMMARIES_FROM_ROUTE: &str = "/v1/explorer/blocks/{from}/{limit}";
+    pub const EXPLORER_TX_DETAIL_BY_POSITION_ROUTE: &str =
+        "/v1/explorer/transaction/{height}/{offset}";
+    pub const EXPLORER_TX_DETAIL_BY_HASH_ROUTE: &str = "/v1/explorer/transaction/hash/{hash}";
+
+    pub const EXPLORER_TX_SUMMARIES_LATEST_ROUTE: &str = "/v1/explorer/transactions/latest/{limit}";
+    pub const EXPLORER_TX_SUMMARIES_FROM_ROUTE: &str =
+        "/v1/explorer/transactions/from/{height}/{offset}/{limit}";
+    pub const EXPLORER_TX_SUMMARIES_BY_HASH_ROUTE: &str =
+        "/v1/explorer/transactions/hash/{hash}/{limit}";
+
+    pub const EXPLORER_TX_SUMMARIES_LATEST_BLOCK_ROUTE: &str =
+        "/v1/explorer/transactions/latest/{limit}/block/{block}";
+    pub const EXPLORER_TX_SUMMARIES_FROM_BLOCK_ROUTE: &str =
+        "/v1/explorer/transactions/from/{height}/{offset}/{limit}/block/{block}";
+    pub const EXPLORER_TX_SUMMARIES_BY_HASH_BLOCK_ROUTE: &str =
+        "/v1/explorer/transactions/hash/{hash}/{limit}/block/{block}";
+
+    pub const EXPLORER_TX_SUMMARIES_LATEST_NS_ROUTE: &str =
+        "/v1/explorer/transactions/latest/{limit}/namespace/{namespace}";
+    pub const EXPLORER_TX_SUMMARIES_FROM_NS_ROUTE: &str =
+        "/v1/explorer/transactions/from/{height}/{offset}/{limit}/namespace/{namespace}";
+    pub const EXPLORER_TX_SUMMARIES_BY_HASH_NS_ROUTE: &str =
+        "/v1/explorer/transactions/hash/{hash}/{limit}/namespace/{namespace}";
+
+    pub const EXPLORER_SUMMARY_ROUTE: &str = "/v1/explorer/explorer-summary";
+    pub const EXPLORER_SEARCH_ROUTE: &str = "/v1/explorer/search/{query}";
+
+    // Token
+    pub const TOKEN_TOTAL_MINTED_SUPPLY_ROUTE: &str = "/v1/token/total-minted-supply";
+    pub const TOKEN_CIRCULATING_SUPPLY_ROUTE: &str = "/v1/token/circulating-supply";
+    pub const TOKEN_CIRCULATING_SUPPLY_ETHEREUM_ROUTE: &str =
+        "/v1/token/circulating-supply-ethereum";
+    pub const TOKEN_TOTAL_ISSUED_SUPPLY_ROUTE: &str = "/v1/token/total-issued-supply";
+    pub const TOKEN_TOTAL_REWARD_DISTRIBUTED_ROUTE: &str = "/v1/token/total-reward-distributed";
+
+    // Database (diagnostic)
+    pub const DATABASE_TABLE_SIZES_ROUTE: &str = "/v1/database/table-sizes";
 }
 
 pub mod v2 {

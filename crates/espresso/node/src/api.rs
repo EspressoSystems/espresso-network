@@ -7840,7 +7840,11 @@ mod test {
 
             let mut api_opts = Options::with_port(api_port)
                 .catchup(Default::default())
-                .config(Default::default());
+                .config(Default::default())
+                .submit(Default::default())
+                .explorer(Default::default())
+                .light_client(Default::default())
+                .hotshot_events(HotshotEvents);
             api_opts.http.axum_port = Some(axum_port);
 
             let config = TestNetworkConfigBuilder::with_num_nodes()
@@ -8630,6 +8634,161 @@ mod test {
 
                 compare_endpoints(&http, api_port, axum_port, "node/oldest-block").await?;
                 compare_endpoints(&http, api_port, axum_port, "node/oldest-leaf").await?;
+
+                // Catchup parity. View number and height for in-memory state aren't readily
+                // available after stopping consensus, so we compare error semantics on
+                // intentionally invalid lookups and the deprecated routes.
+                let decided_view = decided_leaf.view_number().u64();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("catchup/{height}/{decided_view}/blocks"),
+                )
+                .await?;
+                // chain-config: invalid commitment yields 404 from both servers.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    404,
+                )
+                .await?;
+                // leafchain: undecided height returns 404 from both.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "catchup/999999/leafchain",
+                    404,
+                )
+                .await?;
+                // cert2: missing cert returns 404.
+                compare_error_endpoints(&http, api_port, axum_port, "catchup/999999/cert2", 404)
+                    .await?;
+                // Deprecated catchup routes still respond 404.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "catchup/1/reward-amounts/100/0",
+                    404,
+                )
+                .await?;
+
+                // State signature parity. Heights that have a signature should return matching
+                // JSON; missing heights should 404 from both servers.
+                compare_error_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "state-signature/block/999999",
+                    404,
+                )
+                .await?;
+
+                // Explorer parity.
+                compare_endpoints(&http, api_port, axum_port, "explorer/explorer-summary").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("explorer/block/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("explorer/block/hash/{block_hash}"),
+                )
+                .await?;
+                compare_endpoints(&http, api_port, axum_port, "explorer/blocks/latest/10").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("explorer/blocks/{avail_block}/10"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "explorer/transactions/latest/10",
+                )
+                .await?;
+
+                // Light-client parity. Use the same block we used for availability tests.
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("light-client/leaf/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("light-client/leaf/hash/{leaf_hash}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("light-client/payload/{avail_block}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("light-client/payload/{avail_block}/{}", avail_block + 1),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "light-client/namespace/{avail_block}/{}",
+                        u64::from(avail_ns)
+                    ),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "light-client/namespace/{avail_block}/{}/{}",
+                        avail_block + 1,
+                        u64::from(avail_ns)
+                    ),
+                )
+                .await?;
+
+                // hotshot-events startup info: both must return matching JSON.
+                compare_endpoints(&http, api_port, axum_port, "hotshot-events/startup_info")
+                    .await?;
+
+                // Token parity. Both servers share the same data source, so the cached
+                // L1 supply values must match across calls.
+                compare_endpoints(&http, api_port, axum_port, "token/total-minted-supply").await?;
+                compare_endpoints(&http, api_port, axum_port, "token/circulating-supply").await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    "token/circulating-supply-ethereum",
+                )
+                .await?;
+                compare_endpoints(&http, api_port, axum_port, "token/total-issued-supply").await?;
+                compare_endpoints(&http, api_port, axum_port, "token/total-reward-distributed")
+                    .await?;
 
                 // Error equivalence: both tide-disco and Axum must return the same
                 // HTTP status codes for common failure cases that clients encounter.
