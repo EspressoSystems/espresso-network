@@ -82,6 +82,9 @@ struct NetRow {
 ///   * `vm_size_kb`    — total virtual address space size
 ///   * `rss_anon_kb`   — anonymous portion of RSS (heap + stacks)
 ///   * `rss_file_kb`   — file-backed portion of RSS (mmap, code segments)
+///   * `mem_total_kb`  — total physical RAM (constant per node — included on
+///                      every row so analysis scripts can compute pressure
+///                      ratios without joining an extra capacity file)
 ///   * `mem_avail_kb`  — kernel's estimate of how much RAM is still claimable
 #[derive(Serialize)]
 struct MemRow {
@@ -91,6 +94,7 @@ struct MemRow {
     vm_size_kb: u64,
     rss_anon_kb: u64,
     rss_file_kb: u64,
+    mem_total_kb: u64,
     mem_avail_kb: u64,
 }
 
@@ -231,7 +235,7 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
         // downstream `memory_leak.py` script fits a slope and per-view delta
         // to flag a rising floor.
         if let Some(snap) = read_self_status() {
-            let mem_avail_kb = read_meminfo_available().unwrap_or(0);
+            let (mem_total_kb, mem_avail_kb) = read_meminfo();
             inner.mem_rows.lock().push(MemRow {
                 t_ns,
                 vm_rss_kb: snap.vm_rss_kb,
@@ -239,6 +243,7 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
                 vm_size_kb: snap.vm_size_kb,
                 rss_anon_kb: snap.rss_anon_kb,
                 rss_file_kb: snap.rss_file_kb,
+                mem_total_kb,
                 mem_avail_kb,
             });
         }
@@ -461,18 +466,27 @@ fn read_self_status() -> Option<MemSnapshot> {
     Some(snap)
 }
 
-/// Parse `/proc/meminfo` for `MemAvailable` only — kernel's estimate of how
-/// much RAM can still be claimed without paging out, accounting for slab and
-/// reclaimable cache.  Returns kibibytes.
+/// Parse `/proc/meminfo` for `MemTotal` and `MemAvailable`.  Returns
+/// `(total_kb, available_kb)` — total is the machine's physical RAM (constant
+/// per boot), available is the kernel's estimate of how much can still be
+/// claimed without paging out (accounts for slab + reclaimable cache).
 #[cfg(target_os = "linux")]
-fn read_meminfo_available() -> Option<u64> {
-    let s = std::fs::read_to_string("/proc/meminfo").ok()?;
-    for line in s.lines() {
-        if let Some(rest) = line.strip_prefix("MemAvailable:") {
-            return rest.split_whitespace().next().and_then(|s| s.parse().ok());
+fn read_meminfo() -> (u64, u64) {
+    let mut total = 0u64;
+    let mut avail = 0u64;
+    if let Ok(s) = std::fs::read_to_string("/proc/meminfo") {
+        for line in s.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                total = rest.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                avail = rest.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            }
+            if total != 0 && avail != 0 {
+                break;
+            }
         }
     }
-    None
+    (total, avail)
 }
 
 #[cfg(target_os = "linux")]
