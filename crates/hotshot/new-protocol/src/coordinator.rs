@@ -187,6 +187,7 @@ where
                 });
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
         consensus.set_view(anchor_view, anchor_epoch);
+        consensus.seed_restart_guard(initializer.start_view, initializer.last_actioned_view);
 
         let lock = upgrade_lock.clone();
         Self::builder()
@@ -292,11 +293,19 @@ where
         if let Some(leader) = self.leader(next_view, epoch)
             && leader == self.public_key
         {
-            let parent_proposal = self
-                .consensus
-                .proposal_at(cur_view)
-                .expect("parent proposal must be seeded before start()")
-                .clone();
+            // When resuming past the anchor (restart view > anchor view)
+            // there is no proposal for `cur_view`; skip the block request and
+            // let the view time out so the TC path re-proposes from the
+            // locked certificate.
+            let Some(parent_proposal) = self.consensus.proposal_at(cur_view) else {
+                info!(
+                    node = %self.node_id,
+                    view = %cur_view,
+                    "no parent proposal at start view; awaiting timeout to propose"
+                );
+                return;
+            };
+            let parent_proposal = parent_proposal.clone();
             self.outbox
                 .push_back(ConsensusOutput::RequestBlockAndHeader(
                     BlockAndHeaderRequest {

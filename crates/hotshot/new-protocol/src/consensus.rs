@@ -384,6 +384,29 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Restart guard: resume from the persisted restart view and refuse to
+    /// vote1/propose in any view this node acted in before the restart, so
+    /// that replaying undecided views cannot lead to equivocation.
+    ///
+    /// `start_view` is the first view to enter (the persisted restart view,
+    /// already clamped to the anchor by `load_consensus_state`);
+    /// `last_actioned_view` is the highest view this node voted or proposed
+    /// in. Raising `timeout_view` reuses the existing vote1/propose guards.
+    ///
+    /// Idempotent; max-composes with [`Self::apply_pre_cutover_seed`].
+    pub fn seed_restart_guard(&mut self, start_view: ViewNumber, last_actioned_view: ViewNumber) {
+        // The coordinator enters `current_view + 1` on startup, so to enter
+        // `start_view` set current_view = start_view - 1 (saturating for the
+        // fresh-node case where start_view is genesis).
+        let resume = ViewNumber::new(start_view.saturating_sub(1));
+        if resume > self.current_view {
+            self.current_view = resume;
+        }
+        if last_actioned_view > self.timeout_view {
+            self.timeout_view = last_actioned_view;
+        }
+    }
+
     /// Register `justify_qc` as Cert1 for its parent view (idempotent)
     /// and bump `locked_cert` if newer.
     pub(crate) fn register_legacy_qc(&mut self, justify_qc: &Certificate1<T>) {
@@ -1231,6 +1254,14 @@ impl<T: NodeType> Consensus<T> {
     #[instrument(level = "debug", skip_all)]
     fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
         if self.proposed_views.contains(&view) {
+            return;
+        }
+        // A timed-out view is only ever exited forward (its TC enables
+        // `view + 1`), so proposing in a view we already timed out is never
+        // legitimate. `proposed_views` is in-memory only; after a restart this
+        // guard (seeded from the persisted last actioned view) is what
+        // prevents proposing a different block in a view we already acted in.
+        if view <= self.timeout_view {
             return;
         }
 
