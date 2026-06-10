@@ -39,6 +39,7 @@ pub struct VoteCollector<T: NodeType, V, C> {
     /// The signers and their vote signatures per view.
     signers: BTreeMap<ViewNumber, HashMap<T::SignatureKey, VoteSig<T>>>,
 
+    /// The GC threshold.
     lower_bound: ViewNumber,
 
     membership: EpochMembershipCoordinator<T>,
@@ -163,7 +164,7 @@ where
         self.completed = self.completed.split_off(&view);
         self.pending = self.pending.split_off(&view);
         self.signers = self.signers.split_off(&view);
-        self.lower_bound = view;
+        self.lower_bound = view.saturating_sub(1).into();
     }
 
     fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {
