@@ -33,6 +33,11 @@ struct Inner {
     cpu_rows: Mutex<Vec<CpuRow>>,
     core_rows: Mutex<Vec<CoreRow>>,
     net_rows: Mutex<Vec<NetRow>>,
+    /// Memory snapshots from `/proc/self/status` + `/proc/meminfo`, one row
+    /// per sampler tick.  Designed for **leak detection** over a long bench:
+    /// downstream analysis fits RSS(t) and per-view RSS deltas to flag a
+    /// rising floor (true retention leak) vs. a rising ceiling (burst peaks).
+    mem_rows: Mutex<Vec<MemRow>>,
 }
 
 #[derive(Serialize)]
@@ -66,6 +71,39 @@ struct NetRow {
     tx_bytes: u64,
 }
 
+/// One memory snapshot per sampler tick.  All sizes are kibibytes (matching
+/// the `kB` units in `/proc/self/status`).  Absolute values, not deltas —
+/// memory is a level, not a rate, so leak analysis is cleaner with raw
+/// readings.
+///
+/// Field meanings:
+///   * `vm_rss_kb`     — current resident set size (process pages in RAM)
+///   * `vm_hwm_kb`     — peak RSS ever observed (only decreases on exec)
+///   * `vm_size_kb`    — total virtual address space size
+///   * `rss_anon_kb`   — anonymous portion of RSS (heap + stacks)
+///   * `rss_file_kb`   — file-backed portion of RSS (mmap, code segments)
+///   * `mem_avail_kb`  — kernel's estimate of how much RAM is still claimable
+#[derive(Serialize)]
+struct MemRow {
+    t_ns: i128,
+    vm_rss_kb: u64,
+    vm_hwm_kb: u64,
+    vm_size_kb: u64,
+    rss_anon_kb: u64,
+    rss_file_kb: u64,
+    mem_avail_kb: u64,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct MemSnapshot {
+    vm_rss_kb: u64,
+    vm_hwm_kb: u64,
+    vm_size_kb: u64,
+    rss_anon_kb: u64,
+    rss_file_kb: u64,
+}
+
 impl CpuSampler {
     /// Start sampling. `out_dir` is the directory next to `leader_trace_node*.csv`.
     pub fn start(node_id: u64, out_dir: PathBuf, tick: Duration) -> Self {
@@ -75,6 +113,7 @@ impl CpuSampler {
             cpu_rows: Mutex::new(Vec::with_capacity(4096)),
             core_rows: Mutex::new(Vec::with_capacity(4096)),
             net_rows: Mutex::new(Vec::with_capacity(4096)),
+            mem_rows: Mutex::new(Vec::with_capacity(4096)),
         });
 
         let join = {
@@ -186,6 +225,24 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
             }
         }
 
+        // ---- /proc/self/status + /proc/meminfo (memory snapshot) ----
+        // Absolute snapshot per tick (no deltas).  Cheap: two small text
+        // reads, ~50 µs total on Linux.  Designed for leak detection — the
+        // downstream `memory_leak.py` script fits a slope and per-view delta
+        // to flag a rising floor.
+        if let Some(snap) = read_self_status() {
+            let mem_avail_kb = read_meminfo_available().unwrap_or(0);
+            inner.mem_rows.lock().push(MemRow {
+                t_ns,
+                vm_rss_kb: snap.vm_rss_kb,
+                vm_hwm_kb: snap.vm_hwm_kb,
+                vm_size_kb: snap.vm_size_kb,
+                rss_anon_kb: snap.rss_anon_kb,
+                rss_file_kb: snap.rss_file_kb,
+                mem_avail_kb,
+            });
+        }
+
         // ---- per-interface /proc/net/dev ----
         if let Some(ifaces) = read_proc_net_dev() {
             for (iface, rx, tx) in ifaces {
@@ -245,6 +302,17 @@ fn flush(inner: &Inner) -> std::io::Result<()> {
         let path = inner.out_dir.join(format!("net_node{}.csv", inner.node_id));
         let mut wtr = csv::Writer::from_path(&path)?;
         for r in net_rows {
+            wtr.serialize(r)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+        }
+        wtr.flush()?;
+    }
+
+    let mem_rows = std::mem::take(&mut *inner.mem_rows.lock());
+    if !mem_rows.is_empty() {
+        let path = inner.out_dir.join(format!("mem_node{}.csv", inner.node_id));
+        let mut wtr = csv::Writer::from_path(&path)?;
+        for r in mem_rows {
             wtr.serialize(r)
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
         }
@@ -361,6 +429,50 @@ fn read_proc_net_dev() -> Option<Vec<(String, u64, u64)>> {
         out.push((iface.to_string(), nums[0], nums[8]));
     }
     Some(out)
+}
+
+/// Parse `/proc/self/status` for the six VmRSS/HWM/Size/RssAnon/RssFile
+/// fields.  Format is `Key:\t<value> kB` (kibibytes); we drop the unit since
+/// the schema names already include `_kb`.  Missing fields default to 0 —
+/// kernels without `RssAnon`/`RssFile` (pre-4.5) just report zeros there.
+#[cfg(target_os = "linux")]
+fn read_self_status() -> Option<MemSnapshot> {
+    let s = std::fs::read_to_string("/proc/self/status").ok()?;
+    let mut snap = MemSnapshot::default();
+    for line in s.lines() {
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        // `rest` looks like "  12345 kB" — first whitespace-separated token
+        // is the value, second is the "kB" unit which we ignore.
+        let val: u64 = match rest.split_whitespace().next().and_then(|s| s.parse().ok()) {
+            Some(v) => v,
+            None => continue,
+        };
+        match key {
+            "VmRSS" => snap.vm_rss_kb = val,
+            "VmHWM" => snap.vm_hwm_kb = val,
+            "VmSize" => snap.vm_size_kb = val,
+            "RssAnon" => snap.rss_anon_kb = val,
+            "RssFile" => snap.rss_file_kb = val,
+            _ => {},
+        }
+    }
+    Some(snap)
+}
+
+/// Parse `/proc/meminfo` for `MemAvailable` only — kernel's estimate of how
+/// much RAM can still be claimed without paging out, accounting for slab and
+/// reclaimable cache.  Returns kibibytes.
+#[cfg(target_os = "linux")]
+fn read_meminfo_available() -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in s.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            return rest.split_whitespace().next().and_then(|s| s.parse().ok());
+        }
+    }
+    None
 }
 
 #[cfg(target_os = "linux")]
