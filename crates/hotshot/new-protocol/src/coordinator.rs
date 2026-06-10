@@ -795,7 +795,8 @@ where
                     view,
                     crate::leader_trace::LeaderEvent::Vote1BroadcastStart
                 );
-                let r = self.network
+                let r = self
+                    .network
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"));
                 crate::trace_leader_event!(

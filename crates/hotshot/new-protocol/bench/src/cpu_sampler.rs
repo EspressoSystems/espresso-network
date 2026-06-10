@@ -477,9 +477,17 @@ fn read_meminfo() -> (u64, u64) {
     if let Ok(s) = std::fs::read_to_string("/proc/meminfo") {
         for line in s.lines() {
             if let Some(rest) = line.strip_prefix("MemTotal:") {
-                total = rest.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                total = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
             } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
-                avail = rest.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                avail = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
             }
             if total != 0 && avail != 0 {
                 break;
