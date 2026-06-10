@@ -36,7 +36,7 @@ use crate::{
     helpers::test_upgrade_lock,
     network::{Network, cliquenet::Cliquenet},
     tests::common::{
-        coordinator_builder::build_test_coordinator, utils::mock_membership_with_client,
+        coordinator_builder::build_test_coordinator, utils::mock_membership_with_client_and_storage,
     },
 };
 
@@ -52,8 +52,10 @@ pub struct NodeChange {
 /// Actions that can be applied to a node during a test.
 #[derive(Clone, Debug)]
 pub enum NodeAction {
-    /// Restart: shut down the node and create a fresh coordinator from
-    /// genesis (blank state).
+    /// Restart: shut down the node and create a fresh coordinator. The node
+    /// keeps its storage, so it resumes from its persisted restart view and
+    /// never re-votes a view it acted in before (chain state is not yet
+    /// persisted; the node still rebuilds the chain from genesis).
     Restart,
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
@@ -130,6 +132,10 @@ pub enum TestError {
         timeout_count: usize,
         threshold: usize,
     },
+    RevotedView {
+        node: usize,
+        view: ViewNumber,
+    },
 }
 
 impl fmt::Display for TestError {
@@ -167,6 +173,12 @@ impl fmt::Display for TestError {
                      threshold={threshold}"
                 )
             },
+            Self::RevotedView { node, view } => {
+                write!(
+                    f,
+                    "node {node} sent vote1 for view {view} again after a restart"
+                )
+            },
         }
     }
 }
@@ -174,6 +186,7 @@ impl fmt::Display for TestError {
 enum NodeEvent {
     Decided(BTreeMap<ViewNumber, [u8; 32]>),
     TimedOut(ViewNumber),
+    Voted1(ViewNumber),
 }
 
 struct TaggedEvent {
@@ -246,13 +259,24 @@ impl TestRunner {
             })
             .collect::<Vec<_>>();
 
+        // Per-node storage, kept across restarts so a restarted node sees
+        // its previously recorded actions (like production persistence).
+        let storages: Vec<TestStorage<TestTypes>> = (0..self.num_nodes)
+            .map(|_| TestStorage::default())
+            .collect();
+
         // Spawn one coordinator task per live node.  Each node gets its
         // own membership instance so they don't share internal state.
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
             let (membership, storage, client, external_events_tx) =
-                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key);
+                mock_membership_with_client_and_storage(
+                    self.num_nodes,
+                    self.epoch_height,
+                    *public_key,
+                    storages[i].clone(),
+                );
 
             let coord = build_test_coordinator(
                 i as u64,
@@ -312,6 +336,10 @@ impl TestRunner {
         let mut node_commits: Vec<BTreeMap<ViewNumber, [u8; 32]>> =
             vec![BTreeMap::new(); self.num_nodes];
         let mut node_timeouts: Vec<BTreeSet<ViewNumber>> = vec![BTreeSet::new(); self.num_nodes];
+        // Vote1 views per node, keyed by generation. Used to verify that a
+        // restarted node never votes again in a view it acted in before.
+        let mut node_vote1_views: Vec<BTreeMap<u64, BTreeSet<ViewNumber>>> =
+            vec![BTreeMap::new(); self.num_nodes];
         let mut max_decided_view: u64 = 0;
 
         // Seeded leaves never fire `LeafDecided`; pre-populate them.
@@ -367,15 +395,18 @@ impl TestRunner {
                                     handle.abort();
                                     let _ = handle.await;
                                 }
-                                // Create a fresh coordinator from genesis.
+                                // Create a fresh coordinator reusing the
+                                // node's storage so it resumes from its
+                                // persisted restart view.
                                 let net =
                                     create_network(change.idx, &parties, &self.upgrade_lock).await;
                                 let (membership, storage, client, external_events_tx) = {
                                     let k = parties[change.idx].1;
-                                    mock_membership_with_client(
+                                    mock_membership_with_client_and_storage(
                                         self.num_nodes,
                                         self.epoch_height,
                                         k,
+                                        storages[change.idx].clone(),
                                     )
                                 };
                                 let coord = build_test_coordinator(
@@ -430,6 +461,16 @@ impl TestRunner {
             let Ok(Some(tagged)) = timeout(remaining, event_rx.recv()).await else {
                 return Err(TestError::Timeout);
             };
+            // Track vote1 views before the generation filter: votes sent by
+            // an earlier generation are real network messages and must count
+            // when checking for re-votes after a restart.
+            if let NodeEvent::Voted1(view) = tagged.event {
+                node_vote1_views[tagged.idx]
+                    .entry(tagged.generation)
+                    .or_default()
+                    .insert(view);
+                continue;
+            }
             if tagged.generation != generations[tagged.idx] {
                 continue;
             }
@@ -449,9 +490,12 @@ impl TestRunner {
                 NodeEvent::TimedOut(view) => {
                     node_timeouts[tagged.idx].insert(view);
                 },
+                // Handled before the generation filter above.
+                NodeEvent::Voted1(_) => {},
             }
         }
 
+        Self::verify_no_revotes(&node_vote1_views)?;
         Self::verify_correctness(
             &node_commits,
             &node_timeouts,
@@ -459,6 +503,28 @@ impl TestRunner {
             self.target_decisions,
             &currently_down,
         )
+    }
+
+    /// Verify that no node voted (vote1) in a view at or below a view it had
+    /// already voted in before a restart: every vote1 view of a later
+    /// generation must be strictly greater than all vote1 views of earlier
+    /// generations. Within a generation the in-memory `voted_1_views` set
+    /// already prevents duplicates.
+    fn verify_no_revotes(
+        node_vote1_views: &[BTreeMap<u64, BTreeSet<ViewNumber>>],
+    ) -> Result<(), TestError> {
+        for (node, generations) in node_vote1_views.iter().enumerate() {
+            let mut prev_max: Option<ViewNumber> = None;
+            for views in generations.values() {
+                if let (Some(prev_max), Some(min)) = (prev_max, views.first())
+                    && *min <= prev_max
+                {
+                    return Err(TestError::RevotedView { node, view: *min });
+                }
+                prev_max = prev_max.max(views.last().copied());
+            }
+        }
+        Ok(())
     }
 
     /// Verify that the collected per-node commits and timeouts are consistent:
@@ -626,6 +692,8 @@ async fn run_node<N: Network<TestTypes>>(
                 let view = vote.view_number();
                 debug!(node = %coord.node_id(), %view, "timeout vote");
                 send(NodeEvent::TimedOut(view));
+            } else if let ConsensusOutput::SendVote1(vote1) = &output {
+                send(NodeEvent::Voted1(vote1.vote.view_number()));
             } else if let ConsensusOutput::ViewChanged(view, epoch) = &output
                 && *view > last_view
             {

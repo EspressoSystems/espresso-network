@@ -128,6 +128,14 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         consensus.apply_pre_cutover_seed(seed);
     }
 
+    // Resume from the persisted restart view, mirroring production where
+    // `Coordinator::maker` seeds the guard from the `HotShotInitializer`.
+    // A fresh storage holds genesis views, making this a no-op.
+    consensus.seed_restart_guard(
+        storage.restart_view().await,
+        storage.last_actioned_view().await,
+    );
+
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2 {
             block_header: genesis_leaf.block_header().clone(),

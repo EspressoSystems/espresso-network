@@ -742,6 +742,11 @@ impl<T: NodeType> Consensus<T> {
     /// formed for the first but a later overwrite landed in the proposals
     /// map).  No production code should ever do this.
     #[cfg(test)]
+    pub(crate) fn timeout_view(&self) -> ViewNumber {
+        self.timeout_view
+    }
+
+    #[cfg(test)]
     pub(crate) fn force_set_proposal(&mut self, view: ViewNumber, proposal: Proposal<T>) {
         self.proposals.insert(view, proposal);
     }

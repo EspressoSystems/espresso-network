@@ -588,6 +588,27 @@ pub fn mock_membership_with_client(
     CoordinatorClient<TestTypes>,
     async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
 ) {
+    mock_membership_with_client_and_storage(
+        num_nodes,
+        epoch_height,
+        public_key,
+        TestStorage::default(),
+    )
+}
+
+/// Like [`mock_membership_with_client`] but reusing an existing storage, so a
+/// restarted test node keeps its persisted state (e.g. recorded actions).
+pub fn mock_membership_with_client_and_storage(
+    num_nodes: usize,
+    epoch_height: u64,
+    public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
+) -> (
+    EpochMembershipCoordinator<TestTypes>,
+    TestStorage<TestTypes>,
+    CoordinatorClient<TestTypes>,
+    async_broadcast::Sender<hotshot_types::event::Event<TestTypes>>,
+) {
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
     let (coord, storage, external_events_tx) = mock_membership_with_leaf_fetcher_network(
@@ -595,6 +616,7 @@ pub fn mock_membership_with_client(
         epoch_height,
         leaf_fetcher_network,
         public_key,
+        storage,
     );
     (coord, storage, client, external_events_tx)
 }
@@ -606,6 +628,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
         dyn hotshot_types::traits::leaf_fetcher_network::LeafFetcherNetwork<TestTypes>,
     >,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -617,7 +640,6 @@ pub fn mock_membership_with_leaf_fetcher_network(
         &TestNodeStakes::default(),
     )
     .0;
-    let storage = TestStorage::<TestTypes>::default();
     let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
         members.clone(),
         members.clone(),

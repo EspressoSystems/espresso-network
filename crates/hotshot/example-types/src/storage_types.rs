@@ -275,7 +275,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
                 inner.epoch = epoch;
             }
         }
-        if matches!(action, HotShotAction::Vote) {
+        if matches!(action, HotShotAction::Vote) && view + 1 > inner.restart_view {
             inner.restart_view = view + 1;
         }
         Self::run_delay_settings_from_config(&self.delay_config).await;
