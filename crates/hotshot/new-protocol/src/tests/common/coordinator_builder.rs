@@ -137,10 +137,14 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_parent(
+    // A fresh storage holds genesis views, making the restart guard a no-op.
+    consensus.seed(
         genesis_cert1.clone(),
         genesis_proposal.clone(),
         std::iter::empty(),
+        storage.restart_view().await,
+        storage.last_actioned_view().await,
+        None,
     );
 
     if let Some(seed) = pre_cutover_seed {
@@ -197,12 +201,6 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
             anchor_leaf,
         };
         seed_from_initializer(&mut consensus, &mut state_manager, &initializer);
-    } else {
-        // A fresh storage holds genesis views, making this a no-op.
-        consensus.seed_restart_guard(
-            storage.restart_view().await,
-            storage.last_actioned_view().await,
-        );
     }
 
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {

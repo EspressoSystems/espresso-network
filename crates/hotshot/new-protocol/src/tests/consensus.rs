@@ -869,9 +869,7 @@ async fn test_restart_guard_blocks_vote1() {
 
     // Voted through view 2 before the restart; start_view stays at genesis
     // so the replayed views are still processed.
-    harness
-        .consensus
-        .seed_restart_guard(ViewNumber::genesis(), ViewNumber::new(2));
+    harness.seed_restart_guard(ViewNumber::genesis(), ViewNumber::new(2));
 
     harness
         .apply(test_data.views[0].proposal_input_consensus(&node_key))
@@ -909,9 +907,7 @@ async fn test_restart_guard_blocks_propose() {
     let leader_index = node_index_for_key(&leader_for_view_2);
     let mut harness = ConsensusHarness::new(leader_index).await;
 
-    harness
-        .consensus
-        .seed_restart_guard(ViewNumber::genesis(), ViewNumber::new(2));
+    harness.seed_restart_guard(ViewNumber::genesis(), ViewNumber::new(2));
 
     harness
         .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
@@ -931,21 +927,15 @@ async fn test_restart_guard_blocks_propose() {
 async fn test_restart_guard_view_math_and_cutover_composition() {
     let mut harness = ConsensusHarness::new(0).await;
 
-    harness
-        .consensus
-        .seed_restart_guard(ViewNumber::genesis(), ViewNumber::genesis());
+    harness.seed_restart_guard(ViewNumber::genesis(), ViewNumber::genesis());
     assert_eq!(harness.consensus.current_view(), ViewNumber::genesis());
     assert_eq!(harness.consensus.timeout_view(), ViewNumber::genesis());
 
-    harness
-        .consensus
-        .seed_restart_guard(ViewNumber::new(4), ViewNumber::new(3));
+    harness.seed_restart_guard(ViewNumber::new(4), ViewNumber::new(3));
     assert_eq!(harness.consensus.current_view(), ViewNumber::new(3));
     assert_eq!(harness.consensus.timeout_view(), ViewNumber::new(3));
 
-    harness
-        .consensus
-        .seed_restart_guard(ViewNumber::new(2), ViewNumber::new(1));
+    harness.seed_restart_guard(ViewNumber::new(2), ViewNumber::new(1));
     assert_eq!(harness.consensus.current_view(), ViewNumber::new(3));
     assert_eq!(harness.consensus.timeout_view(), ViewNumber::new(3));
 
@@ -958,13 +948,11 @@ async fn test_restart_guard_view_math_and_cutover_composition() {
     };
     let mut a = ConsensusHarness::new(0).await;
     let anchor = a.consensus.last_decided_leaf().clone();
-    a.consensus
-        .seed_restart_guard(ViewNumber::new(4), ViewNumber::new(3));
+    a.seed_restart_guard(ViewNumber::new(4), ViewNumber::new(3));
     a.consensus.apply_pre_cutover_seed(seed(anchor.clone()));
     let mut b = ConsensusHarness::new(0).await;
     b.consensus.apply_pre_cutover_seed(seed(anchor));
-    b.consensus
-        .seed_restart_guard(ViewNumber::new(4), ViewNumber::new(3));
+    b.seed_restart_guard(ViewNumber::new(4), ViewNumber::new(3));
     assert_eq!(a.consensus.current_view(), ViewNumber::new(5));
     assert_eq!(a.consensus.timeout_view(), ViewNumber::new(5));
     assert_eq!(b.consensus.current_view(), a.consensus.current_view());

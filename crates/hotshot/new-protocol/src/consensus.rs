@@ -278,31 +278,40 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Seed a parent certificate and proposal so the leader of the *next* view
-    /// can propose without any external bootstrap injection.
-    /// Sets the locked certificate and current epoch. After calling this, a
-    /// subsequent `apply` that triggers `maybe_propose` will find the
-    /// parent cert and proposal it needs.
-    ///
-    /// `reconstructed` are `(view, V2 commitment)` pairs to record as
-    /// already reconstructed blocks. During normal operation this set is
-    /// populated as VID shares arrive; on restart it starts empty, but the
-    /// persisted leaf and proposals correspond to blocks this node had already
-    /// reconstructed in the previous process. Seeding them lets a restarted
-    /// leader satisfy the `parent_block_reconstructed` check for its first
-    /// proposal/vote instead of stalling.
-    pub fn seed_parent(
+    /// Seed persisted chain state on startup so consensus can resume without
+    /// external bootstrap: `cert1`/`proposal` become the parent to extend,
+    /// `reconstructed` marks blocks this node had already reconstructed
+    /// before it went down, the restart guard refuses to vote1/propose in
+    /// views at or below `last_actioned_view` (so replaying undecided views
+    /// cannot lead to equivocation), and `state_cert` is required to extend
+    /// an epoch-root anchor. Idempotent; max-composes with
+    /// [`Self::apply_pre_cutover_seed`].
+    pub fn seed(
         &mut self,
         cert1: Certificate1<T>,
         proposal: Proposal<T>,
         reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
+        start_view: ViewNumber,
+        last_actioned_view: ViewNumber,
+        state_cert: Option<LightClientStateUpdateCertificateV2<T>>,
     ) {
         self.current_epoch = Some(proposal.epoch);
+        self.current_view = max(
+            self.current_view,
+            max(
+                proposal.view_number,
+                ViewNumber::new(start_view.saturating_sub(1)),
+            ),
+        );
+        self.timeout_view = max(self.timeout_view, last_actioned_view);
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
         self.proposals.insert(proposal.view_number, proposal);
         for (view, commitment) in reconstructed {
             self.blocks_reconstructed.insert((view, commitment));
+        }
+        if let Some(cert) = state_cert {
+            self.state_certs.insert(cert.epoch, cert);
         }
     }
 
@@ -382,26 +391,6 @@ impl<T: NodeType> Consensus<T> {
         if self.current_epoch.is_none_or(|cur| cur < seeded_epoch) {
             self.current_epoch = Some(seeded_epoch);
         }
-    }
-
-    /// Seed a persisted state certificate on restart: extending an
-    /// epoch-root anchor requires it (epoch-root atomicity invariant).
-    pub fn seed_state_cert(&mut self, cert: LightClientStateUpdateCertificateV2<T>) {
-        self.state_certs.insert(cert.epoch, cert);
-    }
-
-    /// Restart guard: enter `start_view` on startup and refuse to
-    /// vote1/propose in views at or below `last_actioned_view` (raising
-    /// `timeout_view` reuses the existing guards), so that replaying
-    /// undecided views cannot lead to equivocation. Idempotent;
-    /// max-composes with [`Self::apply_pre_cutover_seed`].
-    pub fn seed_restart_guard(&mut self, start_view: ViewNumber, last_actioned_view: ViewNumber) {
-        // The coordinator enters `current_view + 1` on startup.
-        self.current_view = max(
-            self.current_view,
-            ViewNumber::new(start_view.saturating_sub(1)),
-        );
-        self.timeout_view = max(self.timeout_view, last_actioned_view);
     }
 
     /// Register `justify_qc` as Cert1 for its parent view (idempotent)
@@ -1258,9 +1247,6 @@ impl<T: NodeType> Consensus<T> {
         if self.proposed_views.contains(&view) {
             return;
         }
-        // A timed-out view is only ever exited forward, and after a restart
-        // (where `proposed_views` is empty) this guard is what prevents
-        // proposing a different block in a view we already acted in.
         if view <= self.timeout_view {
             return;
         }

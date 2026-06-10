@@ -1517,16 +1517,14 @@ pub(crate) fn seed_from_initializer<T: NodeType>(
             VidCommitment::V2(commitment) => Some((view, commitment)),
             _ => None,
         });
-    consensus.seed_parent(
+    consensus.seed(
         initializer.high_qc.clone(),
         parent_proposal,
         reconstructed_blocks,
+        initializer.start_view,
+        initializer.last_actioned_view,
+        initializer.state_cert.clone(),
     );
-    consensus.set_view(anchor_view, anchor_epoch);
-    consensus.seed_restart_guard(initializer.start_view, initializer.last_actioned_view);
-    if let Some(state_cert) = initializer.state_cert.clone() {
-        consensus.seed_state_cert(state_cert);
-    }
 }
 
 /// Garbage collection scope.

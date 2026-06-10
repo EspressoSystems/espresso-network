@@ -275,7 +275,14 @@ async fn build_cutover_coordinator(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
+    consensus.seed(
+        genesis_cert1,
+        genesis_proposal,
+        std::iter::empty(),
+        ViewNumber::genesis(),
+        ViewNumber::genesis(),
+        None,
+    );
 
     let block_builder = BlockBuilder::new(
         instance.clone(),

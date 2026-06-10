@@ -59,6 +59,7 @@ use crate::{
     },
     outbox::Outbox,
     state::StateResponse,
+    tests::common::coordinator_builder::{build_genesis_cert1, build_genesis_proposal},
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -868,6 +869,8 @@ pub(crate) struct ConsensusHarness {
     pub consensus: Consensus<TestTypes>,
     pub membership_coordinator: EpochMembershipCoordinator<TestTypes>,
     pub collected: Outbox<ConsensusOutput<TestTypes>>,
+    genesis_cert1: Certificate1<TestTypes>,
+    genesis_proposal: Proposal<TestTypes>,
 }
 
 impl ConsensusHarness {
@@ -889,6 +892,8 @@ impl ConsensusHarness {
             TEST_VERSIONS.test.base,
         )
         .await;
+        let genesis_cert1 = build_genesis_cert1(&genesis_leaf);
+        let genesis_proposal = build_genesis_proposal(&genesis_leaf, &genesis_cert1);
         let consensus = Consensus::new(
             membership.clone(),
             public_key,
@@ -903,7 +908,21 @@ impl ConsensusHarness {
             consensus,
             membership_coordinator: membership,
             collected: Outbox::new(),
+            genesis_cert1,
+            genesis_proposal,
         }
+    }
+
+    /// Seed the genesis parent along with the given restart-guard views.
+    pub fn seed_restart_guard(&mut self, start_view: ViewNumber, last_actioned_view: ViewNumber) {
+        self.consensus.seed(
+            self.genesis_cert1.clone(),
+            self.genesis_proposal.clone(),
+            std::iter::empty(),
+            start_view,
+            last_actioned_view,
+            None,
+        );
     }
 
     /// Apply a [`ConsensusInput`] and drain outputs, auto-responding to
