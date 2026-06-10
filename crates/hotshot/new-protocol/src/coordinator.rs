@@ -725,7 +725,9 @@ where
                         trace_view,
                         crate::leader_trace::LeaderEvent::VidSharesUnicastStart
                     );
-                    for share in vid_shares {
+
+                    use p3_maybe_rayon::prelude::*;
+                    vid_shares.into_par_iter().for_each(|share| {
                         let recipient = share.data.recipient_key.clone();
                         let view = share.data.view_number();
                         let message = Message {
@@ -740,7 +742,7 @@ where
                             // is not actionable here.
                             warn!(%err, "network error while sending vid share");
                         }
-                    }
+                    });
                     crate::trace_leader_event!(
                         tracer,
                         trace_view,

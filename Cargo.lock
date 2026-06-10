@@ -6408,6 +6408,7 @@ dependencies = [
  "hotshot-testing",
  "hotshot-types",
  "hotshot-utils",
+ "p3-maybe-rayon",
  "parking_lot",
  "rand 0.8.6",
  "serde",

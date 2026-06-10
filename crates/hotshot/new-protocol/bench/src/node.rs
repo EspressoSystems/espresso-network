@@ -44,8 +44,11 @@ use crate::{
 // `TestStorage` accumulates every dispersed payload + decided proposal in an
 // in-memory map; for a 150-view 50MB bench that means +6 GB/min RSS growth
 // and OOM in ~2 min on a 16 GB node.  See `memory_leak.py` analysis.
-type BenchCoordinator =
-    Coordinator<TestTypes, Cliquenet<TestTypes>, hotshot_new_protocol::storage::NullStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<
+    TestTypes,
+    Cliquenet<TestTypes>,
+    hotshot_new_protocol::storage::NullStorage<TestTypes>,
+>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {

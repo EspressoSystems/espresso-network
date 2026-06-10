@@ -311,7 +311,9 @@ impl<T: NodeType> StorageTrait<T> for NullStorage<T> {
         Ok(())
     }
     async fn load_drb_input(&self, _epoch: u64) -> anyhow::Result<DrbInput> {
-        Err(anyhow!("NullStorage discards data — load_drb_input is not supported"))
+        Err(anyhow!(
+            "NullStorage discards data — load_drb_input is not supported"
+        ))
     }
 }
 
