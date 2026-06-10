@@ -461,7 +461,7 @@ where
                             warn!(view = %block.view, "block payload commitment is not V2");
                         }
                         // We built this block; skip reconstructing it from our own loopback share.
-                        self.vid_reconstructor.mark_reconstructed(block.view);
+                        self.vid_reconstructor.retire_view(block.view);
                         self.unicast_to_leader(
                             next_view,
                             epoch,
@@ -1502,7 +1502,7 @@ where
                 self.da_payloads = self.da_payloads.split_off(&(view, vc));
             },
             GcScope::Timeout(view) => {
-                self.vid_reconstructor.discard_view(view);
+                self.vid_reconstructor.retire_view(view);
                 let vc = VidCommitment2::default();
                 self.da_payloads
                     .extract_if((view, vc)..(view + 1, vc), |_, _| true)
