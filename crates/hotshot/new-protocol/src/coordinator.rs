@@ -1552,13 +1552,16 @@ where
         match scope {
             GcScope::Local(view) => {
                 self.block_builder.gc(view);
-                self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(
+                self.cached_validated_proposals = self
+                    .cached_validated_proposals
+                    .split_off(&(view, VidCommitment2::default()));
+                // Keep unpaired shares for a horizon of views below the current one: a
+                // view that later decides without its share is back-filled from this
+                // cache.
+                self.cached_vid_shares = self.cached_vid_shares.split_off(&(
                     ViewNumber::new(view.saturating_sub(LATE_VID_SHARE_HORIZON)),
                     VidCommitment2::default(),
                 ));
-                self.cached_vid_shares = self
-                    .cached_vid_shares
-                    .split_off(&(view, VidCommitment2::default()));
                 // When we enter a new view, we do not want to GC enqueued messages
                 // for the previous view yet:
                 self.network.gc(view.saturating_sub(1).into())?;

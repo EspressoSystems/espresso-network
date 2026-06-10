@@ -107,6 +107,33 @@ async fn test_cached_vid_share_swept_at_decide() {
     assert_share_delivered(&harness, view, &our_key);
 }
 
+/// An unpaired share cached before its view's decide survives the local GC run
+/// by the view change that precedes the decide (`ViewChanged(V+1)` always
+/// arrives before `LeafDecided(V)`), so the decide sweep can still deliver it.
+#[tokio::test]
+async fn test_cached_vid_share_survives_view_change_gc() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (our_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let mut harness = TestHarness::new(0).await;
+
+    // The share arrived (and was validated) before the decide, but its
+    // proposal never did, so it sat unpaired in the cache.
+    harness.cache_vid_share(view.vid_share_for(&our_key));
+
+    // The view change to V+1 garbage-collects local state before view V's
+    // decide is processed; the cached share must survive it.
+    harness.process_output(ConsensusOutput::ViewChanged(
+        view.view_number + 1,
+        view.epoch_number,
+    ));
+
+    // Deciding view 1 without a VID share still delivers the cached one.
+    harness.process_output(decide_without_share(&test_data, 0));
+
+    assert_share_delivered(&harness, view, &our_key);
+}
+
 /// A share addressed to a different node is rejected even though it carries a
 /// valid leader envelope (the leader signs the payload commitment, not the
 /// recipient): externally only this node's own share matters. The view keeps
