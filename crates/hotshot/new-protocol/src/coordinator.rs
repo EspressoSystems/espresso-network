@@ -109,9 +109,11 @@ pub struct Coordinator<T: NodeType, N, S> {
 }
 
 /// Views below the newest decided view for which a late VID share (arriving after its view was
-/// decided without one) is still accepted. Beyond it, the query service's peer fetching covers
-/// the gap.
-pub const LATE_VID_SHARE_HORIZON: u64 = 100;
+/// decided without one) is still accepted. A node's own share has no other recovery path (the
+/// query service's peer fetching only heals the VID common), so this matches the espresso
+/// payload-retention window (~3 hours at 2s views): a stall shorter than that never leaves a
+/// permanent share gap. The bounded maps hold headers and unpaired shares — both small.
+pub const LATE_VID_SHARE_HORIZON: u64 = 5400;
 
 #[bon]
 impl<T, N, S> Coordinator<T, N, S>
