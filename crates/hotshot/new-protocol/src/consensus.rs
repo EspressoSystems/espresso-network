@@ -807,9 +807,6 @@ impl<T: NodeType> Consensus<T> {
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
 
-        // An epoch-root proposal carries the state_cert for its parent's
-        // epoch (validated upstream). Keep it so this node can propose on
-        // the epoch-root QC even if it never formed the cert itself.
         if let Some(state_cert) = &proposal.state_cert {
             self.state_certs
                 .entry(state_cert.epoch)

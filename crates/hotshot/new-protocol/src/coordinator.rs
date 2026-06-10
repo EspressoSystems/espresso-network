@@ -1118,9 +1118,7 @@ where
         self.storage.append_vid(vid_share.clone());
         self.storage
             .append_proposal(validated.message.proposal.data.clone());
-        // An epoch-root proposal carries the state_cert for its parent's
-        // epoch; persist it like the cert formed by our own collector so the
-        // decide path can finalize it by epoch.
+
         if let Some(state_cert) = &validated.message.proposal.data.state_cert {
             self.storage.append_state_cert(
                 ViewNumber::new(state_cert.light_client_state.view_number),
