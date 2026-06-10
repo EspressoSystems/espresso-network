@@ -173,7 +173,6 @@ async fn build_coordinator(
         upgrade_lock.clone(),
         genesis_leaf.clone(),
         epoch_height,
-        100,
     );
     consensus.set_tracer(Some(tracer.clone()));
 
@@ -181,7 +180,6 @@ async fn build_coordinator(
     let vote2_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let timeout_one_honest_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
-    let checkpoint_collector = VoteCollector::new(membership.clone(), upgrade_lock.clone());
     let epoch_root_collector =
         EpochRootVoteCollector::new(membership.clone(), upgrade_lock.clone());
 
@@ -221,7 +219,7 @@ async fn build_coordinator(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_genesis(genesis_cert1, genesis_proposal);
+    consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
@@ -242,7 +240,6 @@ async fn build_coordinator(
         .vote2_collector(vote2_collector)
         .timeout_collector(timeout_collector)
         .timeout_one_honest_collector(timeout_one_honest_collector)
-        .checkpoint_collector(checkpoint_collector)
         .epoch_root_collector(epoch_root_collector)
         .vid_disperser(vid_disperser)
         .vid_reconstructor(vid_reconstructor)
@@ -333,6 +330,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     epoch: req.epoch,
                     payload: block.block,
                     metadata: block.metadata,
+                    payload_commitment: block.payload_commitment,
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);

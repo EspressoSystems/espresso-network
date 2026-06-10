@@ -24,6 +24,16 @@ pub(crate) fn is_proposal(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::SendProposal(..))
 }
 
+/// True if `output` is a `SendProposal` for view `view`.
+pub(crate) fn is_proposal_for_view(output: &ConsensusOutput<TestTypes>, view: u64) -> bool {
+    matches!(output, ConsensusOutput::SendProposal(p) if *p.data.view_number == view)
+}
+
+/// True if `input` is a `HeaderCreated` for view `view`.
+pub(crate) fn is_header_created_for_view(input: &ConsensusInput<TestTypes>, view: u64) -> bool {
+    matches!(input, ConsensusInput::HeaderCreated(v, ..) if **v == view)
+}
+
 pub(crate) fn is_request_block_and_header(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::RequestBlockAndHeader(_))
 }

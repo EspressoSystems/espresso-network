@@ -2,7 +2,6 @@ use std::{
     fmt::{Debug, Display},
     future::Future,
     marker::PhantomData,
-    num::NonZeroU64,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -126,7 +125,6 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         proposal_fetcher_cfg: ProposalFetcherConfig,
         bootstrap_epoch_catchup_timeout: Duration,
-        new_protocol_consensus_gc_interval: NonZeroU64,
     ) -> anyhow::Result<Self> {
         let config = &network_config.config;
         let pub_key = validator_config.public_key;
@@ -206,22 +204,13 @@ where
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
             .initializer(&initializer_for_coordinator)
-            .upgrade_lock({
-                // TODO: The Coordinator and HotShot each create their own UpgradeLock
-                // from the same inputs. They need to share a single lock so that upgrade
-                // certificate updates are visible to both.
-                UpgradeLock::from_certificate(
-                    upgrade,
-                    &initializer_for_coordinator.decided_upgrade_certificate,
-                )
-            })
+            .upgrade_lock(handle.hotshot.upgrade_lock.clone())
             .public_key(validator_config.public_key)
             .private_key(validator_config.private_key.clone())
             .state_private_key(validator_config.state_private_key.clone())
             .stake_table_capacity(stake_table_capacity)
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
-            .garbage_collection_interval(new_protocol_consensus_gc_interval.get())
             .metrics(metrics)
             .make();
 
@@ -471,7 +460,10 @@ where
                 .wait_for_all_nodes_ready(peer_config)
                 .await;
         } else {
-            tracing::error!("Cannot get info from orchestrator client");
+            // the network config was loaded from storage or fetched from
+            // peers, so there is no need of orchestrator
+            // This is the normal path for a node rejoining an existing network.
+            tracing::info!("no orchestrator configured");
         }
         tracing::warn!("starting consensus");
         self.consensus_handle.start_consensus().await;

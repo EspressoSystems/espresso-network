@@ -21,8 +21,8 @@ use crate::{
     tests::common::{
         assertions::{
             any, count_matching, is_leaf_decided, is_proposal, is_request_block_and_header,
-            is_request_state, is_send_timeout_cert, is_send_timeout_vote, is_vote1, is_vote2,
-            node_index_for_key,
+            is_request_state, is_send_timeout_cert, is_send_timeout_vote, is_view_changed,
+            is_vote1, is_vote2, node_index_for_key,
         },
         utils::{ConsensusHarness, MockBlock},
     },
@@ -820,4 +820,79 @@ async fn test_decide_not_repeated_for_same_view() {
     harness.apply(test_data.views[1].cert2_input()).await;
 
     assert_eq!(1, count_matching(harness.outputs(), is_leaf_decided));
+}
+
+/// A timeout for a view below `current_view` is ignored entirely: no
+/// timeout vote is signed or broadcast. Regression test for restarted
+/// nodes being dragged back to long-past views (e.g. the protocol-upgrade
+/// cutover) by joining stale timeouts via `TimeoutOneHonest`.
+#[tokio::test]
+async fn test_stale_timeout_ignored() {
+    let mut harness = ConsensusHarness::new(0).await;
+
+    harness
+        .consensus
+        .set_view(ViewNumber::new(5), EpochNumber::genesis());
+
+    // Timeout for view 2 (< current view 5) must not produce a vote.
+    harness
+        .apply(ConsensusInput::Timeout(
+            ViewNumber::new(2),
+            EpochNumber::genesis(),
+        ))
+        .await;
+    assert!(
+        !any(harness.outputs(), is_send_timeout_vote),
+        "must not sign a timeout vote for a view below the current view"
+    );
+
+    // Timeout at the current view still produces a vote.
+    harness
+        .apply(ConsensusInput::Timeout(
+            ViewNumber::new(5),
+            EpochNumber::genesis(),
+        ))
+        .await;
+    assert!(
+        any(harness.outputs(), is_send_timeout_vote),
+        "timeout at the current view must still produce a vote"
+    );
+}
+
+/// A timeout certificate advancing into a view below `current_view` is
+/// ignored: no `ViewChanged` is emitted and the certificate is not
+/// rebroadcast. Regression test: stale TCs (e.g. formed around the
+/// protocol-upgrade cutover by restarted nodes) must not drag a caught-up
+/// node's view backwards.
+#[tokio::test]
+async fn test_stale_timeout_certificate_ignored() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(6).await;
+
+    harness
+        .consensus
+        .set_view(ViewNumber::new(5), EpochNumber::genesis());
+
+    // TC certifying view 2 advances into view 3 (< current view 5) — ignored.
+    harness.apply(test_data.views[1].timeout_cert_input()).await;
+
+    assert!(
+        !any(harness.outputs(), is_view_changed),
+        "stale timeout certificate must not change the view"
+    );
+    assert!(
+        !any(harness.outputs(), is_send_timeout_cert),
+        "stale timeout certificate must not be rebroadcast"
+    );
+
+    // A TC certifying the current view (advancing into view 6) still works.
+    harness.apply(test_data.views[4].timeout_cert_input()).await;
+    assert!(
+        any(harness.outputs(), is_view_changed),
+        "timeout certificate over the current view must still advance the view"
+    );
+    assert!(
+        any(harness.outputs(), is_send_timeout_cert),
+        "timeout certificate over the current view must still be forwarded"
+    );
 }

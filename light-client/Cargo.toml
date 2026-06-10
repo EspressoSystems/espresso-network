@@ -8,12 +8,7 @@ edition.workspace = true
 default = ["decaf", "rlp"]
 decaf = []
 rlp = ["alloy-rlp", "hotshot-types/rlp"]
-testing = [
-    "espresso-types/testing",
-    "bitvec",
-    "hotshot-contract-adapter",
-    "rand",
-]
+testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand"]
 
 [dependencies]
 alloy = { workspace = true }
