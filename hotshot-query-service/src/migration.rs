@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{collections::HashSet, env, time::Duration};
 
 use async_trait::async_trait;
 
@@ -25,7 +25,7 @@ pub trait DataBackfill: Send + Sync + 'static {
     }
 
     /// Number of batches between progress log lines.
-    fn log_frequency(&self) -> usize {
+    fn log_interval(&self) -> usize {
         10
     }
 
@@ -69,7 +69,7 @@ impl MigrationRegistry {
     /// - All migration names are unique.
     /// - Every name listed in `requires()` refers to a migration that appears earlier in the list.
     pub fn validate(&self) -> anyhow::Result<()> {
-        let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+        let mut seen: HashSet<&'static str> = HashSet::new();
         for m in &self.migrations {
             let name = m.name();
             anyhow::ensure!(seen.insert(name), "duplicate migration name: {name}");
@@ -145,7 +145,8 @@ impl MigrationRegistry {
                 }
 
                 // Run all batches for this migration.
-                if !Self::run_migration(&db, m.as_ref()).await {
+                if let Err(e) = Self::run_migration(&db, m.as_ref()).await {
+                    tracing::error!(name, "deferred migration failed: {e:#}");
                     pending += 1;
                 }
             }
@@ -159,18 +160,15 @@ impl MigrationRegistry {
         }
     }
 
-    /// Run all batches for a single migration to completion. Returns `true` if the migration
-    /// finished successfully, `false` if it encountered an error.
-    async fn run_migration(db: &SqlStorage, m: &dyn DataBackfill) -> bool {
+    /// Run all batches for a single migration to completion.
+    async fn run_migration(db: &SqlStorage, m: &dyn DataBackfill) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+
         let name = m.name();
 
-        let mut offset = match Self::init_and_get_offset(db, name).await {
-            Ok(o) => o,
-            Err(e) => {
-                tracing::error!(name, "failed to initialize migration: {e:#}");
-                return false;
-            },
-        };
+        let mut offset = Self::init_and_get_offset(db, name)
+            .await
+            .context("failed to initialize migration")?;
 
         let delay = env::var("ESPRESSO_NODE_BACKFILL_BATCH_DELAY_MS")
             .ok()
@@ -183,23 +181,17 @@ impl MigrationRegistry {
         let mut batch_count: usize = 0;
 
         loop {
-            let mut tx = match db.write().await {
-                Ok(tx) => tx,
-                Err(e) => {
-                    tracing::error!(name, offset, "failed to open write transaction: {e:#}");
-                    return false;
-                },
-            };
+            let mut tx = db
+                .write()
+                .await
+                .with_context(|| format!("failed to open write transaction at offset {offset}"))?;
 
-            let next = match m.run_batch(&mut tx, offset).await {
-                Ok(next) => next,
-                Err(e) => {
-                    tracing::error!(name, offset, "migration batch failed: {e:#}");
-                    return false;
-                },
-            };
+            let next = m
+                .run_batch(&mut tx, offset)
+                .await
+                .with_context(|| format!("migration batch failed at offset {offset}"))?;
 
-            if let Err(e) = sqlx::query(
+            sqlx::query(
                 "UPDATE deferred_migrations SET last_offset = $1, completed_at = CASE WHEN $2 \
                  THEN CURRENT_TIMESTAMP ELSE completed_at END WHERE name = $3",
             )
@@ -208,21 +200,17 @@ impl MigrationRegistry {
             .bind(name)
             .execute(tx.as_mut())
             .await
-            {
-                tracing::error!(name, "failed to persist migration progress: {e:#}");
-                return false;
-            }
+            .context("failed to persist migration progress")?;
 
-            if let Err(e) = tx.commit().await {
-                tracing::error!(name, "failed to commit migration batch: {e:#}");
-                return false;
-            }
+            tx.commit()
+                .await
+                .context("failed to commit migration batch")?;
 
             batch_count += 1;
 
             let Some(next_offset) = next else {
                 tracing::warn!(name, batches = batch_count, "deferred migration complete");
-                return true;
+                return Ok(());
             };
             offset = next_offset;
 
@@ -230,7 +218,7 @@ impl MigrationRegistry {
                 tokio::time::sleep(delay).await;
             }
 
-            if batch_count.is_multiple_of(m.log_frequency()) {
+            if batch_count.is_multiple_of(m.log_interval()) {
                 tracing::warn!(
                     name,
                     offset,
