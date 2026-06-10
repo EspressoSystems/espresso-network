@@ -8571,6 +8571,35 @@ mod test {
                 compare_endpoints(&http, api_port, axum_port, "node/sync-status").await?;
                 compare_endpoints(&http, api_port, axum_port, "node/limits").await?;
 
+                // Header window: cover all three start variants (time, height, hash). `end` is
+                // an exclusive Unix-second cutoff; using the block's own timestamp + 1 yields
+                // a deterministic single-block window on both servers.
+                let avail_ts = avail_header.timestamp();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/header/window/{avail_ts}/{}", avail_ts + 1),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("node/header/window/from/{avail_block}/{}", avail_ts + 1),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "node/header/window/from/hash/{block_hash}/{}",
+                        avail_ts + 1
+                    ),
+                )
+                .await?;
+
                 compare_endpoints(&http, api_port, axum_port, "node/stake-table/current").await?;
                 compare_endpoints(&http, api_port, axum_port, "node/stake-table/1").await?;
                 compare_endpoints(&http, api_port, axum_port, "node/da-stake-table/current")

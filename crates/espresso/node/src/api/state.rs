@@ -2318,11 +2318,11 @@ where
             espresso_api::v1::VidShareId::Height(h) => HsBlockId::Number(h as usize),
             espresso_api::v1::VidShareId::Hash(h) => HsBlockId::Hash(
                 h.parse()
-                    .map_err(|_| anyhow::anyhow!("invalid block hash: {h}"))?,
+                    .map_err(|_| bad_request(format!("invalid block hash: {h}")))?,
             ),
             espresso_api::v1::VidShareId::PayloadHash(h) => HsBlockId::PayloadHash(
                 h.parse()
-                    .map_err(|_| anyhow::anyhow!("invalid payload hash: {h}"))?,
+                    .map_err(|_| bad_request(format!("invalid payload hash: {h}")))?,
             ),
         };
         hotshot_query_service::node::NodeDataSource::vid_share(ds, node_id)
@@ -2352,14 +2352,14 @@ where
                     .map_err(|_| anyhow::anyhow!("invalid block hash: {h}"))?,
             ),
         };
-        ds.get_header_window(start, end, NODE_WINDOW_LIMIT)
+        ds.get_header_window(start, end, node_window_limit())
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     async fn limits(&self) -> anyhow::Result<Self::Limits> {
         Ok(hotshot_query_service::node::Limits {
-            window_limit: NODE_WINDOW_LIMIT,
+            window_limit: node_window_limit(),
         })
     }
 
@@ -2448,4 +2448,6 @@ where
     }
 }
 
-const NODE_WINDOW_LIMIT: usize = 500;
+fn node_window_limit() -> usize {
+    hotshot_query_service::node::Options::default().window_limit
+}
