@@ -7,8 +7,11 @@ use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use hotshot::{traits::NodeImplementation, types::SystemContextHandle};
 use hotshot_new_protocol::{
     client::ClientApi,
-    consensus::{ConsensusOutput, PreCutoverSeed},
-    coordinator::{Coordinator, CoordinatorOutput, error::Severity},
+    consensus::{ConsensusInput, ConsensusOutput, PreCutoverSeed},
+    coordinator::{
+        Coordinator, CoordinatorOutput,
+        error::{CoordinatorError, Severity},
+    },
     cutover::{
         CutoverGate, extract_pre_cutover_seed, forward_legacy_epoch_changes,
         forward_legacy_high_qc, forward_legacy_timeout_votes,
@@ -26,8 +29,8 @@ use hotshot_types::{
     traits::{ValidatedState, node_implementation::NodeType, signature_key::SignatureKey},
     utils::StateAndDelta,
 };
-use tokio::spawn;
-use tokio_util::task::AbortOnDropHandle;
+use tokio::{select, spawn};
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use versions::NEW_PROTOCOL_VERSION;
 
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
@@ -118,7 +121,13 @@ where
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
     client_api: ClientApi<T>,
+    /// Held only for its drop behavior
+    #[allow(dead_code)]
     coordinator_task: AbortOnDropHandle<()>,
+    /// Signals the coordinator loop to stop
+    shutdown: CancellationToken,
+    /// Cancelled by the coordinator loop once it has stopped
+    shutdown_complete: CancellationToken,
     epoch_height: u64,
     cutover_gate: CutoverGate,
     legacy_event_rx: InactiveReceiver<Event<T>>,
@@ -148,8 +157,14 @@ where
         event_tx.set_await_active(false);
         event_rx.set_overflow(true);
 
-        let coordinator_task =
-            AbortOnDropHandle::new(spawn(run_coordinator(coordinator, event_tx)));
+        let shutdown = CancellationToken::new();
+        let shutdown_complete = CancellationToken::new();
+        let coordinator_task = AbortOnDropHandle::new(spawn(run_coordinator(
+            coordinator,
+            event_tx,
+            shutdown.clone(),
+            shutdown_complete.clone(),
+        )));
 
         spawn(forward_legacy_timeout_votes(
             legacy_event_rx.clone(),
@@ -169,6 +184,8 @@ where
             legacy_handle,
             client_api,
             coordinator_task,
+            shutdown,
+            shutdown_complete,
             epoch_height,
             cutover_gate: CutoverGate::new(),
             legacy_event_rx,
@@ -482,49 +499,77 @@ where
     }
 
     pub async fn shut_down(&self) {
-        self.coordinator_task.abort();
+        self.shutdown.cancel();
+        self.shutdown_complete.cancelled().await;
         self.legacy_handle.write().await.shut_down().await;
     }
 }
 
-async fn run_coordinator<T, N, S>(mut coord: Coordinator<T, N, S>, tx: Sender<CoordinatorEvent<T>>)
+async fn run_coordinator<T, N, S>(
+    mut coord: Coordinator<T, N, S>,
+    tx: Sender<CoordinatorEvent<T>>,
+    shutdown: CancellationToken,
+    shutdown_complete: CancellationToken,
+) where
+    T: NodeType,
+    N: Network<T>,
+    S: NewProtocolStorage<T>,
+{
+    let _done = shutdown_complete.drop_guard();
+
+    coord.start();
+
+    loop {
+        let input = select! {
+            () = shutdown.cancelled() => break,
+            input = coord.next_consensus_input() => input,
+        };
+        if let Err(err) = apply_input(&mut coord, &tx, input).await {
+            tracing::error!(%err, "coordinator: critical error");
+            break;
+        }
+    }
+    coord.stop().await;
+}
+
+async fn apply_input<T, N, S>(
+    coord: &mut Coordinator<T, N, S>,
+    tx: &Sender<CoordinatorEvent<T>>,
+    input: Result<ConsensusInput<T>, CoordinatorError>,
+) -> Result<(), CoordinatorError>
 where
     T: NodeType,
     N: Network<T>,
     S: NewProtocolStorage<T>,
 {
-    coord.start();
+    match input {
+        Ok(input) => coord.apply_consensus(input),
+        Err(err) if err.severity == Severity::Critical => return Err(err),
+        Err(err) => {
+            tracing::warn!(%err, "coordinator: non-critical error");
+            return Ok(());
+        },
+    }
 
-    loop {
-        match coord.next_consensus_input().await {
-            Ok(input) => coord.apply_consensus(input),
-            Err(err) if err.severity == Severity::Critical => {
-                tracing::error!(%err, "coordinator: critical error");
-                return;
-            },
-            Err(err) => {
-                tracing::warn!(%err, "coordinator: non-critical error");
-            },
+    while let Some(output) = coord.outbox_mut().pop_front() {
+        if let Some(event) = consensus_event(coord, &output) {
+            broadcast_event(tx, event).await;
         }
-        while let Some(output) = coord.outbox_mut().pop_front() {
-            if let Some(event) = consensus_event(&coord, &output) {
-                broadcast_event(&tx, event).await;
+        if let Err(err) = coord.process_consensus_output(output) {
+            if err.severity == Severity::Critical {
+                return Err(err.context("processing consensus output"));
             }
-            if let Err(err) = coord.process_consensus_output(output) {
-                if err.severity == Severity::Critical {
-                    tracing::error!(%err, "coordinator: critical error processing output");
-                    return;
-                } else {
-                    tracing::warn!(%err, "coordinator: error processing output");
-                }
-            }
-        }
-        while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
-            if let Some(event) = coordinator_event(&coord, &output) {
-                broadcast_event(&tx, event).await;
-            }
+            tracing::warn!(%err, "coordinator: error processing output");
         }
     }
+
+    while let Some(output) = coord.coordinator_outbox_mut().pop_front() {
+        if let Some(event) = coordinator_event(coord, &output) {
+            broadcast_event(tx, event).await;
+        }
+    }
+
+    Ok(())
 }
 
 async fn broadcast_event<T>(sender: &Sender<CoordinatorEvent<T>>, event: CoordinatorEvent<T>)
