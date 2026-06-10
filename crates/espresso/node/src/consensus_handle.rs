@@ -510,7 +510,7 @@ where
             if let Some(event) = consensus_event(&coord, &output) {
                 broadcast_event(&tx, event).await;
             }
-            if let Err(err) = coord.process_consensus_output(output) {
+            if let Err(err) = coord.process_consensus_output(output).await {
                 if err.severity == Severity::Critical {
                     tracing::error!(%err, "coordinator: critical error processing output");
                     return;

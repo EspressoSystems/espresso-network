@@ -30,7 +30,11 @@ pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
 pub struct Storage<T: NodeType, S> {
     storage: S,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    /// Writes that must be durable before this node votes (see
+    /// [`Self::wait_until_durable`]).
     handles: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
+    /// Payload (DA) writes; best-effort, never block voting.
+    payload_handles: BTreeMap<ViewNumber, Vec<JoinHandle<()>>>,
 }
 
 impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
@@ -39,7 +43,27 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             storage,
             private_key,
             handles: BTreeMap::new(),
+            payload_handles: BTreeMap::new(),
         }
+    }
+
+    /// Wait until every consensus storage write for views up to and including
+    /// `view` has completed. Payload writes (`append_da`) are exempt.
+    ///
+    /// Writes retry until they succeed, so this blocks while storage is
+    /// unavailable; voting must not proceed before the data backing the vote
+    /// is durable. Errors only on a panicked or aborted write task.
+    pub async fn wait_until_durable(&mut self, view: ViewNumber) -> anyhow::Result<()> {
+        let keep = self.handles.split_off(&(view + 1));
+        let wait = std::mem::replace(&mut self.handles, keep);
+        for (write_view, handles) in wait {
+            for handle in handles {
+                handle.await.map_err(|err| {
+                    anyhow::anyhow!("storage write for view {write_view} failed: {err}")
+                })?;
+            }
+        }
+        Ok(())
     }
 
     /// Record that this node acted (voted or proposed) in `view` so that a
@@ -121,7 +145,10 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 }
             }
         });
-        self.handles.entry(view_number).or_default().push(handle);
+        self.payload_handles
+            .entry(view_number)
+            .or_default()
+            .push(handle);
     }
 
     pub fn append_cert2(&mut self, view: ViewNumber, cert2: Certificate2<T>) {
@@ -203,13 +230,12 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        let keep = self.handles.split_off(&view_number);
-        for handles in self.handles.values() {
-            for handle in handles {
+        for handles in [&mut self.handles, &mut self.payload_handles] {
+            let keep = handles.split_off(&view_number);
+            for handle in std::mem::replace(handles, keep).into_values().flatten() {
                 handle.abort();
             }
         }
-        self.handles = keep;
     }
 }
 

@@ -376,7 +376,7 @@ async fn run_cutover_node(
                     });
                 }
             }
-            if let Err(err) = coord.process_consensus_output(output)
+            if let Err(err) = coord.process_consensus_output(output).await
                 && err.severity == Severity::Critical
             {
                 tracing::error!(%err, "cutover coord: critical error processing output");

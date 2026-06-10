@@ -513,7 +513,7 @@ where
         self.consensus.apply(input, &mut self.outbox)
     }
 
-    pub fn process_consensus_output(
+    pub async fn process_consensus_output(
         &mut self,
         output: ConsensusOutput<T>,
     ) -> Result<(), CoordinatorError> {
@@ -700,6 +700,12 @@ where
                     "send vote1"
                 );
                 self.storage.record_action(view, HotShotAction::Vote);
+                // Everything the vote attests to (proposal, VID share, the
+                // vote action itself) must be durable before the vote leaves
+                // this node.
+                self.storage.wait_until_durable(view).await.map_err(|e| {
+                    CoordinatorError::regular(e.to_string()).context("vote1 storage")
+                })?;
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
@@ -712,6 +718,12 @@ where
                 debug!(%node, view = %vote2.view_number(), "send vote2");
                 self.storage
                     .record_action(vote2.view_number(), HotShotAction::Vote);
+                self.storage
+                    .wait_until_durable(vote2.view_number())
+                    .await
+                    .map_err(|e| {
+                        CoordinatorError::regular(e.to_string()).context("vote2 storage")
+                    })?;
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
@@ -1309,7 +1321,7 @@ where
                         .push_back(ConsensusOutput::ViewChanged(cur_view, epoch));
                 }
                 while let Some(output) = self.outbox.pop_front() {
-                    if let Err(err) = self.process_consensus_output(output) {
+                    if let Err(err) = self.process_consensus_output(output).await {
                         tracing::warn!(
                             %err,
                             "error processing post-seed bootstrap output"
@@ -1373,7 +1385,7 @@ where
                     );
                     self.start();
                     while let Some(output) = self.outbox.pop_front() {
-                        if let Err(err) = self.process_consensus_output(output) {
+                        if let Err(err) = self.process_consensus_output(output).await {
                             tracing::warn!(
                                 %err,
                                 "error processing bridged-high-qc bootstrap output"

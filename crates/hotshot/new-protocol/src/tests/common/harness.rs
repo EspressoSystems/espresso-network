@@ -173,7 +173,7 @@ impl TestHarness {
         self.outputs
             .extend(self.coordinator.outbox().iter().cloned());
         for out in self.coordinator.outbox_mut().take() {
-            if let Err(err) = self.coordinator.process_consensus_output(out) {
+            if let Err(err) = self.coordinator.process_consensus_output(out).await {
                 panic!("unexpected error: {err}")
             }
         }

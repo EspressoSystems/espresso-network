@@ -112,6 +112,7 @@ async fn actions_recorded_on_send() {
     };
     coordinator
         .process_consensus_output(ConsensusOutput::SendVote1(vote1))
+        .await
         .unwrap();
     wait_for_recorded_views(&storage, ViewNumber::new(1), ViewNumber::new(2)).await;
 
@@ -120,6 +121,7 @@ async fn actions_recorded_on_send() {
         .process_consensus_output(ConsensusOutput::SendProposal(
             test_data.views[1].proposal.clone(),
         ))
+        .await
         .unwrap();
     wait_for_recorded_views(&storage, ViewNumber::new(2), ViewNumber::new(2)).await;
 
@@ -133,8 +135,61 @@ async fn actions_recorded_on_send() {
     };
     coordinator
         .process_consensus_output(ConsensusOutput::SendVote2(vote2))
+        .await
         .unwrap();
     wait_for_recorded_views(&storage, ViewNumber::new(3), ViewNumber::new(4)).await;
+}
+
+/// A vote is held back until its consensus storage writes are durable; it
+/// goes out once storage recovers.
+#[tokio::test]
+async fn vote_waits_for_durable_storage() {
+    let node_index = 0u64;
+    let (public_key, _) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
+    let (membership, storage, client, _events) =
+        mock_membership_with_client_and_storage(10, 100, public_key, TestStorage::default());
+    let mut coordinator = build_test_coordinator(
+        node_index,
+        lone_network(node_index).await,
+        membership,
+        storage.clone(),
+        client,
+        100,
+        Duration::from_secs(30),
+        None,
+        None,
+    )
+    .await;
+
+    let test_data = TestData::new(1).await;
+    let Message {
+        message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
+        ..
+    } = test_data.views[0].vote1_input(node_index)
+    else {
+        panic!("expected a vote1 message");
+    };
+
+    storage
+        .should_return_err
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut send =
+        std::pin::pin!(coordinator.process_consensus_output(ConsensusOutput::SendVote1(vote1)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), &mut send)
+            .await
+            .is_err(),
+        "vote1 must not be sent while its storage writes are failing"
+    );
+
+    storage
+        .should_return_err
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    tokio::time::timeout(Duration::from_secs(5), send)
+        .await
+        .expect("vote1 should be sent once storage recovers")
+        .unwrap();
+    assert_eq!(storage.last_actioned_view().await, ViewNumber::new(1));
 }
 
 /// Poll until the recorded action watermarks match (recording is async).

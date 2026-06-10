@@ -226,7 +226,7 @@ async fn build_coordinator(
 
     // Process initial outputs so the timer resets before the event loop.
     while let Some(output) = coordinator.outbox_mut().pop_front() {
-        if let Err(e) = coordinator.process_consensus_output(output) {
+        if let Err(e) = coordinator.process_consensus_output(output).await {
             warn!(%e, "error processing initial output");
         }
     }
@@ -300,7 +300,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                 continue; // skip process_consensus_output for this one
             }
 
-            if let Err(err) = coordinator.process_consensus_output(output) {
+            if let Err(err) = coordinator.process_consensus_output(output).await {
                 if err.severity == hotshot_new_protocol::coordinator::error::Severity::Critical {
                     error!(%err, "critical error processing output");
                     metrics.write_csv(&output_path)?;

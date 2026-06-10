@@ -767,7 +767,7 @@ async fn run_node<N: Network<TestTypes>>(
                 last_view = *view;
             }
 
-            if let Err(err) = coord.process_consensus_output(output)
+            if let Err(err) = coord.process_consensus_output(output).await
                 && err.severity == Severity::Critical
             {
                 tracing::error!(%err, node = %coord.node_id(), "critical error processing output");
