@@ -191,6 +191,17 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         }
         self.handles = keep;
     }
+
+    /// Wait for all current storage writes to complete.
+    pub async fn flush(self) {
+        for (view, handles) in self.handles {
+            for handle in handles {
+                if let Err(err) = handle.await {
+                    warn!(%view, %err, "storage task failed during shutdown");
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]

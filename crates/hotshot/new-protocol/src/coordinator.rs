@@ -311,7 +311,8 @@ where
     }
 
     pub async fn stop(mut self) {
-        self.network.shutdown().await
+        self.network.shutdown().await;
+        self.storage.flush().await;
     }
 
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
