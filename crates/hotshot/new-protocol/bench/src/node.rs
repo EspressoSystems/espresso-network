@@ -6,7 +6,6 @@ use hotshot_example_types::{
     block_types::{TestBlockHeader, TestBlockPayload, TestMetadata, TestTransaction},
     node_types::{TEST_VERSIONS, TestTypes},
     state_types::{TestInstanceState, TestValidatedState},
-    storage_types::TestStorage,
 };
 use hotshot_new_protocol::{
     block::{BlockBuilder, BlockBuilderConfig},
@@ -41,7 +40,12 @@ use crate::{
     membership::make_membership, metrics::MetricsCollector,
 };
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
+// Use `NullStorage` (data-discarding) instead of `TestStorage` (data-retaining).
+// `TestStorage` accumulates every dispersed payload + decided proposal in an
+// in-memory map; for a 150-view 50MB bench that means +6 GB/min RSS growth
+// and OOM in ~2 min on a 16 GB node.  See `memory_leak.py` analysis.
+type BenchCoordinator =
+    Coordinator<TestTypes, Cliquenet<TestTypes>, hotshot_new_protocol::storage::NullStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -248,7 +252,7 @@ async fn build_coordinator(
         .proposal_validator(proposal_validator)
         .share_validator(share_validator)
         .storage(hotshot_new_protocol::storage::Storage::new(
-            TestStorage::default(),
+            hotshot_new_protocol::storage::NullStorage::new(),
             private_key,
         ))
         .client(client)

@@ -1,15 +1,22 @@
 use std::{collections::BTreeMap, marker::PhantomData, time::Duration};
 
+use anyhow::anyhow;
 use async_trait::async_trait;
 use hotshot::{traits::BlockPayload, types::SignatureKey};
 use hotshot_example_types::storage_types::TestStorage;
 use hotshot_types::{
     data::{
-        DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
-        VidDisperseShare, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
+        QuorumProposalWrapper, VidCommitment, VidDisperseShare, VidDisperseShare2,
+        ViewChangeEvidence2, ViewNumber,
     },
+    drb::{DrbInput, DrbResult},
+    event::HotShotAction,
     message::Proposal as SignedProposal,
-    simple_certificate::LightClientStateUpdateCertificateV2,
+    simple_certificate::{
+        LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate,
+        QuorumCertificate2, UpgradeCertificate,
+    },
     traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
     utils::EpochTransitionIndicator,
 };
@@ -195,6 +202,121 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
 #[async_trait]
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
+    async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+/// Drop-on-the-floor implementation of [`StorageTrait`] + [`NewProtocolStorage`].
+///
+/// Every `append_*` / `update_*` / `store_*` call returns `Ok(())` without
+/// keeping the data, and every `load_*` call returns an error.  This trades
+/// crash-recovery for **bounded memory**: the bench's previous use of
+/// `TestStorage` accumulated every dispersed payload, recovered proposal,
+/// and cert in process memory, leaking at roughly one block-payload per view
+/// (`memory_leak.py` measured +6 GB/min on 50 MB blocks).  `NullStorage`
+/// keeps RSS flat by simply throwing the data away — appropriate for the
+/// throughput/latency bench where persistence is irrelevant.
+///
+/// Do NOT use in production paths or any test that exercises restart logic.
+#[derive(Clone, Default)]
+pub struct NullStorage<T: NodeType> {
+    _pd: PhantomData<T>,
+}
+
+impl<T: NodeType> NullStorage<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl<T: NodeType> StorageTrait<T> for NullStorage<T> {
+    async fn append_vid(
+        &self,
+        _proposal: &SignedProposal<T, VidDisperseShare<T>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn append_da(
+        &self,
+        _proposal: &SignedProposal<T, DaProposal<T>>,
+        _vid_commit: VidCommitment,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn append_proposal(
+        &self,
+        _proposal: &SignedProposal<T, QuorumProposal<T>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn append_proposal2(
+        &self,
+        _proposal: &SignedProposal<T, QuorumProposal2<T>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn record_action(
+        &self,
+        _view: ViewNumber,
+        _epoch: Option<EpochNumber>,
+        _action: HotShotAction,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn update_high_qc(&self, _high_qc: QuorumCertificate<T>) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn update_state_cert(
+        &self,
+        _state_cert: LightClientStateUpdateCertificateV2<T>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn update_next_epoch_high_qc2(
+        &self,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<T>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn update_eqc(
+        &self,
+        _high_qc: QuorumCertificate2<T>,
+        _next_epoch_high_qc: NextEpochQuorumCertificate2<T>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn update_decided_upgrade_certificate(
+        &self,
+        _decided_upgrade_certificate: Option<UpgradeCertificate<T>>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn store_drb_result(
+        &self,
+        _epoch: EpochNumber,
+        _drb_result: DrbResult,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn store_epoch_root(
+        &self,
+        _epoch: EpochNumber,
+        _block_header: T::BlockHeader,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn store_drb_input(&self, _drb_input: DrbInput) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn load_drb_input(&self, _epoch: u64) -> anyhow::Result<DrbInput> {
+        Err(anyhow!("NullStorage discards data — load_drb_input is not supported"))
+    }
+}
+
+#[async_trait]
+impl<T: NodeType> NewProtocolStorage<T> for NullStorage<T> {
     async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
         Ok(())
     }
