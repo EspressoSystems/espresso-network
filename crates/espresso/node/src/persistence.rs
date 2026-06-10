@@ -268,12 +268,12 @@ mod tests {
     pub fn persistence_types<P: TestablePersistence>(#[case] _p: PhantomData<P>) {}
 
     #[derive(Clone, Debug, Default)]
-    struct EventCollector {
+    pub(crate) struct EventCollector {
         events: Arc<RwLock<Vec<Event>>>,
     }
 
     impl EventCollector {
-        async fn leaf_chain(&self) -> Vec<LeafInfo<SeqTypes>> {
+        pub(crate) async fn leaf_chain(&self) -> Vec<LeafInfo<SeqTypes>> {
             self.events
                 .read()
                 .await
@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[derive(Clone, Copy, Debug)]
-    struct FailConsumer;
+    pub(crate) struct FailConsumer;
 
     #[async_trait]
     impl EventConsumer for FailConsumer {
@@ -561,7 +561,7 @@ mod tests {
         }
     }
 
-    fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
+    pub(crate) fn leaf_info(leaf: Leaf2) -> LeafInfo<SeqTypes> {
         LeafInfo {
             leaf,
             vid_share: None,
@@ -1565,7 +1565,7 @@ mod tests {
     /// header/payload) along with their VID share and DA proposal artifacts, plus the
     /// payload's VID commitment.
     #[allow(clippy::type_complexity)]
-    async fn mock_chain(
+    pub(crate) async fn mock_chain(
         len: u64,
     ) -> (
         Vec<(
@@ -2369,9 +2369,18 @@ mod tests {
             .await
             .unwrap();
 
-        // Decide a newer view, view 1.
+        // Decide a newer view, view 1. Decide a real leaf so the decide-event cursor
+        // advances: pruning is floored at the cursor, so an empty decide would never
+        // reclaim anything.
+        let (chain, _) = mock_chain(3).await;
+        let info = leaf_info(chain[1].0.clone());
         storage
-            .append_decided_leaves(ViewNumber::new(1), [], None, &NullEventConsumer)
+            .append_decided_leaves(
+                ViewNumber::new(1),
+                [(&info, CertificatePair::non_epoch_change(chain[1].1.clone()))],
+                None,
+                &NullEventConsumer,
+            )
             .await
             .unwrap();
 
@@ -2402,8 +2411,14 @@ mod tests {
         );
 
         // Decide an even newer view, triggering GC of the old data.
+        let info = leaf_info(chain[2].0.clone());
         storage
-            .append_decided_leaves(ViewNumber::new(2), [], None, &NullEventConsumer)
+            .append_decided_leaves(
+                ViewNumber::new(2),
+                [(&info, CertificatePair::non_epoch_change(chain[2].1.clone()))],
+                None,
+                &NullEventConsumer,
+            )
             .await
             .unwrap();
         assert!(

@@ -1280,20 +1280,43 @@ impl Persistence {
             .retry_if(WRITE_RETRY_MAX, is_serialization_error, || async {
                 let mut tx = self.db.write().await?;
 
+                // Floor pruning at the decide-event consumer cursor: rows above
+                // `last_processed_view` have not been turned into decide events yet (the
+                // staged payloads are still needed to fill them), and the row AT the cursor
+                // is the restart anchor. If no event was ever processed, nothing is safe to
+                // prune.
+                let Some(processed) = tx
+                    .fetch_optional(
+                        "SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1",
+                    )
+                    .await?
+                    .map(|row| row.get::<i64, _>("last_processed_view") as u64)
+                else {
+                    return Ok(());
+                };
+                let effective_view = cur_view.u64().min(processed);
+                if effective_view < cur_view.u64() {
+                    tracing::warn!(
+                        cur_view = cur_view.u64(),
+                        processed,
+                        "decide processing lags; pruning clamped to consumer cursor"
+                    );
+                }
+
                 // Block payloads (DA proposals) and VID shares dominate consensus storage but are
                 // only needed briefly: for peer recovery of recently-decided views and as the
                 // decide pipeline's storage fallback. Prune them to a short window, independent of
                 // the (longer) general retention period applied below.
                 prune_payload_data(
                     &mut tx,
-                    cur_view.u64().saturating_sub(PAYLOAD_RETENTION_VIEWS),
+                    effective_view.saturating_sub(PAYLOAD_RETENTION_VIEWS),
                 )
                 .await?;
 
                 // Prune everything older than the target retention period.
                 prune_to_view(
                     &mut tx,
-                    cur_view.u64().saturating_sub(self.gc_opt.target_retention),
+                    effective_view.saturating_sub(self.gc_opt.target_retention),
                 )
                 .await?;
 
@@ -1328,7 +1351,7 @@ impl Persistence {
                     );
                     prune_to_view(
                         &mut tx,
-                        cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
+                        effective_view.saturating_sub(self.gc_opt.minimum_retention),
                     )
                     .await?;
                 }
@@ -3741,7 +3764,12 @@ mod test {
     use jf_advz::VidScheme;
 
     use super::*;
-    use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
+    use crate::{
+        BLSPubKey, PubKey,
+        persistence::tests::{
+            EventCollector, FailConsumer, TestablePersistence as _, leaf_info, mock_chain,
+        },
+    };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
@@ -4265,10 +4293,18 @@ mod test {
             .unwrap();
 
         // The first decide doesn't trigger any garbage collection, even though our usage exceeds
-        // the target, because of the minimum retention.
-        tracing::info!("decide view 1");
+        // the target, because of the minimum retention. Decide real leaves so the decide-event
+        // cursor advances: pruning is floored at the cursor.
+        let (chain, _) = mock_chain(4).await;
+        tracing::info!("decide view 2");
+        let info = leaf_info(chain[2].0.clone());
         storage
-            .append_decided_leaves(data_view + 1, [], None, &NullEventConsumer)
+            .append_decided_leaves(
+                data_view + 1,
+                [(&info, CertificatePair::non_epoch_change(chain[2].1.clone()))],
+                None,
+                &NullEventConsumer,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -4286,9 +4322,15 @@ mod test {
 
         // After another view, our data is beyond the minimum retention (though not the target
         // retention) so it gets pruned.
-        tracing::info!("decide view 2");
+        tracing::info!("decide view 3");
+        let info = leaf_info(chain[3].0.clone());
         storage
-            .append_decided_leaves(data_view + 2, [], None, &NullEventConsumer)
+            .append_decided_leaves(
+                data_view + 2,
+                [(&info, CertificatePair::non_epoch_change(chain[3].1.clone()))],
+                None,
+                &NullEventConsumer,
+            )
             .await
             .unwrap();
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);
@@ -4322,6 +4364,104 @@ mod test {
             target_usage: u64::MAX,
         })
         .await
+    }
+
+    /// A stalled decide-event consumer must not lose data to pruning: deletion is floored at the
+    /// consumer cursor, so staged payloads and unprocessed decided leaves survive even maximally
+    /// aggressive pruning until their events are emitted.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruning_floored_at_consumer_cursor() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.consensus_pruning = ConsensusPruningOptions {
+            target_usage: 0,
+            minimum_retention: 0,
+            target_retention: 0,
+        };
+        let storage = opt.create().await.unwrap();
+
+        let (chain, commit) = mock_chain(4).await;
+        for (_, _, vid, da) in &chain {
+            storage.append_da2(da, commit).await.unwrap();
+            storage
+                .append_vid(&convert_proposal(vid.clone()))
+                .await
+                .unwrap();
+        }
+
+        // Decide the whole chain, but the consumer fails: the cursor must not advance, and
+        // pruning (which runs regardless of the failure) must not delete anything.
+        let infos = chain
+            .iter()
+            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .append_decided_leaves(
+                ViewNumber::new(3),
+                infos
+                    .iter()
+                    .map(|(info, qc)| (info, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                &FailConsumer,
+            )
+            .await
+            .unwrap();
+        for i in 0..4 {
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "staged DA proposal {i} lost while the consumer was stalled"
+            );
+            assert!(
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "staged VID share {i} lost while the consumer was stalled"
+            );
+        }
+        let mut tx = storage.db.read().await.unwrap();
+        let (leaves,): (i64,) = query_as("SELECT count(*) FROM anchor_leaf2")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        drop(tx);
+        assert_eq!(leaves, 4, "unprocessed decided leaves lost to pruning");
+
+        // The consumer recovers: events are emitted for the whole chain, the cursor advances,
+        // and the same pruning configuration now reclaims rows strictly below it (the row at
+        // the cursor is the restart anchor and survives).
+        let consumer = EventCollector::default();
+        storage
+            .append_decided_leaves(ViewNumber::new(3), [], None, &consumer)
+            .await
+            .unwrap();
+        assert_eq!(
+            consumer.leaf_chain().await.len(),
+            4,
+            "all stalled leaves must be emitted once the consumer recovers"
+        );
+        for i in 0..3 {
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "processed DA proposal {i} should be reclaimed"
+            );
+        }
+        let mut tx = storage.db.read().await.unwrap();
+        let (leaves,): (i64,) = query_as("SELECT count(*) FROM anchor_leaf2")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        drop(tx);
+        assert_eq!(leaves, 1, "only the restart anchor at the cursor remains");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
