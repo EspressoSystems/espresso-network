@@ -1188,6 +1188,13 @@ where
             .expect("entry checked above");
         info!(%view, "vid share validated after its view was decided");
         self.storage.append_vid(share.clone());
+        // The pairing path (`on_proposal_and_vid_share`) was skipped for this view, so the
+        // reconstructor never got a header for it; vote1-carried shares may already satisfy
+        // the recovery threshold, so supplying (our share, header) unblocks local payload
+        // reconstruction. Bounded by `RECONSTRUCT_KEEP_HORIZON` below the decide; older views
+        // fall back to the decide pipeline's peer recovery.
+        self.vid_reconstructor
+            .handle_vid_share(share.clone(), header.clone());
         self.outbox.push_back(ConsensusOutput::VidShareValidated {
             view,
             header,

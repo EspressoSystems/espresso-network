@@ -162,6 +162,50 @@ async fn test_foreign_vid_share_rejected() {
     assert_share_delivered(&harness, view, &our_key);
 }
 
+/// A late own share for a decided-missing view also unblocks local payload
+/// reconstruction: vote1-carried shares accumulate headerless (the pairing
+/// path that normally supplies the header was skipped), and the late share's
+/// delivery must feed (share, header) to the reconstructor.
+#[tokio::test]
+async fn test_late_vid_share_unblocks_reconstruction() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (our_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let mut harness = TestHarness::new_with_timer(0, Duration::from_millis(500)).await;
+
+    // Vote1s from other nodes fill the accumulator with headerless shares
+    // (below the cert1 threshold, so no certificate forms).
+    for i in 1..7 {
+        harness.message(view.vote1_input(i)).await;
+    }
+
+    // The view decides without our share; the late share arriving afterwards
+    // supplies the header (and the final weight) for local reconstruction.
+    harness.process_output(decide_without_share(&test_data, 0));
+    harness.message(view.vid_share_input(&our_key)).await;
+
+    let reconstructed = |harness: &TestHarness| {
+        harness.outputs().iter().any(|out| {
+            matches!(
+                out,
+                ConsensusOutput::BlockPayloadReconstructed { view: v, .. }
+                    if v == &view.view_number
+            )
+        })
+    };
+    for _ in 0..20 {
+        harness.process_until(|inputs| !inputs.is_empty()).await;
+        if reconstructed(&harness) {
+            break;
+        }
+    }
+    assert!(
+        reconstructed(&harness),
+        "expected the late share to unblock local payload reconstruction for view {}",
+        view.view_number,
+    );
+}
+
 /// A share addressed to another node arriving over the network is dropped at
 /// the boundary: it must not displace this node's own share in the
 /// unpaired-share cache (both carry the same (view, commitment) key), so the
