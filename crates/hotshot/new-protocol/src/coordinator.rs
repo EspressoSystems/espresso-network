@@ -900,6 +900,10 @@ where
                 },
                 ConsensusMessage::Vote1(vote1) => {
                     let view = vote1.vote.view_number();
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vote1 is too far ahead");
+                        return None;
+                    }
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
@@ -923,6 +927,10 @@ where
                 },
                 ConsensusMessage::Vote2(vote2) => {
                     let view = vote2.view_number();
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vote2 is too far ahead");
+                        return None;
+                    }
                     debug!(%node, %sender, %view, "recv vote2");
                     self.vote2_collector.accumulate_vote(vote2);
                     None
@@ -947,6 +955,10 @@ where
                 },
                 ConsensusMessage::TimeoutVote(timeout_msg) => {
                     let view = timeout_msg.vote.view_number();
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "timeout vote is too far ahead");
+                        return None;
+                    }
                     let current_view = self.consensus.current_view();
                     if view < current_view {
                         debug!(
@@ -1493,6 +1505,11 @@ where
             },
         }
         Ok(())
+    }
+
+    /// We ignore votes more that 30 views ahead of our current view.
+    fn is_too_far_ahead(&self, v: ViewNumber) -> bool {
+        v > self.consensus.current_view() + 30
     }
 }
 
