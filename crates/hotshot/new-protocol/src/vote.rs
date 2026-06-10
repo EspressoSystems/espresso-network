@@ -164,7 +164,7 @@ where
         self.completed = self.completed.split_off(&view);
         self.pending = self.pending.split_off(&view);
         self.signers = self.signers.split_off(&view);
-        self.lower_bound = view.saturating_sub(1).into();
+        self.lower_bound = view;
     }
 
     fn resolve_membership(&mut self, vote: &V) -> Option<EpochMembership<T>> {

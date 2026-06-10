@@ -1483,12 +1483,13 @@ where
                 self.cached_vid_shares = self
                     .cached_vid_shares
                     .split_off(&(view, VidCommitment2::default()));
-                // When we enter a new view, we do not want to GC enqueued messages
+                self.vid_disperser.gc(view);
+                // When we enter a new view, we do not want to GC certain data
                 // for the previous view yet:
-                self.network.gc(view.saturating_sub(1).into())?;
+                let view = view.saturating_sub(1).into();
+                self.network.gc(view)?;
                 self.timeout_collector.gc(view);
                 self.timeout_one_honest_collector.gc(view);
-                self.vid_disperser.gc(view);
                 self.vote1_collector.gc(view);
                 self.vote2_collector.gc(view);
             },
