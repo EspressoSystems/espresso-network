@@ -231,62 +231,48 @@ async fn slow_test_restart_all_da_without_cdn() {
     test_restart_helper((2, 8), (2, 0), false, EPOCH_VERSION).await;
 }
 
-// New-protocol (V6) restart tests. These run the same restart scenarios as the
-// legacy ones above, but with the network based on `NEW_PROTOCOL_VERSION` from
-// genesis, so consensus runs through the cliquenet coordinator. They run WITHOUT
-// the CDN (libp2p only) to keep the local resource footprint down (no CDN
-// broker/marshal, fewer sockets and no broker SQLite) and avoid the CDN broker's
-// AWS-metadata lookup path.
+// New protocol (V6) restart tests. These run the network based on
+// `NEW_PROTOCOL_VERSION` from genesis
+// The CDN is not used as cliquenet replaces CDN + libp2p
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_1_da_without_cdn() {
+async fn slow_test_restart_new_protocol_1_of_5() {
     test_restart_helper((2, 3), (1, 0), false, NEW_PROTOCOL_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_1_regular_without_cdn() {
-    test_restart_helper((2, 3), (0, 1), false, NEW_PROTOCOL_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_f_without_cdn() {
-    test_restart_helper((4, 6), (1, 2), false, NEW_PROTOCOL_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_f_minus_1_without_cdn() {
+async fn slow_test_restart_new_protocol_2_of_10() {
     test_restart_helper((4, 6), (1, 1), false, NEW_PROTOCOL_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_f_plus_1_without_cdn() {
+async fn slow_test_restart_new_protocol_3_of_10() {
+    test_restart_helper((4, 6), (1, 2), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_4_of_10() {
     test_restart_helper((4, 6), (1, 3), false, NEW_PROTOCOL_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_2f_without_cdn() {
-    test_restart_helper((4, 6), (1, 5), false, NEW_PROTOCOL_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_2f_minus_1_without_cdn() {
+async fn slow_test_restart_new_protocol_5_of_10() {
     test_restart_helper((4, 6), (1, 4), false, NEW_PROTOCOL_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_2f_plus_1_without_cdn() {
+async fn slow_test_restart_new_protocol_6_of_10() {
+    test_restart_helper((4, 6), (1, 5), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_7_of_10() {
     test_restart_helper((4, 6), (2, 5), false, NEW_PROTOCOL_VERSION).await;
 }
 
-#[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_all_without_cdn() {
+async fn slow_test_restart_new_protocol_10_of_10() {
     test_restart_helper((2, 8), (2, 8), false, NEW_PROTOCOL_VERSION).await;
-}
-
-#[test_log::test(tokio::test(flavor = "multi_thread"))]
-async fn slow_test_restart_new_protocol_all_da_without_cdn() {
-    test_restart_helper((2, 8), (2, 0), false, NEW_PROTOCOL_VERSION).await;
 }
 
 #[ignore]

@@ -1282,7 +1282,7 @@ const WRITE_RETRY_MAX: u32 = 5;
 
 /// Backoff parameters for write-transaction retries.
 const WRITE_BACKOFF: BackoffParams = BackoffParams::new(
-    Duration::from_millis(10),
+    Duration::from_millis(100),
     Duration::from_millis(500),
     2,
     Ratio {

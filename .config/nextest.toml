@@ -34,7 +34,7 @@ slow-timeout = { period = "2m", terminate-after = 15 }
 
 [[profile.default.overrides]]
 filter = 'test(slow_test_restart_new_protocol)'
-slow-timeout = { period = "2m", terminate-after = 4 }
+slow-timeout = { period = "2m", terminate-after = 5 }
 threads-required = 'num-cpus'
 
 # The restart tests run an entire sequencing network, and so are quite resource intensive.

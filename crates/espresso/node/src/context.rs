@@ -606,7 +606,7 @@ async fn handle_events<N, P, C>(
                     hotshot_event.event
                     && let Err(err) = external_event_handler.handle_event(data).await
                 {
-                    tracing::warn!("Failed to handle legacy external message: {:?}", err);
+                    tracing::warn!("Failed to handle legacy external message: {err}");
                 }
                 // Check if we're ready to start the new protocol
                 consensus_handle.cutover_active().await;

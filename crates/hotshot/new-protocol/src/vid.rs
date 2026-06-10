@@ -10,6 +10,12 @@ use hotshot_types::{
 };
 use tokio::task::{AbortHandle, JoinSet};
 
+/// Number of views below the GC cutoff for which the reconstructor retains
+/// accumulated shares and in-flight reconstruction tasks. GC is driven by the
+/// decided view, but reconstruction may still be needed for the parent of a
+/// view being voted on, which can lag the decided view during view churn.
+const VID_RECONSTRUCT_GC_MARGIN: u64 = 10;
+
 pub struct VidDisperseOutput<T: NodeType> {
     pub view: ViewNumber,
     pub payload_commitment: VidCommitment2,
@@ -105,6 +111,92 @@ impl<T: NodeType> VidDisperser<T> {
             handle.abort();
         }
         self.calculations = keep;
+    }
+}
+
+/// A peer-fetched payload that has been verified against the proposal's
+/// payload commitment.
+pub struct FetchedPayloadOutput<T: NodeType> {
+    pub view: ViewNumber,
+    pub payload_commitment: VidCommitment2,
+    pub payload: T::BlockPayload,
+}
+
+/// Verifies peer-fetched block payloads (see `BlockFetchMessage`) by
+/// recomputing the VID dispersal and comparing the payload commitment against
+/// the one in the proposal. Mirrors [`VidDisperser`]'s task structure.
+pub struct PayloadFetchVerifier<T: NodeType> {
+    in_flight: BTreeMap<ViewNumber, AbortHandle>,
+    epoch_membership_coordinator: EpochMembershipCoordinator<T>,
+    tasks: JoinSet<Result<FetchedPayloadOutput<T>, ()>>,
+}
+
+impl<T: NodeType> PayloadFetchVerifier<T> {
+    pub fn new(epoch_membership_coordinator: EpochMembershipCoordinator<T>) -> Self {
+        Self {
+            in_flight: BTreeMap::new(),
+            epoch_membership_coordinator,
+            tasks: JoinSet::new(),
+        }
+    }
+
+    /// Verify the encoded payload bytes received for `view` against
+    /// `expected_commitment`. Deduplicates per view, so only the first of many
+    /// peer responses is verified.
+    pub fn verify(
+        &mut self,
+        view: ViewNumber,
+        epoch: EpochNumber,
+        expected_commitment: VidCommitment2,
+        payload_bytes: Vec<u8>,
+        metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    ) {
+        if self.in_flight.contains_key(&view) {
+            return;
+        }
+        let membership = self.epoch_membership_coordinator.clone();
+        let handle = self.tasks.spawn(async move {
+            let payload = T::BlockPayload::from_bytes(&payload_bytes, &metadata);
+            let Ok((disperse, _duration)) = VidDisperse2::calculate_vid_disperse(
+                &payload,
+                &membership,
+                view,
+                Some(epoch),
+                Some(epoch),
+                &metadata,
+            )
+            .await
+            else {
+                return Err(());
+            };
+            if disperse.payload_commitment != expected_commitment {
+                return Err(());
+            }
+            Ok(FetchedPayloadOutput {
+                view,
+                payload_commitment: expected_commitment,
+                payload,
+            })
+        });
+        self.in_flight.insert(view, handle);
+    }
+
+    pub async fn next(&mut self) -> Option<Result<FetchedPayloadOutput<T>, ()>> {
+        loop {
+            match self.tasks.join_next().await {
+                Some(Ok(result)) => return Some(result),
+                Some(Err(_)) => continue,
+                None => return None,
+            }
+        }
+    }
+
+    pub fn gc(&mut self, view_number: ViewNumber) {
+        let keep = self.in_flight.split_off(&view_number);
+        for handle in self.in_flight.values_mut() {
+            handle.abort();
+        }
+        self.in_flight = keep;
     }
 }
 
@@ -232,12 +324,19 @@ impl<T: NodeType> VidReconstructor<T> {
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        let keep = self.calculations.split_off(&view_number);
+        // Keep a margin of views below the GC cutoff. GC is driven by the
+        // decided view, but a node may still need to reconstruct the parent of
+        // the view it is voting on, which can sit at or just below the decided
+        // view during view churn (e.g. post-restart recovery). Aborting
+        // reconstruction exactly at the cutoff drops shares/tasks for blocks we
+        // still need, stalling the vote on `parent_block_reconstructed`.
+        let cutoff = view_number.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into();
+        let keep = self.calculations.split_off(&cutoff);
         for handle in self.calculations.values_mut() {
             handle.abort();
         }
         self.calculations = keep;
-        self.accumulators = self.accumulators.split_off(&view_number);
+        self.accumulators = self.accumulators.split_off(&cutoff);
     }
 
     /// Mark `view` as already-reconstructed: drop accumulated shares, abort any
