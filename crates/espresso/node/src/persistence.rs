@@ -1562,148 +1562,19 @@ mod tests {
         );
     }
 
-    /// Build a mock chain of `len` consecutive decided leaves (all sharing the genesis
-    /// header/payload) along with their VID share and DA proposal artifacts, plus the
-    /// payload's VID commitment.
-    #[allow(clippy::type_complexity)]
-    pub(crate) async fn mock_chain(
+    /// Build a mock chain of `len` consecutive decided leaves sharing `payload` and `header`,
+    /// along with their VID share and DA proposal artifacts, plus the payload's VID commitment.
+    async fn mock_chain_from(
         len: u64,
-    ) -> (
-        Vec<(
-            Leaf2,
-            QuorumCertificate2<SeqTypes>,
-            Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
-            Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-        )>,
-        VidCommitment,
-    ) {
-        let leaf: Leaf2 = Leaf::genesis(
-            &ValidatedState::default(),
-            &NodeState::mock(),
-            MOCK_UPGRADE.base,
-        )
-        .await
-        .into();
-        let leaf_payload = leaf.block_payload().unwrap();
-        let leaf_payload_bytes_arc = leaf_payload.encode();
-        let avidm_param = init_avidm_param(2).unwrap();
-        let weights = vec![1u32; 2];
-        let ns_table = parse_ns_table(
-            leaf_payload.byte_len().as_usize(),
-            &leaf_payload.ns_table().encode(),
-        );
-        let (payload_commitment, shares) =
-            AvidMScheme::ns_disperse(&avidm_param, &weights, &leaf_payload_bytes_arc, ns_table)
-                .unwrap();
-
-        let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
-        let mut vid = AvidMDisperseShare::<SeqTypes> {
-            view_number: ViewNumber::new(0),
-            payload_commitment,
-            share: shares[0].clone(),
-            recipient_key: pubkey,
-            epoch: Some(EpochNumber::new(0)),
-            target_epoch: Some(EpochNumber::new(0)),
-            common: avidm_param,
-        }
-        .to_proposal(&privkey)
-        .unwrap()
-        .clone();
-        let mut quorum_proposal = QuorumProposalWrapper::<SeqTypes> {
-            proposal: QuorumProposal2::<SeqTypes> {
-                block_header: leaf.block_header().clone(),
-                view_number: ViewNumber::genesis(),
-                justify_qc: QuorumCertificate::genesis(
-                    &ValidatedState::default(),
-                    &NodeState::mock(),
-                    TEST_VERSIONS.test,
-                )
-                .await
-                .to_qc2(),
-                upgrade_certificate: None,
-                view_change_evidence: None,
-                next_drb_result: None,
-                next_epoch_justify_qc: None,
-                epoch: None,
-                state_cert: None,
-            },
-        };
-        let mut qc = QuorumCertificate2::genesis(
-            &ValidatedState::default(),
-            &NodeState::mock(),
-            TEST_VERSIONS.test,
-        )
-        .await;
-
-        let block_payload_signature = BLSPubKey::sign(&privkey, &leaf_payload_bytes_arc)
-            .expect("Failed to sign block payload");
-        let mut da_proposal = Proposal {
-            data: DaProposal2::<SeqTypes> {
-                encoded_transactions: leaf_payload_bytes_arc.clone(),
-                metadata: leaf_payload.ns_table().clone(),
-                view_number: ViewNumber::new(0),
-                epoch: Some(EpochNumber::new(0)),
-                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
-            },
-            signature: block_payload_signature,
-            _pd: Default::default(),
-        };
-
-        let commit = vid_commitment(
-            &leaf_payload_bytes_arc,
-            &leaf.block_header().metadata().encode(),
-            2,
-            TEST_VERSIONS.test.base,
-        );
-
-        let mut chain = vec![];
-        for i in 0..len {
-            quorum_proposal.proposal.view_number = ViewNumber::new(i);
-            let leaf = Leaf2::from_quorum_proposal(&quorum_proposal);
-            qc.view_number = leaf.view_number();
-            qc.data.leaf_commit = Committable::commit(&leaf);
-            vid.data.view_number = leaf.view_number();
-            da_proposal.data.view_number = leaf.view_number();
-            chain.push((leaf.clone(), qc.clone(), vid.clone(), da_proposal.clone()));
-        }
-        (chain, commit)
-    }
-
-    type MockChain = Vec<(
-        Leaf2,
-        QuorumCertificate2<SeqTypes>,
-        Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
-        Proposal<SeqTypes, DaProposal2<SeqTypes>>,
-    )>;
-
-    /// Build a mock chain like [`mock_chain`] but with a real (non-empty) payload, so the decide
-    /// pipeline needs an actual payload source (the empty-namespace-table fast path doesn't apply).
-    async fn mock_chain_with_txns(len: u64) -> (MockChain, Payload, VidCommitment) {
-        let (payload, ns_table) = Payload::from_transactions(
-            [Transaction::new(1_u32.into(), vec![1, 2, 3])],
-            &ValidatedState::default(),
-            &NodeState::mock(),
-        )
-        .await
-        .unwrap();
-        assert!(
-            ns_table.iter().next().is_some(),
-            "test payload must have a non-empty namespace table"
-        );
-        let header = Header::genesis(
-            &NodeState::mock(),
-            payload.clone(),
-            &ns_table,
-            MOCK_UPGRADE.base,
-        );
+        payload: Payload,
+        header: Header,
+    ) -> (MockChain, VidCommitment) {
         let payload_bytes = payload.encode();
-
         let avidm_param = init_avidm_param(2).unwrap();
         let weights = vec![1u32; 2];
-        let avidm_ns_table = parse_ns_table(payload.byte_len().as_usize(), &ns_table.encode());
+        let ns_table = parse_ns_table(payload.byte_len().as_usize(), &payload.ns_table().encode());
         let (payload_commitment, shares) =
-            AvidMScheme::ns_disperse(&avidm_param, &weights, &payload_bytes, avidm_ns_table)
-                .unwrap();
+            AvidMScheme::ns_disperse(&avidm_param, &weights, &payload_bytes, ns_table).unwrap();
 
         let (pubkey, privkey) = BLSPubKey::generated_from_seed_indexed([0; 32], 1);
         let mut vid = AvidMDisperseShare::<SeqTypes> {
@@ -1749,7 +1620,7 @@ mod tests {
         let mut da_proposal = Proposal {
             data: DaProposal2::<SeqTypes> {
                 encoded_transactions: payload_bytes.clone(),
-                metadata: ns_table.clone(),
+                metadata: payload.ns_table().clone(),
                 view_number: ViewNumber::new(0),
                 epoch: Some(EpochNumber::new(0)),
                 epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
@@ -1760,7 +1631,7 @@ mod tests {
 
         let commit = vid_commitment(
             &payload_bytes,
-            &ns_table.encode(),
+            &payload.ns_table().encode(),
             2,
             TEST_VERSIONS.test.base,
         );
@@ -1775,7 +1646,79 @@ mod tests {
             da_proposal.data.view_number = leaf.view_number();
             chain.push((leaf.clone(), qc.clone(), vid.clone(), da_proposal.clone()));
         }
+        (chain, commit)
+    }
+
+    type MockChain = Vec<(
+        Leaf2,
+        QuorumCertificate2<SeqTypes>,
+        Proposal<SeqTypes, AvidMDisperseShare<SeqTypes>>,
+        Proposal<SeqTypes, DaProposal2<SeqTypes>>,
+    )>;
+
+    /// Build a mock chain of `len` consecutive decided leaves (all sharing the genesis
+    /// header/payload) along with their VID share and DA proposal artifacts, plus the
+    /// payload's VID commitment.
+    pub(crate) async fn mock_chain(len: u64) -> (MockChain, VidCommitment) {
+        let leaf: Leaf2 = Leaf::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            MOCK_UPGRADE.base,
+        )
+        .await
+        .into();
+        let payload = leaf.block_payload().unwrap();
+        let header = leaf.block_header().clone();
+        mock_chain_from(len, payload, header).await
+    }
+
+    /// Build a mock chain like [`mock_chain`] but with a real (non-empty) payload, so the decide
+    /// pipeline needs an actual payload source (the empty-namespace-table fast path doesn't apply).
+    async fn mock_chain_with_txns(len: u64) -> (MockChain, Payload, VidCommitment) {
+        let (payload, ns_table) = Payload::from_transactions(
+            [Transaction::new(1_u32.into(), vec![1, 2, 3])],
+            &ValidatedState::default(),
+            &NodeState::mock(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            ns_table.iter().next().is_some(),
+            "test payload must have a non-empty namespace table"
+        );
+        let header = Header::genesis(
+            &NodeState::mock(),
+            payload.clone(),
+            &ns_table,
+            MOCK_UPGRADE.base,
+        );
+        let (chain, commit) = mock_chain_from(len, payload.clone(), header).await;
         (chain, payload, commit)
+    }
+
+    /// Persist `chain`'s leaves as decided at `decided_view` (the synchronous half of a
+    /// decide), leaving event processing to the caller.
+    async fn persist_chain<P: SequencerPersistence>(
+        storage: &P,
+        chain: &MockChain,
+        decided_view: u64,
+        consumer: &(impl EventConsumer + 'static),
+    ) {
+        let infos = chain
+            .iter()
+            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .persist_decided_leaves(
+                ViewNumber::new(decided_view),
+                infos
+                    .iter()
+                    .map(|(info, qc)| (info, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                consumer,
+            )
+            .await
+            .unwrap();
     }
 
     /// Capture the in-memory decide data for `views` of the chain, the way `persist_event`
@@ -1820,21 +1763,7 @@ mod tests {
 
         // Persist all four decided leaves; the staging tables stay empty (async writes unlanded).
         let consumer = EventCollector::default();
-        let leaf_chain = chain
-            .iter()
-            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
-            .collect::<Vec<_>>();
-        storage
-            .persist_decided_leaves(
-                ViewNumber::new(3),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
-                None,
-                &consumer,
-            )
-            .await
-            .unwrap();
+        persist_chain(&storage, &chain, 3, &consumer).await;
 
         // Stage the decide event's capture, then one pass completes with nothing missing.
         let live = live_decide_data(&chain, &payload, 0..4);
@@ -1927,21 +1856,7 @@ mod tests {
         }
 
         let consumer = EventCollector::default();
-        let leaf_chain = chain
-            .iter()
-            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
-            .collect::<Vec<_>>();
-        storage
-            .persist_decided_leaves(
-                ViewNumber::new(3),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
-                None,
-                &consumer,
-            )
-            .await
-            .unwrap();
+        persist_chain(&storage, &chain, 3, &consumer).await;
 
         // The capture covers only views 2 and 3 (e.g. an older signal was coalesced away
         // under processor lag); staging fills exactly those, and one pass completes.
@@ -2015,21 +1930,7 @@ mod tests {
 
         // Persist all four decided leaves up front.
         let consumer = EventCollector::default();
-        let leaf_chain = chain
-            .iter()
-            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
-            .collect::<Vec<_>>();
-        storage
-            .persist_decided_leaves(
-                ViewNumber::new(3),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
-                None,
-                &consumer,
-            )
-            .await
-            .unwrap();
+        persist_chain(&storage, &chain, 3, &consumer).await;
 
         // One pass processes everything: nothing defers, the cursor reaches the newest view.
         let outcome = storage
@@ -2116,21 +2017,7 @@ mod tests {
         }
 
         let consumer = EventCollector::default();
-        let leaf_chain = chain
-            .iter()
-            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
-            .collect::<Vec<_>>();
-        storage
-            .persist_decided_leaves(
-                ViewNumber::new(1),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
-                None,
-                &consumer,
-            )
-            .await
-            .unwrap();
+        persist_chain(&storage, &chain, 1, &consumer).await;
 
         // The empty payload is filled in, both leaves process, and nothing is reported
         // missing.
@@ -2218,21 +2105,7 @@ mod tests {
         // Decide both views with no payload data anywhere. View 1 is emitted without its payload
         // and reported for recovery (view 0 is genesis, special-cased to the empty payload).
         let consumer = EventCollector::default();
-        let leaf_chain = chain
-            .iter()
-            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
-            .collect::<Vec<_>>();
-        storage
-            .persist_decided_leaves(
-                ViewNumber::new(1),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change(qc.clone()))),
-                None,
-                &consumer,
-            )
-            .await
-            .unwrap();
+        persist_chain(&*storage, &chain, 1, &consumer).await;
         let outcome = storage
             .process_decided_events(ViewNumber::new(1), None, &consumer)
             .await
