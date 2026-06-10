@@ -735,11 +735,11 @@ async fn process_decided_events_task<P, C>(
     // cursor reported below raises it.
     let mut last_processed = anchor_view.map(|v| v.u64()).unwrap_or(0);
 
-    // Process leaves persisted before a previous shutdown but not yet handled. No in-memory
-    // decide data survives a restart, so this pass runs purely from storage.
+    // Process leaves persisted before a previous shutdown but not yet handled. Decide data
+    // staged before the shutdown is read back from storage like everything else.
     if let Some(view) = anchor_view {
         match persistence
-            .process_decided_events(view, None, consumer.as_ref(), None)
+            .process_decided_events(view, None, consumer.as_ref())
             .await
         {
             Ok(outcome) => {
@@ -784,16 +784,24 @@ async fn process_decided_events_task<P, C>(
             .backlog
             .set(decided.saturating_sub(last_processed) as usize);
 
+        // Stage the decide event's in-memory data first, so just-decided views don't wait on
+        // the coordinator's async storage writes and event generation reads storage only. On
+        // failure, retry the whole signal rather than emitting events the staged data should
+        // have filled.
+        if !pending.data.is_empty()
+            && let Err(err) = persistence.stage_decide_data(&pending.data).await
+        {
+            metrics.failures.add(1);
+            tracing::warn!(
+                view = ?pending.view,
+                "failed to stage decide data, will retry: {err:#}"
+            );
+            continue;
+        }
+
         let start = Instant::now();
         let result = persistence
-            .process_decided_events(
-                pending.view,
-                pending.deciding_qc.clone(),
-                consumer.as_ref(),
-                // In-memory decide data, so just-decided views don't wait on the async storage
-                // writes. Retries reuse it; uncovered views fall back to storage.
-                Some(&pending.data),
-            )
+            .process_decided_events(pending.view, pending.deciding_qc.clone(), consumer.as_ref())
             .await;
         metrics.duration.add_point(start.elapsed().as_secs_f64());
 

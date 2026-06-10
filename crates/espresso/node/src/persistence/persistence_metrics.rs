@@ -15,10 +15,6 @@ pub struct PersistenceMetricsValue {
     pub decide_missing_payload: Box<dyn Counter>,
     /// Decide events emitted without VID data; healed by the query service's peer fetching
     pub decide_missing_vid: Box<dyn Counter>,
-    /// Block payloads filled from in-memory decide data (may double-count across retries)
-    pub decide_payload_from_memory: Box<dyn Counter>,
-    /// VID shares filled from in-memory decide data (may double-count across retries)
-    pub decide_vid_from_memory: Box<dyn Counter>,
     /// Height gaps hit during decide event generation (a missing decided leaf; investigate if
     /// recurring)
     pub decide_height_gaps: Box<dyn Counter>,
@@ -48,10 +44,6 @@ impl PersistenceMetricsValue {
             decide_missing_payload: metrics
                 .create_counter(String::from("decide_missing_payload"), None),
             decide_missing_vid: metrics.create_counter(String::from("decide_missing_vid"), None),
-            decide_payload_from_memory: metrics
-                .create_counter(String::from("decide_payload_from_memory"), None),
-            decide_vid_from_memory: metrics
-                .create_counter(String::from("decide_vid_from_memory"), None),
             decide_height_gaps: metrics.create_counter(String::from("decide_height_gaps"), None),
         }
     }

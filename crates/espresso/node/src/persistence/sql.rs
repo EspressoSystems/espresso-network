@@ -20,8 +20,8 @@ use espresso_types::{
     parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{
-        DecideEventData, DecideProcessingOutcome, EventConsumer, PersistenceOptions,
-        SequencerPersistence, StateCatchup,
+        DecideProcessingOutcome, EventConsumer, PersistenceOptions, SequencerPersistence,
+        StateCatchup,
     },
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
@@ -902,7 +902,6 @@ impl Persistence {
         decided_view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
-        live: Option<&DecideEventData>,
         missing_payload: &mut Vec<Leaf2>,
     ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
@@ -1002,18 +1001,10 @@ impl Persistence {
             let from_view = leaves[0].0.view_number();
             let to_view = leaves[leaves.len() - 1].0.view_number();
 
-            // In-memory decide data is preferred; the staging tables below are the fallback for
-            // views it doesn't cover (see the module docs).
-            let live_payload = |view: ViewNumber| live.and_then(|data| data.payload(view));
-            let live_vid = |view: ViewNumber| live.and_then(|data| data.vid_share(view));
-
-            // Skip the VID read when the in-memory data covers every view. The gate must mirror
-            // the fill below, since an uncovered view falls back to the stored share.
-            let need_vid_query = leaves
-                .iter()
-                .any(|(leaf, _)| live_vid(leaf.view_number()).is_none());
-            let mut vid_shares = if need_vid_query {
-                tx.fetch_all(
+            // The staging tables are the single source for payload/VID data: the decide
+            // processor stages the in-memory decide data before this runs (see the module docs).
+            let mut vid_shares = tx
+                .fetch_all(
                     query("SELECT view, data FROM vid_share2 where view >= $1 AND view <= $2")
                         .bind(from_view.u64() as i64)
                         .bind(to_view.u64() as i64),
@@ -1028,18 +1019,10 @@ impl Persistence {
                     >(&data)?;
                     Ok((view as u64, vid_proposal))
                 })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?
-            } else {
-                BTreeMap::new()
-            };
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
-            // Skip the DA read when the in-memory data covers every view (gate mirrors the fill
-            // below, as above).
-            let need_da_query = leaves
-                .iter()
-                .any(|(leaf, _)| live_payload(leaf.view_number()).is_none());
-            let mut da_proposals = if need_da_query {
-                tx.fetch_all(
+            let mut da_proposals = tx
+                .fetch_all(
                     query("SELECT view, data FROM da_proposal2 where view >= $1 AND view <= $2")
                         .bind(from_view.u64() as i64)
                         .bind(to_view.u64() as i64),
@@ -1053,10 +1036,7 @@ impl Persistence {
                         bincode::deserialize::<Proposal<SeqTypes, DaProposal2<SeqTypes>>>(&data)?;
                     Ok((view as u64, da_proposal.data))
                 })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?
-            } else {
-                BTreeMap::new()
-            };
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
             let final_qc = leaves[leaves.len() - 1].1.clone();
 
@@ -1071,23 +1051,19 @@ impl Persistence {
                     );
                 })?;
 
-            // The cert2 certifying the newest leaf, preferring the in-memory copy from the
-            // decide event over the asynchronously-written `decided_cert2` table.
-            let cert2 = match live.and_then(|data| data.cert2(to_view)) {
-                Some(cert2) => Some(cert2.clone()),
-                None => tx
-                    .fetch_optional(
-                        query("SELECT data FROM decided_cert2 WHERE view = $1")
-                            .bind(to_view.u64() as i64),
-                    )
-                    .await?
-                    .map(|row| {
-                        let bytes: Vec<u8> = row.get("data");
-                        bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
-                            .context("deserializing decided cert2")
-                    })
-                    .transpose()?,
-            };
+            // The cert2 certifying the newest leaf.
+            let cert2 = tx
+                .fetch_optional(
+                    query("SELECT data FROM decided_cert2 WHERE view = $1")
+                        .bind(to_view.u64() as i64),
+                )
+                .await?
+                .map(|row| {
+                    let bytes: Vec<u8> = row.get("data");
+                    bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
+                        .context("deserializing decided cert2")
+                })
+                .transpose()?;
             drop(tx);
 
             // Collate all the information by view number and construct a chain of leaves.
@@ -1099,14 +1075,7 @@ impl Persistence {
             for (mut leaf, cert) in leaves.into_iter().rev() {
                 let view = leaf.view_number();
 
-                // VID share: in-memory first, then the staging table.
-                let vid_share = match live_vid(view) {
-                    Some(share) => {
-                        self.internal_metrics.decide_vid_from_memory.add(1);
-                        Some(share.clone())
-                    },
-                    None => vid_shares.remove(&view).map(|proposal| proposal.data),
-                };
+                let vid_share = vid_shares.remove(&view).map(|proposal| proposal.data);
                 if vid_share.is_none() && view != ViewNumber::genesis() {
                     // The share never reached this node and is not recoverable here; the
                     // query service has to fetch the VID data from peers.
@@ -1114,11 +1083,8 @@ impl Persistence {
                     self.internal_metrics.decide_missing_vid.add(1);
                 }
 
-                // Block payload: in-memory first, then the DA proposal staging table.
-                if let Some(payload) = live_payload(view) {
-                    leaf.fill_block_payload_unchecked(payload.clone());
-                    self.internal_metrics.decide_payload_from_memory.add(1);
-                } else if let Some(proposal) = da_proposals.remove(&view) {
+                // Block payload from the DA proposal staging table.
+                if let Some(proposal) = da_proposals.remove(&view) {
                     let payload =
                         Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
                     leaf.fill_block_payload_unchecked(payload);
@@ -1746,13 +1712,12 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
-        live: Option<&DecideEventData>,
     ) -> anyhow::Result<DecideProcessingOutcome> {
         // Generate events for the new leaves, then GC. On error `last_processed_view` is not
         // advanced past the failure point, so no data is lost and the range is retried.
         let mut missing_payload = Vec::new();
         let result = self
-            .generate_decide_events(view, deciding_qc, consumer, live, &mut missing_payload)
+            .generate_decide_events(view, deciding_qc, consumer, &mut missing_payload)
             .await;
         // Events are emitted newest-first within each batch; report missing leaves oldest-first.
         missing_payload.sort_by_key(|leaf| leaf.view_number());

@@ -18,8 +18,7 @@ use espresso_types::{
     SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
     v0::traits::{
-        DecideEventData, DecideProcessingOutcome, EventConsumer, PersistenceOptions,
-        SequencerPersistence,
+        DecideProcessingOutcome, EventConsumer, PersistenceOptions, SequencerPersistence,
     },
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
@@ -471,7 +470,6 @@ impl Inner {
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
-        live: Option<&DecideEventData>,
         metrics: &PersistenceMetricsValue,
     ) -> anyhow::Result<(Vec<RangeInclusive<ViewNumber>>, Vec<Leaf2>)> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
@@ -487,24 +485,16 @@ impl Inner {
                 fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
-            // VID share: in-memory first (the share file is written asynchronously), then disk.
-            // A missing share is logged (with a metric) in the emit loop below.
-            let vid_share = match live.and_then(|data| data.vid_share(v)) {
-                Some(share) => {
-                    metrics.decide_vid_from_memory.add(1);
-                    Some(share.clone())
-                },
-                None => self.load_vid_share(v)?.map(|proposal| proposal.data),
-            };
+            // VID share from the staging file (the decide processor stages the in-memory decide
+            // data before this runs). A missing share is logged (with a metric) in the emit
+            // loop below.
+            let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
 
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
 
-            // Block payload: in-memory first, then the DA proposal file.
-            if let Some(payload) = live.and_then(|data| data.payload(v)) {
-                leaf.fill_block_payload_unchecked(payload.clone());
-                metrics.decide_payload_from_memory.add(1);
-            } else if let Some(proposal) = self.load_da_proposal(v)? {
+            // Block payload from the DA proposal staging file.
+            if let Some(proposal) = self.load_da_proposal(v)? {
                 let payload = Payload::from_bytes(
                     &proposal.data.encoded_transactions,
                     &proposal.data.metadata,
@@ -563,11 +553,7 @@ impl Inner {
             }
 
             let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
-                // cert2: in-memory first, then the file.
-                let cert2 = match live.and_then(|data| data.cert2(view)) {
-                    Some(cert2) => Some(cert2.clone()),
-                    None => self.load_cert2(view)?,
-                };
+                let cert2 = self.load_cert2(view)?;
                 // One event per view. cert2 is only stored for the
                 // directly finalized view
                 // ancestors get `cert2: None`,
@@ -884,7 +870,6 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
-        live: Option<&DecideEventData>,
     ) -> anyhow::Result<DecideProcessingOutcome> {
         // On error, GC does not run over the failed range, so the leaves stay on disk and are
         // retried; no data is lost.
@@ -892,7 +877,7 @@ impl SequencerPersistence for Persistence {
             .inner
             .write()
             .await
-            .generate_decide_events(view, deciding_qc, consumer, live, &self.metrics)
+            .generate_decide_events(view, deciding_qc, consumer, &self.metrics)
             .await?;
 
         // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).

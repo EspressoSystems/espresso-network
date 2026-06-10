@@ -23,12 +23,13 @@ use hotshot_types::{
         CertificatePair, LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2,
         QuorumCertificate, QuorumCertificate2, UpgradeCertificate,
     },
+    simple_vote,
     stake_table::HSStakeTable,
     traits::{
-        ValidatedState as HotShotState, metrics::Metrics, node_implementation::NodeType,
-        storage::Storage,
+        EncodeBytes, ValidatedState as HotShotState, metrics::Metrics,
+        node_implementation::NodeType, signature_key::SignatureKey, storage::Storage,
     },
-    utils::genesis_epoch_from_version,
+    utils::{EpochTransitionIndicator, genesis_epoch_from_version},
     vid::avidm_gf2::AvidmGf2Common,
     vote::HasViewNumber,
 };
@@ -920,9 +921,9 @@ pub trait SequencerPersistence:
         self.persist_decided_leaves(decided_view, leaf_chain, deciding_qc.clone(), consumer)
             .await?;
         // Leaves are persisted; processing failures are non-fatal here and retried in production.
-        // No in-memory event data is passed, so this form always exercises the storage path.
+        // No in-memory event data is staged, so this form always exercises the storage path.
         if let Err(err) = self
-            .process_decided_events(decided_view, deciding_qc, consumer, None)
+            .process_decided_events(decided_view, deciding_qc, consumer)
             .await
         {
             tracing::warn!(?decided_view, "decide event processing failed: {err:#}");
@@ -942,18 +943,57 @@ pub trait SequencerPersistence:
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 
+    /// Write the in-memory data captured from a decide event into the consensus staging stores,
+    /// for views whose asynchronous coordinator writes haven't landed yet. The decide processor
+    /// calls this before [`process_decided_events`](Self::process_decided_events), so event
+    /// generation reads storage only and the captured data survives a restart.
+    async fn stage_decide_data(&self, data: &DecideEventData) -> anyhow::Result<()> {
+        for (view, (payload, payload_commitment)) in &data.payloads {
+            if self.load_da_proposal(*view).await?.is_some() {
+                continue;
+            }
+            let proposal = staged_proposal(DaProposal2 {
+                encoded_transactions: payload.encode(),
+                metadata: payload.ns_table().clone(),
+                view_number: *view,
+                // Not recoverable from the capture; staged rows are read back for their
+                // payload bytes only.
+                epoch: None,
+                epoch_transition_indicator: EpochTransitionIndicator::NotInTransition,
+            });
+            self.append_da2(&proposal, *payload_commitment)
+                .await
+                .context("staging DA proposal from decide data")?;
+        }
+        for (view, share) in &data.vid_shares {
+            if self.load_vid_share(*view).await?.is_some() {
+                continue;
+            }
+            self.append_vid(&staged_proposal(share.clone()))
+                .await
+                .context("staging VID share from decide data")?;
+        }
+        if let Some((view, cert2)) = &data.cert2
+            && self.load_cert2(*view).await?.is_none()
+        {
+            self.append_cert2(*view, cert2.clone())
+                .await
+                .context("staging cert2 from decide data")?;
+        }
+        Ok(())
+    }
+
     /// Generate decide events for `consumer` from persisted leaves, then GC processed data.
     /// Cursor-driven (e.g. `last_processed_view`): advances only on success, so it may lag
     /// consensus without losing data.
     ///
-    /// `live` is the in-memory payload/VID/cert2 from the decide event, preferred over storage:
-    /// the new protocol writes that data to storage asynchronously, so a just-decided view's data
-    /// may not have landed yet. Storage is the fallback for views `live` doesn't cover (restart
-    /// replay, signals coalesced under processor lag).
+    /// All event data is read from storage; the in-memory capture from the decide event is
+    /// written to the staging stores up front via [`stage_decide_data`](Self::stage_decide_data),
+    /// covering views whose asynchronous coordinator writes haven't landed yet.
     ///
-    /// Events are never deferred for missing data: a leaf whose payload is in neither `live` nor
-    /// storage is emitted without it and reported in the outcome, so the caller can heal it
-    /// asynchronously via peer recovery.
+    /// Events are never deferred for missing data: a leaf whose payload is not in storage is
+    /// emitted without it and reported in the outcome, so the caller can heal it asynchronously
+    /// via peer recovery.
     ///
     /// Returns the cursor (highest view processed, `None` if none) and the payload-less leaves.
     /// Errors propagate; the failed range is retried. The default reports `decided_view` with no
@@ -964,7 +1004,6 @@ pub trait SequencerPersistence:
         decided_view: ViewNumber,
         _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         _consumer: &(impl EventConsumer + 'static),
-        _live: Option<&DecideEventData>,
     ) -> anyhow::Result<DecideProcessingOutcome> {
         Ok(DecideProcessingOutcome {
             processed: Some(decided_view),
@@ -1148,16 +1187,17 @@ pub trait DecidePayloadRecovery: Debug + Send + Sync {
 ///
 /// The new protocol writes DA proposals, VID shares, and cert2s to storage asynchronously, so a
 /// view can be decided before its data lands on disk — but the decide event already carries it.
-/// Capturing it here lets [`process_decided_events`](SequencerPersistence::process_decided_events)
-/// build complete decide events without racing the staging tables, which remain the fallback.
+/// The decide processor writes this capture into the staging stores
+/// ([`stage_decide_data`](SequencerPersistence::stage_decide_data)) before generating events, so
+/// event generation reads storage only and the captured data survives a restart.
 #[derive(Clone, Debug, Default)]
 pub struct DecideEventData {
-    /// Block payloads from the decided leaves.
-    payloads: BTreeMap<ViewNumber, Payload>,
+    /// Block payloads from the decided leaves, with the header's payload commitment.
+    payloads: BTreeMap<ViewNumber, (Payload, VidCommitment)>,
     /// VID shares attached to the decide event.
     vid_shares: BTreeMap<ViewNumber, VidDisperseShare<SeqTypes>>,
-    /// cert2s certifying decided leaves, keyed by the view they certify.
-    cert2s: BTreeMap<ViewNumber, Certificate2<SeqTypes>>,
+    /// The cert2 certifying the newest decided leaf, keyed by the view it certifies.
+    cert2: Option<(ViewNumber, Certificate2<SeqTypes>)>,
 }
 
 impl DecideEventData {
@@ -1172,7 +1212,10 @@ impl DecideEventData {
         for info in leaf_infos {
             let view = info.leaf.view_number();
             if let Some(payload) = info.leaf.block_payload() {
-                payloads.insert(view, payload);
+                payloads.insert(
+                    view,
+                    (payload, info.leaf.block_header().payload_commitment()),
+                );
             }
             if let Some(share) = &info.vid_share {
                 vid_shares.insert(view, share.clone());
@@ -1181,23 +1224,29 @@ impl DecideEventData {
         Self {
             payloads,
             vid_shares,
-            cert2s: cert2.into_iter().collect(),
+            cert2,
         }
     }
 
-    /// The block payload of the leaf decided at `view`, if the decide event carried it.
-    pub fn payload(&self, view: ViewNumber) -> Option<&Payload> {
-        self.payloads.get(&view)
+    /// Whether the capture carries no data at all (e.g. a legacy decide, whose staging writes
+    /// are synchronous), so staging can be skipped.
+    pub fn is_empty(&self) -> bool {
+        self.payloads.is_empty() && self.vid_shares.is_empty() && self.cert2.is_none()
     }
+}
 
-    /// This node's VID share for `view`, if the decide event carried it.
-    pub fn vid_share(&self, view: ViewNumber) -> Option<&VidDisperseShare<SeqTypes>> {
-        self.vid_shares.get(&view)
-    }
-
-    /// The cert2 certifying the leaf decided at `view`, if the decide event carried it.
-    pub fn cert2(&self, view: ViewNumber) -> Option<&Certificate2<SeqTypes>> {
-        self.cert2s.get(&view)
+/// Wrap `data` in a [`Proposal`] envelope for the staging stores. The signature is vestigial:
+/// staging rows are read back for their data only (decide-event fill, peer recovery) and
+/// consumers re-verify against the header's payload commitment, never the signature — the
+/// coordinator's own storage writer likewise signs staging rows over an empty message.
+fn staged_proposal<D: HasViewNumber + simple_vote::HasEpoch + DeserializeOwned>(
+    data: D,
+) -> Proposal<SeqTypes, D> {
+    let (_, privkey) = PubKey::generated_from_seed_indexed([0; 32], 0);
+    Proposal {
+        data,
+        signature: PubKey::sign(&privkey, &[]).expect("signing an empty message cannot fail"),
+        _pd: std::marker::PhantomData,
     }
 }
 

@@ -17,16 +17,17 @@
 //! never gathered enough shares. Decide events are never delayed for it; instead the payload is
 //! delivered through whichever of these layers fires first:
 //!
-//! 1. **In-memory decide data** ([`DecideEventData`](espresso_types::v0::traits::DecideEventData)):
-//!    the decided leaves arrive with payloads and VID shares attached. The normal path.
-//! 2. **Storage fallback**: the consensus staging tables, for views the in-memory data doesn't
-//!    cover (restart replay, signals coalesced under processor lag).
-//! 3. **Late back-fill / peer recovery**: a payload reconstructed after its view was decided
+//! 1. **Staged decide data**: the decided leaves arrive with payloads and VID shares attached
+//!    ([`DecideEventData`](espresso_types::v0::traits::DecideEventData)); the decide processor
+//!    writes them into the consensus staging tables up front
+//!    ([`stage_decide_data`](espresso_types::v0::traits::SequencerPersistence::stage_decide_data)),
+//!    so event generation reads storage only and the capture survives a restart. The normal path.
+//! 2. **Late back-fill / peer recovery**: a payload reconstructed after its view was decided
 //!    arrives via `BlockPayloadReconstructed`; one still missing is fetched from peers
 //!    ([`DecidePayloadRecovery`](espresso_types::v0::traits::DecidePayloadRecovery)) and verified
 //!    against the header commitment. DA proposals and VID shares are retained after processing (not
 //!    deleted at decide) so peers can serve this.
-//! 4. **Query service fetching**: the final backstop for any block still stored without a payload.
+//! 3. **Query service fetching**: the final backstop for any block still stored without a payload.
 
 use std::collections::HashMap;
 
@@ -1484,7 +1485,7 @@ mod tests {
         // A failing consumer propagates the error and leaves the cursor un-advanced: nothing is
         // GC'd and the range is retried below.
         storage
-            .process_decided_events(ViewNumber::new(3), None, &FailConsumer, None)
+            .process_decided_events(ViewNumber::new(3), None, &FailConsumer)
             .await
             .unwrap_err();
         for i in 0..4 {
@@ -1501,7 +1502,7 @@ mod tests {
         // One process pass at the latest view drains the whole backlog, runs GC, and reports the
         // cursor it advanced to.
         let outcome = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer)
             .await
             .unwrap();
         assert_eq!(
@@ -1548,7 +1549,7 @@ mod tests {
         // Re-processing with nothing new is a no-op.
         let consumer2 = EventCollector::default();
         storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer2, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer2)
             .await
             .unwrap();
         assert!(
@@ -1806,11 +1807,12 @@ mod tests {
         DecideEventData::new(infos.iter(), None)
     }
 
-    /// In-memory decide data alone suffices: with the staging tables empty (view decided before
-    /// the async writes land), processing emits every leaf with its payload and VID share, touches
-    /// no staging table, and reports nothing missing.
+    /// Staged decide data alone suffices: with the staging tables empty (view decided before
+    /// the async writes land), staging the decide event's capture and processing emits every
+    /// leaf with its payload and VID share, and reports nothing missing. The staged data is
+    /// left in storage, so it survives a restart.
     #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_decide_from_memory<P: TestablePersistence>(_p: PhantomData<P>) {
+    pub async fn test_decide_from_staged_data<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
         let storage = P::options(&tmp).create().await.unwrap();
 
@@ -1834,16 +1836,17 @@ mod tests {
             .await
             .unwrap();
 
-        // One pass with the live data completes immediately, with nothing missing.
+        // Stage the decide event's capture, then one pass completes with nothing missing.
         let live = live_decide_data(&chain, &payload, 0..4);
+        storage.stage_decide_data(&live).await.unwrap();
         let outcome = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, Some(&live))
+            .process_decided_events(ViewNumber::new(3), None, &consumer)
             .await
             .unwrap();
         assert_eq!(
             outcome.processed,
             Some(ViewNumber::new(3)),
-            "live data must allow processing without the staging tables"
+            "staged decide data must allow processing without the coordinator's async writes"
         );
         assert!(
             outcome.missing_payload.is_empty(),
@@ -1852,7 +1855,8 @@ mod tests {
         );
 
         // Every post-genesis leaf is delivered exactly once with its payload and VID share from
-        // memory. (Genesis is checked separately: the fs backend may re-emit it as its anchor.)
+        // the staged data. (Genesis is checked separately: the fs backend may re-emit it as its
+        // anchor.)
         let leaf_chain = consumer.leaf_chain().await;
         for (leaf, _, vid, _) in chain.iter().skip(1) {
             let infos = leaf_chain
@@ -1880,31 +1884,33 @@ mod tests {
             );
         }
 
-        // The staging tables were never touched, proving the data came from memory.
+        // The staged data is in the staging tables (restart-safe; retained for peer recovery).
         for i in 0..4 {
             assert!(
                 storage
                     .load_da_proposal(ViewNumber::new(i))
                     .await
                     .unwrap()
-                    .is_none(),
-                "the live path must not populate the DA staging table"
+                    .is_some(),
+                "staging must persist the captured DA proposal for view {i}"
             );
             assert!(
                 storage
                     .load_vid_share(ViewNumber::new(i))
                     .await
                     .unwrap()
-                    .is_none(),
-                "the live path must not populate the VID staging table"
+                    .is_some(),
+                "staging must persist the captured VID share for view {i}"
             );
         }
     }
 
-    /// Views not covered by the in-memory decide data fall back to the consensus staging
-    /// tables: a single pass emits storage-sourced and memory-sourced leaves side by side.
+    /// Staging skips views whose artifacts already landed via the coordinator's async writes,
+    /// and fills in the rest: a single pass emits every leaf with its data either way.
     #[rstest_reuse::apply(persistence_types)]
-    pub async fn test_decide_from_memory_partial<P: TestablePersistence>(_p: PhantomData<P>) {
+    pub async fn test_decide_staging_fills_unlanded_views<P: TestablePersistence>(
+        _p: PhantomData<P>,
+    ) {
         let tmp = P::tmp_storage().await;
         let storage = P::options(&tmp).create().await.unwrap();
 
@@ -1937,11 +1943,12 @@ mod tests {
             .await
             .unwrap();
 
-        // The live data covers only views 2 and 3 (e.g. an older signal was coalesced
-        // away under processor lag); one pass still completes, mixing sources per view.
+        // The capture covers only views 2 and 3 (e.g. an older signal was coalesced away
+        // under processor lag); staging fills exactly those, and one pass completes.
         let live = live_decide_data(&chain, &payload, 2..4);
+        storage.stage_decide_data(&live).await.unwrap();
         let outcome = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, Some(&live))
+            .process_decided_events(ViewNumber::new(3), None, &consumer)
             .await
             .unwrap();
         assert_eq!(outcome.processed, Some(ViewNumber::new(3)));
@@ -1961,22 +1968,21 @@ mod tests {
             assert!(info.vid_share.is_some());
         }
 
-        // Views 2 and 3 were only ever in memory; the staging tables still don't know
-        // them.
-        for i in 2..4 {
+        // Every view's artifacts are now in the staging tables, whichever path wrote them.
+        for i in 0..4 {
             assert!(
                 storage
                     .load_da_proposal(ViewNumber::new(i))
                     .await
                     .unwrap()
-                    .is_none()
+                    .is_some()
             );
             assert!(
                 storage
                     .load_vid_share(ViewNumber::new(i))
                     .await
                     .unwrap()
-                    .is_none()
+                    .is_some()
             );
         }
     }
@@ -2027,7 +2033,7 @@ mod tests {
 
         // One pass processes everything: nothing defers, the cursor reaches the newest view.
         let outcome = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer)
             .await
             .unwrap();
         assert_eq!(
@@ -2070,7 +2076,7 @@ mod tests {
         // successful pass, so recovery is triggered once per leaf.
         let consumer2 = EventCollector::default();
         let outcome = storage
-            .process_decided_events(ViewNumber::new(3), None, &consumer2, None)
+            .process_decided_events(ViewNumber::new(3), None, &consumer2)
             .await
             .unwrap();
         assert!(
@@ -2129,7 +2135,7 @@ mod tests {
         // The empty payload is filled in, both leaves process, and nothing is reported
         // missing.
         let outcome = storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(1), None, &consumer)
             .await
             .unwrap();
         assert_eq!(outcome.processed, Some(ViewNumber::new(1)));
@@ -2228,7 +2234,7 @@ mod tests {
             .await
             .unwrap();
         let outcome = storage
-            .process_decided_events(ViewNumber::new(1), None, &consumer, None)
+            .process_decided_events(ViewNumber::new(1), None, &consumer)
             .await
             .unwrap();
         assert_eq!(outcome.processed, Some(ViewNumber::new(1)));
