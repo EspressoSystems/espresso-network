@@ -413,8 +413,10 @@ where
                         }
                         let key = (view, vid_share.payload_commitment);
                         let Some(validated) = self.cached_validated_proposals.remove(&key) else {
-                            // Wait for the proposal
-                            self.cached_vid_shares.insert(key, vid_share);
+                            // Wait for the proposal. Only own shares reach this point (the
+                            // network arm filters by recipient), so a colliding entry is a
+                            // duplicate; never displace what is already cached.
+                            self.cached_vid_shares.entry(key).or_insert(vid_share);
                             continue;
                         };
                         return self.on_proposal_and_vid_share(validated, vid_share)
@@ -931,11 +933,15 @@ where
                 ConsensusMessage::VidShare(share) => {
                     let view = share.data.view_number();
                     debug!(%node, %sender, %view, "recv vid share");
-                    // Also accept this node's own share for a view already decided without one, so
-                    // it can be stored late (`deliver_late_vid_share` re-checks authoritatively).
-                    if self.consensus.wants_proposal_for_view(&view)
-                        || (self.decided_missing_vid_shares.contains_key(&view)
-                            && share.data.recipient_key == self.public_key)
+                    // Shares are unicast per recipient; one addressed to another node never
+                    // legitimately arrives here (foreign shares circulate via Vote1).
+                    // Accepting it would let it displace our own share in the
+                    // unpaired-share cache and be persisted, voted, and served as ours.
+                    // Shares for views already decided without one are accepted so they
+                    // can be stored late (`deliver_late_vid_share` re-checks).
+                    if share.data.recipient_key == self.public_key
+                        && (self.consensus.wants_proposal_for_view(&view)
+                            || self.decided_missing_vid_shares.contains_key(&view))
                     {
                         self.share_validator.validate(share);
                     }

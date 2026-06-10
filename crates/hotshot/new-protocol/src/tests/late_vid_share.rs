@@ -162,6 +162,30 @@ async fn test_foreign_vid_share_rejected() {
     assert_share_delivered(&harness, view, &our_key);
 }
 
+/// A share addressed to another node arriving over the network is dropped at
+/// the boundary: it must not displace this node's own share in the
+/// unpaired-share cache (both carry the same (view, commitment) key), so the
+/// decide sweep still delivers ours.
+#[tokio::test]
+async fn test_foreign_vid_share_dropped_at_network_boundary() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let (our_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0);
+    let (other_key, _) = BLSPubKey::generated_from_seed_indexed([0u8; 32], 1);
+    let mut harness = TestHarness::new_with_timer(0, Duration::from_millis(500)).await;
+
+    // Our own share arrives first and sits unpaired in the cache; the foreign
+    // share for the same (view, commitment) follows and must not displace it.
+    harness.message(view.vid_share_input(&our_key)).await;
+    harness.message(view.vid_share_input(&other_key)).await;
+    // Drive the validator so the shares are processed into the unpaired cache.
+    harness.process_until(|inputs| !inputs.is_empty()).await;
+
+    // Deciding the view without a share must deliver ours, not the foreign one.
+    harness.process_output(decide_without_share(&test_data, 0));
+    assert_share_delivered(&harness, view, &our_key);
+}
+
 /// A cached share whose payload commitment does not match the decided header
 /// is rejected, and the view keeps waiting: the genuine share arriving later
 /// is still delivered.
