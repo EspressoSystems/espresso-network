@@ -8593,10 +8593,7 @@ mod test {
                     &http,
                     api_port,
                     axum_port,
-                    &format!(
-                        "node/header/window/from/hash/{block_hash}/{}",
-                        avail_ts + 1
-                    ),
+                    &format!("node/header/window/from/hash/{block_hash}/{}", avail_ts + 1),
                 )
                 .await?;
 
