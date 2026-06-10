@@ -19,3 +19,19 @@ pub fn init_avidm_gf2_param(total_weight: usize) -> Result<AvidmGf2Param> {
     AvidmGf2Param::new(recovery_threshold, total_weight)
         .map_err(|err| error!("Failed to initialize VID: {}", err.to_string()))
 }
+
+/// Compute the namespaced AVID-M commitment and common for `encoded_transactions` under a
+/// stake table of `total_weight`, parsing the namespace table from the encoded `metadata`.
+pub fn avidm_gf2_commit(
+    total_weight: usize,
+    encoded_transactions: &[u8],
+    metadata: &[u8],
+) -> Result<(AvidmGf2Commitment, AvidmGf2Common)> {
+    let param = init_avidm_gf2_param(total_weight)?;
+    AvidmGf2Scheme::commit(
+        &param,
+        encoded_transactions,
+        crate::data::ns_table::parse_ns_table(encoded_transactions.len(), metadata),
+    )
+    .map_err(|err| error!("Failed to compute VID commitment: {}", err.to_string()))
+}

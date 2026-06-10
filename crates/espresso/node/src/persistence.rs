@@ -46,7 +46,7 @@ pub mod sql;
 
 /// Number of views for which decided block payloads (DA proposals) and VID shares are retained
 /// in consensus storage so peers can recover payloads for recently-decided views (see
-/// [`PAYLOAD_RECOVERY_HORIZON`](crate::context::PAYLOAD_RECOVERY_HORIZON)).
+/// the decide processor's peer-recovery horizon).
 ///
 /// These dominate consensus storage, so the window is short — a few hours — and independent of
 /// the general consensus retention period (which is kept long for fork/offline recovery of the
@@ -225,7 +225,7 @@ mod tests {
         utils::EpochTransitionIndicator,
         vid::{
             avidm::{AvidMScheme, init_avidm_param},
-            avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+            avidm_gf2::avidm_gf2_commit,
         },
         vote::HasViewNumber,
     };
@@ -2056,14 +2056,10 @@ mod tests {
             };
             // The VID common is not asserted on by these tests; compute a well-formed one from
             // the payload bytes so the recovered result has the shape production delivers.
-            let param = init_avidm_gf2_param(2).unwrap();
-            let (_, common) = AvidmGf2Scheme::commit(
-                &param,
+            let (_, common) = avidm_gf2_commit(
+                2,
                 &proposal.data.encoded_transactions,
-                parse_ns_table(
-                    proposal.data.encoded_transactions.len(),
-                    &proposal.data.metadata.encode(),
-                ),
+                &proposal.data.metadata.encode(),
             )
             .unwrap();
             Ok(Some(RecoveredPayload {

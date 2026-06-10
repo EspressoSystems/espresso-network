@@ -367,6 +367,7 @@ impl Inner {
     fn collect_garbage(
         &mut self,
         decided_view: ViewNumber,
+        keep_leaf: ViewNumber,
         prune_intervals: &[RangeInclusive<ViewNumber>],
     ) -> anyhow::Result<()> {
         let prune_view = ViewNumber::new(decided_view.saturating_sub(self.view_retention));
@@ -393,11 +394,6 @@ impl Inner {
 
         // Keep the most recent *processed* leaf as the restart anchor; the next pass relies on the
         // oldest remaining leaf having been included in a previous decide event.
-        let keep_leaf = prune_intervals
-            .iter()
-            .map(|interval| *interval.end())
-            .max()
-            .unwrap_or(decided_view);
         self.prune_files(
             self.decided_leaf2_path(),
             prune_view,
@@ -883,8 +879,13 @@ impl SequencerPersistence for Persistence {
         // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
         let processed = intervals.iter().map(|i| *i.end()).max();
 
-        // Best-effort GC; runs again at the next decide.
-        let res = self.inner.write().await.collect_garbage(view, &intervals);
+        // Best-effort GC; runs again at the next decide. The most recent processed leaf is kept
+        // as the restart anchor.
+        let res =
+            self.inner
+                .write()
+                .await
+                .collect_garbage(view, processed.unwrap_or(view), &intervals);
         if let Err(err) = res {
             tracing::warn!(?view, "GC failed: {err:#}");
         }

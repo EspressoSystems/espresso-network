@@ -16,10 +16,10 @@ use espresso_types::{
 };
 use hotshot::traits::NodeImplementation;
 use hotshot_types::{
-    data::{VidCommitment, ns_table::parse_ns_table, vid_disperse::vid_total_weight},
+    data::{VidCommitment, vid_disperse::vid_total_weight},
     epoch_membership::EpochMembershipCoordinator,
     traits::{EncodeBytes, network::ConnectedNetwork},
-    vid::avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+    vid::avidm_gf2::avidm_gf2_commit,
 };
 use request_response::RequestType;
 use tokio::time::timeout;
@@ -143,15 +143,10 @@ where
                         );
                         // Recompute commitment and VID common; trust the response only if the
                         // commitment matches the header's.
-                        let param = init_avidm_gf2_param(total_weight)
-                            .map_err(|err| anyhow::anyhow!("failed to init VID params: {err}"))?;
-                        let (commit, common) = AvidmGf2Scheme::commit(
-                            &param,
+                        let (commit, common) = avidm_gf2_commit(
+                            total_weight,
                             &proposal.data.encoded_transactions,
-                            parse_ns_table(
-                                proposal.data.encoded_transactions.len(),
-                                &proposal.data.metadata.encode(),
-                            ),
+                            &proposal.data.metadata.encode(),
                         )
                         .map_err(|err| {
                             anyhow::anyhow!("failed to compute VID commitment: {err}")

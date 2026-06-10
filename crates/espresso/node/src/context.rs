@@ -316,7 +316,7 @@ where
             event_consumer,
             anchor_view,
             proposal_fetcher_cfg,
-            Some(payload_recovery),
+            payload_recovery,
             metrics,
         )
         .with_task_list(tasks))
@@ -337,7 +337,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
-        payload_recovery: Option<Arc<dyn DecidePayloadRecovery>>,
+        payload_recovery: Arc<dyn DecidePayloadRecovery>,
         metrics: &dyn Metrics,
     ) -> Self {
         let events = consensus_handle.event_stream();
@@ -643,10 +643,11 @@ async fn handle_events<N, P, C>(
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
             },
-            CoordinatorEvent::BlockPayloadReconstructed { view, .. } => {
+            CoordinatorEvent::BlockPayloadReconstructed { view, .. }
+            | CoordinatorEvent::VidShareValidated { view, .. } => {
                 // The coordinator already persisted this to consensus storage (with retries);
-                // forward it to the query service to back-fill the block. Spawned so a slow write
-                // can't stall the event loop; idempotent.
+                // forward it to the query service to back-fill the missing block payload or VID
+                // data. Spawned so a slow write can't stall the event loop; idempotent.
                 let consumer = event_consumer.clone();
                 let event = event.clone();
                 let view = *view;
@@ -654,23 +655,7 @@ async fn handle_events<N, P, C>(
                     if let Err(err) = consumer.handle_event(&event).await {
                         tracing::warn!(
                             ?view,
-                            "failed to store reconstructed payload in query service: {err:#}"
-                        );
-                    }
-                });
-            },
-            CoordinatorEvent::VidShareValidated { view, .. } => {
-                // The coordinator already persisted this (with retries); forward it to the query
-                // service to back-fill the missing VID. Spawned so a slow write can't stall the
-                // event loop; idempotent.
-                let consumer = event_consumer.clone();
-                let event = event.clone();
-                let view = *view;
-                spawn(async move {
-                    if let Err(err) = consumer.handle_event(&event).await {
-                        tracing::warn!(
-                            ?view,
-                            "failed to store late VID share in query service: {err:#}"
+                            "failed to store coordinator back-fill data in query service: {err:#}"
                         );
                     }
                 });
@@ -725,7 +710,7 @@ async fn process_decided_events_task<P, C>(
     consumer: Arc<C>,
     mut decide_rx: watch::Receiver<DecideSignal>,
     anchor_view: Option<ViewNumber>,
-    payload_recovery: Option<Arc<dyn DecidePayloadRecovery>>,
+    payload_recovery: Arc<dyn DecidePayloadRecovery>,
     metrics: DecideProcessorMetrics,
 ) where
     P: SequencerPersistence,
@@ -845,12 +830,6 @@ async fn process_decided_events_task<P, C>(
     }
 }
 
-/// Only attempt peer recovery for views within this distance of the newest decided view.
-/// Peers retain DA proposals for [`PAYLOAD_RETENTION_VIEWS`] (a few hours); anything older has
-/// likely been pruned everywhere and is left to the query service's peer fetching instead. Set
-/// equal to the retention window so we never request payloads peers no longer have.
-pub(crate) const PAYLOAD_RECOVERY_HORIZON: u64 = PAYLOAD_RETENTION_VIEWS;
-
 /// Number of attempts to recover a view's payload from peers before giving up and leaving
 /// the gap to the query service's own fetching.
 const PAYLOAD_RECOVERY_ATTEMPTS: u32 = 3;
@@ -862,7 +841,7 @@ const PAYLOAD_RECOVERY_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// Spawn background recovery of `missing` leaves' payloads from peers. Each leaf is reported by
 /// exactly one successful pass (the cursor advances past it), so recovery runs once per leaf.
 fn spawn_payload_recovery<P, C>(
-    payload_recovery: &Option<Arc<dyn DecidePayloadRecovery>>,
+    payload_recovery: &Arc<dyn DecidePayloadRecovery>,
     persistence: &Arc<P>,
     consumer: &Arc<C>,
     decided_view: u64,
@@ -872,25 +851,23 @@ fn spawn_payload_recovery<P, C>(
     P: SequencerPersistence,
     C: PersistenceEventConsumer + 'static,
 {
-    let Some(recovery) = payload_recovery else {
-        return;
-    };
     let leaves = missing
         .into_iter()
         .filter(|leaf| {
-            // Recovery is only supported for new-protocol (V2) payload commitments, and
-            // only within the window peers retain DA proposals for.
+            // Recovery is only supported for new-protocol (V2) payload commitments, and only
+            // within the window peers retain DA proposals for: anything older has likely been
+            // pruned everywhere and is left to the query service's peer fetching instead.
             matches!(
                 leaf.block_header().payload_commitment(),
                 VidCommitment::V2(_)
-            ) && decided_view.saturating_sub(leaf.view_number().u64()) <= PAYLOAD_RECOVERY_HORIZON
+            ) && decided_view.saturating_sub(leaf.view_number().u64()) <= PAYLOAD_RETENTION_VIEWS
         })
         .collect::<Vec<_>>();
     if leaves.is_empty() {
         return;
     }
     spawn(recover_missing_payloads(
-        recovery.clone(),
+        payload_recovery.clone(),
         persistence.clone(),
         consumer.clone(),
         leaves,

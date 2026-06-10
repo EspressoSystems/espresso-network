@@ -3,7 +3,7 @@ mod metrics;
 pub mod timer;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, btree_map::Entry},
     sync::Arc,
     time::Duration,
 };
@@ -1167,7 +1167,7 @@ where
     /// in `decided_missing_vid_shares`, the share is ours, and it matches the decided header.
     fn deliver_late_vid_share(&mut self, share: VidDisperseShare2<T>) {
         let view = share.view_number();
-        let Some(header) = self.decided_missing_vid_shares.get(&view) else {
+        let Entry::Occupied(entry) = self.decided_missing_vid_shares.entry(view) else {
             return;
         };
         // Only this node's own share matters here (the query service serves it as ours); the
@@ -1177,17 +1177,14 @@ where
             warn!(%view, "late vid share not addressed to this node, share discarded");
             return;
         }
-        let VidCommitment::V2(commit) = header.payload_commitment() else {
+        let VidCommitment::V2(commit) = entry.get().payload_commitment() else {
             return;
         };
         if commit != share.payload_commitment {
             warn!(%view, "late vid share payload commitment mismatch, share discarded");
             return;
         }
-        let header = self
-            .decided_missing_vid_shares
-            .remove(&view)
-            .expect("entry checked above");
+        let header = entry.remove();
         info!(%view, "vid share validated after its view was decided");
         self.storage.append_vid(share.clone());
         // The pairing path (`on_proposal_and_vid_share`) was skipped for this view, so the
