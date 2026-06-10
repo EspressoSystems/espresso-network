@@ -309,11 +309,6 @@ struct NetworkParams<'a> {
     l1_provider: &'a str,
     peer_ports: &'a [u16],
     api_ports: &'a [u16],
-    /// Multiplier applied to post-restart progress/epoch timeouts. The new
-    /// protocol (V6) reconstructs merklized state on restart, which is much
-    /// slower than legacy catchup — especially when a restart drops the network
-    /// below quorum and a majority must cold-recover — so it needs more headroom.
-    timeout_scale: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -360,8 +355,6 @@ struct TestNode<S: TestableSequencerDataSource> {
     reference_state: Arc<RwLock<BTreeMap<u64, Commitment<Leaf2>>>>,
     /// Number of epochs to wait after restart before running progress check.
     wait_for_epoch: EpochNumber,
-    /// Multiplier for post-restart progress/epoch timeouts (see `NetworkParams`).
-    timeout_scale: u32,
 }
 
 impl<S: TestableSequencerDataSource> TestNode<S> {
@@ -447,7 +440,6 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             context: None,
             reference_state: Default::default(),
             wait_for_epoch: EpochNumber::new(3),
-            timeout_scale: network.timeout_scale,
         }
     }
 
@@ -540,12 +532,9 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             };
             // Give enough time for every node to propose, with every view timing out. This is
             // conservative: of course if we actually make progress, not every view will time out,
-            // and we will take less than this amount of time. Scaled up for the new protocol,
-            // whose post-restart state catchup is much slower.
-            let timeout_duration = 4
-                * Duration::from_millis(next_view_timeout)
-                * (self.num_nodes as u32)
-                * self.timeout_scale;
+            // and we will take less than this amount of time.
+            let timeout_duration =
+                4 * Duration::from_millis(next_view_timeout) * (self.num_nodes as u32);
             match timeout(timeout_duration, self.check_progress()).await {
                 Ok(res) => res,
                 Err(_) => bail!("timed out waiting for progress on node {node_id}"),
@@ -704,8 +693,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream();
 
-        // Scaled up for the new protocol's slower post-restart catchup.
-        let timeout_duration = Duration::from_secs(60) * self.timeout_scale;
+        let timeout_duration = Duration::from_secs(60);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
                 let Some(decided_epoch) = decided_epoch(&event) else {
@@ -842,17 +830,6 @@ impl TestNetwork {
             .iter()
             .map(|node| node.api_port)
             .collect::<Vec<_>>();
-        // The new protocol rebuilds merklized state on restart, which is far
-        // slower than legacy catchup (especially for below-quorum restarts where
-        // a majority cold-recovers), so give its post-restart waits more
-        // headroom. Legacy keeps the original (1x) budget. The new-protocol
-        // restart tests get a matching longer nextest slow-timeout (see
-        // `.config/nextest.toml`).
-        let timeout_scale = if version >= NEW_PROTOCOL_VERSION {
-            4
-        } else {
-            1
-        };
         let network_params = NetworkParams {
             genesis_file: &genesis_file_path,
             orchestrator_port,
@@ -860,7 +837,6 @@ impl TestNetwork {
             l1_provider: &anvil_endpoint,
             api_ports: &api_ports,
             peer_ports: &peer_ports,
-            timeout_scale,
         };
 
         let mut network = Self {

@@ -85,15 +85,6 @@ pub enum ConsensusInput<T: NodeType> {
         payload_commitment: VidCommitment,
     },
     BlockReconstructed(ViewNumber, VidCommitment2),
-    /// A full block payload fetched from a peer and verified against the
-    /// proposal's payload commitment. Fallback for blocks that cannot be
-    /// reconstructed from live VID shares (see
-    /// [`ConsensusOutput::RequestBlockPayload`]).
-    BlockFetched {
-        view: ViewNumber,
-        payload_commitment: VidCommitment2,
-        payload: T::BlockPayload,
-    },
     Certificate1(Certificate1<T>),
     Certificate2(Certificate2<T>),
     /// Atomic pair emitted by the `EpochRootVoteCollector` for epoch-root views:
@@ -124,15 +115,6 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
-    /// Ask peers for the full payload of the proposal at `view`: voting is
-    /// blocked on a block this node cannot reconstruct from live VID shares
-    /// (e.g. it restarted and missed the dispersal). Any single peer holding
-    /// the payload can answer; the response is verified against the
-    /// proposal's payload commitment before being applied as
-    /// [`ConsensusInput::BlockFetched`].
-    RequestBlockPayload {
-        view: ViewNumber,
-    },
     SendProposal(SignedProposal<T, Proposal<T>>),
     SendVidShares(Vec<VidShareMessage<T>>),
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
@@ -181,10 +163,6 @@ pub struct Consensus<T: NodeType> {
     states_verified: BTreeMap<ViewNumber, Commitment<Leaf2<T>>>,
     blocks_reconstructed: BTreeSet<(ViewNumber, VidCommitment2)>,
     blocks: BTreeMap<(ViewNumber, VidCommitment2), T::BlockPayload>,
-    /// Blocks for which a peer payload fetch has been requested (dedup for
-    /// [`ConsensusOutput::RequestBlockPayload`]). Cleared when the payload
-    /// arrives or the view is garbage collected.
-    requested_payloads: BTreeSet<(ViewNumber, VidCommitment2)>,
     certs: BTreeMap<ViewNumber, Certificate1<T>>,
     certs2: BTreeMap<ViewNumber, Certificate2<T>>,
     timeout_certs: BTreeMap<ViewNumber, TimeoutCertificate2<T>>,
@@ -290,7 +268,6 @@ impl<T: NodeType> Consensus<T> {
             pending_certs1: BTreeMap::new(),
             pending_certs2: BTreeMap::new(),
             pending_timeout_certs: BTreeMap::new(),
-            requested_payloads: BTreeSet::new(),
             private_key,
             state_private_key,
             stake_table_capacity,
@@ -323,14 +300,6 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(proposal.epoch);
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
-        // Anchor the decide cursor at the seeded parent, mirroring
-        // `apply_pre_cutover_seed` (the coordinator's follow-up `set_view`
-        // only moves `current_view`, not the cursor). The seeded parent was
-        // already decided — and processed — before the restart; without this,
-        // `maybe_decide`'s ancestor walk descends through the seeded proposal
-        // and the first post-restart decide re-emits the anchor, re-appending
-        // an already-GC'd leaf to storage below the decide processor's cursor.
-        // The guard keeps genesis seeding (legacy cutover path) a no-op.
         if proposal.view_number > self.last_decided_view {
             self.last_decided_view = proposal.view_number;
             self.last_decided_leaf = proposal.clone().into();
@@ -550,17 +519,6 @@ impl<T: NodeType> Consensus<T> {
                 self.blocks_reconstructed.insert((view, vid_commitment));
                 Protocol::Continue
             },
-            ConsensusInput::BlockFetched {
-                view,
-                payload_commitment,
-                payload,
-            } => {
-                info!(%view, "apply: block payload fetched from peer");
-                self.blocks.insert((view, payload_commitment), payload);
-                self.blocks_reconstructed.insert((view, payload_commitment));
-                self.requested_payloads.remove(&(view, payload_commitment));
-                Protocol::Continue
-            },
             ConsensusInput::StateValidated(state_response) => {
                 debug!(view = %state_response.view, "apply: state validated");
                 self.states_verified
@@ -723,17 +681,6 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.get(view)
     }
 
-    /// The block payload for the proposal at `view`, if this node holds it
-    /// (built, reconstructed, or fetched). Used to serve peer payload-fetch
-    /// requests.
-    pub fn block_payload(&self, view: ViewNumber) -> Option<&T::BlockPayload> {
-        let proposal = self.proposals.get(&view)?;
-        let VidCommitment::V2(commitment) = proposal.block_header.payload_commitment() else {
-            return None;
-        };
-        self.blocks.get(&(view, commitment))
-    }
-
     pub fn gc(&mut self, scope: GcScope) {
         match scope {
             GcScope::Local(view) => {
@@ -749,9 +696,6 @@ impl<T: NodeType> Consensus<T> {
                 self.blocks = self.blocks.split_off(&(view, VidCommitment2::default()));
                 self.blocks_reconstructed = self
                     .blocks_reconstructed
-                    .split_off(&(view, VidCommitment2::default()));
-                self.requested_payloads = self
-                    .requested_payloads
                     .split_off(&(view, VidCommitment2::default()));
                 self.certs = self.certs.split_off(&view);
                 self.certs2 = self.certs2.split_off(&view);
@@ -1594,28 +1538,6 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "debug", skip_all)]
-    /// Safety check: a proposal must extend this node's decided chain.
-    ///
-    /// A proposal whose parent is older than our last decided leaf forks below
-    /// a block we already consider final — e.g. peers that crashed before
-    /// persisting a decide and re-proposed the same height after restart.
-    /// A proposal whose parent is at the decided view must extend the decided
-    /// leaf itself. Voting for (or locking on) such a proposal lets the
-    /// network finalize a conflicting block at an already-decided height.
-    ///
-    /// Genesis parents are exempt, matching the parent-chain verification in
-    /// `maybe_vote_1`.
-    fn extends_decided_chain(&self, proposal: &Proposal<T>) -> bool {
-        let parent_view = proposal.justify_qc.view_number();
-        if parent_view < self.last_decided_view {
-            return false;
-        }
-        if parent_view == self.last_decided_view && parent_view != ViewNumber::genesis() {
-            return proposal.justify_qc.data().leaf_commit == self.last_decided_leaf.commit();
-        }
-        true
-    }
-
     fn maybe_vote_1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
         if view <= self.timeout_view {
             return;
@@ -1632,16 +1554,6 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "proposal not available");
             return;
         };
-        // if !self.extends_decided_chain(proposal) {
-        //     warn!(
-        //         %view,
-        //         block = %proposal.block_header.block_number(),
-        //         qc_view = %proposal.justify_qc.view_number(),
-        //         last_decided_view = %self.last_decided_view,
-        //         "proposal conflicts with the decided chain, refusing to vote1"
-        //     );
-        //     return;
-        // }
         let Some(vid_share) = self.vid_shares.get(&view) else {
             debug!(%view, "vid share not available");
             return;
@@ -1814,19 +1726,6 @@ impl<T: NodeType> Consensus<T> {
             debug!(%view, "proposal not available");
             return;
         };
-        // // Refuse to lock on or vote2 for a proposal that conflicts with our
-        // // decided chain, even if a cert1 formed for it (e.g. among peers that
-        // // lost a decide to a crash). See `extends_decided_chain`.
-        // if !self.extends_decided_chain(proposal) {
-        //     warn!(
-        //         %view,
-        //         block = %proposal.block_header.block_number(),
-        //         qc_view = %proposal.justify_qc.view_number(),
-        //         last_decided_view = %self.last_decided_view,
-        //         "proposal conflicts with the decided chain, refusing to lock or vote2"
-        //     );
-        //     return;
-        // }
         let proposal_epoch = proposal.epoch;
         let block = proposal.block_header.block_number();
         let qc_view = proposal.justify_qc.view_number();
@@ -1902,15 +1801,6 @@ impl<T: NodeType> Consensus<T> {
                 return;
             },
         };
-        info!(
-            node = %self.node_id,
-            %view,
-            block = %proposal.block_header.block_number(),
-            leaf_commit = %proposal_commit,
-            qc_view = %proposal.justify_qc.view_number(),
-            last_decided_view = %self.last_decided_view,
-            "DEBUG emitting vote2"
-        );
         outbox.push_back(ConsensusOutput::SendVote2(vote));
         self.voted_2_views.insert(view);
     }
@@ -2209,7 +2099,6 @@ impl<T: NodeType> ConsensusInput<T> {
         match self {
             ConsensusInput::BlockBuilt { view, .. } => *view,
             ConsensusInput::BlockReconstructed(view, _) => *view,
-            ConsensusInput::BlockFetched { view, .. } => *view,
             ConsensusInput::Certificate1(cert) => cert.view_number(),
             ConsensusInput::Certificate2(cert) => cert.view_number(),
             ConsensusInput::EpochRootCertificates { cert1, .. } => cert1.view_number(),

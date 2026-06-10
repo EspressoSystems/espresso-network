@@ -18,7 +18,7 @@ use hotshot_types::{
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
     traits::{
-        EncodeBytes, block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType,
+        block_contents::BlockHeader, metrics::Metrics, node_implementation::NodeType,
         signature_key::StateSignatureKey,
     },
     utils::{epoch_from_block_number, is_epoch_root},
@@ -42,16 +42,16 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        self, BlockFetchMessage, BlockFetchResponse, BlockMessage, Certificate2, ConsensusMessage,
-        Message, MessageType, Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest,
-        TransactionMessage, Unchecked, Vote2,
+        self, BlockMessage, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
+        ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
+        Vote2,
     },
     network::Network,
     outbox::Outbox,
     proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
     storage::{NewProtocolStorage, Storage},
-    vid::{PayloadFetchVerifier, VidDisperseRequest, VidDisperser, VidReconstructor},
+    vid::{VidDisperseRequest, VidDisperser, VidReconstructor},
     vote::VoteCollector,
 };
 
@@ -74,8 +74,6 @@ pub struct Coordinator<T: NodeType, N, S> {
     client: CoordinatorClient<T>,
     vid_disperser: VidDisperser<T>,
     vid_reconstructor: VidReconstructor<T>,
-    #[builder(default = PayloadFetchVerifier::new(membership_coordinator.clone()))]
-    payload_fetch_verifier: PayloadFetchVerifier<T>,
     vote1_collector: VoteCollector<T, QuorumVote2<T>, QuorumCertificate2<T>>,
     vote2_collector: VoteCollector<T, Vote2<T>, Certificate2<T>>,
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
@@ -196,7 +194,6 @@ where
             .state_manager(state_manager)
             .vid_disperser(VidDisperser::new(membership_coordinator.clone()))
             .vid_reconstructor(VidReconstructor::new())
-            .payload_fetch_verifier(PayloadFetchVerifier::new(membership_coordinator.clone()))
             .vote1_collector(VoteCollector::new(
                 membership_coordinator.clone(),
                 lock.clone(),
@@ -513,27 +510,6 @@ where
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
                     }
                 },
-                Some(item) = self.payload_fetch_verifier.next() => match item {
-                    Ok(out) => {
-                        finish_measurement(next_input);
-                        if let Some(proposal) = self.consensus.proposal_at(out.view) {
-                            self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
-                                view: out.view,
-                                header: proposal.block_header.clone(),
-                                payload: out.payload.clone(),
-                            });
-                        }
-                        return Ok(ConsensusInput::BlockFetched {
-                            view: out.view,
-                            payload_commitment: out.payload_commitment,
-                            payload: out.payload,
-                        })
-                    }
-                    Err(()) => {
-                        finish_measurement(next_input);
-                        return Err(CoordinatorError::unspecified().context("fetched payload verification"))
-                    }
-                },
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
                         finish_measurement(next_input);
@@ -615,25 +591,6 @@ where
             ConsensusOutput::RequestDrbResult(epoch) => {
                 debug!(%node, %epoch, "request drb result");
                 self.epoch_manager.request_drb_result(epoch);
-            },
-            ConsensusOutput::RequestBlockPayload { view } => {
-                info!(%node, %view, "requesting block payload from peers");
-                let request =
-                    self.consensus
-                        .signed_proposal_fetch_request(view)
-                        .map_err(|err| {
-                            let err = format!("failed to sign block payload request: {err}");
-                            CoordinatorError::regular(err).context("sign block payload request")
-                        })?;
-                let message = Message {
-                    sender: self.public_key.clone(),
-                    message_type: MessageType::BlockFetch(BlockFetchMessage::Request(request)),
-                };
-                self.network
-                    .broadcast(self.consensus.current_view(), &message)
-                    .map_err(|err| {
-                        CoordinatorError::from(err).context("broadcast block payload request")
-                    })?;
             },
             ConsensusOutput::LeafDecided {
                 leaves,
@@ -1101,65 +1058,6 @@ where
                 self.pending_proposal_fetches.resolve(&proposal);
                 None
             },
-            MessageType::BlockFetch(BlockFetchMessage::Request(request)) => {
-                let view = request.view_number();
-                debug!(%node, %sender, %view, "recv block payload fetch request");
-                if !request.validate_sender(&message.sender) {
-                    warn!(
-                        %node,
-                        sender = %message.sender,
-                        %view,
-                        "ignoring invalid block payload fetch request signature"
-                    );
-                    return None;
-                }
-                if let Some(payload) = self.consensus.block_payload(view) {
-                    let response = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::BlockFetch(BlockFetchMessage::Response(
-                            BlockFetchResponse {
-                                view,
-                                payload: payload.encode().to_vec(),
-                            },
-                        )),
-                    };
-                    if let Err(err) = self.network.unicast(
-                        self.consensus.current_view(),
-                        &message.sender,
-                        &response,
-                    ) {
-                        let err = CoordinatorError::from(err).context("block payload response");
-                        warn!(%node, %err, "network error while sending block payload response");
-                    }
-                }
-                None
-            },
-            MessageType::BlockFetch(BlockFetchMessage::Response(response)) => {
-                let view = response.view;
-                debug!(%node, %sender, %view, "recv block payload fetch response");
-                // The proposal we hold for this view determines the expected
-                // payload commitment and the metadata needed to decode the
-                // payload; the verifier checks the response against it, so the
-                // responder need not be trusted.
-                let Some(proposal) = self.consensus.proposal_at(view) else {
-                    debug!(%node, %view, "no proposal for fetched block payload");
-                    return None;
-                };
-                let VidCommitment::V2(expected_commitment) =
-                    proposal.block_header.payload_commitment()
-                else {
-                    warn!(%node, %view, "proposal payload commitment is not a V2 VID commitment");
-                    return None;
-                };
-                self.payload_fetch_verifier.verify(
-                    view,
-                    proposal.epoch,
-                    expected_commitment,
-                    response.payload,
-                    proposal.block_header.metadata().clone(),
-                );
-                None
-            },
             MessageType::External(data) => {
                 debug!(%node, %sender, bytes = data.len(), "recv external message");
                 self.coordinator_outbox
@@ -1596,7 +1494,6 @@ where
                 self.state_manager.gc(view);
                 self.storage.gc(view);
                 self.vid_reconstructor.gc(view);
-                self.payload_fetch_verifier.gc(view);
                 self.da_payloads = self
                     .da_payloads
                     .split_off(&(view, VidCommitment2::default()));

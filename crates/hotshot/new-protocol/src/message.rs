@@ -209,38 +209,6 @@ impl<T: NodeType> HasViewNumber for ProposalFetchMessage<T> {
     }
 }
 
-/// Request/response for fetching a full block payload from a peer.
-///
-/// VID reconstruction needs a quorum of live shares, which a node that missed
-/// the dispersal (e.g. it was restarting) can never assemble if too few peers
-/// retained shares. Any single peer holding the payload can serve this request
-/// instead; the requester verifies the response against the payload commitment
-/// in its copy of the proposal, so the responder need not be trusted.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-#[serde(bound(deserialize = ""))]
-pub enum BlockFetchMessage<T: NodeType> {
-    Request(ProposalFetchRequest<T>),
-    Response(BlockFetchResponse),
-}
-
-/// The encoded payload for the proposal at `view`. The requester rebuilds the
-/// payload using the metadata from its own copy of the proposal and checks it
-/// against the proposal's payload commitment.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
-pub struct BlockFetchResponse {
-    pub view: ViewNumber,
-    pub payload: Vec<u8>,
-}
-
-impl<T: NodeType> HasViewNumber for BlockFetchMessage<T> {
-    fn view_number(&self) -> ViewNumber {
-        match self {
-            Self::Request(request) => request.view_number(),
-            Self::Response(response) => response.view,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 #[serde(bound(deserialize = ""))]
 pub struct DedupManifest<T: NodeType> {
@@ -280,7 +248,6 @@ pub enum MessageType<T: NodeType, S> {
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
     External(Vec<u8>),
-    BlockFetch(BlockFetchMessage<T>),
 }
 
 impl<T: NodeType, S> MessageType<T, S> {
@@ -291,7 +258,6 @@ impl<T: NodeType, S> MessageType<T, S> {
             Self::Block(b) => MessageType::Block(b),
             Self::ProposalFetch(r) => MessageType::ProposalFetch(r),
             Self::External(v) => MessageType::External(v),
-            Self::BlockFetch(r) => MessageType::BlockFetch(r),
         }
     }
 }
@@ -324,7 +290,6 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ProposalFetch(message) => message.view_number(),
             MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
-            MessageType::BlockFetch(message) => message.view_number(),
         }
     }
 }
