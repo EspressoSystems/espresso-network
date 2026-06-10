@@ -835,7 +835,10 @@ pub trait SequencerPersistence:
                 Some(PendingDecide {
                     view: decided_view,
                     deciding_qc: deciding_qc.clone(),
-                    data: Arc::new(DecideEventData::new(leaf_chain.iter(), None)),
+                    // No capture for legacy decides: their DA/VID writes are synchronous
+                    // before voting, so the staging stores always cover them, and capturing
+                    // would deep-clone every payload on the consensus event loop for nothing.
+                    data: Arc::new(DecideEventData::default()),
                 })
             },
             CoordinatorEvent::NewDecide {
