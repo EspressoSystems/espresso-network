@@ -1608,18 +1608,6 @@ impl<T: NodeType> Consensus<T> {
             let parent_block = prev_proposal.block_header.block_number();
             let parent_epoch = prev_proposal.epoch;
 
-            // The justify QC must certify the parent proposal we hold. Checked
-            // before the availability gate below, which uses the QC as
-            // evidence.
-            if proposal.justify_qc.data().leaf_commit != proposal_commitment(prev_proposal) {
-                debug!(
-                    %view, block = %block_number, %epoch,
-                    %parent_view, %parent_block, %parent_epoch,
-                    "justify qc commitment does not match proposal commitment"
-                );
-                return;
-            }
-
             if !parent_is_pre_cutover {
                 let VidCommitment::V2(prev_block_commitment) =
                     prev_proposal.block_header.payload_commitment()
@@ -1631,26 +1619,28 @@ impl<T: NodeType> Consensus<T> {
                     }
                     return;
                 };
+                // Verify we have a reconstructed block for the parent whose
+                // commitment matches the parent proposal's payload commitment.
                 if !self
                     .blocks_reconstructed
                     .contains(&(parent_view, prev_block_commitment))
                 {
-                    // We never reconstructed the parent ourselves — e.g. we
-                    // restarted and missed the dispersal, and live shares for
-                    // an old view will never arrive. The verified justify QC
-                    // is quorum evidence of the parent's availability: every
-                    // vote1 carries the voter's VID share, so a valid cert1 of
-                    // weight >= 2f+1 implies at least f+1 honest nodes held
-                    // shares, which meets the VID recovery threshold
-                    // (ceil(n/3)). Accept it in place of local reconstruction.
-                    info!(
+                    debug!(
                         %view, block = %block_number, %epoch,
                         %parent_view, %parent_block, %parent_epoch,
-                        "accepting justify qc as parent availability evidence"
+                        "no reconstructed block matching the parent block commitment"
                     );
-                    self.blocks_reconstructed
-                        .insert((parent_view, prev_block_commitment));
+                    return;
                 }
+            }
+
+            if proposal.justify_qc.data().leaf_commit != proposal_commitment(prev_proposal) {
+                debug!(
+                    %view, block = %block_number, %epoch,
+                    %parent_view, %parent_block, %parent_epoch,
+                    "justify qc commitment does not match proposal commitment"
+                );
+                return;
             }
         }
 
@@ -1754,17 +1744,11 @@ impl<T: NodeType> Consensus<T> {
             .blocks_reconstructed
             .contains(&(view, proposal_block_commitment))
         {
-            // The cert1 above certifies this proposal (leaf commitment checked)
-            // and every vote1 in it carried the voter's VID share, so a valid
-            // cert1 of weight >= 2f+1 implies at least f+1 honest nodes held
-            // shares — the VID recovery threshold. Accept it in place of local
-            // reconstruction (e.g. we restarted and missed the dispersal).
-            info!(
+            debug!(
                 %view, %block, epoch = %proposal_epoch, %qc_view, ?qc_epoch,
-                "accepting cert1 as block availability evidence"
+                "no reconstructed block matching the proposal commitment"
             );
-            self.blocks_reconstructed
-                .insert((view, proposal_block_commitment));
+            return;
         }
 
         // We have a valid certificate, proposal, and reconstructed block
