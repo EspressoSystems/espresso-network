@@ -92,6 +92,11 @@ where
             return;
         }
 
+        let Some(membership) = self.resolve_membership(&vote) else {
+            self.pending.entry(view).or_default().push(vote);
+            return;
+        };
+
         // Check that we have not received a vote from this signer already.
         {
             let key = vote.signing_key();
@@ -99,20 +104,15 @@ where
 
             let signers = self.signers.entry(view).or_default();
 
-            if let Some(s) = signers.get(&key)
-                && *s != sig
-            {
-                warn!(%view, cert = type_name::<C>(), signer = %key, "multiple votes in one view");
+            if let Some(s) = signers.get(&key) {
+                if *s != sig {
+                    warn!(%view, cert = type_name::<C>(), signer = %key, "multiple votes in one view");
+                }
                 return;
             } else {
-                signers.insert(vote.signing_key(), vote.signature());
+                signers.insert(key, sig);
             }
         }
-
-        let Some(membership) = self.resolve_membership(&vote) else {
-            self.pending.entry(view).or_default().push(vote);
-            return;
-        };
 
         if let Some(tx) = self.ballot_boxes.get(&view) {
             let _ = tx.send(vote);
