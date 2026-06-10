@@ -8,6 +8,7 @@ use hotshot_types::{
         DaProposal2, EpochNumber, QuorumProposal2, QuorumProposalWrapper, VidCommitment,
         VidDisperseShare, VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
     },
+    event::HotShotAction,
     message::Proposal as SignedProposal,
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
@@ -39,6 +40,24 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             private_key,
             handles: BTreeMap::new(),
         }
+    }
+
+    /// Record that this node acted (voted or proposed) in `view` so that a
+    /// restarted node never re-enters a view it already acted in.
+    pub fn record_action(&mut self, view: ViewNumber, epoch: EpochNumber, action: HotShotAction) {
+        let storage = self.storage.clone();
+        let handle = spawn(async move {
+            loop {
+                match storage.record_action(view, Some(epoch), action).await {
+                    Ok(()) => return,
+                    Err(err) => {
+                        warn!(%err, %view, ?action, "failed to record action, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
     }
 
     pub fn append_vid(&mut self, vid_share: VidDisperseShare2<T>) {

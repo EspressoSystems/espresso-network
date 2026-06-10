@@ -14,6 +14,7 @@ use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
     data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
+    event::HotShotAction,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
     simple_vote::{HasEpoch, QuorumVote2, TimeoutVote2},
@@ -640,6 +641,8 @@ where
                 let epoch = proposal.data.epoch;
                 let block = proposal.data.block_header.block_number();
                 info!(%node, %view, %epoch, %block, "send proposal");
+                self.storage
+                    .record_action(view, epoch, HotShotAction::Propose);
                 self.storage.append_proposal(proposal.data.clone());
                 // Two blocks can be built for one view. Here we know which one
                 // wins and we persist just that one:
@@ -736,6 +739,13 @@ where
                     epoch_root = vote1.state_vote.is_some(),
                     "send vote1"
                 );
+                self.storage.record_action(
+                    view,
+                    self.consensus
+                        .current_epoch()
+                        .unwrap_or(EpochNumber::genesis()),
+                    HotShotAction::Vote,
+                );
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
@@ -746,6 +756,13 @@ where
             },
             ConsensusOutput::SendVote2(vote2) => {
                 debug!(%node, view = %vote2.view_number(), "send vote2");
+                self.storage.record_action(
+                    vote2.view_number(),
+                    self.consensus
+                        .current_epoch()
+                        .unwrap_or(EpochNumber::genesis()),
+                    HotShotAction::Vote,
+                );
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
