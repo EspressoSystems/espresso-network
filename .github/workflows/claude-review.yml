@@ -35,6 +35,28 @@ jobs:
             "${{ github.event.pull_request.number }}" \
             > ./tmp/pr-review-comments.json
 
+      - name: Prepare backport context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Backport PRs use the branch name backport-<original>-to-<target>,
+          # created by both scripts/backport-dispatch and korthout/backport-action.
+          if [[ ! "$HEAD_REF" =~ ^backport-([0-9]+)-to- ]]; then
+            echo "not a backport branch ($HEAD_REF); skipping"
+            exit 0
+          fi
+          orig="${BASH_REMATCH[1]}"
+          echo "$orig" > ./tmp/is-backport
+          scripts/fetch-pr-team-comments "$OWNER" "$REPO" "$orig" \
+            > ./tmp/original-pr-comments.json
+          gh pr diff "$orig" > ./tmp/original.diff
+          gh pr diff "$PR_NUMBER" > ./tmp/backport.diff
+
       - name: Claude Code Review
         uses: anthropics/claude-code-action@v1
         with:
@@ -44,7 +66,21 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
 
-            Perform a comprehensive code review with the following focus areas:
+            If `./tmp/is-backport` exists, this PR is a backport of the original PR
+            whose number is in that file. Perform a BACKPORT-CORRECTNESS review instead
+            of the standard review below:
+            - `./tmp/original.diff` is the original PR's diff; `./tmp/backport.diff` is
+              this PR's diff. Compare them and confirm the backport faithfully reproduces
+              the original change, adapted correctly to the target branch (API/type
+              differences between branches, conflict-resolution edits, dropped or extra
+              hunks).
+            - `./tmp/original-pr-comments.json` holds the original PR's review comments.
+              Do NOT re-flag anything already raised there. Only flag problems introduced
+              by the backport itself (bad merge, lost hunk, wrong adaptation).
+            - Skip the same exclusions listed below.
+            Then stop; do not run the standard review.
+
+            Otherwise, perform a comprehensive code review with the following focus areas:
 
             1. **Code Quality**
                - Clean code principles and best practices
