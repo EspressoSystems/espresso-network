@@ -3967,7 +3967,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        match select_active_validator_set(state.validators()) {
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
             Err(StakeTableError::NoValidValidators) => {},
             Ok(map) => assert!(map.get(&account).is_none()),
             Err(e) => panic!("unexpected error: {e}"),
