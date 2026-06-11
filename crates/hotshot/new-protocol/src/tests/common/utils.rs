@@ -59,6 +59,7 @@ use crate::{
     },
     outbox::Outbox,
     state::StateResponse,
+    storage::StorageOutput,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -889,6 +890,20 @@ impl ConsensusHarness {
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
+        // The coordinator persists incoming proposals and VID shares before
+        // consensus sees them; simulate those storage confirmations.
+        if let ConsensusInput::ProposalWithVidShare(_, msg, vid_share) = &input {
+            let view = msg.proposal.data.view_number;
+            let commitment = proposal_commitment(&msg.proposal.data);
+            self.consensus.apply(
+                ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                &mut outbox,
+            );
+            self.consensus.apply(
+                ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
+                &mut outbox,
+            );
+        }
         self.consensus.apply(input, &mut outbox);
         self.drain_outbox(&mut outbox).await;
     }
@@ -909,6 +924,20 @@ impl ConsensusHarness {
             ConsensusOutput::RequestState(req) => {
                 let input = state_verified_input(&req.proposal, req.view);
                 self.consensus.apply(input, outbox);
+            },
+            ConsensusOutput::RecordAction(view, _, kind) => {
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
+                    outbox,
+                );
+            },
+            ConsensusOutput::PersistProposal(proposal) => {
+                let view = proposal.data.view_number;
+                let commitment = proposal_commitment(&proposal.data);
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
             },
             ConsensusOutput::RequestBlockAndHeader(req) => {
                 let mock_block = MockBlock::new();
