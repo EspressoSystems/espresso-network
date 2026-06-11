@@ -131,7 +131,7 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
     // Restarted nodes must not act again in views they acted in before.
     let restart_view = storage.restart_view().await;
     let last_actioned_view = storage.last_actioned_view().await;
-    consensus.skip_to_view(std::cmp::max(restart_view, last_actioned_view + 1) - 1);
+    consensus.resume_from_restart(ViewNumber::genesis(), restart_view, last_actioned_view);
 
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2 {

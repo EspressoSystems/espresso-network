@@ -3,7 +3,6 @@ mod metrics;
 pub mod timer;
 
 use std::{
-    cmp::max,
     collections::{BTreeMap, HashMap},
     sync::Arc,
     time::Duration,
@@ -185,15 +184,16 @@ where
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
                 });
+        // `seed_parent` sets the current epoch from the anchor proposal;
+        // `resume_from_restart` positions the view so the node never
+        // re-enters a view it may have voted or proposed in before it went
+        // down.
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
-        consensus.set_view(anchor_view, anchor_epoch);
-        // Never re-enter a view this node may have voted or proposed in
-        // before it went down.
-        let start_view = max(
-            anchor_view + 1,
-            max(initializer.start_view, initializer.last_actioned_view + 1),
+        consensus.resume_from_restart(
+            anchor_view,
+            initializer.start_view,
+            initializer.last_actioned_view,
         );
-        consensus.skip_to_view(start_view - 1);
         if let Some(state_cert) = initializer.state_cert.clone() {
             consensus.seed_state_cert(state_cert);
         }

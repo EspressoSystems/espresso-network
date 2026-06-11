@@ -696,15 +696,28 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(epoch);
     }
 
-    /// Forward-only jump used on restart. Raising `timeout_view` keeps the
-    /// node from voting in views it may already have acted in before it
-    /// went down.
-    pub fn skip_to_view(&mut self, view: ViewNumber) {
-        if view > self.timeout_view {
-            self.timeout_view = view;
+    /// Position the view state on restart at the first view this node may
+    /// act in: past the decided anchor, no earlier than the view it was in
+    /// at shutdown, and past any view it recorded an action for. Raising
+    /// `timeout_view` bars voting and proposing in everything earlier.
+    ///
+    /// `current_view` lands one view before the first allowed view because
+    /// `Coordinator::start` enters `current_view + 1` through the normal
+    /// `ViewChanged` path, which arms the timer and kicks off the leader's
+    /// block request. Forward-only: never regresses either view.
+    pub fn resume_from_restart(
+        &mut self,
+        anchor_view: ViewNumber,
+        restart_view: ViewNumber,
+        last_actioned_view: ViewNumber,
+    ) {
+        let first_allowed = max(anchor_view + 1, max(restart_view, last_actioned_view + 1));
+        let last_barred = first_allowed - 1;
+        if last_barred > self.timeout_view {
+            self.timeout_view = last_barred;
         }
-        if view > self.current_view {
-            self.current_view = view;
+        if last_barred > self.current_view {
+            self.current_view = last_barred;
         }
     }
 
