@@ -35,7 +35,29 @@ use url::Url;
 use crate::{UnauthenticatedToken, push_task, remote_write::Label};
 
 const SERVICE_NAME: &str = "espresso-node";
-const LOGGER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Join `thread`, detaching it after [`SHUTDOWN_TIMEOUT`] so a wedged exporter
+/// can't hang shutdown on the main thread.
+fn join_bounded(thread: std::thread::JoinHandle<()>, what: &str) {
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    if let Err(e) = std::thread::Builder::new()
+        .name("espresso-telemetry-join".into())
+        .spawn(move || {
+            let _ = thread.join();
+            let _ = done_tx.send(());
+        })
+    {
+        tracing::warn!(error = %e, "telemetry: cannot spawn {what} join watcher");
+        return;
+    }
+    if done_rx.recv_timeout(SHUTDOWN_TIMEOUT).is_err() {
+        tracing::warn!(
+            timeout_secs = SHUTDOWN_TIMEOUT.as_secs(),
+            "telemetry: {what} shutdown timed out; detaching thread",
+        );
+    }
+}
 
 /// Global handoff for the prometheus `Registry` populated by HotShot.
 ///
@@ -165,8 +187,8 @@ impl TelemetryHandle {
         Some(bridge.with_filter(EnvFilter::new(self.log_filter.clone())))
     }
 
-    /// Spawn the periodic metrics push on its own thread. Idempotent: no-op if
-    /// already attached or if metrics are disabled. No ambient runtime required.
+    /// Wrapper over [`attach_metrics_push_buffered`] that emits setup warnings
+    /// directly, for callers that already have a subscriber installed.
     pub fn attach_metrics_push(&mut self, registry: Arc<Registry>) {
         let mut deferred = Vec::new();
         self.attach_metrics_push_buffered(registry, &mut deferred);
@@ -175,9 +197,9 @@ impl TelemetryHandle {
         }
     }
 
-    /// Like [`attach_metrics_push`], but buffers warnings into `deferred`
-    /// instead of emitting them, for use during [`init`] before a subscriber is
-    /// installed.
+    /// Spawn the periodic metrics push on its own thread. Idempotent: no-op if
+    /// already attached or if metrics are disabled. Setup warnings buffer into
+    /// `deferred` so [`init`] can replay them after a subscriber is installed.
     fn attach_metrics_push_buffered(
         &mut self,
         registry: Arc<Registry>,
@@ -246,35 +268,23 @@ impl TelemetryHandle {
     }
 
     /// Flush the push thread, then shut down the OTel logger provider.
-    /// Best-effort; failures are logged, never bubbled. The provider shutdown
-    /// can deadlock on a current-thread runtime, so it runs on a detached OS
-    /// thread bounded by [`LOGGER_SHUTDOWN_TIMEOUT`].
+    /// Best-effort; failures are logged, never bubbled. Both joins run through
+    /// [`join_bounded`] (the provider shutdown can deadlock on a current-thread
+    /// runtime).
     pub fn shutdown(self) {
         if let Some(MetricsPushHandle { shutdown, thread }) = self.metrics_push {
             let _ = shutdown.send(());
-            if thread.join().is_err() {
-                tracing::warn!("telemetry: metrics push thread panicked");
-            }
+            join_bounded(thread, "metrics push");
         }
         if let Some(provider) = self.logger_provider {
-            let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
-            let spawned = std::thread::Builder::new()
+            match std::thread::Builder::new()
                 .name("espresso-telemetry-shutdown".into())
                 .spawn(move || {
                     if let Err(e) = provider.shutdown() {
                         tracing::warn!(error = %e, "telemetry: logger provider shutdown error");
                     }
-                    let _ = done_tx.send(());
-                });
-            match spawned {
-                Ok(_) => {
-                    if done_rx.recv_timeout(LOGGER_SHUTDOWN_TIMEOUT).is_err() {
-                        tracing::warn!(
-                            timeout_secs = LOGGER_SHUTDOWN_TIMEOUT.as_secs(),
-                            "telemetry: logger provider shutdown timed out; detaching thread",
-                        );
-                    }
-                },
+                }) {
+                Ok(thread) => join_bounded(thread, "logger provider"),
                 Err(e) => tracing::warn!(error = %e, "telemetry: cannot spawn shutdown thread"),
             }
         }

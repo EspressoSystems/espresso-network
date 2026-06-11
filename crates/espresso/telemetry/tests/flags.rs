@@ -33,8 +33,7 @@ fn all_flags_off_returns_none() {
         ..Default::default()
     };
     let endpoint = local_endpoint(reserve_port());
-    let (handle, warnings) =
-        init(&opts, &key, None, None, &endpoint, None).expect("disabled init never errors");
+    let (handle, warnings) = init(&opts, &key, None, None, &endpoint, None).unwrap();
     assert!(handle.is_none());
     assert!(warnings.is_empty());
 }
@@ -49,8 +48,8 @@ async fn both_flags_enabled() {
         metrics_enable: true,
         ..Default::default()
     };
-    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).expect("init ok");
-    let handle = handle.expect("both flags returns handle");
+    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).unwrap();
+    let handle = handle.unwrap();
 
     assert!(
         handle
@@ -72,8 +71,8 @@ async fn logs_enable_only() {
         metrics_enable: false,
         ..Default::default()
     };
-    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).expect("init ok");
-    let mut handle = handle.expect("logs_enable returns handle");
+    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).unwrap();
+    let mut handle = handle.unwrap();
 
     assert!(
         handle
@@ -99,8 +98,8 @@ async fn metrics_enable_only() {
         metrics_enable: true,
         ..Default::default()
     };
-    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).expect("init ok");
-    let mut handle = handle.expect("metrics_enable returns handle");
+    let (handle, _) = init(&opts, &key, None, None, &endpoint, None).unwrap();
+    let mut handle = handle.unwrap();
 
     assert!(
         handle

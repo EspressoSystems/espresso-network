@@ -9,7 +9,7 @@ use std::{
 
 use prometheus::Registry;
 use reqwest::{
-    Client,
+    Client, StatusCode,
     header::{AUTHORIZATION, CONTENT_TYPE},
 };
 use tokio::{sync::oneshot, time::MissedTickBehavior};
@@ -118,7 +118,7 @@ async fn push_once(
 
     match resp {
         Ok(r) if r.status().is_success() => {},
-        Ok(r) if r.status().as_u16() == 429 => {
+        Ok(r) if r.status() == StatusCode::TOO_MANY_REQUESTS => {
             let retry_after = r
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
