@@ -19,6 +19,7 @@ use espresso_types::{
 };
 
 pub mod fs;
+pub mod migrations;
 pub mod no_storage;
 mod persistence_metrics;
 pub mod sql;

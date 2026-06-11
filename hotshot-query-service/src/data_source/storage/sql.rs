@@ -247,12 +247,7 @@ impl Default for Config {
 #[cfg(feature = "embedded-db")]
 impl Default for Config {
     fn default() -> Self {
-        SqliteConnectOptions::default()
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .busy_timeout(Duration::from_secs(30))
-            .auto_vacuum(sqlx::sqlite::SqliteAutoVacuum::Incremental)
-            .create_if_missing(true)
-            .into()
+        crate::sqlite_options::sqlite_options().into()
     }
 }
 
@@ -1263,13 +1258,13 @@ pub mod testing {
                 (
                     "BIT(8)",
                     "BYTEA",
-                    "SERIAL PRIMARY KEY",
+                    "BIGSERIAL PRIMARY KEY",
                     "(data->>'test_merkle_tree_root')",
                 )
             };
 
             format!(
-                "CREATE TABLE IF NOT EXISTS hash
+                "CREATE TABLE IF NOT EXISTS hash_bigint
             (
                 id {hash_pk},
                 value {binary}  NOT NULL UNIQUE
@@ -1283,7 +1278,7 @@ pub mod testing {
             (
                 path JSONB NOT NULL,
                 created BIGINT NOT NULL,
-                hash_id INT NOT NULL,
+                hash_id BIGINT NOT NULL,
                 children JSONB,
                 children_bitvec {bit_vec},
                 idx JSONB,
