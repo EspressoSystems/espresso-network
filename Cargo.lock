@@ -2455,6 +2455,17 @@ checksum = "1bc2832c24239b0141d5674bb9174f9d68a8b5b3f2753311927c172ca46f7e9c"
 dependencies = [
  "funty",
  "radium",
+ "tap",
+ "wyz",
+]
+
+[[package]]
+name = "bitvec"
+version = "1.1.0"
+source = "git+https://github.com/EspressoSystems/bitvec-patch.git#4dd7c59cbbbb1143d069e3edf1047af846734a7a"
+dependencies = [
+ "funty",
+ "radium",
  "serde",
  "tap",
  "wyz",
@@ -3221,7 +3232,7 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74b169b26623ff17e9db37a539fe4f15342080df39f129ef7631df7683d6d9d4"
 dependencies = [
- "bitvec",
+ "bitvec 1.0.1",
  "coins-bip32",
  "hmac 0.12.1",
  "once_cell",
@@ -3309,7 +3320,7 @@ source = "git+https://github.com/EspressoSystems/commit.git#57c7f29c96c4cc18a514
 dependencies = [
  "arbitrary",
  "ark-serialize 0.5.0",
- "bitvec",
+ "bitvec 1.0.1",
  "derivative",
  "derive_more 0.99.20",
  "funty",
@@ -4045,7 +4056,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.117",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -6677,7 +6688,7 @@ dependencies = [
  "async-trait",
  "automod",
  "bincode",
- "bitvec",
+ "bitvec 1.1.0",
  "committable",
  "either",
  "futures",
@@ -6726,7 +6737,7 @@ dependencies = [
  "async-lock 3.4.2",
  "async-trait",
  "bincode",
- "bitvec",
+ "bitvec 1.1.0",
  "blake3",
  "bs58",
  "clap 4.6.1",
@@ -8544,7 +8555,7 @@ dependencies = [
  "anyhow",
  "async-lock 3.4.2",
  "async-trait",
- "bitvec",
+ "bitvec 1.1.0",
  "clap 4.6.1",
  "committable",
  "derivative",
@@ -9116,7 +9127,7 @@ dependencies = [
  "async-lock 3.4.2",
  "async-trait",
  "bincode",
- "bitvec",
+ "bitvec 1.1.0",
  "circular-buffer",
  "clap 4.6.1",
  "espresso-types",
@@ -9540,7 +9551,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799781ae679d79a948e13d4824a40970bfa500058d245760dd857301059810fa"
 dependencies = [
  "arrayvec",
- "bitvec",
+ "bitvec 1.0.1",
  "byte-slice-cast",
  "const_format",
  "impl-trait-for-tuples",
@@ -11057,7 +11068,7 @@ version = "0.7.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2297bf9c81a3f0dc96bc9521370b88f054168c29826a75e89c55ff196e7ed6a1"
 dependencies = [
- "bitvec",
+ "bitvec 1.0.1",
  "bytecheck",
  "bytes 1.11.1",
  "hashbrown 0.12.3",
