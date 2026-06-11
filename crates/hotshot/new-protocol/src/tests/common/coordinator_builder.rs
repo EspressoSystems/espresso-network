@@ -128,6 +128,11 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         consensus.apply_pre_cutover_seed(seed);
     }
 
+    // Restarted nodes must not act again in views they acted in before.
+    let restart_view = storage.restart_view().await;
+    let last_actioned_view = storage.last_actioned_view().await;
+    consensus.skip_to_view(std::cmp::max(restart_view, last_actioned_view + 1) - 1);
+
     let genesis_wrapper = QuorumProposalWrapper::<TestTypes> {
         proposal: QuorumProposal2 {
             block_header: genesis_leaf.block_header().clone(),

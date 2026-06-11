@@ -575,7 +575,7 @@ pub fn mock_membership_with_num_nodes(
     CoordinatorClient<TestTypes>,
 ) {
     let (coord, storage, client, _external_events_tx) =
-        mock_membership_with_client(num_nodes, epoch_height, public_key);
+        mock_membership_with_client(num_nodes, epoch_height, public_key, TestStorage::default());
     (coord, storage, client)
 }
 
@@ -583,6 +583,7 @@ pub fn mock_membership_with_client(
     num_nodes: usize,
     epoch_height: u64,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -596,6 +597,7 @@ pub fn mock_membership_with_client(
         epoch_height,
         leaf_fetcher_network,
         public_key,
+        storage,
     );
     (coord, storage, client, external_events_tx)
 }
@@ -607,6 +609,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
         dyn hotshot_types::traits::leaf_fetcher_network::LeafFetcherNetwork<TestTypes>,
     >,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -618,7 +621,6 @@ pub fn mock_membership_with_leaf_fetcher_network(
         &TestNodeStakes::default(),
     )
     .0;
-    let storage = TestStorage::<TestTypes>::default();
     let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
         members.clone(),
         members.clone(),

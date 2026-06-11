@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use crate::tests::common::{
     runner::{NodeAction, NodeChange, TestRunner},
@@ -72,33 +72,46 @@ async fn restart_f_nodes_with_epochs() {
         .unwrap();
 }
 
-// TODO: This test currently builds a brand-new chain from genesis after
-// the restart because there is no persistent storage.  Once storage is
-// implemented the restarted nodes should resume from their last decided
-// state instead of starting a fresh chain.
-//
-// #[tokio::test(flavor = "multi_thread")]
-// async fn restart_all_nodes_with_epochs() {
-//     TestRunner {
-//         num_nodes: 5,
-//         target_decisions: 30,
-//         max_runtime: Duration::from_secs(300),
-//         epoch_height: 10,
-//         node_changes: vec![(
-//             15,
-//             (0..5)
-//                 .map(|i| NodeChange {
-//                     idx: i,
-//                     action: NodeAction::Restart,
-//                 })
-//                 .collect(),
-//         )],
-//         ..Default::default()
-//     }
-//     .run::<MemoryTestNetwork>()
-//     .await
-//     .unwrap();
-// }
+/// 5 nodes all crash at view ~5 and restart with their persisted storage.
+///
+/// Decided state is not yet persisted (the chain re-grows from the genesis
+/// anchor), but the persisted action records must keep every node out of
+/// the views it acted in before the crash: views resume past the crash and
+/// no node records a Vote or Propose action twice for any view.
+/// The crash/recovery window is nondeterministic, so those views are
+/// excluded from the usual per-view verification.
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_all_nodes_with_storage() {
+    let num_nodes = 5;
+    let mut runner = TestRunner::builder()
+        .num_nodes(num_nodes)
+        .target_decisions(35)
+        .epoch_height(10)
+        .persistent_storage(true)
+        .tolerated_failed_views(views(1..=30))
+        .node_changes(vec![(
+            5,
+            (0..num_nodes)
+                .map(|idx| NodeChange {
+                    idx,
+                    action: NodeAction::Restart,
+                })
+                .collect(),
+        )])
+        .build();
+    runner.run().await.unwrap();
+
+    for (idx, storage) in runner.node_storages().iter().enumerate() {
+        let mut seen = HashSet::new();
+        for (view, action) in storage.action_log().await {
+            assert!(
+                seen.insert((view, action)),
+                "node {idx} recorded {action:?} twice for view {view} — it re-entered a view it \
+                 had already acted in"
+            );
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Late start (with epochs)
