@@ -7,13 +7,12 @@ use std::{
 };
 
 use alloy::primitives::Address;
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
-use either::Either;
 use espresso_types::{
     AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
     NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash, parse_duration,
@@ -24,7 +23,6 @@ use espresso_types::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -33,11 +31,9 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
-    availability::BlockId,
     data_source::{
         Transaction as _, VersionedDataSource,
         storage::{
-            AvailabilityStorage,
             pruning::PrunerCfg,
             sql::{
                 Config, Db, Read, SqlStorage, StorageConnectionType, Transaction, Write,
@@ -72,12 +68,10 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use jf_merkle_tree_compat::MerkleTreeScheme;
 use sqlx::{Executor, QueryBuilder, Row, query};
 
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
-    api::RewardMerkleTreeV2Data,
     catchup::SqlStateCatchup,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
@@ -698,6 +692,14 @@ impl PersistenceOptions for Options {
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            let registry = super::migrations::hash_bigint_migrations();
+            let db = persistence.db.clone();
+            tokio::spawn(registry.run_all_migrations(db));
+        }
+
         Ok(persistence)
     }
 
@@ -1332,202 +1334,6 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
-        let batch_size: i64 = 1000;
-
-        let result = {
-            let mut tx = self.db.read().await?;
-            query_as::<(bool, i64)>(
-                "SELECT completed, migrated_rows FROM epoch_migration WHERE table_name = \
-                 'reward_merkle_tree_v2_data'",
-            )
-            .fetch_optional(tx.as_mut())
-            .await?
-        };
-
-        let (is_completed, mut offset) = result.unwrap_or((false, 0));
-
-        if is_completed {
-            tracing::info!("reward_merkle_tree_v2 migration already done");
-            return Ok(());
-        }
-
-        let max_height: Option<i64> = {
-            let mut tx = self.db.read().await?;
-            query_as::<(Option<i64>,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
-                .fetch_one(tx.as_mut())
-                .await?
-                .0
-        };
-
-        let max_height = match max_height {
-            Some(h) => h,
-            None => {
-                tracing::info!("no reward data found in reward_merkle_tree_v2, skipping migration");
-                return Ok(());
-            },
-        };
-
-        tracing::warn!(
-            "migrating reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height \
-             {max_height}..."
-        );
-
-        let mut balances: Vec<(RewardAccountV2, RewardAmount)> = Vec::new();
-
-        loop {
-            let mut tx = self.db.read().await?;
-
-            #[cfg(not(feature = "embedded-db"))]
-            let rows = query_as::<(serde_json::Value, serde_json::Value)>(
-                "SELECT DISTINCT ON (idx) idx, entry
-                   FROM reward_merkle_tree_v2
-                  WHERE idx IS NOT NULL AND entry IS NOT NULL
-                  ORDER BY idx, created DESC
-                  LIMIT $1 OFFSET $2",
-            )
-            .bind(batch_size)
-            .bind(offset)
-            .fetch_all(tx.as_mut())
-            .await
-            .context("loading reward accounts from reward_merkle_tree_v2")?;
-
-            #[cfg(feature = "embedded-db")]
-            let rows = query_as::<(serde_json::Value, serde_json::Value)>(
-                "SELECT idx, entry FROM (
-                     SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) \
-                 as rn
-                       FROM reward_merkle_tree_v2
-                      WHERE idx IS NOT NULL AND entry IS NOT NULL
-                 ) sub
-                 WHERE rn = 1 ORDER BY idx
-                 LIMIT $1 OFFSET $2",
-            )
-            .bind(batch_size)
-            .bind(offset)
-            .fetch_all(tx.as_mut())
-            .await
-            .context("loading reward accounts from reward_merkle_tree_v2")?;
-
-            drop(tx);
-
-            if rows.is_empty() {
-                break;
-            }
-
-            let rows_count = rows.len();
-
-            for (idx, entry) in rows {
-                let account: RewardAccountV2 =
-                    serde_json::from_value(idx).context("deserializing reward account")?;
-                let balance: RewardAmount = serde_json::from_value(entry).context(format!(
-                    "deserializing reward balance for account {account}"
-                ))?;
-                balances.push((account, balance));
-            }
-
-            offset += rows_count as i64;
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "epoch_migration",
-                ["table_name", "completed", "migrated_rows"],
-                ["table_name"],
-                [("reward_merkle_tree_v2_data".to_string(), false, offset)],
-            )
-            .await?;
-            tx.commit().await?;
-
-            tracing::info!(
-                "reward_merkle_tree_v2 progress: rows={} offset={}",
-                rows_count,
-                offset
-            );
-
-            if rows_count < batch_size as usize {
-                break;
-            }
-        }
-
-        if balances.is_empty() {
-            tracing::info!("no reward accounts found, skipping tree rebuild");
-            return Ok(());
-        }
-
-        tracing::info!(
-            "rebuilding RewardMerkleTreeV2 from {} accounts",
-            balances.len()
-        );
-
-        let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
-            .context("failed to rebuild RewardMerkleTreeV2 from balances")?;
-
-        let mut tx = self.db.read().await?;
-        let header = tx
-            .get_header(BlockId::<SeqTypes>::from(max_height as usize))
-            .await
-            .context(format!("header {max_height} not available"))?;
-        drop(tx);
-
-        match header.reward_merkle_tree_root() {
-            Either::Right(expected_root) => {
-                ensure!(
-                    tree.commitment() == expected_root,
-                    "rebuilt RewardMerkleTreeV2 commitment {} does not match header commitment {} \
-                     at height {max_height}",
-                    tree.commitment(),
-                    expected_root,
-                );
-            },
-            Either::Left(_) => {
-                bail!(
-                    "header at height {max_height} has a v1 reward merkle tree root, expected v2"
-                );
-            },
-        }
-
-        let tree_data: RewardMerkleTreeV2Data = (&tree)
-            .try_into()
-            .context("failed to convert RewardMerkleTreeV2 to RewardMerkleTreeV2Data")?;
-        let serialized =
-            bincode::serialize(&tree_data).context("failed to serialize RewardMerkleTreeV2Data")?;
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "reward_merkle_tree_v2_data",
-            ["height", "balances"],
-            ["height"],
-            [(max_height, serialized)],
-        )
-        .await?;
-        tx.commit().await?;
-
-        // Mark migration as complete, and clean up old tables.
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed", "migrated_rows"],
-            ["table_name"],
-            [("reward_merkle_tree_v2_data".to_string(), true, offset)],
-        )
-        .await?;
-        let truncate = if cfg!(feature = "embedded-db") {
-            "DELETE FROM"
-        } else {
-            "TRUNCATE"
-        };
-        query(&format!("{truncate} reward_merkle_tree_v2"))
-            .execute(tx.as_mut())
-            .await?;
-        query(&format!("{truncate} reward_merkle_tree"))
-            .execute(tx.as_mut())
-            .await?;
-        tx.commit().await?;
-
-        tracing::warn!("migrated reward_merkle_tree_v2 at height {max_height}");
-
-        Ok(())
-    }
-
     fn into_catchup_provider(
         self,
         backoff: BackoffParams,

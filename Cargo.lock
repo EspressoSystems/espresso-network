@@ -12379,6 +12379,7 @@ checksum = "6a007b6936676aa9ab40207cde35daab0a04b823be8ae004368c0793b96a61e0"
 dependencies = [
  "bit-vec 0.6.3",
  "bytes 1.11.1",
+ "chrono",
  "crc",
  "crossbeam-queue",
  "either",
@@ -12457,6 +12458,7 @@ dependencies = [
  "bitflags 2.11.1",
  "byteorder",
  "bytes 1.11.1",
+ "chrono",
  "crc",
  "digest 0.10.7",
  "dotenvy",
@@ -12500,6 +12502,7 @@ dependencies = [
  "bit-vec 0.6.3",
  "bitflags 2.11.1",
  "byteorder",
+ "chrono",
  "crc",
  "dotenvy",
  "etcetera",
@@ -12535,6 +12538,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f85ca71d3a5b24e64e1d08dd8fe36c6c95c339a896cc33068148906784620540"
 dependencies = [
  "atoi",
+ "chrono",
  "flume 0.11.1",
  "futures-channel",
  "futures-core",
@@ -14273,6 +14277,7 @@ dependencies = [
  "rand 0.8.6",
  "reed-solomon-simd",
  "serde",
+ "serde_bytes",
  "sha2 0.10.9",
  "sha3",
  "tagged-base64",

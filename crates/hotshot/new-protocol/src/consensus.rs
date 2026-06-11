@@ -199,7 +199,6 @@ pub struct Consensus<T: NodeType> {
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     state_private_key: <T::StateSignatureKey as StateSignatureKey>::StatePrivateKey,
     stake_table_capacity: usize,
-    // TODO: persist state_certs
     state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<T>>,
     node_id: KeyPrefix,
     upgrade_lock: UpgradeLock<T>,
@@ -316,6 +315,13 @@ impl<T: NodeType> Consensus<T> {
         for (view, commitment) in reconstructed {
             self.blocks_reconstructed.insert((view, commitment));
         }
+    }
+
+    /// Seed a state certificate loaded from storage on restart, so a leader
+    /// proposing on an epoch-root parent QC right after a restart does not
+    /// stall on a missing state_cert.
+    pub fn seed_state_cert(&mut self, state_cert: LightClientStateUpdateCertificateV2<T>) {
+        self.state_certs.insert(state_cert.epoch, state_cert);
     }
 
     /// Apply a [`PreCutoverSeed`] to bridge legacy state into the new
@@ -832,6 +838,12 @@ impl<T: NodeType> Consensus<T> {
         self.signed_proposals.insert(view, signed_proposal.clone());
         self.leaves.insert(view, proposal.clone().into());
         self.vid_shares.insert(view, vid_share);
+
+        if let Some(state_cert) = &proposal.state_cert {
+            self.state_certs
+                .entry(state_cert.epoch)
+                .or_insert_with(|| state_cert.clone());
+        }
 
         // Request the DRB if we don't have it yet.  A mismatching DRB is
         // a hard failure (invalid leader), but a missing DRB is

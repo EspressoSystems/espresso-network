@@ -372,6 +372,7 @@ snafu = "0.8"
 snow = { version = "0.10.0", features = ["ring-accelerated"] }
 sqlx = { version = "=0.8.3", features = [
     "bit-vec",
+    "chrono",
     "postgres",
     "runtime-tokio",
     "tls-native-tls",
