@@ -283,9 +283,25 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
     let mut metrics = MetricsCollector::new(cfg.node_id);
     let output_path = PathBuf::from(&cfg.output_file);
 
+    // Once `decided >= target_views`, instead of returning immediately we
+    // enter a "drain" phase: keep running the event loop for ~1 view cycle so
+    // any in-flight messages (cliquenet's per-peer TCP send queues, pending
+    // VID `spawn_blocking` tasks, the share-sign loop) get a chance to leave
+    // this node before the tokio runtime is torn down.  Without this, the
+    // first node to exit drops its final vote2 / cert1 / cert2 acknowledgements
+    // on the floor, and peers that were waiting on those messages stall and
+    // start timing out, cascading into the timeout-loop you observed.
+    //
+    // We bound the drain at 2× `timeout_ms` so a stuck-on-network drain can't
+    // hang forever, but the typical case exits in a few hundred ms — as soon
+    // as cliquenet has flushed its outbound queues there's nothing left to do.
+    let drain_budget = std::time::Duration::from_millis(cfg.timeout_ms.saturating_mul(2));
+    let mut drain_deadline: Option<std::time::Instant> = None;
+
     info!(
         node_id = cfg.node_id,
         target_views = cfg.target_views,
+        drain_ms = drain_budget.as_millis() as u64,
         "entering event loop"
     );
 
@@ -357,13 +373,33 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
         // Check after processing all outputs for this round.
         let decided = metrics.max_decided_view();
         if decided >= cfg.target_views {
-            info!(
-                node_id = cfg.node_id,
-                decided_view = decided,
-                "target views reached, shutting down"
-            );
-            metrics.write_csv(&output_path)?;
-            return Ok(());
+            match drain_deadline {
+                None => {
+                    // Just hit target — start draining instead of returning.
+                    let deadline = std::time::Instant::now() + drain_budget;
+                    drain_deadline = Some(deadline);
+                    info!(
+                        node_id = cfg.node_id,
+                        decided_view = decided,
+                        drain_ms = drain_budget.as_millis() as u64,
+                        "target views reached, draining in-flight messages before exit"
+                    );
+                },
+                Some(deadline) if std::time::Instant::now() >= deadline => {
+                    info!(
+                        node_id = cfg.node_id,
+                        decided_view = decided,
+                        "drain complete, shutting down"
+                    );
+                    metrics.write_csv(&output_path)?;
+                    return Ok(());
+                },
+                Some(_) => {
+                    // Still inside drain window — keep the loop spinning so
+                    // cliquenet's writer tasks get scheduled and the JoinSet
+                    // tasks (VID spawn_blocking, share-sign loop) can finish.
+                },
+            }
         }
     }
 }
