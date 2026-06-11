@@ -55,7 +55,7 @@ use crate::{
     vid::{
         advz::{ADVZScheme, advz_scheme},
         avidm::{AvidMScheme, init_avidm_param},
-        avidm_gf2::{AvidmGf2Scheme, init_avidm_gf2_param},
+        avidm_gf2::{AvidmGf2Scheme, avidm_gf2_commit},
     },
     vote::{Certificate, HasViewNumber},
 };
@@ -399,15 +399,9 @@ pub fn vid_commitment(
         .map(VidCommitment::V1)
         .unwrap()
     } else {
-        let param = init_avidm_gf2_param(total_weight).unwrap();
-        let encoded_tx_len = encoded_transactions.len();
-        AvidmGf2Scheme::commit(
-            &param,
-            encoded_transactions,
-            ns_table::parse_ns_table(encoded_tx_len, metadata),
-        )
-        .map(|(comm, _)| VidCommitment::V2(comm))
-        .unwrap()
+        avidm_gf2_commit(total_weight, encoded_transactions, metadata)
+            .map(|(comm, _)| VidCommitment::V2(comm))
+            .unwrap()
     }
 }
 

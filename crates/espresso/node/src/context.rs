@@ -10,8 +10,11 @@ use anyhow::Context;
 use async_lock::RwLock;
 use derivative::Derivative;
 use espresso_types::{
-    NodeState, PubKey, Transaction, ValidatedState,
-    v0::traits::{EventConsumer as PersistenceEventConsumer, SequencerPersistence},
+    NodeState, Payload, PubKey, Transaction, ValidatedState,
+    v0::traits::{
+        DecidePayloadRecovery, EventConsumer as PersistenceEventConsumer, PendingDecide,
+        RecoveredPayload, SequencerPersistence,
+    },
 };
 use futures::{
     future::join_all,
@@ -25,14 +28,14 @@ use hotshot_types::{
     PeerConfig, ValidatorConfig,
     consensus::ConsensusMetricsValue,
     constants::EXTERNAL_EVENT_CHANNEL_SIZE,
-    data::{Leaf2, ViewNumber},
+    data::{Leaf2, VidCommitment, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::UpgradeLock,
     network::NetworkConfig,
     new_protocol::CoordinatorEvent,
-    simple_certificate::CertificatePair,
     storage_metrics::StorageMetricsValue,
     traits::{
+        block_contents::BlockPayload,
         metrics::{Counter, Gauge, Histogram, Metrics},
         network::ConnectedNetwork,
     },
@@ -43,6 +46,7 @@ use tokio::{
     spawn,
     sync::{mpsc::channel, watch},
     task::JoinHandle,
+    time::sleep,
 };
 use tracing::{Instrument, Level};
 use url::Url;
@@ -52,11 +56,13 @@ use crate::{
     catchup::ParallelStateCatchup,
     consensus_handle::ConsensusHandle,
     external_event_handler::ExternalEventHandler,
+    persistence::PAYLOAD_RETENTION_VIEWS,
     proposal_fetcher::ProposalFetcherConfig,
     request_response::{
         RequestResponseProtocol,
         data_source::{DataSource, Storage as RequestResponseStorage},
         network::Sender as RequestResponseSender,
+        payload_recovery::PayloadRecovery,
         recipient_source::RecipientSource,
     },
     startup_catchup::bootstrap_epoch_window,
@@ -258,7 +264,7 @@ where
             RequestResponseSender::new(outbound_message_sender),
             request_response_receiver,
             RecipientSource {
-                memberships: membership_coordinator,
+                memberships: membership_coordinator.clone(),
                 consensus_handle: consensus_handle.clone(),
                 public_key: validator_config.public_key,
             },
@@ -277,6 +283,13 @@ where
         // the request-response protocol will now retroactively be used anywhere we passed in the original struct (e.g. in consensus
         // itself)
         state_catchup.add_provider(Arc::new(request_response_protocol.clone()));
+
+        // Recovers DA proposals from peers for views decided before their payload landed.
+        let payload_recovery: Arc<dyn DecidePayloadRecovery> = Arc::new(PayloadRecovery::new(
+            request_response_protocol.clone(),
+            membership_coordinator.clone(),
+            epoch_height,
+        ));
 
         // Create the external event handler
         let mut tasks = TaskList::default();
@@ -303,6 +316,7 @@ where
             event_consumer,
             anchor_view,
             proposal_fetcher_cfg,
+            payload_recovery,
             metrics,
         )
         .with_task_list(tasks))
@@ -323,6 +337,7 @@ where
         event_consumer: impl PersistenceEventConsumer + 'static,
         anchor_view: Option<ViewNumber>,
         proposal_fetcher_cfg: ProposalFetcherConfig,
+        payload_recovery: Arc<dyn DecidePayloadRecovery>,
         metrics: &dyn Metrics,
     ) -> Self {
         let events = consensus_handle.event_stream();
@@ -364,6 +379,7 @@ where
                 event_consumer.clone(),
                 decide_rx,
                 anchor_view,
+                payload_recovery,
                 DecideProcessorMetrics::new(metrics),
             ),
         );
@@ -545,9 +561,10 @@ impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence> Drop for SequencerCon
     }
 }
 
-/// Latest decided view and its (optional) deciding QC, sent from the event loop to the background
-/// decide processor. `None` is the initial/no-op value of the `watch` channel.
-type DecideSignal = Option<(ViewNumber, Option<Arc<CertificatePair<SeqTypes>>>)>;
+/// Latest decide, sent from the event loop to the background processor with the in-memory event
+/// data for live ingestion. `None` is the `watch` channel's initial value. Under lag the channel
+/// coalesces; dropped views are regenerated from storage.
+type DecideSignal = Option<PendingDecide>;
 
 /// Metrics for the background decide processor. `backlog` (decided - processed) is the key signal:
 /// sustained growth means staging tables accumulate (no data lost, but disk grows).
@@ -557,6 +574,10 @@ struct DecideProcessorMetrics {
     backlog: Arc<dyn Gauge>,
     duration: Arc<dyn Histogram>,
     failures: Arc<dyn Counter>,
+    /// Block payloads recovered from peers for views decided without one.
+    payloads_recovered: Arc<dyn Counter>,
+    /// Failed attempts to recover a block payload from peers.
+    payload_recovery_failures: Arc<dyn Counter>,
 }
 
 impl DecideProcessorMetrics {
@@ -576,6 +597,12 @@ impl DecideProcessorMetrics {
                 .create_histogram("process_duration".into(), Some("seconds".into()))
                 .into(),
             failures: metrics.create_counter("failures".into(), None).into(),
+            payloads_recovered: metrics
+                .create_counter("payloads_recovered".into(), None)
+                .into(),
+            payload_recovery_failures: metrics
+                .create_counter("payload_recovery_failures".into(), None)
+                .into(),
         }
     }
 }
@@ -615,6 +642,23 @@ async fn handle_events<N, P, C>(
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
                 }
+            },
+            CoordinatorEvent::BlockPayloadReconstructed { view, .. }
+            | CoordinatorEvent::VidShareValidated { view, .. } => {
+                // The coordinator already persisted this to consensus storage (with retries);
+                // forward it to the query service to back-fill the missing block payload or VID
+                // data. Spawned so a slow write can't stall the event loop; idempotent.
+                let consumer = event_consumer.clone();
+                let event = event.clone();
+                let view = *view;
+                spawn(async move {
+                    if let Err(err) = consumer.handle_event(&event).await {
+                        tracing::warn!(
+                            ?view,
+                            "failed to store coordinator back-fill data in query service: {err:#}"
+                        );
+                    }
+                });
             },
             _ => {},
         }
@@ -666,6 +710,7 @@ async fn process_decided_events_task<P, C>(
     consumer: Arc<C>,
     mut decide_rx: watch::Receiver<DecideSignal>,
     anchor_view: Option<ViewNumber>,
+    payload_recovery: Arc<dyn DecidePayloadRecovery>,
     metrics: DecideProcessorMetrics,
 ) where
     P: SequencerPersistence,
@@ -675,16 +720,25 @@ async fn process_decided_events_task<P, C>(
     // cursor reported below raises it.
     let mut last_processed = anchor_view.map(|v| v.u64()).unwrap_or(0);
 
-    // Process leaves persisted before a previous shutdown but not yet handled.
+    // Process leaves persisted before a previous shutdown but not yet handled. Decide data
+    // staged before the shutdown is read back from storage like everything else.
     if let Some(view) = anchor_view {
         match persistence
             .process_decided_events(view, None, consumer.as_ref())
             .await
         {
-            Ok(processed) => {
-                if let Some(v) = processed {
+            Ok(outcome) => {
+                if let Some(v) = outcome.processed {
                     last_processed = last_processed.max(v.u64());
                 }
+                spawn_payload_recovery(
+                    &payload_recovery,
+                    &persistence,
+                    &consumer,
+                    view.u64(),
+                    outcome.missing_payload,
+                    &metrics,
+                );
             },
             Err(err) => tracing::warn!(
                 "failed to process decided leaves on startup, chain may not be up to date: {err:#}"
@@ -706,31 +760,56 @@ async fn process_decided_events_task<P, C>(
             Err(_) => {}, // Timed out; fall through to retry `latest`.
         }
 
-        let Some((view, deciding_qc)) = latest.clone() else {
+        let Some(pending) = latest.clone() else {
             continue;
         };
-        let decided = view.u64();
+        let decided = pending.view.u64();
         metrics.last_decided.set(decided as usize);
         metrics
             .backlog
             .set(decided.saturating_sub(last_processed) as usize);
 
+        // Stage the decide event's in-memory data first, so just-decided views don't wait on
+        // the coordinator's async storage writes and event generation reads storage only. On
+        // failure, retry the whole signal rather than emitting events the staged data should
+        // have filled.
+        if !pending.data.is_empty()
+            && let Err(err) = persistence.stage_decide_data(&pending.data).await
+        {
+            metrics.failures.add(1);
+            tracing::warn!(
+                view = ?pending.view,
+                "failed to stage decide data, will retry: {err:#}"
+            );
+            continue;
+        }
+
         let start = Instant::now();
         let result = persistence
-            .process_decided_events(view, deciding_qc, consumer.as_ref())
+            .process_decided_events(pending.view, pending.deciding_qc.clone(), consumer.as_ref())
             .await;
         metrics.duration.add_point(start.elapsed().as_secs_f64());
 
         match result {
-            Ok(processed) => {
+            Ok(outcome) => {
                 // Advance from the real cursor, not `decided`: if ingestion/GC lagged, `processed`
                 // stays behind and the backlog gauge reflects it.
-                if let Some(v) = processed {
+                if let Some(v) = outcome.processed {
                     last_processed = last_processed.max(v.u64());
                 }
+                // Recover payloads for leaves emitted without one, in the background, so the
+                // cursor never waits on the network.
+                spawn_payload_recovery(
+                    &payload_recovery,
+                    &persistence,
+                    &consumer,
+                    decided,
+                    outcome.missing_payload,
+                    &metrics,
+                );
                 // reset latest if we have processed all the decided leaves
-                if let Some((view, _)) = latest.clone()
-                    && last_processed >= view.u64()
+                if let Some(pending) = &latest
+                    && last_processed >= pending.view.u64()
                 {
                     latest = None;
                 }
@@ -742,8 +821,142 @@ async fn process_decided_events_task<P, C>(
             Err(err) => {
                 // Cursor not advanced, so this range is retried next iteration; no data is lost.
                 metrics.failures.add(1);
-                tracing::warn!(?view, "deferred decide processing failed: {err:#}");
+                tracing::warn!(
+                    view = ?pending.view,
+                    "deferred decide processing failed: {err:#}"
+                );
             },
+        }
+    }
+}
+
+/// Number of attempts to recover a view's payload from peers before giving up and leaving
+/// the gap to the query service's own fetching.
+const PAYLOAD_RECOVERY_ATTEMPTS: u32 = 3;
+
+/// Pause between payload-recovery attempts, so a fast-failing error (e.g. stake table catchup
+/// still in flight) doesn't burn every attempt within milliseconds.
+const PAYLOAD_RECOVERY_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+/// Spawn background recovery of `missing` leaves' payloads from peers. Each leaf is reported by
+/// exactly one successful pass (the cursor advances past it), so recovery runs once per leaf.
+fn spawn_payload_recovery<P, C>(
+    payload_recovery: &Arc<dyn DecidePayloadRecovery>,
+    persistence: &Arc<P>,
+    consumer: &Arc<C>,
+    decided_view: u64,
+    missing: Vec<Leaf2<SeqTypes>>,
+    metrics: &DecideProcessorMetrics,
+) where
+    P: SequencerPersistence,
+    C: PersistenceEventConsumer + 'static,
+{
+    let leaves = missing
+        .into_iter()
+        .filter(|leaf| {
+            // Recovery is only supported for new-protocol (V2) payload commitments, and only
+            // within the window peers retain DA proposals for: anything older has likely been
+            // pruned everywhere and is left to the query service's peer fetching instead.
+            matches!(
+                leaf.block_header().payload_commitment(),
+                VidCommitment::V2(_)
+            ) && decided_view.saturating_sub(leaf.view_number().u64()) <= PAYLOAD_RETENTION_VIEWS
+        })
+        .collect::<Vec<_>>();
+    if leaves.is_empty() {
+        return;
+    }
+    spawn(recover_missing_payloads(
+        payload_recovery.clone(),
+        persistence.clone(),
+        consumer.clone(),
+        leaves,
+        metrics.payloads_recovered.clone(),
+        metrics.payload_recovery_failures.clone(),
+    ));
+}
+
+/// Fetch missing block payloads from peers, persist each to consensus storage, then forward it
+/// (and the regenerated VID common) to the query service.
+pub(crate) async fn recover_missing_payloads<P, C>(
+    recovery: Arc<dyn DecidePayloadRecovery>,
+    persistence: Arc<P>,
+    consumer: Arc<C>,
+    leaves: Vec<Leaf2<SeqTypes>>,
+    recovered: Arc<dyn Counter>,
+    failures: Arc<dyn Counter>,
+) where
+    P: SequencerPersistence,
+    C: PersistenceEventConsumer + 'static,
+{
+    for leaf in leaves {
+        let view = leaf.view_number();
+        let mut recovered_payload = None;
+        for attempt in 1..=PAYLOAD_RECOVERY_ATTEMPTS {
+            if attempt > 1 {
+                sleep(PAYLOAD_RECOVERY_RETRY_DELAY).await;
+            }
+            match recovery.recover_payload(&leaf).await {
+                Ok(Some(found)) => {
+                    recovered_payload = Some(found);
+                    break;
+                },
+                Ok(None) => {
+                    tracing::warn!(?view, attempt, "could not recover block payload from peers");
+                },
+                Err(err) => {
+                    tracing::warn!(?view, attempt, "payload recovery failed: {err:#}");
+                },
+            }
+        }
+        let Some(RecoveredPayload {
+            proposal,
+            vid_common,
+        }) = recovered_payload
+        else {
+            failures.add(1);
+            continue;
+        };
+        tracing::info!(?view, "recovered block payload from peers");
+        recovered.add(1);
+
+        // Consensus storage first, so the payload survives a restart and can be served to
+        // peers; the write is idempotent.
+        if let Err(err) = persistence
+            .append_da2(&proposal, leaf.block_header().payload_commitment())
+            .await
+        {
+            tracing::warn!(?view, "failed to store recovered payload: {err:#}");
+        }
+
+        // Then the query service: the payload, through the same event the coordinator emits
+        // for late local reconstructions, ...
+        let payload =
+            Payload::from_bytes(&proposal.data.encoded_transactions, &proposal.data.metadata);
+        let payload_event = CoordinatorEvent::BlockPayloadReconstructed {
+            view,
+            header: leaf.block_header().clone(),
+            payload,
+        };
+        if let Err(err) = consumer.handle_event(&payload_event).await {
+            tracing::warn!(
+                ?view,
+                "failed to store recovered payload in query service: {err:#}"
+            );
+        }
+
+        // ... and the VID common regenerated from that payload, so VID-common queries are
+        // served without waiting on the query service's own VID fetching.
+        let vid_event = CoordinatorEvent::VidCommonRecovered {
+            view,
+            header: leaf.block_header().clone(),
+            common: vid_common,
+        };
+        if let Err(err) = consumer.handle_event(&vid_event).await {
+            tracing::warn!(
+                ?view,
+                "failed to store recovered VID common in query service: {err:#}"
+            );
         }
     }
 }

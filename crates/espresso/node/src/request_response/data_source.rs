@@ -350,6 +350,18 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
                 Ok(Response::RewardMerkleTreeV2(merkle_tree_bytes))
             },
+            Request::DaProposal(view) => {
+                // DA proposals are retained in consensus storage for the retention window
+                // so that peers which decided a view before obtaining its payload can
+                // recover it from us (see `generate_decide_events`).
+                let proposal = self
+                    .persistence
+                    .load_da_proposal(ViewNumber::new(*view))
+                    .await
+                    .with_context(|| "failed to load DA proposal from persistence")?
+                    .with_context(|| format!("no DA proposal available for view {view}"))?;
+                Ok(Response::DaProposal(Box::new(proposal)))
+            },
         }
     }
 }

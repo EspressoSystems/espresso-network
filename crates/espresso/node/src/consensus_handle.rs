@@ -91,6 +91,15 @@ where
             header: header.clone(),
             payload: payload.clone(),
         }),
+        ConsensusOutput::VidShareValidated {
+            view,
+            header,
+            share,
+        } => Some(CoordinatorEvent::VidShareValidated {
+            view: *view,
+            header: header.clone(),
+            share: share.clone(),
+        }),
         _ => None,
     }
 }

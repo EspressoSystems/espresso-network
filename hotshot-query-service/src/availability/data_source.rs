@@ -298,11 +298,30 @@ pub trait UpdateAvailabilityData<Types: NodeType> {
     ///
     /// Decide events in the new protocol may arrive before VID reconstruction has produced the
     /// block payload. When the payload eventually becomes available the data source uses this
-    /// method to fill it in, notifying any pending fetchers. Implementations that don't track
-    /// blocks (e.g. metrics-only) may leave the default no-op.
+    /// method to fill it in, notifying any pending fetchers. The payload is only stored once the
+    /// decided leaf at its height is ingested and its header matches; otherwise it is dropped
+    /// (the decide event itself remains the canonical payload source).
+    ///
+    /// This back-fill is best-effort: implementations that don't track blocks (e.g.
+    /// metrics-only) may leave the default no-op, and the file system backend cannot update an
+    /// already-occupied or skipped-over slot.
     fn append_payload(
         &self,
         _block: BlockQueryData<Types>,
+    ) -> impl Send + Future<Output = anyhow::Result<()>> {
+        async { Ok(()) }
+    }
+
+    /// Append VID data for a block whose leaf was already decided without it (the new protocol can
+    /// decide before this node's VID share arrives). Fills in the common and share, notifying
+    /// pending fetchers; data not matching the decided header at its height is dropped.
+    ///
+    /// This back-fill is best-effort: implementations that don't track VID may leave the default
+    /// no-op, and the file system backend cannot update an already-occupied or skipped-over slot.
+    fn append_vid(
+        &self,
+        _common: VidCommonQueryData<Types>,
+        _share: Option<VidShare>,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async { Ok(()) }
     }

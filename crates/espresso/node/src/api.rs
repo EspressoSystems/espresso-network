@@ -3017,20 +3017,22 @@ mod api_tests {
                 .ok()
                 .unwrap();
 
-            // Check that all data has been garbage collected for the decided views.
+            // Quorum proposals are GCed at decide; DA proposals and VID shares are
+            // retained for the consensus storage retention window so payloads remain
+            // recoverable by this node and its peers.
             assert!(
                 persistence
                     .load_da_proposal(leaf.view_number())
                     .await
                     .unwrap()
-                    .is_none()
+                    .is_some()
             );
             assert!(
                 persistence
                     .load_vid_share(leaf.view_number())
                     .await
                     .unwrap()
-                    .is_none()
+                    .is_some()
             );
             assert!(
                 persistence
@@ -3067,6 +3069,7 @@ mod api_tests {
         D: TestableSequencerDataSource + Debug + 'static,
     {
         use ark_serialize::CanonicalDeserialize;
+        use hotshot_types::traits::block_contents::BlockPayload;
 
         let storage = D::create_storage().await;
         let persistence = D::persistence_options(&storage).create().await.unwrap();
@@ -3111,12 +3114,22 @@ mod api_tests {
 
         // Create another leaf, with missing data. We have to use a different payload commitment,
         // otherwise the database will be able to combine the empty payload from the genesis block
-        // with this header, and the payload will not actually be missing.
+        // with this header, and the payload will not actually be missing. The namespace table must
+        // also be non-empty: decide processing fills empty-namespace-table blocks with the
+        // canonical empty payload, which would likewise make the payload not missing.
+        let (_, ns_table) = espresso_types::Payload::from_transactions(
+            [Transaction::new(1_u32.into(), vec![1, 2, 3])],
+            &ValidatedState::default(),
+            &NodeState::mock(),
+        )
+        .await
+        .unwrap();
         let mut block_header = leaf.block_header().clone();
         *block_header.height_mut() += 1;
         *block_header.payload_commitment_mut() = VidCommitment::V1(
             CanonicalDeserialize::deserialize_uncompressed_unchecked([1u8; 32].as_slice()).unwrap(),
         );
+        *block_header.ns_table_mut() = ns_table;
         let qp = QuorumProposalWrapper {
             proposal: QuorumProposal2 {
                 block_header,

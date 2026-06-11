@@ -5,7 +5,7 @@ use hotshot::traits::BlockPayload;
 use hotshot_types::{
     data::{EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::NodeType,
+    traits::{block_contents::BlockHeader, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
@@ -22,6 +22,9 @@ pub struct VidReconstructOutput<T: NodeType> {
     pub payload_commitment: VidCommitment2,
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
+    /// Block header, carried through reconstruction so consumers don't need the proposal (which
+    /// may have been GC'd from consensus state by the time we finish).
+    pub header: T::BlockHeader,
     pub tx_commitments: Vec<Commitment<T::Transaction>>,
 }
 
@@ -113,7 +116,9 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
     accumulated_weight: usize,
     seen_keys: HashSet<T::SignatureKey>,
     common: AvidmGf2Common,
-    metadata: Option<<T::BlockPayload as BlockPayload<T>>::Metadata>,
+    /// Block header from the proposal for this view. Required for reconstruction (it
+    /// provides the payload metadata) and carried into the output for consumers.
+    header: Option<T::BlockHeader>,
     epoch: Option<EpochNumber>,
 }
 
@@ -122,6 +127,10 @@ impl<T: NodeType> VidShareAccumulator<T> {
         self.accumulated_weight >= self.common.param.recovery_threshold
     }
 }
+
+/// Views below the GC view for which in-flight reconstructions and accumulators are kept alive,
+/// so payloads for just-decided views can still be reconstructed for the decide pipeline.
+pub(crate) const RECONSTRUCT_KEEP_HORIZON: u64 = 5;
 
 #[derive(Default)]
 pub struct VidReconstructor<T: NodeType> {
@@ -141,9 +150,9 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    pub(crate) fn handle_vid_share<M>(&mut self, share: VidDisperseShare2<T>, metadata: M)
+    pub(crate) fn handle_vid_share<H>(&mut self, share: VidDisperseShare2<T>, header: H)
     where
-        M: Into<Option<<T::BlockPayload as BlockPayload<T>>::Metadata>>,
+        H: Into<Option<T::BlockHeader>>,
     {
         let view = share.view_number;
         if self.reconstructed.contains(&view) {
@@ -152,7 +161,7 @@ impl<T: NodeType> VidReconstructor<T> {
         let payload_commitment = share.payload_commitment;
         let recipient_key = share.recipient_key.clone();
         let weight = share.share.weight();
-        let metadata = metadata.into();
+        let header = header.into();
         let share_epoch = share.epoch;
         let accumulator = self
             .accumulators
@@ -162,13 +171,13 @@ impl<T: NodeType> VidReconstructor<T> {
                 accumulated_weight: 0,
                 seen_keys: HashSet::new(),
                 common: share.common.clone(),
-                metadata: None,
+                header: None,
                 epoch: share_epoch,
             });
-        if accumulator.metadata.is_none()
-            && let Some(m) = metadata
+        if accumulator.header.is_none()
+            && let Some(h) = header
         {
-            accumulator.metadata = Some(m)
+            accumulator.header = Some(h)
         }
         if accumulator.seen_keys.insert(recipient_key) {
             accumulator.accumulated_weight += weight;
@@ -207,8 +216,9 @@ impl<T: NodeType> VidReconstructor<T> {
         };
         let shares = accumulator.shares.clone();
         let common = accumulator.common.clone();
-        // Metadata comes from when we get the proposal, otherwise we can't reconstruct the payload
-        let Some(metadata) = accumulator.metadata.clone() else {
+        // The header comes from the proposal; without it we have no payload metadata and
+        // can't reconstruct the payload.
+        let Some(header) = accumulator.header.clone() else {
             return;
         };
         let epoch = accumulator.epoch.unwrap_or(EpochNumber::genesis());
@@ -217,6 +227,7 @@ impl<T: NodeType> VidReconstructor<T> {
                 // TODO: Handle error
                 return Err(());
             };
+            let metadata = header.metadata().clone();
             let payload = T::BlockPayload::from_bytes(&result, &metadata);
             let tx_commitments = payload.transaction_commitments(&metadata);
             Ok(VidReconstructOutput {
@@ -225,6 +236,7 @@ impl<T: NodeType> VidReconstructor<T> {
                 payload_commitment,
                 payload,
                 metadata,
+                header,
                 tx_commitments,
             })
         });
@@ -232,12 +244,20 @@ impl<T: NodeType> VidReconstructor<T> {
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
-        let keep = self.calculations.split_off(&view_number);
+        // GC runs at decide, but those views' payloads are what the decide pipeline still needs:
+        // a multi-leaf decide would otherwise abort the older leaves' reconstructions and lose
+        // their payloads. Keep a small horizon below the GC view alive; further below, accumulators
+        // can't make progress anyway (the share-carrying Vote1 messages stop arriving).
+        let horizon = ViewNumber::new(view_number.saturating_sub(RECONSTRUCT_KEEP_HORIZON));
+        let keep = self.calculations.split_off(&horizon);
         for handle in self.calculations.values_mut() {
             handle.abort();
         }
         self.calculations = keep;
-        self.accumulators = self.accumulators.split_off(&view_number);
+        self.accumulators = self.accumulators.split_off(&horizon);
+        // Forget completed views below the horizon; their accumulators are gone, so late
+        // shares can no longer trigger duplicate reconstructions.
+        self.reconstructed = self.reconstructed.split_off(&horizon);
     }
 
     /// Mark `view` as already-reconstructed: drop accumulated shares, abort any

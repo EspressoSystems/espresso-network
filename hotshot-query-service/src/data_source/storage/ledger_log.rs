@@ -155,7 +155,11 @@ impl<T: Serialize + DeserializeOwned + Clone> LedgerLog<T> {
             }
             Ok(true)
         } else if matches!(self.iter().nth(index), Some(Some(_))) {
-            // This is a duplicate, we don't have to insert anything.
+            // The slot is already occupied and cannot be updated; the new object is dropped.
+            // This is the expected dedup path for identical re-inserts, but it also means a
+            // back-fill (e.g. a late VID share for an entry stored without one) is a no-op on
+            // this backend.
+            debug!(index, "slot already occupied; skipping insert");
             Ok(false)
         } else {
             // This is an object earlier in the chain that we are now receiving asynchronously.

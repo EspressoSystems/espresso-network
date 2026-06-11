@@ -17,7 +17,9 @@ use espresso_types::{
     AuthenticatedValidatorMap, Leaf, Leaf2, NetworkConfig, Payload, PubKey, RegisteredValidatorMap,
     SeqTypes, StakeTableHash,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence},
+    v0::traits::{
+        DecideProcessingOutcome, EventConsumer, PersistenceOptions, SequencerPersistence,
+    },
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
@@ -53,7 +55,10 @@ use itertools::Itertools;
 use super::RegisteredValidatorNoX25519;
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    persistence::{
+        PAYLOAD_RETENTION_VIEWS, migrate_network_config,
+        persistence_metrics::PersistenceMetricsValue,
+    },
 };
 
 /// Deserialize a stake table from bytes, trying current and legacy formats.
@@ -362,12 +367,18 @@ impl Inner {
     fn collect_garbage(
         &mut self,
         decided_view: ViewNumber,
+        keep_leaf: ViewNumber,
         prune_intervals: &[RangeInclusive<ViewNumber>],
     ) -> anyhow::Result<()> {
         let prune_view = ViewNumber::new(decided_view.saturating_sub(self.view_retention));
 
-        self.prune_files(self.da2_dir_path(), prune_view, None, prune_intervals)?;
-        self.prune_files(self.vid2_dir_path(), prune_view, None, prune_intervals)?;
+        // DA proposals and VID shares are retained after processing so peers can recover recent
+        // payloads, but they dominate storage, so they're pruned on a short window (a few hours,
+        // or the general retention if shorter) — separate from the smaller leaf spine below.
+        let payload_retention = self.view_retention.min(PAYLOAD_RETENTION_VIEWS);
+        let payload_prune_view = ViewNumber::new(decided_view.saturating_sub(payload_retention));
+        self.prune_files(self.da2_dir_path(), payload_prune_view, None, &[])?;
+        self.prune_files(self.vid2_dir_path(), payload_prune_view, None, &[])?;
         self.prune_files(
             self.quorum_proposals2_dir_path(),
             prune_view,
@@ -381,11 +392,12 @@ impl Inner {
             prune_intervals,
         )?;
 
-        // Save the most recent leaf as it will be our anchor point if the node restarts.
+        // Keep the most recent *processed* leaf as the restart anchor; the next pass relies on the
+        // oldest remaining leaf having been included in a previous decide event.
         self.prune_files(
             self.decided_leaf2_path(),
             prune_view,
-            Some(decided_view),
+            Some(keep_leaf),
             prune_intervals,
         )?;
 
@@ -446,13 +458,16 @@ impl Inner {
     /// Generate events based on persisted decided leaves.
     ///
     /// Returns a list of closed intervals of views which can be safely deleted, as all leaves
-    /// within these view ranges have been processed by the event consumer.
+    /// within these view ranges have been processed by the event consumer, along with the
+    /// leaves whose decide events were emitted without a block payload (so the caller can
+    /// recover them from peers in the background, after releasing the inner lock).
     async fn generate_decide_events(
         &mut self,
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
-    ) -> anyhow::Result<Vec<RangeInclusive<ViewNumber>>> {
+        metrics: &PersistenceMetricsValue,
+    ) -> anyhow::Result<(Vec<RangeInclusive<ViewNumber>>, Vec<Leaf2>)> {
         // Generate a decide event for each leaf, to be processed by the event consumer. We make a
         // separate event for each leaf because it is possible we have non-consecutive leaves in our
         // storage, which would not be valid as a single decide with a single leaf chain.
@@ -466,26 +481,30 @@ impl Inner {
                 fs::read(&path).context(format!("reading decided leaf {}", path.display()))?;
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
-            // Include the VID share if available.
-            let vid_proposal = self.load_vid_share(v)?;
-            if vid_proposal.is_none() {
-                tracing::debug!(?v, "VID share not available at decide");
-            }
-            let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
+            // VID share from the staging file (the decide processor stages the in-memory decide
+            // data before this runs). A missing share is logged (with a metric) in the emit
+            // loop below.
+            let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
 
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
 
-            // Fill in the full block payload using the DA proposals we had persisted.
+            // Block payload from the DA proposal staging file.
             if let Some(proposal) = self.load_da_proposal(v)? {
                 let payload = Payload::from_bytes(
                     &proposal.data.encoded_transactions,
                     &proposal.data.metadata,
                 );
                 leaf.fill_block_payload_unchecked(payload);
-            } else {
-                tracing::debug!(?v, "DA proposal not available at decide");
+            } else if v == ViewNumber::genesis()
+                || leaf.block_header().ns_table().iter().next().is_none()
+            {
+                // No DA proposal for the genesis view (or any empty-namespace-table block), but
+                // the payload is always the canonical empty one.
+                leaf.fill_block_payload_unchecked(Payload::empty().0);
             }
+            // A leaf left without a payload is logged (with a metric) and reported for peer
+            // recovery in the emit loop below.
 
             let info = LeafInfo {
                 leaf,
@@ -511,10 +530,23 @@ impl Inner {
             }
         }
 
+        let mut missing_payload = Vec::new();
         let mut intervals = vec![];
         let mut current_interval = None;
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
+
+            // Missing data isn't waited for: emit as-is. A missing payload is reported for
+            // background peer recovery; missing VID is left to the query service's fetching.
+            if leaf.leaf.block_payload().is_none() {
+                tracing::warn!(?view, "DA proposal not available at decide");
+                metrics.decide_missing_payload.add(1);
+                missing_payload.push(leaf.leaf.clone());
+            }
+            if leaf.vid_share.is_none() && view != ViewNumber::genesis() {
+                tracing::warn!(?view, "VID share not available at decide");
+                metrics.decide_missing_vid.add(1);
+            }
 
             let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
                 let cert2 = self.load_cert2(view)?;
@@ -551,7 +583,16 @@ impl Inner {
                     *current_height += 1;
                     *end = view;
                 } else {
-                    // Otherwise, end the current interval and start a new one.
+                    // A height gap means a decided leaf was never persisted (its decide event
+                    // was dropped before the event loop). End the current interval and start a
+                    // new one, leaving the hole for the query service's leaf fetching to heal.
+                    // Recurring gaps mean leaves lost before persistence.
+                    tracing::error!(
+                        height,
+                        parent = *current_height,
+                        "non-consecutive decided leaf; skipping the gap"
+                    );
+                    metrics.decide_height_gaps.add(1);
                     intervals.push(*start..=*end);
                     current_interval = Some((view, view, height));
                 }
@@ -564,7 +605,7 @@ impl Inner {
             intervals.push(start..=end);
         }
 
-        Ok(intervals)
+        Ok((intervals, missing_payload))
     }
 
     fn load_da_proposal(
@@ -821,26 +862,34 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
-    ) -> anyhow::Result<Option<ViewNumber>> {
+    ) -> anyhow::Result<DecideProcessingOutcome> {
         // On error, GC does not run over the failed range, so the leaves stay on disk and are
         // retried; no data is lost.
-        let intervals = self
+        let (intervals, missing_payload) = self
             .inner
             .write()
             .await
-            .generate_decide_events(view, deciding_qc, consumer)
+            .generate_decide_events(view, deciding_qc, consumer, &self.metrics)
             .await?;
 
         // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
         let processed = intervals.iter().map(|i| *i.end()).max();
 
-        // Best-effort GC; runs again at the next decide.
-        let res = self.inner.write().await.collect_garbage(view, &intervals);
+        // Best-effort GC; runs again at the next decide. The most recent processed leaf is kept
+        // as the restart anchor.
+        let res =
+            self.inner
+                .write()
+                .await
+                .collect_garbage(view, processed.unwrap_or(view), &intervals);
         if let Err(err) = res {
             tracing::warn!(?view, "GC failed: {err:#}");
         }
 
-        Ok(processed)
+        Ok(DecideProcessingOutcome {
+            processed,
+            missing_payload,
+        })
     }
 
     async fn load_anchor_leaf(

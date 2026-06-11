@@ -338,6 +338,29 @@ where
                     return Err(height);
                 }
             },
+            CoordinatorEvent::VidShareValidated { header, share, .. } => {
+                let common =
+                    VidCommonQueryData::new(header.clone(), VidCommon::V2(share.common.clone()));
+                let height = common.height();
+                if let Err(err) = self
+                    .append_vid(common, Some(VidShare::V2(share.share.clone())))
+                    .await
+                {
+                    tracing::error!(height, "failed to store late VID share: {err:#}");
+                    return Err(height);
+                }
+            },
+            CoordinatorEvent::VidCommonRecovered { header, common, .. } => {
+                // VID common regenerated from a recovered payload (no per-node share). Back-fill
+                // the common so VID-common queries can be served; the share, if any, is healed
+                // separately by the late-share path or the query service's own fetching.
+                let common = VidCommonQueryData::new(header.clone(), VidCommon::V2(common.clone()));
+                let height = common.height();
+                if let Err(err) = self.append_vid(common, None).await {
+                    tracing::error!(height, "failed to store recovered VID common: {err:#}");
+                    return Err(height);
+                }
+            },
             _ => {},
         }
         Ok(())

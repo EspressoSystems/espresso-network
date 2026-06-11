@@ -625,15 +625,21 @@ pub mod availability_tests {
 #[espresso_macros::generic_tests]
 pub mod persistence_tests {
     use committable::Committable;
+    use futures::stream::StreamExt;
     use hotshot_example_types::{
         node_types::TEST_VERSIONS,
         state_types::{TestInstanceState, TestValidatedState},
     };
-    use hotshot_types::simple_certificate::QuorumCertificate2;
+    use hotshot_types::{
+        data::{VidCommitment, VidCommon, VidShare},
+        simple_certificate::QuorumCertificate2,
+        vid::advz::advz_scheme,
+    };
+    use jf_advz::VidScheme;
 
     use crate::{
         Leaf2,
-        availability::{BlockQueryData, LeafQueryData},
+        availability::{BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData},
         data_source::{
             Transaction,
             storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
@@ -833,6 +839,96 @@ pub mod persistence_tests {
         assert_eq!(block, ds.get_block(height).await.await);
         ds.get_leaf(height - 1).await.try_resolve().unwrap_err();
         ds.get_block(height - 1).await.try_resolve().unwrap_err();
+    }
+
+    /// Payload/VID back-fill (`append_payload`/`append_vid`) is gated on the decided header:
+    /// data for a block whose leaf is not ingested (or whose header does not match the decided
+    /// one at that height, e.g. a reconstructed payload from a never-decided proposal) must not
+    /// reach storage keyed by height.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_backfill_gated_on_decided_header<D: TestableDataSource>()
+    where
+        for<'a> D::Transaction<'a>: UpdateAvailabilityStorage<MockTypes>
+            + AvailabilityStorage<MockTypes>
+            + NodeStorage<MockTypes>,
+    {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        // Mock up some consensus data.
+        let mut mock_qc = QuorumCertificate2::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let mut mock_leaf = Leaf2::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await;
+        mock_leaf.block_header_mut().block_number += 1;
+        mock_qc.data.leaf_commit = <Leaf2<MockTypes> as Committable>::commit(&mock_leaf);
+
+        let block = BlockQueryData::new(mock_leaf.block_header().clone(), MockPayload::genesis());
+        let leaf = LeafQueryData::new(mock_leaf.clone(), mock_qc.clone()).unwrap();
+        let height = leaf.height() as usize;
+
+        // Height-keyed waiters are what a never-decided block poisons: the first block (or VID
+        // common) delivered to these subscriptions must be the one matching the decided header.
+        let mut blocks = ds.subscribe_blocks(height).await;
+        let mut vids = ds.subscribe_vid_common(height).await;
+
+        // Back-filling before the leaf is ingested is skipped.
+        ds.append_payload(block.clone()).await.unwrap();
+
+        // Ingest the decided leaf (without its payload or VID data).
+        ds.append(BlockInfo::new(leaf.clone(), None, None, None))
+            .await
+            .unwrap();
+
+        // Nothing was stored by the early back-fill: the block at this height is still missing.
+        ds.get_block(height).await.try_resolve().unwrap_err();
+
+        // A payload whose header does not match the decided leaf at this height is dropped.
+        // The mock header commitment covers only the height and payload commitment, so change
+        // the latter to get a conflicting header at the same height.
+        let mut wrong_header = leaf.header().clone();
+        wrong_header.payload_commitment =
+            VidCommitment::V0(advz_scheme(2).disperse([1]).unwrap().commit);
+        ds.append_payload(BlockQueryData::new(
+            wrong_header.clone(),
+            MockPayload::genesis(),
+        ))
+        .await
+        .unwrap();
+
+        // The payload matching the decided header is back-filled; the subscription must see it
+        // (and not the mismatched block) as the block at this height.
+        ds.append_payload(block.clone()).await.unwrap();
+        assert_eq!(blocks.next().await.unwrap(), block);
+        assert_eq!(ds.get_block(height).await.await, block);
+
+        // Same for VID data: a mismatched header is dropped, the matching one back-fills.
+        let mut vid = advz_scheme(2);
+        let disperse = vid.disperse([]).unwrap();
+        ds.append_vid(
+            VidCommonQueryData::new(wrong_header, VidCommon::V0(disperse.common.clone())),
+            Some(VidShare::V0(disperse.shares[0].clone())),
+        )
+        .await
+        .unwrap();
+
+        let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
+        ds.append_vid(
+            common.clone(),
+            Some(VidShare::V0(disperse.shares[0].clone())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(vids.next().await.unwrap(), common);
+        assert_eq!(ds.get_vid_common(height).await.await, common);
     }
 }
 

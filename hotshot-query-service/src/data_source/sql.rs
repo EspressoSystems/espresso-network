@@ -410,6 +410,45 @@ mod test {
 
     type D = SqlDataSource<MockTypes, NoFetching>;
 
+    /// Inserting a VID share whose header row is not yet ingested must fail (instead of
+    /// silently updating zero rows), so the caller's retry can attach the share once the leaf
+    /// at this height lands.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_vid_share_insert_requires_header() {
+        let storage = D::create(0).await;
+        let ds = <D as DataSourceLifeCycle>::connect(&storage).await;
+
+        let disperse = advz_scheme(2).disperse([]).unwrap();
+        let leaf = LeafQueryData::<MockTypes>::genesis(
+            &TestValidatedState::default(),
+            &TestInstanceState::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let common = VidCommonQueryData::new(leaf.header().clone(), VidCommon::V0(disperse.common));
+        let share = VidShare::V0(disperse.shares[0].clone());
+
+        // No header row at this height yet: the share insert must error and roll back.
+        let mut tx = ds.write().await.unwrap();
+        tx.insert_vid(&common, Some(&share)).await.unwrap_err();
+        drop(tx);
+
+        // Once the leaf (and thus the header row) is ingested, the same insert succeeds.
+        ds.append(BlockInfo::new(leaf, None, None, None))
+            .await
+            .unwrap();
+        let mut tx = ds.write().await.unwrap();
+        tx.insert_vid(&common, Some(&share)).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(ds.get_vid_common(0).await.await, common);
+        assert_eq!(
+            NodeStorage::<MockTypes>::vid_share(&mut ds.read().await.unwrap(), 0)
+                .await
+                .unwrap(),
+            share
+        );
+    }
+
     // This function should be generic, but the file system data source does not currently support
     // storing VID common and later the corresponding share.
     #[test_log::test(tokio::test(flavor = "multi_thread"))]

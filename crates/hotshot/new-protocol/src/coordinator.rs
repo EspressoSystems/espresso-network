@@ -3,7 +3,7 @@ mod metrics;
 pub mod timer;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, btree_map::Entry},
     sync::Arc,
     time::Duration,
 };
@@ -97,11 +97,23 @@ pub struct Coordinator<T: NodeType, N, S> {
     #[builder(default)]
     cached_validated_proposals: BTreeMap<(ViewNumber, VidCommitment2), ValidatedProposal<T>>,
     #[builder(default)]
+    /// Headers of views that were decided without this node's VID share, kept so a
+    /// late share can still be validated, persisted, and delivered to downstream
+    /// consumers (e.g. the query service). Bounded by [`LATE_VID_SHARE_HORIZON`].
+    decided_missing_vid_shares: BTreeMap<ViewNumber, T::BlockHeader>,
+    #[builder(default)]
     cached_vid_shares: BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>,
     #[builder(skip)]
     da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
 }
+
+/// Views below the newest decided view for which a late VID share (arriving after its view was
+/// decided without one) is still accepted. A node's own share has no other recovery path (the
+/// query service's peer fetching only heals the VID common), so this matches the espresso
+/// payload-retention window (~3 hours at 2s views): a stall shorter than that never leaves a
+/// permanent share gap. The bounded maps hold headers and unpaired shares — both small.
+pub const LATE_VID_SHARE_HORIZON: u64 = 5400;
 
 #[bon]
 impl<T, N, S> Coordinator<T, N, S>
@@ -394,10 +406,19 @@ where
                     Ok(vid_share) => {
                         finish_measurement(next_input);
                         let view = vid_share.view_number();
+                        // Already decided without this share, so the pairing path below won't
+                        // deliver it; persist and notify consumers directly (flushed from the
+                        // outbox on the next input).
+                        if self.decided_missing_vid_shares.contains_key(&view) {
+                            self.deliver_late_vid_share(vid_share);
+                            continue;
+                        }
                         let key = (view, vid_share.payload_commitment);
                         let Some(validated) = self.cached_validated_proposals.remove(&key) else {
-                            // Wait for the proposal
-                            self.cached_vid_shares.insert(key, vid_share);
+                            // Wait for the proposal. Only own shares reach this point (the
+                            // network arm filters by recipient), so a colliding entry is a
+                            // duplicate; never displace what is already cached.
+                            self.cached_vid_shares.entry(key).or_insert(vid_share);
                             continue;
                         };
                         return self.on_proposal_and_vid_share(validated, vid_share)
@@ -492,16 +513,17 @@ where
                             out.view,
                             out.epoch,
                             out.payload.clone(),
-                            out.metadata.clone(),
+                            out.metadata,
                             VidCommitment::V2(out.payload_commitment),
                         );
-                        if let Some(proposal) = self.consensus.proposal_at(out.view) {
-                            self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
-                                view: out.view,
-                                header: proposal.block_header.clone(),
-                                payload: out.payload,
-                            });
-                        }
+                        // Notify consumers of the reconstructed payload. The header is carried
+                        // through the reconstructor, so this works even if the proposal was
+                        // already GC'd from consensus state.
+                        self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
+                            view: out.view,
+                            header: out.header,
+                            payload: out.payload,
+                        });
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
                     Err(()) => {
@@ -595,7 +617,7 @@ where
                 leaves,
                 cert1,
                 cert2,
-                ..
+                vid_shares,
             } => {
                 info!(
                     %node,
@@ -613,6 +635,25 @@ where
                     let gc_view = newest.view_number();
                     let gc_epoch = newest.justify_qc().epoch().unwrap_or_default();
                     self.gc(gc_epoch, GcScope::Decided(gc_view))?;
+                }
+                // Track leaves decided without this node's VID share (`vid_shares` parallels
+                // `leaves`) so a late share can still be persisted and delivered. One that already
+                // arrived but never paired with its proposal is delivered right away.
+                for (leaf, vid_share) in leaves.iter().zip(&vid_shares) {
+                    if vid_share.is_some() {
+                        continue;
+                    }
+                    let header = leaf.block_header();
+                    let VidCommitment::V2(commit) = header.payload_commitment() else {
+                        continue;
+                    };
+                    self.decided_missing_vid_shares
+                        .insert(leaf.view_number(), header.clone());
+                    if let Some(cached) =
+                        self.cached_vid_shares.remove(&(leaf.view_number(), commit))
+                    {
+                        self.deliver_late_vid_share(cached);
+                    }
                 }
                 for leaf in leaves {
                     self.epoch_manager.handle_leaf_decided(leaf);
@@ -832,6 +873,7 @@ where
                 }
             },
             ConsensusOutput::BlockPayloadReconstructed { .. } => {},
+            ConsensusOutput::VidShareValidated { .. } => {},
         }
         Ok(())
     }
@@ -893,7 +935,16 @@ where
                 ConsensusMessage::VidShare(share) => {
                     let view = share.data.view_number();
                     debug!(%node, %sender, %view, "recv vid share");
-                    if self.consensus.wants_proposal_for_view(&view) {
+                    // Shares are unicast per recipient; one addressed to another node never
+                    // legitimately arrives here (foreign shares circulate via Vote1).
+                    // Accepting it would let it displace our own share in the
+                    // unpaired-share cache and be persisted, voted, and served as ours.
+                    // Shares for views already decided without one are accepted so they
+                    // can be stored late (`deliver_late_vid_share` re-checks).
+                    if share.data.recipient_key == self.public_key
+                        && (self.consensus.wants_proposal_for_view(&view)
+                            || self.decided_missing_vid_shares.contains_key(&view))
+                    {
                         self.share_validator.validate(share);
                     }
                     None
@@ -1103,6 +1154,53 @@ where
         }
     }
 
+    /// Test-only: insert a share into the unpaired-share cache, as if it had
+    /// been validated while its proposal was still missing.
+    #[cfg(test)]
+    pub(crate) fn cache_vid_share_for_test(&mut self, share: VidDisperseShare2<T>) {
+        self.cached_vid_shares
+            .insert((share.view_number(), share.payload_commitment), share);
+    }
+
+    /// Persist a VID share that arrived after its view was decided without one, and notify
+    /// consumers (via the outbox) to back-fill the missing VID. No-op unless the view is tracked
+    /// in `decided_missing_vid_shares`, the share is ours, and it matches the decided header.
+    fn deliver_late_vid_share(&mut self, share: VidDisperseShare2<T>) {
+        let view = share.view_number();
+        let Entry::Occupied(entry) = self.decided_missing_vid_shares.entry(view) else {
+            return;
+        };
+        // Only this node's own share matters here (the query service serves it as ours); the
+        // leader's signature covers the commitment, not the recipient, so keep waiting if this
+        // isn't ours.
+        if share.recipient_key != self.public_key {
+            warn!(%view, "late vid share not addressed to this node, share discarded");
+            return;
+        }
+        let VidCommitment::V2(commit) = entry.get().payload_commitment() else {
+            return;
+        };
+        if commit != share.payload_commitment {
+            warn!(%view, "late vid share payload commitment mismatch, share discarded");
+            return;
+        }
+        let header = entry.remove();
+        info!(%view, "vid share validated after its view was decided");
+        self.storage.append_vid(share.clone());
+        // The pairing path (`on_proposal_and_vid_share`) was skipped for this view, so the
+        // reconstructor never got a header for it; vote1-carried shares may already satisfy
+        // the recovery threshold, so supplying (our share, header) unblocks local payload
+        // reconstruction. Bounded by `RECONSTRUCT_KEEP_HORIZON` below the decide; older views
+        // fall back to the decide pipeline's peer recovery.
+        self.vid_reconstructor
+            .handle_vid_share(share.clone(), header.clone());
+        self.outbox.push_back(ConsensusOutput::VidShareValidated {
+            view,
+            header,
+            share,
+        });
+    }
+
     fn on_proposal_and_vid_share(
         &mut self,
         validated: ValidatedProposal<T>,
@@ -1116,21 +1214,17 @@ where
         self.storage
             .append_proposal(validated.message.proposal.data.clone());
 
-        let m = validated
-            .message
-            .proposal
-            .data
-            .block_header
-            .metadata()
-            .clone();
+        let header = validated.message.proposal.data.block_header.clone();
         self.vid_reconstructor
-            .handle_vid_share(vid_share.clone(), m);
+            .handle_vid_share(vid_share.clone(), header);
 
-        // GC for the cache
+        // GC for the cache. Unpaired shares are kept for a horizon of older
+        // views so a view decided without its share can still be back-filled.
         let view = validated.message.proposal.data.view_number();
-        self.cached_vid_shares = self
-            .cached_vid_shares
-            .split_off(&(view + 1, VidCommitment2::default()));
+        self.cached_vid_shares = self.cached_vid_shares.split_off(&(
+            ViewNumber::new((view + 1).saturating_sub(LATE_VID_SHARE_HORIZON)),
+            VidCommitment2::default(),
+        ));
         self.cached_validated_proposals = self
             .cached_validated_proposals
             .split_off(&(view + 1, VidCommitment2::default()));
@@ -1473,9 +1567,13 @@ where
                 self.cached_validated_proposals = self
                     .cached_validated_proposals
                     .split_off(&(view, VidCommitment2::default()));
-                self.cached_vid_shares = self
-                    .cached_vid_shares
-                    .split_off(&(view, VidCommitment2::default()));
+                // Keep unpaired shares for a horizon of views below the current one: a
+                // view that later decides without its share is back-filled from this
+                // cache.
+                self.cached_vid_shares = self.cached_vid_shares.split_off(&(
+                    ViewNumber::new(view.saturating_sub(LATE_VID_SHARE_HORIZON)),
+                    VidCommitment2::default(),
+                ));
                 // When we enter a new view, we do not want to GC enqueued messages
                 // for the previous view yet:
                 self.network.gc(view.saturating_sub(1).into())?;
@@ -1492,6 +1590,11 @@ where
                 self.state_manager.gc(view);
                 self.storage.gc(view);
                 self.vid_reconstructor.gc(view);
+                // Stop waiting for late VID shares beyond the horizon; the query
+                // service's peer fetching covers older gaps.
+                self.decided_missing_vid_shares = self.decided_missing_vid_shares.split_off(
+                    &ViewNumber::new(view.saturating_sub(LATE_VID_SHARE_HORIZON)),
+                );
                 self.da_payloads = self
                     .da_payloads
                     .split_off(&(view, VidCommitment2::default()));

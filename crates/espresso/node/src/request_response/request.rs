@@ -5,7 +5,11 @@ use espresso_types::{
     v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
     v0_4::{RewardAccountV2, RewardMerkleTreeV2},
 };
-use hotshot_types::{data::VidShare, simple_certificate::LightClientStateUpdateCertificateV2};
+use hotshot_types::{
+    data::{DaProposal2, VidShare},
+    message::Proposal,
+    simple_certificate::LightClientStateUpdateCertificateV2,
+};
 use request_response::{Serializable, request::Request as RequestTrait};
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +44,11 @@ pub enum Request {
     RewardMerkleTreeV2(u64, ViewNumber),
     /// A request for the cert2 at or above the given height
     Cert2(Height),
+    /// A request for the DA proposal (block payload) at the given view, used to recover
+    /// payloads for views that were decided before this node obtained their payload. DA
+    /// proposals are retained in consensus storage for the retention window precisely so
+    /// they can be served here.
+    DaProposal(ViewNumber),
 }
 
 /// The outermost response type. This an enum that contains all the possible responses that the
@@ -66,6 +75,10 @@ pub enum Response {
     RewardMerkleTreeV2(Vec<u8>),
     /// A response with the earliest cert2 (fast finality protocol)
     Cert2(Certificate2<SeqTypes>),
+    /// A response with the DA proposal for a view. The signature is not meaningful to the
+    /// requester; the payload must be verified against the block header's payload
+    /// commitment instead.
+    DaProposal(Box<Proposal<SeqTypes, DaProposal2<SeqTypes>>>),
 }
 
 /// Implement the `RequestTrait` trait for the `Request` type. This tells the request response

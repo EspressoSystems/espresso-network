@@ -179,6 +179,22 @@ impl TestHarness {
         }
     }
 
+    /// Feed a consensus output directly to the coordinator's output processor,
+    /// collecting anything it pushes back to the outbox (e.g. a late
+    /// `VidShareValidated`) into the harness outputs.
+    pub fn process_output(&mut self, output: ConsensusOutput<TestTypes>) {
+        if let Err(err) = self.coordinator.process_consensus_output(output) {
+            panic!("unexpected error: {err}")
+        }
+        self.outputs.extend(self.coordinator.outbox_mut().take());
+    }
+
+    /// Insert a share into the coordinator's unpaired-share cache, as if it had
+    /// been validated while its proposal was still missing.
+    pub fn cache_vid_share(&mut self, share: hotshot_types::data::VidDisperseShare2<TestTypes>) {
+        self.coordinator.cache_vid_share_for_test(share);
+    }
+
     /// Process events from the coordinator until `predicate` is satisfied.
     ///
     /// Each event is immediately applied and appended to the collected list.

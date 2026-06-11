@@ -66,6 +66,7 @@ use async_lock::Semaphore;
 use async_trait::async_trait;
 use backoff::{ExponentialBackoff, ExponentialBackoffBuilder, backoff::Backoff};
 use chrono::{DateTime, Utc};
+use committable::Committable;
 use derivative::Derivative;
 use futures::{
     channel::oneshot,
@@ -768,6 +769,28 @@ where
     }
 }
 
+impl<Types, S, P> FetchingDataSource<Types, S, P>
+where
+    Types: NodeType,
+    Header<Types>: QueryableHeader<Types>,
+    Payload<Types>: QueryablePayload<Types>,
+    S: VersionedDataSource + 'static,
+    for<'a> S::ReadOnly<'a>: AvailabilityStorage<Types> + NodeStorage<Types> + PrunedHeightStorage,
+    P: AvailabilityProvider<Types>,
+{
+    /// The decided header at `height`, if its leaf has already been ingested into local storage.
+    /// Read from the leaf (not `get_header`): the back-fill scenario is precisely a leaf decided
+    /// without its block, and e.g. the fs backend derives headers from block storage.
+    async fn ingested_header_at(&self, height: usize) -> anyhow::Result<Option<Header<Types>>> {
+        let mut tx = self.read().await.context("opening read transaction")?;
+        match tx.get_leaf(LeafId::Number(height)).await {
+            Ok(leaf) => Ok(Some(leaf.header().clone())),
+            Err(QueryError::NotFound | QueryError::Missing) => Ok(None),
+            Err(err) => Err(err).context(format!("loading leaf {height}")),
+        }
+    }
+}
+
 impl<Types, S, P> UpdateAvailabilityData<Types> for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
@@ -859,16 +882,68 @@ where
         Ok(())
     }
 
-    /// Append a payload for a block whose leaf was already decided without one.
-    ///
-    /// In the new protocol, decide events can arrive before VID reconstruction
-    /// has produced the block payload, so [`append`](Self::append) may persist
-    /// a leaf with no payload attached. The payload is then back-filled here
-    /// once it becomes available, leaving the rest of the block info untouched.
+    /// Append a payload for a block whose leaf was already decided without one (the new protocol
+    /// can decide before VID reconstruction produces the payload). Back-fills it, leaving the rest
+    /// of the block info untouched.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        let height = block.height() as usize;
+        // A reconstructed payload can come from a proposal that never decided (its view timed
+        // out): only back-fill when the decided header at this height is already ingested and
+        // matches, or the transactions index and notify-by-height waiters would be poisoned
+        // with the wrong block. Absent is safe to skip: the decide event itself carries this
+        // payload, read from the DA staging table written at reconstruction time.
+        match self.ingested_header_at(height).await? {
+            Some(header) if header.commit() == block.hash() => {},
+            Some(header) => {
+                tracing::warn!(
+                    height,
+                    expected = %header.commit(),
+                    got = %block.hash(),
+                    "dropping reconstructed payload: does not match the decided header"
+                );
+                return Ok(());
+            },
+            None => {
+                tracing::info!(
+                    height,
+                    "skipping reconstructed payload: leaf not yet ingested"
+                );
+                return Ok(());
+            },
+        }
         // Write to storage and notify any pending fetchers waiting on this height.
         self.fetcher.store(&block).await;
         block.notify(&self.fetcher.notifiers).await;
+        Ok(())
+    }
+
+    /// Append VID data for a block whose leaf was already decided without it (the new protocol can
+    /// decide before this node's VID share arrives). Back-fills the common and share, leaving the
+    /// rest of the block info untouched.
+    async fn append_vid(
+        &self,
+        common: VidCommonQueryData<Types>,
+        share: Option<VidShare>,
+    ) -> anyhow::Result<()> {
+        let height = common.height() as usize;
+        // Unlike a reconstructed payload, VID data always derives from a decided header, so an
+        // absent leaf just means decide ingestion is lagging: proceed, and rely on the storage
+        // layer to fail (and the store retry below) until the header row lands. A mismatch
+        // still means a buggy or stale producer: drop it.
+        if let Some(header) = self.ingested_header_at(height).await?
+            && header.commit() != common.block_hash()
+        {
+            tracing::warn!(
+                height,
+                expected = %header.commit(),
+                got = %common.block_hash(),
+                "dropping late VID data: does not match the decided header"
+            );
+            return Ok(());
+        }
+        // Write to storage and notify any pending fetchers waiting on this height.
+        self.fetcher.store(&(common.clone(), share)).await;
+        common.notify(&self.fetcher.notifiers).await;
         Ok(())
     }
 }

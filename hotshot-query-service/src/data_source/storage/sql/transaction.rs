@@ -808,7 +808,11 @@ where
                 let share_row = if let Some(share) = share {
                     let share_data =
                         bincode::serialize(&share).context("failed to serialize VID share")?;
-                    Some((common.height() as i64, share_data))
+                    Some((
+                        common.height() as i64,
+                        common.block_hash().to_string(),
+                        share_data,
+                    ))
                 } else {
                     None
                 };
@@ -816,7 +820,13 @@ where
                 anyhow::Ok((common_row, share_row))
             })
             .process_results(|iter| iter.unzip())?;
-        let share_rows = share_rows.into_iter().flatten().collect::<Vec<_>>();
+        // Dedup by height: a multi-row UPDATE..FROM with duplicate join keys reports one
+        // matched row per header row, so the expected count below must be distinct heights.
+        let share_rows = share_rows
+            .into_iter()
+            .flatten()
+            .unique_by(|(height, ..)| *height)
+            .collect::<Vec<_>>();
 
         // Multiple blocks in the range might have the same VID common. We must filter out such
         // duplicates, because SQL does not allow conflicting rows in a single upsert statement.
@@ -827,19 +837,32 @@ where
             .context("inserting VID common")?;
 
         if !share_rows.is_empty() {
-            let mut q = QueryBuilder::new("WITH rows (height, share) AS (");
-            q.push_values(share_rows, |mut q, (height, share)| {
-                q.push_bind(height).push_bind(share);
+            let expected = share_rows.len() as u64;
+            let mut q = QueryBuilder::new("WITH rows (height, hash, share) AS (");
+            q.push_values(share_rows, |mut q, (height, hash, share)| {
+                q.push_bind(height).push_bind(hash).push_bind(share);
             });
+            // Conditioning on the header hash guarantees a share is never attached to a
+            // different header that later occupies this height.
             q.push(
                 ") UPDATE header SET vid_share = rows.share
                 FROM rows
-                WHERE header.height = rows.height",
+                WHERE header.height = rows.height AND header.hash = rows.hash",
             );
-            q.build()
+            let res = q
+                .build()
                 .execute(self.as_mut())
                 .await
                 .context("inserting VID shares")?;
+            // An UPDATE matching no header row used to drop the share silently. Fail the
+            // transaction instead, so the caller's retry can attach the share once the leaf
+            // at this height is ingested (or surface a real header mismatch).
+            anyhow::ensure!(
+                res.rows_affected() == expected,
+                "VID share insert matched {}/{expected} header rows (header not yet ingested or \
+                 hash mismatch)",
+                res.rows_affected(),
+            );
         }
 
         Ok(())

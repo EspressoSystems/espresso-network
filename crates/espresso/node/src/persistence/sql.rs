@@ -18,7 +18,10 @@ use espresso_types::{
     NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash, parse_duration,
     parse_size,
     traits::{EventsPersistenceRead, MembershipPersistence, StakeTuple},
-    v0::traits::{EventConsumer, PersistenceOptions, SequencerPersistence, StateCatchup},
+    v0::traits::{
+        DecideProcessingOutcome, EventConsumer, PersistenceOptions, SequencerPersistence,
+        StateCatchup,
+    },
     v0_3::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
@@ -73,7 +76,10 @@ use sqlx::{Executor, QueryBuilder, Row, query};
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
     catchup::SqlStateCatchup,
-    persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
+    persistence::{
+        PAYLOAD_RETENTION_VIEWS, migrate_network_config,
+        persistence_metrics::PersistenceMetricsValue,
+    },
 };
 
 /// Options for Postgres-backed persistence.
@@ -890,10 +896,15 @@ impl Persistence {
             .map(|row| ViewNumber::new(row.get::<i64, _>("last_processed_view") as u64)))
     }
 
+    /// Generate decide events for all unprocessed decided leaves up to and including
+    /// `decided_view`, recording leaves whose events were emitted without a block payload in
+    /// `missing_payload` (so the caller can recover them from peers in the background).
     async fn generate_decide_events(
         &self,
+        decided_view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &impl EventConsumer,
+        missing_payload: &mut Vec<Leaf2>,
     ) -> anyhow::Result<()> {
         let mut last_processed_view: Option<i64> = self
             .db
@@ -921,14 +932,19 @@ impl Persistence {
             };
             tracing::debug!(?from_view, "generate decide event");
 
+            // Bound the scan at the signaled view: leaves from a decide committed while this
+            // signal is being processed belong to the next signal, whose in-memory data covers
+            // them (processing them here would emit them payload-less if their async staging
+            // writes haven't landed yet).
             let mut parent = None;
             let mut rows = query(
-                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view",
+                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 AND view <= $2 \
+                 ORDER BY view",
             )
             .bind(from_view)
+            .bind(decided_view.u64() as i64)
             .fetch(tx.as_mut());
             let mut leaves: Vec<(Leaf2, CertificatePair<SeqTypes>)> = vec![];
-            let mut final_qc = None;
             while let Some(row) = rows.next().await {
                 let row = match row {
                     Ok(row) => row,
@@ -958,32 +974,37 @@ impl Persistence {
                 if let Some(parent) = parent
                     && height != parent + 1
                 {
-                    tracing::debug!(
+                    // A height gap means a decided leaf was never persisted (its decide event was
+                    // dropped before the event loop). This batch ends here; the cursor advances and
+                    // the next pass resumes after the gap, leaving the hole for the query service's
+                    // leaf fetching to heal. Recurring gaps mean leaves lost before persistence.
+                    tracing::error!(
                         height,
                         parent,
-                        "ending decide event at non-consecutive leaf"
+                        "non-consecutive decided leaf; skipping the gap"
                     );
+                    self.internal_metrics.decide_height_gaps.add(1);
                     break;
                 }
                 parent = Some(height);
                 let cert = CertificatePair::new(qc, next_epoch_qc);
-                final_qc = Some(cert.clone());
                 leaves.push((leaf, cert));
             }
             drop(rows);
 
-            let Some(final_qc) = final_qc else {
+            if leaves.is_empty() {
                 // End event processing when there are no more decided views.
                 tracing::debug!(from_view, "no new leaves at decide");
                 return Ok(());
-            };
+            }
 
-            // Find the range of views encompassed by this leaf chain. All data in this range can be
-            // processed by the consumer and then deleted.
+            // Find the range of views encompassed by this leaf chain. All data in this range can
+            // be processed by the consumer and then garbage collected.
             let from_view = leaves[0].0.view_number();
             let to_view = leaves[leaves.len() - 1].0.view_number();
 
-            // Collect VID shares for the decide event.
+            // The staging tables are the single source for payload/VID data: the decide
+            // processor stages the in-memory decide data before this runs (see the module docs).
             let mut vid_shares = tx
                 .fetch_all(
                     query("SELECT view, data FROM vid_share2 where view >= $1 AND view <= $2")
@@ -1002,7 +1023,6 @@ impl Persistence {
                 })
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
-            // Collect DA proposals for the decide event.
             let mut da_proposals = tx
                 .fetch_all(
                     query("SELECT view, data FROM da_proposal2 where view >= $1 AND view <= $2")
@@ -1020,6 +1040,8 @@ impl Persistence {
                 })
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
+            let final_qc = leaves[leaves.len() - 1].1.clone();
+
             // Collect state certs for the decide event.
             let state_certs = Self::load_state_certs(&mut tx, from_view, to_view)
                 .await
@@ -1031,6 +1053,7 @@ impl Persistence {
                     );
                 })?;
 
+            // The cert2 certifying the newest leaf.
             let cert2 = tx
                 .fetch_optional(
                     query("SELECT data FROM decided_cert2 WHERE view = $1")
@@ -1046,47 +1069,55 @@ impl Persistence {
             drop(tx);
 
             // Collate all the information by view number and construct a chain of leaves.
-            let chain = leaves
-                .into_iter()
-                // Go in reverse chronological order, as expected by Decide events.
-                .rev()
-                .map(|(mut leaf, cert)| {
-                    let view = leaf.view_number();
+            // Go in reverse chronological order, as expected by Decide events. Missing payloads
+            // merge into `missing_payload` only after this batch's cursor commits, so a later
+            // batch's failure can't strand an earlier committed batch's leaves.
+            let mut batch_missing = Vec::new();
+            let mut chain = Vec::with_capacity(leaves.len());
+            for (mut leaf, cert) in leaves.into_iter().rev() {
+                let view = leaf.view_number();
 
-                    // Include the VID share if available.
-                    let vid_proposal = vid_shares.remove(&view);
-                    if vid_proposal.is_none() {
-                        tracing::debug!(?view, "VID share not available at decide");
-                    }
-                    let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
+                let vid_share = vid_shares.remove(&view).map(|proposal| proposal.data);
+                if vid_share.is_none() && view != ViewNumber::genesis() {
+                    // The share never reached this node and is not recoverable here; the
+                    // query service has to fetch the VID data from peers.
+                    tracing::warn!(?view, "VID share not available at decide");
+                    self.internal_metrics.decide_missing_vid.add(1);
+                }
 
-                    // Fill in the full block payload using the DA proposals we had persisted.
-                    if let Some(proposal) = da_proposals.remove(&view) {
-                        let payload =
-                            Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
-                        leaf.fill_block_payload_unchecked(payload);
-                    } else if view == ViewNumber::genesis() {
-                        // We don't get a DA proposal for the genesis view, but we know what the
-                        // payload always is.
-                        leaf.fill_block_payload_unchecked(Payload::empty().0);
-                    } else {
-                        tracing::debug!(?view, "DA proposal not available at decide");
-                    }
+                // Block payload from the DA proposal staging table.
+                if let Some(proposal) = da_proposals.remove(&view) {
+                    let payload =
+                        Payload::from_bytes(&proposal.encoded_transactions, &proposal.metadata);
+                    leaf.fill_block_payload_unchecked(payload);
+                } else if view == ViewNumber::genesis()
+                    || leaf.block_header().ns_table().iter().next().is_none()
+                {
+                    // We don't get a DA proposal for the genesis view, but we know what the
+                    // payload always is; the same goes for any block with an empty namespace
+                    // table.
+                    leaf.fill_block_payload_unchecked(Payload::empty().0);
+                } else {
+                    // Payload never reconstructed before decide: emit without it and report the
+                    // leaf for background peer recovery.
+                    tracing::warn!(?view, "DA proposal not available at decide");
+                    self.internal_metrics.decide_missing_payload.add(1);
+                    batch_missing.push(leaf.clone());
+                }
 
-                    let state_cert = state_certs.get(&view).cloned();
+                let state_cert = state_certs.get(&view).cloned();
 
-                    let info = LeafInfo {
-                        leaf,
-                        vid_share,
-                        state_cert,
-                        // Note: the following fields are not used in Decide event processing,
-                        // and should be removed. For now, we just default them.
-                        state: Default::default(),
-                        delta: Default::default(),
-                    };
-                    DecidedLeaf { info, cert }
-                })
-                .collect();
+                let info = LeafInfo {
+                    leaf,
+                    vid_share,
+                    state_cert,
+                    // Note: the following fields are not used in Decide event processing,
+                    // and should be removed. For now, we just default them.
+                    state: Default::default(),
+                    delta: Default::default(),
+                };
+                chain.push(DecidedLeaf { info, cert });
+            }
 
             tracing::debug!(
                 ?from_view,
@@ -1135,18 +1166,9 @@ impl Persistence {
                     }
 
                     // Delete the data that has been fully processed.
-                    tx.execute(
-                        query("DELETE FROM vid_share2 where view >= $1 AND view <= $2")
-                            .bind(from_view_i64)
-                            .bind(to_view_i64),
-                    )
-                    .await?;
-                    tx.execute(
-                        query("DELETE FROM da_proposal2 where view >= $1 AND view <= $2")
-                            .bind(from_view_i64)
-                            .bind(to_view_i64),
-                    )
-                    .await?;
+                    //
+                    // DA proposals and VID shares are NOT deleted here: they are retained (and
+                    // pruned later by [`Persistence::prune`]) so peers can recover recent payloads.
                     tx.execute(
                         query("DELETE FROM quorum_proposals2 where view >= $1 AND view <= $2")
                             .bind(from_view_i64)
@@ -1187,6 +1209,9 @@ impl Persistence {
                 })
                 .await?;
             last_processed_view = Some(to_view_i64);
+            // This batch's cursor is committed, so its missing-payload leaves will not be
+            // re-emitted on a later pass; report them now for background recovery.
+            missing_payload.append(&mut batch_missing);
         }
     }
 
@@ -1230,10 +1255,43 @@ impl Persistence {
             .retry_if(WRITE_RETRY_MAX, is_serialization_error, || async {
                 let mut tx = self.db.write().await?;
 
+                // Floor pruning at the decide-event consumer cursor: rows above
+                // `last_processed_view` have not been turned into decide events yet (the
+                // staged payloads are still needed to fill them), and the row AT the cursor
+                // is the restart anchor. If no event was ever processed, nothing is safe to
+                // prune.
+                let Some(processed) = tx
+                    .fetch_optional(
+                        "SELECT last_processed_view FROM event_stream WHERE id = 1 LIMIT 1",
+                    )
+                    .await?
+                    .map(|row| row.get::<i64, _>("last_processed_view") as u64)
+                else {
+                    return Ok(());
+                };
+                let effective_view = cur_view.u64().min(processed);
+                if effective_view < cur_view.u64() {
+                    tracing::warn!(
+                        cur_view = cur_view.u64(),
+                        processed,
+                        "decide processing lags; pruning clamped to consumer cursor"
+                    );
+                }
+
+                // Block payloads (DA proposals) and VID shares dominate consensus storage but are
+                // only needed briefly: for peer recovery of recently-decided views and as the
+                // decide pipeline's storage fallback. Prune them to a short window, independent of
+                // the (longer) general retention period applied below.
+                prune_payload_data(
+                    &mut tx,
+                    effective_view.saturating_sub(PAYLOAD_RETENTION_VIEWS),
+                )
+                .await?;
+
                 // Prune everything older than the target retention period.
                 prune_to_view(
                     &mut tx,
-                    cur_view.u64().saturating_sub(self.gc_opt.target_retention),
+                    effective_view.saturating_sub(self.gc_opt.target_retention),
                 )
                 .await?;
 
@@ -1268,7 +1326,7 @@ impl Persistence {
                     );
                     prune_to_view(
                         &mut tx,
-                        cur_view.u64().saturating_sub(self.gc_opt.minimum_retention),
+                        effective_view.saturating_sub(self.gc_opt.minimum_retention),
                     )
                     .await?;
                 }
@@ -1307,6 +1365,35 @@ const PRUNE_TABLES: &[&str] = &[
     "quorum_proposals2",
     "quorum_certificate2",
 ];
+
+/// Payload-bearing tables pruned on the short [`PAYLOAD_RETENTION_VIEWS`] window rather than the
+/// general retention period.
+const PAYLOAD_TABLES: &[&str] = &["vid_share2", "da_proposal2"];
+
+/// Prune block payloads (DA proposals) and VID shares older than `view`. These are retained only
+/// for the short payload-retention window (see [`PAYLOAD_RETENTION_VIEWS`]); the general
+/// [`prune_to_view`] still covers them at the longer retention period as a backstop.
+async fn prune_payload_data(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
+    if view == 0 {
+        // Nothing to prune, the entire chain is younger than the payload retention window.
+        return Ok(());
+    }
+    for table in PAYLOAD_TABLES {
+        let res = query(&format!("DELETE FROM {table} WHERE view < $1"))
+            .bind(view as i64)
+            .execute(tx.as_mut())
+            .await
+            .context(format!("pruning {table}"))?;
+        if res.rows_affected() > 0 {
+            tracing::info!(
+                "garbage collected {} payload rows from {table}",
+                res.rows_affected()
+            );
+        }
+    }
+
+    Ok(())
+}
 
 async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result<()> {
     if view == 0 {
@@ -1431,17 +1518,40 @@ impl SequencerPersistence for Persistence {
         view: ViewNumber,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
         consumer: &(impl EventConsumer + 'static),
-    ) -> anyhow::Result<Option<ViewNumber>> {
+    ) -> anyhow::Result<DecideProcessingOutcome> {
         // Generate events for the new leaves, then GC. On error `last_processed_view` is not
         // advanced past the failure point, so no data is lost and the range is retried.
-        self.generate_decide_events(deciding_qc, consumer).await?;
+        let mut missing_payload = Vec::new();
+        let result = self
+            .generate_decide_events(view, deciding_qc, consumer, &mut missing_payload)
+            .await;
+        // Events are emitted newest-first within each batch; report missing leaves oldest-first.
+        missing_payload.sort_by_key(|leaf| leaf.view_number());
 
         // Best-effort GC of data not included in any decide event; runs again at the next decide.
         if let Err(err) = self.prune(view).await {
             tracing::warn!(?view, "pruning failed: {err:#}");
         }
 
-        self.load_processed_view().await
+        match result {
+            Ok(()) => {},
+            // Nothing was committed, so nothing was reported: propagate the error so the failure
+            // is recorded and the whole range is retried on the next call.
+            Err(err) if missing_payload.is_empty() => return Err(err),
+            // A committed batch reported missing payloads before a later batch (across a height
+            // gap) failed. Surface them so recovery still runs; their cursor is committed, so they
+            // won't be re-emitted, while the uncommitted range is retried on the next call.
+            Err(err) => tracing::warn!(
+                ?view,
+                "decide processing failed after partial progress; recovering committed missing \
+                 payloads: {err:#}"
+            ),
+        }
+
+        Ok(DecideProcessingOutcome {
+            processed: self.load_processed_view().await?,
+            missing_payload,
+        })
     }
 
     async fn load_latest_acted_view(&self) -> anyhow::Result<Option<ViewNumber>> {
@@ -3432,7 +3542,12 @@ mod test {
     use jf_advz::VidScheme;
 
     use super::*;
-    use crate::{BLSPubKey, PubKey, persistence::tests::TestablePersistence as _};
+    use crate::{
+        BLSPubKey, PubKey,
+        persistence::tests::{
+            EventCollector, FailConsumer, TestablePersistence as _, leaf_info, mock_chain,
+        },
+    };
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_quorum_proposals_leaf_hash_migration() {
@@ -3956,10 +4071,18 @@ mod test {
             .unwrap();
 
         // The first decide doesn't trigger any garbage collection, even though our usage exceeds
-        // the target, because of the minimum retention.
-        tracing::info!("decide view 1");
+        // the target, because of the minimum retention. Decide real leaves so the decide-event
+        // cursor advances: pruning is floored at the cursor.
+        let (chain, _) = mock_chain(4).await;
+        tracing::info!("decide view 2");
+        let info = leaf_info(chain[2].0.clone());
         storage
-            .append_decided_leaves(data_view + 1, [], None, &NullEventConsumer)
+            .append_decided_leaves(
+                data_view + 1,
+                [(&info, CertificatePair::non_epoch_change(chain[2].1.clone()))],
+                None,
+                &NullEventConsumer,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -3977,9 +4100,15 @@ mod test {
 
         // After another view, our data is beyond the minimum retention (though not the target
         // retention) so it gets pruned.
-        tracing::info!("decide view 2");
+        tracing::info!("decide view 3");
+        let info = leaf_info(chain[3].0.clone());
         storage
-            .append_decided_leaves(data_view + 2, [], None, &NullEventConsumer)
+            .append_decided_leaves(
+                data_view + 2,
+                [(&info, CertificatePair::non_epoch_change(chain[3].1.clone()))],
+                None,
+                &NullEventConsumer,
+            )
             .await
             .unwrap();
         assert!(storage.load_vid_share(data_view).await.unwrap().is_none(),);
@@ -4013,6 +4142,104 @@ mod test {
             target_usage: u64::MAX,
         })
         .await
+    }
+
+    /// A stalled decide-event consumer must not lose data to pruning: deletion is floored at the
+    /// consumer cursor, so staged payloads and unprocessed decided leaves survive even maximally
+    /// aggressive pruning until their events are emitted.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_pruning_floored_at_consumer_cursor() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        opt.consensus_pruning = ConsensusPruningOptions {
+            target_usage: 0,
+            minimum_retention: 0,
+            target_retention: 0,
+        };
+        let storage = opt.create().await.unwrap();
+
+        let (chain, commit) = mock_chain(4).await;
+        for (_, _, vid, da) in &chain {
+            storage.append_da2(da, commit).await.unwrap();
+            storage
+                .append_vid(&convert_proposal(vid.clone()))
+                .await
+                .unwrap();
+        }
+
+        // Decide the whole chain, but the consumer fails: the cursor must not advance, and
+        // pruning (which runs regardless of the failure) must not delete anything.
+        let infos = chain
+            .iter()
+            .map(|(leaf, qc, ..)| (leaf_info(leaf.clone()), qc.clone()))
+            .collect::<Vec<_>>();
+        storage
+            .append_decided_leaves(
+                ViewNumber::new(3),
+                infos
+                    .iter()
+                    .map(|(info, qc)| (info, CertificatePair::non_epoch_change(qc.clone()))),
+                None,
+                &FailConsumer,
+            )
+            .await
+            .unwrap();
+        for i in 0..4 {
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "staged DA proposal {i} lost while the consumer was stalled"
+            );
+            assert!(
+                storage
+                    .load_vid_share(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "staged VID share {i} lost while the consumer was stalled"
+            );
+        }
+        let mut tx = storage.db.read().await.unwrap();
+        let (leaves,): (i64,) = query_as("SELECT count(*) FROM anchor_leaf2")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        drop(tx);
+        assert_eq!(leaves, 4, "unprocessed decided leaves lost to pruning");
+
+        // The consumer recovers: events are emitted for the whole chain, the cursor advances,
+        // and the same pruning configuration now reclaims rows strictly below it (the row at
+        // the cursor is the restart anchor and survives).
+        let consumer = EventCollector::default();
+        storage
+            .append_decided_leaves(ViewNumber::new(3), [], None, &consumer)
+            .await
+            .unwrap();
+        assert_eq!(
+            consumer.leaf_chain().await.len(),
+            4,
+            "all stalled leaves must be emitted once the consumer recovers"
+        );
+        for i in 0..3 {
+            assert!(
+                storage
+                    .load_da_proposal(ViewNumber::new(i))
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "processed DA proposal {i} should be reclaimed"
+            );
+        }
+        let mut tx = storage.db.read().await.unwrap();
+        let (leaves,): (i64,) = query_as("SELECT count(*) FROM anchor_leaf2")
+            .fetch_one(tx.as_mut())
+            .await
+            .unwrap();
+        drop(tx);
+        assert_eq!(leaves, 1, "only the restart anchor at the cursor remains");
     }
 
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
