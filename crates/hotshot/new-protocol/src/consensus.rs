@@ -696,6 +696,18 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(epoch);
     }
 
+    /// Forward-only jump used on restart. Raising `timeout_view` keeps the
+    /// node from voting in views it may already have acted in before it
+    /// went down.
+    pub fn skip_to_view(&mut self, view: ViewNumber) {
+        if view > self.timeout_view {
+            self.timeout_view = view;
+        }
+        if view > self.current_view {
+            self.current_view = view;
+        }
+    }
+
     pub fn wants_proposal_for_view(&self, view: &ViewNumber) -> bool {
         let locked_too_new = self
             .locked_cert

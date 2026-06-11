@@ -3,6 +3,7 @@ mod metrics;
 pub mod timer;
 
 use std::{
+    cmp::max,
     collections::{BTreeMap, HashMap},
     sync::Arc,
     time::Duration,
@@ -186,6 +187,13 @@ where
                 });
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
         consensus.set_view(anchor_view, anchor_epoch);
+        // Never re-enter a view this node may have voted or proposed in
+        // before it went down.
+        let start_view = max(
+            anchor_view + 1,
+            max(initializer.start_view, initializer.last_actioned_view + 1),
+        );
+        consensus.skip_to_view(start_view - 1);
         if let Some(state_cert) = initializer.state_cert.clone() {
             consensus.seed_state_cert(state_cert);
         }
@@ -294,19 +302,19 @@ where
         if let Some(leader) = self.leader(next_view, epoch)
             && leader == self.public_key
         {
-            let parent_proposal = self
-                .consensus
-                .proposal_at(cur_view)
-                .expect("parent proposal must be seeded before start()")
-                .clone();
-            self.outbox
-                .push_back(ConsensusOutput::RequestBlockAndHeader(
-                    BlockAndHeaderRequest {
-                        view: next_view,
-                        epoch,
-                        parent_proposal,
-                    },
-                ));
+            // No parent proposal when restarting past the anchor view: the
+            // node cannot propose off the anchor for a later view; the
+            // timeout path takes over instead.
+            if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
+                self.outbox
+                    .push_back(ConsensusOutput::RequestBlockAndHeader(
+                        BlockAndHeaderRequest {
+                            view: next_view,
+                            epoch,
+                            parent_proposal,
+                        },
+                    ));
+            }
         }
     }
 
