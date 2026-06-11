@@ -23,7 +23,12 @@ default = ["file-system-data-source", "metrics-data-source", "sql-data-source"]
 # Enables support for an embedded SQLite database instead of PostgreSQL.
 # Ideal for lightweight nodes that benefit from pruning and merklized state storage,
 # offering advantages over file system storage.
-embedded-db = ["sqlx/sqlite"]
+embedded-db = ["sqlx/sqlite", "sqlite-options"]
+
+# Exposes shared SQLite connection helpers (e.g. `sqlite_options`) for callers that build their
+# own pool. Separate from `embedded-db` so clients can opt in to the helpers without flipping the
+# workspace into SQLite mode.
+sqlite-options = ["sqlx/sqlite"]
 
 # Enable the availability data source backed by the local file system.
 file-system-data-source = ["atomic_store"]
