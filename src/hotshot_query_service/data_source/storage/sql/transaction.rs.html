@@ -896,14 +896,14 @@
 <a href=#896 id=896 data-nosnippet>896</a>        <span class="kw">let </span>hashes: Vec&lt;Vec&lt;u8&gt;&gt; = all_hashes.into_iter().collect();
 <a href=#897 id=897 data-nosnippet>897</a>
 <a href=#898 id=898 data-nosnippet>898</a>        <span class="attr">#[cfg(not(feature = <span class="string">"embedded-db"</span>))]
-<a href=#899 id=899 data-nosnippet>899</a>        </span><span class="kw">let </span>nodes_hash_ids: HashMap&lt;Vec&lt;u8&gt;, i32&gt; = batch_insert_hashes(hashes, <span class="self">self</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#899 id=899 data-nosnippet>899</a>        </span><span class="kw">let </span>nodes_hash_ids: HashMap&lt;Vec&lt;u8&gt;, i64&gt; = batch_insert_hashes(hashes, <span class="self">self</span>).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#900 id=900 data-nosnippet>900</a>
 <a href=#901 id=901 data-nosnippet>901</a>        <span class="attr">#[cfg(feature = <span class="string">"embedded-db"</span>)]
-<a href=#902 id=902 data-nosnippet>902</a>        </span><span class="kw">let </span>nodes_hash_ids: HashMap&lt;Vec&lt;u8&gt;, i32&gt; = {
-<a href=#903 id=903 data-nosnippet>903</a>            <span class="kw">let </span><span class="kw-2">mut </span>hash_ids: HashMap&lt;Vec&lt;u8&gt;, i32&gt; = HashMap::with_capacity(hashes.len());
+<a href=#902 id=902 data-nosnippet>902</a>        </span><span class="kw">let </span>nodes_hash_ids: HashMap&lt;Vec&lt;u8&gt;, i64&gt; = {
+<a href=#903 id=903 data-nosnippet>903</a>            <span class="kw">let </span><span class="kw-2">mut </span>hash_ids: HashMap&lt;Vec&lt;u8&gt;, i64&gt; = HashMap::with_capacity(hashes.len());
 <a href=#904 id=904 data-nosnippet>904</a>            <span class="kw">for </span>hash_chunk <span class="kw">in </span>hashes.chunks(<span class="number">20</span>) {
 <a href=#905 id=905 data-nosnippet>905</a>                <span class="kw">let </span>(query, sql) = build_hash_batch_insert(hash_chunk)<span class="question-mark">?</span>;
-<a href=#906 id=906 data-nosnippet>906</a>                <span class="kw">let </span>chunk_ids: HashMap&lt;Vec&lt;u8&gt;, i32&gt; = query
+<a href=#906 id=906 data-nosnippet>906</a>                <span class="kw">let </span>chunk_ids: HashMap&lt;Vec&lt;u8&gt;, i64&gt; = query
 <a href=#907 id=907 data-nosnippet>907</a>                    .query_as(<span class="kw-2">&amp;</span>sql)
 <a href=#908 id=908 data-nosnippet>908</a>                    .fetch(<span class="self">self</span>.as_mut())
 <a href=#909 id=909 data-nosnippet>909</a>                    .try_collect()
@@ -923,7 +923,7 @@
 <a href=#923 id=923 data-nosnippet>923</a>                <span class="kw">let </span>children_hashes = children
 <a href=#924 id=924 data-nosnippet>924</a>                    .iter()
 <a href=#925 id=925 data-nosnippet>925</a>                    .map(|c| nodes_hash_ids.get(c).copied())
-<a href=#926 id=926 data-nosnippet>926</a>                    .collect::&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;i32&gt;&gt;&gt;()
+<a href=#926 id=926 data-nosnippet>926</a>                    .collect::&lt;<span class="prelude-ty">Option</span>&lt;Vec&lt;i64&gt;&gt;&gt;()
 <a href=#927 id=927 data-nosnippet>927</a>                    .ok_or(QueryError::Error {
 <a href=#928 id=928 data-nosnippet>928</a>                        message: <span class="string">"Missing child hash"</span>.to_string(),
 <a href=#929 id=929 data-nosnippet>929</a>                    })<span class="question-mark">?</span>;

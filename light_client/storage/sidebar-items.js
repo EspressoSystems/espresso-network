@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["LeafRequest"],"struct":["LightClientSqliteOptions","SqliteStorage"],"trait":["Storage"]};
+window.SIDEBAR_ITEMS = {"constant":["WRITE_BACKOFF","WRITE_RETRY_MAX"],"enum":["LeafRequest"],"struct":["LightClientSqliteOptions","SqliteStorage"],"trait":["Storage"]};
