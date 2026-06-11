@@ -19,11 +19,7 @@ use jf_signature::{
 
 use crate::{
     field_to_u256,
-    sol_types::{
-        StakeTableV2::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2, getVersionReturn},
-        StakeTableV3,
-        *,
-    },
+    sol_types::{StakeTableV3, *},
     u256_to_field,
 };
 
