@@ -52,8 +52,10 @@ pub struct NodeChange {
 /// Actions that can be applied to a node during a test.
 #[derive(Clone, Debug)]
 pub enum NodeAction {
-    /// Restart: shut down the node and create a fresh coordinator from
-    /// genesis (blank state).
+    /// Restart: shut down the node and create a fresh coordinator. With
+    /// `persistent_storage` the node resumes from its persisted decided
+    /// anchor and action records; otherwise it starts from genesis
+    /// (blank state).
     Restart,
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
@@ -314,6 +316,7 @@ impl TestRunner {
                 }
                 Some(tokio::spawn(run_node(
                     coord,
+                    self.node_storages[i].clone(),
                     tx,
                     i,
                     generation,
@@ -394,7 +397,9 @@ impl TestRunner {
                                     handle.abort();
                                     let _ = handle.await;
                                 }
-                                // Create a fresh coordinator from genesis.
+                                // Create a fresh coordinator; it resumes
+                                // from the persisted anchor when storage is
+                                // persistent, from genesis otherwise.
                                 let net =
                                     create_network(change.idx, &parties, &self.upgrade_lock).await;
                                 if !self.persistent_storage {
@@ -432,6 +437,7 @@ impl TestRunner {
                                 let initial_commits = BTreeMap::new();
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
+                                    self.node_storages[change.idx].clone(),
                                     tx,
                                     change.idx,
                                     generation,
@@ -607,8 +613,10 @@ async fn create_network(
         .unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_node<N: Network<TestTypes>>(
     mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
+    storage: TestStorage<TestTypes>,
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,
     generation: u64,
@@ -643,7 +651,16 @@ async fn run_node<N: Network<TestTypes>>(
         }
 
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let ConsensusOutput::LeafDecided { leaves, .. } = &output {
+            if let ConsensusOutput::LeafDecided { leaves, cert1, .. } = &output {
+                // Persist the decided anchor the way the application's
+                // persistence layer does in production: the newest decided
+                // leaf and the QC certifying it. A node restarted with
+                // persistent storage resumes consensus from this anchor.
+                if let Some(newest) = leaves.first() {
+                    storage
+                        .update_anchor_leaf(newest.clone(), cert1.clone())
+                        .await;
+                }
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
                     let view = leaf.view_number();

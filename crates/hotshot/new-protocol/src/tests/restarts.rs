@@ -74,15 +74,17 @@ async fn restart_f_nodes_with_epochs() {
 
 /// 5 nodes all crash at view ~5 and restart with their persisted storage.
 ///
-/// Decided state is not yet persisted (the chain re-grows from the genesis
-/// anchor), but the persisted action records must keep every node out of
-/// the views it acted in before the crash: views resume past the crash and
-/// no node records a Vote or Propose action twice for any view.
+/// Each node resumes from its persisted decided anchor (the newest decided
+/// leaf at crash time) instead of re-growing the chain from genesis, and
+/// the persisted action records keep every node out of the views it acted
+/// in before the crash: views resume past the crash and no node records a
+/// Vote or Propose action twice for any view.
 /// The crash/recovery window is nondeterministic, so those views are
 /// excluded from the usual per-view verification.
 #[tokio::test(flavor = "multi_thread")]
 async fn restart_all_nodes_with_storage() {
     let num_nodes = 5;
+    let crash_view = 5;
     let mut runner = TestRunner::builder()
         .num_nodes(num_nodes)
         .target_decisions(35)
@@ -90,7 +92,7 @@ async fn restart_all_nodes_with_storage() {
         .persistent_storage(true)
         .tolerated_failed_views(views(1..=30))
         .node_changes(vec![(
-            5,
+            crash_view,
             (0..num_nodes)
                 .map(|idx| NodeChange {
                     idx,
@@ -110,6 +112,16 @@ async fn restart_all_nodes_with_storage() {
                  had already acted in"
             );
         }
+
+        let (anchor, _) = storage
+            .anchor_leaf()
+            .await
+            .unwrap_or_else(|| panic!("node {idx} has no persisted anchor"));
+        assert!(
+            *anchor.view_number() > crash_view,
+            "node {idx} anchor stuck at view {} — it did not keep deciding after the restart",
+            anchor.view_number()
+        );
     }
 }
 
