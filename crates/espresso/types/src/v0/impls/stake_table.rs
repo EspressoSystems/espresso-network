@@ -2415,6 +2415,27 @@ mod tests {
     }
 
     #[test]
+    fn test_register_v3_bad_sig_preserves_parsed_bls_key() {
+        let val = TestValidator::random();
+        let other = TestValidator::random();
+        let bad_val = TestValidator {
+            bls_sig: other.bls_sig,
+            ..val.clone()
+        };
+
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3((&bad_val).into()))
+            .expect("no fatal error")
+            .expect("registered unauthenticated");
+
+        let registered = state.validators().get(&val.account).expect("present");
+        assert!(!registered.authenticated);
+        let expected_bls = BLSPubKey::try_from(val.bls_vk).expect("valid bls key");
+        assert_eq!(registered.stake_table_key.as_ref(), Some(&expected_bls));
+    }
+
+    #[test]
     fn test_authenticated_validator_deserialize_rejects_unauthenticated() {
         let mut validator = RegisteredValidator::<BLSPubKey>::mock();
         validator.authenticated = false;
@@ -3918,6 +3939,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_register_v3_zero_g2_excluded_from_active_set() {
+        let val = TestValidator::random();
+        let account = val.account;
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3(register_v3_with_bls(
+                &val,
+                zero_g2(),
+            )))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(v.stake_table_key.is_none());
+        assert!(!v.authenticated);
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        assert_excluded_from_active_set(&state, account);
+    }
+
     fn zero_schnorr() -> hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
         hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
             x: U256::ZERO,
@@ -3931,6 +3981,24 @@ mod tests {
         hotshot_contract_adapter::sol_types::EdOnBN254PointSol {
             x: U256::ZERO,
             y: U256::from(1),
+        }
+    }
+
+    /// Build a valid V3 registration for `val` but overwrite `blsVK` with a poison value.
+    /// The blsSig is for the original key so `authenticate()` will also fail, which is
+    /// fine: the BLS key is unparsable regardless.
+    fn register_v3_with_bls(val: &TestValidator, bls: G2PointSol) -> ValidatorRegisteredV3 {
+        let mut reg = ValidatorRegisteredV3::from(val);
+        reg.blsVK = bls;
+        reg
+    }
+
+    /// Check that `account` is excluded from the active validator set.
+    fn assert_excluded_from_active_set(state: &StakeTableState, account: Address) {
+        match select_active_validator_set(state.validators(), EPOCH_VERSION) {
+            Err(StakeTableError::NoValidValidators) => {},
+            Ok(map) => assert!(map.get(&account).is_none()),
+            Err(e) => panic!("unexpected error: {e}"),
         }
     }
 
@@ -4011,6 +4079,68 @@ mod tests {
             Ok(map) => assert!(map.get(&account).is_none()),
             Err(e) => panic!("unexpected error: {e}"),
         }
+    }
+
+    #[test]
+    fn test_register_v3_identity_schnorr_excluded_from_active_set() {
+        let val = TestValidator::random();
+        let account = val.account;
+        let mut reg = ValidatorRegisteredV3::from(&val);
+        reg.schnorrVK = identity_schnorr();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3(reg))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(
+            !v.authenticated,
+            "validator with identity schnorr key must be unauthenticated"
+        );
+        assert!(v.state_ver_key.is_none());
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        assert_excluded_from_active_set(&state, account);
+    }
+
+    #[test]
+    fn test_register_v3_invalid_schnorr_excluded_from_active_set() {
+        let val = TestValidator::random();
+        let account = val.account;
+        let mut reg = ValidatorRegisteredV3::from(&val);
+        reg.schnorrVK = zero_schnorr();
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3(reg))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).expect("present");
+        assert!(
+            !v.authenticated,
+            "validator with zero schnorr key must be unauthenticated"
+        );
+        assert!(v.state_ver_key.is_none());
+
+        state
+            .apply_event(StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: account,
+                amount: U256::from(100),
+            }))
+            .unwrap()
+            .unwrap();
+
+        assert_excluded_from_active_set(&state, account);
     }
 
     #[test]
@@ -4158,6 +4288,37 @@ mod tests {
         assert!(AuthenticatedValidator::try_from(poisoned).is_err());
     }
 
+    #[test]
+    fn test_register_v3_zero_bls_key_unauthenticated_in_from_l1_events() {
+        let valid_val = TestValidator::random();
+        let poison_val = TestValidator::random();
+        let poison_account = poison_val.account;
+
+        let events = vec![
+            StakeTableEvent::RegisterV3((&valid_val).into()),
+            StakeTableEvent::RegisterV3(register_v3_with_bls(&poison_val, zero_g2())),
+            StakeTableEvent::Delegate(Delegated {
+                delegator: Address::random(),
+                validator: poison_account,
+                amount: U256::from(10),
+            }),
+        ];
+
+        let (validators, _) = validators_from_l1_events(events.into_iter()).expect("must not fail");
+        let valid = validators
+            .get(&valid_val.account)
+            .expect("valid validator present");
+        assert!(valid.authenticated);
+
+        let poisoned = validators
+            .get(&poison_account)
+            .expect("poison validator present as unauthenticated");
+        assert!(!poisoned.authenticated);
+        assert!(poisoned.stake_table_key.is_none());
+        assert_eq!(poisoned.stake, U256::from(10));
+        assert!(AuthenticatedValidator::try_from(poisoned).is_err());
+    }
+
     /// Two distinct off-curve registrations must both succeed; unparsable
     /// keys are never inserted into `used_bls_keys`.
     #[test]
@@ -4211,6 +4372,50 @@ mod tests {
         assert!(state.used_bls_keys().is_empty());
     }
 
+    /// Two distinct V3 off-curve registrations must both succeed; unparsable
+    /// keys are never inserted into `used_bls_keys`. Each account uses a
+    /// distinct nonzero x25519 key so the x25519 dedup check does not fire.
+    #[test]
+    fn test_register_v3_two_distinct_unparsable_g2_keys_both_register() {
+        let zero = zero_g2();
+        // x=(1, 0), y=(0, 0): violates y² = x³ + b' over Fp2.
+        let nonzero = G2PointSol {
+            x0: U256::from(1),
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        };
+        assert!(BLSPubKey::try_from(zero).is_err());
+        assert!(BLSPubKey::try_from(nonzero).is_err());
+        assert_ne!(zero, nonzero);
+
+        let val_a = TestValidator::random();
+        let val_b = TestValidator::random();
+        let acc_a = val_a.account;
+        let acc_b = val_b.account;
+
+        let mut state = StakeTableState::default();
+        state
+            .apply_event(StakeTableEvent::RegisterV3(register_v3_with_bls(
+                &val_a, zero,
+            )))
+            .expect("first unparsable register must not fail")
+            .expect("first unparsable register must apply");
+        state
+            .apply_event(StakeTableEvent::RegisterV3(register_v3_with_bls(
+                &val_b, nonzero,
+            )))
+            .expect("second unparsable register must not fail")
+            .expect("second unparsable register must apply");
+
+        for account in [acc_a, acc_b] {
+            let v = state.validators().get(&account).expect("present");
+            assert!(!v.authenticated);
+            assert!(v.stake_table_key.is_none());
+        }
+        assert!(state.used_bls_keys().is_empty());
+    }
+
     /// After a poison Register, a subsequent valid KeyUpdateV2 must
     /// authenticate the validator and install the new keys.
     #[test]
@@ -4229,6 +4434,36 @@ mod tests {
                 schnorrSig: Bytes::default(),
                 metadataUri: String::new(),
             }))
+            .unwrap()
+            .unwrap();
+        assert!(!state.validators().get(&account).unwrap().authenticated);
+
+        let new_keys = TestValidator::random_update_keys(account, 0);
+        let update: ConsensusKeysUpdatedV2 = (&new_keys).into();
+        state
+            .apply_event(StakeTableEvent::KeyUpdateV2(update))
+            .unwrap()
+            .unwrap();
+
+        let v = state.validators().get(&account).unwrap();
+        let expected_bls = BLSPubKey::try_from(new_keys.bls_vk).unwrap();
+        assert_eq!(v.stake_table_key.as_ref(), Some(&expected_bls));
+        // KeyUpdateV2 authenticates signatures, so on success the validator
+        // is promoted to `authenticated=true`.
+        assert!(v.authenticated);
+    }
+
+    #[test]
+    fn test_register_v3_zero_g2_then_valid_key_update() {
+        let val = TestValidator::random();
+        let account = val.account;
+        let mut state = StakeTableState::default();
+
+        state
+            .apply_event(StakeTableEvent::RegisterV3(register_v3_with_bls(
+                &val,
+                zero_g2(),
+            )))
             .unwrap()
             .unwrap();
         assert!(!state.validators().get(&account).unwrap().authenticated);
