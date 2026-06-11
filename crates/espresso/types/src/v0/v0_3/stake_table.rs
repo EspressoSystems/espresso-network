@@ -203,7 +203,8 @@ impl<KEY: SignatureKey> From<AuthenticatedValidator<KEY>> for RegisteredValidato
 
 impl<KEY: SignatureKey> Committable for RegisteredValidator<KEY> {
     fn commit(&self) -> Commitment<Self> {
-        let mut builder = RawCommitmentBuilder::new(&Self::tag()).fixed_size_field("account", &self.account);
+        let mut builder =
+            RawCommitmentBuilder::new(&Self::tag()).fixed_size_field("account", &self.account);
 
         // Present-key layout is preserved for backwards compatibility; absent
         // keys use a distinct marker that can't collide with any present key.
