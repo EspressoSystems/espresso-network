@@ -117,11 +117,7 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
-    /// Durably record that this node acted (voted or proposed) in a view.
-    /// The corresponding send is held in a pending map until the matching
-    /// `ConsensusInput::Stored` confirmation arrives.
     RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
-    /// Durably store this node's own proposal before it is broadcast.
     PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
     SendVidShares(Vec<VidShareMessage<T>>),
