@@ -55,11 +55,16 @@ use crate::{
     vote::VoteCollector,
 };
 
-/// Views to retain in the VID reconstructor behind the decided view. A decide
-/// can arrive while we are still reconstructing the payload of an earlier
-/// view. Garbage collecting at the decided view would abort that task and drop its
-/// accumulated shares.
-const VID_RECONSTRUCT_GC_MARGIN: u64 = 20;
+/// Views to retain in the VID reconstructor behind the decided view
+///
+/// A decide can land while an earlier view's payload is still being
+/// reconstructed, and GC at the decided view would abort that task.
+/// A decide proves a quorum reconstructed the payload
+/// so it can be fetched later assuming the quorum includes at
+/// least one query node serving catchup.
+/// The margin gives in flight reconstruction tasks time to finish, which is
+/// cheaper than fetching the payload through catchup.
+const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
 pub enum CoordinatorOutput<T: NodeType> {
