@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["Command","PeerCommand","RetryPolicy","SendAction"],"fn":["msg_bytes"],"mod":["peer","send_command_builder","server"],"struct":["Network","NetworkController","NetworkReceiver","SendCommand","SendCommandBuilder"],"type":["PeerMessage"]};
+window.SIDEBAR_ITEMS = {"enum":["Command","PeerCommand","RetryPolicy","SendAction"],"fn":["msg_bytes"],"mod":["peer","send_command_builder","server"],"struct":["Network","NetworkReceiver","NetworkSender","SendCommand","SendCommandBuilder"],"type":["PeerMessage"]};
