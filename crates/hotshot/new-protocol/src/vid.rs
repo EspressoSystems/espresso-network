@@ -241,9 +241,13 @@ impl<T: NodeType> VidReconstructor<T> {
         self.reconstructed = self.reconstructed.split_off(&view_number);
     }
 
-    /// Mark `view` as already-reconstructed: drop accumulated shares, abort any
-    /// in-flight reconstruction task, and ignore later shares for this view.
-    pub fn mark_reconstructed(&mut self, view: ViewNumber) {
+    /// Stop tracking `view`.
+    ///
+    /// Either because its payload was reconstructed (or obtained elsewhere)
+    /// or because it timed out and will never be decided: record it so
+    /// `handle_vid_share` ignores later shares, drop its accumulator, and
+    /// abort any in-flight reconstruction task.
+    pub fn retire_view(&mut self, view: ViewNumber) {
         self.reconstructed.insert(view);
         self.accumulators.remove(&view);
         if let Some(handle) = self.calculations.remove(&view) {

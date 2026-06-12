@@ -184,8 +184,19 @@ where
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
                 });
+        // `seed_parent` sets the current epoch from the anchor proposal;
+        // `resume_from_restart` positions the view so the node never
+        // re-enters a view it may have voted or proposed in before it went
+        // down.
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
-        consensus.set_view(anchor_view, anchor_epoch);
+        consensus.resume_from_restart(
+            anchor_view,
+            initializer.start_view,
+            initializer.last_actioned_view,
+        );
+        if let Some(state_cert) = initializer.state_cert.clone() {
+            consensus.seed_state_cert(state_cert);
+        }
 
         let lock = upgrade_lock.clone();
         Self::builder()
@@ -291,19 +302,19 @@ where
         if let Some(leader) = self.leader(next_view, epoch)
             && leader == self.public_key
         {
-            let parent_proposal = self
-                .consensus
-                .proposal_at(cur_view)
-                .expect("parent proposal must be seeded before start()")
-                .clone();
-            self.outbox
-                .push_back(ConsensusOutput::RequestBlockAndHeader(
-                    BlockAndHeaderRequest {
-                        view: next_view,
-                        epoch,
-                        parent_proposal,
-                    },
-                ));
+            // No parent proposal when restarting past the anchor view: the
+            // node cannot propose off the anchor for a later view; the
+            // timeout path takes over instead.
+            if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
+                self.outbox
+                    .push_back(ConsensusOutput::RequestBlockAndHeader(
+                        BlockAndHeaderRequest {
+                            view: next_view,
+                            epoch,
+                            parent_proposal,
+                        },
+                    ));
+            }
         }
     }
 
@@ -461,7 +472,7 @@ where
                             warn!(view = %block.view, "block payload commitment is not V2");
                         }
                         // We built this block; skip reconstructing it from our own loopback share.
-                        self.vid_reconstructor.mark_reconstructed(block.view);
+                        self.vid_reconstructor.retire_view(block.view);
                         self.unicast_to_leader(
                             next_view,
                             epoch,
@@ -508,6 +519,10 @@ where
                         finish_measurement(next_input);
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
                     }
+                },
+                Some(stored) = self.storage.next() => {
+                    finish_measurement(next_input);
+                    return Ok(ConsensusInput::Stored(stored))
                 },
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
@@ -635,11 +650,13 @@ where
                 );
                 self.block_builder.request_block(request);
             },
-            ConsensusOutput::SendProposal(proposal) => {
+            ConsensusOutput::RecordAction(view, epoch, kind) => {
+                debug!(%node, %view, ?kind, "record action");
+                self.storage.record_action(view, epoch, kind);
+            },
+            ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
-                let epoch = proposal.data.epoch;
-                let block = proposal.data.block_header.block_number();
-                info!(%node, %view, %epoch, %block, "send proposal");
+                debug!(%node, %view, "persist proposal");
                 self.storage.append_proposal(proposal.data.clone());
                 // Two blocks can be built for one view. Here we know which one
                 // wins and we persist just that one:
@@ -656,9 +673,12 @@ where
                         warn!(%node, %view, "no payload for proposed block");
                     }
                 }
-                // TODO: This may be done async in network so we do not spend
-                // too much time here in this loop.
-
+            },
+            ConsensusOutput::SendProposal(proposal) => {
+                let view = proposal.data.view_number;
+                let epoch = proposal.data.epoch;
+                let block = proposal.data.block_header.block_number();
+                info!(%node, %view, %epoch, %block, "send proposal");
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Proposal(
@@ -830,6 +850,14 @@ where
                 if next_epoch > EpochNumber::genesis() + 1 {
                     self.epoch_manager.request_drb_result(next_epoch);
                 }
+            },
+            ConsensusOutput::ViewTimedOut(view) => {
+                debug!(%node, %view, "view timed out");
+                let epoch = self
+                    .consensus
+                    .current_epoch()
+                    .unwrap_or_else(EpochNumber::genesis);
+                self.gc(epoch, GcScope::Timeout(view))?;
             },
             ConsensusOutput::BlockPayloadReconstructed { .. } => {},
         }
@@ -1123,6 +1151,13 @@ where
         self.storage.append_vid(vid_share.clone());
         self.storage
             .append_proposal(validated.message.proposal.data.clone());
+
+        if let Some(state_cert) = &validated.message.proposal.data.state_cert {
+            self.storage.append_state_cert(
+                ViewNumber::new(state_cert.light_client_state.view_number),
+                state_cert.clone(),
+            );
+        }
 
         let m = validated
             .message
@@ -1476,13 +1511,11 @@ where
         self.consensus.gc(scope);
         match scope {
             GcScope::Local(view) => {
+                let vc = VidCommitment2::default();
                 self.block_builder.gc(view);
-                self.cached_validated_proposals = self
-                    .cached_validated_proposals
-                    .split_off(&(view, VidCommitment2::default()));
-                self.cached_vid_shares = self
-                    .cached_vid_shares
-                    .split_off(&(view, VidCommitment2::default()));
+                self.cached_validated_proposals =
+                    self.cached_validated_proposals.split_off(&(view, vc));
+                self.cached_vid_shares = self.cached_vid_shares.split_off(&(view, vc));
                 self.vid_disperser.gc(view);
                 // When we enter a new view, we do not want to GC certain data
                 // for the previous view yet:
@@ -1500,9 +1533,15 @@ where
                 self.state_manager.gc(view);
                 self.storage.gc(view);
                 self.vid_reconstructor.gc(view);
-                self.da_payloads = self
-                    .da_payloads
-                    .split_off(&(view, VidCommitment2::default()));
+                let vc = VidCommitment2::default();
+                self.da_payloads = self.da_payloads.split_off(&(view, vc));
+            },
+            GcScope::Timeout(view) => {
+                self.vid_reconstructor.retire_view(view);
+                let vc = VidCommitment2::default();
+                self.da_payloads
+                    .extract_if((view, vc)..(view + 1, vc), |_, _| true)
+                    .for_each(drop);
             },
         }
         Ok(())
@@ -1521,6 +1560,8 @@ pub enum GcScope {
     Local(ViewNumber),
     /// GC is invoked on local decided views.
     Decided(ViewNumber),
+    /// GC is invoked on a view that advanced via timeout certificate.
+    Timeout(ViewNumber),
 }
 
 /// A payload built locally and awaiting DA persistence.

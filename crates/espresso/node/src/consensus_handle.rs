@@ -250,33 +250,39 @@ where
 
     pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
         if self.cutover_active().await {
-            return self
-                .client_api
-                .decided_state()
-                .await
-                .expect("coordinator channel closed");
+            return match self.client_api.decided_state().await {
+                Ok(state) => state,
+                Err(err) => {
+                    tracing::warn!("coordinator unavailable for decided_state: {err:#}");
+                    None
+                },
+            };
         }
         Some(self.legacy_handle.read().await.decided_state().await)
     }
 
     pub async fn state(&self, view: ViewNumber) -> Option<Arc<T::ValidatedState>> {
         if self.at_or_past_cutover(view).await {
-            return self
-                .client_api
-                .state(view)
-                .await
-                .expect("coordinator channel closed");
+            return match self.client_api.state(view).await {
+                Ok(state) => state,
+                Err(err) => {
+                    tracing::warn!(%view, "coordinator unavailable for state: {err:#}");
+                    None
+                },
+            };
         }
         self.legacy_handle.read().await.state(view).await
     }
 
     pub async fn state_and_delta(&self, view: ViewNumber) -> StateAndDelta<T> {
         if self.at_or_past_cutover(view).await {
-            return self
-                .client_api
-                .state_and_delta(view)
-                .await
-                .expect("coordinator channel closed");
+            return match self.client_api.state_and_delta(view).await {
+                Ok(state_and_delta) => state_and_delta,
+                Err(err) => {
+                    tracing::warn!(%view, "coordinator unavailable for state_and_delta: {err:#}");
+                    (None, None)
+                },
+            };
         }
         self.legacy_handle
             .read()
@@ -290,11 +296,13 @@ where
 
     pub async fn undecided_leaves(&self) -> Vec<Leaf2<T>> {
         if self.cutover_active().await {
-            return self
-                .client_api
-                .undecided_leaves()
-                .await
-                .expect("coordinator channel closed");
+            return match self.client_api.undecided_leaves().await {
+                Ok(leaves) => leaves,
+                Err(err) => {
+                    tracing::warn!("coordinator unavailable for undecided_leaves: {err:#}");
+                    Vec::new()
+                },
+            };
         }
         self.legacy_handle
             .read()
@@ -308,11 +316,13 @@ where
 
     pub async fn current_epoch(&self) -> Option<EpochNumber> {
         if self.cutover_active().await {
-            return self
-                .client_api
-                .current_epoch()
-                .await
-                .expect("coordinator channel closed");
+            return match self.client_api.current_epoch().await {
+                Ok(epoch) => epoch,
+                Err(err) => {
+                    tracing::warn!("coordinator unavailable for current_epoch: {err:#}");
+                    None
+                },
+            };
         }
         self.legacy_handle.read().await.cur_epoch().await
     }

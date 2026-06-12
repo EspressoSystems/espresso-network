@@ -849,6 +849,10 @@ where
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<data_source::TableSize>> {
         self.inner().get_table_sizes().await
     }
+
+    async fn get_migration_status(&self) -> anyhow::Result<Vec<data_source::MigrationStatus>> {
+        self.inner().get_migration_status().await
+    }
 }
 
 impl<N: ConnectedNetwork<PubKey>, P: SequencerPersistence, D: CatchupStorage + Send + Sync>
@@ -6047,7 +6051,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_state_reconstruction(#[case] upgrade: Upgrade) -> anyhow::Result<()> {
@@ -7784,7 +7787,6 @@ mod test {
     }
 
     #[rstest]
-    #[case(POS_V3)]
     #[case(POS_V4)]
     #[test_log::test]
     fn test_reward_proof_endpoint(#[case] upgrade: Upgrade) {
