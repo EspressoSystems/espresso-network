@@ -92,7 +92,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Bogus token: skips the OIDC->app-token exchange (which 401s on
+          # pull_request_target) while granting Claude no GitHub access. This
+          # step only edits files locally; the workflow pushes afterward.
+          github_token: not-a-real-token
           prompt: |
             Mergiraf left conflict markers in these backport PRs:
             ${{ steps.resolve.outputs.needs_claude }}
