@@ -968,8 +968,7 @@ where
                     } else {
                         self.vote1_collector.accumulate_vote(vote1.vote.clone());
                     }
-                    self.vid_reconstructor
-                        .handle_vid_share(vote1.vid_share, None);
+                    self.vid_reconstructor.handle_vid_share(vote1.vid_share);
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
@@ -1178,15 +1177,14 @@ where
             );
         }
 
-        let m = validated
-            .message
-            .proposal
-            .data
-            .block_header
-            .metadata()
-            .clone();
-        self.vid_reconstructor
-            .handle_vid_share(vid_share.clone(), m);
+        let proposal = &validated.message.proposal.data;
+        self.vid_reconstructor.handle_proposal(
+            proposal.view_number(),
+            vid_share.payload_commitment,
+            proposal.block_header.metadata().clone(),
+            proposal.epoch,
+        );
+        self.vid_reconstructor.handle_vid_share(vid_share.clone());
 
         // GC for the cache
         let view = validated.message.proposal.data.view_number();

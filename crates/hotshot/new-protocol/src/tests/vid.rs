@@ -10,6 +10,22 @@ use crate::vid::{VidReconstructErrorKind, VidReconstructor};
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
 
+/// Fetch the honest share for the voter with key index `i`.
+fn honest_share(view: &TestView, i: u64) -> VidDisperseShare2<TestTypes> {
+    view.vid_share_for(&BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0)
+}
+
+/// Pin the reconstructor to the view's proposal, as the coordinator does
+/// when the validated proposal arrives.
+fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestView) {
+    reconstructor.handle_proposal(
+        view.view_number,
+        view.vid_shares[0].payload_commitment,
+        view.proposal.data.block_header.metadata,
+        view.proposal.data.epoch,
+    );
+}
+
 /// Feeding shares beyond the reconstruction threshold for the same view
 /// should produce exactly one BlockReconstructed result from `next()`,
 /// not one per extra share.
@@ -19,26 +35,10 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    // Feed the proposal share first (carries metadata required for reconstruction).
-    let proposal_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
-    let proposal_share = view
-        .vid_shares
-        .iter()
-        .find(|s| s.recipient_key == proposal_key)
-        .unwrap()
-        .clone();
-    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.metadata);
-
-    // Feed remaining shares from other nodes — enough to exceed the threshold.
-    for i in 1..view.vid_shares.len() as u64 {
-        let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
-        let share = view
-            .vid_shares
-            .iter()
-            .find(|s| s.recipient_key == key)
-            .unwrap()
-            .clone();
-        reconstructor.handle_vid_share(share, None);
+    handle_proposal(&mut reconstructor, view);
+    // Feed every node's share — enough to exceed the threshold.
+    for i in 0..view.vid_shares.len() as u64 {
+        reconstructor.handle_vid_share(honest_share(view, i));
     }
 
     // First call to `next()` should succeed.
@@ -70,7 +70,7 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
 }
 
 /// `retire_view` should suppress reconstruction for the retired view
-/// even when threshold-plus shares are fed in afterwards.
+/// even when the proposal and threshold-plus shares are fed in afterwards.
 #[tokio::test]
 async fn test_retire_view_skips_reconstruction() {
     let test_data = TestData::new(1).await;
@@ -79,24 +79,9 @@ async fn test_retire_view_skips_reconstruction() {
 
     reconstructor.retire_view(view.view_number);
 
-    // Feed threshold-plus shares; none should trigger reconstruction.
-    let proposal_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
-    let proposal_share = view
-        .vid_shares
-        .iter()
-        .find(|s| s.recipient_key == proposal_key)
-        .unwrap()
-        .clone();
-    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.metadata);
-    for i in 1..view.vid_shares.len() as u64 {
-        let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
-        let share = view
-            .vid_shares
-            .iter()
-            .find(|s| s.recipient_key == key)
-            .unwrap()
-            .clone();
-        reconstructor.handle_vid_share(share, None);
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..view.vid_shares.len() as u64 {
+        reconstructor.handle_vid_share(honest_share(view, i));
     }
 
     let result =
@@ -124,25 +109,10 @@ async fn test_shares_after_reconstruction_are_ignored() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    // Feed exactly threshold shares (with metadata on the first).
-    let first_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
-    let first_share = view
-        .vid_shares
-        .iter()
-        .find(|s| s.recipient_key == first_key)
-        .unwrap()
-        .clone();
-    reconstructor.handle_vid_share(first_share, view.proposal.data.block_header.metadata);
-
-    for i in 1..THRESHOLD {
-        let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
-        let share = view
-            .vid_shares
-            .iter()
-            .find(|s| s.recipient_key == key)
-            .unwrap()
-            .clone();
-        reconstructor.handle_vid_share(share, None);
+    // Feed exactly threshold shares.
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..THRESHOLD {
+        reconstructor.handle_vid_share(honest_share(view, i));
     }
 
     // Drain the one expected result.
@@ -154,14 +124,7 @@ async fn test_shares_after_reconstruction_are_ignored() {
 
     // Now feed more shares for the same view — they should be ignored.
     for i in THRESHOLD..view.vid_shares.len() as u64 {
-        let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
-        let share = view
-            .vid_shares
-            .iter()
-            .find(|s| s.recipient_key == key)
-            .unwrap()
-            .clone();
-        reconstructor.handle_vid_share(share, None);
+        reconstructor.handle_vid_share(honest_share(view, i));
     }
 
     // No additional reconstruction should be spawned.
@@ -182,43 +145,77 @@ async fn test_shares_after_reconstruction_are_ignored() {
     }
 }
 
-/// Fetch the honest share for the voter with key index `i`.
-fn honest_share(view: &TestView, i: u64) -> VidDisperseShare2<TestTypes> {
-    let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
-    view.vid_shares
-        .iter()
-        .find(|s| s.recipient_key == key)
-        .unwrap()
-        .clone()
-}
-
-/// Shares whose claimed commitment is inconsistent with their common data
-/// must be rejected at intake (the common is the verification oracle for
-/// weeding, so it has to be hash-bound to the commitment first) and must not
-/// interfere with honest reconstruction of the same view.
+/// Shares can arrive (via Vote1) before the view's proposal. They are held
+/// pending — no reconstruction is possible without the proposal's metadata —
+/// and admitted as soon as the proposal pins the view's commitment.
 #[tokio::test]
-async fn test_inconsistent_commitment_shares_ignored() {
+async fn test_shares_before_proposal_reconstruct_on_proposal() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    // A valid commitment over different payload bytes: the honest common is
-    // inconsistent with it.
+    for i in 0..THRESHOLD {
+        reconstructor.handle_vid_share(honest_share(view, i));
+    }
+
+    // No proposal yet: nothing to reconstruct against.
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
+    match result {
+        Err(_) | Ok(None) => { /* timed out or no tasks — no attempt ran, good */ },
+        Ok(Some(Ok(out))) => panic!(
+            "BUG: reconstruction for view {:?} ran without the proposal",
+            out.view
+        ),
+        Ok(Some(Err(err))) => panic!(
+            "BUG: a reconstruction attempt for view {:?} ran without the proposal",
+            err.view
+        ),
+    }
+
+    // The proposal admits the pending shares; no further input is needed.
+    handle_proposal(&mut reconstructor, view);
+    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("reconstruction should complete in time")
+        .expect("should produce a result")
+        .expect("reconstruction from pending shares should succeed");
+    assert_eq!(out.view, view.view_number);
+    assert_eq!(
+        out.payload_commitment,
+        view.vid_shares[0].payload_commitment
+    );
+}
+
+/// Shares whose common data is not hash-bound to the proposal's commitment
+/// must be rejected at intake (the common is the verification oracle for
+/// weeding, so it has to be consistent with the commitment first) and must
+/// not interfere with honest reconstruction of the same view.
+#[tokio::test]
+async fn test_inconsistent_common_shares_ignored() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+    handle_proposal(&mut reconstructor, view);
+
+    // A valid common over different payload bytes: consistent with some
+    // commitment, but not with the proposal's.
     let param = &view.vid_shares[0].common.param;
     let other_payload = vec![0xa5u8; 64];
-    let (wrong_commitment, _) = AvidmGf2Scheme::commit(
+    let (_, wrong_common) = AvidmGf2Scheme::commit(
         param,
         &other_payload,
         std::iter::once(0..other_payload.len()),
     )
     .unwrap();
 
-    // Feed threshold-plus shares claiming the wrong commitment; all must be
-    // dropped at intake, so no reconstruction is ever attempted.
+    // Feed threshold-plus shares claiming the proposal's commitment but
+    // carrying the wrong common; all must be dropped at intake, so no
+    // reconstruction is ever attempted.
     for i in 0..THRESHOLD {
         let mut share = honest_share(view, i);
-        share.payload_commitment = wrong_commitment;
-        reconstructor.handle_vid_share(share, view.proposal.data.block_header.metadata);
+        share.common = wrong_common.clone();
+        reconstructor.handle_vid_share(share);
     }
     let result =
         tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
@@ -226,14 +223,14 @@ async fn test_inconsistent_commitment_shares_ignored() {
         Err(_) | Ok(None) => { /* timed out or no tasks — no attempt ran, good */ },
         Ok(Some(Ok(out))) => {
             panic!(
-                "BUG: shares with a commitment inconsistent with their common produced a payload \
+                "BUG: shares with a common inconsistent with the commitment produced a payload \
                  for view {:?}",
                 out.view
             );
         },
         Ok(Some(Err(err))) => {
             panic!(
-                "BUG: shares with a commitment inconsistent with their common triggered a \
+                "BUG: shares with a common inconsistent with the commitment triggered a \
                  reconstruction attempt for view {:?}",
                 err.view
             );
@@ -241,12 +238,8 @@ async fn test_inconsistent_commitment_shares_ignored() {
     }
 
     // The same voters can still contribute their honest shares.
-    reconstructor.handle_vid_share(
-        honest_share(view, 0),
-        view.proposal.data.block_header.metadata,
-    );
-    for i in 1..THRESHOLD {
-        reconstructor.handle_vid_share(honest_share(view, i), None);
+    for i in 0..THRESHOLD {
+        reconstructor.handle_vid_share(honest_share(view, i));
     }
     let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
@@ -309,17 +302,14 @@ async fn test_weeds_bad_shares_and_recovers() {
 
     // Feed one less than the recovery threshold honestly, then the poison
     // share to trigger a (poisoned) reconstruction attempt.
-    reconstructor.handle_vid_share(
-        honest_share(view, 0),
-        view.proposal.data.block_header.metadata,
-    );
-    for i in 1..recovery_threshold - 1 {
-        reconstructor.handle_vid_share(honest_share(view, i), None);
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..recovery_threshold - 1 {
+        reconstructor.handle_vid_share(honest_share(view, i));
     }
-    reconstructor.handle_vid_share(poison, None);
+    reconstructor.handle_vid_share(poison);
     // More honest shares arrive while the poisoned attempt is in flight.
-    reconstructor.handle_vid_share(honest_share(view, recovery_threshold - 1), None);
-    reconstructor.handle_vid_share(honest_share(view, recovery_threshold), None);
+    reconstructor.handle_vid_share(honest_share(view, recovery_threshold - 1));
+    reconstructor.handle_vid_share(honest_share(view, recovery_threshold));
 
     // The poisoned attempt fails, identifying exactly the poison voter.
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
@@ -367,16 +357,13 @@ async fn test_replayed_share_does_not_fake_coverage() {
     let mut replay = honest_share(view, 0);
     replay.recipient_key = replayer;
 
-    reconstructor.handle_vid_share(
-        honest_share(view, 0),
-        view.proposal.data.block_header.metadata,
-    );
-    for i in 1..recovery_threshold - 1 {
-        reconstructor.handle_vid_share(honest_share(view, i), None);
+    handle_proposal(&mut reconstructor, view);
+    for i in 0..recovery_threshold - 1 {
+        reconstructor.handle_vid_share(honest_share(view, i));
     }
     // The replay covers an already-covered shard range: dropped at intake,
     // coverage stays below the threshold and no attempt is triggered.
-    reconstructor.handle_vid_share(replay, None);
+    reconstructor.handle_vid_share(replay);
 
     let result =
         tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
@@ -393,7 +380,7 @@ async fn test_replayed_share_does_not_fake_coverage() {
     }
 
     // One more honest share provides the missing distinct range.
-    reconstructor.handle_vid_share(honest_share(view, recovery_threshold - 1), None);
+    reconstructor.handle_vid_share(honest_share(view, recovery_threshold - 1));
     let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
         .expect("reconstruction should complete in time")

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashSet},
     ops::Range,
 };
 
@@ -149,15 +149,19 @@ impl<T: NodeType> VidDisperser<T> {
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
+    /// The payload commitment claimed by the view's validated proposal.
+    payload_commitment: VidCommitment2,
+    metadata: Metadata<T>,
+    epoch: EpochNumber,
+    /// Common data pinned by the first admitted share; hash-bound to
+    /// `payload_commitment` (see [`Self::accept`]).
+    common: Option<AvidmGf2Common>,
     /// Admitted shares by voter; their shard ranges are pairwise disjoint
     /// (see [`Self::accept`]).
     shares: BTreeMap<T::SignatureKey, AvidmGf2Share>,
     /// Every voter whose share was admitted, including weeded ones: a voter
     /// whose share failed verification doesn't get a second submission.
     seen_keys: HashSet<T::SignatureKey>,
-    common: AvidmGf2Common,
-    metadata: Option<Metadata<T>>,
-    epoch: Option<EpochNumber>,
     /// Set when a fully verified share set failed to decode to a payload
     /// matching the commitment: the disperser is provably faulty and further
     /// attempts are pointless.
@@ -165,30 +169,46 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
 }
 
 impl<T: NodeType> VidShareAccumulator<T> {
-    fn new(common: AvidmGf2Common, epoch: Option<EpochNumber>) -> Self {
+    fn new(payload_commitment: VidCommitment2, metadata: Metadata<T>, epoch: EpochNumber) -> Self {
         Self {
+            payload_commitment,
+            metadata,
+            epoch,
+            common: None,
             shares: BTreeMap::new(),
             seen_keys: HashSet::new(),
-            common,
-            metadata: None,
-            epoch,
             exhausted: false,
         }
     }
 
-    /// Admit `share` if it is from a new voter, carries the accumulator's
-    /// common data, and covers a well-formed shard range disjoint from every
-    /// admitted share's. Deduplicating by range up front keeps coverage
-    /// exact — a replayed share verifies against the commitment (merkle
-    /// proofs don't bind the recipient) but cannot fake quorum — and the
-    /// decoder never sees a shard position twice.
+    /// Admit `share` if it claims the proposal's commitment, carries the
+    /// common data hash-bound to that commitment, is from a new voter, and
+    /// covers a well-formed shard range disjoint from every admitted
+    /// share's. Deduplicating by range up front keeps coverage exact — a
+    /// replayed share verifies against the commitment (merkle proofs don't
+    /// bind the recipient) but cannot fake quorum — and the decoder never
+    /// sees a shard position twice.
     fn accept(&mut self, view: ViewNumber, share: VidDisperseShare2<T>) {
+        if self.exhausted {
+            return;
+        }
         let sender = share.recipient_key;
-        // `is_consistent` pinned our common to the commitment; a share
-        // smuggling different common data alongside the same commitment
-        // must not be trusted.
-        if share.common != self.common {
-            warn!(%view, ?sender, "VID share common differs from the accumulator's");
+        if share.payload_commitment != self.payload_commitment {
+            warn!(%view, ?sender, "VID share commitment differs from the proposal's");
+            return;
+        }
+        // The commitment hash-binds the common data; check that before
+        // trusting the common as the verification oracle used for weeding
+        // out bad shares. Every later share must carry the identical common.
+        if let Some(common) = &self.common {
+            if share.common != *common {
+                warn!(%view, ?sender, "VID share common differs from the accumulator's");
+                return;
+            }
+        } else if AvidmGf2Scheme::is_consistent(&self.payload_commitment, &share.common) {
+            self.common = Some(share.common.clone());
+        } else {
+            warn!(%view, ?sender, "VID share common is inconsistent with its commitment");
             return;
         }
         // A share whose namespaces disagree on the shard range is malformed.
@@ -198,7 +218,7 @@ impl<T: NodeType> VidShareAccumulator<T> {
         };
         // An empty range contributes nothing; positions past the end of the
         // encoded payload would inflate coverage without aiding decoding.
-        if range.is_empty() || range.end > self.common.param.total_weights {
+        if range.is_empty() || range.end > share.common.param.total_weights {
             warn!(%view, ?sender, ?range, "VID share has an empty or out-of-bounds shard range");
             return;
         }
@@ -230,13 +250,21 @@ impl<T: NodeType> VidShareAccumulator<T> {
     }
 
     fn has_enough_shares(&self) -> bool {
-        self.coverage() >= self.common.param.recovery_threshold
+        self.common
+            .as_ref()
+            .is_some_and(|common| self.coverage() >= common.param.recovery_threshold)
     }
 }
 
 #[derive(Default)]
 pub struct VidReconstructor<T: NodeType> {
-    accumulators: BTreeMap<(ViewNumber, VidCommitment2), VidShareAccumulator<T>>,
+    /// Shares that arrived before their view's proposal, one per voter:
+    /// admitted (or dropped) once the proposal pins the view's commitment.
+    pending: BTreeMap<ViewNumber, BTreeMap<T::SignatureKey, VidDisperseShare2<T>>>,
+    /// One accumulator per view, created when its validated proposal
+    /// arrives: reconstruction needs the proposal's metadata, so only the
+    /// proposal's commitment is worth accumulating.
+    accumulators: BTreeMap<ViewNumber, VidShareAccumulator<T>>,
     reconstructed: BTreeSet<ViewNumber>,
     tasks: JoinSet<ReconstructResult<T>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
@@ -245,6 +273,7 @@ pub struct VidReconstructor<T: NodeType> {
 impl<T: NodeType> VidReconstructor<T> {
     pub fn new() -> Self {
         Self {
+            pending: BTreeMap::new(),
             accumulators: BTreeMap::new(),
             reconstructed: BTreeSet::new(),
             tasks: JoinSet::new(),
@@ -252,46 +281,53 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    pub(crate) fn handle_vid_share<M>(&mut self, share: VidDisperseShare2<T>, metadata: M)
-    where
-        M: Into<Option<Metadata<T>>>,
-    {
+    /// Pin `view` to its validated proposal's payload commitment and
+    /// metadata, and admit any shares that arrived before the proposal.
+    pub(crate) fn handle_proposal(
+        &mut self,
+        view: ViewNumber,
+        payload_commitment: VidCommitment2,
+        metadata: Metadata<T>,
+        epoch: EpochNumber,
+    ) {
+        if self.reconstructed.contains(&view) {
+            return;
+        }
+        if let Some(existing) = self.accumulators.get(&view) {
+            // The first proposal wins: an equivocating leader cannot re-pin
+            // the view to another commitment.
+            if existing.payload_commitment != payload_commitment {
+                warn!(%view, "conflicting proposal for a view pinned to another commitment");
+            }
+            return;
+        }
+        let accumulator = self
+            .accumulators
+            .entry(view)
+            .or_insert_with(|| VidShareAccumulator::new(payload_commitment, metadata, epoch));
+        for (_, share) in self.pending.remove(&view).into_iter().flatten() {
+            accumulator.accept(view, share);
+        }
+        self.try_reconstruct(view);
+    }
+
+    pub(crate) fn handle_vid_share(&mut self, share: VidDisperseShare2<T>) {
         let view = share.view_number;
         if self.reconstructed.contains(&view) {
             return;
         }
-        let payload_commitment = share.payload_commitment;
-        let accumulator = match self.accumulators.entry((view, payload_commitment)) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                // The commitment hash-binds the common data; check that
-                // before trusting the common as the verification oracle
-                // used for weeding out bad shares.
-                if !AvidmGf2Scheme::is_consistent(&payload_commitment, &share.common) {
-                    warn!(
-                        %view,
-                        sender = ?share.recipient_key,
-                        "VID share common is inconsistent with its commitment"
-                    );
-                    return;
-                }
-                entry.insert(VidShareAccumulator::new(share.common.clone(), share.epoch))
-            },
-        };
-        if accumulator.exhausted {
+        let Some(accumulator) = self.accumulators.get_mut(&view) else {
+            // No validated proposal yet: hold the voter's share until
+            // `handle_proposal` pins the view's commitment.
+            self.pending
+                .entry(view)
+                .or_default()
+                .entry(share.recipient_key.clone())
+                .or_insert(share);
             return;
-        }
-        // Metadata comes with the proposal; record it even if the share
-        // carrying it is rejected.
-        if accumulator.metadata.is_none()
-            && let Some(m) = metadata.into()
-        {
-            accumulator.metadata = Some(m)
-        }
+        };
         accumulator.accept(view, share);
-        if accumulator.has_enough_shares() {
-            self.try_reconstruct(view, payload_commitment);
-        }
+        self.try_reconstruct(view);
     }
 
     pub async fn next(&mut self) -> Option<ReconstructResult<T>> {
@@ -299,7 +335,7 @@ impl<T: NodeType> VidReconstructor<T> {
             match self.tasks.join_next().await {
                 Some(Ok(Ok(out))) => {
                     self.calculations.remove(&out.view);
-                    self.accumulators.retain(|(view, _), _| *view != out.view);
+                    self.accumulators.remove(&out.view);
                     self.reconstructed.insert(out.view);
                     return Some(Ok(out));
                 },
@@ -319,44 +355,46 @@ impl<T: NodeType> VidReconstructor<T> {
     /// (`try_reconstruct` re-checks coverage, which shares that arrived while
     /// the attempt ran may already restore).
     fn handle_failed_attempt(&mut self, err: &VidReconstructError<T::SignatureKey>) {
-        let Some(accumulator) = self
-            .accumulators
-            .get_mut(&(err.view, err.payload_commitment))
-        else {
+        let Some(accumulator) = self.accumulators.get_mut(&err.view) else {
             return;
         };
+        // Views are pinned to one commitment for their lifetime, so a
+        // finished attempt always matches; guard anyway so a future re-pin
+        // policy can't weed the wrong accumulator.
+        if accumulator.payload_commitment != err.payload_commitment {
+            return;
+        }
         for key in &err.bad_share_keys {
             accumulator.shares.remove(key);
         }
         match err.kind {
             VidReconstructErrorKind::Unrecoverable => accumulator.exhausted = true,
-            VidReconstructErrorKind::AwaitingShares => {
-                self.try_reconstruct(err.view, err.payload_commitment)
-            },
+            VidReconstructErrorKind::AwaitingShares => self.try_reconstruct(err.view),
         }
     }
 
-    fn try_reconstruct(&mut self, view: ViewNumber, payload_commitment: VidCommitment2) {
+    fn try_reconstruct(&mut self, view: ViewNumber) {
         if self.calculations.contains_key(&view) {
             return;
         }
-        let Some(accumulator) = self.accumulators.get(&(view, payload_commitment)) else {
+        let Some(accumulator) = self.accumulators.get(&view) else {
             return;
         };
         if accumulator.exhausted || !accumulator.has_enough_shares() {
             return;
         }
-        // Metadata comes from when we get the proposal, otherwise we can't reconstruct the payload
-        let Some(metadata) = accumulator.metadata.clone() else {
+        // Enough shares implies an admitted share, which pinned the common.
+        let Some(common) = accumulator.common.clone() else {
             return;
         };
+        let payload_commitment = accumulator.payload_commitment;
+        let metadata = accumulator.metadata.clone();
         let shares: Vec<(T::SignatureKey, AvidmGf2Share)> = accumulator
             .shares
             .iter()
             .map(|(key, share)| (key.clone(), share.clone()))
             .collect();
-        let common = accumulator.common.clone();
-        let epoch = accumulator.epoch.unwrap_or(EpochNumber::genesis());
+        let epoch = accumulator.epoch;
         let task = self.tasks.spawn_blocking(move || {
             Self::reconstruct(view, epoch, payload_commitment, common, shares, metadata)
         });
@@ -487,9 +525,8 @@ impl<T: NodeType> VidReconstructor<T> {
             handle.abort();
         }
         self.calculations = keep;
-        self.accumulators = self
-            .accumulators
-            .split_off(&(view_number, VidCommitment2::default()));
+        self.pending = self.pending.split_off(&view_number);
+        self.accumulators = self.accumulators.split_off(&view_number);
         self.reconstructed = self.reconstructed.split_off(&view_number);
     }
 
@@ -497,11 +534,12 @@ impl<T: NodeType> VidReconstructor<T> {
     ///
     /// Either because its payload was reconstructed (or obtained elsewhere)
     /// or because it timed out and will never be decided: record it so
-    /// `handle_vid_share` ignores later shares, drop its accumulators, and
-    /// abort any in-flight reconstruction task.
+    /// `handle_vid_share` ignores later shares, drop its accumulator and
+    /// pending shares, and abort any in-flight reconstruction task.
     pub fn retire_view(&mut self, view: ViewNumber) {
         self.reconstructed.insert(view);
-        self.accumulators.retain(|(v, _), _| *v != view);
+        self.pending.remove(&view);
+        self.accumulators.remove(&view);
         if let Some(handle) = self.calculations.remove(&view) {
             handle.abort();
         }
