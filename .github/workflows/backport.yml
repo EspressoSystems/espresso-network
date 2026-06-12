@@ -15,7 +15,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  id-token: write
 jobs:
   backport:
     name: Backport pull request
@@ -93,6 +92,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             Mergiraf left conflict markers in these backport PRs:
             ${{ steps.resolve.outputs.needs_claude }}
