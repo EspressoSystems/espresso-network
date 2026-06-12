@@ -617,10 +617,9 @@ async fn handle_events<N, P, C>(
                 }
             },
             CoordinatorEvent::BlockPayloadReconstructed { .. } => {
-                // Forward straight to the consumer: reconstructed payloads aren't persisted
-                // by consensus storage, and the query service verifies the block against a
-                // decided leaf before storing it. On failure the payload is simply fetched
-                // later through catchup.
+                // Forward straight to the consumer: reconstructed payloads might not yet
+                // have been stored by consensus storage,
+                // Query service verifies the block against a decided leaf before storing it.
                 if let Err(err) = event_consumer.handle_event(&event).await {
                     tracing::warn!("failed to handle reconstructed payload: {err:#}");
                 }

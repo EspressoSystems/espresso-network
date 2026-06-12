@@ -526,10 +526,7 @@ where
                             VidCommitment::V2(out.payload_commitment),
                         );
                         if let Some(proposal) = self.consensus.proposal_at(out.view) {
-                            // Only pair the payload with the header if the proposal commits to
-                            // it: the reconstructed commitment comes from the VID shares, which
-                            // may belong to a different block at this view (e.g. an equivocating
-                            // leader).
+                            // Only pair the payload with the header if the proposal commits to it
                             if proposal.block_header.payload_commitment()
                                 == VidCommitment::V2(out.payload_commitment)
                             {
