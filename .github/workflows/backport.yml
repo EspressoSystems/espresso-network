@@ -1,4 +1,3 @@
-# Create a backport PR to branch "foo" from a merged PR by adding a PR label "backport foo"
 name: Backport merged pull request
 on:
   pull_request_target:
@@ -14,15 +13,114 @@ on:
         required: true
         type: string
 permissions:
-  contents: write # so it can comment
-  pull-requests: write # so it can create pull requests
+  contents: write
+  pull-requests: write
+  id-token: write
 jobs:
   backport:
     name: Backport pull request
     runs-on: ubuntu-latest
-    # Don't run on closed unmerged pull requests
-    if: github.event.pull_request.merged
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - uses: taiki-e/install-action@just
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mergiraf
+
+      - name: Configure git identity and mergiraf merge driver
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config --global merge.mergiraf.name mergiraf
+          git config --global merge.mergiraf.driver 'mergiraf merge --git %O %A %B -s %S -x %X -y %Y -p %P'
+          mkdir -p ~/.config/git
+          echo '* merge=mergiraf' > ~/.config/git/attributes
+
+      - name: Cherry-pick via workflow_dispatch
+        id: dispatch_backport
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        run: |
+          scripts/backport-dispatch "$PR_NUMBER" "$TARGET_BRANCH"
+
       - name: Create backport pull requests
+        id: backport
+        if: github.event_name == 'pull_request_target'
         uses: korthout/backport-action@v3
+        with:
+          experimental: '{"conflict_resolution":"draft_commit_conflicts"}'
+
+      - name: Detect remaining conflicts
+        id: resolve
+        if: |
+          steps.backport.outputs.created_pull_numbers != '' ||
+          steps.dispatch_backport.outputs.created_pull_numbers != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          pr_numbers="${{ steps.backport.outputs.created_pull_numbers }} ${{ steps.dispatch_backport.outputs.created_pull_numbers }}"
+          needs_claude=""
+          for pr in $pr_numbers; do
+            branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
+            git fetch origin "$branch"
+            if git grep -lE '^<<<<<<< ' "origin/$branch" -- >/dev/null; then
+              needs_claude="$needs_claude $pr"
+            else
+              gh pr ready "$pr" || true
+            fi
+          done
+          echo "needs_claude=$needs_claude" >> "$GITHUB_OUTPUT"
+
+      - name: Claude conflict resolution
+        if: steps.resolve.outputs.needs_claude != ''
+        timeout-minutes: 30
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Mergiraf left conflict markers in these backport PRs:
+            ${{ steps.resolve.outputs.needs_claude }}
+
+            For each PR: create a local branch tracking origin/<branch>, resolve the markers, run `just fmt`, commit. Do not push and do not use the `gh` CLI; the workflow will verify compilation and push.
+
+            Commit attribution: only create new commits authored by the current git identity (the bot). Do not use --amend, --author=, --reuse-message=, git rebase, or `git cherry-pick --continue`; those preserve the original PR author's identity, which must never happen here.
+          claude_args: "--model claude-opus-4-6"
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.resolve.outputs.needs_claude != ''
+        with:
+          prefix-key: v3-rust
+          shared-key: backport-claude
+
+      - name: Verify Claude-resolved backports compile, label, mark ready
+        if: steps.resolve.outputs.needs_claude != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create claude-resolved --color FF6B35 --description "Backport conflicts resolved by Claude" 2>/dev/null || true
+          for pr in ${{ steps.resolve.outputs.needs_claude }}; do
+            branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
+            git checkout "$branch"
+            cargo check --tests --examples
+            git push origin "$branch"
+            gh pr edit "$pr" --add-label claude-resolved
+            gh pr ready "$pr"
+          done
