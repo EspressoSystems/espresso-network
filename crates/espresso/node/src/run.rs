@@ -74,72 +74,19 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
 
-<<<<<<< HEAD
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
-||||||| parent of dc6d1a54fe (feat: add node telemetry (#4281))
-    let public_node_config = PublicNodeConfig::new(&opt, &modules);
-
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
-=======
-    let public_node_config = PublicNodeConfig::new(&opt, &modules);
-
->>>>>>> dc6d1a54fe (feat: add node telemetry (#4281))
     tracing::warn!(?genesis, "genesis");
 
-<<<<<<< HEAD
-    if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage).await
-||||||| parent of dc6d1a54fe (feat: add node telemetry (#4281))
-    if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage, public_node_config).await
-=======
     let result = if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
->>>>>>> dc6d1a54fe (feat: add node telemetry (#4281))
+        run_with_storage(genesis, modules, opt, storage, telemetry_handle.as_mut()).await
     } else if let Some(storage) = modules.storage_sql.take() {
-<<<<<<< HEAD
-        run_with_storage(genesis, modules, opt, storage).await
-||||||| parent of dc6d1a54fe (feat: add node telemetry (#4281))
-        run_with_storage(genesis, modules, opt, storage, public_node_config).await
-=======
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            storage,
-            public_node_config,
-            telemetry_handle.as_mut(),
-        )
-        .await
->>>>>>> dc6d1a54fe (feat: add node telemetry (#4281))
+        run_with_storage(genesis, modules, opt, storage, telemetry_handle.as_mut()).await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
-<<<<<<< HEAD
-        run_with_storage(genesis, modules, opt, persistence::fs::Options::default()).await
-||||||| parent of dc6d1a54fe (feat: add node telemetry (#4281))
         run_with_storage(
             genesis,
             modules,
             opt,
             persistence::fs::Options::default(),
-            public_node_config,
-        )
-        .await
-=======
-        run_with_storage(
-            genesis,
-            modules,
-            opt,
-            persistence::fs::Options::default(),
-            public_node_config,
             telemetry_handle.as_mut(),
         )
         .await
@@ -147,7 +94,6 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     if let Some(h) = telemetry_handle {
         h.shutdown();
->>>>>>> dc6d1a54fe (feat: add node telemetry (#4281))
     }
     result
 }
@@ -157,13 +103,7 @@ async fn run_with_storage<S>(
     modules: Modules,
     opt: Options,
     storage_opt: S,
-<<<<<<< HEAD
-||||||| parent of dc6d1a54fe (feat: add node telemetry (#4281))
-    public_node_config: PublicNodeConfig,
-=======
-    public_node_config: PublicNodeConfig,
     telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
->>>>>>> dc6d1a54fe (feat: add node telemetry (#4281))
 ) -> anyhow::Result<()>
 where
     S: DataSourceOptions,
