@@ -166,6 +166,12 @@ impl<
             upgrade_lock,
         }
     }
+
+    pub fn clear(&mut self) {
+        self.vote_outcomes.clear();
+        self.signers.clear();
+    }
+
     /// Add a vote to the total accumulated votes for the given epoch.
     /// Returns the accumulator or the certificate if we
     /// have accumulated enough votes to exceed the threshold for creating a certificate.
