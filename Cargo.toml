@@ -397,7 +397,7 @@ test-log = { version = "0.2", features = ["color", "trace"] }
 test-utils = { path = "test-utils" }
 thiserror = "2"
 tide-disco = "0.9"
-time = "0.3"
+time = ">=0.3, <0.3.48"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 toml = "0.8"
