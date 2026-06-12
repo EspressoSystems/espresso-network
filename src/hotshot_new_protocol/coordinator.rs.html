@@ -344,7 +344,7 @@
 <a href=#344 id=344 data-nosnippet>344</a>                () = <span class="kw-2">&amp;mut </span><span class="self">self</span>.timer =&gt; {
 <a href=#345 id=345 data-nosnippet>345</a>                    <span class="kw">let </span>view = <span class="self">self</span>.timer.view();
 <a href=#346 id=346 data-nosnippet>346</a>                    <span class="kw">let </span>epoch = <span class="self">self</span>.timer.epoch();
-<a href=#347 id=347 data-nosnippet>347</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(stats) = <span class="self">self</span>.vote1_collector.stats(view, epoch).<span class="kw">await </span>{
+<a href=#347 id=347 data-nosnippet>347</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(stats) = <span class="self">self</span>.vote1_collector.stats(view, epoch) {
 <a href=#348 id=348 data-nosnippet>348</a>                        <span class="macro">warn!</span>(
 <a href=#349 id=349 data-nosnippet>349</a>                            %view, %epoch,
 <a href=#350 id=350 data-nosnippet>350</a>                            stake = %stats.stake,
@@ -529,10 +529,10 @@
 <a href=#529 id=529 data-nosnippet>529</a>                        finish_measurement(next_input);
 <a href=#530 id=530 data-nosnippet>530</a>                        <span class="comment">// New epoch data available — retry votes that were
 <a href=#531 id=531 data-nosnippet>531</a>                        // buffered because their membership wasn't ready.
-<a href=#532 id=532 data-nosnippet>532</a>                        </span><span class="self">self</span>.vote1_collector.retry_pending_votes().<span class="kw">await</span>;
-<a href=#533 id=533 data-nosnippet>533</a>                        <span class="self">self</span>.vote2_collector.retry_pending_votes().<span class="kw">await</span>;
-<a href=#534 id=534 data-nosnippet>534</a>                        <span class="self">self</span>.timeout_collector.retry_pending_votes().<span class="kw">await</span>;
-<a href=#535 id=535 data-nosnippet>535</a>                        <span class="self">self</span>.timeout_one_honest_collector.retry_pending_votes().<span class="kw">await</span>;
+<a href=#532 id=532 data-nosnippet>532</a>                        </span><span class="self">self</span>.vote1_collector.retry_pending_votes();
+<a href=#533 id=533 data-nosnippet>533</a>                        <span class="self">self</span>.vote2_collector.retry_pending_votes();
+<a href=#534 id=534 data-nosnippet>534</a>                        <span class="self">self</span>.timeout_collector.retry_pending_votes();
+<a href=#535 id=535 data-nosnippet>535</a>                        <span class="self">self</span>.timeout_one_honest_collector.retry_pending_votes();
 <a href=#536 id=536 data-nosnippet>536</a>                        <span class="kw">return </span><span class="prelude-val">Ok</span>(ConsensusInput::DrbResult(epoch, drb_result))
 <a href=#537 id=537 data-nosnippet>537</a>                    }
 <a href=#538 id=538 data-nosnippet>538</a>                    <span class="prelude-val">Ok</span>(EpochRootResult::EpochRootAdded(epoch)) =&gt; {
@@ -928,708 +928,720 @@
 <a href=#928 id=928 data-nosnippet>928</a>                </span>},
 <a href=#929 id=929 data-nosnippet>929</a>                ConsensusMessage::Vote1(vote1) =&gt; {
 <a href=#930 id=930 data-nosnippet>930</a>                    <span class="kw">let </span>view = vote1.vote.view_number();
-<a href=#931 id=931 data-nosnippet>931</a>                    <span class="kw">let </span>bn = vote1.vote.data.block_number.unwrap_or(<span class="number">0</span>);
-<a href=#932 id=932 data-nosnippet>932</a>                    <span class="kw">let </span>epoch_height = <span class="kw-2">*</span><span class="self">self</span>.consensus.epoch_height;
-<a href=#933 id=933 data-nosnippet>933</a>                    <span class="kw">let </span>is_epoch_root_vote = is_epoch_root(bn, epoch_height);
-<a href=#934 id=934 data-nosnippet>934</a>                    <span class="macro">debug!</span>(
-<a href=#935 id=935 data-nosnippet>935</a>                        %node, %sender, %view,
-<a href=#936 id=936 data-nosnippet>936</a>                        epoch_root = is_epoch_root_vote,
-<a href=#937 id=937 data-nosnippet>937</a>                        has_state_vote = vote1.state_vote.is_some(),
-<a href=#938 id=938 data-nosnippet>938</a>                        <span class="string">"recv vote1"
-<a href=#939 id=939 data-nosnippet>939</a>                    </span>);
-<a href=#940 id=940 data-nosnippet>940</a>                    <span class="kw">if </span>is_epoch_root_vote {
-<a href=#941 id=941 data-nosnippet>941</a>                        <span class="comment">// An epoch-root Vote1 MUST carry a state_vote.
-<a href=#942 id=942 data-nosnippet>942</a>                        // Reject otherwise.
-<a href=#943 id=943 data-nosnippet>943</a>                        </span>vote1.state_vote.as_ref()<span class="question-mark">?</span>;
-<a href=#944 id=944 data-nosnippet>944</a>                        <span class="self">self</span>.epoch_root_collector.accumulate(vote1.clone()).<span class="kw">await</span>;
-<a href=#945 id=945 data-nosnippet>945</a>                    } <span class="kw">else </span>{
-<a href=#946 id=946 data-nosnippet>946</a>                        <span class="self">self</span>.vote1_collector
-<a href=#947 id=947 data-nosnippet>947</a>                            .accumulate_vote(vote1.vote.clone())
-<a href=#948 id=948 data-nosnippet>948</a>                            .<span class="kw">await</span>;
-<a href=#949 id=949 data-nosnippet>949</a>                    }
-<a href=#950 id=950 data-nosnippet>950</a>                    <span class="self">self</span>.vid_reconstructor
-<a href=#951 id=951 data-nosnippet>951</a>                        .handle_vid_share(vote1.vid_share, <span class="prelude-val">None</span>);
-<a href=#952 id=952 data-nosnippet>952</a>                    <span class="prelude-val">None
-<a href=#953 id=953 data-nosnippet>953</a>                </span>},
-<a href=#954 id=954 data-nosnippet>954</a>                ConsensusMessage::Vote2(vote2) =&gt; {
-<a href=#955 id=955 data-nosnippet>955</a>                    <span class="kw">let </span>view = vote2.view_number();
-<a href=#956 id=956 data-nosnippet>956</a>                    <span class="macro">debug!</span>(%node, %sender, %view, <span class="string">"recv vote2"</span>);
-<a href=#957 id=957 data-nosnippet>957</a>                    <span class="self">self</span>.vote2_collector.accumulate_vote(vote2).<span class="kw">await</span>;
-<a href=#958 id=958 data-nosnippet>958</a>                    <span class="prelude-val">None
-<a href=#959 id=959 data-nosnippet>959</a>                </span>},
-<a href=#960 id=960 data-nosnippet>960</a>                ConsensusMessage::Certificate1(certificate1, _key) =&gt; {
-<a href=#961 id=961 data-nosnippet>961</a>                    <span class="macro">debug!</span>(
-<a href=#962 id=962 data-nosnippet>962</a>                        %node, %sender,
-<a href=#963 id=963 data-nosnippet>963</a>                        view = %certificate1.view_number(),
-<a href=#964 id=964 data-nosnippet>964</a>                        epoch = <span class="question-mark">?</span>certificate1.epoch().map(|e| <span class="kw-2">*</span>e),
-<a href=#965 id=965 data-nosnippet>965</a>                        <span class="string">"recv certificate1"
-<a href=#966 id=966 data-nosnippet>966</a>                    </span>);
-<a href=#967 id=967 data-nosnippet>967</a>                    <span class="prelude-val">Some</span>(ConsensusInput::Certificate1(certificate1))
-<a href=#968 id=968 data-nosnippet>968</a>                },
-<a href=#969 id=969 data-nosnippet>969</a>                ConsensusMessage::Certificate2(certificate2, _key) =&gt; {
-<a href=#970 id=970 data-nosnippet>970</a>                    <span class="macro">debug!</span>(
-<a href=#971 id=971 data-nosnippet>971</a>                        %node, %sender,
-<a href=#972 id=972 data-nosnippet>972</a>                        view = %certificate2.view_number(),
-<a href=#973 id=973 data-nosnippet>973</a>                        epoch = <span class="question-mark">?</span>certificate2.epoch().map(|e| <span class="kw-2">*</span>e),
-<a href=#974 id=974 data-nosnippet>974</a>                        <span class="string">"recv certificate2"
-<a href=#975 id=975 data-nosnippet>975</a>                    </span>);
-<a href=#976 id=976 data-nosnippet>976</a>                    <span class="prelude-val">Some</span>(ConsensusInput::Certificate2(certificate2))
-<a href=#977 id=977 data-nosnippet>977</a>                },
-<a href=#978 id=978 data-nosnippet>978</a>                ConsensusMessage::TimeoutVote(timeout_msg) =&gt; {
-<a href=#979 id=979 data-nosnippet>979</a>                    <span class="kw">let </span>view = timeout_msg.vote.view_number();
-<a href=#980 id=980 data-nosnippet>980</a>                    <span class="kw">let </span>current_view = <span class="self">self</span>.consensus.current_view();
-<a href=#981 id=981 data-nosnippet>981</a>                    <span class="kw">if </span>view &lt; current_view {
-<a href=#982 id=982 data-nosnippet>982</a>                        <span class="macro">debug!</span>(
-<a href=#983 id=983 data-nosnippet>983</a>                            %node, %sender, %view, %current_view,
-<a href=#984 id=984 data-nosnippet>984</a>                            <span class="string">"ignoring timeout vote for stale view"
-<a href=#985 id=985 data-nosnippet>985</a>                        </span>);
-<a href=#986 id=986 data-nosnippet>986</a>                        <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#987 id=987 data-nosnippet>987</a>                    }
-<a href=#988 id=988 data-nosnippet>988</a>                    <span class="macro">debug!</span>(
-<a href=#989 id=989 data-nosnippet>989</a>                        %node, %sender, %view,
-<a href=#990 id=990 data-nosnippet>990</a>                        has_lock = timeout_msg.lock.is_some(),
-<a href=#991 id=991 data-nosnippet>991</a>                        <span class="string">"recv timeout vote"
-<a href=#992 id=992 data-nosnippet>992</a>                    </span>);
-<a href=#993 id=993 data-nosnippet>993</a>                    <span class="self">self</span>.timeout_collector
-<a href=#994 id=994 data-nosnippet>994</a>                        .accumulate_vote(timeout_msg.vote.clone())
-<a href=#995 id=995 data-nosnippet>995</a>                        .<span class="kw">await</span>;
-<a href=#996 id=996 data-nosnippet>996</a>                    <span class="self">self</span>.timeout_one_honest_collector
-<a href=#997 id=997 data-nosnippet>997</a>                        .accumulate_vote(timeout_msg.vote)
-<a href=#998 id=998 data-nosnippet>998</a>                        .<span class="kw">await</span>;
-<a href=#999 id=999 data-nosnippet>999</a>                    <span class="prelude-val">None
-<a href=#1000 id=1000 data-nosnippet>1000</a>                </span>},
-<a href=#1001 id=1001 data-nosnippet>1001</a>                ConsensusMessage::TimeoutCertificate(tc) =&gt; {
-<a href=#1002 id=1002 data-nosnippet>1002</a>                    <span class="macro">debug!</span>(
-<a href=#1003 id=1003 data-nosnippet>1003</a>                        %node, %sender,
-<a href=#1004 id=1004 data-nosnippet>1004</a>                        view = %tc.view_number(),
-<a href=#1005 id=1005 data-nosnippet>1005</a>                        epoch = <span class="question-mark">?</span>tc.epoch().map(|e| <span class="kw-2">*</span>e),
-<a href=#1006 id=1006 data-nosnippet>1006</a>                        <span class="string">"recv timeout certificate"
-<a href=#1007 id=1007 data-nosnippet>1007</a>                    </span>);
-<a href=#1008 id=1008 data-nosnippet>1008</a>                    <span class="prelude-val">Some</span>(ConsensusInput::TimeoutCertificate(tc))
-<a href=#1009 id=1009 data-nosnippet>1009</a>                },
-<a href=#1010 id=1010 data-nosnippet>1010</a>                ConsensusMessage::EpochChange(epoch_change) =&gt; {
-<a href=#1011 id=1011 data-nosnippet>1011</a>                    <span class="macro">debug!</span>(
-<a href=#1012 id=1012 data-nosnippet>1012</a>                        %node, %sender,
-<a href=#1013 id=1013 data-nosnippet>1013</a>                        view = %epoch_change.cert1.view_number(),
-<a href=#1014 id=1014 data-nosnippet>1014</a>                        epoch = <span class="question-mark">?</span>epoch_change.cert1.epoch().map(|e| <span class="kw-2">*</span>e),
-<a href=#1015 id=1015 data-nosnippet>1015</a>                        <span class="string">"recv epoch change"
-<a href=#1016 id=1016 data-nosnippet>1016</a>                    </span>);
-<a href=#1017 id=1017 data-nosnippet>1017</a>                    <span class="prelude-val">Some</span>(ConsensusInput::EpochChange(epoch_change))
-<a href=#1018 id=1018 data-nosnippet>1018</a>                },
-<a href=#1019 id=1019 data-nosnippet>1019</a>            },
-<a href=#1020 id=1020 data-nosnippet>1020</a>            MessageType::Block(msg) =&gt; {
-<a href=#1021 id=1021 data-nosnippet>1021</a>                <span class="kw">match </span>msg {
-<a href=#1022 id=1022 data-nosnippet>1022</a>                    BlockMessage::Transactions(msg) =&gt; {
-<a href=#1023 id=1023 data-nosnippet>1023</a>                        <span class="macro">debug!</span>(
-<a href=#1024 id=1024 data-nosnippet>1024</a>                            %node, %sender,
-<a href=#1025 id=1025 data-nosnippet>1025</a>                            view = %msg.view,
-<a href=#1026 id=1026 data-nosnippet>1026</a>                            count = msg.transactions.len(),
-<a href=#1027 id=1027 data-nosnippet>1027</a>                            <span class="string">"recv transactions"
-<a href=#1028 id=1028 data-nosnippet>1028</a>                        </span>);
-<a href=#1029 id=1029 data-nosnippet>1029</a>                        <span class="self">self</span>.block_builder.on_transactions(msg)
-<a href=#1030 id=1030 data-nosnippet>1030</a>                    },
-<a href=#1031 id=1031 data-nosnippet>1031</a>                    BlockMessage::DedupManifest(manifest) =&gt; {
-<a href=#1032 id=1032 data-nosnippet>1032</a>                        <span class="macro">debug!</span>(
-<a href=#1033 id=1033 data-nosnippet>1033</a>                            %node, %sender,
-<a href=#1034 id=1034 data-nosnippet>1034</a>                            view = %manifest.view,
-<a href=#1035 id=1035 data-nosnippet>1035</a>                            epoch = %manifest.epoch,
-<a href=#1036 id=1036 data-nosnippet>1036</a>                            hashes = manifest.hashes.len(),
-<a href=#1037 id=1037 data-nosnippet>1037</a>                            <span class="string">"recv dedup manifest"
-<a href=#1038 id=1038 data-nosnippet>1038</a>                        </span>);
-<a href=#1039 id=1039 data-nosnippet>1039</a>                        <span class="kw">if let </span><span class="prelude-val">Some</span>(view_leader) = <span class="self">self</span>.leader(manifest.view, manifest.epoch)
-<a href=#1040 id=1040 data-nosnippet>1040</a>                            &amp;&amp; view_leader == message.sender
-<a href=#1041 id=1041 data-nosnippet>1041</a>                        {
-<a href=#1042 id=1042 data-nosnippet>1042</a>                            <span class="self">self</span>.block_builder.on_dedup_manifest(manifest)
-<a href=#1043 id=1043 data-nosnippet>1043</a>                        }
-<a href=#1044 id=1044 data-nosnippet>1044</a>                    },
-<a href=#1045 id=1045 data-nosnippet>1045</a>                }
-<a href=#1046 id=1046 data-nosnippet>1046</a>                <span class="prelude-val">None
-<a href=#1047 id=1047 data-nosnippet>1047</a>            </span>},
-<a href=#1048 id=1048 data-nosnippet>1048</a>            MessageType::ProposalFetch(ProposalFetchMessage::Request(request)) =&gt; {
-<a href=#1049 id=1049 data-nosnippet>1049</a>                <span class="kw">let </span>view = request.view_number();
-<a href=#1050 id=1050 data-nosnippet>1050</a>                <span class="macro">debug!</span>(%node, %sender, %view, <span class="string">"recv proposal fetch request"</span>);
-<a href=#1051 id=1051 data-nosnippet>1051</a>                <span class="kw">if </span>!request.validate_sender(<span class="kw-2">&amp;</span>message.sender) {
-<a href=#1052 id=1052 data-nosnippet>1052</a>                    <span class="macro">warn!</span>(
-<a href=#1053 id=1053 data-nosnippet>1053</a>                        %node,
-<a href=#1054 id=1054 data-nosnippet>1054</a>                        sender = %message.sender,
-<a href=#1055 id=1055 data-nosnippet>1055</a>                        %view,
-<a href=#1056 id=1056 data-nosnippet>1056</a>                        <span class="string">"ignoring invalid proposal fetch request signature"
-<a href=#1057 id=1057 data-nosnippet>1057</a>                    </span>);
-<a href=#1058 id=1058 data-nosnippet>1058</a>                    <span class="kw">return </span><span class="prelude-val">None</span>;
-<a href=#1059 id=1059 data-nosnippet>1059</a>                }
-<a href=#1060 id=1060 data-nosnippet>1060</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(proposal) = <span class="self">self</span>.consensus.signed_proposal(<span class="kw-2">&amp;</span>view).cloned() {
-<a href=#1061 id=1061 data-nosnippet>1061</a>                    <span class="kw">let </span>response = Message {
-<a href=#1062 id=1062 data-nosnippet>1062</a>                        sender: <span class="self">self</span>.public_key.clone(),
-<a href=#1063 id=1063 data-nosnippet>1063</a>                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(
-<a href=#1064 id=1064 data-nosnippet>1064</a>                            Box::new(proposal),
-<a href=#1065 id=1065 data-nosnippet>1065</a>                        )),
-<a href=#1066 id=1066 data-nosnippet>1066</a>                    };
-<a href=#1067 id=1067 data-nosnippet>1067</a>                    <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self</span>.network.unicast(
-<a href=#1068 id=1068 data-nosnippet>1068</a>                        <span class="self">self</span>.consensus.current_view(),
-<a href=#1069 id=1069 data-nosnippet>1069</a>                        <span class="kw-2">&amp;</span>message.sender,
-<a href=#1070 id=1070 data-nosnippet>1070</a>                        <span class="kw-2">&amp;</span>response,
-<a href=#1071 id=1071 data-nosnippet>1071</a>                    ) {
-<a href=#1072 id=1072 data-nosnippet>1072</a>                        <span class="kw">let </span>err = CoordinatorError::from(err).context(<span class="string">"proposal response"</span>);
-<a href=#1073 id=1073 data-nosnippet>1073</a>                        <span class="macro">warn!</span>(%node, %err, <span class="string">"network error while sending proposal response"</span>);
-<a href=#1074 id=1074 data-nosnippet>1074</a>                    }
-<a href=#1075 id=1075 data-nosnippet>1075</a>                }
-<a href=#1076 id=1076 data-nosnippet>1076</a>                <span class="prelude-val">None
-<a href=#1077 id=1077 data-nosnippet>1077</a>            </span>},
-<a href=#1078 id=1078 data-nosnippet>1078</a>            MessageType::ProposalFetch(ProposalFetchMessage::Response(proposal)) =&gt; {
-<a href=#1079 id=1079 data-nosnippet>1079</a>                <span class="macro">debug!</span>(
-<a href=#1080 id=1080 data-nosnippet>1080</a>                    %node, %sender,
-<a href=#1081 id=1081 data-nosnippet>1081</a>                    view = %proposal.data.view_number,
-<a href=#1082 id=1082 data-nosnippet>1082</a>                    <span class="string">"recv proposal fetch response"
-<a href=#1083 id=1083 data-nosnippet>1083</a>                </span>);
-<a href=#1084 id=1084 data-nosnippet>1084</a>                <span class="self">self</span>.pending_proposal_fetches.resolve(<span class="kw-2">&amp;</span>proposal);
-<a href=#1085 id=1085 data-nosnippet>1085</a>                <span class="prelude-val">None
-<a href=#1086 id=1086 data-nosnippet>1086</a>            </span>},
-<a href=#1087 id=1087 data-nosnippet>1087</a>            MessageType::External(data) =&gt; {
-<a href=#1088 id=1088 data-nosnippet>1088</a>                <span class="macro">debug!</span>(%node, %sender, bytes = data.len(), <span class="string">"recv external message"</span>);
-<a href=#1089 id=1089 data-nosnippet>1089</a>                <span class="self">self</span>.coordinator_outbox
-<a href=#1090 id=1090 data-nosnippet>1090</a>                    .push_back(CoordinatorOutput::ExternalMessageReceived {
-<a href=#1091 id=1091 data-nosnippet>1091</a>                        sender: message.sender,
-<a href=#1092 id=1092 data-nosnippet>1092</a>                        data,
-<a href=#1093 id=1093 data-nosnippet>1093</a>                    });
-<a href=#1094 id=1094 data-nosnippet>1094</a>                <span class="prelude-val">None
-<a href=#1095 id=1095 data-nosnippet>1095</a>            </span>},
-<a href=#1096 id=1096 data-nosnippet>1096</a>        }
-<a href=#1097 id=1097 data-nosnippet>1097</a>    }
-<a href=#1098 id=1098 data-nosnippet>1098</a>
-<a href=#1099 id=1099 data-nosnippet>1099</a>    <span class="kw">fn </span>on_state_manager_output(
-<a href=#1100 id=1100 data-nosnippet>1100</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1101 id=1101 data-nosnippet>1101</a>        output: StateManagerOutput&lt;T&gt;,
-<a href=#1102 id=1102 data-nosnippet>1102</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;ConsensusInput&lt;T&gt;&gt; {
-<a href=#1103 id=1103 data-nosnippet>1103</a>        <span class="kw">let </span>_m = <span class="self">self
-<a href=#1104 id=1104 data-nosnippet>1104</a>            </span>.metrics
-<a href=#1105 id=1105 data-nosnippet>1105</a>            .as_ref()
-<a href=#1106 id=1106 data-nosnippet>1106</a>            .map(|m| Measurement::start(m.on_state_manager_output.clone()));
-<a href=#1107 id=1107 data-nosnippet>1107</a>        <span class="kw">match </span>output {
-<a href=#1108 id=1108 data-nosnippet>1108</a>            StateManagerOutput::State {
-<a href=#1109 id=1109 data-nosnippet>1109</a>                response,
-<a href=#1110 id=1110 data-nosnippet>1110</a>                validated: <span class="bool-val">true</span>,
-<a href=#1111 id=1111 data-nosnippet>1111</a>            } =&gt; <span class="prelude-val">Some</span>(ConsensusInput::StateValidated(response)),
-<a href=#1112 id=1112 data-nosnippet>1112</a>            StateManagerOutput::State {
-<a href=#1113 id=1113 data-nosnippet>1113</a>                response,
-<a href=#1114 id=1114 data-nosnippet>1114</a>                validated: <span class="bool-val">false</span>,
-<a href=#1115 id=1115 data-nosnippet>1115</a>            } =&gt; <span class="prelude-val">Some</span>(ConsensusInput::StateValidationFailed(response)),
-<a href=#1116 id=1116 data-nosnippet>1116</a>            StateManagerOutput::Header {
+<a href=#931 id=931 data-nosnippet>931</a>                    <span class="kw">if </span><span class="self">self</span>.is_too_far_ahead(view) {
+<a href=#932 id=932 data-nosnippet>932</a>                        <span class="macro">warn!</span>(%node, %sender, %view, <span class="string">"vote1 is too far ahead"</span>);
+<a href=#933 id=933 data-nosnippet>933</a>                        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#934 id=934 data-nosnippet>934</a>                    }
+<a href=#935 id=935 data-nosnippet>935</a>                    <span class="kw">let </span>bn = vote1.vote.data.block_number.unwrap_or(<span class="number">0</span>);
+<a href=#936 id=936 data-nosnippet>936</a>                    <span class="kw">let </span>epoch_height = <span class="kw-2">*</span><span class="self">self</span>.consensus.epoch_height;
+<a href=#937 id=937 data-nosnippet>937</a>                    <span class="kw">let </span>is_epoch_root_vote = is_epoch_root(bn, epoch_height);
+<a href=#938 id=938 data-nosnippet>938</a>                    <span class="macro">debug!</span>(
+<a href=#939 id=939 data-nosnippet>939</a>                        %node, %sender, %view,
+<a href=#940 id=940 data-nosnippet>940</a>                        epoch_root = is_epoch_root_vote,
+<a href=#941 id=941 data-nosnippet>941</a>                        has_state_vote = vote1.state_vote.is_some(),
+<a href=#942 id=942 data-nosnippet>942</a>                        <span class="string">"recv vote1"
+<a href=#943 id=943 data-nosnippet>943</a>                    </span>);
+<a href=#944 id=944 data-nosnippet>944</a>                    <span class="kw">if </span>is_epoch_root_vote {
+<a href=#945 id=945 data-nosnippet>945</a>                        <span class="comment">// An epoch-root Vote1 MUST carry a state_vote.
+<a href=#946 id=946 data-nosnippet>946</a>                        // Reject otherwise.
+<a href=#947 id=947 data-nosnippet>947</a>                        </span>vote1.state_vote.as_ref()<span class="question-mark">?</span>;
+<a href=#948 id=948 data-nosnippet>948</a>                        <span class="self">self</span>.epoch_root_collector.accumulate(vote1.clone()).<span class="kw">await</span>;
+<a href=#949 id=949 data-nosnippet>949</a>                    } <span class="kw">else </span>{
+<a href=#950 id=950 data-nosnippet>950</a>                        <span class="self">self</span>.vote1_collector.accumulate_vote(vote1.vote.clone());
+<a href=#951 id=951 data-nosnippet>951</a>                    }
+<a href=#952 id=952 data-nosnippet>952</a>                    <span class="self">self</span>.vid_reconstructor
+<a href=#953 id=953 data-nosnippet>953</a>                        .handle_vid_share(vote1.vid_share, <span class="prelude-val">None</span>);
+<a href=#954 id=954 data-nosnippet>954</a>                    <span class="prelude-val">None
+<a href=#955 id=955 data-nosnippet>955</a>                </span>},
+<a href=#956 id=956 data-nosnippet>956</a>                ConsensusMessage::Vote2(vote2) =&gt; {
+<a href=#957 id=957 data-nosnippet>957</a>                    <span class="kw">let </span>view = vote2.view_number();
+<a href=#958 id=958 data-nosnippet>958</a>                    <span class="kw">if </span><span class="self">self</span>.is_too_far_ahead(view) {
+<a href=#959 id=959 data-nosnippet>959</a>                        <span class="macro">warn!</span>(%node, %sender, %view, <span class="string">"vote2 is too far ahead"</span>);
+<a href=#960 id=960 data-nosnippet>960</a>                        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#961 id=961 data-nosnippet>961</a>                    }
+<a href=#962 id=962 data-nosnippet>962</a>                    <span class="macro">debug!</span>(%node, %sender, %view, <span class="string">"recv vote2"</span>);
+<a href=#963 id=963 data-nosnippet>963</a>                    <span class="self">self</span>.vote2_collector.accumulate_vote(vote2);
+<a href=#964 id=964 data-nosnippet>964</a>                    <span class="prelude-val">None
+<a href=#965 id=965 data-nosnippet>965</a>                </span>},
+<a href=#966 id=966 data-nosnippet>966</a>                ConsensusMessage::Certificate1(certificate1, _key) =&gt; {
+<a href=#967 id=967 data-nosnippet>967</a>                    <span class="macro">debug!</span>(
+<a href=#968 id=968 data-nosnippet>968</a>                        %node, %sender,
+<a href=#969 id=969 data-nosnippet>969</a>                        view = %certificate1.view_number(),
+<a href=#970 id=970 data-nosnippet>970</a>                        epoch = <span class="question-mark">?</span>certificate1.epoch().map(|e| <span class="kw-2">*</span>e),
+<a href=#971 id=971 data-nosnippet>971</a>                        <span class="string">"recv certificate1"
+<a href=#972 id=972 data-nosnippet>972</a>                    </span>);
+<a href=#973 id=973 data-nosnippet>973</a>                    <span class="prelude-val">Some</span>(ConsensusInput::Certificate1(certificate1))
+<a href=#974 id=974 data-nosnippet>974</a>                },
+<a href=#975 id=975 data-nosnippet>975</a>                ConsensusMessage::Certificate2(certificate2, _key) =&gt; {
+<a href=#976 id=976 data-nosnippet>976</a>                    <span class="macro">debug!</span>(
+<a href=#977 id=977 data-nosnippet>977</a>                        %node, %sender,
+<a href=#978 id=978 data-nosnippet>978</a>                        view = %certificate2.view_number(),
+<a href=#979 id=979 data-nosnippet>979</a>                        epoch = <span class="question-mark">?</span>certificate2.epoch().map(|e| <span class="kw-2">*</span>e),
+<a href=#980 id=980 data-nosnippet>980</a>                        <span class="string">"recv certificate2"
+<a href=#981 id=981 data-nosnippet>981</a>                    </span>);
+<a href=#982 id=982 data-nosnippet>982</a>                    <span class="prelude-val">Some</span>(ConsensusInput::Certificate2(certificate2))
+<a href=#983 id=983 data-nosnippet>983</a>                },
+<a href=#984 id=984 data-nosnippet>984</a>                ConsensusMessage::TimeoutVote(timeout_msg) =&gt; {
+<a href=#985 id=985 data-nosnippet>985</a>                    <span class="kw">let </span>view = timeout_msg.vote.view_number();
+<a href=#986 id=986 data-nosnippet>986</a>                    <span class="kw">if </span><span class="self">self</span>.is_too_far_ahead(view) {
+<a href=#987 id=987 data-nosnippet>987</a>                        <span class="macro">warn!</span>(%node, %sender, %view, <span class="string">"timeout vote is too far ahead"</span>);
+<a href=#988 id=988 data-nosnippet>988</a>                        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#989 id=989 data-nosnippet>989</a>                    }
+<a href=#990 id=990 data-nosnippet>990</a>                    <span class="kw">let </span>current_view = <span class="self">self</span>.consensus.current_view();
+<a href=#991 id=991 data-nosnippet>991</a>                    <span class="kw">if </span>view &lt; current_view {
+<a href=#992 id=992 data-nosnippet>992</a>                        <span class="macro">debug!</span>(
+<a href=#993 id=993 data-nosnippet>993</a>                            %node, %sender, %view, %current_view,
+<a href=#994 id=994 data-nosnippet>994</a>                            <span class="string">"ignoring timeout vote for stale view"
+<a href=#995 id=995 data-nosnippet>995</a>                        </span>);
+<a href=#996 id=996 data-nosnippet>996</a>                        <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#997 id=997 data-nosnippet>997</a>                    }
+<a href=#998 id=998 data-nosnippet>998</a>                    <span class="macro">debug!</span>(
+<a href=#999 id=999 data-nosnippet>999</a>                        %node, %sender, %view,
+<a href=#1000 id=1000 data-nosnippet>1000</a>                        has_lock = timeout_msg.lock.is_some(),
+<a href=#1001 id=1001 data-nosnippet>1001</a>                        <span class="string">"recv timeout vote"
+<a href=#1002 id=1002 data-nosnippet>1002</a>                    </span>);
+<a href=#1003 id=1003 data-nosnippet>1003</a>                    <span class="self">self</span>.timeout_collector
+<a href=#1004 id=1004 data-nosnippet>1004</a>                        .accumulate_vote(timeout_msg.vote.clone());
+<a href=#1005 id=1005 data-nosnippet>1005</a>                    <span class="self">self</span>.timeout_one_honest_collector
+<a href=#1006 id=1006 data-nosnippet>1006</a>                        .accumulate_vote(timeout_msg.vote);
+<a href=#1007 id=1007 data-nosnippet>1007</a>                    <span class="prelude-val">None
+<a href=#1008 id=1008 data-nosnippet>1008</a>                </span>},
+<a href=#1009 id=1009 data-nosnippet>1009</a>                ConsensusMessage::TimeoutCertificate(tc) =&gt; {
+<a href=#1010 id=1010 data-nosnippet>1010</a>                    <span class="macro">debug!</span>(
+<a href=#1011 id=1011 data-nosnippet>1011</a>                        %node, %sender,
+<a href=#1012 id=1012 data-nosnippet>1012</a>                        view = %tc.view_number(),
+<a href=#1013 id=1013 data-nosnippet>1013</a>                        epoch = <span class="question-mark">?</span>tc.epoch().map(|e| <span class="kw-2">*</span>e),
+<a href=#1014 id=1014 data-nosnippet>1014</a>                        <span class="string">"recv timeout certificate"
+<a href=#1015 id=1015 data-nosnippet>1015</a>                    </span>);
+<a href=#1016 id=1016 data-nosnippet>1016</a>                    <span class="prelude-val">Some</span>(ConsensusInput::TimeoutCertificate(tc))
+<a href=#1017 id=1017 data-nosnippet>1017</a>                },
+<a href=#1018 id=1018 data-nosnippet>1018</a>                ConsensusMessage::EpochChange(epoch_change) =&gt; {
+<a href=#1019 id=1019 data-nosnippet>1019</a>                    <span class="macro">debug!</span>(
+<a href=#1020 id=1020 data-nosnippet>1020</a>                        %node, %sender,
+<a href=#1021 id=1021 data-nosnippet>1021</a>                        view = %epoch_change.cert1.view_number(),
+<a href=#1022 id=1022 data-nosnippet>1022</a>                        epoch = <span class="question-mark">?</span>epoch_change.cert1.epoch().map(|e| <span class="kw-2">*</span>e),
+<a href=#1023 id=1023 data-nosnippet>1023</a>                        <span class="string">"recv epoch change"
+<a href=#1024 id=1024 data-nosnippet>1024</a>                    </span>);
+<a href=#1025 id=1025 data-nosnippet>1025</a>                    <span class="prelude-val">Some</span>(ConsensusInput::EpochChange(epoch_change))
+<a href=#1026 id=1026 data-nosnippet>1026</a>                },
+<a href=#1027 id=1027 data-nosnippet>1027</a>            },
+<a href=#1028 id=1028 data-nosnippet>1028</a>            MessageType::Block(msg) =&gt; {
+<a href=#1029 id=1029 data-nosnippet>1029</a>                <span class="kw">match </span>msg {
+<a href=#1030 id=1030 data-nosnippet>1030</a>                    BlockMessage::Transactions(msg) =&gt; {
+<a href=#1031 id=1031 data-nosnippet>1031</a>                        <span class="macro">debug!</span>(
+<a href=#1032 id=1032 data-nosnippet>1032</a>                            %node, %sender,
+<a href=#1033 id=1033 data-nosnippet>1033</a>                            view = %msg.view,
+<a href=#1034 id=1034 data-nosnippet>1034</a>                            count = msg.transactions.len(),
+<a href=#1035 id=1035 data-nosnippet>1035</a>                            <span class="string">"recv transactions"
+<a href=#1036 id=1036 data-nosnippet>1036</a>                        </span>);
+<a href=#1037 id=1037 data-nosnippet>1037</a>                        <span class="self">self</span>.block_builder.on_transactions(msg)
+<a href=#1038 id=1038 data-nosnippet>1038</a>                    },
+<a href=#1039 id=1039 data-nosnippet>1039</a>                    BlockMessage::DedupManifest(manifest) =&gt; {
+<a href=#1040 id=1040 data-nosnippet>1040</a>                        <span class="macro">debug!</span>(
+<a href=#1041 id=1041 data-nosnippet>1041</a>                            %node, %sender,
+<a href=#1042 id=1042 data-nosnippet>1042</a>                            view = %manifest.view,
+<a href=#1043 id=1043 data-nosnippet>1043</a>                            epoch = %manifest.epoch,
+<a href=#1044 id=1044 data-nosnippet>1044</a>                            hashes = manifest.hashes.len(),
+<a href=#1045 id=1045 data-nosnippet>1045</a>                            <span class="string">"recv dedup manifest"
+<a href=#1046 id=1046 data-nosnippet>1046</a>                        </span>);
+<a href=#1047 id=1047 data-nosnippet>1047</a>                        <span class="kw">if let </span><span class="prelude-val">Some</span>(view_leader) = <span class="self">self</span>.leader(manifest.view, manifest.epoch)
+<a href=#1048 id=1048 data-nosnippet>1048</a>                            &amp;&amp; view_leader == message.sender
+<a href=#1049 id=1049 data-nosnippet>1049</a>                        {
+<a href=#1050 id=1050 data-nosnippet>1050</a>                            <span class="self">self</span>.block_builder.on_dedup_manifest(manifest)
+<a href=#1051 id=1051 data-nosnippet>1051</a>                        }
+<a href=#1052 id=1052 data-nosnippet>1052</a>                    },
+<a href=#1053 id=1053 data-nosnippet>1053</a>                }
+<a href=#1054 id=1054 data-nosnippet>1054</a>                <span class="prelude-val">None
+<a href=#1055 id=1055 data-nosnippet>1055</a>            </span>},
+<a href=#1056 id=1056 data-nosnippet>1056</a>            MessageType::ProposalFetch(ProposalFetchMessage::Request(request)) =&gt; {
+<a href=#1057 id=1057 data-nosnippet>1057</a>                <span class="kw">let </span>view = request.view_number();
+<a href=#1058 id=1058 data-nosnippet>1058</a>                <span class="macro">debug!</span>(%node, %sender, %view, <span class="string">"recv proposal fetch request"</span>);
+<a href=#1059 id=1059 data-nosnippet>1059</a>                <span class="kw">if </span>!request.validate_sender(<span class="kw-2">&amp;</span>message.sender) {
+<a href=#1060 id=1060 data-nosnippet>1060</a>                    <span class="macro">warn!</span>(
+<a href=#1061 id=1061 data-nosnippet>1061</a>                        %node,
+<a href=#1062 id=1062 data-nosnippet>1062</a>                        sender = %message.sender,
+<a href=#1063 id=1063 data-nosnippet>1063</a>                        %view,
+<a href=#1064 id=1064 data-nosnippet>1064</a>                        <span class="string">"ignoring invalid proposal fetch request signature"
+<a href=#1065 id=1065 data-nosnippet>1065</a>                    </span>);
+<a href=#1066 id=1066 data-nosnippet>1066</a>                    <span class="kw">return </span><span class="prelude-val">None</span>;
+<a href=#1067 id=1067 data-nosnippet>1067</a>                }
+<a href=#1068 id=1068 data-nosnippet>1068</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(proposal) = <span class="self">self</span>.consensus.signed_proposal(<span class="kw-2">&amp;</span>view).cloned() {
+<a href=#1069 id=1069 data-nosnippet>1069</a>                    <span class="kw">let </span>response = Message {
+<a href=#1070 id=1070 data-nosnippet>1070</a>                        sender: <span class="self">self</span>.public_key.clone(),
+<a href=#1071 id=1071 data-nosnippet>1071</a>                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Response(
+<a href=#1072 id=1072 data-nosnippet>1072</a>                            Box::new(proposal),
+<a href=#1073 id=1073 data-nosnippet>1073</a>                        )),
+<a href=#1074 id=1074 data-nosnippet>1074</a>                    };
+<a href=#1075 id=1075 data-nosnippet>1075</a>                    <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self</span>.network.unicast(
+<a href=#1076 id=1076 data-nosnippet>1076</a>                        <span class="self">self</span>.consensus.current_view(),
+<a href=#1077 id=1077 data-nosnippet>1077</a>                        <span class="kw-2">&amp;</span>message.sender,
+<a href=#1078 id=1078 data-nosnippet>1078</a>                        <span class="kw-2">&amp;</span>response,
+<a href=#1079 id=1079 data-nosnippet>1079</a>                    ) {
+<a href=#1080 id=1080 data-nosnippet>1080</a>                        <span class="kw">let </span>err = CoordinatorError::from(err).context(<span class="string">"proposal response"</span>);
+<a href=#1081 id=1081 data-nosnippet>1081</a>                        <span class="macro">warn!</span>(%node, %err, <span class="string">"network error while sending proposal response"</span>);
+<a href=#1082 id=1082 data-nosnippet>1082</a>                    }
+<a href=#1083 id=1083 data-nosnippet>1083</a>                }
+<a href=#1084 id=1084 data-nosnippet>1084</a>                <span class="prelude-val">None
+<a href=#1085 id=1085 data-nosnippet>1085</a>            </span>},
+<a href=#1086 id=1086 data-nosnippet>1086</a>            MessageType::ProposalFetch(ProposalFetchMessage::Response(proposal)) =&gt; {
+<a href=#1087 id=1087 data-nosnippet>1087</a>                <span class="macro">debug!</span>(
+<a href=#1088 id=1088 data-nosnippet>1088</a>                    %node, %sender,
+<a href=#1089 id=1089 data-nosnippet>1089</a>                    view = %proposal.data.view_number,
+<a href=#1090 id=1090 data-nosnippet>1090</a>                    <span class="string">"recv proposal fetch response"
+<a href=#1091 id=1091 data-nosnippet>1091</a>                </span>);
+<a href=#1092 id=1092 data-nosnippet>1092</a>                <span class="self">self</span>.pending_proposal_fetches.resolve(<span class="kw-2">&amp;</span>proposal);
+<a href=#1093 id=1093 data-nosnippet>1093</a>                <span class="prelude-val">None
+<a href=#1094 id=1094 data-nosnippet>1094</a>            </span>},
+<a href=#1095 id=1095 data-nosnippet>1095</a>            MessageType::External(data) =&gt; {
+<a href=#1096 id=1096 data-nosnippet>1096</a>                <span class="macro">debug!</span>(%node, %sender, bytes = data.len(), <span class="string">"recv external message"</span>);
+<a href=#1097 id=1097 data-nosnippet>1097</a>                <span class="self">self</span>.coordinator_outbox
+<a href=#1098 id=1098 data-nosnippet>1098</a>                    .push_back(CoordinatorOutput::ExternalMessageReceived {
+<a href=#1099 id=1099 data-nosnippet>1099</a>                        sender: message.sender,
+<a href=#1100 id=1100 data-nosnippet>1100</a>                        data,
+<a href=#1101 id=1101 data-nosnippet>1101</a>                    });
+<a href=#1102 id=1102 data-nosnippet>1102</a>                <span class="prelude-val">None
+<a href=#1103 id=1103 data-nosnippet>1103</a>            </span>},
+<a href=#1104 id=1104 data-nosnippet>1104</a>        }
+<a href=#1105 id=1105 data-nosnippet>1105</a>    }
+<a href=#1106 id=1106 data-nosnippet>1106</a>
+<a href=#1107 id=1107 data-nosnippet>1107</a>    <span class="kw">fn </span>on_state_manager_output(
+<a href=#1108 id=1108 data-nosnippet>1108</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1109 id=1109 data-nosnippet>1109</a>        output: StateManagerOutput&lt;T&gt;,
+<a href=#1110 id=1110 data-nosnippet>1110</a>    ) -&gt; <span class="prelude-ty">Option</span>&lt;ConsensusInput&lt;T&gt;&gt; {
+<a href=#1111 id=1111 data-nosnippet>1111</a>        <span class="kw">let </span>_m = <span class="self">self
+<a href=#1112 id=1112 data-nosnippet>1112</a>            </span>.metrics
+<a href=#1113 id=1113 data-nosnippet>1113</a>            .as_ref()
+<a href=#1114 id=1114 data-nosnippet>1114</a>            .map(|m| Measurement::start(m.on_state_manager_output.clone()));
+<a href=#1115 id=1115 data-nosnippet>1115</a>        <span class="kw">match </span>output {
+<a href=#1116 id=1116 data-nosnippet>1116</a>            StateManagerOutput::State {
 <a href=#1117 id=1117 data-nosnippet>1117</a>                response,
-<a href=#1118 id=1118 data-nosnippet>1118</a>                header: <span class="prelude-val">Some</span>(hdr),
-<a href=#1119 id=1119 data-nosnippet>1119</a>            } =&gt; <span class="prelude-val">Some</span>(ConsensusInput::HeaderCreated(
-<a href=#1120 id=1120 data-nosnippet>1120</a>                response.view,
-<a href=#1121 id=1121 data-nosnippet>1121</a>                proposal_commitment(<span class="kw-2">&amp;</span>response.parent_proposal),
-<a href=#1122 id=1122 data-nosnippet>1122</a>                hdr,
-<a href=#1123 id=1123 data-nosnippet>1123</a>            )),
+<a href=#1118 id=1118 data-nosnippet>1118</a>                validated: <span class="bool-val">true</span>,
+<a href=#1119 id=1119 data-nosnippet>1119</a>            } =&gt; <span class="prelude-val">Some</span>(ConsensusInput::StateValidated(response)),
+<a href=#1120 id=1120 data-nosnippet>1120</a>            StateManagerOutput::State {
+<a href=#1121 id=1121 data-nosnippet>1121</a>                response,
+<a href=#1122 id=1122 data-nosnippet>1122</a>                validated: <span class="bool-val">false</span>,
+<a href=#1123 id=1123 data-nosnippet>1123</a>            } =&gt; <span class="prelude-val">Some</span>(ConsensusInput::StateValidationFailed(response)),
 <a href=#1124 id=1124 data-nosnippet>1124</a>            StateManagerOutput::Header {
 <a href=#1125 id=1125 data-nosnippet>1125</a>                response,
-<a href=#1126 id=1126 data-nosnippet>1126</a>                header: <span class="prelude-val">None</span>,
-<a href=#1127 id=1127 data-nosnippet>1127</a>            } =&gt; {
-<a href=#1128 id=1128 data-nosnippet>1128</a>                <span class="macro">tracing::warn!</span>(view = %response.view, <span class="string">"header creation failed"</span>);
-<a href=#1129 id=1129 data-nosnippet>1129</a>                <span class="prelude-val">None
-<a href=#1130 id=1130 data-nosnippet>1130</a>            </span>},
-<a href=#1131 id=1131 data-nosnippet>1131</a>        }
-<a href=#1132 id=1132 data-nosnippet>1132</a>    }
-<a href=#1133 id=1133 data-nosnippet>1133</a>
-<a href=#1134 id=1134 data-nosnippet>1134</a>    <span class="kw">fn </span>on_proposal_and_vid_share(
-<a href=#1135 id=1135 data-nosnippet>1135</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1136 id=1136 data-nosnippet>1136</a>        validated: ValidatedProposal&lt;T&gt;,
-<a href=#1137 id=1137 data-nosnippet>1137</a>        vid_share: VidDisperseShare2&lt;T&gt;,
-<a href=#1138 id=1138 data-nosnippet>1138</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;ConsensusInput&lt;T&gt;, CoordinatorError&gt; {
-<a href=#1139 id=1139 data-nosnippet>1139</a>        <span class="kw">let </span>_m = <span class="self">self
-<a href=#1140 id=1140 data-nosnippet>1140</a>            </span>.metrics
-<a href=#1141 id=1141 data-nosnippet>1141</a>            .as_ref()
-<a href=#1142 id=1142 data-nosnippet>1142</a>            .map(|m| Measurement::start(m.on_proposal_and_vid_share.clone()));
-<a href=#1143 id=1143 data-nosnippet>1143</a>        <span class="self">self</span>.storage.append_vid(vid_share.clone());
-<a href=#1144 id=1144 data-nosnippet>1144</a>        <span class="self">self</span>.storage
-<a href=#1145 id=1145 data-nosnippet>1145</a>            .append_proposal(validated.message.proposal.data.clone());
-<a href=#1146 id=1146 data-nosnippet>1146</a>
-<a href=#1147 id=1147 data-nosnippet>1147</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(state_cert) = <span class="kw-2">&amp;</span>validated.message.proposal.data.state_cert {
-<a href=#1148 id=1148 data-nosnippet>1148</a>            <span class="self">self</span>.storage.append_state_cert(
-<a href=#1149 id=1149 data-nosnippet>1149</a>                ViewNumber::new(state_cert.light_client_state.view_number),
-<a href=#1150 id=1150 data-nosnippet>1150</a>                state_cert.clone(),
-<a href=#1151 id=1151 data-nosnippet>1151</a>            );
-<a href=#1152 id=1152 data-nosnippet>1152</a>        }
-<a href=#1153 id=1153 data-nosnippet>1153</a>
-<a href=#1154 id=1154 data-nosnippet>1154</a>        <span class="kw">let </span>m = validated
-<a href=#1155 id=1155 data-nosnippet>1155</a>            .message
-<a href=#1156 id=1156 data-nosnippet>1156</a>            .proposal
-<a href=#1157 id=1157 data-nosnippet>1157</a>            .data
-<a href=#1158 id=1158 data-nosnippet>1158</a>            .block_header
-<a href=#1159 id=1159 data-nosnippet>1159</a>            .metadata()
-<a href=#1160 id=1160 data-nosnippet>1160</a>            .clone();
-<a href=#1161 id=1161 data-nosnippet>1161</a>        <span class="self">self</span>.vid_reconstructor
-<a href=#1162 id=1162 data-nosnippet>1162</a>            .handle_vid_share(vid_share.clone(), m);
-<a href=#1163 id=1163 data-nosnippet>1163</a>
-<a href=#1164 id=1164 data-nosnippet>1164</a>        <span class="comment">// GC for the cache
-<a href=#1165 id=1165 data-nosnippet>1165</a>        </span><span class="kw">let </span>view = validated.message.proposal.data.view_number();
-<a href=#1166 id=1166 data-nosnippet>1166</a>        <span class="self">self</span>.cached_vid_shares = <span class="self">self
-<a href=#1167 id=1167 data-nosnippet>1167</a>            </span>.cached_vid_shares
-<a href=#1168 id=1168 data-nosnippet>1168</a>            .split_off(<span class="kw-2">&amp;</span>(view + <span class="number">1</span>, VidCommitment2::default()));
-<a href=#1169 id=1169 data-nosnippet>1169</a>        <span class="self">self</span>.cached_validated_proposals = <span class="self">self
-<a href=#1170 id=1170 data-nosnippet>1170</a>            </span>.cached_validated_proposals
-<a href=#1171 id=1171 data-nosnippet>1171</a>            .split_off(<span class="kw-2">&amp;</span>(view + <span class="number">1</span>, VidCommitment2::default()));
-<a href=#1172 id=1172 data-nosnippet>1172</a>
-<a href=#1173 id=1173 data-nosnippet>1173</a>        <span class="prelude-val">Ok</span>(ConsensusInput::ProposalWithVidShare(
-<a href=#1174 id=1174 data-nosnippet>1174</a>            validated.sender,
-<a href=#1175 id=1175 data-nosnippet>1175</a>            validated.message,
-<a href=#1176 id=1176 data-nosnippet>1176</a>            vid_share,
-<a href=#1177 id=1177 data-nosnippet>1177</a>        ))
-<a href=#1178 id=1178 data-nosnippet>1178</a>    }
-<a href=#1179 id=1179 data-nosnippet>1179</a>
-<a href=#1180 id=1180 data-nosnippet>1180</a>    <span class="kw">fn </span>unicast_to_leader(
-<a href=#1181 id=1181 data-nosnippet>1181</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1182 id=1182 data-nosnippet>1182</a>        view: ViewNumber,
-<a href=#1183 id=1183 data-nosnippet>1183</a>        epoch: EpochNumber,
-<a href=#1184 id=1184 data-nosnippet>1184</a>        msg: BlockMessage&lt;T&gt;,
-<a href=#1185 id=1185 data-nosnippet>1185</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), CoordinatorError&gt; {
-<a href=#1186 id=1186 data-nosnippet>1186</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(leader) = <span class="self">self</span>.leader(view, epoch) <span class="kw">else </span>{
-<a href=#1187 id=1187 data-nosnippet>1187</a>            <span class="macro">warn!</span>(%view, %epoch, <span class="string">"failed to resolve leader for unicast"</span>);
-<a href=#1188 id=1188 data-nosnippet>1188</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#1189 id=1189 data-nosnippet>1189</a>        };
-<a href=#1190 id=1190 data-nosnippet>1190</a>        <span class="kw">let </span>message = Message {
-<a href=#1191 id=1191 data-nosnippet>1191</a>            sender: <span class="self">self</span>.public_key.clone(),
-<a href=#1192 id=1192 data-nosnippet>1192</a>            message_type: MessageType::Block(msg),
-<a href=#1193 id=1193 data-nosnippet>1193</a>        };
-<a href=#1194 id=1194 data-nosnippet>1194</a>        <span class="self">self</span>.network
-<a href=#1195 id=1195 data-nosnippet>1195</a>            .unicast(<span class="self">self</span>.consensus.current_view(), <span class="kw-2">&amp;</span>leader, <span class="kw-2">&amp;</span>message)
-<a href=#1196 id=1196 data-nosnippet>1196</a>            .map_err(|e| CoordinatorError::from(e).context(<span class="string">"leader unicast"</span>))
-<a href=#1197 id=1197 data-nosnippet>1197</a>    }
-<a href=#1198 id=1198 data-nosnippet>1198</a>
-<a href=#1199 id=1199 data-nosnippet>1199</a>    <span class="kw">fn </span>leader(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber, epoch: EpochNumber) -&gt; <span class="prelude-ty">Option</span>&lt;T::SignatureKey&gt; {
-<a href=#1200 id=1200 data-nosnippet>1200</a>        <span class="kw">let </span>membership = <span class="self">self
-<a href=#1201 id=1201 data-nosnippet>1201</a>            </span>.membership_coordinator
-<a href=#1202 id=1202 data-nosnippet>1202</a>            .membership_for_epoch(<span class="prelude-val">Some</span>(epoch))
-<a href=#1203 id=1203 data-nosnippet>1203</a>            .ok()<span class="question-mark">?</span>;
-<a href=#1204 id=1204 data-nosnippet>1204</a>        membership.leader(view).ok()
+<a href=#1126 id=1126 data-nosnippet>1126</a>                header: <span class="prelude-val">Some</span>(hdr),
+<a href=#1127 id=1127 data-nosnippet>1127</a>            } =&gt; <span class="prelude-val">Some</span>(ConsensusInput::HeaderCreated(
+<a href=#1128 id=1128 data-nosnippet>1128</a>                response.view,
+<a href=#1129 id=1129 data-nosnippet>1129</a>                proposal_commitment(<span class="kw-2">&amp;</span>response.parent_proposal),
+<a href=#1130 id=1130 data-nosnippet>1130</a>                hdr,
+<a href=#1131 id=1131 data-nosnippet>1131</a>            )),
+<a href=#1132 id=1132 data-nosnippet>1132</a>            StateManagerOutput::Header {
+<a href=#1133 id=1133 data-nosnippet>1133</a>                response,
+<a href=#1134 id=1134 data-nosnippet>1134</a>                header: <span class="prelude-val">None</span>,
+<a href=#1135 id=1135 data-nosnippet>1135</a>            } =&gt; {
+<a href=#1136 id=1136 data-nosnippet>1136</a>                <span class="macro">warn!</span>(view = %response.view, <span class="string">"header creation failed"</span>);
+<a href=#1137 id=1137 data-nosnippet>1137</a>                <span class="prelude-val">None
+<a href=#1138 id=1138 data-nosnippet>1138</a>            </span>},
+<a href=#1139 id=1139 data-nosnippet>1139</a>        }
+<a href=#1140 id=1140 data-nosnippet>1140</a>    }
+<a href=#1141 id=1141 data-nosnippet>1141</a>
+<a href=#1142 id=1142 data-nosnippet>1142</a>    <span class="kw">fn </span>on_proposal_and_vid_share(
+<a href=#1143 id=1143 data-nosnippet>1143</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1144 id=1144 data-nosnippet>1144</a>        validated: ValidatedProposal&lt;T&gt;,
+<a href=#1145 id=1145 data-nosnippet>1145</a>        vid_share: VidDisperseShare2&lt;T&gt;,
+<a href=#1146 id=1146 data-nosnippet>1146</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;ConsensusInput&lt;T&gt;, CoordinatorError&gt; {
+<a href=#1147 id=1147 data-nosnippet>1147</a>        <span class="kw">let </span>_m = <span class="self">self
+<a href=#1148 id=1148 data-nosnippet>1148</a>            </span>.metrics
+<a href=#1149 id=1149 data-nosnippet>1149</a>            .as_ref()
+<a href=#1150 id=1150 data-nosnippet>1150</a>            .map(|m| Measurement::start(m.on_proposal_and_vid_share.clone()));
+<a href=#1151 id=1151 data-nosnippet>1151</a>        <span class="self">self</span>.storage.append_vid(vid_share.clone());
+<a href=#1152 id=1152 data-nosnippet>1152</a>        <span class="self">self</span>.storage
+<a href=#1153 id=1153 data-nosnippet>1153</a>            .append_proposal(validated.message.proposal.data.clone());
+<a href=#1154 id=1154 data-nosnippet>1154</a>
+<a href=#1155 id=1155 data-nosnippet>1155</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(state_cert) = <span class="kw-2">&amp;</span>validated.message.proposal.data.state_cert {
+<a href=#1156 id=1156 data-nosnippet>1156</a>            <span class="self">self</span>.storage.append_state_cert(
+<a href=#1157 id=1157 data-nosnippet>1157</a>                ViewNumber::new(state_cert.light_client_state.view_number),
+<a href=#1158 id=1158 data-nosnippet>1158</a>                state_cert.clone(),
+<a href=#1159 id=1159 data-nosnippet>1159</a>            );
+<a href=#1160 id=1160 data-nosnippet>1160</a>        }
+<a href=#1161 id=1161 data-nosnippet>1161</a>
+<a href=#1162 id=1162 data-nosnippet>1162</a>        <span class="kw">let </span>m = validated
+<a href=#1163 id=1163 data-nosnippet>1163</a>            .message
+<a href=#1164 id=1164 data-nosnippet>1164</a>            .proposal
+<a href=#1165 id=1165 data-nosnippet>1165</a>            .data
+<a href=#1166 id=1166 data-nosnippet>1166</a>            .block_header
+<a href=#1167 id=1167 data-nosnippet>1167</a>            .metadata()
+<a href=#1168 id=1168 data-nosnippet>1168</a>            .clone();
+<a href=#1169 id=1169 data-nosnippet>1169</a>        <span class="self">self</span>.vid_reconstructor
+<a href=#1170 id=1170 data-nosnippet>1170</a>            .handle_vid_share(vid_share.clone(), m);
+<a href=#1171 id=1171 data-nosnippet>1171</a>
+<a href=#1172 id=1172 data-nosnippet>1172</a>        <span class="comment">// GC for the cache
+<a href=#1173 id=1173 data-nosnippet>1173</a>        </span><span class="kw">let </span>view = validated.message.proposal.data.view_number();
+<a href=#1174 id=1174 data-nosnippet>1174</a>        <span class="self">self</span>.cached_vid_shares = <span class="self">self
+<a href=#1175 id=1175 data-nosnippet>1175</a>            </span>.cached_vid_shares
+<a href=#1176 id=1176 data-nosnippet>1176</a>            .split_off(<span class="kw-2">&amp;</span>(view + <span class="number">1</span>, VidCommitment2::default()));
+<a href=#1177 id=1177 data-nosnippet>1177</a>        <span class="self">self</span>.cached_validated_proposals = <span class="self">self
+<a href=#1178 id=1178 data-nosnippet>1178</a>            </span>.cached_validated_proposals
+<a href=#1179 id=1179 data-nosnippet>1179</a>            .split_off(<span class="kw-2">&amp;</span>(view + <span class="number">1</span>, VidCommitment2::default()));
+<a href=#1180 id=1180 data-nosnippet>1180</a>
+<a href=#1181 id=1181 data-nosnippet>1181</a>        <span class="prelude-val">Ok</span>(ConsensusInput::ProposalWithVidShare(
+<a href=#1182 id=1182 data-nosnippet>1182</a>            validated.sender,
+<a href=#1183 id=1183 data-nosnippet>1183</a>            validated.message,
+<a href=#1184 id=1184 data-nosnippet>1184</a>            vid_share,
+<a href=#1185 id=1185 data-nosnippet>1185</a>        ))
+<a href=#1186 id=1186 data-nosnippet>1186</a>    }
+<a href=#1187 id=1187 data-nosnippet>1187</a>
+<a href=#1188 id=1188 data-nosnippet>1188</a>    <span class="kw">fn </span>unicast_to_leader(
+<a href=#1189 id=1189 data-nosnippet>1189</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1190 id=1190 data-nosnippet>1190</a>        view: ViewNumber,
+<a href=#1191 id=1191 data-nosnippet>1191</a>        epoch: EpochNumber,
+<a href=#1192 id=1192 data-nosnippet>1192</a>        msg: BlockMessage&lt;T&gt;,
+<a href=#1193 id=1193 data-nosnippet>1193</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), CoordinatorError&gt; {
+<a href=#1194 id=1194 data-nosnippet>1194</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(leader) = <span class="self">self</span>.leader(view, epoch) <span class="kw">else </span>{
+<a href=#1195 id=1195 data-nosnippet>1195</a>            <span class="macro">warn!</span>(%view, %epoch, <span class="string">"failed to resolve leader for unicast"</span>);
+<a href=#1196 id=1196 data-nosnippet>1196</a>            <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#1197 id=1197 data-nosnippet>1197</a>        };
+<a href=#1198 id=1198 data-nosnippet>1198</a>        <span class="kw">let </span>message = Message {
+<a href=#1199 id=1199 data-nosnippet>1199</a>            sender: <span class="self">self</span>.public_key.clone(),
+<a href=#1200 id=1200 data-nosnippet>1200</a>            message_type: MessageType::Block(msg),
+<a href=#1201 id=1201 data-nosnippet>1201</a>        };
+<a href=#1202 id=1202 data-nosnippet>1202</a>        <span class="self">self</span>.network
+<a href=#1203 id=1203 data-nosnippet>1203</a>            .unicast(<span class="self">self</span>.consensus.current_view(), <span class="kw-2">&amp;</span>leader, <span class="kw-2">&amp;</span>message)
+<a href=#1204 id=1204 data-nosnippet>1204</a>            .map_err(|e| CoordinatorError::from(e).context(<span class="string">"leader unicast"</span>))
 <a href=#1205 id=1205 data-nosnippet>1205</a>    }
 <a href=#1206 id=1206 data-nosnippet>1206</a>
-<a href=#1207 id=1207 data-nosnippet>1207</a>    <span class="kw">async fn </span>on_client_request(
-<a href=#1208 id=1208 data-nosnippet>1208</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1209 id=1209 data-nosnippet>1209</a>        request: ClientRequest&lt;T&gt;,
-<a href=#1210 id=1210 data-nosnippet>1210</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), CoordinatorError&gt; {
-<a href=#1211 id=1211 data-nosnippet>1211</a>        <span class="kw">let </span>_m = <span class="self">self
-<a href=#1212 id=1212 data-nosnippet>1212</a>            </span>.metrics
-<a href=#1213 id=1213 data-nosnippet>1213</a>            .as_ref()
-<a href=#1214 id=1214 data-nosnippet>1214</a>            .map(|m| Measurement::start(m.on_client_request.clone()));
-<a href=#1215 id=1215 data-nosnippet>1215</a>        <span class="kw">match </span>request {
-<a href=#1216 id=1216 data-nosnippet>1216</a>            ClientRequest::CurrentView(tx) =&gt; {
-<a href=#1217 id=1217 data-nosnippet>1217</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.consensus.current_view());
-<a href=#1218 id=1218 data-nosnippet>1218</a>            },
-<a href=#1219 id=1219 data-nosnippet>1219</a>            ClientRequest::CurrentEpoch(tx) =&gt; {
-<a href=#1220 id=1220 data-nosnippet>1220</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.consensus.current_epoch());
-<a href=#1221 id=1221 data-nosnippet>1221</a>            },
-<a href=#1222 id=1222 data-nosnippet>1222</a>            ClientRequest::DecidedLeaf(tx) =&gt; {
-<a href=#1223 id=1223 data-nosnippet>1223</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.consensus.last_decided_leaf().clone());
-<a href=#1224 id=1224 data-nosnippet>1224</a>            },
-<a href=#1225 id=1225 data-nosnippet>1225</a>            ClientRequest::DecidedState(tx) =&gt; {
-<a href=#1226 id=1226 data-nosnippet>1226</a>                <span class="kw">let </span>view = <span class="self">self</span>.consensus.last_decided_leaf().view_number();
-<a href=#1227 id=1227 data-nosnippet>1227</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.state(view).map(|s| s.state.clone()));
-<a href=#1228 id=1228 data-nosnippet>1228</a>            },
-<a href=#1229 id=1229 data-nosnippet>1229</a>            ClientRequest::UndecidedLeaves(tx) =&gt; {
-<a href=#1230 id=1230 data-nosnippet>1230</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.consensus.undecided_leaves().cloned().collect());
-<a href=#1231 id=1231 data-nosnippet>1231</a>            },
-<a href=#1232 id=1232 data-nosnippet>1232</a>            ClientRequest::GetState { view, respond } =&gt; {
-<a href=#1233 id=1233 data-nosnippet>1233</a>                <span class="kw">let _ </span>= respond.send(<span class="self">self</span>.state(view).map(|s| s.state.clone()));
-<a href=#1234 id=1234 data-nosnippet>1234</a>            },
-<a href=#1235 id=1235 data-nosnippet>1235</a>            ClientRequest::GetStateAndDelta { view, respond } =&gt; {
-<a href=#1236 id=1236 data-nosnippet>1236</a>                <span class="kw">let _ </span>= respond.send(<span class="kw">match </span><span class="self">self</span>.state(view) {
-<a href=#1237 id=1237 data-nosnippet>1237</a>                    <span class="prelude-val">Some</span>(s) =&gt; (<span class="prelude-val">Some</span>(s.state.clone()), s.delta.clone()),
-<a href=#1238 id=1238 data-nosnippet>1238</a>                    <span class="prelude-val">None </span>=&gt; (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>),
-<a href=#1239 id=1239 data-nosnippet>1239</a>                });
-<a href=#1240 id=1240 data-nosnippet>1240</a>            },
-<a href=#1241 id=1241 data-nosnippet>1241</a>            ClientRequest::SubmitTransaction { tx, respond } =&gt; {
-<a href=#1242 id=1242 data-nosnippet>1242</a>                <span class="self">self</span>.block_builder.on_submit_transaction(tx);
-<a href=#1243 id=1243 data-nosnippet>1243</a>                <span class="kw">let _ </span>= respond.send(());
-<a href=#1244 id=1244 data-nosnippet>1244</a>            },
-<a href=#1245 id=1245 data-nosnippet>1245</a>            ClientRequest::UpdateLeaf { update, respond } =&gt; {
-<a href=#1246 id=1246 data-nosnippet>1246</a>                <span class="self">self</span>.state_manager.update_state(update);
-<a href=#1247 id=1247 data-nosnippet>1247</a>                <span class="kw">let _ </span>= respond.send(());
+<a href=#1207 id=1207 data-nosnippet>1207</a>    <span class="kw">fn </span>leader(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber, epoch: EpochNumber) -&gt; <span class="prelude-ty">Option</span>&lt;T::SignatureKey&gt; {
+<a href=#1208 id=1208 data-nosnippet>1208</a>        <span class="kw">let </span>membership = <span class="self">self
+<a href=#1209 id=1209 data-nosnippet>1209</a>            </span>.membership_coordinator
+<a href=#1210 id=1210 data-nosnippet>1210</a>            .membership_for_epoch(<span class="prelude-val">Some</span>(epoch))
+<a href=#1211 id=1211 data-nosnippet>1211</a>            .ok()<span class="question-mark">?</span>;
+<a href=#1212 id=1212 data-nosnippet>1212</a>        membership.leader(view).ok()
+<a href=#1213 id=1213 data-nosnippet>1213</a>    }
+<a href=#1214 id=1214 data-nosnippet>1214</a>
+<a href=#1215 id=1215 data-nosnippet>1215</a>    <span class="kw">async fn </span>on_client_request(
+<a href=#1216 id=1216 data-nosnippet>1216</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1217 id=1217 data-nosnippet>1217</a>        request: ClientRequest&lt;T&gt;,
+<a href=#1218 id=1218 data-nosnippet>1218</a>    ) -&gt; <span class="prelude-ty">Result</span>&lt;(), CoordinatorError&gt; {
+<a href=#1219 id=1219 data-nosnippet>1219</a>        <span class="kw">let </span>_m = <span class="self">self
+<a href=#1220 id=1220 data-nosnippet>1220</a>            </span>.metrics
+<a href=#1221 id=1221 data-nosnippet>1221</a>            .as_ref()
+<a href=#1222 id=1222 data-nosnippet>1222</a>            .map(|m| Measurement::start(m.on_client_request.clone()));
+<a href=#1223 id=1223 data-nosnippet>1223</a>        <span class="kw">match </span>request {
+<a href=#1224 id=1224 data-nosnippet>1224</a>            ClientRequest::CurrentView(tx) =&gt; {
+<a href=#1225 id=1225 data-nosnippet>1225</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.consensus.current_view());
+<a href=#1226 id=1226 data-nosnippet>1226</a>            },
+<a href=#1227 id=1227 data-nosnippet>1227</a>            ClientRequest::CurrentEpoch(tx) =&gt; {
+<a href=#1228 id=1228 data-nosnippet>1228</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.consensus.current_epoch());
+<a href=#1229 id=1229 data-nosnippet>1229</a>            },
+<a href=#1230 id=1230 data-nosnippet>1230</a>            ClientRequest::DecidedLeaf(tx) =&gt; {
+<a href=#1231 id=1231 data-nosnippet>1231</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.consensus.last_decided_leaf().clone());
+<a href=#1232 id=1232 data-nosnippet>1232</a>            },
+<a href=#1233 id=1233 data-nosnippet>1233</a>            ClientRequest::DecidedState(tx) =&gt; {
+<a href=#1234 id=1234 data-nosnippet>1234</a>                <span class="kw">let </span>view = <span class="self">self</span>.consensus.last_decided_leaf().view_number();
+<a href=#1235 id=1235 data-nosnippet>1235</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.state(view).map(|s| s.state.clone()));
+<a href=#1236 id=1236 data-nosnippet>1236</a>            },
+<a href=#1237 id=1237 data-nosnippet>1237</a>            ClientRequest::UndecidedLeaves(tx) =&gt; {
+<a href=#1238 id=1238 data-nosnippet>1238</a>                <span class="kw">let _ </span>= tx.send(<span class="self">self</span>.consensus.undecided_leaves().cloned().collect());
+<a href=#1239 id=1239 data-nosnippet>1239</a>            },
+<a href=#1240 id=1240 data-nosnippet>1240</a>            ClientRequest::GetState { view, respond } =&gt; {
+<a href=#1241 id=1241 data-nosnippet>1241</a>                <span class="kw">let _ </span>= respond.send(<span class="self">self</span>.state(view).map(|s| s.state.clone()));
+<a href=#1242 id=1242 data-nosnippet>1242</a>            },
+<a href=#1243 id=1243 data-nosnippet>1243</a>            ClientRequest::GetStateAndDelta { view, respond } =&gt; {
+<a href=#1244 id=1244 data-nosnippet>1244</a>                <span class="kw">let _ </span>= respond.send(<span class="kw">match </span><span class="self">self</span>.state(view) {
+<a href=#1245 id=1245 data-nosnippet>1245</a>                    <span class="prelude-val">Some</span>(s) =&gt; (<span class="prelude-val">Some</span>(s.state.clone()), s.delta.clone()),
+<a href=#1246 id=1246 data-nosnippet>1246</a>                    <span class="prelude-val">None </span>=&gt; (<span class="prelude-val">None</span>, <span class="prelude-val">None</span>),
+<a href=#1247 id=1247 data-nosnippet>1247</a>                });
 <a href=#1248 id=1248 data-nosnippet>1248</a>            },
-<a href=#1249 id=1249 data-nosnippet>1249</a>            ClientRequest::RequestProposal {
-<a href=#1250 id=1250 data-nosnippet>1250</a>                view,
-<a href=#1251 id=1251 data-nosnippet>1251</a>                leaf_commitment,
-<a href=#1252 id=1252 data-nosnippet>1252</a>                respond,
-<a href=#1253 id=1253 data-nosnippet>1253</a>            } =&gt; {
-<a href=#1254 id=1254 data-nosnippet>1254</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(proposal) = <span class="self">self</span>.consensus.signed_proposal(<span class="kw-2">&amp;</span>view)
-<a href=#1255 id=1255 data-nosnippet>1255</a>                    &amp;&amp; proposal_commitment(<span class="kw-2">&amp;</span>proposal.data) == leaf_commitment
-<a href=#1256 id=1256 data-nosnippet>1256</a>                {
-<a href=#1257 id=1257 data-nosnippet>1257</a>                    <span class="kw">let _ </span>= respond.send(<span class="prelude-val">Ok</span>(proposal.clone()));
-<a href=#1258 id=1258 data-nosnippet>1258</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#1259 id=1259 data-nosnippet>1259</a>                }
-<a href=#1260 id=1260 data-nosnippet>1260</a>                <span class="kw">if </span>!<span class="self">self
-<a href=#1261 id=1261 data-nosnippet>1261</a>                    </span>.pending_proposal_fetches
-<a href=#1262 id=1262 data-nosnippet>1262</a>                    .contains_request(view, leaf_commitment)
-<a href=#1263 id=1263 data-nosnippet>1263</a>                {
-<a href=#1264 id=1264 data-nosnippet>1264</a>                    <span class="kw">let </span>request =
-<a href=#1265 id=1265 data-nosnippet>1265</a>                        <span class="self">self</span>.consensus
-<a href=#1266 id=1266 data-nosnippet>1266</a>                            .signed_proposal_fetch_request(view)
-<a href=#1267 id=1267 data-nosnippet>1267</a>                            .map_err(|err| {
-<a href=#1268 id=1268 data-nosnippet>1268</a>                                <span class="kw">let </span>err = <span class="macro">format!</span>(<span class="string">"failed to sign proposal request: {err}"</span>);
-<a href=#1269 id=1269 data-nosnippet>1269</a>                                CoordinatorError::regular(err).context(<span class="string">"sign proposal request"</span>)
-<a href=#1270 id=1270 data-nosnippet>1270</a>                            })<span class="question-mark">?</span>;
-<a href=#1271 id=1271 data-nosnippet>1271</a>
-<a href=#1272 id=1272 data-nosnippet>1272</a>                    <span class="kw">let </span>message = Message {
-<a href=#1273 id=1273 data-nosnippet>1273</a>                        sender: <span class="self">self</span>.public_key.clone(),
-<a href=#1274 id=1274 data-nosnippet>1274</a>                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(
-<a href=#1275 id=1275 data-nosnippet>1275</a>                            request,
-<a href=#1276 id=1276 data-nosnippet>1276</a>                        )),
-<a href=#1277 id=1277 data-nosnippet>1277</a>                    };
-<a href=#1278 id=1278 data-nosnippet>1278</a>
-<a href=#1279 id=1279 data-nosnippet>1279</a>                    <span class="self">self</span>.network
-<a href=#1280 id=1280 data-nosnippet>1280</a>                        .broadcast(<span class="self">self</span>.consensus.current_view(), <span class="kw-2">&amp;</span>message)
-<a href=#1281 id=1281 data-nosnippet>1281</a>                        .map_err(|err| {
-<a href=#1282 id=1282 data-nosnippet>1282</a>                            CoordinatorError::from(err).context(<span class="string">"broadcast proposal request"</span>)
-<a href=#1283 id=1283 data-nosnippet>1283</a>                        })<span class="question-mark">?</span>;
-<a href=#1284 id=1284 data-nosnippet>1284</a>                }
-<a href=#1285 id=1285 data-nosnippet>1285</a>                <span class="self">self</span>.pending_proposal_fetches
-<a href=#1286 id=1286 data-nosnippet>1286</a>                    .push(view, leaf_commitment, respond);
-<a href=#1287 id=1287 data-nosnippet>1287</a>            },
-<a href=#1288 id=1288 data-nosnippet>1288</a>            ClientRequest::SendExternalMessage {
-<a href=#1289 id=1289 data-nosnippet>1289</a>                payload,
-<a href=#1290 id=1290 data-nosnippet>1290</a>                recipient,
-<a href=#1291 id=1291 data-nosnippet>1291</a>                respond,
-<a href=#1292 id=1292 data-nosnippet>1292</a>            } =&gt; {
-<a href=#1293 id=1293 data-nosnippet>1293</a>                <span class="kw">let </span>message = Message {
-<a href=#1294 id=1294 data-nosnippet>1294</a>                    sender: <span class="self">self</span>.public_key.clone(),
-<a href=#1295 id=1295 data-nosnippet>1295</a>                    message_type: MessageType::External(payload),
-<a href=#1296 id=1296 data-nosnippet>1296</a>                };
-<a href=#1297 id=1297 data-nosnippet>1297</a>                <span class="kw">let </span>result = <span class="self">self
-<a href=#1298 id=1298 data-nosnippet>1298</a>                    </span>.network
-<a href=#1299 id=1299 data-nosnippet>1299</a>                    .unicast(<span class="self">self</span>.consensus.current_view(), <span class="kw-2">&amp;</span>recipient, <span class="kw-2">&amp;</span>message)
-<a href=#1300 id=1300 data-nosnippet>1300</a>                    .map_err(|err| {
-<a href=#1301 id=1301 data-nosnippet>1301</a>                        CoordinatorError::from(err)
-<a href=#1302 id=1302 data-nosnippet>1302</a>                            .context(<span class="string">"send external message"</span>)
-<a href=#1303 id=1303 data-nosnippet>1303</a>                            .into()
-<a href=#1304 id=1304 data-nosnippet>1304</a>                    });
-<a href=#1305 id=1305 data-nosnippet>1305</a>                <span class="kw">let _ </span>= respond.send(result);
-<a href=#1306 id=1306 data-nosnippet>1306</a>            },
-<a href=#1307 id=1307 data-nosnippet>1307</a>            ClientRequest::SeedPreCutover { seed, respond } =&gt; {
-<a href=#1308 id=1308 data-nosnippet>1308</a>                <span class="kw">let </span>current_view = <span class="self">self</span>.consensus.current_view();
-<a href=#1309 id=1309 data-nosnippet>1309</a>                <span class="kw">if </span>seed.cutover_view &gt; ViewNumber::genesis() &amp;&amp; current_view &gt;= seed.cutover_view {
-<a href=#1310 id=1310 data-nosnippet>1310</a>                    <span class="macro">tracing::info!</span>(
-<a href=#1311 id=1311 data-nosnippet>1311</a>                        %current_view,
-<a href=#1312 id=1312 data-nosnippet>1312</a>                        cutover_view = <span class="kw-2">*</span>seed.cutover_view,
-<a href=#1313 id=1313 data-nosnippet>1313</a>                        <span class="string">"coordinator: ignoring pre-cutover seed; already past the cutover"</span>,
-<a href=#1314 id=1314 data-nosnippet>1314</a>                    );
-<a href=#1315 id=1315 data-nosnippet>1315</a>                    <span class="kw">let _ </span>= respond.send(());
-<a href=#1316 id=1316 data-nosnippet>1316</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#1317 id=1317 data-nosnippet>1317</a>                }
-<a href=#1318 id=1318 data-nosnippet>1318</a>                <span class="macro">tracing::info!</span>(
-<a href=#1319 id=1319 data-nosnippet>1319</a>                    undecided = seed.undecided.len(),
-<a href=#1320 id=1320 data-nosnippet>1320</a>                    anchor_view = <span class="kw-2">*</span>seed.decided_anchor.view_number(),
-<a href=#1321 id=1321 data-nosnippet>1321</a>                    high_qc_view = seed.high_qc.as_ref().map(|qc| <span class="kw-2">*</span>qc.view_number()),
-<a href=#1322 id=1322 data-nosnippet>1322</a>                    cutover_view = <span class="kw-2">*</span>seed.cutover_view,
-<a href=#1323 id=1323 data-nosnippet>1323</a>                    states = seed.validated_states.len(),
-<a href=#1324 id=1324 data-nosnippet>1324</a>                    <span class="string">"coordinator: applying legacy → new-protocol seed"</span>,
-<a href=#1325 id=1325 data-nosnippet>1325</a>                );
-<a href=#1326 id=1326 data-nosnippet>1326</a>
-<a href=#1327 id=1327 data-nosnippet>1327</a>                <span class="comment">// State manager is owned by the coordinator, so the
-<a href=#1328 id=1328 data-nosnippet>1328</a>                // validated-state map must be applied here before the
-<a href=#1329 id=1329 data-nosnippet>1329</a>                // seed is consumed by consensus.
-<a href=#1330 id=1330 data-nosnippet>1330</a>                </span><span class="kw">let </span>anchor_view = seed.decided_anchor.view_number();
-<a href=#1331 id=1331 data-nosnippet>1331</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(state) = seed.validated_states.get(<span class="kw-2">&amp;</span>anchor_view).cloned() {
-<a href=#1332 id=1332 data-nosnippet>1332</a>                    <span class="self">self</span>.state_manager
-<a href=#1333 id=1333 data-nosnippet>1333</a>                        .seed_state(anchor_view, state, seed.decided_anchor.clone());
-<a href=#1334 id=1334 data-nosnippet>1334</a>                }
-<a href=#1335 id=1335 data-nosnippet>1335</a>                <span class="kw">for </span>leaf <span class="kw">in </span><span class="kw-2">&amp;</span>seed.undecided {
-<a href=#1336 id=1336 data-nosnippet>1336</a>                    <span class="kw">let </span>view = leaf.view_number();
-<a href=#1337 id=1337 data-nosnippet>1337</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(state) = seed.validated_states.get(<span class="kw-2">&amp;</span>view).cloned() {
-<a href=#1338 id=1338 data-nosnippet>1338</a>                        <span class="self">self</span>.state_manager.seed_state(view, state, leaf.clone());
-<a href=#1339 id=1339 data-nosnippet>1339</a>                    }
-<a href=#1340 id=1340 data-nosnippet>1340</a>                }
-<a href=#1341 id=1341 data-nosnippet>1341</a>
-<a href=#1342 id=1342 data-nosnippet>1342</a>                <span class="kw">let </span>highest_seeded_leaf = seed.undecided.last().unwrap_or(<span class="kw-2">&amp;</span>seed.decided_anchor);
-<a href=#1343 id=1343 data-nosnippet>1343</a>                <span class="kw">let </span>cutover_epoch = EpochNumber::new(epoch_from_block_number(
-<a href=#1344 id=1344 data-nosnippet>1344</a>                    highest_seeded_leaf.block_header().block_number(),
-<a href=#1345 id=1345 data-nosnippet>1345</a>                    <span class="kw-2">*</span><span class="self">self</span>.consensus.epoch_height,
-<a href=#1346 id=1346 data-nosnippet>1346</a>                ));
-<a href=#1347 id=1347 data-nosnippet>1347</a>                <span class="kw">let </span>cutover_view = seed.cutover_view;
-<a href=#1348 id=1348 data-nosnippet>1348</a>
-<a href=#1349 id=1349 data-nosnippet>1349</a>                <span class="self">self</span>.consensus.apply_pre_cutover_seed(seed);
-<a href=#1350 id=1350 data-nosnippet>1350</a>
-<a href=#1351 id=1351 data-nosnippet>1351</a>                <span class="comment">// Refresh peers for the cutover epoch before kicking the
-<a href=#1352 id=1352 data-nosnippet>1352</a>                // leader — the proposal-driven site can't fire yet.
-<a href=#1353 id=1353 data-nosnippet>1353</a>                </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self
-<a href=#1354 id=1354 data-nosnippet>1354</a>                    </span>.network
-<a href=#1355 id=1355 data-nosnippet>1355</a>                    .apply_epoch(cutover_epoch, <span class="kw-2">&amp;</span><span class="self">self</span>.membership_coordinator)
-<a href=#1356 id=1356 data-nosnippet>1356</a>                {
-<a href=#1357 id=1357 data-nosnippet>1357</a>                    <span class="macro">tracing::error!</span>(
-<a href=#1358 id=1358 data-nosnippet>1358</a>                        %cutover_epoch,
-<a href=#1359 id=1359 data-nosnippet>1359</a>                        %err,
-<a href=#1360 id=1360 data-nosnippet>1360</a>                        <span class="string">"network on_epoch_change failed during seed_pre_cutover"</span>,
-<a href=#1361 id=1361 data-nosnippet>1361</a>                    );
-<a href=#1362 id=1362 data-nosnippet>1362</a>                }
-<a href=#1363 id=1363 data-nosnippet>1363</a>
-<a href=#1364 id=1364 data-nosnippet>1364</a>                <span class="kw">let </span>cur_view = <span class="self">self</span>.consensus.current_view();
-<a href=#1365 id=1365 data-nosnippet>1365</a>                <span class="kw">if </span><span class="self">self</span>.consensus.timeout_cert_at(cur_view).is_some() {
-<a href=#1366 id=1366 data-nosnippet>1366</a>                    <span class="self">self</span>.resume_after_cutover_tc();
-<a href=#1367 id=1367 data-nosnippet>1367</a>                } <span class="kw">else if </span>cur_view + <span class="number">1 </span>== cutover_view
-<a href=#1368 id=1368 data-nosnippet>1368</a>                    &amp;&amp; <span class="self">self</span>.consensus.cert1_at(cur_view).is_some()
-<a href=#1369 id=1369 data-nosnippet>1369</a>                    &amp;&amp; <span class="self">self</span>.consensus.proposal_at(cur_view).is_some()
-<a href=#1370 id=1370 data-nosnippet>1370</a>                {
-<a href=#1371 id=1371 data-nosnippet>1371</a>                    <span class="self">self</span>.start();
-<a href=#1372 id=1372 data-nosnippet>1372</a>                } <span class="kw">else </span>{
-<a href=#1373 id=1373 data-nosnippet>1373</a>                    <span class="kw">let </span>epoch = <span class="self">self
-<a href=#1374 id=1374 data-nosnippet>1374</a>                        </span>.consensus
-<a href=#1375 id=1375 data-nosnippet>1375</a>                        .current_epoch()
-<a href=#1376 id=1376 data-nosnippet>1376</a>                        .unwrap_or(EpochNumber::genesis());
-<a href=#1377 id=1377 data-nosnippet>1377</a>                    <span class="self">self</span>.outbox
-<a href=#1378 id=1378 data-nosnippet>1378</a>                        .push_back(ConsensusOutput::ViewChanged(cur_view, epoch));
-<a href=#1379 id=1379 data-nosnippet>1379</a>                }
-<a href=#1380 id=1380 data-nosnippet>1380</a>                <span class="kw">while let </span><span class="prelude-val">Some</span>(output) = <span class="self">self</span>.outbox.pop_front() {
-<a href=#1381 id=1381 data-nosnippet>1381</a>                    <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self</span>.process_consensus_output(output) {
-<a href=#1382 id=1382 data-nosnippet>1382</a>                        <span class="macro">tracing::warn!</span>(
-<a href=#1383 id=1383 data-nosnippet>1383</a>                            %err,
-<a href=#1384 id=1384 data-nosnippet>1384</a>                            <span class="string">"error processing post-seed bootstrap output"
-<a href=#1385 id=1385 data-nosnippet>1385</a>                        </span>);
-<a href=#1386 id=1386 data-nosnippet>1386</a>                    }
+<a href=#1249 id=1249 data-nosnippet>1249</a>            ClientRequest::SubmitTransaction { tx, respond } =&gt; {
+<a href=#1250 id=1250 data-nosnippet>1250</a>                <span class="self">self</span>.block_builder.on_submit_transaction(tx);
+<a href=#1251 id=1251 data-nosnippet>1251</a>                <span class="kw">let _ </span>= respond.send(());
+<a href=#1252 id=1252 data-nosnippet>1252</a>            },
+<a href=#1253 id=1253 data-nosnippet>1253</a>            ClientRequest::UpdateLeaf { update, respond } =&gt; {
+<a href=#1254 id=1254 data-nosnippet>1254</a>                <span class="self">self</span>.state_manager.update_state(update);
+<a href=#1255 id=1255 data-nosnippet>1255</a>                <span class="kw">let _ </span>= respond.send(());
+<a href=#1256 id=1256 data-nosnippet>1256</a>            },
+<a href=#1257 id=1257 data-nosnippet>1257</a>            ClientRequest::RequestProposal {
+<a href=#1258 id=1258 data-nosnippet>1258</a>                view,
+<a href=#1259 id=1259 data-nosnippet>1259</a>                leaf_commitment,
+<a href=#1260 id=1260 data-nosnippet>1260</a>                respond,
+<a href=#1261 id=1261 data-nosnippet>1261</a>            } =&gt; {
+<a href=#1262 id=1262 data-nosnippet>1262</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(proposal) = <span class="self">self</span>.consensus.signed_proposal(<span class="kw-2">&amp;</span>view)
+<a href=#1263 id=1263 data-nosnippet>1263</a>                    &amp;&amp; proposal_commitment(<span class="kw-2">&amp;</span>proposal.data) == leaf_commitment
+<a href=#1264 id=1264 data-nosnippet>1264</a>                {
+<a href=#1265 id=1265 data-nosnippet>1265</a>                    <span class="kw">let _ </span>= respond.send(<span class="prelude-val">Ok</span>(proposal.clone()));
+<a href=#1266 id=1266 data-nosnippet>1266</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#1267 id=1267 data-nosnippet>1267</a>                }
+<a href=#1268 id=1268 data-nosnippet>1268</a>                <span class="kw">if </span>!<span class="self">self
+<a href=#1269 id=1269 data-nosnippet>1269</a>                    </span>.pending_proposal_fetches
+<a href=#1270 id=1270 data-nosnippet>1270</a>                    .contains_request(view, leaf_commitment)
+<a href=#1271 id=1271 data-nosnippet>1271</a>                {
+<a href=#1272 id=1272 data-nosnippet>1272</a>                    <span class="kw">let </span>request =
+<a href=#1273 id=1273 data-nosnippet>1273</a>                        <span class="self">self</span>.consensus
+<a href=#1274 id=1274 data-nosnippet>1274</a>                            .signed_proposal_fetch_request(view)
+<a href=#1275 id=1275 data-nosnippet>1275</a>                            .map_err(|err| {
+<a href=#1276 id=1276 data-nosnippet>1276</a>                                <span class="kw">let </span>err = <span class="macro">format!</span>(<span class="string">"failed to sign proposal request: {err}"</span>);
+<a href=#1277 id=1277 data-nosnippet>1277</a>                                CoordinatorError::regular(err).context(<span class="string">"sign proposal request"</span>)
+<a href=#1278 id=1278 data-nosnippet>1278</a>                            })<span class="question-mark">?</span>;
+<a href=#1279 id=1279 data-nosnippet>1279</a>
+<a href=#1280 id=1280 data-nosnippet>1280</a>                    <span class="kw">let </span>message = Message {
+<a href=#1281 id=1281 data-nosnippet>1281</a>                        sender: <span class="self">self</span>.public_key.clone(),
+<a href=#1282 id=1282 data-nosnippet>1282</a>                        message_type: MessageType::ProposalFetch(ProposalFetchMessage::Request(
+<a href=#1283 id=1283 data-nosnippet>1283</a>                            request,
+<a href=#1284 id=1284 data-nosnippet>1284</a>                        )),
+<a href=#1285 id=1285 data-nosnippet>1285</a>                    };
+<a href=#1286 id=1286 data-nosnippet>1286</a>
+<a href=#1287 id=1287 data-nosnippet>1287</a>                    <span class="self">self</span>.network
+<a href=#1288 id=1288 data-nosnippet>1288</a>                        .broadcast(<span class="self">self</span>.consensus.current_view(), <span class="kw-2">&amp;</span>message)
+<a href=#1289 id=1289 data-nosnippet>1289</a>                        .map_err(|err| {
+<a href=#1290 id=1290 data-nosnippet>1290</a>                            CoordinatorError::from(err).context(<span class="string">"broadcast proposal request"</span>)
+<a href=#1291 id=1291 data-nosnippet>1291</a>                        })<span class="question-mark">?</span>;
+<a href=#1292 id=1292 data-nosnippet>1292</a>                }
+<a href=#1293 id=1293 data-nosnippet>1293</a>                <span class="self">self</span>.pending_proposal_fetches
+<a href=#1294 id=1294 data-nosnippet>1294</a>                    .push(view, leaf_commitment, respond);
+<a href=#1295 id=1295 data-nosnippet>1295</a>            },
+<a href=#1296 id=1296 data-nosnippet>1296</a>            ClientRequest::SendExternalMessage {
+<a href=#1297 id=1297 data-nosnippet>1297</a>                payload,
+<a href=#1298 id=1298 data-nosnippet>1298</a>                recipient,
+<a href=#1299 id=1299 data-nosnippet>1299</a>                respond,
+<a href=#1300 id=1300 data-nosnippet>1300</a>            } =&gt; {
+<a href=#1301 id=1301 data-nosnippet>1301</a>                <span class="kw">let </span>message = Message {
+<a href=#1302 id=1302 data-nosnippet>1302</a>                    sender: <span class="self">self</span>.public_key.clone(),
+<a href=#1303 id=1303 data-nosnippet>1303</a>                    message_type: MessageType::External(payload),
+<a href=#1304 id=1304 data-nosnippet>1304</a>                };
+<a href=#1305 id=1305 data-nosnippet>1305</a>                <span class="kw">let </span>result = <span class="self">self
+<a href=#1306 id=1306 data-nosnippet>1306</a>                    </span>.network
+<a href=#1307 id=1307 data-nosnippet>1307</a>                    .unicast(<span class="self">self</span>.consensus.current_view(), <span class="kw-2">&amp;</span>recipient, <span class="kw-2">&amp;</span>message)
+<a href=#1308 id=1308 data-nosnippet>1308</a>                    .map_err(|err| {
+<a href=#1309 id=1309 data-nosnippet>1309</a>                        CoordinatorError::from(err)
+<a href=#1310 id=1310 data-nosnippet>1310</a>                            .context(<span class="string">"send external message"</span>)
+<a href=#1311 id=1311 data-nosnippet>1311</a>                            .into()
+<a href=#1312 id=1312 data-nosnippet>1312</a>                    });
+<a href=#1313 id=1313 data-nosnippet>1313</a>                <span class="kw">let _ </span>= respond.send(result);
+<a href=#1314 id=1314 data-nosnippet>1314</a>            },
+<a href=#1315 id=1315 data-nosnippet>1315</a>            ClientRequest::SeedPreCutover { seed, respond } =&gt; {
+<a href=#1316 id=1316 data-nosnippet>1316</a>                <span class="kw">let </span>current_view = <span class="self">self</span>.consensus.current_view();
+<a href=#1317 id=1317 data-nosnippet>1317</a>                <span class="kw">if </span>seed.cutover_view &gt; ViewNumber::genesis() &amp;&amp; current_view &gt;= seed.cutover_view {
+<a href=#1318 id=1318 data-nosnippet>1318</a>                    <span class="macro">info!</span>(
+<a href=#1319 id=1319 data-nosnippet>1319</a>                        %current_view,
+<a href=#1320 id=1320 data-nosnippet>1320</a>                        cutover_view = <span class="kw-2">*</span>seed.cutover_view,
+<a href=#1321 id=1321 data-nosnippet>1321</a>                        <span class="string">"coordinator: ignoring pre-cutover seed; already past the cutover"</span>,
+<a href=#1322 id=1322 data-nosnippet>1322</a>                    );
+<a href=#1323 id=1323 data-nosnippet>1323</a>                    <span class="kw">let _ </span>= respond.send(());
+<a href=#1324 id=1324 data-nosnippet>1324</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#1325 id=1325 data-nosnippet>1325</a>                }
+<a href=#1326 id=1326 data-nosnippet>1326</a>                <span class="macro">info!</span>(
+<a href=#1327 id=1327 data-nosnippet>1327</a>                    undecided = seed.undecided.len(),
+<a href=#1328 id=1328 data-nosnippet>1328</a>                    anchor_view = <span class="kw-2">*</span>seed.decided_anchor.view_number(),
+<a href=#1329 id=1329 data-nosnippet>1329</a>                    high_qc_view = seed.high_qc.as_ref().map(|qc| <span class="kw-2">*</span>qc.view_number()),
+<a href=#1330 id=1330 data-nosnippet>1330</a>                    cutover_view = <span class="kw-2">*</span>seed.cutover_view,
+<a href=#1331 id=1331 data-nosnippet>1331</a>                    states = seed.validated_states.len(),
+<a href=#1332 id=1332 data-nosnippet>1332</a>                    <span class="string">"coordinator: applying legacy → new-protocol seed"</span>,
+<a href=#1333 id=1333 data-nosnippet>1333</a>                );
+<a href=#1334 id=1334 data-nosnippet>1334</a>
+<a href=#1335 id=1335 data-nosnippet>1335</a>                <span class="comment">// State manager is owned by the coordinator, so the
+<a href=#1336 id=1336 data-nosnippet>1336</a>                // validated-state map must be applied here before the
+<a href=#1337 id=1337 data-nosnippet>1337</a>                // seed is consumed by consensus.
+<a href=#1338 id=1338 data-nosnippet>1338</a>                </span><span class="kw">let </span>anchor_view = seed.decided_anchor.view_number();
+<a href=#1339 id=1339 data-nosnippet>1339</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>(state) = seed.validated_states.get(<span class="kw-2">&amp;</span>anchor_view).cloned() {
+<a href=#1340 id=1340 data-nosnippet>1340</a>                    <span class="self">self</span>.state_manager
+<a href=#1341 id=1341 data-nosnippet>1341</a>                        .seed_state(anchor_view, state, seed.decided_anchor.clone());
+<a href=#1342 id=1342 data-nosnippet>1342</a>                }
+<a href=#1343 id=1343 data-nosnippet>1343</a>                <span class="kw">for </span>leaf <span class="kw">in </span><span class="kw-2">&amp;</span>seed.undecided {
+<a href=#1344 id=1344 data-nosnippet>1344</a>                    <span class="kw">let </span>view = leaf.view_number();
+<a href=#1345 id=1345 data-nosnippet>1345</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>(state) = seed.validated_states.get(<span class="kw-2">&amp;</span>view).cloned() {
+<a href=#1346 id=1346 data-nosnippet>1346</a>                        <span class="self">self</span>.state_manager.seed_state(view, state, leaf.clone());
+<a href=#1347 id=1347 data-nosnippet>1347</a>                    }
+<a href=#1348 id=1348 data-nosnippet>1348</a>                }
+<a href=#1349 id=1349 data-nosnippet>1349</a>
+<a href=#1350 id=1350 data-nosnippet>1350</a>                <span class="kw">let </span>highest_seeded_leaf = seed.undecided.last().unwrap_or(<span class="kw-2">&amp;</span>seed.decided_anchor);
+<a href=#1351 id=1351 data-nosnippet>1351</a>                <span class="kw">let </span>cutover_epoch = EpochNumber::new(epoch_from_block_number(
+<a href=#1352 id=1352 data-nosnippet>1352</a>                    highest_seeded_leaf.block_header().block_number(),
+<a href=#1353 id=1353 data-nosnippet>1353</a>                    <span class="kw-2">*</span><span class="self">self</span>.consensus.epoch_height,
+<a href=#1354 id=1354 data-nosnippet>1354</a>                ));
+<a href=#1355 id=1355 data-nosnippet>1355</a>                <span class="kw">let </span>cutover_view = seed.cutover_view;
+<a href=#1356 id=1356 data-nosnippet>1356</a>
+<a href=#1357 id=1357 data-nosnippet>1357</a>                <span class="self">self</span>.consensus.apply_pre_cutover_seed(seed);
+<a href=#1358 id=1358 data-nosnippet>1358</a>
+<a href=#1359 id=1359 data-nosnippet>1359</a>                <span class="comment">// Refresh peers for the cutover epoch before kicking the
+<a href=#1360 id=1360 data-nosnippet>1360</a>                // leader — the proposal-driven site can't fire yet.
+<a href=#1361 id=1361 data-nosnippet>1361</a>                </span><span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self
+<a href=#1362 id=1362 data-nosnippet>1362</a>                    </span>.network
+<a href=#1363 id=1363 data-nosnippet>1363</a>                    .apply_epoch(cutover_epoch, <span class="kw-2">&amp;</span><span class="self">self</span>.membership_coordinator)
+<a href=#1364 id=1364 data-nosnippet>1364</a>                {
+<a href=#1365 id=1365 data-nosnippet>1365</a>                    <span class="macro">error!</span>(
+<a href=#1366 id=1366 data-nosnippet>1366</a>                        %cutover_epoch,
+<a href=#1367 id=1367 data-nosnippet>1367</a>                        %err,
+<a href=#1368 id=1368 data-nosnippet>1368</a>                        <span class="string">"network on_epoch_change failed during seed_pre_cutover"</span>,
+<a href=#1369 id=1369 data-nosnippet>1369</a>                    );
+<a href=#1370 id=1370 data-nosnippet>1370</a>                }
+<a href=#1371 id=1371 data-nosnippet>1371</a>
+<a href=#1372 id=1372 data-nosnippet>1372</a>                <span class="kw">let </span>cur_view = <span class="self">self</span>.consensus.current_view();
+<a href=#1373 id=1373 data-nosnippet>1373</a>                <span class="kw">if </span><span class="self">self</span>.consensus.timeout_cert_at(cur_view).is_some() {
+<a href=#1374 id=1374 data-nosnippet>1374</a>                    <span class="self">self</span>.resume_after_cutover_tc();
+<a href=#1375 id=1375 data-nosnippet>1375</a>                } <span class="kw">else if </span>cur_view + <span class="number">1 </span>== cutover_view
+<a href=#1376 id=1376 data-nosnippet>1376</a>                    &amp;&amp; <span class="self">self</span>.consensus.cert1_at(cur_view).is_some()
+<a href=#1377 id=1377 data-nosnippet>1377</a>                    &amp;&amp; <span class="self">self</span>.consensus.proposal_at(cur_view).is_some()
+<a href=#1378 id=1378 data-nosnippet>1378</a>                {
+<a href=#1379 id=1379 data-nosnippet>1379</a>                    <span class="self">self</span>.start();
+<a href=#1380 id=1380 data-nosnippet>1380</a>                } <span class="kw">else </span>{
+<a href=#1381 id=1381 data-nosnippet>1381</a>                    <span class="kw">let </span>epoch = <span class="self">self
+<a href=#1382 id=1382 data-nosnippet>1382</a>                        </span>.consensus
+<a href=#1383 id=1383 data-nosnippet>1383</a>                        .current_epoch()
+<a href=#1384 id=1384 data-nosnippet>1384</a>                        .unwrap_or(EpochNumber::genesis());
+<a href=#1385 id=1385 data-nosnippet>1385</a>                    <span class="self">self</span>.outbox
+<a href=#1386 id=1386 data-nosnippet>1386</a>                        .push_back(ConsensusOutput::ViewChanged(cur_view, epoch));
 <a href=#1387 id=1387 data-nosnippet>1387</a>                }
-<a href=#1388 id=1388 data-nosnippet>1388</a>                <span class="kw">let _ </span>= respond.send(());
-<a href=#1389 id=1389 data-nosnippet>1389</a>            },
-<a href=#1390 id=1390 data-nosnippet>1390</a>            ClientRequest::SubmitTimeoutVote { vote, respond } =&gt; {
-<a href=#1391 id=1391 data-nosnippet>1391</a>                <span class="kw">let </span>view = vote.view_number();
-<a href=#1392 id=1392 data-nosnippet>1392</a>                <span class="kw">let </span>current_view = <span class="self">self</span>.consensus.current_view();
-<a href=#1393 id=1393 data-nosnippet>1393</a>                <span class="kw">if </span>view &lt; current_view {
-<a href=#1394 id=1394 data-nosnippet>1394</a>                    <span class="macro">debug!</span>(
-<a href=#1395 id=1395 data-nosnippet>1395</a>                        %view, %current_view,
-<a href=#1396 id=1396 data-nosnippet>1396</a>                        <span class="string">"ignoring bridged timeout vote for stale view"
-<a href=#1397 id=1397 data-nosnippet>1397</a>                    </span>);
-<a href=#1398 id=1398 data-nosnippet>1398</a>                    <span class="kw">let _ </span>= respond.send(());
-<a href=#1399 id=1399 data-nosnippet>1399</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
-<a href=#1400 id=1400 data-nosnippet>1400</a>                }
-<a href=#1401 id=1401 data-nosnippet>1401</a>                <span class="self">self</span>.timeout_collector.accumulate_vote(vote.clone()).<span class="kw">await</span>;
-<a href=#1402 id=1402 data-nosnippet>1402</a>                <span class="self">self</span>.timeout_one_honest_collector
-<a href=#1403 id=1403 data-nosnippet>1403</a>                    .accumulate_vote(vote.clone())
-<a href=#1404 id=1404 data-nosnippet>1404</a>                    .<span class="kw">await</span>;
-<a href=#1405 id=1405 data-nosnippet>1405</a>                <span class="comment">// Rebroadcast so peer coordinators can aggregate too.
-<a href=#1406 id=1406 data-nosnippet>1406</a>                </span><span class="kw">let </span>message = Message {
-<a href=#1407 id=1407 data-nosnippet>1407</a>                    sender: <span class="self">self</span>.public_key.clone(),
-<a href=#1408 id=1408 data-nosnippet>1408</a>                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
-<a href=#1409 id=1409 data-nosnippet>1409</a>                        message::TimeoutVoteMessage { vote, lock: <span class="prelude-val">None </span>},
-<a href=#1410 id=1410 data-nosnippet>1410</a>                    )),
-<a href=#1411 id=1411 data-nosnippet>1411</a>                };
-<a href=#1412 id=1412 data-nosnippet>1412</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self
-<a href=#1413 id=1413 data-nosnippet>1413</a>                    </span>.network
-<a href=#1414 id=1414 data-nosnippet>1414</a>                    .broadcast(<span class="self">self</span>.consensus.current_view(), <span class="kw-2">&amp;</span>message)
-<a href=#1415 id=1415 data-nosnippet>1415</a>                {
-<a href=#1416 id=1416 data-nosnippet>1416</a>                    <span class="macro">tracing::warn!</span>(%err, <span class="string">"failed to rebroadcast bridged timeout vote"</span>);
-<a href=#1417 id=1417 data-nosnippet>1417</a>                }
-<a href=#1418 id=1418 data-nosnippet>1418</a>                <span class="kw">let _ </span>= respond.send(());
-<a href=#1419 id=1419 data-nosnippet>1419</a>            },
-<a href=#1420 id=1420 data-nosnippet>1420</a>            ClientRequest::SubmitLegacyHighQc { qc, respond } =&gt; {
-<a href=#1421 id=1421 data-nosnippet>1421</a>                <span class="comment">// QC certifies the last legacy view; cutover view is the next.
-<a href=#1422 id=1422 data-nosnippet>1422</a>                // Register idempotently so the smooth-start precondition holds
-<a href=#1423 id=1423 data-nosnippet>1423</a>                // regardless of arrival order vs. the cutover seed.
-<a href=#1424 id=1424 data-nosnippet>1424</a>                </span><span class="kw">let </span>qc_view = qc.view_number();
-<a href=#1425 id=1425 data-nosnippet>1425</a>                <span class="kw">let </span>cutover_view = qc_view + <span class="number">1</span>;
-<a href=#1426 id=1426 data-nosnippet>1426</a>                <span class="self">self</span>.consensus.register_legacy_qc(<span class="kw-2">&amp;</span>qc);
-<a href=#1427 id=1427 data-nosnippet>1427</a>
-<a href=#1428 id=1428 data-nosnippet>1428</a>                <span class="comment">// Still parked on the last legacy view (seed landed without this
-<a href=#1429 id=1429 data-nosnippet>1429</a>                // QC, waiting out the timer) and not yet skipped via TC2: propose
-<a href=#1430 id=1430 data-nosnippet>1430</a>                // the cutover view on the real QC now. Self-idempotent — once
-<a href=#1431 id=1431 data-nosnippet>1431</a>                // started, `cur_view` advances past `qc_view` and `maybe_propose`
-<a href=#1432 id=1432 data-nosnippet>1432</a>                // dedups by `proposed_views`.
-<a href=#1433 id=1433 data-nosnippet>1433</a>                </span><span class="kw">let </span>cur_view = <span class="self">self</span>.consensus.current_view();
-<a href=#1434 id=1434 data-nosnippet>1434</a>                <span class="kw">if </span>cur_view == qc_view
-<a href=#1435 id=1435 data-nosnippet>1435</a>                    &amp;&amp; <span class="self">self</span>.consensus.timeout_cert_at(cutover_view).is_none()
-<a href=#1436 id=1436 data-nosnippet>1436</a>                    &amp;&amp; <span class="self">self</span>.consensus.cert1_at(qc_view).is_some()
-<a href=#1437 id=1437 data-nosnippet>1437</a>                    &amp;&amp; <span class="self">self</span>.consensus.proposal_at(qc_view).is_some()
-<a href=#1438 id=1438 data-nosnippet>1438</a>                {
-<a href=#1439 id=1439 data-nosnippet>1439</a>                    <span class="macro">tracing::info!</span>(
-<a href=#1440 id=1440 data-nosnippet>1440</a>                        %cutover_view,
-<a href=#1441 id=1441 data-nosnippet>1441</a>                        <span class="string">"bridged late legacy high QC; proposing cutover view on it (no timeout)"
-<a href=#1442 id=1442 data-nosnippet>1442</a>                    </span>);
-<a href=#1443 id=1443 data-nosnippet>1443</a>                    <span class="self">self</span>.start();
-<a href=#1444 id=1444 data-nosnippet>1444</a>                    <span class="kw">while let </span><span class="prelude-val">Some</span>(output) = <span class="self">self</span>.outbox.pop_front() {
-<a href=#1445 id=1445 data-nosnippet>1445</a>                        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self</span>.process_consensus_output(output) {
-<a href=#1446 id=1446 data-nosnippet>1446</a>                            <span class="macro">tracing::warn!</span>(
-<a href=#1447 id=1447 data-nosnippet>1447</a>                                %err,
-<a href=#1448 id=1448 data-nosnippet>1448</a>                                <span class="string">"error processing bridged-high-qc bootstrap output"
-<a href=#1449 id=1449 data-nosnippet>1449</a>                            </span>);
-<a href=#1450 id=1450 data-nosnippet>1450</a>                        }
-<a href=#1451 id=1451 data-nosnippet>1451</a>                    }
-<a href=#1452 id=1452 data-nosnippet>1452</a>                }
-<a href=#1453 id=1453 data-nosnippet>1453</a>                <span class="kw">let _ </span>= respond.send(());
-<a href=#1454 id=1454 data-nosnippet>1454</a>            },
-<a href=#1455 id=1455 data-nosnippet>1455</a>            ClientRequest::BumpNetworkEpoch { epoch, respond } =&gt; {
-<a href=#1456 id=1456 data-nosnippet>1456</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self
-<a href=#1457 id=1457 data-nosnippet>1457</a>                    </span>.network
-<a href=#1458 id=1458 data-nosnippet>1458</a>                    .apply_epoch(epoch, <span class="kw-2">&amp;</span><span class="self">self</span>.membership_coordinator)
-<a href=#1459 id=1459 data-nosnippet>1459</a>                {
-<a href=#1460 id=1460 data-nosnippet>1460</a>                    <span class="macro">tracing::warn!</span>(%epoch, %err, <span class="string">"network on_epoch_change failed"</span>);
-<a href=#1461 id=1461 data-nosnippet>1461</a>                }
-<a href=#1462 id=1462 data-nosnippet>1462</a>                <span class="kw">let _ </span>= respond.send(());
-<a href=#1463 id=1463 data-nosnippet>1463</a>            },
-<a href=#1464 id=1464 data-nosnippet>1464</a>        }
-<a href=#1465 id=1465 data-nosnippet>1465</a>
-<a href=#1466 id=1466 data-nosnippet>1466</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1467 id=1467 data-nosnippet>1467</a>    }
-<a href=#1468 id=1468 data-nosnippet>1468</a>
-<a href=#1469 id=1469 data-nosnippet>1469</a>    <span class="doccomment">/// Kick the leader after the seed lands when a forwarded TC2 had
-<a href=#1470 id=1470 data-nosnippet>1470</a>    /// already advanced `current_view`. No-op unless leader and all
-<a href=#1471 id=1471 data-nosnippet>1471</a>    /// prerequisites are present.
-<a href=#1472 id=1472 data-nosnippet>1472</a>    </span><span class="kw">fn </span>resume_after_cutover_tc(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#1473 id=1473 data-nosnippet>1473</a>        <span class="kw">let </span>cur_view = <span class="self">self</span>.consensus.current_view();
-<a href=#1474 id=1474 data-nosnippet>1474</a>        <span class="kw">if </span><span class="self">self</span>.consensus.timeout_cert_at(cur_view).is_none() {
-<a href=#1475 id=1475 data-nosnippet>1475</a>            <span class="kw">return</span>;
-<a href=#1476 id=1476 data-nosnippet>1476</a>        }
-<a href=#1477 id=1477 data-nosnippet>1477</a>        <span class="kw">let </span>epoch = <span class="self">self
-<a href=#1478 id=1478 data-nosnippet>1478</a>            </span>.consensus
-<a href=#1479 id=1479 data-nosnippet>1479</a>            .current_epoch()
-<a href=#1480 id=1480 data-nosnippet>1480</a>            .unwrap_or(EpochNumber::genesis());
-<a href=#1481 id=1481 data-nosnippet>1481</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(leader) = <span class="self">self</span>.leader(cur_view, epoch) <span class="kw">else </span>{
+<a href=#1388 id=1388 data-nosnippet>1388</a>                <span class="kw">while let </span><span class="prelude-val">Some</span>(output) = <span class="self">self</span>.outbox.pop_front() {
+<a href=#1389 id=1389 data-nosnippet>1389</a>                    <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self</span>.process_consensus_output(output) {
+<a href=#1390 id=1390 data-nosnippet>1390</a>                        <span class="macro">warn!</span>(
+<a href=#1391 id=1391 data-nosnippet>1391</a>                            %err,
+<a href=#1392 id=1392 data-nosnippet>1392</a>                            <span class="string">"error processing post-seed bootstrap output"
+<a href=#1393 id=1393 data-nosnippet>1393</a>                        </span>);
+<a href=#1394 id=1394 data-nosnippet>1394</a>                    }
+<a href=#1395 id=1395 data-nosnippet>1395</a>                }
+<a href=#1396 id=1396 data-nosnippet>1396</a>                <span class="kw">let _ </span>= respond.send(());
+<a href=#1397 id=1397 data-nosnippet>1397</a>            },
+<a href=#1398 id=1398 data-nosnippet>1398</a>            ClientRequest::SubmitTimeoutVote { vote, respond } =&gt; {
+<a href=#1399 id=1399 data-nosnippet>1399</a>                <span class="kw">let </span>view = vote.view_number();
+<a href=#1400 id=1400 data-nosnippet>1400</a>                <span class="kw">let </span>current_view = <span class="self">self</span>.consensus.current_view();
+<a href=#1401 id=1401 data-nosnippet>1401</a>                <span class="kw">if </span>view &lt; current_view {
+<a href=#1402 id=1402 data-nosnippet>1402</a>                    <span class="macro">debug!</span>(
+<a href=#1403 id=1403 data-nosnippet>1403</a>                        %view, %current_view,
+<a href=#1404 id=1404 data-nosnippet>1404</a>                        <span class="string">"ignoring bridged timeout vote for stale view"
+<a href=#1405 id=1405 data-nosnippet>1405</a>                    </span>);
+<a href=#1406 id=1406 data-nosnippet>1406</a>                    <span class="kw">let _ </span>= respond.send(());
+<a href=#1407 id=1407 data-nosnippet>1407</a>                    <span class="kw">return </span><span class="prelude-val">Ok</span>(());
+<a href=#1408 id=1408 data-nosnippet>1408</a>                }
+<a href=#1409 id=1409 data-nosnippet>1409</a>                <span class="self">self</span>.timeout_collector.accumulate_vote(vote.clone());
+<a href=#1410 id=1410 data-nosnippet>1410</a>                <span class="self">self</span>.timeout_one_honest_collector
+<a href=#1411 id=1411 data-nosnippet>1411</a>                    .accumulate_vote(vote.clone());
+<a href=#1412 id=1412 data-nosnippet>1412</a>                <span class="comment">// Rebroadcast so peer coordinators can aggregate too.
+<a href=#1413 id=1413 data-nosnippet>1413</a>                </span><span class="kw">let </span>message = Message {
+<a href=#1414 id=1414 data-nosnippet>1414</a>                    sender: <span class="self">self</span>.public_key.clone(),
+<a href=#1415 id=1415 data-nosnippet>1415</a>                    message_type: MessageType::Consensus(ConsensusMessage::TimeoutVote(
+<a href=#1416 id=1416 data-nosnippet>1416</a>                        message::TimeoutVoteMessage { vote, lock: <span class="prelude-val">None </span>},
+<a href=#1417 id=1417 data-nosnippet>1417</a>                    )),
+<a href=#1418 id=1418 data-nosnippet>1418</a>                };
+<a href=#1419 id=1419 data-nosnippet>1419</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self
+<a href=#1420 id=1420 data-nosnippet>1420</a>                    </span>.network
+<a href=#1421 id=1421 data-nosnippet>1421</a>                    .broadcast(<span class="self">self</span>.consensus.current_view(), <span class="kw-2">&amp;</span>message)
+<a href=#1422 id=1422 data-nosnippet>1422</a>                {
+<a href=#1423 id=1423 data-nosnippet>1423</a>                    <span class="macro">warn!</span>(%err, <span class="string">"failed to rebroadcast bridged timeout vote"</span>);
+<a href=#1424 id=1424 data-nosnippet>1424</a>                }
+<a href=#1425 id=1425 data-nosnippet>1425</a>                <span class="kw">let _ </span>= respond.send(());
+<a href=#1426 id=1426 data-nosnippet>1426</a>            },
+<a href=#1427 id=1427 data-nosnippet>1427</a>            ClientRequest::SubmitLegacyHighQc { qc, respond } =&gt; {
+<a href=#1428 id=1428 data-nosnippet>1428</a>                <span class="comment">// QC certifies the last legacy view; cutover view is the next.
+<a href=#1429 id=1429 data-nosnippet>1429</a>                // Register idempotently so the smooth-start precondition holds
+<a href=#1430 id=1430 data-nosnippet>1430</a>                // regardless of arrival order vs. the cutover seed.
+<a href=#1431 id=1431 data-nosnippet>1431</a>                </span><span class="kw">let </span>qc_view = qc.view_number();
+<a href=#1432 id=1432 data-nosnippet>1432</a>                <span class="kw">let </span>cutover_view = qc_view + <span class="number">1</span>;
+<a href=#1433 id=1433 data-nosnippet>1433</a>                <span class="self">self</span>.consensus.register_legacy_qc(<span class="kw-2">&amp;</span>qc);
+<a href=#1434 id=1434 data-nosnippet>1434</a>
+<a href=#1435 id=1435 data-nosnippet>1435</a>                <span class="comment">// Still parked on the last legacy view (seed landed without this
+<a href=#1436 id=1436 data-nosnippet>1436</a>                // QC, waiting out the timer) and not yet skipped via TC2: propose
+<a href=#1437 id=1437 data-nosnippet>1437</a>                // the cutover view on the real QC now. Self-idempotent — once
+<a href=#1438 id=1438 data-nosnippet>1438</a>                // started, `cur_view` advances past `qc_view` and `maybe_propose`
+<a href=#1439 id=1439 data-nosnippet>1439</a>                // dedups by `proposed_views`.
+<a href=#1440 id=1440 data-nosnippet>1440</a>                </span><span class="kw">let </span>cur_view = <span class="self">self</span>.consensus.current_view();
+<a href=#1441 id=1441 data-nosnippet>1441</a>                <span class="kw">if </span>cur_view == qc_view
+<a href=#1442 id=1442 data-nosnippet>1442</a>                    &amp;&amp; <span class="self">self</span>.consensus.timeout_cert_at(cutover_view).is_none()
+<a href=#1443 id=1443 data-nosnippet>1443</a>                    &amp;&amp; <span class="self">self</span>.consensus.cert1_at(qc_view).is_some()
+<a href=#1444 id=1444 data-nosnippet>1444</a>                    &amp;&amp; <span class="self">self</span>.consensus.proposal_at(qc_view).is_some()
+<a href=#1445 id=1445 data-nosnippet>1445</a>                {
+<a href=#1446 id=1446 data-nosnippet>1446</a>                    <span class="macro">info!</span>(
+<a href=#1447 id=1447 data-nosnippet>1447</a>                        %cutover_view,
+<a href=#1448 id=1448 data-nosnippet>1448</a>                        <span class="string">"bridged late legacy high QC; proposing cutover view on it (no timeout)"
+<a href=#1449 id=1449 data-nosnippet>1449</a>                    </span>);
+<a href=#1450 id=1450 data-nosnippet>1450</a>                    <span class="self">self</span>.start();
+<a href=#1451 id=1451 data-nosnippet>1451</a>                    <span class="kw">while let </span><span class="prelude-val">Some</span>(output) = <span class="self">self</span>.outbox.pop_front() {
+<a href=#1452 id=1452 data-nosnippet>1452</a>                        <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self</span>.process_consensus_output(output) {
+<a href=#1453 id=1453 data-nosnippet>1453</a>                            <span class="macro">warn!</span>(
+<a href=#1454 id=1454 data-nosnippet>1454</a>                                %err,
+<a href=#1455 id=1455 data-nosnippet>1455</a>                                <span class="string">"error processing bridged-high-qc bootstrap output"
+<a href=#1456 id=1456 data-nosnippet>1456</a>                            </span>);
+<a href=#1457 id=1457 data-nosnippet>1457</a>                        }
+<a href=#1458 id=1458 data-nosnippet>1458</a>                    }
+<a href=#1459 id=1459 data-nosnippet>1459</a>                }
+<a href=#1460 id=1460 data-nosnippet>1460</a>                <span class="kw">let _ </span>= respond.send(());
+<a href=#1461 id=1461 data-nosnippet>1461</a>            },
+<a href=#1462 id=1462 data-nosnippet>1462</a>            ClientRequest::BumpNetworkEpoch { epoch, respond } =&gt; {
+<a href=#1463 id=1463 data-nosnippet>1463</a>                <span class="kw">if let </span><span class="prelude-val">Err</span>(err) = <span class="self">self
+<a href=#1464 id=1464 data-nosnippet>1464</a>                    </span>.network
+<a href=#1465 id=1465 data-nosnippet>1465</a>                    .apply_epoch(epoch, <span class="kw-2">&amp;</span><span class="self">self</span>.membership_coordinator)
+<a href=#1466 id=1466 data-nosnippet>1466</a>                {
+<a href=#1467 id=1467 data-nosnippet>1467</a>                    <span class="macro">warn!</span>(%epoch, %err, <span class="string">"network on_epoch_change failed"</span>);
+<a href=#1468 id=1468 data-nosnippet>1468</a>                }
+<a href=#1469 id=1469 data-nosnippet>1469</a>                <span class="kw">let _ </span>= respond.send(());
+<a href=#1470 id=1470 data-nosnippet>1470</a>            },
+<a href=#1471 id=1471 data-nosnippet>1471</a>        }
+<a href=#1472 id=1472 data-nosnippet>1472</a>
+<a href=#1473 id=1473 data-nosnippet>1473</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1474 id=1474 data-nosnippet>1474</a>    }
+<a href=#1475 id=1475 data-nosnippet>1475</a>
+<a href=#1476 id=1476 data-nosnippet>1476</a>    <span class="doccomment">/// Kick the leader after the seed lands when a forwarded TC2 had
+<a href=#1477 id=1477 data-nosnippet>1477</a>    /// already advanced `current_view`. No-op unless leader and all
+<a href=#1478 id=1478 data-nosnippet>1478</a>    /// prerequisites are present.
+<a href=#1479 id=1479 data-nosnippet>1479</a>    </span><span class="kw">fn </span>resume_after_cutover_tc(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#1480 id=1480 data-nosnippet>1480</a>        <span class="kw">let </span>cur_view = <span class="self">self</span>.consensus.current_view();
+<a href=#1481 id=1481 data-nosnippet>1481</a>        <span class="kw">if </span><span class="self">self</span>.consensus.timeout_cert_at(cur_view).is_none() {
 <a href=#1482 id=1482 data-nosnippet>1482</a>            <span class="kw">return</span>;
-<a href=#1483 id=1483 data-nosnippet>1483</a>        };
-<a href=#1484 id=1484 data-nosnippet>1484</a>        <span class="kw">if </span>leader != <span class="self">self</span>.public_key {
-<a href=#1485 id=1485 data-nosnippet>1485</a>            <span class="kw">return</span>;
-<a href=#1486 id=1486 data-nosnippet>1486</a>        }
-<a href=#1487 id=1487 data-nosnippet>1487</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(locked_view) = <span class="self">self</span>.consensus.locked_view() <span class="kw">else </span>{
-<a href=#1488 id=1488 data-nosnippet>1488</a>            <span class="kw">return</span>;
-<a href=#1489 id=1489 data-nosnippet>1489</a>        };
-<a href=#1490 id=1490 data-nosnippet>1490</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(parent_proposal) = <span class="self">self</span>.consensus.proposal_at(locked_view).cloned() <span class="kw">else </span>{
-<a href=#1491 id=1491 data-nosnippet>1491</a>            <span class="kw">return</span>;
-<a href=#1492 id=1492 data-nosnippet>1492</a>        };
-<a href=#1493 id=1493 data-nosnippet>1493</a>        <span class="self">self</span>.outbox
-<a href=#1494 id=1494 data-nosnippet>1494</a>            .push_back(ConsensusOutput::RequestBlockAndHeader(
-<a href=#1495 id=1495 data-nosnippet>1495</a>                BlockAndHeaderRequest {
-<a href=#1496 id=1496 data-nosnippet>1496</a>                    view: cur_view,
-<a href=#1497 id=1497 data-nosnippet>1497</a>                    epoch,
-<a href=#1498 id=1498 data-nosnippet>1498</a>                    parent_proposal,
-<a href=#1499 id=1499 data-nosnippet>1499</a>                },
-<a href=#1500 id=1500 data-nosnippet>1500</a>            ));
-<a href=#1501 id=1501 data-nosnippet>1501</a>    }
-<a href=#1502 id=1502 data-nosnippet>1502</a>
-<a href=#1503 id=1503 data-nosnippet>1503</a>    <span class="kw">fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: EpochNumber, scope: GcScope) -&gt; <span class="prelude-ty">Result</span>&lt;(), CoordinatorError&gt; {
-<a href=#1504 id=1504 data-nosnippet>1504</a>        <span class="self">self</span>.consensus.gc(scope);
-<a href=#1505 id=1505 data-nosnippet>1505</a>        <span class="kw">match </span>scope {
-<a href=#1506 id=1506 data-nosnippet>1506</a>            GcScope::Local(view) =&gt; {
-<a href=#1507 id=1507 data-nosnippet>1507</a>                <span class="kw">let </span>vc = VidCommitment2::default();
-<a href=#1508 id=1508 data-nosnippet>1508</a>                <span class="self">self</span>.block_builder.gc(view);
-<a href=#1509 id=1509 data-nosnippet>1509</a>                <span class="self">self</span>.cached_validated_proposals =
-<a href=#1510 id=1510 data-nosnippet>1510</a>                    <span class="self">self</span>.cached_validated_proposals.split_off(<span class="kw-2">&amp;</span>(view, vc));
-<a href=#1511 id=1511 data-nosnippet>1511</a>                <span class="self">self</span>.cached_vid_shares = <span class="self">self</span>.cached_vid_shares.split_off(<span class="kw-2">&amp;</span>(view, vc));
-<a href=#1512 id=1512 data-nosnippet>1512</a>                <span class="comment">// When we enter a new view, we do not want to GC enqueued messages
-<a href=#1513 id=1513 data-nosnippet>1513</a>                // for the previous view yet:
-<a href=#1514 id=1514 data-nosnippet>1514</a>                </span><span class="self">self</span>.network.gc(view.saturating_sub(<span class="number">1</span>).into())<span class="question-mark">?</span>;
-<a href=#1515 id=1515 data-nosnippet>1515</a>                <span class="self">self</span>.timeout_collector.gc(view, epoch);
-<a href=#1516 id=1516 data-nosnippet>1516</a>                <span class="self">self</span>.timeout_one_honest_collector.gc(view, epoch);
-<a href=#1517 id=1517 data-nosnippet>1517</a>                <span class="self">self</span>.vid_disperser.gc(view);
-<a href=#1518 id=1518 data-nosnippet>1518</a>                <span class="self">self</span>.vote1_collector.gc(view, epoch);
-<a href=#1519 id=1519 data-nosnippet>1519</a>                <span class="self">self</span>.vote2_collector.gc(view, epoch);
-<a href=#1520 id=1520 data-nosnippet>1520</a>            },
-<a href=#1521 id=1521 data-nosnippet>1521</a>            GcScope::Decided(view) =&gt; {
-<a href=#1522 id=1522 data-nosnippet>1522</a>                <span class="self">self</span>.epoch_manager.gc(epoch);
-<a href=#1523 id=1523 data-nosnippet>1523</a>                <span class="self">self</span>.epoch_root_collector.gc(view, epoch);
-<a href=#1524 id=1524 data-nosnippet>1524</a>                <span class="self">self</span>.pending_proposal_fetches.gc(view);
-<a href=#1525 id=1525 data-nosnippet>1525</a>                <span class="self">self</span>.state_manager.gc(view);
-<a href=#1526 id=1526 data-nosnippet>1526</a>                <span class="self">self</span>.storage.gc(view);
-<a href=#1527 id=1527 data-nosnippet>1527</a>                <span class="self">self</span>.vid_reconstructor.gc(view);
-<a href=#1528 id=1528 data-nosnippet>1528</a>                <span class="kw">let </span>vc = VidCommitment2::default();
-<a href=#1529 id=1529 data-nosnippet>1529</a>                <span class="self">self</span>.da_payloads = <span class="self">self</span>.da_payloads.split_off(<span class="kw-2">&amp;</span>(view, vc));
-<a href=#1530 id=1530 data-nosnippet>1530</a>            },
-<a href=#1531 id=1531 data-nosnippet>1531</a>            GcScope::Timeout(view) =&gt; {
-<a href=#1532 id=1532 data-nosnippet>1532</a>                <span class="self">self</span>.vid_reconstructor.retire_view(view);
-<a href=#1533 id=1533 data-nosnippet>1533</a>                <span class="kw">let </span>vc = VidCommitment2::default();
-<a href=#1534 id=1534 data-nosnippet>1534</a>                <span class="self">self</span>.da_payloads
-<a href=#1535 id=1535 data-nosnippet>1535</a>                    .extract_if((view, vc)..(view + <span class="number">1</span>, vc), |<span class="kw">_</span>, <span class="kw">_</span>| <span class="bool-val">true</span>)
-<a href=#1536 id=1536 data-nosnippet>1536</a>                    .for_each(drop);
-<a href=#1537 id=1537 data-nosnippet>1537</a>            },
-<a href=#1538 id=1538 data-nosnippet>1538</a>        }
-<a href=#1539 id=1539 data-nosnippet>1539</a>        <span class="prelude-val">Ok</span>(())
-<a href=#1540 id=1540 data-nosnippet>1540</a>    }
-<a href=#1541 id=1541 data-nosnippet>1541</a>}
-<a href=#1542 id=1542 data-nosnippet>1542</a>
-<a href=#1543 id=1543 data-nosnippet>1543</a><span class="doccomment">/// Garbage collection scope.
-<a href=#1544 id=1544 data-nosnippet>1544</a></span><span class="attr">#[derive(Debug, Clone, Copy)]
-<a href=#1545 id=1545 data-nosnippet>1545</a></span><span class="kw">pub enum </span>GcScope {
-<a href=#1546 id=1546 data-nosnippet>1546</a>    <span class="doccomment">/// GC is invoked on local view changes.
-<a href=#1547 id=1547 data-nosnippet>1547</a>    </span>Local(ViewNumber),
-<a href=#1548 id=1548 data-nosnippet>1548</a>    <span class="doccomment">/// GC is invoked on local decided views.
-<a href=#1549 id=1549 data-nosnippet>1549</a>    </span>Decided(ViewNumber),
-<a href=#1550 id=1550 data-nosnippet>1550</a>    <span class="doccomment">/// GC is invoked on a view that advanced via timeout certificate.
-<a href=#1551 id=1551 data-nosnippet>1551</a>    </span>Timeout(ViewNumber),
-<a href=#1552 id=1552 data-nosnippet>1552</a>}
-<a href=#1553 id=1553 data-nosnippet>1553</a>
-<a href=#1554 id=1554 data-nosnippet>1554</a><span class="doccomment">/// A payload built locally and awaiting DA persistence.
-<a href=#1555 id=1555 data-nosnippet>1555</a></span><span class="kw">struct </span>PendingDa&lt;T: NodeType&gt; {
-<a href=#1556 id=1556 data-nosnippet>1556</a>    epoch: EpochNumber,
-<a href=#1557 id=1557 data-nosnippet>1557</a>    payload: T::BlockPayload,
-<a href=#1558 id=1558 data-nosnippet>1558</a>    metadata: &lt;T::BlockPayload <span class="kw">as </span>BlockPayload&lt;T&gt;&gt;::Metadata,
-<a href=#1559 id=1559 data-nosnippet>1559</a>}
-<a href=#1560 id=1560 data-nosnippet>1560</a>
-<a href=#1561 id=1561 data-nosnippet>1561</a><span class="kw">type </span>ProposalFetchResponseSender&lt;T&gt; =
-<a href=#1562 id=1562 data-nosnippet>1562</a>    oneshot::Sender&lt;<span class="prelude-ty">Result</span>&lt;SignedProposal&lt;T, Proposal&lt;T&gt;&gt;, QueryError&gt;&gt;;
-<a href=#1563 id=1563 data-nosnippet>1563</a>
-<a href=#1564 id=1564 data-nosnippet>1564</a><span class="attr">#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-<a href=#1565 id=1565 data-nosnippet>1565</a></span><span class="kw">struct </span>ProposalFetchKey&lt;T: NodeType&gt; {
-<a href=#1566 id=1566 data-nosnippet>1566</a>    view: ViewNumber,
-<a href=#1567 id=1567 data-nosnippet>1567</a>    leaf_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
-<a href=#1568 id=1568 data-nosnippet>1568</a>}
-<a href=#1569 id=1569 data-nosnippet>1569</a>
-<a href=#1570 id=1570 data-nosnippet>1570</a><span class="kw">impl</span>&lt;T: NodeType&gt; ProposalFetchKey&lt;T&gt; {
-<a href=#1571 id=1571 data-nosnippet>1571</a>    <span class="kw">fn </span>new(view: ViewNumber, leaf_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;) -&gt; <span class="self">Self </span>{
-<a href=#1572 id=1572 data-nosnippet>1572</a>        <span class="self">Self </span>{
-<a href=#1573 id=1573 data-nosnippet>1573</a>            view,
-<a href=#1574 id=1574 data-nosnippet>1574</a>            leaf_commitment,
-<a href=#1575 id=1575 data-nosnippet>1575</a>        }
-<a href=#1576 id=1576 data-nosnippet>1576</a>    }
-<a href=#1577 id=1577 data-nosnippet>1577</a>}
-<a href=#1578 id=1578 data-nosnippet>1578</a>
-<a href=#1579 id=1579 data-nosnippet>1579</a><span class="attr">#[derive(Default)]
-<a href=#1580 id=1580 data-nosnippet>1580</a></span><span class="kw">struct </span>PendingProposalFetches&lt;T: NodeType&gt; {
-<a href=#1581 id=1581 data-nosnippet>1581</a>    pending: HashMap&lt;ProposalFetchKey&lt;T&gt;, Vec&lt;ProposalFetchResponseSender&lt;T&gt;&gt;&gt;,
-<a href=#1582 id=1582 data-nosnippet>1582</a>}
-<a href=#1583 id=1583 data-nosnippet>1583</a>
-<a href=#1584 id=1584 data-nosnippet>1584</a><span class="kw">impl</span>&lt;T: NodeType&gt; PendingProposalFetches&lt;T&gt; {
-<a href=#1585 id=1585 data-nosnippet>1585</a>    <span class="kw">fn </span>prune_closed(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#1586 id=1586 data-nosnippet>1586</a>        <span class="self">self</span>.pending.retain(|<span class="kw">_</span>, responders| {
-<a href=#1587 id=1587 data-nosnippet>1587</a>            responders.retain(|respond| !respond.is_closed());
-<a href=#1588 id=1588 data-nosnippet>1588</a>            !responders.is_empty()
-<a href=#1589 id=1589 data-nosnippet>1589</a>        });
-<a href=#1590 id=1590 data-nosnippet>1590</a>    }
+<a href=#1483 id=1483 data-nosnippet>1483</a>        }
+<a href=#1484 id=1484 data-nosnippet>1484</a>        <span class="kw">let </span>epoch = <span class="self">self
+<a href=#1485 id=1485 data-nosnippet>1485</a>            </span>.consensus
+<a href=#1486 id=1486 data-nosnippet>1486</a>            .current_epoch()
+<a href=#1487 id=1487 data-nosnippet>1487</a>            .unwrap_or(EpochNumber::genesis());
+<a href=#1488 id=1488 data-nosnippet>1488</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(leader) = <span class="self">self</span>.leader(cur_view, epoch) <span class="kw">else </span>{
+<a href=#1489 id=1489 data-nosnippet>1489</a>            <span class="kw">return</span>;
+<a href=#1490 id=1490 data-nosnippet>1490</a>        };
+<a href=#1491 id=1491 data-nosnippet>1491</a>        <span class="kw">if </span>leader != <span class="self">self</span>.public_key {
+<a href=#1492 id=1492 data-nosnippet>1492</a>            <span class="kw">return</span>;
+<a href=#1493 id=1493 data-nosnippet>1493</a>        }
+<a href=#1494 id=1494 data-nosnippet>1494</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(locked_view) = <span class="self">self</span>.consensus.locked_view() <span class="kw">else </span>{
+<a href=#1495 id=1495 data-nosnippet>1495</a>            <span class="kw">return</span>;
+<a href=#1496 id=1496 data-nosnippet>1496</a>        };
+<a href=#1497 id=1497 data-nosnippet>1497</a>        <span class="kw">let </span><span class="prelude-val">Some</span>(parent_proposal) = <span class="self">self</span>.consensus.proposal_at(locked_view).cloned() <span class="kw">else </span>{
+<a href=#1498 id=1498 data-nosnippet>1498</a>            <span class="kw">return</span>;
+<a href=#1499 id=1499 data-nosnippet>1499</a>        };
+<a href=#1500 id=1500 data-nosnippet>1500</a>        <span class="self">self</span>.outbox
+<a href=#1501 id=1501 data-nosnippet>1501</a>            .push_back(ConsensusOutput::RequestBlockAndHeader(
+<a href=#1502 id=1502 data-nosnippet>1502</a>                BlockAndHeaderRequest {
+<a href=#1503 id=1503 data-nosnippet>1503</a>                    view: cur_view,
+<a href=#1504 id=1504 data-nosnippet>1504</a>                    epoch,
+<a href=#1505 id=1505 data-nosnippet>1505</a>                    parent_proposal,
+<a href=#1506 id=1506 data-nosnippet>1506</a>                },
+<a href=#1507 id=1507 data-nosnippet>1507</a>            ));
+<a href=#1508 id=1508 data-nosnippet>1508</a>    }
+<a href=#1509 id=1509 data-nosnippet>1509</a>
+<a href=#1510 id=1510 data-nosnippet>1510</a>    <span class="kw">fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, epoch: EpochNumber, scope: GcScope) -&gt; <span class="prelude-ty">Result</span>&lt;(), CoordinatorError&gt; {
+<a href=#1511 id=1511 data-nosnippet>1511</a>        <span class="self">self</span>.consensus.gc(scope);
+<a href=#1512 id=1512 data-nosnippet>1512</a>        <span class="kw">match </span>scope {
+<a href=#1513 id=1513 data-nosnippet>1513</a>            GcScope::Local(view) =&gt; {
+<a href=#1514 id=1514 data-nosnippet>1514</a>                <span class="kw">let </span>vc = VidCommitment2::default();
+<a href=#1515 id=1515 data-nosnippet>1515</a>                <span class="self">self</span>.block_builder.gc(view);
+<a href=#1516 id=1516 data-nosnippet>1516</a>                <span class="self">self</span>.cached_validated_proposals =
+<a href=#1517 id=1517 data-nosnippet>1517</a>                    <span class="self">self</span>.cached_validated_proposals.split_off(<span class="kw-2">&amp;</span>(view, vc));
+<a href=#1518 id=1518 data-nosnippet>1518</a>                <span class="self">self</span>.cached_vid_shares = <span class="self">self</span>.cached_vid_shares.split_off(<span class="kw-2">&amp;</span>(view, vc));
+<a href=#1519 id=1519 data-nosnippet>1519</a>                <span class="self">self</span>.vid_disperser.gc(view);
+<a href=#1520 id=1520 data-nosnippet>1520</a>                <span class="comment">// When we enter a new view, we do not want to GC certain data
+<a href=#1521 id=1521 data-nosnippet>1521</a>                // for the previous view yet:
+<a href=#1522 id=1522 data-nosnippet>1522</a>                </span><span class="kw">let </span>view = view.saturating_sub(<span class="number">1</span>).into();
+<a href=#1523 id=1523 data-nosnippet>1523</a>                <span class="self">self</span>.network.gc(view)<span class="question-mark">?</span>;
+<a href=#1524 id=1524 data-nosnippet>1524</a>                <span class="self">self</span>.timeout_collector.gc(view);
+<a href=#1525 id=1525 data-nosnippet>1525</a>                <span class="self">self</span>.timeout_one_honest_collector.gc(view);
+<a href=#1526 id=1526 data-nosnippet>1526</a>                <span class="self">self</span>.vote1_collector.gc(view);
+<a href=#1527 id=1527 data-nosnippet>1527</a>                <span class="self">self</span>.vote2_collector.gc(view);
+<a href=#1528 id=1528 data-nosnippet>1528</a>            },
+<a href=#1529 id=1529 data-nosnippet>1529</a>            GcScope::Decided(view) =&gt; {
+<a href=#1530 id=1530 data-nosnippet>1530</a>                <span class="self">self</span>.epoch_manager.gc(epoch);
+<a href=#1531 id=1531 data-nosnippet>1531</a>                <span class="self">self</span>.epoch_root_collector.gc(view, epoch);
+<a href=#1532 id=1532 data-nosnippet>1532</a>                <span class="self">self</span>.pending_proposal_fetches.gc(view);
+<a href=#1533 id=1533 data-nosnippet>1533</a>                <span class="self">self</span>.state_manager.gc(view);
+<a href=#1534 id=1534 data-nosnippet>1534</a>                <span class="self">self</span>.storage.gc(view);
+<a href=#1535 id=1535 data-nosnippet>1535</a>                <span class="self">self</span>.vid_reconstructor.gc(view);
+<a href=#1536 id=1536 data-nosnippet>1536</a>                <span class="kw">let </span>vc = VidCommitment2::default();
+<a href=#1537 id=1537 data-nosnippet>1537</a>                <span class="self">self</span>.da_payloads = <span class="self">self</span>.da_payloads.split_off(<span class="kw-2">&amp;</span>(view, vc));
+<a href=#1538 id=1538 data-nosnippet>1538</a>            },
+<a href=#1539 id=1539 data-nosnippet>1539</a>            GcScope::Timeout(view) =&gt; {
+<a href=#1540 id=1540 data-nosnippet>1540</a>                <span class="self">self</span>.vid_reconstructor.retire_view(view);
+<a href=#1541 id=1541 data-nosnippet>1541</a>                <span class="kw">let </span>vc = VidCommitment2::default();
+<a href=#1542 id=1542 data-nosnippet>1542</a>                <span class="self">self</span>.da_payloads
+<a href=#1543 id=1543 data-nosnippet>1543</a>                    .extract_if((view, vc)..(view + <span class="number">1</span>, vc), |<span class="kw">_</span>, <span class="kw">_</span>| <span class="bool-val">true</span>)
+<a href=#1544 id=1544 data-nosnippet>1544</a>                    .for_each(drop);
+<a href=#1545 id=1545 data-nosnippet>1545</a>            },
+<a href=#1546 id=1546 data-nosnippet>1546</a>        }
+<a href=#1547 id=1547 data-nosnippet>1547</a>        <span class="prelude-val">Ok</span>(())
+<a href=#1548 id=1548 data-nosnippet>1548</a>    }
+<a href=#1549 id=1549 data-nosnippet>1549</a>
+<a href=#1550 id=1550 data-nosnippet>1550</a>    <span class="doccomment">/// We ignore votes more that 30 views ahead of our current view.
+<a href=#1551 id=1551 data-nosnippet>1551</a>    </span><span class="kw">fn </span>is_too_far_ahead(<span class="kw-2">&amp;</span><span class="self">self</span>, v: ViewNumber) -&gt; bool {
+<a href=#1552 id=1552 data-nosnippet>1552</a>        v &gt; <span class="self">self</span>.consensus.current_view() + <span class="number">30
+<a href=#1553 id=1553 data-nosnippet>1553</a>    </span>}
+<a href=#1554 id=1554 data-nosnippet>1554</a>}
+<a href=#1555 id=1555 data-nosnippet>1555</a>
+<a href=#1556 id=1556 data-nosnippet>1556</a><span class="doccomment">/// Garbage collection scope.
+<a href=#1557 id=1557 data-nosnippet>1557</a></span><span class="attr">#[derive(Debug, Clone, Copy)]
+<a href=#1558 id=1558 data-nosnippet>1558</a></span><span class="kw">pub enum </span>GcScope {
+<a href=#1559 id=1559 data-nosnippet>1559</a>    <span class="doccomment">/// GC is invoked on local view changes.
+<a href=#1560 id=1560 data-nosnippet>1560</a>    </span>Local(ViewNumber),
+<a href=#1561 id=1561 data-nosnippet>1561</a>    <span class="doccomment">/// GC is invoked on local decided views.
+<a href=#1562 id=1562 data-nosnippet>1562</a>    </span>Decided(ViewNumber),
+<a href=#1563 id=1563 data-nosnippet>1563</a>    <span class="doccomment">/// GC is invoked on a view that advanced via timeout certificate.
+<a href=#1564 id=1564 data-nosnippet>1564</a>    </span>Timeout(ViewNumber),
+<a href=#1565 id=1565 data-nosnippet>1565</a>}
+<a href=#1566 id=1566 data-nosnippet>1566</a>
+<a href=#1567 id=1567 data-nosnippet>1567</a><span class="doccomment">/// A payload built locally and awaiting DA persistence.
+<a href=#1568 id=1568 data-nosnippet>1568</a></span><span class="kw">struct </span>PendingDa&lt;T: NodeType&gt; {
+<a href=#1569 id=1569 data-nosnippet>1569</a>    epoch: EpochNumber,
+<a href=#1570 id=1570 data-nosnippet>1570</a>    payload: T::BlockPayload,
+<a href=#1571 id=1571 data-nosnippet>1571</a>    metadata: &lt;T::BlockPayload <span class="kw">as </span>BlockPayload&lt;T&gt;&gt;::Metadata,
+<a href=#1572 id=1572 data-nosnippet>1572</a>}
+<a href=#1573 id=1573 data-nosnippet>1573</a>
+<a href=#1574 id=1574 data-nosnippet>1574</a><span class="kw">type </span>ProposalFetchResponseSender&lt;T&gt; =
+<a href=#1575 id=1575 data-nosnippet>1575</a>    oneshot::Sender&lt;<span class="prelude-ty">Result</span>&lt;SignedProposal&lt;T, Proposal&lt;T&gt;&gt;, QueryError&gt;&gt;;
+<a href=#1576 id=1576 data-nosnippet>1576</a>
+<a href=#1577 id=1577 data-nosnippet>1577</a><span class="attr">#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+<a href=#1578 id=1578 data-nosnippet>1578</a></span><span class="kw">struct </span>ProposalFetchKey&lt;T: NodeType&gt; {
+<a href=#1579 id=1579 data-nosnippet>1579</a>    view: ViewNumber,
+<a href=#1580 id=1580 data-nosnippet>1580</a>    leaf_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
+<a href=#1581 id=1581 data-nosnippet>1581</a>}
+<a href=#1582 id=1582 data-nosnippet>1582</a>
+<a href=#1583 id=1583 data-nosnippet>1583</a><span class="kw">impl</span>&lt;T: NodeType&gt; ProposalFetchKey&lt;T&gt; {
+<a href=#1584 id=1584 data-nosnippet>1584</a>    <span class="kw">fn </span>new(view: ViewNumber, leaf_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;) -&gt; <span class="self">Self </span>{
+<a href=#1585 id=1585 data-nosnippet>1585</a>        <span class="self">Self </span>{
+<a href=#1586 id=1586 data-nosnippet>1586</a>            view,
+<a href=#1587 id=1587 data-nosnippet>1587</a>            leaf_commitment,
+<a href=#1588 id=1588 data-nosnippet>1588</a>        }
+<a href=#1589 id=1589 data-nosnippet>1589</a>    }
+<a href=#1590 id=1590 data-nosnippet>1590</a>}
 <a href=#1591 id=1591 data-nosnippet>1591</a>
-<a href=#1592 id=1592 data-nosnippet>1592</a>    <span class="kw">fn </span>contains_request(
-<a href=#1593 id=1593 data-nosnippet>1593</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1594 id=1594 data-nosnippet>1594</a>        view: ViewNumber,
-<a href=#1595 id=1595 data-nosnippet>1595</a>        leaf_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
-<a href=#1596 id=1596 data-nosnippet>1596</a>    ) -&gt; bool {
-<a href=#1597 id=1597 data-nosnippet>1597</a>        <span class="self">self</span>.prune_closed();
-<a href=#1598 id=1598 data-nosnippet>1598</a>        <span class="self">self</span>.pending
-<a href=#1599 id=1599 data-nosnippet>1599</a>            .contains_key(<span class="kw-2">&amp;</span>ProposalFetchKey::new(view, leaf_commitment))
-<a href=#1600 id=1600 data-nosnippet>1600</a>    }
-<a href=#1601 id=1601 data-nosnippet>1601</a>
-<a href=#1602 id=1602 data-nosnippet>1602</a>    <span class="kw">fn </span>push(
-<a href=#1603 id=1603 data-nosnippet>1603</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
-<a href=#1604 id=1604 data-nosnippet>1604</a>        view: ViewNumber,
-<a href=#1605 id=1605 data-nosnippet>1605</a>        leaf_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
-<a href=#1606 id=1606 data-nosnippet>1606</a>        respond: ProposalFetchResponseSender&lt;T&gt;,
-<a href=#1607 id=1607 data-nosnippet>1607</a>    ) {
-<a href=#1608 id=1608 data-nosnippet>1608</a>        <span class="self">self</span>.pending
-<a href=#1609 id=1609 data-nosnippet>1609</a>            .entry(ProposalFetchKey::new(view, leaf_commitment))
-<a href=#1610 id=1610 data-nosnippet>1610</a>            .or_default()
-<a href=#1611 id=1611 data-nosnippet>1611</a>            .push(respond);
-<a href=#1612 id=1612 data-nosnippet>1612</a>    }
-<a href=#1613 id=1613 data-nosnippet>1613</a>
-<a href=#1614 id=1614 data-nosnippet>1614</a>    <span class="attr">#[allow(dead_code)]
-<a href=#1615 id=1615 data-nosnippet>1615</a>    </span><span class="kw">fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber) {
-<a href=#1616 id=1616 data-nosnippet>1616</a>        <span class="self">self</span>.pending.retain(|key, responders| {
-<a href=#1617 id=1617 data-nosnippet>1617</a>            responders.retain(|respond| !respond.is_closed());
-<a href=#1618 id=1618 data-nosnippet>1618</a>            key.view &gt;= view &amp;&amp; !responders.is_empty()
-<a href=#1619 id=1619 data-nosnippet>1619</a>        });
-<a href=#1620 id=1620 data-nosnippet>1620</a>    }
-<a href=#1621 id=1621 data-nosnippet>1621</a>
-<a href=#1622 id=1622 data-nosnippet>1622</a>    <span class="kw">fn </span>resolve(<span class="kw-2">&amp;mut </span><span class="self">self</span>, proposal: <span class="kw-2">&amp;</span>SignedProposal&lt;T, Proposal&lt;T&gt;&gt;) {
-<a href=#1623 id=1623 data-nosnippet>1623</a>        <span class="self">self</span>.prune_closed();
-<a href=#1624 id=1624 data-nosnippet>1624</a>        <span class="kw">let </span>view = proposal.data.view_number;
-<a href=#1625 id=1625 data-nosnippet>1625</a>        <span class="kw">let </span>leaf_commitment = proposal_commitment(<span class="kw-2">&amp;</span>proposal.data);
-<a href=#1626 id=1626 data-nosnippet>1626</a>        <span class="kw">let </span>key = ProposalFetchKey::new(view, leaf_commitment);
-<a href=#1627 id=1627 data-nosnippet>1627</a>
-<a href=#1628 id=1628 data-nosnippet>1628</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(responders) = <span class="self">self</span>.pending.remove(<span class="kw-2">&amp;</span>key) {
-<a href=#1629 id=1629 data-nosnippet>1629</a>            <span class="kw">for </span>respond <span class="kw">in </span>responders {
-<a href=#1630 id=1630 data-nosnippet>1630</a>                <span class="kw">let _ </span>= respond.send(<span class="prelude-val">Ok</span>(proposal.clone()));
-<a href=#1631 id=1631 data-nosnippet>1631</a>            }
-<a href=#1632 id=1632 data-nosnippet>1632</a>        }
-<a href=#1633 id=1633 data-nosnippet>1633</a>    }
-<a href=#1634 id=1634 data-nosnippet>1634</a>}
+<a href=#1592 id=1592 data-nosnippet>1592</a><span class="attr">#[derive(Default)]
+<a href=#1593 id=1593 data-nosnippet>1593</a></span><span class="kw">struct </span>PendingProposalFetches&lt;T: NodeType&gt; {
+<a href=#1594 id=1594 data-nosnippet>1594</a>    pending: HashMap&lt;ProposalFetchKey&lt;T&gt;, Vec&lt;ProposalFetchResponseSender&lt;T&gt;&gt;&gt;,
+<a href=#1595 id=1595 data-nosnippet>1595</a>}
+<a href=#1596 id=1596 data-nosnippet>1596</a>
+<a href=#1597 id=1597 data-nosnippet>1597</a><span class="kw">impl</span>&lt;T: NodeType&gt; PendingProposalFetches&lt;T&gt; {
+<a href=#1598 id=1598 data-nosnippet>1598</a>    <span class="kw">fn </span>prune_closed(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#1599 id=1599 data-nosnippet>1599</a>        <span class="self">self</span>.pending.retain(|<span class="kw">_</span>, responders| {
+<a href=#1600 id=1600 data-nosnippet>1600</a>            responders.retain(|respond| !respond.is_closed());
+<a href=#1601 id=1601 data-nosnippet>1601</a>            !responders.is_empty()
+<a href=#1602 id=1602 data-nosnippet>1602</a>        });
+<a href=#1603 id=1603 data-nosnippet>1603</a>    }
+<a href=#1604 id=1604 data-nosnippet>1604</a>
+<a href=#1605 id=1605 data-nosnippet>1605</a>    <span class="kw">fn </span>contains_request(
+<a href=#1606 id=1606 data-nosnippet>1606</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1607 id=1607 data-nosnippet>1607</a>        view: ViewNumber,
+<a href=#1608 id=1608 data-nosnippet>1608</a>        leaf_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
+<a href=#1609 id=1609 data-nosnippet>1609</a>    ) -&gt; bool {
+<a href=#1610 id=1610 data-nosnippet>1610</a>        <span class="self">self</span>.prune_closed();
+<a href=#1611 id=1611 data-nosnippet>1611</a>        <span class="self">self</span>.pending
+<a href=#1612 id=1612 data-nosnippet>1612</a>            .contains_key(<span class="kw-2">&amp;</span>ProposalFetchKey::new(view, leaf_commitment))
+<a href=#1613 id=1613 data-nosnippet>1613</a>    }
+<a href=#1614 id=1614 data-nosnippet>1614</a>
+<a href=#1615 id=1615 data-nosnippet>1615</a>    <span class="kw">fn </span>push(
+<a href=#1616 id=1616 data-nosnippet>1616</a>        <span class="kw-2">&amp;mut </span><span class="self">self</span>,
+<a href=#1617 id=1617 data-nosnippet>1617</a>        view: ViewNumber,
+<a href=#1618 id=1618 data-nosnippet>1618</a>        leaf_commitment: Commitment&lt;Leaf2&lt;T&gt;&gt;,
+<a href=#1619 id=1619 data-nosnippet>1619</a>        respond: ProposalFetchResponseSender&lt;T&gt;,
+<a href=#1620 id=1620 data-nosnippet>1620</a>    ) {
+<a href=#1621 id=1621 data-nosnippet>1621</a>        <span class="self">self</span>.pending
+<a href=#1622 id=1622 data-nosnippet>1622</a>            .entry(ProposalFetchKey::new(view, leaf_commitment))
+<a href=#1623 id=1623 data-nosnippet>1623</a>            .or_default()
+<a href=#1624 id=1624 data-nosnippet>1624</a>            .push(respond);
+<a href=#1625 id=1625 data-nosnippet>1625</a>    }
+<a href=#1626 id=1626 data-nosnippet>1626</a>
+<a href=#1627 id=1627 data-nosnippet>1627</a>    <span class="kw">fn </span>gc(<span class="kw-2">&amp;mut </span><span class="self">self</span>, view: ViewNumber) {
+<a href=#1628 id=1628 data-nosnippet>1628</a>        <span class="self">self</span>.pending.retain(|key, responders| {
+<a href=#1629 id=1629 data-nosnippet>1629</a>            responders.retain(|respond| !respond.is_closed());
+<a href=#1630 id=1630 data-nosnippet>1630</a>            key.view &gt;= view &amp;&amp; !responders.is_empty()
+<a href=#1631 id=1631 data-nosnippet>1631</a>        });
+<a href=#1632 id=1632 data-nosnippet>1632</a>    }
+<a href=#1633 id=1633 data-nosnippet>1633</a>
+<a href=#1634 id=1634 data-nosnippet>1634</a>    <span class="kw">fn </span>resolve(<span class="kw-2">&amp;mut </span><span class="self">self</span>, proposal: <span class="kw-2">&amp;</span>SignedProposal&lt;T, Proposal&lt;T&gt;&gt;) {
+<a href=#1635 id=1635 data-nosnippet>1635</a>        <span class="self">self</span>.prune_closed();
+<a href=#1636 id=1636 data-nosnippet>1636</a>        <span class="kw">let </span>view = proposal.data.view_number;
+<a href=#1637 id=1637 data-nosnippet>1637</a>        <span class="kw">let </span>leaf_commitment = proposal_commitment(<span class="kw-2">&amp;</span>proposal.data);
+<a href=#1638 id=1638 data-nosnippet>1638</a>        <span class="kw">let </span>key = ProposalFetchKey::new(view, leaf_commitment);
+<a href=#1639 id=1639 data-nosnippet>1639</a>
+<a href=#1640 id=1640 data-nosnippet>1640</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(responders) = <span class="self">self</span>.pending.remove(<span class="kw-2">&amp;</span>key) {
+<a href=#1641 id=1641 data-nosnippet>1641</a>            <span class="kw">for </span>respond <span class="kw">in </span>responders {
+<a href=#1642 id=1642 data-nosnippet>1642</a>                <span class="kw">let _ </span>= respond.send(<span class="prelude-val">Ok</span>(proposal.clone()));
+<a href=#1643 id=1643 data-nosnippet>1643</a>            }
+<a href=#1644 id=1644 data-nosnippet>1644</a>        }
+<a href=#1645 id=1645 data-nosnippet>1645</a>    }
+<a href=#1646 id=1646 data-nosnippet>1646</a>}
 </code></pre></div></section></main></body></html>
