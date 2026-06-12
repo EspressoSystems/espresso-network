@@ -5,6 +5,7 @@ use std::sync::Arc;
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
+use espresso_telemetry as telemetry;
 use espresso_types::{
     BlockMerkleTree, PubKey, SeqTypes,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
@@ -211,6 +212,7 @@ impl Options {
             // storage.
             let ds = MetricsDataSource::default();
             let metrics = ds.populate_metrics();
+            telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
             tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
             let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
                 ds,
@@ -294,6 +296,9 @@ impl Options {
         D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
     {
         let metrics = ds.populate_metrics();
+        // Deposit the underlying prometheus::Registry for the in-process
+        // telemetry push task. Idempotent; safe to call multiple times.
+        telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
         let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
         let api_state: endpoints::AvailState<N, P, D> = ds.clone().into();
         let mut app = App::<_, Error>::with_state(api_state);

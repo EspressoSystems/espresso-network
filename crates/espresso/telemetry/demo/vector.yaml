@@ -1,0 +1,37 @@
+# Local telemetry collector for the demo.
+#
+# Receives the two signals the espresso node emits and prints them as JSON:
+# - OTel logs over OTLP/HTTP at /v1/logs (opentelemetry source)
+# - Prometheus remote-write metrics at /api/v1/write (prometheus_remote_write source)
+#
+# The two sources bind separate ports, so each demo node points at exactly one
+# of them via ESPRESSO_NODE_TELEMETRY_ENDPOINT. Ports here mirror
+# ESPRESSO_DEMO_TELEMETRY_{OTLP,PRW}_PORT in .env; keep them in sync.
+#
+# Not production: the BLS-signed JWT the nodes send is accepted unverified.
+
+sources:
+  otlp:
+    type: opentelemetry
+    grpc:
+      address: 0.0.0.0:4317
+    http:
+      address: 0.0.0.0:4318
+
+  prw:
+    type: prometheus_remote_write
+    address: 0.0.0.0:9009
+    path: /api/v1/write
+
+sinks:
+  logs:
+    type: console
+    inputs: [otlp.logs]
+    encoding:
+      codec: json
+
+  metrics:
+    type: console
+    inputs: [prw]
+    encoding:
+      codec: json
