@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use committable::{Commitment, Committable};
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::traits::BlockPayload;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
@@ -144,6 +144,8 @@ pub enum ConsensusOutput<T: NodeType> {
     },
     LockUpdated(Certificate2<T>),
     ViewChanged(ViewNumber, EpochNumber),
+    /// A view timed out with a timeout certificate.
+    ViewTimedOut(ViewNumber),
     ProposalValidated {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
@@ -739,8 +741,8 @@ impl<T: NodeType> Consensus<T> {
     pub fn gc(&mut self, scope: GcScope) {
         match scope {
             GcScope::Local(view) => {
-                self.headers
-                    .retain(|(header_view, _), _| *header_view >= view);
+                let c = Commitment::default_commitment_no_preimage();
+                self.headers = self.headers.split_off(&(view, c));
                 self.proposed_views = self.proposed_views.split_off(&view);
                 self.states_verified = self.states_verified.split_off(&view);
                 self.timeout_certs = self.timeout_certs.split_off(&view);
@@ -748,10 +750,9 @@ impl<T: NodeType> Consensus<T> {
                 self.voted_2_views = self.voted_2_views.split_off(&view);
             },
             GcScope::Decided(view) => {
-                self.blocks = self.blocks.split_off(&(view, VidCommitment2::default()));
-                self.blocks_reconstructed = self
-                    .blocks_reconstructed
-                    .split_off(&(view, VidCommitment2::default()));
+                let vc = VidCommitment2::default();
+                self.blocks = self.blocks.split_off(&(view, vc));
+                self.blocks_reconstructed = self.blocks_reconstructed.split_off(&(view, vc));
                 self.certs = self.certs.split_off(&view);
                 self.certs2 = self.certs2.split_off(&view);
                 self.leaves = self.leaves.split_off(&view);
@@ -774,6 +775,22 @@ impl<T: NodeType> Consensus<T> {
                     self.drb_results = self.drb_results.split_off(&epoch);
                     self.state_certs = self.state_certs.split_off(&epoch);
                 }
+            },
+            GcScope::Timeout(view) => {
+                // A view with a quorum certificate is still undecided.
+                if self.certs.contains_key(&view) || self.certs2.contains_key(&view) {
+                    return;
+                }
+                self.proposals.remove(&view);
+                self.signed_proposals.remove(&view);
+                self.vid_shares.remove(&view);
+                let vc = VidCommitment2::default();
+                self.blocks
+                    .extract_if((view, vc)..(view + 1, vc), |_, _| true)
+                    .for_each(drop);
+                self.blocks_reconstructed
+                    .extract_if((view, vc)..(view + 1, vc), |_| true)
+                    .for_each(drop);
             },
         }
     }
@@ -1152,6 +1169,7 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs.insert(view, certificate.clone());
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
+        outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
             certificate,
             view,
