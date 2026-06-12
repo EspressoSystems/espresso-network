@@ -39,7 +39,7 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     block::BlockAndHeaderRequest,
-    coordinator::GcScope,
+    coordinator::{GcScope, VID_RECONSTRUCT_GC_MARGIN},
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
@@ -759,7 +759,12 @@ impl<T: NodeType> Consensus<T> {
                 self.pending_certs1 = self.pending_certs1.split_off(&view);
                 self.pending_certs2 = self.pending_certs2.split_off(&view);
                 self.pending_timeout_certs = self.pending_timeout_certs.split_off(&view);
-                self.proposals = self.proposals.split_off(&view);
+                // Keep proposals within the reconstructor's margin so a late
+                // reconstruction can still emit `BlockPayloadReconstructed`,
+                // which needs the proposal's block header.
+                self.proposals = self
+                    .proposals
+                    .split_off(&view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 self.signed_proposals = self.signed_proposals.split_off(&view);
                 self.vid_shares = self.vid_shares.split_off(&view);
                 self.stored_proposals = self.stored_proposals.split_off(&view);
