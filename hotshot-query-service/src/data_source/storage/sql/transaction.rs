@@ -196,6 +196,36 @@ impl TransactionMode for Prune {
     }
 }
 
+/// Marker type indicating a transaction used for deferred-migration batches.
+///
+/// On Postgres this uses READ COMMITTED instead of SERIALIZABLE. Long-running backfill batches
+/// that INSERT into and DELETE from tables consensus is also writing to (e.g. the merkle-tree
+/// tables) trigger Serializable Snapshot Isolation predicate-lock conflicts and abort with
+/// "could not serialize access". Backfill batches are designed to be idempotent (`ON CONFLICT`,
+/// monotonic keyset cursors), so the weaker isolation is acceptable.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Backfill;
+
+impl TransactionMode for Backfill {
+    #[allow(unused_variables)]
+    async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
+        // SQLite: same as Write -- acquire an exclusive lock immediately to avoid deadlocks.
+        #[cfg(feature = "embedded-db")]
+        conn.execute("UPDATE pruned_height SET id = id WHERE false")
+            .await?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        conn.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .await?;
+
+        Ok(())
+    }
+
+    fn display() -> &'static str {
+        "backfill"
+    }
+}
+
 impl TransactionMode for Read {
     #[allow(unused_variables)]
     async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {

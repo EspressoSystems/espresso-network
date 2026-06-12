@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::data_source::{
     Transaction as _, VersionedDataSource,
-    storage::sql::{SqlStorage, Transaction, Write},
+    storage::sql::{Backfill, SqlStorage, Transaction},
 };
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(300);
@@ -37,9 +37,12 @@ pub trait DataBackfill: Send + Sync + 'static {
     /// Process one batch starting at `offset`.
     ///
     /// Returns `Some(next_offset)` to continue, or `None` when all rows have been processed.
+    ///
+    /// The transaction runs at READ COMMITTED on Postgres (see [`Backfill`]), so batches must be
+    /// idempotent — typically by writing with `ON CONFLICT` and advancing a monotonic cursor.
     async fn run_batch(
         &self,
-        tx: &mut Transaction<Write>,
+        tx: &mut Transaction<Backfill>,
         offset: u64,
     ) -> anyhow::Result<Option<u64>>;
 }
@@ -181,10 +184,9 @@ impl MigrationRegistry {
         let mut batch_count: usize = 0;
 
         loop {
-            let mut tx = db
-                .write()
-                .await
-                .with_context(|| format!("failed to open write transaction at offset {offset}"))?;
+            let mut tx = db.backfill().await.with_context(|| {
+                format!("failed to open backfill transaction at offset {offset}")
+            })?;
 
             let next = m
                 .run_batch(&mut tx, offset)
@@ -315,7 +317,7 @@ mod tests {
 
         async fn run_batch(
             &self,
-            _tx: &mut Transaction<Write>,
+            _tx: &mut Transaction<Backfill>,
             offset: u64,
         ) -> anyhow::Result<Option<u64>> {
             Ok((offset < self.total).then_some(offset + 1))

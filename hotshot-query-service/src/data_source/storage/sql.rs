@@ -702,6 +702,14 @@ impl SqlStorage {
         Transaction::new(&self.pool, self.pool_metrics.clone()).await
     }
 
+    /// Open a transaction for a deferred-migration batch.
+    ///
+    /// Backfill transactions run under READ COMMITTED on Postgres so long-running batches don't
+    /// trip SSI predicate-lock conflicts against concurrent consensus writes. See [`Backfill`].
+    pub async fn backfill(&self) -> anyhow::Result<Transaction<Backfill>> {
+        Transaction::new(&self.pool, self.pool_metrics.clone()).await
+    }
+
     async fn get_minimum_height(&self) -> QueryResult<Option<u64>> {
         let mut tx = self.read().await.map_err(|err| QueryError::Error {
             message: err.to_string(),

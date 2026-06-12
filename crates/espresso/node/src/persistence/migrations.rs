@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use hotshot_query_service::{
-    data_source::storage::sql::{Transaction, Write},
+    data_source::storage::sql::{Backfill, Transaction},
     migration::{DataBackfill, MigrationRegistry},
 };
 
@@ -16,7 +16,7 @@ impl DataBackfill for BackfillHash {
 
     async fn run_batch(
         &self,
-        tx: &mut Transaction<Write>,
+        tx: &mut Transaction<Backfill>,
         // Reused as last-seen id (keyset cursor), not a row count.
         // Initial value 0 is safe because auto-increment ids start at 1.
         offset: u64,
@@ -73,7 +73,7 @@ macro_rules! merkle_tree_backfill {
 
             async fn run_batch(
                 &self,
-                tx: &mut Transaction<Write>,
+                tx: &mut Transaction<Backfill>,
                 // Cursor: the start of the `created` (block height) range for this batch.
                 // Each batch covers [offset, offset + batch_size), using the index on `created`.
                 offset: u64,
@@ -189,7 +189,7 @@ impl DataBackfill for CleanupLegacyHashTable {
 
     async fn run_batch(
         &self,
-        tx: &mut Transaction<Write>,
+        tx: &mut Transaction<Backfill>,
         // Keyset cursor: last deleted id (0 on first batch).
         offset: u64,
     ) -> anyhow::Result<Option<u64>> {
@@ -247,7 +247,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         let mut offset = 0u64;
         loop {
-            let mut tx = storage.write().await?;
+            let mut tx = storage.backfill().await?;
             let next = backfill.run_batch(&mut tx, offset).await?;
             tx.commit().await?;
             match next {
