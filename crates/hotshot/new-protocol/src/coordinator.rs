@@ -55,6 +55,12 @@ use crate::{
     vote::VoteCollector,
 };
 
+/// Views to retain in the VID reconstructor behind the decided view. A decide
+/// can arrive while we are still reconstructing the payload of an earlier
+/// view. Garbage collecting at the decided view would abort that task and drop its
+/// accumulated shares.
+const VID_RECONSTRUCT_GC_MARGIN: u64 = 20;
+
 #[allow(clippy::large_enum_variant)]
 pub enum CoordinatorOutput<T: NodeType> {
     Consensus(ConsensusOutput<T>),
@@ -1493,7 +1499,8 @@ where
                 self.pending_proposal_fetches.gc(view);
                 self.state_manager.gc(view);
                 self.storage.gc(view);
-                self.vid_reconstructor.gc(view);
+                self.vid_reconstructor
+                    .gc(view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 self.da_payloads = self
                     .da_payloads
                     .split_off(&(view, VidCommitment2::default()));
