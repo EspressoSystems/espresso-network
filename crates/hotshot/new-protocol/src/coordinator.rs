@@ -64,7 +64,11 @@ use crate::{
 /// least one query node serving catchup.
 /// The margin gives in flight reconstruction tasks time to finish, which is
 /// cheaper than fetching the payload through catchup.
-const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
+///
+/// Proposals are retained with the same margin: when a reconstruction
+/// finishes, `BlockPayloadReconstructed` is only emitted if the proposal
+/// (the block header) for that view is still available.
+pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
 pub enum CoordinatorOutput<T: NodeType> {
