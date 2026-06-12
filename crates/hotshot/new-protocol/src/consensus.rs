@@ -48,6 +48,7 @@ use crate::{
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
+    storage::{ActionKind, StorageOutput},
 };
 
 /// Inputs to [`Consensus::apply_pre_cutover_seed`].
@@ -103,6 +104,7 @@ pub enum ConsensusInput<T: NodeType> {
     ),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
+    Stored(StorageOutput<T>),
     Timeout(ViewNumber, EpochNumber),
     TimeoutCertificate(TimeoutCertificate2<T>),
     TimeoutOneHonest(ViewNumber, EpochNumber),
@@ -115,6 +117,8 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
+    RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
+    PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
     SendVidShares(Vec<VidShareMessage<T>>),
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
@@ -175,6 +179,18 @@ pub struct Consensus<T: NodeType> {
 
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
+
+    /// Storage confirmations; sends are gated on these facts.
+    stored_proposals: BTreeMap<ViewNumber, Vec<Commitment<Leaf2<T>>>>,
+    stored_vids: BTreeSet<ViewNumber>,
+    stored_actions: BTreeSet<(ViewNumber, ActionKind)>,
+    requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
+
+    /// Messages constructed and accounted for in `voted_*_views` /
+    /// `proposed_views`, awaiting their storage confirmations.
+    pending_vote1: BTreeMap<ViewNumber, Vote1<T>>,
+    pending_vote2: BTreeMap<ViewNumber, Vote2<T>>,
+    pending_proposal: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
 
     /// Skipped by `maybe_vote_2_and_update_lock` (V1 AvidM dispersal).
     pre_cutover_views: BTreeSet<ViewNumber>,
@@ -263,6 +279,13 @@ impl<T: NodeType> Consensus<T> {
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
+            stored_proposals: BTreeMap::new(),
+            stored_vids: BTreeSet::new(),
+            stored_actions: BTreeSet::new(),
+            requested_actions: BTreeSet::new(),
+            pending_vote1: BTreeMap::new(),
+            pending_vote2: BTreeMap::new(),
+            pending_proposal: BTreeMap::new(),
             pre_cutover_views: BTreeSet::new(),
             pending_certs1: BTreeMap::new(),
             pending_certs2: BTreeMap::new(),
@@ -532,6 +555,11 @@ impl<T: NodeType> Consensus<T> {
                 self.headers.insert((view, commitment), header);
                 Protocol::Continue
             },
+            ConsensusInput::Stored(stored) => {
+                debug!(?stored, "apply: stored");
+                self.handle_stored(stored, outbox);
+                Protocol::Continue
+            },
             ConsensusInput::StateValidationFailed(state_response) => {
                 let view = state_response.view;
                 let stored_proposal = self.proposals.get(&view);
@@ -664,6 +692,31 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(epoch);
     }
 
+    /// Position the view state on restart at the first view this node may
+    /// act in: past the decided anchor, no earlier than the view it was in
+    /// at shutdown, and past any view it recorded an action for. Raising
+    /// `timeout_view` bars voting and proposing in everything earlier.
+    ///
+    /// `current_view` lands one view before the first allowed view because
+    /// `Coordinator::start` enters `current_view + 1` through the normal
+    /// `ViewChanged` path, which arms the timer and kicks off the leader's
+    /// block request. Forward-only: never regresses either view.
+    pub fn resume_from_restart(
+        &mut self,
+        anchor_view: ViewNumber,
+        restart_view: ViewNumber,
+        last_actioned_view: ViewNumber,
+    ) {
+        let first_allowed = max(anchor_view + 1, max(restart_view, last_actioned_view + 1));
+        let last_barred = first_allowed - 1;
+        if last_barred > self.timeout_view {
+            self.timeout_view = last_barred;
+        }
+        if last_barred > self.current_view {
+            self.current_view = last_barred;
+        }
+    }
+
     pub fn wants_proposal_for_view(&self, view: &ViewNumber) -> bool {
         let locked_too_new = self
             .locked_cert
@@ -708,6 +761,14 @@ impl<T: NodeType> Consensus<T> {
                 self.proposals = self.proposals.split_off(&view);
                 self.signed_proposals = self.signed_proposals.split_off(&view);
                 self.vid_shares = self.vid_shares.split_off(&view);
+                self.stored_proposals = self.stored_proposals.split_off(&view);
+                self.stored_vids = self.stored_vids.split_off(&view);
+                self.stored_actions = self.stored_actions.split_off(&(view, ActionKind::Vote));
+                self.requested_actions =
+                    self.requested_actions.split_off(&(view, ActionKind::Vote));
+                self.pending_vote1 = self.pending_vote1.split_off(&view);
+                self.pending_vote2 = self.pending_vote2.split_off(&view);
+                self.pending_proposal = self.pending_proposal.split_off(&view);
                 if let Some(epoch) = self.current_epoch {
                     let epoch = EpochNumber::new(epoch.saturating_sub(1));
                     self.drb_results = self.drb_results.split_off(&epoch);
@@ -1404,7 +1465,9 @@ impl<T: NodeType> Consensus<T> {
         };
 
         self.proposed_views.insert(view);
-        outbox.push_back(ConsensusOutput::SendProposal(message));
+        outbox.push_back(ConsensusOutput::PersistProposal(message.clone()));
+        self.request_action(view, Some(proposal_epoch), ActionKind::Propose, outbox);
+        self.pending_proposal.insert(view, message);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1543,6 +1606,87 @@ impl<T: NodeType> Consensus<T> {
             auth_root,
             signed_state_digest,
         })
+    }
+
+    fn handle_stored(&mut self, stored: StorageOutput<T>, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let view = stored.view_number();
+        match stored {
+            StorageOutput::Proposal(view, commitment) => {
+                self.stored_proposals
+                    .entry(view)
+                    .or_default()
+                    .push(commitment);
+            },
+            StorageOutput::Vid(view) => {
+                self.stored_vids.insert(view);
+            },
+            StorageOutput::Action(view, kind) => {
+                self.stored_actions.insert((view, kind));
+            },
+        }
+        self.release_vote1(view, outbox);
+        self.release_vote2(view, outbox);
+        self.release_proposal(view, outbox);
+    }
+
+    fn release_vote1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let Some(vote1) = self.pending_vote1.get(&view) else {
+            return;
+        };
+        if !self.stored_actions.contains(&(view, ActionKind::Vote))
+            || !self.is_proposal_stored(view, &vote1.vote.data.leaf_commit)
+        {
+            return;
+        }
+        let vote1 = self.pending_vote1.remove(&view).expect("checked above");
+        if view <= self.timeout_view {
+            debug!(%view, "dropping pending vote1 for timed-out view");
+            return;
+        }
+        outbox.push_back(ConsensusOutput::SendVote1(vote1));
+    }
+
+    fn release_vote2(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if !self.stored_actions.contains(&(view, ActionKind::Vote))
+            || !self.stored_vids.contains(&view)
+        {
+            return;
+        }
+        let Some(vote2) = self.pending_vote2.remove(&view) else {
+            return;
+        };
+        outbox.push_back(ConsensusOutput::SendVote2(vote2));
+    }
+
+    fn release_proposal(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let Some(message) = self.pending_proposal.get(&view) else {
+            return;
+        };
+        if !self.stored_actions.contains(&(view, ActionKind::Propose))
+            || !self.is_proposal_stored(view, &proposal_commitment(&message.data))
+        {
+            return;
+        }
+        let message = self.pending_proposal.remove(&view).expect("checked above");
+        outbox.push_back(ConsensusOutput::SendProposal(message));
+    }
+
+    fn is_proposal_stored(&self, view: ViewNumber, commitment: &Commitment<Leaf2<T>>) -> bool {
+        self.stored_proposals
+            .get(&view)
+            .is_some_and(|commitments| commitments.contains(commitment))
+    }
+
+    fn request_action(
+        &mut self,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
+        kind: ActionKind,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        if self.requested_actions.insert((view, kind)) {
+            outbox.push_back(ConsensusOutput::RecordAction(view, epoch, kind));
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1699,8 +1843,15 @@ impl<T: NodeType> Consensus<T> {
             vid_share: vid_share.clone(),
             state_vote,
         };
-        outbox.push_back(ConsensusOutput::SendVote1(vote));
         self.voted_1_views.insert(view);
+        if self.stored_actions.contains(&(view, ActionKind::Vote))
+            && self.is_proposal_stored(view, &proposal_commit)
+        {
+            outbox.push_back(ConsensusOutput::SendVote1(vote));
+        } else {
+            self.request_action(view, Some(epoch), ActionKind::Vote, outbox);
+            self.pending_vote1.insert(view, vote);
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1793,8 +1944,15 @@ impl<T: NodeType> Consensus<T> {
                 return;
             },
         };
-        outbox.push_back(ConsensusOutput::SendVote2(vote));
         self.voted_2_views.insert(view);
+        if self.stored_actions.contains(&(view, ActionKind::Vote))
+            && self.stored_vids.contains(&view)
+        {
+            outbox.push_back(ConsensusOutput::SendVote2(vote));
+        } else {
+            self.request_action(view, Some(proposal_epoch), ActionKind::Vote, outbox);
+            self.pending_vote2.insert(view, vote);
+        }
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -2098,6 +2256,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
+            ConsensusInput::Stored(stored) => stored.view_number(),
             ConsensusInput::Timeout(view, _) => *view,
             ConsensusInput::TimeoutOneHonest(view, _) => *view,
             ConsensusInput::TimeoutCertificate(cert) => {

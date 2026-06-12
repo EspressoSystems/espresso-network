@@ -184,8 +184,16 @@ where
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
                 });
+        // `seed_parent` sets the current epoch from the anchor proposal;
+        // `resume_from_restart` positions the view so the node never
+        // re-enters a view it may have voted or proposed in before it went
+        // down.
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
-        consensus.set_view(anchor_view, anchor_epoch);
+        consensus.resume_from_restart(
+            anchor_view,
+            initializer.start_view,
+            initializer.last_actioned_view,
+        );
         if let Some(state_cert) = initializer.state_cert.clone() {
             consensus.seed_state_cert(state_cert);
         }
@@ -294,19 +302,19 @@ where
         if let Some(leader) = self.leader(next_view, epoch)
             && leader == self.public_key
         {
-            let parent_proposal = self
-                .consensus
-                .proposal_at(cur_view)
-                .expect("parent proposal must be seeded before start()")
-                .clone();
-            self.outbox
-                .push_back(ConsensusOutput::RequestBlockAndHeader(
-                    BlockAndHeaderRequest {
-                        view: next_view,
-                        epoch,
-                        parent_proposal,
-                    },
-                ));
+            // No parent proposal when restarting past the anchor view: the
+            // node cannot propose off the anchor for a later view; the
+            // timeout path takes over instead.
+            if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
+                self.outbox
+                    .push_back(ConsensusOutput::RequestBlockAndHeader(
+                        BlockAndHeaderRequest {
+                            view: next_view,
+                            epoch,
+                            parent_proposal,
+                        },
+                    ));
+            }
         }
     }
 
@@ -512,6 +520,10 @@ where
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
                     }
                 },
+                Some(stored) = self.storage.next() => {
+                    finish_measurement(next_input);
+                    return Ok(ConsensusInput::Stored(stored))
+                },
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
                         finish_measurement(next_input);
@@ -638,11 +650,13 @@ where
                 );
                 self.block_builder.request_block(request);
             },
-            ConsensusOutput::SendProposal(proposal) => {
+            ConsensusOutput::RecordAction(view, epoch, kind) => {
+                debug!(%node, %view, ?kind, "record action");
+                self.storage.record_action(view, epoch, kind);
+            },
+            ConsensusOutput::PersistProposal(proposal) => {
                 let view = proposal.data.view_number;
-                let epoch = proposal.data.epoch;
-                let block = proposal.data.block_header.block_number();
-                info!(%node, %view, %epoch, %block, "send proposal");
+                debug!(%node, %view, "persist proposal");
                 self.storage.append_proposal(proposal.data.clone());
                 // Two blocks can be built for one view. Here we know which one
                 // wins and we persist just that one:
@@ -659,9 +673,12 @@ where
                         warn!(%node, %view, "no payload for proposed block");
                     }
                 }
-                // TODO: This may be done async in network so we do not spend
-                // too much time here in this loop.
-
+            },
+            ConsensusOutput::SendProposal(proposal) => {
+                let view = proposal.data.view_number;
+                let epoch = proposal.data.epoch;
+                let block = proposal.data.block_header.block_number();
+                info!(%node, %view, %epoch, %block, "send proposal");
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Proposal(

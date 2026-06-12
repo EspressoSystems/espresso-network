@@ -52,8 +52,10 @@ pub struct NodeChange {
 /// Actions that can be applied to a node during a test.
 #[derive(Clone, Debug)]
 pub enum NodeAction {
-    /// Restart: shut down the node and create a fresh coordinator from
-    /// genesis (blank state).
+    /// Restart: shut down the node and create a fresh coordinator. With
+    /// `persistent_storage` the node resumes from its persisted decided
+    /// anchor and action records; otherwise it starts from genesis
+    /// (blank state).
     Restart,
     /// Start: bring a node that was initially offline into the network
     /// with a fresh coordinator from genesis.
@@ -91,6 +93,22 @@ pub struct TestRunner {
     /// in this set the test also fails.
     #[builder(default)]
     expected_failed_views: BTreeSet<ViewNumber>,
+
+    /// Views excluded from correctness verification entirely.  Used by
+    /// full-restart tests where whether a view in the crash/recovery window
+    /// decides or times out is nondeterministic.
+    #[builder(default)]
+    tolerated_failed_views: BTreeSet<ViewNumber>,
+
+    /// Reuse each node's `TestStorage` across `NodeAction::Restart` instead
+    /// of starting from blank storage.
+    #[builder(default)]
+    persistent_storage: bool,
+
+    /// Per-node storage, created at the start of `run()`.  Exposed so tests
+    /// can inspect persisted state (e.g. the action log) after a run.
+    #[builder(skip)]
+    node_storages: Vec<TestStorage<TestTypes>>,
 
     /// Node indices that are offline for the entire test.  Down nodes do
     /// not run a coordinator.  Views where a down node is leader are
@@ -222,9 +240,16 @@ impl TestRunner {
         result
     }
 
+    pub fn node_storages(&self) -> &[TestStorage<TestTypes>] {
+        &self.node_storages
+    }
+
     pub async fn run(&mut self) -> Result<(), TestError> {
         crate::logging::init_test_logging();
 
+        self.node_storages = (0..self.num_nodes)
+            .map(|_| TestStorage::default())
+            .collect();
         let initially_down = self.initially_down_nodes();
         let mut node_handles: Vec<Option<JoinHandle<()>>> = Vec::with_capacity(self.num_nodes);
         let mut generations: Vec<u64> = vec![0; self.num_nodes];
@@ -251,8 +276,12 @@ impl TestRunner {
         for (i, (_, public_key, _)) in parties.iter().enumerate() {
             let network = create_network(i, &parties, &self.upgrade_lock).await;
 
-            let (membership, storage, client, external_events_tx) =
-                mock_membership_with_client(self.num_nodes, self.epoch_height, *public_key);
+            let (membership, storage, client, external_events_tx) = mock_membership_with_client(
+                self.num_nodes,
+                self.epoch_height,
+                *public_key,
+                self.node_storages[i].clone(),
+            );
 
             let coord = build_test_coordinator(
                 i as u64,
@@ -287,6 +316,7 @@ impl TestRunner {
                 }
                 Some(tokio::spawn(run_node(
                     coord,
+                    self.node_storages[i].clone(),
                     tx,
                     i,
                     generation,
@@ -367,15 +397,21 @@ impl TestRunner {
                                     handle.abort();
                                     let _ = handle.await;
                                 }
-                                // Create a fresh coordinator from genesis.
+                                // Create a fresh coordinator; it resumes
+                                // from the persisted anchor when storage is
+                                // persistent, from genesis otherwise.
                                 let net =
                                     create_network(change.idx, &parties, &self.upgrade_lock).await;
+                                if !self.persistent_storage {
+                                    self.node_storages[change.idx] = TestStorage::default();
+                                }
                                 let (membership, storage, client, external_events_tx) = {
                                     let k = parties[change.idx].1;
                                     mock_membership_with_client(
                                         self.num_nodes,
                                         self.epoch_height,
                                         k,
+                                        self.node_storages[change.idx].clone(),
                                     )
                                 };
                                 let coord = build_test_coordinator(
@@ -401,6 +437,7 @@ impl TestRunner {
                                 let initial_commits = BTreeMap::new();
                                 node_handles[change.idx] = Some(tokio::spawn(run_node(
                                     coord,
+                                    self.node_storages[change.idx].clone(),
                                     tx,
                                     change.idx,
                                     generation,
@@ -456,6 +493,7 @@ impl TestRunner {
             &node_commits,
             &node_timeouts,
             &all_expected_failures,
+            &self.tolerated_failed_views,
             self.target_decisions,
             &currently_down,
         )
@@ -469,6 +507,7 @@ impl TestRunner {
         node_commits: &[BTreeMap<ViewNumber, [u8; 32]>],
         node_timeouts: &[BTreeSet<ViewNumber>],
         expected_failed_views: &BTreeSet<ViewNumber>,
+        tolerated_failed_views: &BTreeSet<ViewNumber>,
         target_decisions: usize,
         down_nodes: &BTreeSet<usize>,
     ) -> Result<(), TestError> {
@@ -479,6 +518,9 @@ impl TestRunner {
         let last_view = expected_failed_views.len() + target_decisions;
         for v in 1..=last_view {
             let view = ViewNumber::new(v.try_into().unwrap());
+            if tolerated_failed_views.contains(&view) {
+                continue;
+            }
             if expected_failed_views.contains(&view) {
                 let mut timeout_count = 0;
                 for (i, commits) in node_commits.iter().enumerate() {
@@ -571,8 +613,10 @@ async fn create_network(
         .unwrap()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_node<N: Network<TestTypes>>(
     mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
+    storage: TestStorage<TestTypes>,
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,
     generation: u64,
@@ -607,7 +651,16 @@ async fn run_node<N: Network<TestTypes>>(
         }
 
         while let Some(output) = coord.outbox_mut().pop_front() {
-            if let ConsensusOutput::LeafDecided { leaves, .. } = &output {
+            if let ConsensusOutput::LeafDecided { leaves, cert1, .. } = &output {
+                // Persist the decided anchor the way the application's
+                // persistence layer does in production: the newest decided
+                // leaf and the QC certifying it. A node restarted with
+                // persistent storage resumes consensus from this anchor.
+                if let Some(newest) = leaves.first() {
+                    storage
+                        .update_anchor_leaf(newest.clone(), cert1.clone())
+                        .await;
+                }
                 for leaf in leaves {
                     let commit: [u8; 32] = leaf.commit().into();
                     let view = leaf.view_number();
