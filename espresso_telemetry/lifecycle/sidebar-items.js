@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["SERVICE_NAME","SHUTDOWN_TIMEOUT"],"fn":["build_logger_provider","init","join_bounded","registry","set_registry"],"static":["REGISTRY"],"struct":["MetricsPushHandle","TelemetryHandle","TelemetryOptions"]};

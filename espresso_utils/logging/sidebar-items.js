@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BacktraceLoggingMode"],"struct":["Config"]};
+window.SIDEBAR_ITEMS = {"enum":["BacktraceLoggingMode"],"struct":["Config"],"type":["FmtSubscriber"]};

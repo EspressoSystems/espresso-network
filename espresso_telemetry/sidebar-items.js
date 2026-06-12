@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["NAME_LABEL"],"fn":["build_write_request","encode_to_snappy","format_float","init","label_pairs_to_labels","make_bucket_series","make_series","named_series","now_unix_millis","registry","set_registry"],"mod":["lifecycle","push_task","rate_limit","remote_write","token"],"struct":["TelemetryHandle","TelemetryOptions"]};

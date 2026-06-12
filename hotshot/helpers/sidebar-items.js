@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["initialize_logging"]};
+window.SIDEBAR_ITEMS = {"fn":["initialize_logging","initialize_logging_with","parse_span_filter","stderr_layer"],"type":["ErasedFmtLayer","FmtSubscriber"]};
