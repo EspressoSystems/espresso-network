@@ -10,6 +10,7 @@ use super::{AvidmGf2Commit, AvidmGf2Share};
 use crate::{
     VidError, VidResult, VidScheme,
     avidm_gf2::{AvidmGf2Scheme, MerkleTree},
+    utils::blake3::Blake3Node,
 };
 
 /// Dummy struct for namespaced AvidmGf2 scheme
@@ -35,6 +36,42 @@ impl NsAvidmGf2Common {
     /// Return the total payload byte length
     pub fn payload_byte_len(&self) -> usize {
         self.ns_lens.iter().sum()
+    }
+
+    /// Commitment to this common data: the root of [`Self::merkle_tree`].
+    pub fn commitment(&self) -> VidResult<NsAvidmGf2Commit> {
+        Ok(NsAvidmGf2Commit {
+            commit: self.merkle_tree()?.commitment(),
+        })
+    }
+
+    /// The merkle tree underlying the namespaced VID commitment: one leaf
+    /// per namespace commitment, plus a final leaf binding the rest of the
+    /// common data. Binding the entire common means `is_consistent` rejects
+    /// a tampered `param` or `ns_lens`, not just tampered namespace
+    /// commitments — nobody can pass off altered decoding parameters as
+    /// belonging to an honest commitment.
+    pub(crate) fn merkle_tree(&self) -> VidResult<MerkleTree> {
+        let leaves = self
+            .ns_commits
+            .iter()
+            .map(|c| c.commit)
+            .chain([self.binding_leaf()]);
+        MerkleTree::from_elems(None, leaves).map_err(|err| VidError::Internal(err.into()))
+    }
+
+    /// Hash of the common data fields that the namespace commitment leaves
+    /// don't already bind.
+    fn binding_leaf(&self) -> Blake3Node {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"NS_AVIDM_GF2_COMMON");
+        hasher.update(&(self.param.recovery_threshold as u64).to_le_bytes());
+        hasher.update(&(self.param.total_weights as u64).to_le_bytes());
+        hasher.update(&(self.ns_lens.len() as u64).to_le_bytes());
+        for len in &self.ns_lens {
+            hasher.update(&(*len as u64).to_le_bytes());
+        }
+        hasher.finalize().into()
     }
 }
 
@@ -97,20 +134,18 @@ impl NsAvidmGf2Scheme {
             ns_commits,
             ns_lens,
         };
-        let commit = MerkleTree::from_elems(None, common.ns_commits.iter().map(|c| c.commit))
-            .map_err(|err| VidError::Internal(err.into()))?
-            .commitment();
-        Ok((NsAvidmGf2Commit { commit }, common))
+        let commit = common.commitment()?;
+        Ok((commit, common))
     }
 
-    /// Check whether the namespaced commitment is consistent with the common data
+    /// Check whether the namespaced commitment is consistent with the common
+    /// data. The commitment binds the entire common (namespace commitments,
+    /// `param`, and `ns_lens`), so a `true` result authenticates every field
+    /// of `common` against `commit`.
     pub fn is_consistent(commit: &NsAvidmGf2Commit, common: &NsAvidmGf2Common) -> bool {
-        let Ok(mt) =
-            MerkleTree::from_elems(None, common.ns_commits.iter().map(|commit| commit.commit))
-        else {
-            return false;
-        };
-        commit.commit == mt.commitment()
+        common
+            .commitment()
+            .is_ok_and(|recomputed| recomputed == *commit)
     }
 
     /// Disperse a payload according to a distribution table and a namespace
@@ -145,11 +180,7 @@ impl NsAvidmGf2Scheme {
             ns_commits,
             ns_lens,
         };
-        let commit = NsAvidmGf2Commit {
-            commit: MerkleTree::from_elems(None, common.ns_commits.iter().map(|c| c.commit))
-                .map_err(|err| VidError::Internal(err.into()))?
-                .commitment(),
-        };
+        let commit = common.commitment()?;
         let mut shares = vec![NsAvidmGf2Share::default(); num_storage_nodes];
         disperses.into_iter().for_each(|ns_disperse| {
             shares
@@ -345,6 +376,37 @@ pub mod tests {
         let mut tampered_common = common;
         tampered_common.ns_commits = different_common.ns_commits;
         assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered_common));
+    }
+
+    /// The commitment must bind `param`, not just the namespace commitments:
+    /// otherwise a Byzantine node could pass off forged decoding parameters
+    /// alongside the honest `ns_commits` as belonging to an honest
+    /// commitment.
+    #[test]
+    fn is_consistent_rejects_tampered_param() {
+        let (commit, common, _shares) = setup_test_data();
+
+        let mut tampered = common.clone();
+        tampered.param.recovery_threshold = 1;
+        assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered));
+
+        let mut tampered = common;
+        tampered.param.total_weights *= 2;
+        assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered));
+    }
+
+    /// Same as `is_consistent_rejects_tampered_param`, for `ns_lens`.
+    #[test]
+    fn is_consistent_rejects_tampered_ns_lens() {
+        let (commit, common, _shares) = setup_test_data();
+
+        let mut tampered = common.clone();
+        tampered.ns_lens[0] += 1;
+        assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered));
+
+        let mut tampered = common;
+        tampered.ns_lens.push(0);
+        assert!(!NsAvidmGf2Scheme::is_consistent(&commit, &tampered));
     }
 
     #[test]

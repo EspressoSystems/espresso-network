@@ -48,7 +48,7 @@ impl NsAvidmGf2Scheme {
             )));
         }
 
-        let mt = MerkleTree::from_elems(None, common.ns_commits.iter().map(|c| c.commit))?;
+        let mt = common.merkle_tree()?;
         Ok(NsProof {
             ns_index,
             ns_payload: payload[ns_payload_range_start..ns_payload_range_end].to_vec(),
@@ -61,11 +61,23 @@ impl NsAvidmGf2Scheme {
     }
 
     /// Verify a namespace proof against a namespaced VID commitment.
+    ///
+    /// `common` may come from an untrusted source: it is first checked for
+    /// consistency against `commit` (which binds all of it), so a forged
+    /// `param` or `ns_lens` fails verification outright.
     pub fn verify_namespace_proof(
         commit: &NsAvidmGf2Commit,
         common: &NsAvidmGf2Common,
         proof: &NsProof,
     ) -> VidResult<VerificationResult> {
+        if !Self::is_consistent(commit, common) {
+            return Ok(Err(()));
+        }
+        // Excludes the final binding leaf of the commitment's merkle tree,
+        // which is not a namespace commitment.
+        if proof.ns_index >= common.ns_commits.len() {
+            return Ok(Err(()));
+        }
         let ns_commit = AvidmGf2Scheme::commit(&common.param, &proof.ns_payload)?;
         Ok(MerkleTree::verify(
             &commit.commit,
@@ -113,6 +125,38 @@ mod tests {
         proof.ns_index = 100;
         assert!(
             NsAvidmGf2Scheme::verify_namespace_proof(&commit, &common, &proof)
+                .unwrap()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn ns_proof_rejects_tampered_common() {
+        let param = AvidmGf2Scheme::setup(5usize, 10usize).unwrap();
+        let payload = vec![1u8; 100];
+        let ns_table = vec![(0..10), (10..100)];
+        let (commit, common) = NsAvidmGf2Scheme::commit(&param, &payload, ns_table).unwrap();
+        let proof = NsAvidmGf2Scheme::namespace_proof(&common, &payload, 1).unwrap();
+        assert!(
+            NsAvidmGf2Scheme::verify_namespace_proof(&commit, &common, &proof)
+                .unwrap()
+                .is_ok()
+        );
+
+        // A common with forged params does not belong to this commitment.
+        let mut tampered = common.clone();
+        tampered.param.recovery_threshold = 1;
+        assert!(
+            NsAvidmGf2Scheme::verify_namespace_proof(&commit, &tampered, &proof)
+                .unwrap()
+                .is_err()
+        );
+
+        // The binding leaf's index cannot be claimed as a namespace.
+        let mut out_of_range = proof.clone();
+        out_of_range.ns_index = common.ns_commits.len();
+        assert!(
+            NsAvidmGf2Scheme::verify_namespace_proof(&commit, &common, &out_of_range)
                 .unwrap()
                 .is_err()
         );
