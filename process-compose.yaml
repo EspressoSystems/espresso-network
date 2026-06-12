@@ -203,6 +203,11 @@ processes:
         path: /healthcheck
     availability: *run-forever
 
+  telemetry-collector:
+    command: docker compose up vector --force-recreate --renew-anon-volumes
+    log_location: logs/vector.log
+    availability: *run-forever
+
   prover-one-shot:
     # "nice" this compute heavy process to reduce load
     command: nice state-prover
@@ -227,6 +232,10 @@ processes:
     command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup -- light-client
     log_location: logs/sequencer0.log
     environment:
+      - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
+      - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
+      - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_0_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_0_AXUM_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_0_TONIC_PORT}
@@ -289,6 +298,8 @@ processes:
   espresso-node-1:
     command: espresso-node -- storage-sql -- http -- config -- query -- submit -- explorer -- catchup
     environment:
+      - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://localhost:${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_1_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_1_AXUM_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_1_TONIC_PORT}
@@ -406,6 +417,9 @@ processes:
   espresso-node-3:
     command: espresso-node -- http -- config -- query -- storage-fs
     environment:
+      - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://localhost:${ESPRESSO_DEMO_TELEMETRY_OTLP_PORT}
+      - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_API_PORT=${ESPRESSO_NODE_3_API_PORT}
       - ESPRESSO_NODE_AXUM_PORT=${ESPRESSO_NODE_3_AXUM_PORT}
       - ESPRESSO_NODE_TONIC_PORT=${ESPRESSO_NODE_3_TONIC_PORT}

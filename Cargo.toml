@@ -17,6 +17,7 @@ members = [
     "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/node-sqlite",
+    "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
     "crates/hotshot-builder/legacy",
@@ -98,6 +99,7 @@ default-members = [
     "crates/espresso/api",
     "crates/espresso/keyset",
     "crates/espresso/node",
+    "crates/espresso/telemetry",
     "slow-tests",
     "staking-cli",
     "test-utils",
@@ -208,6 +210,7 @@ espresso-keyset = { path = "crates/espresso/keyset" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 espresso-node = { path = "crates/espresso/node", default-features = false }
 espresso-safe-tx-builder = { path = "contracts/rust/safe-tx-builder" }
+espresso-telemetry = { path = "crates/espresso/telemetry" }
 espresso-types = { path = "crates/espresso/types" }
 espresso-utils = { path = "crates/espresso/utils" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
@@ -326,6 +329,10 @@ num-traits = "0.2"
 num_cpus = "1"
 num_enum = "0.7"
 openssl = { version = "0.10", features = ["vendored"] }
+opentelemetry = "0.32"
+opentelemetry-appender-tracing = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "logs", "gzip-http", "experimental-http-retry"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["logs"] }
 p3-maybe-rayon = "0.2"
 parking_lot = { version = "0.12", features = ["send_guard"] }
 paste = "1.0"
@@ -368,6 +375,7 @@ serde_json = "1.0.113"
 sha2 = "0.10"
 sha3 = "0.10.8"
 snafu = "0.8"
+snap = "1"
 snow = { version = "0.10.0", features = ["ring-accelerated"] }
 sqlx = { version = "=0.8.3", features = [
     "bit-vec",
