@@ -66,6 +66,10 @@ use crate::{
 /// cheaper than fetching the payload through catchup.
 const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 
+/// Views to retain in storage GC behind the decided view, so in-flight
+/// storage writes for recent views aren't aborted before they persist.
+const STORAGE_GC_MARGIN: u64 = 5;
+
 #[allow(clippy::large_enum_variant)]
 pub enum CoordinatorOutput<T: NodeType> {
     Consensus(ConsensusOutput<T>),
@@ -1542,7 +1546,8 @@ where
                 self.epoch_root_collector.gc(view, epoch);
                 self.pending_proposal_fetches.gc(view);
                 self.state_manager.gc(view);
-                self.storage.gc(view);
+                self.storage
+                    .gc(view.saturating_sub(STORAGE_GC_MARGIN).into());
                 self.vid_reconstructor
                     .gc(view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 let vc = VidCommitment2::default();
