@@ -534,9 +534,9 @@ where
                         }
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
-                    Err(()) => {
+                    Err(err) => {
                         finish_measurement(next_input);
-                        return Err(CoordinatorError::unspecified().context("vid reconstruction"))
+                        return Err(CoordinatorError::regular(err.to_string()).context("vid reconstruction"))
                     }
                 },
                 Some(stored) = self.storage.next() => {
