@@ -41,6 +41,15 @@ WIPE_PG_NODE = 1
 NEW_NODE_INDEX = 5
 NEW_NODE_API_PORT = 24005
 
+# Matches the demo genesis epoch height.
+EPOCH_HEIGHT = 30
+# Stops are only allowed when height % EPOCH_HEIGHT is in this inclusive
+# window, so a ~10-20s stop+restart cannot overlap the epoch root
+# (position 25) or transition blocks (27, 28, 29, 0). The pg wipe's db
+# recreate can exceed that downtime; the window only shrinks the overlap
+# odds there.
+SAFE_STOP_WINDOW = (2, 10)
+
 
 # Services NOT touched by the binary upgrade test:
 #   - one-shots that already ran in phase 1 (deploy-*, fund-builder,
@@ -756,9 +765,33 @@ def _boot_network(compose: Compose, config: Config) -> None:
     log.info(f"compose up -d running in background; log at {compose_up_log}")
 
 
+def _wait_safe_stop_position(ref: Node, timeout: float = 180.0) -> None:
+    deadline = time.monotonic() + timeout
+    last_h: int | None = None
+    while time.monotonic() < deadline:
+        h = ref.consensus_height()
+        if h is not None:
+            last_h = h
+            pos = h % EPOCH_HEIGHT
+            if SAFE_STOP_WINDOW[0] <= pos <= SAFE_STOP_WINDOW[1]:
+                log.info(f"Safe stop position reached: height={h}, position={pos}")
+                return
+        time.sleep(1.0)
+    pos = last_h % EPOCH_HEIGHT if last_h is not None else None
+    raise TimeoutError(
+        f"No safe stop position on {ref} after {int(timeout)}s "
+        f"(height={last_h}, position={pos})"
+    )
+
+
+def _peer_idx(idx: int) -> int:
+    return 1 if idx == 0 else 0
+
+
 def _roll(compose: Compose, idx: int, upgrade_tag: str) -> None:
     nodes = [Node.from_index(i) for i in NODE_INDICES]
-    ref = nodes[1] if idx == 0 else nodes[0]
+    ref = nodes[_peer_idx(idx)]
+    _wait_safe_stop_position(ref)
     initial: int | None = None
     for _ in range(5):
         initial = ref.storage_height()
@@ -790,7 +823,7 @@ def _roll(compose: Compose, idx: int, upgrade_tag: str) -> None:
 
 
 def _restart_with_config_peer(compose: Compose, idx: int, tag: str) -> None:
-    peer_idx = 1 if idx == 0 else 0
+    peer_idx = _peer_idx(idx)
     peer_port_var = f"ESPRESSO_NODE_{peer_idx}_API_PORT"
     peer_port = os.environ.get(peer_port_var)
     if not peer_port:
@@ -842,6 +875,7 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
             _roll(compose, idx, config.upgrade_tag)
 
         case Wipe(idx=idx, backend=backend):
+            _wait_safe_stop_position(Node.from_index(_peer_idx(idx)))
             if backend == "fs":
                 compose.wipe_fs_node(idx)
             else:
