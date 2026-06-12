@@ -238,6 +238,7 @@ impl<T: NodeType> VidReconstructor<T> {
         }
         self.calculations = keep;
         self.accumulators = self.accumulators.split_off(&view_number);
+        self.reconstructed = self.reconstructed.split_off(&view_number);
     }
 
     /// Stop tracking `view`.

@@ -55,6 +55,25 @@ use crate::{
     vote::VoteCollector,
 };
 
+/// Views to retain in the VID reconstructor behind the decided view
+///
+/// A decide can land while an earlier view's payload is still being
+/// reconstructed, and GC at the decided view would abort that task.
+/// A decide proves a quorum reconstructed the payload
+/// so it can be fetched later assuming the quorum includes at
+/// least one query node serving catchup.
+/// The margin gives in flight reconstruction tasks time to finish, which is
+/// cheaper than fetching the payload through catchup.
+///
+/// Proposals are retained with the same margin: when a reconstruction
+/// finishes, `BlockPayloadReconstructed` is only emitted if the proposal
+/// (the block header) for that view is still available.
+pub(crate) const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
+
+/// Views to retain in storage GC behind the decided view, so in-flight
+/// storage writes for recent views aren't aborted before they persist.
+const STORAGE_GC_MARGIN: u64 = 5;
+
 #[allow(clippy::large_enum_variant)]
 pub enum CoordinatorOutput<T: NodeType> {
     Consensus(ConsensusOutput<T>),
@@ -344,7 +363,7 @@ where
                 () = &mut self.timer => {
                     let view = self.timer.view();
                     let epoch = self.timer.epoch();
-                    if let Some(stats) = self.vote1_collector.stats(view, epoch).await {
+                    if let Some(stats) = self.vote1_collector.stats(view, epoch) {
                         warn!(
                             %view, %epoch,
                             stake = %stats.stake,
@@ -529,10 +548,10 @@ where
                         finish_measurement(next_input);
                         // New epoch data available — retry votes that were
                         // buffered because their membership wasn't ready.
-                        self.vote1_collector.retry_pending_votes().await;
-                        self.vote2_collector.retry_pending_votes().await;
-                        self.timeout_collector.retry_pending_votes().await;
-                        self.timeout_one_honest_collector.retry_pending_votes().await;
+                        self.vote1_collector.retry_pending_votes();
+                        self.vote2_collector.retry_pending_votes();
+                        self.timeout_collector.retry_pending_votes();
+                        self.timeout_one_honest_collector.retry_pending_votes();
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Ok(EpochRootResult::EpochRootAdded(epoch)) => {
@@ -928,6 +947,10 @@ where
                 },
                 ConsensusMessage::Vote1(vote1) => {
                     let view = vote1.vote.view_number();
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vote1 is too far ahead");
+                        return None;
+                    }
                     let bn = vote1.vote.data.block_number.unwrap_or(0);
                     let epoch_height = *self.consensus.epoch_height;
                     let is_epoch_root_vote = is_epoch_root(bn, epoch_height);
@@ -943,9 +966,7 @@ where
                         vote1.state_vote.as_ref()?;
                         self.epoch_root_collector.accumulate(vote1.clone()).await;
                     } else {
-                        self.vote1_collector
-                            .accumulate_vote(vote1.vote.clone())
-                            .await;
+                        self.vote1_collector.accumulate_vote(vote1.vote.clone());
                     }
                     self.vid_reconstructor
                         .handle_vid_share(vote1.vid_share, None);
@@ -953,8 +974,12 @@ where
                 },
                 ConsensusMessage::Vote2(vote2) => {
                     let view = vote2.view_number();
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "vote2 is too far ahead");
+                        return None;
+                    }
                     debug!(%node, %sender, %view, "recv vote2");
-                    self.vote2_collector.accumulate_vote(vote2).await;
+                    self.vote2_collector.accumulate_vote(vote2);
                     None
                 },
                 ConsensusMessage::Certificate1(certificate1, _key) => {
@@ -977,6 +1002,10 @@ where
                 },
                 ConsensusMessage::TimeoutVote(timeout_msg) => {
                     let view = timeout_msg.vote.view_number();
+                    if self.is_too_far_ahead(view) {
+                        warn!(%node, %sender, %view, "timeout vote is too far ahead");
+                        return None;
+                    }
                     let current_view = self.consensus.current_view();
                     if view < current_view {
                         debug!(
@@ -991,11 +1020,9 @@ where
                         "recv timeout vote"
                     );
                     self.timeout_collector
-                        .accumulate_vote(timeout_msg.vote.clone())
-                        .await;
+                        .accumulate_vote(timeout_msg.vote.clone());
                     self.timeout_one_honest_collector
-                        .accumulate_vote(timeout_msg.vote)
-                        .await;
+                        .accumulate_vote(timeout_msg.vote);
                     None
                 },
                 ConsensusMessage::TimeoutCertificate(tc) => {
@@ -1125,7 +1152,7 @@ where
                 response,
                 header: None,
             } => {
-                tracing::warn!(view = %response.view, "header creation failed");
+                warn!(view = %response.view, "header creation failed");
                 None
             },
         }
@@ -1307,7 +1334,7 @@ where
             ClientRequest::SeedPreCutover { seed, respond } => {
                 let current_view = self.consensus.current_view();
                 if seed.cutover_view > ViewNumber::genesis() && current_view >= seed.cutover_view {
-                    tracing::info!(
+                    info!(
                         %current_view,
                         cutover_view = *seed.cutover_view,
                         "coordinator: ignoring pre-cutover seed; already past the cutover",
@@ -1315,7 +1342,7 @@ where
                     let _ = respond.send(());
                     return Ok(());
                 }
-                tracing::info!(
+                info!(
                     undecided = seed.undecided.len(),
                     anchor_view = *seed.decided_anchor.view_number(),
                     high_qc_view = seed.high_qc.as_ref().map(|qc| *qc.view_number()),
@@ -1354,7 +1381,7 @@ where
                     .network
                     .apply_epoch(cutover_epoch, &self.membership_coordinator)
                 {
-                    tracing::error!(
+                    error!(
                         %cutover_epoch,
                         %err,
                         "network on_epoch_change failed during seed_pre_cutover",
@@ -1379,7 +1406,7 @@ where
                 }
                 while let Some(output) = self.outbox.pop_front() {
                     if let Err(err) = self.process_consensus_output(output) {
-                        tracing::warn!(
+                        warn!(
                             %err,
                             "error processing post-seed bootstrap output"
                         );
@@ -1398,10 +1425,9 @@ where
                     let _ = respond.send(());
                     return Ok(());
                 }
-                self.timeout_collector.accumulate_vote(vote.clone()).await;
+                self.timeout_collector.accumulate_vote(vote.clone());
                 self.timeout_one_honest_collector
-                    .accumulate_vote(vote.clone())
-                    .await;
+                    .accumulate_vote(vote.clone());
                 // Rebroadcast so peer coordinators can aggregate too.
                 let message = Message {
                     sender: self.public_key.clone(),
@@ -1413,7 +1439,7 @@ where
                     .network
                     .broadcast(self.consensus.current_view(), &message)
                 {
-                    tracing::warn!(%err, "failed to rebroadcast bridged timeout vote");
+                    warn!(%err, "failed to rebroadcast bridged timeout vote");
                 }
                 let _ = respond.send(());
             },
@@ -1436,14 +1462,14 @@ where
                     && self.consensus.cert1_at(qc_view).is_some()
                     && self.consensus.proposal_at(qc_view).is_some()
                 {
-                    tracing::info!(
+                    info!(
                         %cutover_view,
                         "bridged late legacy high QC; proposing cutover view on it (no timeout)"
                     );
                     self.start();
                     while let Some(output) = self.outbox.pop_front() {
                         if let Err(err) = self.process_consensus_output(output) {
-                            tracing::warn!(
+                            warn!(
                                 %err,
                                 "error processing bridged-high-qc bootstrap output"
                             );
@@ -1457,7 +1483,7 @@ where
                     .network
                     .apply_epoch(epoch, &self.membership_coordinator)
                 {
-                    tracing::warn!(%epoch, %err, "network on_epoch_change failed");
+                    warn!(%epoch, %err, "network on_epoch_change failed");
                 }
                 let _ = respond.send(());
             },
@@ -1509,22 +1535,25 @@ where
                 self.cached_validated_proposals =
                     self.cached_validated_proposals.split_off(&(view, vc));
                 self.cached_vid_shares = self.cached_vid_shares.split_off(&(view, vc));
-                // When we enter a new view, we do not want to GC enqueued messages
-                // for the previous view yet:
-                self.network.gc(view.saturating_sub(1).into())?;
-                self.timeout_collector.gc(view, epoch);
-                self.timeout_one_honest_collector.gc(view, epoch);
                 self.vid_disperser.gc(view);
-                self.vote1_collector.gc(view, epoch);
-                self.vote2_collector.gc(view, epoch);
+                // When we enter a new view, we do not want to GC certain data
+                // for the previous view yet:
+                let view = view.saturating_sub(1).into();
+                self.network.gc(view)?;
+                self.timeout_collector.gc(view);
+                self.timeout_one_honest_collector.gc(view);
+                self.vote1_collector.gc(view);
+                self.vote2_collector.gc(view);
             },
             GcScope::Decided(view) => {
                 self.epoch_manager.gc(epoch);
                 self.epoch_root_collector.gc(view, epoch);
                 self.pending_proposal_fetches.gc(view);
                 self.state_manager.gc(view);
-                self.storage.gc(view);
-                self.vid_reconstructor.gc(view);
+                self.storage
+                    .gc(view.saturating_sub(STORAGE_GC_MARGIN).into());
+                self.vid_reconstructor
+                    .gc(view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 let vc = VidCommitment2::default();
                 self.da_payloads = self.da_payloads.split_off(&(view, vc));
             },
@@ -1537,6 +1566,11 @@ where
             },
         }
         Ok(())
+    }
+
+    /// We ignore votes more that 30 views ahead of our current view.
+    fn is_too_far_ahead(&self, v: ViewNumber) -> bool {
+        v > self.consensus.current_view() + 30
     }
 }
 
@@ -1611,7 +1645,6 @@ impl<T: NodeType> PendingProposalFetches<T> {
             .push(respond);
     }
 
-    #[allow(dead_code)]
     fn gc(&mut self, view: ViewNumber) {
         self.pending.retain(|key, responders| {
             responders.retain(|respond| !respond.is_closed());
