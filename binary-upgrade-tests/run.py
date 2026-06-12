@@ -160,16 +160,17 @@ SCENARIOS: dict[str, list[Action]] = {
     ],
     "new-from-old-pg": [
         SmokeTest(tag_source="base"),
-        # Roll every other node first so node-1's archival peer (node-0) is
-        # upgraded and fully re-indexed before node-1 is wiped. Otherwise node-1
-        # and node-0 catch up simultaneously and node-0 cannot serve the leaves
-        # node-1 needs, wedging the wiped node's rebuild.
-        Roll(0),
+        # Wipe node-1 while the rest of the network still runs the old binary;
+        # that is the point of new-from-old. Roll node-0 (node-1's archival
+        # peer) last: node-1's historical backfill continues in the background
+        # after the Wipe step passes, and node-0 must stay fully indexed to
+        # serve it.
+        Roll(WIPE_PG_NODE),
+        Wipe(WIPE_PG_NODE, backend="pg"),
         Roll(2),
         Roll(3),
         Roll(4),
-        Roll(WIPE_PG_NODE),
-        Wipe(WIPE_PG_NODE, backend="pg"),
+        Roll(0),
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
         SmokeTest(),
