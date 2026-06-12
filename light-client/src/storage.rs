@@ -1,11 +1,13 @@
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
-use std::{future::Future, path::PathBuf, str::FromStr, sync::Arc};
+use std::{future::Future, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
 use derive_more::{Display, From};
-use espresso_types::{PubKey, SeqTypes, StakeTableState, v0_3::RegisteredValidator};
+use espresso_types::{
+    BackoffParams, PubKey, Ratio, SeqTypes, StakeTableState, v0_3::RegisteredValidator,
+};
 use futures::TryStreamExt;
 use hotshot_query_service_types::{
     HeightIndexed,
@@ -14,10 +16,7 @@ use hotshot_query_service_types::{
 use hotshot_types::{data::EpochNumber, light_client::StateVerKey, x25519};
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::{
-    QueryBuilder, SqlitePool, query, query_as,
-    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-};
+use sqlx::{QueryBuilder, SqlitePool, query, query_as, sqlite::SqlitePoolOptions};
 use tempfile::{Builder, TempDir};
 use vbs::version::Version;
 
@@ -32,6 +31,20 @@ pub enum LeafRequest {
     #[display("header {_0}")]
     Header(BlockId<SeqTypes>),
 }
+
+/// Maximum number of retries for a failed write before propagating the error.
+const WRITE_RETRY_MAX: u32 = 5;
+
+/// Backoff for retrying failed writes. Staggered so concurrent writers don't lock-step.
+const WRITE_BACKOFF: BackoffParams = BackoffParams::new(
+    Duration::from_millis(50),
+    Duration::from_millis(1_000),
+    2,
+    Ratio {
+        numerator: 5,
+        denominator: 10,
+    },
+);
 
 /// Client-side database for a [`LightClient`].
 pub trait Storage: Sized + Send + Sync + 'static {
@@ -189,9 +202,7 @@ impl LightClientSqliteOptions {
             },
         };
 
-        let opt = SqliteConnectOptions::new()
-            .filename(&path)
-            .create_if_missing(true);
+        let opt = hotshot_query_service::sqlite_options::sqlite_options().filename(&path);
         let pool = SqlitePoolOptions::default()
             .max_connections(self.num_connections)
             .connect_with(opt)
@@ -303,56 +314,64 @@ impl Storage for SqliteStorage {
     }
 
     async fn insert_leaf(&self, leaf: LeafQueryData<SeqTypes>) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
         let height = leaf.height() as i64;
         let hash = leaf.hash().to_string();
         let block_hash = leaf.block_hash().to_string();
         let payload_hash = leaf.payload_hash().to_string();
-        let data = serde_json::to_value(leaf)?;
+        let data = serde_json::to_value(&leaf)?;
 
-        tracing::debug!(height, hash, "inserting leaf");
-        let (id,): (i32,) = query_as(
-            "INSERT INTO leaf (height, hash, block_hash, payload_hash, data) VALUES ($1, $2, $3, \
-             $4, $5)
+        WRITE_BACKOFF
+            .retry_if(
+                WRITE_RETRY_MAX,
+                |_| true,
+                || async {
+                    let mut tx = self.pool.begin().await?;
+
+                    tracing::debug!(height, hash, "inserting leaf");
+                    let (id,): (i32,) = query_as(
+                        "INSERT INTO leaf (height, hash, block_hash, payload_hash, data) VALUES \
+                         ($1, $2, $3, $4, $5)
                     ON CONFLICT (height) DO UPDATE SET id = excluded.id
                     RETURNING id",
-        )
-        .bind(height)
-        .bind(&hash)
-        .bind(&block_hash)
-        .bind(&payload_hash)
-        .bind(data)
-        .fetch_one(tx.as_mut())
-        .await
-        .context("inserting new leaf")?;
-        tracing::debug!(height, hash, id, "inserted leaf");
-
-        // Delete the oldest leaves as necessary until the number of leaves stored does not exceed
-        // `num_leaves`.
-        let (num_leaves,): (u32,) = query_as("SELECT count(*) FROM leaf")
-            .fetch_one(tx.as_mut())
-            .await
-            .context("counting leaves")?;
-        let to_delete = num_leaves.saturating_sub(self.num_leaves);
-        if to_delete > 0 {
-            let (id_to_delete,): (i64,) =
-                query_as("SELECT id FROM leaf ORDER BY id LIMIT 1 OFFSET $1")
-                    .bind(to_delete - 1)
+                    )
+                    .bind(height)
+                    .bind(&hash)
+                    .bind(&block_hash)
+                    .bind(&payload_hash)
+                    .bind(&data)
                     .fetch_one(tx.as_mut())
                     .await
-                    .context("finding timestamp for GC")?;
-            tracing::info!(id_to_delete, "garbage collecting {to_delete} leaves");
-            let res = query("DELETE FROM leaf WHERE id <= $1")
-                .bind(id_to_delete)
-                .execute(tx.as_mut())
-                .await
-                .context("deleting old leaves")?;
-            tracing::info!("deleted {} leaves", res.rows_affected());
-        }
+                    .context("inserting new leaf")?;
+                    tracing::debug!(height, hash, id, "inserted leaf");
 
-        tx.commit().await?;
-        Ok(())
+                    // Delete the oldest leaves as necessary until the number of leaves stored does
+                    // not exceed `num_leaves`.
+                    let (num_leaves,): (u32,) = query_as("SELECT count(*) FROM leaf")
+                        .fetch_one(tx.as_mut())
+                        .await
+                        .context("counting leaves")?;
+                    let to_delete = num_leaves.saturating_sub(self.num_leaves);
+                    if to_delete > 0 {
+                        let (id_to_delete,): (i64,) =
+                            query_as("SELECT id FROM leaf ORDER BY id LIMIT 1 OFFSET $1")
+                                .bind(to_delete - 1)
+                                .fetch_one(tx.as_mut())
+                                .await
+                                .context("finding timestamp for GC")?;
+                        tracing::info!(id_to_delete, "garbage collecting {to_delete} leaves");
+                        let res = query("DELETE FROM leaf WHERE id <= $1")
+                            .bind(id_to_delete)
+                            .execute(tx.as_mut())
+                            .await
+                            .context("deleting old leaves")?;
+                        tracing::info!("deleted {} leaves", res.rows_affected());
+                    }
+
+                    tx.commit().await?;
+                    Ok(())
+                },
+            )
+            .await
     }
 
     async fn stake_table_lower_bound(
@@ -463,134 +482,148 @@ impl Storage for SqliteStorage {
         epoch_root_protocol_version: Version,
         next_epoch_root_protocol_version: Version,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        // Record that the stake table for this epoch is available, along with the versions of
-        // the epoch root headers in epochs `e-2` and `e-1` (snapshot points for `e` and `e+1`).
         let epoch = i64::try_from(*epoch).context("epoch overflow")?;
         let epoch_root_protocol_version_str = epoch_root_protocol_version.to_string();
         let next_epoch_root_protocol_version_str = next_epoch_root_protocol_version.to_string();
-        query(
-            "INSERT INTO stake_table_epoch (epoch, epoch_root_protocol_version, \
-             next_epoch_root_protocol_version) VALUES ($1, $2, $3)",
-        )
-        .bind(epoch)
-        .bind(&epoch_root_protocol_version_str)
-        .bind(&next_epoch_root_protocol_version_str)
-        .execute(tx.as_mut())
-        .await
-        .context(format!(
-            "recording stake table availability for epoch {epoch}"
-        ))?;
-
-        // Insert validators for the new stake table.
         let validators = stake_table
             .validators()
             .values()
             .cloned()
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()?;
-        QueryBuilder::new("INSERT INTO stake_table_validator (epoch, idx, data) ")
-            .push_values(validators.into_iter().enumerate(), |mut q, (i, data)| {
-                q.push_bind(epoch).push_bind(i as i64).push_bind(data);
-            })
-            .build()
-            .execute(tx.as_mut())
-            .await
-            .context(format!("inserting validators for epoch {epoch}"))?;
 
-        // Insert only newly used BLS keys.
-        QueryBuilder::new("INSERT INTO stake_table_bls_key (epoch, key) ")
-            .push_values(stake_table.used_bls_keys(), |mut q, key| {
-                q.push_bind(epoch).push_bind(key.to_string());
-            })
-            // If we insert keys out of order, make sure `epoch` reflects the earliest time when
-            // this key was added to the state.
-            .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
-            .build()
-            .execute(tx.as_mut())
-            .await
-            .context(format!("inserting newly used BLS keys for epoch {epoch}"))?;
+        WRITE_BACKOFF
+            .retry_if(
+                WRITE_RETRY_MAX,
+                |_| true,
+                || async {
+                    let mut tx = self.pool.begin().await?;
 
-        // Insert only newly used Schnorr keys.
-        QueryBuilder::new("INSERT INTO stake_table_schnorr_key (epoch, key) ")
-            .push_values(stake_table.used_schnorr_keys(), |mut q, key| {
-                q.push_bind(epoch).push_bind(key.to_string());
-            })
-            // If we insert keys out of order, make sure `epoch` reflects the earliest time when
-            // this key was added to the state.
-            .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
-            .build()
-            .execute(tx.as_mut())
-            .await
-            .context(format!(
-                "inserting newly used Schnorr keys for epoch {epoch}"
-            ))?;
-
-        // Insert only newly used x25519 keys.
-        if !stake_table.used_x25519_keys().is_empty() {
-            QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
-                .push_values(stake_table.used_x25519_keys(), |mut q, key| {
-                    q.push_bind(epoch).push_bind(key.to_string());
-                })
-                // If we insert keys out of order, make sure `epoch` reflects the earliest time
-                // when this key was added to the state.
-                .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
-                .build()
-                .execute(tx.as_mut())
-                .await
-                .context(format!(
-                    "inserting newly used x25519 keys for epoch {epoch}"
-                ))?;
-        }
-
-        // Insert only the new validator exits.
-        if !stake_table.validator_exits().is_empty() {
-            QueryBuilder::new("INSERT INTO stake_table_exit (epoch, address) ")
-                .push_values(stake_table.validator_exits(), |mut q, address| {
-                    q.push_bind(epoch).push_bind(address.to_string());
-                })
-                // If we insert exits out of order, make sure `epoch` reflects the earliest time
-                // when this exit was added to the state.
-                .push(" ON CONFLICT (address) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
-                .build()
-                .execute(tx.as_mut())
-                .await
-                .context(format!("inserting new validator exits for epoch {epoch}"))?;
-        }
-
-        // Delete the second oldest stake table if necessary to ensure the number of stake tables
-        // stored does not exceed `num_stake_tables`.
-        let (num_stake_tables,): (u32,) = query_as("SELECT count(*) FROM stake_table_epoch")
-            .fetch_one(tx.as_mut())
-            .await
-            .context("counting stake tables")?;
-        if num_stake_tables > self.num_stake_tables {
-            // We always delete the _second oldest_ stake table. We want to keep the oldest around
-            // because it is the hardest to catch up for if we need it again (we would have to go
-            // all the way back to genesis). The second oldest is the least likely to be used again
-            // after the oldest, while still being easy to replay if we do need it (because we can
-            // just replay from the cached oldest).
-            let (epoch_to_delete,): (i64,) =
-                query_as("SELECT epoch FROM stake_table_epoch ORDER BY epoch LIMIT 1 OFFSET 1")
-                    .fetch_one(tx.as_mut())
+                    // Record that the stake table for this epoch is available, along with the
+                    // versions of the epoch root headers in epochs `e-2` and `e-1` (snapshot points
+                    // for `e` and `e+1`).
+                    query(
+                        "INSERT INTO stake_table_epoch (epoch, epoch_root_protocol_version, \
+                         next_epoch_root_protocol_version) VALUES ($1, $2, $3)",
+                    )
+                    .bind(epoch)
+                    .bind(&epoch_root_protocol_version_str)
+                    .bind(&next_epoch_root_protocol_version_str)
+                    .execute(tx.as_mut())
                     .await
-                    .context("find second oldest epoch")?;
-            tracing::info!(epoch_to_delete, "garbage collecting stake table");
+                    .context(format!(
+                        "recording stake table availability for epoch {epoch}"
+                    ))?;
 
-            // Delete from the main epoch table. The corresponding rows from `stake_table_validator`
-            // will be deleted automatically by cascading. The corresponding rows in the BLS keys,
-            // Schnorr keys, and validator exits tables cannot be deleted, because those tables are
-            // cumulative over later epochs.
-            query("DELETE FROM stake_table_epoch WHERE epoch = $1")
-                .bind(epoch_to_delete)
-                .execute(tx.as_mut())
-                .await
-                .context("garbage collecting stake table")?;
-        }
+                    QueryBuilder::new("INSERT INTO stake_table_validator (epoch, idx, data) ")
+                        .push_values(validators.iter().enumerate(), |mut q, (i, data)| {
+                            q.push_bind(epoch).push_bind(i as i64).push_bind(data);
+                        })
+                        .build()
+                        .execute(tx.as_mut())
+                        .await
+                        .context(format!("inserting validators for epoch {epoch}"))?;
 
-        tx.commit().await?;
-        Ok(())
+                    // Insert only newly used BLS keys.
+                    QueryBuilder::new("INSERT INTO stake_table_bls_key (epoch, key) ")
+                    .push_values(stake_table.used_bls_keys(), |mut q, key| {
+                        q.push_bind(epoch).push_bind(key.to_string());
+                    })
+                    // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                    // when this key was added to the state.
+                    .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
+                    .build()
+                    .execute(tx.as_mut())
+                    .await
+                    .context(format!("inserting newly used BLS keys for epoch {epoch}"))?;
+
+                    // Insert only newly used Schnorr keys.
+                    QueryBuilder::new("INSERT INTO stake_table_schnorr_key (epoch, key) ")
+                    .push_values(stake_table.used_schnorr_keys(), |mut q, key| {
+                        q.push_bind(epoch).push_bind(key.to_string());
+                    })
+                    // If we insert keys out of order, make sure `epoch` reflects the earliest time
+                    // when this key was added to the state.
+                    .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
+                    .build()
+                    .execute(tx.as_mut())
+                    .await
+                    .context(format!(
+                        "inserting newly used Schnorr keys for epoch {epoch}"
+                    ))?;
+
+                    // Insert only newly used x25519 keys.
+                    if !stake_table.used_x25519_keys().is_empty() {
+                        QueryBuilder::new("INSERT INTO stake_table_x25519_key (epoch, key) ")
+                        .push_values(stake_table.used_x25519_keys(), |mut q, key| {
+                            q.push_bind(epoch).push_bind(key.to_string());
+                        })
+                        // If we insert keys out of order, make sure `epoch` reflects the earliest
+                        // time when this key was added to the state.
+                        .push(" ON CONFLICT (key) DO UPDATE SET epoch = min(epoch, excluded.epoch)")
+                        .build()
+                        .execute(tx.as_mut())
+                        .await
+                        .context(format!(
+                            "inserting newly used x25519 keys for epoch {epoch}"
+                        ))?;
+                    }
+
+                    // Insert only the new validator exits.
+                    if !stake_table.validator_exits().is_empty() {
+                        QueryBuilder::new("INSERT INTO stake_table_exit (epoch, address) ")
+                        .push_values(stake_table.validator_exits(), |mut q, address| {
+                            q.push_bind(epoch).push_bind(address.to_string());
+                        })
+                        // If we insert exits out of order, make sure `epoch` reflects the earliest
+                        // time when this exit was added to the state.
+                        .push(
+                            " ON CONFLICT (address) DO UPDATE SET epoch = min(epoch, \
+                             excluded.epoch)",
+                        )
+                        .build()
+                        .execute(tx.as_mut())
+                        .await
+                        .context(format!("inserting new validator exits for epoch {epoch}"))?;
+                    }
+
+                    // Delete the second oldest stake table if necessary to ensure the number of stake
+                    // tables stored does not exceed `num_stake_tables`.
+                    let (num_stake_tables,): (u32,) =
+                        query_as("SELECT count(*) FROM stake_table_epoch")
+                            .fetch_one(tx.as_mut())
+                            .await
+                            .context("counting stake tables")?;
+                    if num_stake_tables > self.num_stake_tables {
+                        // We always delete the _second oldest_ stake table. We want to keep the oldest
+                        // around because it is the hardest to catch up for if we need it again (we
+                        // would have to go all the way back to genesis). The second oldest is the
+                        // least likely to be used again after the oldest, while still being easy to
+                        // replay if we do need it (because we can just replay from the cached oldest).
+                        let (epoch_to_delete,): (i64,) = query_as(
+                            "SELECT epoch FROM stake_table_epoch ORDER BY epoch LIMIT 1 OFFSET 1",
+                        )
+                        .fetch_one(tx.as_mut())
+                        .await
+                        .context("find second oldest epoch")?;
+                        tracing::info!(epoch_to_delete, "garbage collecting stake table");
+
+                        // Delete from the main epoch table. The corresponding rows from
+                        // `stake_table_validator` will be deleted automatically by cascading. The
+                        // corresponding rows in the BLS keys, Schnorr keys, and validator exits tables
+                        // cannot be deleted, because those tables are cumulative over later epochs.
+                        query("DELETE FROM stake_table_epoch WHERE epoch = $1")
+                            .bind(epoch_to_delete)
+                            .execute(tx.as_mut())
+                            .await
+                            .context("garbage collecting stake table")?;
+                    }
+
+                    tx.commit().await?;
+                    Ok(())
+                },
+            )
+            .await
     }
 }
 
@@ -600,6 +633,7 @@ mod test {
     use std::os::unix::fs::PermissionsExt;
 
     use pretty_assertions::assert_eq;
+    use sqlx::sqlite::SqliteConnectOptions;
     use tempfile::tempdir;
     use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 

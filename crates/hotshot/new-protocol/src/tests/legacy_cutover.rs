@@ -275,7 +275,7 @@ async fn build_cutover_coordinator(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_parent(genesis_cert1, genesis_proposal);
+    consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
     let block_builder = BlockBuilder::new(
         instance.clone(),
@@ -401,7 +401,7 @@ async fn spawn_node(
 ) -> NodeState {
     let network = build_new_protocol_network(i, parties, new_proto_lock).await;
     let (membership, storage, client, external_events_tx) =
-        mock_membership_with_client(num_nodes, EPOCH_HEIGHT, parties[i].1);
+        mock_membership_with_client(num_nodes, EPOCH_HEIGHT, parties[i].1, Default::default());
 
     let coord = build_cutover_coordinator(
         i as u64,

@@ -59,6 +59,7 @@ use crate::{
     },
     outbox::Outbox,
     state::StateResponse,
+    storage::StorageOutput,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -574,7 +575,7 @@ pub fn mock_membership_with_num_nodes(
     CoordinatorClient<TestTypes>,
 ) {
     let (coord, storage, client, _external_events_tx) =
-        mock_membership_with_client(num_nodes, epoch_height, public_key);
+        mock_membership_with_client(num_nodes, epoch_height, public_key, TestStorage::default());
     (coord, storage, client)
 }
 
@@ -582,6 +583,7 @@ pub fn mock_membership_with_client(
     num_nodes: usize,
     epoch_height: u64,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -595,6 +597,7 @@ pub fn mock_membership_with_client(
         epoch_height,
         leaf_fetcher_network,
         public_key,
+        storage,
     );
     (coord, storage, client, external_events_tx)
 }
@@ -606,6 +609,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
         dyn hotshot_types::traits::leaf_fetcher_network::LeafFetcherNetwork<TestTypes>,
     >,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -617,7 +621,6 @@ pub fn mock_membership_with_leaf_fetcher_network(
         &TestNodeStakes::default(),
     )
     .0;
-    let storage = TestStorage::<TestTypes>::default();
     let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
         members.clone(),
         members.clone(),
@@ -766,7 +769,7 @@ impl MockBlock {
             &block.encode(),
             &metadata.encode(),
             10,
-            TEST_VERSIONS.test.base,
+            versions::NEW_PROTOCOL_VERSION,
         );
         let builder_commitment =
             <TestBlockPayload as BlockPayload<TestTypes>>::builder_commitment(&block, &metadata);
@@ -889,6 +892,20 @@ impl ConsensusHarness {
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
+        // The coordinator persists incoming proposals and VID shares before
+        // consensus sees them; simulate those storage confirmations.
+        if let ConsensusInput::ProposalWithVidShare(_, msg, vid_share) = &input {
+            let view = msg.proposal.data.view_number;
+            let commitment = proposal_commitment(&msg.proposal.data);
+            self.consensus.apply(
+                ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                &mut outbox,
+            );
+            self.consensus.apply(
+                ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
+                &mut outbox,
+            );
+        }
         self.consensus.apply(input, &mut outbox);
         self.drain_outbox(&mut outbox).await;
     }
@@ -910,6 +927,20 @@ impl ConsensusHarness {
                 let input = state_verified_input(&req.proposal, req.view);
                 self.consensus.apply(input, outbox);
             },
+            ConsensusOutput::RecordAction(view, _, kind) => {
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
+                    outbox,
+                );
+            },
+            ConsensusOutput::PersistProposal(proposal) => {
+                let view = proposal.data.view_number;
+                let commitment = proposal_commitment(&proposal.data);
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
+            },
             ConsensusOutput::RequestBlockAndHeader(req) => {
                 let mock_block = MockBlock::new();
                 let parent_leaf = req.parent_proposal.clone().into();
@@ -930,6 +961,7 @@ impl ConsensusHarness {
                         epoch: req.epoch,
                         payload: mock_block.block,
                         metadata: mock_block.metadata,
+                        payload_commitment: mock_block.payload_commitment,
                     },
                     outbox,
                 );
@@ -939,6 +971,7 @@ impl ConsensusHarness {
                 epoch,
                 payload,
                 metadata,
+                payload_commitment: _,
             } => {
                 let vid_disperse = VidDisperse::calculate_vid_disperse(
                     payload,

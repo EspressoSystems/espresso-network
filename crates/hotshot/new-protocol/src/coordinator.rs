@@ -12,7 +12,7 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidDisperseShare2, ViewNumber},
+    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
@@ -95,9 +95,11 @@ pub struct Coordinator<T: NodeType, N, S> {
     #[builder(skip)]
     pending_proposal_fetches: PendingProposalFetches<T>,
     #[builder(default)]
-    cached_validated_proposals: BTreeMap<ViewNumber, ValidatedProposal<T>>,
+    cached_validated_proposals: BTreeMap<(ViewNumber, VidCommitment2), ValidatedProposal<T>>,
     #[builder(default)]
-    cached_vid_shares: BTreeMap<ViewNumber, VidDisperseShare2<T>>,
+    cached_vid_shares: BTreeMap<(ViewNumber, VidCommitment2), VidDisperseShare2<T>>,
+    #[builder(skip)]
+    da_payloads: BTreeMap<(ViewNumber, VidCommitment2), PendingDa<T>>,
     metrics: Option<metrics::Metrics>,
 }
 
@@ -167,8 +169,34 @@ where
             initializer.anchor_state.clone(),
             anchor_leaf.clone(),
         );
-        consensus.seed_parent(cert1, parent_proposal);
-        consensus.set_view(anchor_view, anchor_epoch);
+        // The anchor leaf and persisted proposals are blocks this node had
+        // reconstructed before it went down, so treat them as reconstructed on
+        // restart
+        let reconstructed_blocks =
+            std::iter::once((anchor_view, anchor_leaf.block_header().clone()))
+                .chain(
+                    initializer
+                        .saved_proposals
+                        .iter()
+                        .map(|(view, p)| (*view, p.data.block_header().clone())),
+                )
+                .filter_map(|(view, header)| match header.payload_commitment() {
+                    VidCommitment::V2(commitment) => Some((view, commitment)),
+                    _ => None,
+                });
+        // `seed_parent` sets the current epoch from the anchor proposal;
+        // `resume_from_restart` positions the view so the node never
+        // re-enters a view it may have voted or proposed in before it went
+        // down.
+        consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
+        consensus.resume_from_restart(
+            anchor_view,
+            initializer.start_view,
+            initializer.last_actioned_view,
+        );
+        if let Some(state_cert) = initializer.state_cert.clone() {
+            consensus.seed_state_cert(state_cert);
+        }
 
         let lock = upgrade_lock.clone();
         Self::builder()
@@ -274,19 +302,19 @@ where
         if let Some(leader) = self.leader(next_view, epoch)
             && leader == self.public_key
         {
-            let parent_proposal = self
-                .consensus
-                .proposal_at(cur_view)
-                .expect("parent proposal must be seeded before start()")
-                .clone();
-            self.outbox
-                .push_back(ConsensusOutput::RequestBlockAndHeader(
-                    BlockAndHeaderRequest {
-                        view: next_view,
-                        epoch,
-                        parent_proposal,
-                    },
-                ));
+            // No parent proposal when restarting past the anchor view: the
+            // node cannot propose off the anchor for a later view; the
+            // timeout path takes over instead.
+            if let Some(parent_proposal) = self.consensus.proposal_at(cur_view).cloned() {
+                self.outbox
+                    .push_back(ConsensusOutput::RequestBlockAndHeader(
+                        BlockAndHeaderRequest {
+                            view: next_view,
+                            epoch,
+                            parent_proposal,
+                        },
+                    ));
+            }
         }
     }
 
@@ -377,14 +405,12 @@ where
                     Ok(vid_share) => {
                         finish_measurement(next_input);
                         let view = vid_share.view_number();
-                        let Some(validated) = self.cached_validated_proposals.remove(&view) else {
+                        let key = (view, vid_share.payload_commitment);
+                        let Some(validated) = self.cached_validated_proposals.remove(&key) else {
                             // Wait for the proposal
-                            self.cached_vid_shares.insert(view, vid_share);
+                            self.cached_vid_shares.insert(key, vid_share);
                             continue;
                         };
-                        if !check_payload_commitment(&validated.message.proposal, &vid_share) {
-                            continue;
-                        }
                         return self.on_proposal_and_vid_share(validated, vid_share)
                     },
                     Err(e) => {
@@ -405,15 +431,18 @@ where
                         }
 
                         let view = validated.message.proposal.data.view_number();
-                        let Some(vid_share) = self.cached_vid_shares.remove(&view) else {
-                            // Wait for the vid share
-                            self.cached_validated_proposals.insert(view, validated);
+                        let VidCommitment::V2(commit) =
+                            validated.message.proposal.data.block_header.payload_commitment()
+                        else {
+                            warn!(%view, "proposal payload commitment is not V2, discarding");
                             continue;
                         };
-                        // Check for commitment correspondence
-                        if !check_payload_commitment(&validated.message.proposal, &vid_share) {
+                        let key = (view, commit);
+                        let Some(vid_share) = self.cached_vid_shares.remove(&key) else {
+                            // Wait for the vid share describing this payload.
+                            self.cached_validated_proposals.insert(key, validated);
                             continue;
-                        }
+                        };
                         return self.on_proposal_and_vid_share(validated, vid_share)
                     }
                     Err(e) => {
@@ -428,15 +457,22 @@ where
                         let next_view = block.view + 1;
                         let epoch = block.epoch;
                         let manifest = block.manifest.clone();
-                        self.storage.append_da(
-                            block.view,
-                            block.epoch,
-                            block.payload.payload.clone(),
-                            block.payload.metadata.clone(),
-                            block.payload_commitment,
-                        );
+                        // Retain the payload and persist it when consensus proposes this
+                        // exact block (cf. SendProposal):
+                        if let VidCommitment::V2(commit) = block.payload_commitment {
+                            self.da_payloads.insert(
+                                (block.view, commit),
+                                PendingDa {
+                                    epoch: block.epoch,
+                                    payload: block.payload.payload.clone(),
+                                    metadata: block.payload.metadata.clone(),
+                                },
+                            );
+                        } else {
+                            warn!(view = %block.view, "block payload commitment is not V2");
+                        }
                         // We built this block; skip reconstructing it from our own loopback share.
-                        self.vid_reconstructor.mark_reconstructed(block.view);
+                        self.vid_reconstructor.retire_view(block.view);
                         self.unicast_to_leader(
                             next_view,
                             epoch,
@@ -484,6 +520,10 @@ where
                         return Err(CoordinatorError::unspecified().context("vid reconstruction"))
                     }
                 },
+                Some(stored) = self.storage.next() => {
+                    finish_measurement(next_input);
+                    return Ok(ConsensusInput::Stored(stored))
+                },
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
                         finish_measurement(next_input);
@@ -494,6 +534,11 @@ where
                         self.timeout_collector.retry_pending_votes().await;
                         self.timeout_one_honest_collector.retry_pending_votes().await;
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
+                    }
+                    Ok(EpochRootResult::EpochRootAdded(epoch)) => {
+                        finish_measurement(next_input);
+                        debug!(%epoch, "epoch root added to membership");
+                        continue;
                     }
                     Err(failure) => {
                         finish_measurement(next_input);
@@ -546,6 +591,7 @@ where
                 epoch,
                 payload,
                 metadata,
+                payload_commitment,
             } => {
                 debug!(%node, %view, %epoch, "request vid disperse");
                 self.vid_disperser.request_vid_disperse(VidDisperseRequest {
@@ -553,6 +599,7 @@ where
                     epoch,
                     block: payload,
                     metadata,
+                    payload_commitment,
                 });
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
@@ -603,15 +650,35 @@ where
                 );
                 self.block_builder.request_block(request);
             },
+            ConsensusOutput::RecordAction(view, epoch, kind) => {
+                debug!(%node, %view, ?kind, "record action");
+                self.storage.record_action(view, epoch, kind);
+            },
+            ConsensusOutput::PersistProposal(proposal) => {
+                let view = proposal.data.view_number;
+                debug!(%node, %view, "persist proposal");
+                self.storage.append_proposal(proposal.data.clone());
+                // Two blocks can be built for one view. Here we know which one
+                // wins and we persist just that one:
+                if let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() {
+                    if let Some(da) = self.da_payloads.remove(&(view, commit)) {
+                        self.storage.append_da(
+                            view,
+                            da.epoch,
+                            da.payload,
+                            da.metadata,
+                            VidCommitment::V2(commit),
+                        );
+                    } else {
+                        warn!(%node, %view, "no payload for proposed block");
+                    }
+                }
+            },
             ConsensusOutput::SendProposal(proposal) => {
                 let view = proposal.data.view_number;
                 let epoch = proposal.data.epoch;
                 let block = proposal.data.block_header.block_number();
                 info!(%node, %view, %epoch, %block, "send proposal");
-                self.storage.append_proposal(proposal.data.clone());
-                // TODO: This may be done async in network so we do not spend
-                // too much time here in this loop.
-
                 let message = Message {
                     sender: self.public_key.clone(),
                     message_type: MessageType::Consensus(ConsensusMessage::Proposal(
@@ -783,6 +850,14 @@ where
                 if next_epoch > EpochNumber::genesis() + 1 {
                     self.epoch_manager.request_drb_result(next_epoch);
                 }
+            },
+            ConsensusOutput::ViewTimedOut(view) => {
+                debug!(%node, %view, "view timed out");
+                let epoch = self
+                    .consensus
+                    .current_epoch()
+                    .unwrap_or_else(EpochNumber::genesis);
+                self.gc(epoch, GcScope::Timeout(view))?;
             },
             ConsensusOutput::BlockPayloadReconstructed { .. } => {},
         }
@@ -1069,6 +1144,13 @@ where
         self.storage
             .append_proposal(validated.message.proposal.data.clone());
 
+        if let Some(state_cert) = &validated.message.proposal.data.state_cert {
+            self.storage.append_state_cert(
+                ViewNumber::new(state_cert.light_client_state.view_number),
+                state_cert.clone(),
+            );
+        }
+
         let m = validated
             .message
             .proposal
@@ -1081,8 +1163,12 @@ where
 
         // GC for the cache
         let view = validated.message.proposal.data.view_number();
-        self.cached_vid_shares = self.cached_vid_shares.split_off(&(view + 1));
-        self.cached_validated_proposals = self.cached_validated_proposals.split_off(&(view + 1));
+        self.cached_vid_shares = self
+            .cached_vid_shares
+            .split_off(&(view + 1, VidCommitment2::default()));
+        self.cached_validated_proposals = self
+            .cached_validated_proposals
+            .split_off(&(view + 1, VidCommitment2::default()));
 
         Ok(ConsensusInput::ProposalWithVidShare(
             validated.sender,
@@ -1418,9 +1504,11 @@ where
         self.consensus.gc(scope);
         match scope {
             GcScope::Local(view) => {
+                let vc = VidCommitment2::default();
                 self.block_builder.gc(view);
-                self.cached_validated_proposals = self.cached_validated_proposals.split_off(&view);
-                self.cached_vid_shares = self.cached_vid_shares.split_off(&view);
+                self.cached_validated_proposals =
+                    self.cached_validated_proposals.split_off(&(view, vc));
+                self.cached_vid_shares = self.cached_vid_shares.split_off(&(view, vc));
                 // When we enter a new view, we do not want to GC enqueued messages
                 // for the previous view yet:
                 self.network.gc(view.saturating_sub(1).into())?;
@@ -1437,6 +1525,15 @@ where
                 self.state_manager.gc(view);
                 self.storage.gc(view);
                 self.vid_reconstructor.gc(view);
+                let vc = VidCommitment2::default();
+                self.da_payloads = self.da_payloads.split_off(&(view, vc));
+            },
+            GcScope::Timeout(view) => {
+                self.vid_reconstructor.retire_view(view);
+                let vc = VidCommitment2::default();
+                self.da_payloads
+                    .extract_if((view, vc)..(view + 1, vc), |_, _| true)
+                    .for_each(drop);
             },
         }
         Ok(())
@@ -1450,27 +1547,15 @@ pub enum GcScope {
     Local(ViewNumber),
     /// GC is invoked on local decided views.
     Decided(ViewNumber),
+    /// GC is invoked on a view that advanced via timeout certificate.
+    Timeout(ViewNumber),
 }
 
-fn check_payload_commitment<T: NodeType>(
-    proposal: &SignedProposal<T, Proposal<T>>,
-    vid_share: &VidDisperseShare2<T>,
-) -> bool {
-    let VidCommitment::V2(commit) = proposal.data.block_header.payload_commitment() else {
-        warn!(
-            "unexpected payload commitment type in view {}, proposal discarded",
-            proposal.data.view_number
-        );
-        return false;
-    };
-    if commit != vid_share.payload_commitment {
-        warn!(
-            "payload commitment mismatch in view {}, discard the proposal",
-            proposal.data.view_number
-        );
-        return false;
-    }
-    true
+/// A payload built locally and awaiting DA persistence.
+struct PendingDa<T: NodeType> {
+    epoch: EpochNumber,
+    payload: T::BlockPayload,
+    metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
 }
 
 type ProposalFetchResponseSender<T> =

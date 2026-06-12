@@ -211,6 +211,25 @@ impl TestHarness {
         inputs
     }
 
+    /// Process events from the coordinator until the collected outputs
+    /// satisfy `predicate`. Use for outputs that are gated on storage
+    /// confirmations (votes, proposals) and thus need extra loop turns
+    /// after their triggering input has been observed.
+    pub async fn process_until_output<P>(&mut self, pred: P)
+    where
+        P: Fn(&Outbox<ConsensusOutput<TestTypes>>) -> bool,
+    {
+        while !pred(&self.outputs) {
+            match self.coordinator.next_consensus_input().await {
+                Ok(input) => self.apply_and_process(input).await,
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
+    }
+
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
         &self.outputs
     }
