@@ -95,6 +95,11 @@ impl AvidmGf2Share {
         self.range.len()
     }
 
+    /// Range of this share in the encoded payload.
+    pub fn range(&self) -> &Range<usize> {
+        &self.range
+    }
+
     /// Validate the share structure.
     pub fn validate(&self) -> bool {
         self.payload.len() == self.range.len() && self.mt_proofs.len() == self.range.len()

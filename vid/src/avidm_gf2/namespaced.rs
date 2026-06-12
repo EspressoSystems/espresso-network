@@ -70,6 +70,16 @@ impl NsAvidmGf2Share {
     pub fn inner_ns_share(&self, ns_index: usize) -> Option<AvidmGf2Share> {
         self.0.get(ns_index).cloned()
     }
+
+    /// The shard range this share covers, identical across all namespaces.
+    /// `None` if the share is empty or its namespaces disagree on the range.
+    pub fn range(&self) -> Option<&Range<usize>> {
+        let first = self.0.first()?.range();
+        self.0
+            .iter()
+            .all(|share| share.range() == first)
+            .then_some(first)
+    }
 }
 
 impl NsAvidmGf2Scheme {
