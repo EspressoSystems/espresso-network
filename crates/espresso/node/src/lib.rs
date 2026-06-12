@@ -37,6 +37,22 @@ use espresso_types::{
 };
 
 pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
+pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
+pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
+    "https://telemetry.decaf.testnet.espresso.network";
+
+/// Default telemetry endpoint for known networks. Unknown chains have no
+/// default; operators set `ESPRESSO_NODE_TELEMETRY_ENDPOINT` explicitly.
+pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static str> {
+    if chain_id == MAINNET_CHAIN_ID {
+        Some(MAINNET_TELEMETRY_ENDPOINT)
+    } else if chain_id == ChainId(U256::from(0xdecafu64)) {
+        Some(DECAF_TELEMETRY_ENDPOINT)
+    } else {
+        None
+    }
+}
+
 pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
@@ -1766,6 +1782,28 @@ mod test {
         traits::block_contents::{BlockHeader, BlockPayload},
     };
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
+
+    #[test]
+    fn telemetry_endpoint_defaults_by_chain() {
+        use super::{
+            ChainId, DECAF_TELEMETRY_ENDPOINT, MAINNET_CHAIN_ID, MAINNET_TELEMETRY_ENDPOINT, U256,
+            default_telemetry_endpoint,
+        };
+
+        assert_eq!(
+            default_telemetry_endpoint(MAINNET_CHAIN_ID),
+            Some(MAINNET_TELEMETRY_ENDPOINT)
+        );
+        assert_eq!(
+            default_telemetry_endpoint(ChainId(U256::from(0xdecafu64))),
+            Some(DECAF_TELEMETRY_ENDPOINT)
+        );
+        // Unknown chains (e.g. the demo chain) get no default.
+        assert_eq!(
+            default_telemetry_endpoint(ChainId(U256::from(999999999u64))),
+            None
+        );
+    }
 
     use self::testing::run_test_builder;
     use super::*;
