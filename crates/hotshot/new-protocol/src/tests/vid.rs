@@ -338,8 +338,8 @@ async fn test_weeds_bad_shares_and_recovers() {
     assert_eq!(err.kind, VidReconstructErrorKind::AwaitingShares);
     assert_eq!(err.bad_share_keys, vec![poison_voter]);
 
-    // Weeding plus the shares that arrived in flight put the verified weight
-    // back over the threshold: the retry happens without further input.
+    // Weeding plus the shares that arrived in flight put the coverage back
+    // over the threshold: the retry happens without further input.
     let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
         .expect("retry should complete in time")
@@ -349,13 +349,11 @@ async fn test_weeds_bad_shares_and_recovers() {
     assert_eq!(out.payload_commitment, payload_commitment);
 }
 
-/// A Byzantine voter replaying another voter's (valid) share fakes quorum
-/// weight without contributing a new shard range. The attempt fails, but the
-/// payload must NOT be declared unrecoverable — the replay verifies against
-/// the commitment, so the disperser can't be implicated — and reconstruction
-/// must succeed once a genuinely new share arrives.
+/// A Byzantine voter replaying another voter's (valid) share contributes no
+/// new shard coverage, so it must be dropped at intake: no reconstruction
+/// attempt runs until genuinely new shares cover the recovery threshold.
 #[tokio::test]
-async fn test_replayed_share_does_not_block_reconstruction() {
+async fn test_replayed_share_does_not_fake_coverage() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
@@ -376,33 +374,29 @@ async fn test_replayed_share_does_not_block_reconstruction() {
     for i in 1..recovery_threshold - 1 {
         reconstructor.handle_vid_share(honest_share(view, i), None);
     }
-    // The replay's weight reaches the threshold and triggers an attempt that
-    // cannot succeed: one shard range is covered twice.
+    // The replay covers an already-covered shard range: dropped at intake,
+    // coverage stays below the threshold and no attempt is triggered.
     reconstructor.handle_vid_share(replay, None);
 
-    let result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("attempt should complete in time")
-        .expect("should produce a result");
-    let err = match result {
-        Err(err) => err,
-        Ok(out) => panic!(
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
+    match result {
+        Err(_) | Ok(None) => { /* timed out or no tasks — no attempt ran, good */ },
+        Ok(Some(Ok(out))) => panic!(
             "BUG: a replayed share produced a payload for view {:?}",
             out.view
         ),
-    };
-    assert_eq!(err.view, view.view_number);
-    assert_eq!(err.kind, VidReconstructErrorKind::AwaitingShares);
-    assert!(
-        err.bad_share_keys.is_empty(),
-        "a replayed share verifies, so no voter is attributably bad"
-    );
+        Ok(Some(Err(err))) => panic!(
+            "BUG: a replayed share triggered a reconstruction attempt for view {:?}",
+            err.view
+        ),
+    }
 
     // One more honest share provides the missing distinct range.
     reconstructor.handle_vid_share(honest_share(view, recovery_threshold - 1), None);
     let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
-        .expect("retry should complete in time")
+        .expect("reconstruction should complete in time")
         .expect("should produce a result")
         .expect("reconstruction should succeed once a new distinct share arrives");
     assert_eq!(out.view, view.view_number);

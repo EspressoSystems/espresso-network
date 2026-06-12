@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet, btree_map::Entry};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet, btree_map::Entry},
+    ops::Range,
+};
 
 use committable::Commitment;
 use hotshot::traits::BlockPayload;
@@ -34,8 +37,8 @@ pub struct VidReconstructOutput<T: NodeType> {
 pub enum VidReconstructErrorKind {
     /// Decoding failed or the recovered payload did not re-commit to the
     /// expected commitment, and the shares that failed verification were
-    /// weeded out. Reconstruction retries once enough verified weight
-    /// accumulates.
+    /// weeded out. Reconstruction retries once the remaining shares cover
+    /// the recovery threshold again.
     #[error("awaiting more shares after weeding out unverifiable ones")]
     AwaitingShares,
     /// Every share verified against the commitment and the decoded payload
@@ -146,10 +149,11 @@ impl<T: NodeType> VidDisperser<T> {
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
+    /// Admitted shares by voter; their shard ranges are pairwise disjoint
+    /// (see [`Self::accept`]).
     shares: BTreeMap<T::SignatureKey, AvidmGf2Share>,
-    accumulated_weight: usize,
-    /// Every key that ever contributed, including weeded ones: a voter whose
-    /// share failed verification doesn't get a second submission.
+    /// Every voter whose share was admitted, including weeded ones: a voter
+    /// whose share failed verification doesn't get a second submission.
     seen_keys: HashSet<T::SignatureKey>,
     common: AvidmGf2Common,
     metadata: Option<Metadata<T>>,
@@ -161,8 +165,72 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
 }
 
 impl<T: NodeType> VidShareAccumulator<T> {
+    fn new(common: AvidmGf2Common, epoch: Option<EpochNumber>) -> Self {
+        Self {
+            shares: BTreeMap::new(),
+            seen_keys: HashSet::new(),
+            common,
+            metadata: None,
+            epoch,
+            exhausted: false,
+        }
+    }
+
+    /// Admit `share` if it is from a new voter, carries the accumulator's
+    /// common data, and covers a well-formed shard range disjoint from every
+    /// admitted share's. Deduplicating by range up front keeps coverage
+    /// exact — a replayed share verifies against the commitment (merkle
+    /// proofs don't bind the recipient) but cannot fake quorum — and the
+    /// decoder never sees a shard position twice.
+    fn accept(&mut self, view: ViewNumber, share: VidDisperseShare2<T>) {
+        let sender = share.recipient_key;
+        // `is_consistent` pinned our common to the commitment; a share
+        // smuggling different common data alongside the same commitment
+        // must not be trusted.
+        if share.common != self.common {
+            warn!(%view, ?sender, "VID share common differs from the accumulator's");
+            return;
+        }
+        // A share whose namespaces disagree on the shard range is malformed.
+        let Some(range) = share.share.range() else {
+            warn!(%view, ?sender, "VID share has an inconsistent shard range");
+            return;
+        };
+        // An empty range contributes nothing; positions past the end of the
+        // encoded payload would inflate coverage without aiding decoding.
+        if range.is_empty() || range.end > self.common.param.total_weights {
+            warn!(%view, ?sender, ?range, "VID share has an empty or out-of-bounds shard range");
+            return;
+        }
+        if self.seen_keys.contains(&sender) {
+            return;
+        }
+        // Don't charge the sender's one submission for an overlap: their
+        // share may become admissible after a squatting share is weeded out.
+        if self
+            .ranges()
+            .any(|covered| covered.start < range.end && range.start < covered.end)
+        {
+            warn!(%view, ?sender, "VID share covers already-covered shard positions");
+            return;
+        }
+        self.seen_keys.insert(sender.clone());
+        self.shares.insert(sender, share.share);
+    }
+
+    fn ranges(&self) -> impl Iterator<Item = &Range<usize>> {
+        // Admitted shares always have a consistent range (checked in `accept`).
+        self.shares.values().filter_map(AvidmGf2Share::range)
+    }
+
+    /// Number of shard positions covered by the admitted shares; exact
+    /// because their ranges are disjoint.
+    fn coverage(&self) -> usize {
+        self.ranges().map(ExactSizeIterator::len).sum()
+    }
+
     fn has_enough_shares(&self) -> bool {
-        self.accumulated_weight >= self.common.param.recovery_threshold
+        self.coverage() >= self.common.param.recovery_threshold
     }
 }
 
@@ -207,50 +275,20 @@ impl<T: NodeType> VidReconstructor<T> {
                     );
                     return;
                 }
-                entry.insert(VidShareAccumulator {
-                    shares: BTreeMap::new(),
-                    accumulated_weight: 0,
-                    seen_keys: HashSet::new(),
-                    common: share.common.clone(),
-                    metadata: None,
-                    epoch: share.epoch,
-                    exhausted: false,
-                })
+                entry.insert(VidShareAccumulator::new(share.common.clone(), share.epoch))
             },
         };
         if accumulator.exhausted {
             return;
         }
-        // `is_consistent` pins everything the commitment hashes; comparing
-        // with the accumulator's common catches shares smuggling a different
-        // param alongside the same commitment.
-        if share.common != accumulator.common {
-            warn!(
-                %view,
-                sender = ?share.recipient_key,
-                "VID share common differs from the accumulator's"
-            );
-            return;
-        }
-        // A share whose namespaces disagree on the shard range is malformed;
-        // its weight is meaningless.
-        if share.share.range().is_none() {
-            warn!(
-                %view,
-                sender = ?share.recipient_key,
-                "VID share has an inconsistent shard range"
-            );
-            return;
-        }
+        // Metadata comes with the proposal; record it even if the share
+        // carrying it is rejected.
         if accumulator.metadata.is_none()
             && let Some(m) = metadata.into()
         {
             accumulator.metadata = Some(m)
         }
-        if accumulator.seen_keys.insert(share.recipient_key.clone()) {
-            accumulator.accumulated_weight += share.share.weight();
-            accumulator.shares.insert(share.recipient_key, share.share);
-        }
+        accumulator.accept(view, share);
         if accumulator.has_enough_shares() {
             self.try_reconstruct(view, payload_commitment);
         }
@@ -276,34 +314,25 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    /// Apply the outcome of a failed attempt: remove the weeded shares and
-    /// either retry right away (shares that arrived while the attempt ran
-    /// may already provide enough verified weight) or mark the payload as
-    /// unrecoverable.
+    /// Apply the outcome of a failed attempt: weed the bad shares out of the
+    /// accumulator, then either mark the payload as unrecoverable or retry
+    /// (`try_reconstruct` re-checks coverage, which shares that arrived while
+    /// the attempt ran may already restore).
     fn handle_failed_attempt(&mut self, err: &VidReconstructError<T::SignatureKey>) {
-        let mut retry = false;
-        if let Some(accumulator) = self
+        let Some(accumulator) = self
             .accumulators
             .get_mut(&(err.view, err.payload_commitment))
-        {
-            for key in &err.bad_share_keys {
-                if let Some(share) = accumulator.shares.remove(key) {
-                    accumulator.accumulated_weight -= share.weight();
-                }
-            }
-            match err.kind {
-                VidReconstructErrorKind::Unrecoverable => accumulator.exhausted = true,
-                VidReconstructErrorKind::AwaitingShares => {
-                    // Only retry when weeding changed the share set, else an
-                    // attempt over the same shares would fail the same way in
-                    // a loop. If shares arrived while the attempt ran, the
-                    // next arriving share triggers the retry instead.
-                    retry = !err.bad_share_keys.is_empty() && accumulator.has_enough_shares();
-                },
-            }
+        else {
+            return;
+        };
+        for key in &err.bad_share_keys {
+            accumulator.shares.remove(key);
         }
-        if retry {
-            self.try_reconstruct(err.view, err.payload_commitment);
+        match err.kind {
+            VidReconstructErrorKind::Unrecoverable => accumulator.exhausted = true,
+            VidReconstructErrorKind::AwaitingShares => {
+                self.try_reconstruct(err.view, err.payload_commitment)
+            },
         }
     }
 
@@ -314,7 +343,7 @@ impl<T: NodeType> VidReconstructor<T> {
         let Some(accumulator) = self.accumulators.get(&(view, payload_commitment)) else {
             return;
         };
-        if accumulator.exhausted {
+        if accumulator.exhausted || !accumulator.has_enough_shares() {
             return;
         }
         // Metadata comes from when we get the proposal, otherwise we can't reconstruct the payload
@@ -335,9 +364,12 @@ impl<T: NodeType> VidReconstructor<T> {
     }
 
     /// Decode the shares and accept the result only if it re-commits to
-    /// `payload_commitment`. On failure, weed out the shares that fail
+    /// `payload_commitment`. On failure, report the shares that fail
     /// verification against the commitment (each share is self-authenticating
-    /// via its merkle proofs) and retry once with the verified remainder.
+    /// via its merkle proofs) so they can be weeded out. If every share
+    /// verifies, the payload is unrecoverable: the shares cover the recovery
+    /// threshold with disjoint ranges, so the disperser committed to a
+    /// non-codeword and no share subset can ever succeed.
     fn reconstruct(
         view: ViewNumber,
         epoch: EpochNumber,
@@ -346,9 +378,9 @@ impl<T: NodeType> VidReconstructor<T> {
         shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
         metadata: Metadata<T>,
     ) -> ReconstructResult<T> {
-        let decode_set = Self::dedup_by_range(view, &shares);
+        let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
         if let Some(bytes) =
-            Self::decode_and_recommit(view, &common, &decode_set, &payload_commitment, &metadata)
+            Self::decode_and_recommit(view, &common, &shares, &payload_commitment, &metadata)
         {
             return Ok(Self::output(
                 view,
@@ -358,56 +390,32 @@ impl<T: NodeType> VidReconstructor<T> {
                 metadata,
             ));
         }
-        let (good, bad): (Vec<_>, Vec<_>) = shares.into_iter().partition(|(_, share)| {
-            matches!(
-                AvidmGf2Scheme::verify_share_with_verified_common(&common, share),
-                Ok(Ok(()))
-            )
-        });
-        let bad_share_keys: Vec<_> = bad.into_iter().map(|(key, _)| key).collect();
-        if !bad_share_keys.is_empty() {
-            warn!(
-                %view,
-                %payload_commitment,
-                ?bad_share_keys,
-                "weeded out VID shares that failed verification"
-            );
-        }
-        // Weight that provably backs this commitment: verified shares,
-        // counting overlapping (e.g. replayed) shard ranges once.
-        let verified_set = Self::dedup_by_range(view, &good);
-        let verified_weight: usize = verified_set.iter().map(AvidmGf2Share::weight).sum();
-        let kind = if verified_weight < common.param.recovery_threshold {
-            VidReconstructErrorKind::AwaitingShares
-        } else {
-            if !bad_share_keys.is_empty()
-                && let Some(bytes) = Self::decode_and_recommit(
-                    view,
-                    &common,
-                    &verified_set,
-                    &payload_commitment,
-                    &metadata,
+        let bad_share_keys: Vec<_> = keys
+            .into_iter()
+            .zip(&shares)
+            .filter(|(_, share)| {
+                !matches!(
+                    AvidmGf2Scheme::verify_share_with_verified_common(&common, share),
+                    Ok(Ok(()))
                 )
-            {
-                return Ok(Self::output(
-                    view,
-                    epoch,
-                    payload_commitment,
-                    &bytes,
-                    metadata,
-                ));
-            }
-            // A deduplicated, fully verified set with enough weight cannot
-            // decode to a payload matching the commitment: the disperser
-            // committed to a non-codeword, no share subset can ever succeed.
-            // (With nothing weeded, the failed first attempt already used
-            // exactly this set.)
+            })
+            .map(|(key, _)| key)
+            .collect();
+        let kind = if bad_share_keys.is_empty() {
             warn!(
                 %view,
                 %payload_commitment,
                 "verified shares cannot decode to a payload matching the commitment"
             );
             VidReconstructErrorKind::Unrecoverable
+        } else {
+            warn!(
+                %view,
+                %payload_commitment,
+                ?bad_share_keys,
+                "weeded out VID shares that failed verification"
+            );
+            VidReconstructErrorKind::AwaitingShares
         };
         Err(VidReconstructError {
             view,
@@ -415,32 +423,6 @@ impl<T: NodeType> VidReconstructor<T> {
             kind,
             bad_share_keys,
         })
-    }
-
-    /// Keep the first share covering each shard position, in input order.
-    ///
-    /// A replayed share verifies against the commitment (merkle proofs don't
-    /// bind the recipient), but feeding the same shard position twice breaks
-    /// the decoder, and double-counting its weight would fake quorum.
-    fn dedup_by_range(
-        view: ViewNumber,
-        shares: &[(T::SignatureKey, AvidmGf2Share)],
-    ) -> Vec<AvidmGf2Share> {
-        let mut covered = BTreeSet::new();
-        let mut out = Vec::with_capacity(shares.len());
-        for (key, share) in shares {
-            // Intake rejects shares without a consistent range.
-            let Some(range) = share.range() else {
-                continue;
-            };
-            if range.clone().any(|position| covered.contains(&position)) {
-                warn!(%view, sender = ?key, "dropped VID share with an already-covered shard range");
-                continue;
-            }
-            covered.extend(range.clone());
-            out.push(share.clone());
-        }
-        out
     }
 
     /// Decode `shares` and return the payload bytes only if they re-commit to
