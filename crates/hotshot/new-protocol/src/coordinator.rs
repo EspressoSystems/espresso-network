@@ -66,12 +66,8 @@ use crate::{
 /// cheaper than fetching the payload through catchup.
 const VID_RECONSTRUCT_GC_MARGIN: u64 = 5;
 
-/// Views to retain in storage GC behind the decided view
-///
-/// Storage writes are spawned tasks with retry loops; a write for a view
-/// just behind the decided view may still be in flight when the decide
-/// lands. GC at the decided view would abort it and the data would never
-/// be persisted. The margin gives in-flight writes time to complete.
+/// Views to retain in storage GC behind the decided view, so in-flight
+/// storage writes for recent views aren't aborted before they persist.
 const STORAGE_GC_MARGIN: u64 = 5;
 
 #[allow(clippy::large_enum_variant)]
