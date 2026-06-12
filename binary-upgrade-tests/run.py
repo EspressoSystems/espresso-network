@@ -49,6 +49,7 @@ NEW_NODE_API_PORT = 24005
 #     L1 anvil, block-explorer)
 NOUPGRADE_SERVICES = (
     "block-explorer",
+    "cdn-open",
     "cdn-whitelist",
     "demo-l1-network",
     "deploy-espresso-contracts",
@@ -107,11 +108,6 @@ class UpgradeSupportServices:
 
 
 @dataclass(frozen=True)
-class RewhitelistCdn:
-    pass
-
-
-@dataclass(frozen=True)
 class AssertImagesUpgraded:
     pass
 
@@ -122,13 +118,7 @@ class SmokeTest:
 
 
 Action = (
-    Roll
-    | Wipe
-    | JoinNode
-    | UpgradeSupportServices
-    | RewhitelistCdn
-    | AssertImagesUpgraded
-    | SmokeTest
+    Roll | Wipe | JoinNode | UpgradeSupportServices | AssertImagesUpgraded | SmokeTest
 )
 
 # ---------------------------------------------------------------------------
@@ -161,12 +151,16 @@ SCENARIOS: dict[str, list[Action]] = {
     ],
     "new-from-old-pg": [
         SmokeTest(tag_source="base"),
-        Roll(WIPE_PG_NODE),
-        Wipe(WIPE_PG_NODE, backend="pg"),
+        # Roll every other node first so node-1's archival peer (node-0) is
+        # upgraded and fully re-indexed before node-1 is wiped. Otherwise node-1
+        # and node-0 catch up simultaneously and node-0 cannot serve the leaves
+        # node-1 needs, wedging the wiped node's rebuild.
         Roll(0),
         Roll(2),
         Roll(3),
         Roll(4),
+        Roll(WIPE_PG_NODE),
+        Wipe(WIPE_PG_NODE, backend="pg"),
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
         SmokeTest(),
@@ -180,7 +174,6 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(4),
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
-        RewhitelistCdn(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_FS_OVERLAY),
         SmokeTest(),
     ],
@@ -193,7 +186,6 @@ SCENARIOS: dict[str, list[Action]] = {
         Roll(4),
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
-        RewhitelistCdn(),
         JoinNode(NEW_NODE_INDEX, overlay=NODE_5_PG_OVERLAY),
         SmokeTest(),
     ],
@@ -870,12 +862,6 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
         case UpgradeSupportServices():
             log.info(f"Bulk-upgrading remaining services to {config.upgrade_tag}")
             compose.bulk_upgrade_remaining(config.upgrade_tag)
-
-        case RewhitelistCdn():
-            log.info(
-                f"Re-running cdn-whitelist on tag {config.upgrade_tag} to include extra keys"
-            )
-            compose.run("run", "--rm", "cdn-whitelist", docker_tag=config.upgrade_tag)
 
         case AssertImagesUpgraded():
             log.info(
