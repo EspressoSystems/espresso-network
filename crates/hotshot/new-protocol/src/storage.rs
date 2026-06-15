@@ -14,7 +14,7 @@ use hotshot_types::{
     utils::EpochTransitionIndicator,
 };
 use tokio::{spawn, task::JoinHandle, time::sleep};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::message::{Certificate2, Proposal};
 
@@ -194,6 +194,9 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 
     /// Wait for all current storage writes to complete.
     pub async fn flush(self) {
+        let views = self.handles.len();
+        let tasks: usize = self.handles.values().map(Vec::len).sum();
+        info!(views, tasks, "flushing storage tasks during shutdown");
         for (view, handles) in self.handles {
             for handle in handles {
                 if let Err(err) = handle.await {
@@ -201,6 +204,7 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                 }
             }
         }
+        info!("storage flush complete");
     }
 }
 

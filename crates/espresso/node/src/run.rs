@@ -3,6 +3,7 @@ use clap::Parser;
 use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
+use tokio::signal::unix::{SignalKind, signal};
 
 use super::{
     Genesis, L1Params, NetworkParams,
@@ -54,13 +55,33 @@ async fn run_with_storage<S>(
 where
     S: DataSourceOptions,
 {
-    let ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
+    let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
 
     // Start doing consensus.
     ctx.start_consensus().await;
-    ctx.join().await;
+
+    // Run until consensus stops on its own or we receive a shutdown signal. On a signal, shut down
+    // gracefully
+    tokio::select! {
+        () = ctx.join() => tracing::warn!("consensus stopped; exiting"),
+        signal = wait_for_shutdown_signal() => {
+            tracing::warn!(signal, "received shutdown signal; shutting down gracefully");
+            ctx.shut_down().await;
+        },
+    }
 
     Ok(())
+}
+
+/// Wait for a shutdown signal
+async fn wait_for_shutdown_signal() -> &'static str {
+    let mut interrupt = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+    let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+
+    tokio::select! {
+        _ = interrupt.recv() => "SIGINT",
+        _ = terminate.recv() => "SIGTERM",
+    }
 }
 
 pub async fn init_with_storage<S>(
