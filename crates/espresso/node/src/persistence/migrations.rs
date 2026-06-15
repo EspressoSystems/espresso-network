@@ -190,21 +190,12 @@ impl DataBackfill for CleanupLegacyHashTable {
     async fn run_batch(
         &self,
         tx: &mut Transaction<Backfill>,
-        // Keyset cursor: last deleted id (0 on first batch).
-        offset: u64,
+        _offset: u64,
     ) -> anyhow::Result<Option<u64>> {
-        // Both merkle tree tables are now empty so there are no FK references to hash.id.
-        let deleted: Vec<(i64,)> = sqlx::query_as(
-            "DELETE FROM hash WHERE id IN (
-                SELECT id FROM hash WHERE id > $1 ORDER BY id LIMIT $2
-             ) RETURNING id",
-        )
-        .bind(offset as i64)
-        .bind(self.batch_size() as i64)
-        .fetch_all(tx.as_mut())
-        .await?;
-
-        Ok(deleted.last().map(|(id,)| *id as u64))
+        sqlx::query("TRUNCATE TABLE hash, fee_merkle_tree, block_merkle_tree")
+            .execute(tx.as_mut())
+            .await?;
+        Ok(None)
     }
 }
 
