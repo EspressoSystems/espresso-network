@@ -969,7 +969,7 @@ impl Header {
 
         tracing::info!(%height, %epoch, %prev_epoch, "epoch boundary: applying rewards");
 
-        // Take the result. A failed task propagates its
+        // Take the result. A failed eager task propagates its
         // error here rather than retrying
         let result = reward_calculator.get_result(prev_epoch).await.transpose()?;
 
