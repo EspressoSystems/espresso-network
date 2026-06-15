@@ -112,6 +112,11 @@ Migrations (all three backends required when adding storage):
   recoverable and atomic.
 - Update `SequencerPersistence` for all backends; test with `cargo test -p espresso-node persistence`.
 
+Refinery migrations run synchronously at startup before the node joins consensus, so they must be fast and schema-only.
+Any migration whose work scales with database size must use the `DataBackfill` pattern (background task, runs after
+startup) instead. Before writing a migration that touches existing rows, read
+[`doc/agents/refinery-migrations.md`](refinery-migrations.md).
+
 ## Adding an API endpoint
 
 1. Add route to a `.toml` schema with `PATH`, parameter types, `METHOD`, `DOC`.

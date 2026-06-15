@@ -204,8 +204,12 @@ async fn upgrade_certificate_cutover() {
     );
 
     let public_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
-    let (membership, ..) =
-        crate::tests::common::utils::mock_membership_with_client(num_nodes, 100, public_key);
+    let (membership, ..) = crate::tests::common::utils::mock_membership_with_client(
+        num_nodes,
+        100,
+        public_key,
+        Default::default(),
+    );
     let epoch_membership = membership
         .membership_for_epoch(Some(EpochNumber::genesis()))
         .unwrap();

@@ -109,6 +109,16 @@ impl PrometheusMetrics {
         self.get_metric(&self.histogram_families, name)
     }
 
+    /// Borrow the underlying [`prometheus::Registry`].
+    ///
+    /// Useful for callers that need to scrape the full set of metric families
+    /// (e.g. a remote-write push task) instead of going through the text-format
+    /// [`Metrics::export`] path. The registry is `Clone` (it shares state via
+    /// `Arc` internally), so callers can take an owned copy if needed.
+    pub fn registry(&self) -> &Registry {
+        &self.metrics
+    }
+
     /// Get a (possibly nested) subgroup of this group by its path.
     pub fn get_subgroup<I>(&self, path: I) -> Result<PrometheusMetrics, MetricsError>
     where

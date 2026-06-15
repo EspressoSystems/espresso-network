@@ -508,7 +508,7 @@ where
     ///
     /// Under normal conditions, this function will block forever, which is a convenient way of
     /// keeping the main thread from exiting as long as there are still active background tasks.
-    pub async fn join(mut self) {
+    pub async fn join(&mut self) {
         self.tasks.join().await;
     }
 
@@ -614,6 +614,14 @@ async fn handle_events<N, P, C>(
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
+                }
+            },
+            CoordinatorEvent::BlockPayloadReconstructed { .. } => {
+                // Forward straight to the consumer: reconstructed payloads might not yet
+                // have been stored by consensus storage,
+                // Query service verifies the block against a decided leaf before storing it.
+                if let Err(err) = event_consumer.handle_event(&event).await {
+                    tracing::warn!("failed to handle reconstructed payload: {err:#}");
                 }
             },
             _ => {},

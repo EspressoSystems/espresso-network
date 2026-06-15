@@ -300,6 +300,10 @@ pub trait UpdateAvailabilityData<Types: NodeType> {
     /// block payload. When the payload eventually becomes available the data source uses this
     /// method to fill it in, notifying any pending fetchers. Implementations that don't track
     /// blocks (e.g. metrics-only) may leave the default no-op.
+    ///
+    /// The block comes from a reconstruction event for a view that may never be decided, so
+    /// implementations must verify that it matches the decided leaf at the same height before
+    /// storing it.
     fn append_payload(
         &self,
         _block: BlockQueryData<Types>,

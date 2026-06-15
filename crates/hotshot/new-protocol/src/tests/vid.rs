@@ -67,15 +67,15 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     }
 }
 
-/// `mark_reconstructed` should suppress reconstruction for the marked view
+/// `retire_view` should suppress reconstruction for the retired view
 /// even when threshold-plus shares are fed in afterwards.
 #[tokio::test]
-async fn test_mark_reconstructed_skips_reconstruction() {
+async fn test_retire_view_skips_reconstruction() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    reconstructor.mark_reconstructed(view.view_number);
+    reconstructor.retire_view(view.view_number);
 
     // Feed threshold-plus shares; none should trigger reconstruction.
     let proposal_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
@@ -106,8 +106,8 @@ async fn test_mark_reconstructed_skips_reconstruction() {
         Ok(Some(Err(()))) => { /* error, not a duplicate success */ },
         Ok(Some(Ok(out))) => {
             panic!(
-                "BUG: mark_reconstructed should have suppressed reconstruction, but got a result \
-                 for view {:?}",
+                "BUG: retire_view should have suppressed reconstruction, but got a result for \
+                 view {:?}",
                 out.view
             );
         },
