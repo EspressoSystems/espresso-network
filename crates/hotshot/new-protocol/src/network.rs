@@ -62,10 +62,10 @@ pub enum NetworkError {
     #[error("{0}")]
     Critical(#[source] Box<dyn std::error::Error + Send + Sync>),
 
-    #[error("configured sender {config:?} != actual sender {actual}")]
+    #[error("message sender {msg:?} != message source {src}")]
     InvalidSender {
-        config: Option<x25519::PublicKey>,
-        actual: x25519::PublicKey,
+        msg: Option<x25519::PublicKey>,
+        src: x25519::PublicKey,
     },
 }
 
