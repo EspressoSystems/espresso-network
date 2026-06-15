@@ -101,6 +101,7 @@ serde_json = { workspace = true }
 serialization-api = { path = "../../serialization/api" }
 sha2 = { workspace = true }
 snafu = { workspace = true }
+snmalloc-rs = "0.7.4"
 sqlx = { workspace = true }
 staking-cli = { workspace = true }
 static_assertions = { workspace = true }
