@@ -126,12 +126,8 @@ macro_rules! function_name {
             ::std::any::type_name::<T>()
         }
         let full: &'static str = type_name_of(__f);
-        // Strip the trailing "::__f" (5 bytes) and take the last "::" segment.
-        let trimmed: &'static str = &full[..full.len() - 5];
-        match trimmed.rfind("::") {
-            Some(idx) => &trimmed[idx + 2..],
-            None => trimmed,
-        }
+        let trimmed: &'static str = full.strip_suffix("::__f").unwrap_or(full);
+        trimmed.rsplit("::").next().unwrap_or(trimmed)
     }};
 }
 

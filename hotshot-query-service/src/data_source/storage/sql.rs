@@ -1065,6 +1065,14 @@ mod serializable_retry_tests {
         }
         assert_eq!(outer_test_fn(), "outer_test_fn");
         assert_eq!(crate::function_name!(), "test_function_name_macro");
+
+        // Non-ASCII identifiers must not panic: the macro slices the `type_name` output, and
+        // a multi-byte codepoint near a slice boundary would panic if the macro used fixed
+        // byte offsets instead of char-boundary-safe operations.
+        fn télécharger() -> &'static str {
+            crate::function_name!()
+        }
+        assert_eq!(télécharger(), "télécharger");
     }
 }
 
