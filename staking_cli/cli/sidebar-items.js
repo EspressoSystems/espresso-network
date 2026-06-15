@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["decode_and_display_logs","exit","exit_err","resolve_node_signatures","run"],"struct":["Args"],"trait":["AddressExt"]};
+window.SIDEBAR_ITEMS = {"fn":["decode_and_display_logs","display_bls_vk","display_schnorr_vk","exit","exit_err","resolve_node_signatures","run"],"struct":["Args"],"trait":["AddressExt"]};
