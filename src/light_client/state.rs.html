@@ -52,7 +52,7 @@
 <a href=#52 id=52 data-nosnippet>52</a>    </span><span class="kw">pub </span>stake_table: Vec&lt;StakeTableEntry&lt;PubKey&gt;&gt;,
 <a href=#53 id=53 data-nosnippet>53</a>}
 <a href=#54 id=54 data-nosnippet>54</a>
-<a href=#55 id=55 data-nosnippet>55</a><span class="attr">#[derive(Clone, Debug, Serialize)]
+<a href=#55 id=55 data-nosnippet>55</a><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize)]
 <a href=#56 id=56 data-nosnippet>56</a>#[cfg_attr(feature = <span class="string">"clap"</span>, derive(clap::Parser))]
 <a href=#57 id=57 data-nosnippet>57</a></span><span class="kw">pub struct </span>LightClientOptions {
 <a href=#58 id=58 data-nosnippet>58</a>    <span class="doccomment">/// Maximum number of stake tables to cache in memory at any given time.
