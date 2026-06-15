@@ -526,17 +526,29 @@ where
                             VidCommitment::V2(out.payload_commitment),
                         );
                         if let Some(proposal) = self.consensus.proposal_at(out.view) {
-                            self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
-                                view: out.view,
-                                header: proposal.block_header.clone(),
-                                payload: out.payload,
-                            });
+                            // Only pair the payload with the header if the proposal commits to it
+                            if proposal.block_header.payload_commitment()
+                                == VidCommitment::V2(out.payload_commitment)
+                            {
+                                self.outbox.push_back(ConsensusOutput::BlockPayloadReconstructed {
+                                    view: out.view,
+                                    header: proposal.block_header.clone(),
+                                    payload: out.payload,
+                                });
+                            } else {
+                                warn!(
+                                    view = %out.view,
+                                    header = %proposal.block_header.payload_commitment(),
+                                    reconstructed = %out.payload_commitment,
+                                    "reconstructed payload commitment does not match proposal header"
+                                );
+                            }
                         }
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
-                    Err(()) => {
+                    Err(err) => {
                         finish_measurement(next_input);
-                        return Err(CoordinatorError::unspecified().context("vid reconstruction"))
+                        return Err(CoordinatorError::regular(err).context("vid reconstruction"))
                     }
                 },
                 Some(stored) = self.storage.next() => {

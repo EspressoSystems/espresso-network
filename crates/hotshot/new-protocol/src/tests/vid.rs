@@ -1,6 +1,6 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
-use hotshot_types::traits::signature_key::SignatureKey;
+use hotshot_types::{traits::signature_key::SignatureKey, vid::avidm_gf2::AvidmGf2Scheme};
 
 use super::common::utils::TestData;
 use crate::vid::VidReconstructor;
@@ -56,7 +56,7 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     match second {
         Err(_elapsed) => { /* timed out — no duplicate, good */ },
         Ok(None) => { /* no more tasks — no duplicate, good */ },
-        Ok(Some(Err(()))) => { /* error, not a duplicate success */ },
+        Ok(Some(Err(_))) => { /* error, not a duplicate success */ },
         Ok(Some(Ok(out))) => {
             panic!(
                 "BUG: got a duplicate BlockReconstructed for view {:?} — the reconstructor \
@@ -103,7 +103,7 @@ async fn test_retire_view_skips_reconstruction() {
     match result {
         Err(_elapsed) => { /* no task ever spawned — good */ },
         Ok(None) => { /* no tasks — good */ },
-        Ok(Some(Err(()))) => { /* error, not a duplicate success */ },
+        Ok(Some(Err(_))) => { /* error, not a duplicate success */ },
         Ok(Some(Ok(out))) => {
             panic!(
                 "BUG: retire_view should have suppressed reconstruction, but got a result for \
@@ -169,7 +169,7 @@ async fn test_shares_after_reconstruction_are_ignored() {
     match extra {
         Err(_elapsed) => { /* timed out — good, no extra task */ },
         Ok(None) => { /* no tasks — good */ },
-        Ok(Some(Err(()))) => { /* error, not a duplicate success */ },
+        Ok(Some(Err(_))) => { /* error, not a duplicate success */ },
         Ok(Some(Ok(out))) => {
             panic!(
                 "BUG: got a duplicate BlockReconstructed for view {:?} after reconstruction was \
@@ -178,4 +178,83 @@ async fn test_shares_after_reconstruction_are_ignored() {
             );
         },
     }
+}
+
+/// Reconstruction must fail when the recovered payload does not re-commit to
+/// the commitment the shares claimed, and the failure must not block a later
+/// attempt with the correct commitment.
+#[tokio::test]
+async fn test_reconstruction_rejects_mismatched_commitment() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    // A valid commitment over different payload bytes.
+    let param = &view.vid_shares[0].common.param;
+    let other_payload = vec![0xa5u8; 64];
+    let (wrong_commitment, _) = AvidmGf2Scheme::commit(
+        param,
+        &other_payload,
+        std::iter::once(0..other_payload.len()),
+    )
+    .unwrap();
+
+    // Feed threshold-plus shares with honest content but a wrong claimed
+    // commitment: decoding succeeds and the recommit check must reject it.
+    let proposal_key = BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0;
+    let mut proposal_share = view
+        .vid_shares
+        .iter()
+        .find(|s| s.recipient_key == proposal_key)
+        .unwrap()
+        .clone();
+    proposal_share.payload_commitment = wrong_commitment;
+    reconstructor.handle_vid_share(proposal_share, view.proposal.data.block_header.metadata);
+    for i in 1..THRESHOLD {
+        let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0;
+        let mut share = view
+            .vid_shares
+            .iter()
+            .find(|s| s.recipient_key == key)
+            .unwrap()
+            .clone();
+        share.payload_commitment = wrong_commitment;
+        reconstructor.handle_vid_share(share, None);
+    }
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("reconstruction attempt should complete in time")
+        .expect("should produce a result");
+    let err = match result {
+        Err(err) => err,
+        Ok(out) => panic!(
+            "BUG: reconstruction for view {:?} accepted a payload that doesn't match the claimed \
+             commitment",
+            out.view
+        ),
+    };
+    assert_eq!(err.view, view.view_number);
+
+    // The failure must not retire the view: one more share claiming the
+    // correct commitment triggers a retry that succeeds.
+    let key = BLSPubKey::generated_from_seed_indexed([0u8; 32], THRESHOLD).0;
+    let share = view
+        .vid_shares
+        .iter()
+        .find(|s| s.recipient_key == key)
+        .unwrap()
+        .clone();
+    reconstructor.handle_vid_share(share, None);
+
+    let retry = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("retry should complete in time")
+        .expect("should produce a result")
+        .expect("retry with the correct commitment should succeed");
+    assert_eq!(retry.view, view.view_number);
+    assert_eq!(
+        retry.payload_commitment,
+        view.vid_shares[0].payload_commitment
+    );
 }

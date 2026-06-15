@@ -131,15 +131,13 @@ impl EpochCommittee {
         let stake_table: IndexMap<PubKey, PeerConfig<SeqTypes>> = validators
             .values()
             .map(|v| {
-                address_mapping.insert(v.stake_table_key, v.account);
+                let key = *v.stake_table_key();
+                address_mapping.insert(key, v.account);
                 (
-                    v.stake_table_key,
+                    key,
                     PeerConfig {
-                        stake_table_entry: BLSPubKey::stake_table_entry(
-                            &v.stake_table_key,
-                            v.stake,
-                        ),
-                        state_ver_key: v.state_ver_key.clone(),
+                        stake_table_entry: BLSPubKey::stake_table_entry(&key, v.stake),
+                        state_ver_key: v.state_ver_key().clone(),
                         connect_info: v.x25519_key.and_then(|p| {
                             let a = v.p2p_addr.clone()?;
                             Some(PeerConnectInfo {
