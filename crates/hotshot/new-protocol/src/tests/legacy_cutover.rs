@@ -53,7 +53,7 @@ use crate::{
     coordinator::{Coordinator, CoordinatorOutput, error::Severity, timer::Timer},
     cutover::{CutoverGate, forward_legacy_high_qc, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     tests::common::{utils::mock_membership_with_client, views},
 };
@@ -216,7 +216,6 @@ async fn build_cutover_coordinator(
     view_timeout: Duration,
 ) -> Coordinator<
     TestTypes,
-    Cliquenet<TestTypes>,
     hotshot_example_types::storage_types::TestStorage<TestTypes>,
 > {
     use hotshot_example_types::{node_types::TEST_VERSIONS, state_types::TestValidatedState};
@@ -329,7 +328,6 @@ struct DecisionEvent {
 async fn run_cutover_node(
     mut coord: Coordinator<
         TestTypes,
-        Cliquenet<TestTypes>,
         hotshot_example_types::storage_types::TestStorage<TestTypes>,
     >,
     decision_tx: UnboundedSender<DecisionEvent>,

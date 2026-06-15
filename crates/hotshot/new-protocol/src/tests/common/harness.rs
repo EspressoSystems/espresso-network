@@ -20,7 +20,7 @@ use crate::{
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,

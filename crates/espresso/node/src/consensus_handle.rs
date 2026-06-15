@@ -13,7 +13,6 @@ use hotshot_new_protocol::{
         CutoverGate, extract_pre_cutover_seed, forward_legacy_epoch_changes,
         forward_legacy_high_qc, forward_legacy_timeout_votes,
     },
-    network::Network,
     state::UpdateLeaf,
     storage::NewProtocolStorage,
 };
@@ -33,13 +32,12 @@ use versions::NEW_PROTOCOL_VERSION;
 // TODO: `ConsensusOutput::LeafDecided` still carries fields (leaves +
 // vid_shares) rather than a `Vec<LeafInfo>`. This is because `Consensus` doesn't own `StateManager`
 // state and delta only become available one level up, in `Coordinator`.
-fn consensus_event<T, N, S>(
-    coordinator: &Coordinator<T, N, S>,
+fn consensus_event<T, S>(
+    coordinator: &Coordinator<T, S>,
     output: &ConsensusOutput<T>,
 ) -> Option<CoordinatorEvent<T>>
 where
     T: NodeType,
-    N: Network<T>,
     S: NewProtocolStorage<T>,
 {
     match output {
@@ -95,13 +93,12 @@ where
     }
 }
 
-fn coordinator_event<T, N, S>(
-    coordinator: &Coordinator<T, N, S>,
+fn coordinator_event<T, S>(
+    coordinator: &Coordinator<T, S>,
     output: &CoordinatorOutput<T>,
 ) -> Option<CoordinatorEvent<T>>
 where
     T: NodeType,
-    N: Network<T>,
     S: NewProtocolStorage<T>,
 {
     match output {
@@ -130,15 +127,14 @@ where
     T: NodeType,
     I: NodeImplementation<T>,
 {
-    pub fn new<N>(
+    pub fn new(
         legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
-        coordinator: Coordinator<T, N, I::Storage>,
+        coordinator: Coordinator<T, I::Storage>,
         epoch_height: u64,
         legacy_event_rx: InactiveReceiver<Event<T>>,
         event_channel_capacity: usize,
     ) -> Self
     where
-        N: Network<T> + Send + 'static,
         I::Storage: NewProtocolStorage<T>,
     {
         let client_api = coordinator.client_api().clone();
@@ -497,10 +493,9 @@ where
     }
 }
 
-async fn run_coordinator<T, N, S>(mut coord: Coordinator<T, N, S>, tx: Sender<CoordinatorEvent<T>>)
+async fn run_coordinator<T, S>(mut coord: Coordinator<T, S>, tx: Sender<CoordinatorEvent<T>>)
 where
     T: NodeType,
-    N: Network<T>,
     S: NewProtocolStorage<T>,
 {
     coord.start();

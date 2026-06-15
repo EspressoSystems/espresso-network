@@ -46,7 +46,7 @@ use crate::{
         ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
         Vote2,
     },
-    network::Network,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
@@ -84,10 +84,10 @@ pub enum CoordinatorOutput<T: NodeType> {
 }
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, N, S> {
+pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
-    network: N,
+    network: Cliquenet<T>,
     state_manager: StateManager<T>,
     #[builder(default)]
     client: CoordinatorClient<T>,
@@ -123,17 +123,16 @@ pub struct Coordinator<T: NodeType, N, S> {
 }
 
 #[bon]
-impl<T, N, S> Coordinator<T, N, S>
+impl<T, S> Coordinator<T, S>
 where
     T: NodeType,
-    N: Network<T>,
     S: NewProtocolStorage<T>,
 {
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     #[allow(clippy::too_many_arguments)]
     pub fn maker(
         membership_coordinator: EpochMembershipCoordinator<T>,
-        network: N,
+        network: Cliquenet<T>,
         initializer: &HotShotInitializer<T>,
         upgrade_lock: UpgradeLock<T>,
         public_key: T::SignatureKey,
@@ -718,6 +717,7 @@ where
                 };
                 if let Err(err) = self
                     .network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                 {
                     let err = CoordinatorError::from(err).context("proposal broadcast");
@@ -738,6 +738,7 @@ where
                     };
                     if let Err(err) =
                         self.network
+                            .sender()
                             .unicast(self.consensus.current_view(), &recipient, &message)
                     {
                         let err = CoordinatorError::from(err).context("vid share unicast");
@@ -759,6 +760,7 @@ where
                     )),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
             },
@@ -776,6 +778,7 @@ where
                         )),
                     };
                     self.network
+                        .sender()
                         .unicast(self.consensus.current_view(), &leader, &message)
                         .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
                 }
@@ -792,6 +795,7 @@ where
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
             },
@@ -802,6 +806,7 @@ where
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
             },
@@ -819,6 +824,7 @@ where
                     )),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
@@ -837,6 +843,7 @@ where
                     )),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
             },
@@ -1103,7 +1110,7 @@ where
                             Box::new(proposal),
                         )),
                     };
-                    if let Err(err) = self.network.unicast(
+                    if let Err(err) = self.network.sender().unicast(
                         self.consensus.current_view(),
                         &message.sender,
                         &response,
@@ -1231,6 +1238,7 @@ where
             message_type: MessageType::Block(msg),
         };
         self.network
+            .sender()
             .unicast(self.consensus.current_view(), &leader, &message)
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
@@ -1316,6 +1324,7 @@ where
                     };
 
                     self.network
+                        .sender()
                         .broadcast(self.consensus.current_view(), &message)
                         .map_err(|err| {
                             CoordinatorError::from(err).context("broadcast proposal request")
@@ -1335,6 +1344,7 @@ where
                 };
                 let result = self
                     .network
+                    .sender()
                     .unicast(self.consensus.current_view(), &recipient, &message)
                     .map_err(|err| {
                         CoordinatorError::from(err)
@@ -1449,6 +1459,7 @@ where
                 };
                 if let Err(err) = self
                     .network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                 {
                     warn!(%err, "failed to rebroadcast bridged timeout vote");

@@ -16,7 +16,7 @@ use hotshot_new_protocol::{
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -37,7 +37,7 @@ use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
