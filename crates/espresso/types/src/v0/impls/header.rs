@@ -12,7 +12,6 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
-    stake_table::HSStakeTable,
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
@@ -912,7 +911,7 @@ impl Header {
 
         tracing::info!(%height, %epoch, %prev_epoch, "epoch boundary: applying rewards");
 
-        // Take the result. A failed eager task propagates its
+        // Take the result. A failed task propagates its
         // error here rather than retrying
         let result = reward_calculator.get_result(prev_epoch).await.transpose()?;
 
