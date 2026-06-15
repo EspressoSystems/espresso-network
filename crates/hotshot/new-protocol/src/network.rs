@@ -4,6 +4,7 @@ use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
     traits::node_implementation::NodeType,
+    x25519,
 };
 
 use crate::message::{Message, Unchecked, Validated};
@@ -60,6 +61,12 @@ pub enum NetworkError {
 
     #[error("{0}")]
     Critical(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    #[error("configured sender {config:?} != actual sender {actual}")]
+    InvalidSender {
+        config: Option<x25519::PublicKey>,
+        actual: x25519::PublicKey,
+    },
 }
 
 impl NetworkError {
