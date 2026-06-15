@@ -536,7 +536,7 @@ where
                     }
                     Err(err) => {
                         finish_measurement(next_input);
-                        return Err(CoordinatorError::regular(err.to_string()).context("vid reconstruction"))
+                        return Err(CoordinatorError::regular(err).context("vid reconstruction"))
                     }
                 },
                 Some(stored) = self.storage.next() => {
