@@ -122,12 +122,20 @@ pub trait Storage: Sized + Send + Sync + 'static {
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientSqliteOptions {
     /// Maximum number of simultaneous DB connections to allow.
+    ///
+    /// One connection serializes all access. With more, the read paths that
+    /// also write (the LRU `id` bump in `leaf_upper_bound`) contend for the WAL
+    /// write lock and return SQLITE_BUSY. The light client is the query
+    /// service's sole fetch provider, so a single such failure returns `None`
+    /// for that height and strands the aggregator (seen during a wiped node's
+    /// full-history backfill). The DB is a bounded cache, so serializing is
+    /// cheap.
     #[cfg_attr(
         feature = "clap",
         clap(
             long = "light-client-db-num-connections",
             env = "LIGHT_CLIENT_DB_NUM_CONNECTIONS",
-            default_value = "5",
+            default_value = "1",
         )
     )]
     pub num_connections: u32,
@@ -169,7 +177,7 @@ pub struct LightClientSqliteOptions {
 impl Default for LightClientSqliteOptions {
     fn default() -> Self {
         Self {
-            num_connections: 5,
+            num_connections: 1,
             num_leaves: 100,
             num_stake_tables: 100,
             lc_path: None,
@@ -698,6 +706,53 @@ mod test {
         assert_eq!(height, 0);
 
         drop(db);
+    }
+
+    // Regression: with more than one connection the read-then-write LRU bump in
+    // `leaf_upper_bound` contends for the WAL write lock and returns
+    // SQLITE_BUSY. The light client is the query service's sole fetch provider,
+    // so one such failure returns `None` for that height and strands the
+    // aggregator during a wiped node's backfill. The default must serialize
+    // access so heavy concurrent read+write never produces a lock error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_concurrent_access_never_locks() {
+        let db = Arc::new(
+            LightClientSqliteOptions {
+                num_leaves: 10,
+                ..Default::default()
+            }
+            .connect()
+            .await
+            .unwrap(),
+        );
+        let leaves = leaf_chain(0..40, EPOCH_VERSION).await;
+
+        let mut tasks = Vec::new();
+        for leaf in leaves {
+            let db = db.clone();
+            tasks.push(tokio::spawn(async move {
+                db.insert_leaf(leaf).await.map(|_| ())
+            }));
+        }
+        for h in 0..40usize {
+            let read_db = db.clone();
+            tasks.push(tokio::spawn(async move {
+                read_db
+                    .leaf_upper_bound(LeafId::Number(h))
+                    .await
+                    .map(|_| ())
+            }));
+            let height_db = db.clone();
+            tasks.push(tokio::spawn(async move {
+                height_db.block_height().await.map(|_| ())
+            }));
+        }
+
+        for task in tasks {
+            task.await
+                .unwrap()
+                .expect("concurrent op must not fail with a database lock error");
+        }
     }
 
     #[cfg(unix)]

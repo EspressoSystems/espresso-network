@@ -184,7 +184,7 @@ modules:
       num_stake_tables_in_memory: 100
       decaf: false
     light_client_db:
-      num_connections: 5
+      num_connections: 1
       num_leaves: 100
       num_stake_tables: 100
       lc_path: ~
