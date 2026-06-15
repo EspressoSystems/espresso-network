@@ -129,12 +129,22 @@ pub mod availability_tests {
 
     use committable::Committable;
     use futures::stream::StreamExt;
-    use hotshot_example_types::node_types::TEST_VERSIONS;
-    use hotshot_types::{data::Leaf2, vote::HasViewNumber};
+    use hotshot::traits::BlockPayload;
+    use hotshot_example_types::{
+        block_types::TestBlockPayload,
+        node_types::{TEST_VERSIONS, TestTypes},
+    };
+    use hotshot_types::{
+        data::{Leaf2, vid_commitment},
+        traits::block_contents::EncodeBytes,
+        vote::HasViewNumber,
+    };
 
     use super::test_helpers::*;
     use crate::{
-        availability::{BlockId, BlockQueryData, LeafQueryData, VidCommonQueryData, payload_size},
+        availability::{
+            BlockId, BlockInfo, BlockQueryData, LeafQueryData, VidCommonQueryData, payload_size,
+        },
         data_source::{
             Transaction,
             storage::{AvailabilityStorage, NodeStorage, UpdateAvailabilityStorage},
@@ -617,6 +627,73 @@ pub mod availability_tests {
         assert_eq!(ds.get_block(1).await.await, block2);
         assert_eq!(ds.get_vid_common(0).await.await, vid);
         assert_eq!(ds.get_vid_common(1).await.await, vid2);
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    pub async fn test_append_payload_verification<D: TestableDataSource>() {
+        let storage = D::create(0).await;
+        let ds = D::connect(&storage).await;
+
+        let leaf = LeafQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+        let payload = BlockQueryData::<MockTypes>::genesis(
+            &Default::default(),
+            &Default::default(),
+            TEST_VERSIONS.test.base,
+        )
+        .await
+        .payload;
+
+        // The leaf is decided without its payload, as when a decide event precedes VID
+        // reconstruction.
+        ds.append(BlockInfo::new(leaf.clone(), None, None, None))
+            .await
+            .unwrap();
+
+        // A reconstructed payload whose header was not decided at this height is discarded.
+        let mut forked_header = leaf.header().clone();
+        forked_header.payload_commitment =
+            vid_commitment(&[1, 2, 3], &[], 1, TEST_VERSIONS.test.base);
+        let forked_block = BlockQueryData::new(forked_header, payload.clone());
+        ds.append_payload(forked_block).await.unwrap();
+        assert!(ds.get_block(0).await.try_resolve().is_err());
+
+        // The payload matching the decided leaf is stored.
+        let block = BlockQueryData::new(leaf.header().clone(), payload.clone());
+        ds.append_payload(block.clone()).await.unwrap();
+        assert_eq!(ds.get_block(0).await.await, block);
+
+        // A payload arriving before its leaf has been ingested is dropped, not held; it can be
+        // stored once the leaf is available. The payload must be distinct from block 0's, or
+        // `append` would back-fill it from storage by payload hash.
+        let (payload2, metadata2) =
+            <TestBlockPayload as BlockPayload<TestTypes>>::from_transactions(
+                [mock_transaction(vec![1])],
+                &Default::default(),
+                &Default::default(),
+            )
+            .await
+            .unwrap();
+        let mut leaf2 = leaf.clone();
+        leaf2.leaf.block_header_mut().block_number += 1;
+        leaf2.leaf.block_header_mut().payload_commitment = vid_commitment(
+            &payload2.encode(),
+            &metadata2.encode(),
+            1,
+            TEST_VERSIONS.test.base,
+        );
+        let block2 = BlockQueryData::new(leaf2.header().clone(), payload2);
+        ds.append_payload(block2.clone()).await.unwrap();
+        ds.append(BlockInfo::new(leaf2, None, None, None))
+            .await
+            .unwrap();
+        assert!(ds.get_block(1).await.try_resolve().is_err());
+        ds.append_payload(block2.clone()).await.unwrap();
+        assert_eq!(ds.get_block(1).await.await, block2);
     }
 }
 
