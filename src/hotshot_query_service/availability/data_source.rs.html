@@ -300,11 +300,15 @@
 <a href=#300 id=300 data-nosnippet>300</a>    /// block payload. When the payload eventually becomes available the data source uses this
 <a href=#301 id=301 data-nosnippet>301</a>    /// method to fill it in, notifying any pending fetchers. Implementations that don't track
 <a href=#302 id=302 data-nosnippet>302</a>    /// blocks (e.g. metrics-only) may leave the default no-op.
-<a href=#303 id=303 data-nosnippet>303</a>    </span><span class="kw">fn </span>append_payload(
-<a href=#304 id=304 data-nosnippet>304</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#305 id=305 data-nosnippet>305</a>        _block: BlockQueryData&lt;Types&gt;,
-<a href=#306 id=306 data-nosnippet>306</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;()&gt;&gt; {
-<a href=#307 id=307 data-nosnippet>307</a>        <span class="kw">async </span>{ <span class="prelude-val">Ok</span>(()) }
-<a href=#308 id=308 data-nosnippet>308</a>    }
-<a href=#309 id=309 data-nosnippet>309</a>}
+<a href=#303 id=303 data-nosnippet>303</a>    ///
+<a href=#304 id=304 data-nosnippet>304</a>    /// The block comes from a reconstruction event for a view that may never be decided, so
+<a href=#305 id=305 data-nosnippet>305</a>    /// implementations must verify that it matches the decided leaf at the same height before
+<a href=#306 id=306 data-nosnippet>306</a>    /// storing it.
+<a href=#307 id=307 data-nosnippet>307</a>    </span><span class="kw">fn </span>append_payload(
+<a href=#308 id=308 data-nosnippet>308</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#309 id=309 data-nosnippet>309</a>        _block: BlockQueryData&lt;Types&gt;,
+<a href=#310 id=310 data-nosnippet>310</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = anyhow::Result&lt;()&gt;&gt; {
+<a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">async </span>{ <span class="prelude-val">Ok</span>(()) }
+<a href=#312 id=312 data-nosnippet>312</a>    }
+<a href=#313 id=313 data-nosnippet>313</a>}
 </code></pre></div></section></main></body></html>
