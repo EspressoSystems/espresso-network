@@ -77,7 +77,7 @@ async fn two_nodes() -> (Network, Network, PublicKey, PublicKey) {
 /// Unicast from A to B.
 #[tokio::test]
 async fn unicast() {
-    let (mut net_a, mut net_b, pka, pkb) = two_nodes().await;
+    let (net_a, mut net_b, pka, pkb) = two_nodes().await;
 
     net_a.unicast(Slot::MIN, pkb, b"hello".to_vec()).unwrap();
 
@@ -93,7 +93,7 @@ async fn unicast() {
 /// Unicast multiple messages, all arrive in order.
 #[tokio::test]
 async fn unicast_multiple() {
-    let (mut net_a, mut net_b, _pka, pkb) = two_nodes().await;
+    let (net_a, mut net_b, _pka, pkb) = two_nodes().await;
 
     let n = 10usize;
     for i in 0..n {
@@ -222,7 +222,7 @@ async fn self_unicast() {
 /// Large message spanning multiple Noise frames.
 #[tokio::test]
 async fn large_message() {
-    let (mut net_a, mut net_b, _pka, pkb) = two_nodes().await;
+    let (net_a, mut net_b, _pka, pkb) = two_nodes().await;
 
     let big: Vec<u8> = (0..200 * 1024).map(|i| (i % 251) as u8).collect();
     net_a.unicast(Slot::MIN, pkb, big.clone()).unwrap();
@@ -237,20 +237,20 @@ async fn large_message() {
 /// Message too large is rejected at the API level.
 #[tokio::test]
 async fn message_too_large() {
-    let (mut net_a, _net_b, _pka, pkb) = two_nodes().await;
+    let (net_a, _net_b, _pka, pkb) = two_nodes().await;
 
     let huge = vec![0u8; 11 * 1024 * 1024]; // > 10 MiB default
     let result = net_a.unicast(Slot::MIN, pkb, huge);
     assert!(matches!(result, Err(NetworkError::MessageTooLarge)));
 }
 
-/// Dropping the controller shuts down the network.
+/// Dropping all senders shuts down the network.
 #[tokio::test]
 async fn shutdown_on_drop() {
     let (net_a, _net_b, _pka, _pkb) = two_nodes().await;
 
-    let (ctrl_a, mut rx_a) = net_a.split_into();
-    drop(ctrl_a);
+    let (send_a, mut rx_a) = net_a.split_into();
+    drop(send_a);
 
     let result = timeout(Duration::from_secs(2), rx_a.receive()).await;
     match result {
@@ -302,7 +302,7 @@ async fn three_node_broadcast() {
 /// Empty payload is delivered correctly.
 #[tokio::test]
 async fn empty_payload() {
-    let (mut net_a, mut net_b, _pka, pkb) = two_nodes().await;
+    let (net_a, mut net_b, _pka, pkb) = two_nodes().await;
 
     net_a.unicast(Slot::MIN, pkb, vec![]).unwrap();
 
@@ -316,7 +316,7 @@ async fn empty_payload() {
 /// GC discards old-slot messages while current-slot messages are delivered.
 #[tokio::test]
 async fn gc() {
-    let (mut net_a, mut net_b, _pka, pkb) = two_nodes().await;
+    let (net_a, mut net_b, _pka, pkb) = two_nodes().await;
 
     // Send messages in slots 1 and 3.
     net_a.unicast(Slot::new(1), pkb, b"old".to_vec()).unwrap();
@@ -350,7 +350,7 @@ async fn add_peer() {
 
     // Start A and B knowing only each other.
     let all_ab = [&a, &b];
-    let mut net_a = Network::create(make_config(&a, &all_ab)).await.unwrap();
+    let net_a = Network::create(make_config(&a, &all_ab)).await.unwrap();
     let _net_b = Network::create(make_config(&b, &all_ab)).await.unwrap();
 
     // Start C knowing A and B.
@@ -539,7 +539,7 @@ async fn reconnect_after_restart() {
     // B knows itself and A.
     let all_b = [&a, &b];
 
-    let mut net_a = Network::create(make_config(&a, &all_a)).await.unwrap();
+    let net_a = Network::create(make_config(&a, &all_a)).await.unwrap();
     let net_b = Network::create(make_config(&b, &all_b)).await.unwrap();
 
     sleep(SETTLE).await;
@@ -597,7 +597,7 @@ async fn unknown_peer_backs_off() {
     // C knows A and connects. Without the backoff, C's 1 s retry would
     // cause it to reconnect immediately after each rejection. With the
     // backoff, C sleeps 60 s after the first hello exchange.
-    let mut net_c = Network::create(
+    let net_c = Network::create(
         Config::builder()
             .name("test")
             .keypair(c.keypair.clone())
@@ -640,7 +640,7 @@ async fn update_party_address() {
 
     // A knows B at its first address.
     let all = [&a, &b1];
-    let mut net_a = Network::create(make_config(&a, &all)).await.unwrap();
+    let net_a = Network::create(make_config(&a, &all)).await.unwrap();
     let mut net_b1 = Network::create(make_config(&b1, &all)).await.unwrap();
 
     sleep(SETTLE).await;

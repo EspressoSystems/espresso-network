@@ -206,10 +206,10 @@ fn bench_cliquenet(c: &mut Criterion) {
 // -- Bidirectional throughput -------------------------------------------------
 
 struct BiDir {
-    ctrl_a: cliquenet::NetworkController,
+    send_a: cliquenet::NetworkSender,
     recv_a: cliquenet::NetworkReceiver,
     pka: PublicKey,
-    ctrl_b: cliquenet::NetworkController,
+    send_b: cliquenet::NetworkSender,
     recv_b: cliquenet::NetworkReceiver,
     pkb: PublicKey,
 }
@@ -259,10 +259,10 @@ async fn setup_bidir() -> BiDir {
     let (ctrl_b, recv_b) = net_b.split_into();
 
     BiDir {
-        ctrl_a,
+        send_a: ctrl_a,
         recv_a,
         pka,
-        ctrl_b,
+        send_b: ctrl_b,
         recv_b,
         pkb,
     }
@@ -289,7 +289,7 @@ fn bench_bidirectional(c: &mut Criterion) {
                         tokio::join!(
                             async {
                                 for _ in 0..ROUNDS {
-                                    bd.ctrl_a.unicast(Slot::MIN, bd.pkb, data.clone()).unwrap();
+                                    bd.send_a.unicast(Slot::MIN, bd.pkb, data.clone()).unwrap();
                                     let (src, recv) = bd.recv_a.receive().await.unwrap();
                                     assert_eq!(src, bd.pkb);
                                     assert_eq!(recv.len(), n);
@@ -297,7 +297,7 @@ fn bench_bidirectional(c: &mut Criterion) {
                             },
                             async {
                                 for _ in 0..ROUNDS {
-                                    bd.ctrl_b.unicast(Slot::MIN, bd.pka, data.clone()).unwrap();
+                                    bd.send_b.unicast(Slot::MIN, bd.pka, data.clone()).unwrap();
                                     let (src, recv) = bd.recv_b.receive().await.unwrap();
                                     assert_eq!(src, bd.pka);
                                     assert_eq!(recv.len(), n);
@@ -332,7 +332,7 @@ fn bench_bidirectional(c: &mut Criterion) {
                                         .retry(RetryPolicy::NoRetry)
                                         .action(SendAction::Unicast(bd.pkb, data.clone()))
                                         .build();
-                                    bd.ctrl_a.send(cmd).unwrap();
+                                    bd.send_a.send(cmd).unwrap();
                                     let (src, recv) = bd.recv_a.receive().await.unwrap();
                                     assert_eq!(src, bd.pkb);
                                     assert_eq!(recv.len(), n);
@@ -345,7 +345,7 @@ fn bench_bidirectional(c: &mut Criterion) {
                                         .retry(RetryPolicy::NoRetry)
                                         .action(SendAction::Unicast(bd.pka, data.clone()))
                                         .build();
-                                    bd.ctrl_b.send(cmd).unwrap();
+                                    bd.send_b.send(cmd).unwrap();
                                     let (src, recv) = bd.recv_b.receive().await.unwrap();
                                     assert_eq!(src, bd.pka);
                                     assert_eq!(recv.len(), n);
