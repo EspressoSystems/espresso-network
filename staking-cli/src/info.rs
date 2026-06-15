@@ -47,7 +47,10 @@ pub fn display_stake_table(
     };
     for validator in stake_table.iter() {
         let comm: Commission = validator.commission.try_into()?;
-        let key_str = shorten(validator.stake_table_key.to_string());
+        let key_str = shorten(match &validator.stake_table_key {
+            Some(key) => key.to_string(),
+            None => "<no_bls_key>".to_string(),
+        });
         output_success(format!(
             "Validator {}: {key_str} comm={comm} stake={} ESP",
             validator.account,

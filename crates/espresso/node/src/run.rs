@@ -1,9 +1,11 @@
 use anyhow::Context;
 use clap::Parser;
+use espresso_telemetry as telemetry;
 use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
 use tokio::signal::unix::{SignalKind, signal};
+use url::Url;
 
 use super::{
     Genesis, L1Params, NetworkParams,
@@ -13,11 +15,61 @@ use super::{
     options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
-use crate::keyset::KeySet;
+use crate::{default_telemetry_endpoint, keyset::KeySet};
 
 pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let opt = Options::parse();
-    opt.logging.init();
+
+    // Genesis carries the chain ID, which selects the default telemetry
+    // endpoint. Load it before telemetry init; the genesis log line is emitted
+    // later, once the subscriber is installed.
+    let genesis = Genesis::from_file(&opt.genesis_file)?;
+    let telemetry_endpoint: Option<Url> = opt.telemetry.endpoint.clone().or_else(|| {
+        default_telemetry_endpoint(genesis.chain_config.chain_id).map(|s| {
+            s.parse()
+                .expect("default telemetry endpoint is a valid URL")
+        })
+    });
+    let telemetry_enabled = opt.telemetry.logs_enable || opt.telemetry.metrics_enable;
+
+    // Build telemetry before logging so its layer attaches to the global
+    // subscriber. The registry is still `None` here (the API setup runs later);
+    // the metrics push is attached then via `attach_metrics_push`.
+    let (mut telemetry_handle, deferred_warnings, telemetry_init_error) =
+        match (opt.key_set.clone().try_into(), telemetry_endpoint.as_ref()) {
+            (Ok(KeySet { staking, .. }), Some(endpoint)) => match telemetry::init(
+                &opt.telemetry,
+                &staking,
+                opt.identity.node_name.as_deref(),
+                opt.identity.company_name.as_deref(),
+                endpoint,
+                telemetry::registry(),
+            ) {
+                Ok((h, warns)) => (h, warns, None),
+                Err(e) => (None, Vec::new(), Some(e.context("telemetry init failed"))),
+            },
+            // Telemetry requested but no endpoint resolved (unknown chain, no
+            // override). Stay off and warn so the misconfig is visible.
+            (Ok(_), None) if telemetry_enabled => (
+                None,
+                vec![format!(
+                    "telemetry enabled but no endpoint resolved for chain {}; set \
+                     ESPRESSO_NODE_TELEMETRY_ENDPOINT",
+                    genesis.chain_config.chain_id
+                )],
+                None,
+            ),
+            // Keyset error (surfaced later) or telemetry not requested.
+            _ => (None, Vec::new(), None),
+        };
+    let otel_layer = telemetry_handle.as_ref().and_then(|h| h.tracing_layer());
+    opt.logging.init_with_otel(otel_layer);
+    for w in deferred_warnings {
+        tracing::warn!("{w}");
+    }
+    if let Some(e) = telemetry_init_error {
+        tracing::error!("{e:#}; continuing without telemetry");
+    }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
     let mut modules = opt.modules();
@@ -25,13 +77,28 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
 
     let public_node_config = PublicNodeConfig::new(&opt, &modules);
 
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
     tracing::warn!(?genesis, "genesis");
 
-    if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage, public_node_config).await
+    let result = if let Some(storage) = modules.storage_fs.take() {
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(genesis, modules, opt, storage, public_node_config).await
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
         run_with_storage(
@@ -40,9 +107,15 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             opt,
             persistence::fs::Options::default(),
             public_node_config,
+            telemetry_handle.as_mut(),
         )
         .await
+    };
+
+    if let Some(h) = telemetry_handle {
+        h.shutdown();
     }
+    result
 }
 
 async fn run_with_storage<S>(
@@ -51,11 +124,19 @@ async fn run_with_storage<S>(
     opt: Options,
     storage_opt: S,
     public_node_config: PublicNodeConfig,
+    telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
 ) -> anyhow::Result<()>
 where
     S: DataSourceOptions,
 {
     let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
+
+    // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
+    // (if the HTTP module was configured). Attach the metrics push task now,
+    // before consensus starts churning.
+    if let (Some(handle), Some(registry)) = (telemetry_handle, telemetry::registry()) {
+        handle.attach_metrics_push(registry);
+    }
 
     // Start doing consensus.
     ctx.start_consensus().await;

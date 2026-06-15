@@ -7,13 +7,12 @@ use std::{
 };
 
 use alloy::primitives::Address;
-use anyhow::{Context, bail, ensure};
+use anyhow::{Context, bail};
 use async_trait::async_trait;
 use clap::Parser;
 use committable::Committable;
 use derivative::Derivative;
 use derive_more::derive::{From, Into};
-use either::Either;
 use espresso_types::{
     AuthenticatedValidatorMap, BackoffParams, BlockMerkleTree, FeeMerkleTree, Leaf, Leaf2,
     NetworkConfig, Payload, PubKey, Ratio, RegisteredValidatorMap, StakeTableHash, parse_duration,
@@ -24,7 +23,6 @@ use espresso_types::{
         AuthenticatedValidator, EventKey, IndexedStake, RegisteredValidator, RewardAmount,
         StakeTableEvent,
     },
-    v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
 };
 use futures::stream::StreamExt;
 use hotshot::InitializerEpochInfo;
@@ -33,11 +31,9 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
-    availability::BlockId,
     data_source::{
         Transaction as _, VersionedDataSource,
         storage::{
-            AvailabilityStorage,
             pruning::PrunerCfg,
             sql::{
                 Config, Db, Read, SqlStorage, StorageConnectionType, Transaction, Write,
@@ -72,12 +68,10 @@ use hotshot_types::{
 };
 use indexmap::IndexMap;
 use itertools::Itertools;
-use jf_merkle_tree_compat::MerkleTreeScheme;
 use sqlx::{Executor, QueryBuilder, Row, query};
 
 use crate::{
     NodeType, RECENT_STAKE_TABLES_LIMIT, SeqTypes, ViewNumber,
-    api::RewardMerkleTreeV2Data,
     catchup::SqlStateCatchup,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
 };
@@ -698,6 +692,14 @@ impl PersistenceOptions for Options {
         };
         persistence.migrate_quorum_proposal_leaf_hashes().await?;
         self.pool = Some(persistence.db.pool());
+
+        #[cfg(not(feature = "embedded-db"))]
+        {
+            let registry = super::migrations::hash_bigint_migrations();
+            let db = persistence.db.clone();
+            tokio::spawn(registry.run_all_migrations(db));
+        }
+
         Ok(persistence)
     }
 
@@ -1332,202 +1334,6 @@ async fn prune_to_view(tx: &mut Transaction<Write>, view: u64) -> anyhow::Result
 
 #[async_trait]
 impl SequencerPersistence for Persistence {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
-        let batch_size: i64 = 1000;
-
-        let result = {
-            let mut tx = self.db.read().await?;
-            query_as::<(bool, i64)>(
-                "SELECT completed, migrated_rows FROM epoch_migration WHERE table_name = \
-                 'reward_merkle_tree_v2_data'",
-            )
-            .fetch_optional(tx.as_mut())
-            .await?
-        };
-
-        let (is_completed, mut offset) = result.unwrap_or((false, 0));
-
-        if is_completed {
-            tracing::info!("reward_merkle_tree_v2 migration already done");
-            return Ok(());
-        }
-
-        let max_height: Option<i64> = {
-            let mut tx = self.db.read().await?;
-            query_as::<(Option<i64>,)>("SELECT MAX(created) FROM reward_merkle_tree_v2")
-                .fetch_one(tx.as_mut())
-                .await?
-                .0
-        };
-
-        let max_height = match max_height {
-            Some(h) => h,
-            None => {
-                tracing::info!("no reward data found in reward_merkle_tree_v2, skipping migration");
-                return Ok(());
-            },
-        };
-
-        tracing::warn!(
-            "migrating reward_merkle_tree_v2 to reward_merkle_tree_v2_data at height \
-             {max_height}..."
-        );
-
-        let mut balances: Vec<(RewardAccountV2, RewardAmount)> = Vec::new();
-
-        loop {
-            let mut tx = self.db.read().await?;
-
-            #[cfg(not(feature = "embedded-db"))]
-            let rows = query_as::<(serde_json::Value, serde_json::Value)>(
-                "SELECT DISTINCT ON (idx) idx, entry
-                   FROM reward_merkle_tree_v2
-                  WHERE idx IS NOT NULL AND entry IS NOT NULL
-                  ORDER BY idx, created DESC
-                  LIMIT $1 OFFSET $2",
-            )
-            .bind(batch_size)
-            .bind(offset)
-            .fetch_all(tx.as_mut())
-            .await
-            .context("loading reward accounts from reward_merkle_tree_v2")?;
-
-            #[cfg(feature = "embedded-db")]
-            let rows = query_as::<(serde_json::Value, serde_json::Value)>(
-                "SELECT idx, entry FROM (
-                     SELECT idx, entry, ROW_NUMBER() OVER (PARTITION BY idx ORDER BY created DESC) \
-                 as rn
-                       FROM reward_merkle_tree_v2
-                      WHERE idx IS NOT NULL AND entry IS NOT NULL
-                 ) sub
-                 WHERE rn = 1 ORDER BY idx
-                 LIMIT $1 OFFSET $2",
-            )
-            .bind(batch_size)
-            .bind(offset)
-            .fetch_all(tx.as_mut())
-            .await
-            .context("loading reward accounts from reward_merkle_tree_v2")?;
-
-            drop(tx);
-
-            if rows.is_empty() {
-                break;
-            }
-
-            let rows_count = rows.len();
-
-            for (idx, entry) in rows {
-                let account: RewardAccountV2 =
-                    serde_json::from_value(idx).context("deserializing reward account")?;
-                let balance: RewardAmount = serde_json::from_value(entry).context(format!(
-                    "deserializing reward balance for account {account}"
-                ))?;
-                balances.push((account, balance));
-            }
-
-            offset += rows_count as i64;
-            let mut tx = self.db.write().await?;
-            tx.upsert(
-                "epoch_migration",
-                ["table_name", "completed", "migrated_rows"],
-                ["table_name"],
-                [("reward_merkle_tree_v2_data".to_string(), false, offset)],
-            )
-            .await?;
-            tx.commit().await?;
-
-            tracing::info!(
-                "reward_merkle_tree_v2 progress: rows={} offset={}",
-                rows_count,
-                offset
-            );
-
-            if rows_count < batch_size as usize {
-                break;
-            }
-        }
-
-        if balances.is_empty() {
-            tracing::info!("no reward accounts found, skipping tree rebuild");
-            return Ok(());
-        }
-
-        tracing::info!(
-            "rebuilding RewardMerkleTreeV2 from {} accounts",
-            balances.len()
-        );
-
-        let tree = RewardMerkleTreeV2::from_kv_set(REWARD_MERKLE_TREE_V2_HEIGHT, balances)
-            .context("failed to rebuild RewardMerkleTreeV2 from balances")?;
-
-        let mut tx = self.db.read().await?;
-        let header = tx
-            .get_header(BlockId::<SeqTypes>::from(max_height as usize))
-            .await
-            .context(format!("header {max_height} not available"))?;
-        drop(tx);
-
-        match header.reward_merkle_tree_root() {
-            Either::Right(expected_root) => {
-                ensure!(
-                    tree.commitment() == expected_root,
-                    "rebuilt RewardMerkleTreeV2 commitment {} does not match header commitment {} \
-                     at height {max_height}",
-                    tree.commitment(),
-                    expected_root,
-                );
-            },
-            Either::Left(_) => {
-                bail!(
-                    "header at height {max_height} has a v1 reward merkle tree root, expected v2"
-                );
-            },
-        }
-
-        let tree_data: RewardMerkleTreeV2Data = (&tree)
-            .try_into()
-            .context("failed to convert RewardMerkleTreeV2 to RewardMerkleTreeV2Data")?;
-        let serialized =
-            bincode::serialize(&tree_data).context("failed to serialize RewardMerkleTreeV2Data")?;
-
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "reward_merkle_tree_v2_data",
-            ["height", "balances"],
-            ["height"],
-            [(max_height, serialized)],
-        )
-        .await?;
-        tx.commit().await?;
-
-        // Mark migration as complete, and clean up old tables.
-        let mut tx = self.db.write().await?;
-        tx.upsert(
-            "epoch_migration",
-            ["table_name", "completed", "migrated_rows"],
-            ["table_name"],
-            [("reward_merkle_tree_v2_data".to_string(), true, offset)],
-        )
-        .await?;
-        let truncate = if cfg!(feature = "embedded-db") {
-            "DELETE FROM"
-        } else {
-            "TRUNCATE"
-        };
-        query(&format!("{truncate} reward_merkle_tree_v2"))
-            .execute(tx.as_mut())
-            .await?;
-        query(&format!("{truncate} reward_merkle_tree"))
-            .execute(tx.as_mut())
-            .await?;
-        tx.commit().await?;
-
-        tracing::warn!("migrated reward_merkle_tree_v2 at height {max_height}");
-
-        Ok(())
-    }
-
     fn into_catchup_provider(
         self,
         backoff: BackoffParams,
@@ -3026,6 +2832,40 @@ impl SequencerPersistence for Persistence {
     }
 }
 
+fn deserialize_authenticated_validator_map(
+    bytes: &[u8],
+) -> anyhow::Result<AuthenticatedValidatorMap> {
+    if let Ok(map) = bincode::deserialize::<AuthenticatedValidatorMap>(bytes) {
+        return Ok(map);
+    }
+
+    // Pre-Schnorr-Option: stake_table_key as Option<KEY>, state_ver_key as raw KEY.
+    if let Ok(pre_schnorr) =
+        bincode::deserialize::<IndexMap<Address, super::RegisteredValidatorPreSchnorrOption>>(bytes)
+    {
+        return pre_schnorr
+            .into_iter()
+            .map(|(addr, v)| {
+                let registered = v.migrate();
+                let authenticated = AuthenticatedValidator::try_from(registered)?;
+                Ok((addr, authenticated))
+            })
+            .collect();
+    }
+
+    // Pre-Option: both keys raw, with x25519/p2p fields.
+    let legacy: IndexMap<Address, super::RegisteredValidatorPreOption> =
+        bincode::deserialize(bytes).context("deserializing stake table")?;
+    legacy
+        .into_iter()
+        .map(|(addr, v)| {
+            let registered = v.migrate();
+            let authenticated = AuthenticatedValidator::try_from(registered)?;
+            Ok((addr, authenticated))
+        })
+        .collect()
+}
+
 #[async_trait]
 impl MembershipPersistence for Persistence {
     async fn load_stake(&self, epoch: EpochNumber) -> anyhow::Result<Option<StakeTuple>> {
@@ -3047,9 +2887,7 @@ impl MembershipPersistence for Persistence {
                 let stake_table_bytes: Vec<u8> = row.get("stake");
                 let reward_bytes: Option<Vec<u8>> = row.get("block_reward");
                 let stake_table_hash_bytes: Option<Vec<u8>> = row.get("stake_table_hash");
-                let stake_table: AuthenticatedValidatorMap =
-                    bincode::deserialize(&stake_table_bytes)
-                        .context("deserializing stake table")?;
+                let stake_table = deserialize_authenticated_validator_map(&stake_table_bytes)?;
                 let reward: Option<RewardAmount> = reward_bytes
                     .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
                     .transpose()?;
@@ -3084,8 +2922,7 @@ impl MembershipPersistence for Persistence {
             .into_iter()
             .map(
                 |(id, stake_bytes, reward_bytes_opt, stake_table_hash_bytes_opt)| {
-                    let stake_table: AuthenticatedValidatorMap =
-                        bincode::deserialize(&stake_bytes).context("deserializing stake table")?;
+                    let stake_table = deserialize_authenticated_validator_map(&stake_bytes)?;
 
                     let block_reward: Option<RewardAmount> = reward_bytes_opt
                         .map(|b| bincode::deserialize(&b).context("deserializing block_reward"))
@@ -3723,12 +3560,18 @@ mod test {
 
         let epoch = 1i64;
         let address = validator.account;
+        let legacy_bls_key = validator.stake_table_key.expect("mock has BLS key");
+
+        let state_ver_key_raw = validator
+            .state_ver_key
+            .clone()
+            .expect("mock has valid Schnorr key");
 
         // Create legacy data without x25519 fields
         let legacy = RegisteredValidatorNoX25519 {
             account: validator.account,
-            stake_table_key: validator.stake_table_key,
-            state_ver_key: validator.state_ver_key.clone(),
+            stake_table_key: legacy_bls_key,
+            state_ver_key: state_ver_key_raw.clone(),
             stake: validator.stake,
             commission: validator.commission,
             delegators: HashMap::new(),
@@ -3743,8 +3586,8 @@ mod test {
         // JSON: serialize without x25519 fields
         let json_legacy = RegisteredValidatorNoX25519 {
             account: validator.account,
-            stake_table_key: validator.stake_table_key,
-            state_ver_key: validator.state_ver_key.clone(),
+            stake_table_key: legacy_bls_key,
+            state_ver_key: state_ver_key_raw,
             stake: validator.stake,
             commission: validator.commission,
             delegators: HashMap::new(),
@@ -3846,6 +3689,118 @@ mod test {
         }
     }
 
+    fn pre_option_validator(seed: u8, stake: u64) -> super::super::RegisteredValidatorPreOption {
+        use std::collections::HashMap;
+
+        use alloy::primitives::U256;
+        use hotshot_types::light_client::StateVerKey;
+
+        super::super::RegisteredValidatorPreOption {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([seed; 32], 0).0,
+            state_ver_key: StateVerKey::default(),
+            stake: U256::from(stake),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
+        }
+    }
+
+    async fn insert_legacy_stake_row(
+        persistence: &Persistence,
+        epoch: i64,
+        validator: super::super::RegisteredValidatorPreOption,
+    ) {
+        let mut map: IndexMap<Address, super::super::RegisteredValidatorPreOption> =
+            IndexMap::new();
+        map.insert(validator.account, validator);
+        let stake_bytes = bincode::serialize(&map).unwrap();
+        let mut tx = persistence.db.write().await.unwrap();
+        tx.execute(
+            query("INSERT INTO epoch_drb_and_root (epoch, stake) VALUES ($1, $2)")
+                .bind(epoch)
+                .bind(&stake_bytes),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_legacy_storage() {
+        let tmp = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&tmp).await;
+
+        let v1 = pre_option_validator(1, 100);
+        let v2 = pre_option_validator(2, 200);
+        let v1_addr = v1.account;
+        let v2_addr = v2.account;
+        insert_legacy_stake_row(&persistence, 1, v1).await;
+        insert_legacy_stake_row(&persistence, 2, v2).await;
+
+        let (loaded1, ..) = persistence
+            .load_stake(EpochNumber::new(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded1.len(), 1);
+        assert!(loaded1.get(&v1_addr).unwrap().stake_table_key.is_some());
+
+        let (loaded2, ..) = persistence
+            .load_stake(EpochNumber::new(2))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded2.len(), 1);
+        assert!(loaded2.get(&v2_addr).unwrap().stake_table_key.is_some());
+
+        let latest = persistence.load_latest_stake(10).await.unwrap().unwrap();
+        assert_eq!(latest.len(), 2);
+        let epochs: Vec<_> = latest.iter().map(|(e, ..)| *e).collect();
+        assert!(epochs.contains(&EpochNumber::new(1)));
+        assert!(epochs.contains(&EpochNumber::new(2)));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_mixed_storage() {
+        let tmp = Persistence::tmp_storage().await;
+        let persistence = Persistence::connect(&tmp).await;
+
+        let legacy_v = pre_option_validator(3, 300);
+        let legacy_addr = legacy_v.account;
+        insert_legacy_stake_row(&persistence, 5, legacy_v).await;
+
+        let current_v = espresso_types::v0_3::AuthenticatedValidator::mock();
+        let current_addr = current_v.account;
+        let mut current_map = IndexMap::new();
+        current_map.insert(current_addr, current_v);
+        persistence
+            .store_stake(EpochNumber::new(6), current_map, None, None)
+            .await
+            .unwrap();
+
+        let latest = persistence.load_latest_stake(10).await.unwrap().unwrap();
+        assert_eq!(latest.len(), 2);
+        let by_epoch: std::collections::HashMap<_, _> = latest
+            .into_iter()
+            .map(|(e, (map, _), _)| (e, map))
+            .collect();
+        assert!(
+            by_epoch
+                .get(&EpochNumber::new(5))
+                .unwrap()
+                .contains_key(&legacy_addr)
+        );
+        assert!(
+            by_epoch
+                .get(&EpochNumber::new(6))
+                .unwrap()
+                .contains_key(&current_addr)
+        );
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_store_all_validators_authenticated_and_unauthenticated() {
         use std::collections::HashMap;
@@ -3860,8 +3815,8 @@ mod test {
         // Create an authenticated validator
         let authenticated_validator = RegisteredValidator {
             account: Address::random(),
-            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
-            state_ver_key: StateVerKey::default(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0),
+            state_ver_key: Some(StateVerKey::default()),
             stake: U256::from(1000),
             commission: 100,
             delegators: HashMap::new(),
@@ -3873,8 +3828,8 @@ mod test {
         // Create an unauthenticated validator
         let unauthenticated_validator = RegisteredValidator {
             account: Address::random(),
-            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
-            state_ver_key: StateVerKey::default(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0),
+            state_ver_key: Some(StateVerKey::default()),
             stake: U256::from(2000),
             commission: 200,
             delegators: HashMap::new(),

@@ -1,0 +1,12 @@
+---
+source: crates/espresso/types/src/v0/impls/stake_table.rs
+assertion_line: 3676
+expression: summary
+---
+network: mainnet
+to_block: 25188000
+stake_table_contract: 0xcef474d372b5b09defe2af187bf17338dc704451
+stake_table_hash: STAKE_TABLE~BfffcamiX5aiODiUCHNTnh9ZHCHL8otb0R-x0G2pEHzt
+active_validators_commit: STAKE_TABLE~DLaGgL64ctrqjN5g1y_mvE54IghMBl_KYJfYyMInooKP
+all_validators: 97
+active_validators: 76
