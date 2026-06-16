@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet, btree_map::Entry},
     ops::Range,
 };
 
@@ -61,6 +61,15 @@ pub struct VidReconstructError<K> {
 type Metadata<T> = <<T as NodeType>::BlockPayload as BlockPayload<T>>::Metadata;
 type ReconstructResult<T> =
     Result<VidReconstructOutput<T>, VidReconstructError<<T as NodeType>::SignatureKey>>;
+
+/// Whether `share` verifies against a `common` already known to be hash-bound
+/// to the commitment (a `verify_with_verified_common` success).
+fn share_verifies(common: &AvidmGf2Common, share: &AvidmGf2Share) -> bool {
+    matches!(
+        AvidmGf2Scheme::verify_share_with_verified_common(common, share),
+        Ok(Ok(()))
+    )
+}
 
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct VidDisperseRequest<T: NodeType> {
@@ -205,11 +214,11 @@ impl<T: NodeType> VidShareAccumulator<T> {
         // Byzantine voter can pair real `ns_commits` with a forged `param` (e.g.
         // an inflated `recovery_threshold`). Pinning that common as the
         // verification oracle would reject every honest share, so reject it now.
-        if let Some(expected) = &self.expected_param {
-            if share.common.param != *expected {
-                warn!(%view, ?sender, "VID share common param differs from the committee's");
-                return;
-            }
+        if let Some(expected) = &self.expected_param
+            && share.common.param != *expected
+        {
+            warn!(%view, ?sender, "VID share common param differs from the committee's");
+            return;
         }
         // The commitment hash-binds the common, so trust it as the verification
         // oracle only after that check; later shares must carry the same common.
@@ -277,12 +286,10 @@ impl<T: NodeType> VidShareAccumulator<T> {
         self.seen_keys.insert(sender.clone());
         let mut survivor = false;
         for key in conflicts {
-            let verified = self.shares.get(&key).is_some_and(|admitted| {
-                matches!(
-                    AvidmGf2Scheme::verify_share_with_verified_common(&common, admitted),
-                    Ok(Ok(()))
-                )
-            });
+            let verified = self
+                .shares
+                .get(&key)
+                .is_some_and(|admitted| share_verifies(&common, admitted));
             if verified {
                 survivor = true;
             } else {
@@ -295,10 +302,7 @@ impl<T: NodeType> VidShareAccumulator<T> {
         if survivor {
             return;
         }
-        if matches!(
-            AvidmGf2Scheme::verify_share_with_verified_common(&common, &share.share),
-            Ok(Ok(()))
-        ) {
+        if share_verifies(&common, &share.share) {
             self.shares.insert(sender, share.share);
         } else {
             warn!(%view, ?sender, "dropping unverifiable VID share at intake conflict");
@@ -361,17 +365,22 @@ impl<T: NodeType> VidReconstructor<T> {
         if self.reconstructed.contains(&view) {
             return;
         }
-        if let Some(existing) = self.accumulators.get(&view) {
-            // The first proposal wins: an equivocating leader cannot re-pin
-            // the view to another commitment.
-            if existing.payload_commitment != payload_commitment {
-                warn!(%view, "conflicting proposal for a view pinned to another commitment");
-            }
-            return;
-        }
-        let accumulator = self.accumulators.entry(view).or_insert_with(|| {
-            VidShareAccumulator::new(payload_commitment, metadata, epoch, expected_param)
-        });
+        let accumulator = match self.accumulators.entry(view) {
+            Entry::Occupied(existing) => {
+                // The first proposal wins: an equivocating leader cannot re-pin
+                // the view to another commitment.
+                if existing.get().payload_commitment != payload_commitment {
+                    warn!(%view, "conflicting proposal for a view pinned to another commitment");
+                }
+                return;
+            },
+            Entry::Vacant(slot) => slot.insert(VidShareAccumulator::new(
+                payload_commitment,
+                metadata,
+                epoch,
+                expected_param,
+            )),
+        };
         for (sender, share) in self.pending.remove(&view).into_iter().flatten() {
             accumulator.accept(view, sender, share);
         }
@@ -510,12 +519,7 @@ impl<T: NodeType> VidReconstructor<T> {
         let bad_share_keys: Vec<_> = keys
             .into_iter()
             .zip(&shares)
-            .filter(|(_, share)| {
-                !matches!(
-                    AvidmGf2Scheme::verify_share_with_verified_common(&common, share),
-                    Ok(Ok(()))
-                )
-            })
+            .filter(|(_, share)| !share_verifies(&common, share))
             .map(|(key, _)| key)
             .collect();
         let kind = if bad_share_keys.is_empty() {

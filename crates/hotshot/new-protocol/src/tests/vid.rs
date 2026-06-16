@@ -15,6 +15,18 @@ fn honest_share(view: &TestView, i: u64) -> VidDisperseShare2<TestTypes> {
     view.vid_share_for(&BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0)
 }
 
+/// The VID recovery threshold (in weight units), not the consensus vote
+/// threshold.
+fn recovery_threshold(view: &TestView) -> u64 {
+    view.vid_shares[0].common.param.recovery_threshold as u64
+}
+
+/// A voter (key index 9) whose honest share the tests never feed: stands in as
+/// the attacker / poison / squatter / replayer key.
+fn attacker_key() -> BLSPubKey {
+    BLSPubKey::generated_from_seed_indexed([0u8; 32], 9).0
+}
+
 /// A share claiming the view's commitment and common but carrying a different
 /// payload's content, so it fails merkle verification. Occupies voter `slot`'s
 /// shard range, addressed to `recipient_key` (forge it to model squatting).
@@ -70,6 +82,61 @@ fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestV
     );
 }
 
+/// Assert that no reconstruction attempt runs in a short window — neither a
+/// successful payload nor an errored attempt. Used where the offending input
+/// must be rejected at intake so nothing is ever spawned. `context` names that
+/// input for the failure message.
+async fn assert_no_reconstruction(reconstructor: &mut VidReconstructor<TestTypes>, context: &str) {
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
+    match result {
+        Err(_) | Ok(None) => { /* timed out or no tasks — no attempt ran, good */ },
+        Ok(Some(Ok(out))) => {
+            panic!("BUG: {context} produced a payload for view {:?}", out.view)
+        },
+        Ok(Some(Err(err))) => {
+            panic!(
+                "BUG: {context} triggered a reconstruction attempt for view {:?}",
+                err.view
+            )
+        },
+    }
+}
+
+/// Assert that no *duplicate* successful reconstruction is produced in a short
+/// window. An errored attempt is tolerated; a second `Ok` is the failure.
+async fn assert_no_duplicate_success(
+    reconstructor: &mut VidReconstructor<TestTypes>,
+    context: &str,
+) {
+    let result =
+        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
+    match result {
+        Err(_) | Ok(None) | Ok(Some(Err(_))) => { /* no duplicate success — good */ },
+        Ok(Some(Ok(out))) => {
+            panic!(
+                "BUG: got a duplicate BlockReconstructed for view {:?} — {context}",
+                out.view
+            )
+        },
+    }
+}
+
+/// Drive the reconstructor to a single successful reconstruction and assert it
+/// matches `view`'s commitment.
+async fn expect_reconstruction(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestView) {
+    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("reconstruction should complete in time")
+        .expect("should produce a result")
+        .expect("reconstruction should succeed");
+    assert_eq!(out.view, view.view_number);
+    assert_eq!(
+        out.payload_commitment,
+        view.vid_shares[0].payload_commitment
+    );
+}
+
 /// Feeding shares beyond the threshold produces exactly one reconstruction
 /// result, not one per extra share.
 #[tokio::test]
@@ -84,29 +151,14 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
         feed(&mut reconstructor, honest_share(view, i));
     }
 
-    let first = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete in time");
-    assert!(first.is_some(), "should produce a reconstruction result");
-    assert!(first.unwrap().is_ok(), "reconstruction should succeed");
+    expect_reconstruction(&mut reconstructor, view).await;
 
     // A second call must NOT produce another result for the same view.
-    let second =
-        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
-
-    // Timeout or None is fine; a second Ok result means a duplicate task.
-    match second {
-        Err(_elapsed) => { /* timed out — no duplicate, good */ },
-        Ok(None) => { /* no more tasks — no duplicate, good */ },
-        Ok(Some(Err(_))) => { /* error, not a duplicate success */ },
-        Ok(Some(Ok(out))) => {
-            panic!(
-                "BUG: got a duplicate BlockReconstructed for view {:?} — the reconstructor \
-                 spawned multiple tasks for the same view",
-                out.view
-            );
-        },
-    }
+    assert_no_duplicate_success(
+        &mut reconstructor,
+        "the reconstructor spawned multiple tasks for the same view",
+    )
+    .await;
 }
 
 /// `retire_view` should suppress reconstruction for the retired view
@@ -124,21 +176,11 @@ async fn test_retire_view_skips_reconstruction() {
         feed(&mut reconstructor, honest_share(view, i));
     }
 
-    let result =
-        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
-
-    match result {
-        Err(_elapsed) => { /* no task ever spawned — good */ },
-        Ok(None) => { /* no tasks — good */ },
-        Ok(Some(Err(_))) => { /* error, not a duplicate success */ },
-        Ok(Some(Ok(out))) => {
-            panic!(
-                "BUG: retire_view should have suppressed reconstruction, but got a result for \
-                 view {:?}",
-                out.view
-            );
-        },
-    }
+    assert_no_duplicate_success(
+        &mut reconstructor,
+        "retire_view should have suppressed reconstruction",
+    )
+    .await;
 }
 
 /// Shares arriving after reconstruction has already completed for a view
@@ -155,32 +197,14 @@ async fn test_shares_after_reconstruction_are_ignored() {
     }
 
     // Drain the one expected result.
-    let _result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete")
-        .expect("should have a result")
-        .expect("reconstruction should succeed");
+    expect_reconstruction(&mut reconstructor, view).await;
 
     // More shares for the same view should be ignored.
     for i in THRESHOLD..view.vid_shares.len() as u64 {
         feed(&mut reconstructor, honest_share(view, i));
     }
 
-    let extra =
-        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
-
-    match extra {
-        Err(_elapsed) => { /* timed out — good, no extra task */ },
-        Ok(None) => { /* no tasks — good */ },
-        Ok(Some(Err(_))) => { /* error, not a duplicate success */ },
-        Ok(Some(Ok(out))) => {
-            panic!(
-                "BUG: got a duplicate BlockReconstructed for view {:?} after reconstruction was \
-                 already completed",
-                out.view
-            );
-        },
-    }
+    assert_no_duplicate_success(&mut reconstructor, "reconstruction was already completed").await;
 }
 
 /// Shares arriving before the view's proposal are held pending and admitted as
@@ -196,32 +220,11 @@ async fn test_shares_before_proposal_reconstruct_on_proposal() {
     }
 
     // No proposal yet: nothing to reconstruct against.
-    let result =
-        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
-    match result {
-        Err(_) | Ok(None) => { /* timed out or no tasks — no attempt ran, good */ },
-        Ok(Some(Ok(out))) => panic!(
-            "BUG: reconstruction for view {:?} ran without the proposal",
-            out.view
-        ),
-        Ok(Some(Err(err))) => panic!(
-            "BUG: a reconstruction attempt for view {:?} ran without the proposal",
-            err.view
-        ),
-    }
+    assert_no_reconstruction(&mut reconstructor, "a share before the proposal").await;
 
     // The proposal admits the pending shares; no further input is needed.
     handle_proposal(&mut reconstructor, view);
-    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete in time")
-        .expect("should produce a result")
-        .expect("reconstruction from pending shares should succeed");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(
-        out.payload_commitment,
-        view.vid_shares[0].payload_commitment
-    );
+    expect_reconstruction(&mut reconstructor, view).await;
 }
 
 /// Shares whose common is not hash-bound to the proposal's commitment are
@@ -251,40 +254,17 @@ async fn test_inconsistent_common_shares_ignored() {
         share.common = wrong_common.clone();
         feed(&mut reconstructor, share);
     }
-    let result =
-        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
-    match result {
-        Err(_) | Ok(None) => { /* timed out or no tasks — no attempt ran, good */ },
-        Ok(Some(Ok(out))) => {
-            panic!(
-                "BUG: shares with a common inconsistent with the commitment produced a payload \
-                 for view {:?}",
-                out.view
-            );
-        },
-        Ok(Some(Err(err))) => {
-            panic!(
-                "BUG: shares with a common inconsistent with the commitment triggered a \
-                 reconstruction attempt for view {:?}",
-                err.view
-            );
-        },
-    }
+    assert_no_reconstruction(
+        &mut reconstructor,
+        "a share with a common inconsistent with the commitment",
+    )
+    .await;
 
     // The same voters can still contribute their honest shares.
     for i in 0..THRESHOLD {
         feed(&mut reconstructor, honest_share(view, i));
     }
-    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete in time")
-        .expect("should produce a result")
-        .expect("reconstruction from honest shares should succeed");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(
-        out.payload_commitment,
-        view.vid_shares[0].payload_commitment
-    );
+    expect_reconstruction(&mut reconstructor, view).await;
 }
 
 /// A share claiming the right commitment but carrying a different payload's
@@ -296,41 +276,14 @@ async fn test_weeds_bad_shares_and_recovers() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    let template = &view.vid_shares[0];
-    let common = template.common.clone();
-    let payload_commitment = template.payload_commitment;
-    // The VID recovery threshold (in weight units), not the consensus vote
-    // threshold.
-    let recovery_threshold = common.param.recovery_threshold as u64;
+    let payload_commitment = view.vid_shares[0].payload_commitment;
+    let recovery_threshold = recovery_threshold(view);
 
-    // Disperse a different payload with the same params and weights: the poison
-    // share is structurally valid but fails verification against the real
-    // commitment.
-    let weights: Vec<u32> = view
-        .vid_shares
-        .iter()
-        .map(|s| s.share.weight() as u32)
-        .collect();
-    let other_payload = vec![0xb7u8; 64];
-    let (_, _, other_shares) = AvidmGf2Scheme::ns_disperse(
-        &common.param,
-        &weights,
-        &other_payload,
-        std::iter::once(0..other_payload.len()),
-    )
-    .unwrap();
-
-    // The poison voter is one whose honest share we never feed.
-    let poison_voter = BLSPubKey::generated_from_seed_indexed([0u8; 32], 9).0;
-    let poison = VidDisperseShare2::<TestTypes> {
-        view_number: template.view_number,
-        epoch: template.epoch,
-        target_epoch: template.target_epoch,
-        payload_commitment,
-        share: other_shares.last().unwrap().clone(),
-        recipient_key: poison_voter,
-        common: common.clone(),
-    };
+    // A share claiming the real commitment but carrying a different payload's
+    // content: structurally valid but fails verification. Its voter is one
+    // whose honest share we never feed.
+    let poison_voter = attacker_key();
+    let poison = garbage_share(view, poison_voter, view.vid_shares.len() - 1);
 
     // One short of the threshold honestly, then the poison share to trigger a
     // poisoned attempt.
@@ -365,13 +318,7 @@ async fn test_weeds_bad_shares_and_recovers() {
 
     // Weeding plus the shares that arrived in flight put the coverage back
     // over the threshold: the retry happens without further input.
-    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("retry should complete in time")
-        .expect("should produce a result")
-        .expect("retry from verified shares should succeed");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(out.payload_commitment, payload_commitment);
+    expect_reconstruction(&mut reconstructor, view).await;
 }
 
 /// Replaying another voter's valid share under your own key adds no coverage:
@@ -383,12 +330,10 @@ async fn test_replayed_share_does_not_fake_coverage() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    let template = &view.vid_shares[0];
-    let payload_commitment = template.payload_commitment;
-    let recovery_threshold = template.common.param.recovery_threshold as u64;
+    let recovery_threshold = recovery_threshold(view);
 
     // The replayer is a voter whose honest share we never feed.
-    let replayer = BLSPubKey::generated_from_seed_indexed([0u8; 32], 9).0;
+    let replayer = attacker_key();
     let mut replay = honest_share(view, 0);
     replay.recipient_key = replayer;
 
@@ -400,32 +345,14 @@ async fn test_replayed_share_does_not_fake_coverage() {
     // genuine verified share, so coverage stays below the threshold.
     feed(&mut reconstructor, replay);
 
-    let result =
-        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
-    match result {
-        Err(_) | Ok(None) => { /* timed out or no tasks — no attempt ran, good */ },
-        Ok(Some(Ok(out))) => panic!(
-            "BUG: a replayed share produced a payload for view {:?}",
-            out.view
-        ),
-        Ok(Some(Err(err))) => panic!(
-            "BUG: a replayed share triggered a reconstruction attempt for view {:?}",
-            err.view
-        ),
-    }
+    assert_no_reconstruction(&mut reconstructor, "a replayed share").await;
 
     // One more honest share provides the missing distinct range.
     feed(
         &mut reconstructor,
         honest_share(view, recovery_threshold - 1),
     );
-    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete in time")
-        .expect("should produce a result")
-        .expect("reconstruction should succeed once a new distinct share arrives");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(out.payload_commitment, payload_commitment);
+    expect_reconstruction(&mut reconstructor, view).await;
 }
 
 /// A share delivered by a sender other than the voter it is addressed to is
@@ -437,8 +364,8 @@ async fn test_forged_recipient_key_rejected() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    let recovery_threshold = view.vid_shares[0].common.param.recovery_threshold as u64;
-    let attacker = BLSPubKey::generated_from_seed_indexed([0u8; 32], 9).0;
+    let recovery_threshold = recovery_threshold(view);
+    let attacker = attacker_key();
 
     handle_proposal(&mut reconstructor, view);
     // One short of the recovery threshold, honestly.
@@ -450,35 +377,14 @@ async fn test_forged_recipient_key_rejected() {
     let victim_share = honest_share(view, recovery_threshold - 1);
     reconstructor.handle_vid_share(attacker, victim_share);
 
-    let result =
-        tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
-    match result {
-        Err(_) | Ok(None) => { /* timed out or no tasks — no attempt ran, good */ },
-        Ok(Some(Ok(out))) => panic!(
-            "BUG: a forged-sender share produced a payload for view {:?}",
-            out.view
-        ),
-        Ok(Some(Err(err))) => panic!(
-            "BUG: a forged-sender share triggered a reconstruction attempt for view {:?}",
-            err.view
-        ),
-    }
+    assert_no_reconstruction(&mut reconstructor, "a forged-sender share").await;
 
     // Delivered honestly by its true owner, the same share completes the set.
     feed(
         &mut reconstructor,
         honest_share(view, recovery_threshold - 1),
     );
-    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete in time")
-        .expect("should produce a result")
-        .expect("reconstruction should succeed once the real owner contributes");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(
-        out.payload_commitment,
-        view.vid_shares[0].payload_commitment
-    );
+    expect_reconstruction(&mut reconstructor, view).await;
 }
 
 /// Pending shares are keyed by authenticated sender, so a forged-recipient
@@ -490,8 +396,8 @@ async fn test_forged_recipient_does_not_squat_pending() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    let recovery_threshold = view.vid_shares[0].common.param.recovery_threshold as u64;
-    let attacker = BLSPubKey::generated_from_seed_indexed([0u8; 32], 9).0;
+    let recovery_threshold = recovery_threshold(view);
+    let attacker = attacker_key();
     let victim_slot = 0usize;
     let victim_key = honest_share(view, victim_slot as u64).recipient_key;
 
@@ -507,16 +413,7 @@ async fn test_forged_recipient_does_not_squat_pending() {
     }
     handle_proposal(&mut reconstructor, view);
 
-    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete in time")
-        .expect("should produce a result")
-        .expect("victim's pending slot was not squatted, so reconstruction succeeds");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(
-        out.payload_commitment,
-        view.vid_shares[0].payload_commitment
-    );
+    expect_reconstruction(&mut reconstructor, view).await;
 }
 
 /// A Byzantine voter pins the view's `common` to one with the proposal's real
@@ -530,8 +427,6 @@ async fn test_poisoned_common_param_does_not_block_reconstruction() {
     let test_data = TestData::new(1).await;
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
-
-    let payload_commitment = view.vid_shares[0].payload_commitment;
 
     // Attacker (slot 9, whose honest share we never feed) keeps its real share
     // content — so the common stays `is_consistent` — but forges an unreachable
@@ -550,13 +445,7 @@ async fn test_poisoned_common_param_does_not_block_reconstruction() {
 
     // A secure reconstructor rejects the poisoned common and reconstructs from
     // the honest shares; vulnerable code pins it and `next()` yields nothing.
-    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete in time")
-        .expect("should produce a result")
-        .expect("honest shares must reconstruct despite the poisoned-common share");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(out.payload_commitment, payload_commitment);
+    expect_reconstruction(&mut reconstructor, view).await;
 }
 
 /// A squatter occupies an honest voter's shard range with garbage under its own
@@ -569,8 +458,8 @@ async fn test_overlapping_garbage_loses_conflict_to_honest_share() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    let recovery_threshold = view.vid_shares[0].common.param.recovery_threshold as u64;
-    let squatter = BLSPubKey::generated_from_seed_indexed([0u8; 32], 9).0;
+    let recovery_threshold = recovery_threshold(view);
+    let squatter = attacker_key();
     let victim_slot = 0usize;
 
     handle_proposal(&mut reconstructor, view);
@@ -593,14 +482,5 @@ async fn test_overlapping_garbage_loses_conflict_to_honest_share() {
         honest_share(view, recovery_threshold - 1),
     );
 
-    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
-        .await
-        .expect("reconstruction should complete in time")
-        .expect("should produce a result")
-        .expect("first attempt is over verified shares and must succeed (no poisoned decode)");
-    assert_eq!(out.view, view.view_number);
-    assert_eq!(
-        out.payload_commitment,
-        view.vid_shares[0].payload_commitment
-    );
+    expect_reconstruction(&mut reconstructor, view).await;
 }
