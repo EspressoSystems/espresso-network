@@ -338,8 +338,7 @@ where
     }
 
     pub async fn stop(mut self) {
-        self.network.shutdown().await;
-        self.storage.flush().await;
+        futures::join!(self.network.shutdown(), self.storage.flush());
     }
 
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
@@ -547,9 +546,9 @@ where
                         }
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
-                    Err(()) => {
+                    Err(err) => {
                         finish_measurement(next_input);
-                        return Err(CoordinatorError::unspecified().context("vid reconstruction"))
+                        return Err(CoordinatorError::regular(err).context("vid reconstruction"))
                     }
                 },
                 Some(stored) = self.storage.next() => {

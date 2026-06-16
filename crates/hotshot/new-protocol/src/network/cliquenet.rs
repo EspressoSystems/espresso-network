@@ -148,13 +148,24 @@ impl<T: NodeType> Network<T> for Cliquenet<T> {
     }
 
     async fn receive(&mut self) -> Result<Message<T, Unchecked>, NetworkError> {
-        let (_src, bytes) = self
+        let (src, bytes) = self
             .inner
             .receive()
             .await
             .ok_or_else(|| NetworkError::Critical("cliquenet has shutdown".into()))?;
-        let m = self.deserialize(&bytes)?;
-        Ok(m)
+        let msg = self.deserialize(&bytes)?;
+        let key = self
+            .peers
+            .get(&msg.sender)
+            .map(|info| info.x25519_key)
+            .or_else(|| (msg.sender == self.my_keys.0).then_some(self.my_keys.1.into()));
+        if Some(src.into()) != key {
+            return Err(NetworkError::InvalidSender {
+                msg: key,
+                src: src.into(),
+            });
+        }
+        Ok(msg)
     }
 
     async fn shutdown(&mut self) {

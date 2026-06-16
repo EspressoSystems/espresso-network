@@ -3,12 +3,16 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use committable::Commitment;
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
-    data::{EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber},
+    data::{
+        EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber,
+        ns_table::parse_ns_table,
+    },
     epoch_membership::EpochMembershipCoordinator,
-    traits::node_implementation::NodeType,
+    traits::{block_contents::EncodeBytes, node_implementation::NodeType},
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
+use tracing::warn;
 
 pub struct VidDisperseOutput<T: NodeType> {
     pub view: ViewNumber,
@@ -23,6 +27,17 @@ pub struct VidReconstructOutput<T: NodeType> {
     pub payload: T::BlockPayload,
     pub metadata: <T::BlockPayload as BlockPayload<T>>::Metadata,
     pub tx_commitments: Vec<Commitment<T::Transaction>>,
+}
+
+/// A reconstruction attempt failed: either decoding errored or the recovered
+/// payload did not re-commit to the expected payload commitment.
+///
+/// Carries the view so the reconstructor can drop its in-flight marker; the
+/// accumulated shares are kept, so a later share triggers another attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("VID reconstruction failed for view {view}")]
+pub struct VidReconstructError {
+    pub view: ViewNumber,
 }
 
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -127,7 +142,7 @@ impl<T: NodeType> VidShareAccumulator<T> {
 pub struct VidReconstructor<T: NodeType> {
     accumulators: BTreeMap<ViewNumber, VidShareAccumulator<T>>,
     reconstructed: BTreeSet<ViewNumber>,
-    tasks: JoinSet<Result<VidReconstructOutput<T>, ()>>,
+    tasks: JoinSet<Result<VidReconstructOutput<T>, VidReconstructError>>,
     calculations: BTreeMap<ViewNumber, AbortHandle>,
 }
 
@@ -179,7 +194,7 @@ impl<T: NodeType> VidReconstructor<T> {
         }
     }
 
-    pub async fn next(&mut self) -> Option<Result<VidReconstructOutput<T>, ()>> {
+    pub async fn next(&mut self) -> Option<Result<VidReconstructOutput<T>, VidReconstructError>> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(Ok(out))) => {
@@ -188,9 +203,11 @@ impl<T: NodeType> VidReconstructor<T> {
                     self.reconstructed.insert(out.view);
                     return Some(Ok(out));
                 },
-                Some(Ok(Err(()))) => {
-                    // TODO: Handle error
-                    return Some(Err(()));
+                Some(Ok(Err(err))) => {
+                    // Drop the in-flight marker but keep the accumulated
+                    // shares: a later share triggers another attempt.
+                    self.calculations.remove(&err.view);
+                    return Some(Err(err));
                 },
                 Some(Err(_)) => continue,
                 None => return None,
@@ -213,11 +230,30 @@ impl<T: NodeType> VidReconstructor<T> {
         };
         let epoch = accumulator.epoch.unwrap_or(EpochNumber::genesis());
         let task = self.tasks.spawn_blocking(move || {
-            let Ok(result) = AvidmGf2Scheme::recover(&common, &shares) else {
-                // TODO: Handle error
-                return Err(());
-            };
-            let payload = T::BlockPayload::from_bytes(&result, &metadata);
+            let bytes = AvidmGf2Scheme::recover(&common, &shares).map_err(|err| {
+                warn!(%view, %err, "VID recovery failed");
+                VidReconstructError { view }
+            })?;
+            // Recovery does not bind the decoded bytes to the commitment: a
+            // Byzantine disperser can commit to a non-codeword, and a bad
+            // share poisons the erasure decoding. Recommit and compare before
+            // trusting the payload.
+            let ns_table = parse_ns_table(bytes.len(), &metadata.encode());
+            let (recomputed, _) =
+                AvidmGf2Scheme::commit(&common.param, &bytes, ns_table).map_err(|err| {
+                    warn!(%view, %err, "failed to recommit reconstructed VID payload");
+                    VidReconstructError { view }
+                })?;
+            if recomputed != payload_commitment {
+                warn!(
+                    %view,
+                    expected = %payload_commitment,
+                    %recomputed,
+                    "reconstructed payload does not match the payload commitment"
+                );
+                return Err(VidReconstructError { view });
+            }
+            let payload = T::BlockPayload::from_bytes(&bytes, &metadata);
             let tx_commitments = payload.transaction_commitments(&metadata);
             Ok(VidReconstructOutput {
                 view,

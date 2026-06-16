@@ -121,7 +121,7 @@ where
 pub struct ConsensusHandle<T: NodeType, I: NodeImplementation<T>> {
     legacy_handle: Arc<RwLock<SystemContextHandle<T, I>>>,
     client_api: ClientApi<T>,
-    /// Held only for its drop behavior
+    /// Safety net: aborts the coordinator task on drop if `shut_down()` was never called.
     #[allow(dead_code)]
     coordinator_task: AbortOnDropHandle<()>,
     /// Signals the coordinator loop to stop

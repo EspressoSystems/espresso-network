@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::{
     block::BlockError, epoch::EpochManagerError, network::NetworkError, proposal::ValidationError,
+    vid::VidReconstructError,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +87,9 @@ pub enum ErrorSource {
 
     #[error("epoch manager error: {0}")]
     EpochManager(#[from] EpochManagerError),
+
+    #[error("vid reconstruction error: {0}")]
+    VidReconstruct(#[from] VidReconstructError),
 }
 
 impl From<NetworkError> for CoordinatorError {

@@ -52,7 +52,7 @@ pub struct Genesis {
     pub stake_table: Vec<StakeTableEntry<PubKey>>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientOptions {
     /// Maximum number of stake tables to cache in memory at any given time.
