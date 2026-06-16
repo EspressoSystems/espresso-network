@@ -961,7 +961,7 @@ pub mod testing {
     };
     use espresso_types::{
         EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
-        Upgrade, UpgradeMap,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -1291,6 +1291,36 @@ pub mod testing {
 
         pub fn epoch_start_block(mut self, start_block: u64) -> Self {
             self.config.epoch_start_block = start_block;
+            self
+        }
+
+        /// Override the builder timeout. On an idle chain the test builder returns no block (so it
+        /// doesn't drive empty blocks at full speed); the leader retries until this timeout elapses
+        /// and only then proposes an empty block itself. So for an empty mempool this is effectively
+        /// the empty-block time. Keep it below [`Self::next_view_timeout`] or views time out before
+        /// the leader proposes.
+        pub fn builder_timeout(mut self, timeout: Duration) -> Self {
+            self.config.builder_timeout = timeout;
+            self
+        }
+
+        /// Override the base next-view (failure) timeout. Raise it when using a large
+        /// [`Self::builder_timeout`] so a slow-but-healthy view isn't mistaken for a failed one.
+        pub fn next_view_timeout(mut self, timeout: Duration) -> Self {
+            self.config.next_view_timeout = timeout.as_millis() as u64;
+            self
+        }
+
+        /// Override the views during which the upgrade is proposed. Call after `set_upgrades`.
+        pub fn upgrade_proposing_views(mut self, start: u64, stop: u64) -> Self {
+            for upgrade in self.upgrades.values_mut() {
+                if let UpgradeMode::View(v) = &mut upgrade.mode {
+                    v.start_proposing_view = start;
+                    v.stop_proposing_view = stop;
+                }
+            }
+            self.config.start_proposing_view = start;
+            self.config.stop_proposing_view = stop;
             self
         }
 
