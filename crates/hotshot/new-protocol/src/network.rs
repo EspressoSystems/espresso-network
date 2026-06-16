@@ -377,13 +377,16 @@ impl<T: NodeType> Sender<T> {
     ) -> Result<(), NetworkError> {
         let bytes = self.serialize(m)?;
         let mut targets = Vec::new();
-        for t in to {
-            if let Some(info) = self.shared.read().peers.get(t) {
-                targets.push(info.x25519_key.into())
-            } else if *t == self.my_keys.0 {
-                targets.push(self.my_keys.1)
-            } else {
-                error!(peer = %t, "multicast target not found");
+        {
+            let shared = self.shared.read();
+            for t in to {
+                if let Some(info) = shared.peers.get(t) {
+                    targets.push(info.x25519_key.into())
+                } else if *t == self.my_keys.0 {
+                    targets.push(self.my_keys.1)
+                } else {
+                    error!(peer = %t, "multicast target not found");
+                }
             }
         }
         self.sender.multicast(Slot::new(*v), targets, bytes)?;
