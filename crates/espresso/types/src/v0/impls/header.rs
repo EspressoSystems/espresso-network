@@ -987,61 +987,13 @@ impl Header {
             // Previous epoch is too early to have rewards.
             (RewardAmount::default(), HashSet::new())
         } else {
-<<<<<<< HEAD
-            // the background result is missing
-            // Fetch the previous epoch's leaf and compute rewards synchronously.
-            let prev_epoch_last_block = *prev_epoch * epoch_height;
-            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)).await {
-                tracing::info!(%prev_epoch, "stake table missing for prev_epoch, triggering catchup: {err:#}");
-                coordinator
-                    .wait_for_catchup(prev_epoch)
-                    .await
-                    .context(format!("failed to catch up for prev_epoch={prev_epoch}"))?;
-            }
-||||||| parent of b5b45c0a3e (Fix epoch reward: handle pre V5 epoch in reward calculation (#4513))
-            // the background result is missing
-            // Fetch the previous epoch's leaf and compute rewards synchronously.
-            let prev_epoch_last_block = *prev_epoch * epoch_height;
-            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)) {
-                tracing::info!(%prev_epoch, "stake table missing for prev_epoch, triggering catchup: {err:#}");
-                coordinator
-                    .wait_for_catchup(prev_epoch)
-                    .await
-                    .context(format!("failed to catch up for prev_epoch={prev_epoch}"))?;
-            }
-=======
             // The background result is missing so compute
             tracing::warn!(
                 %epoch,
                 %prev_epoch,
                 "missing epoch rewards at boundary, spawning calculation now"
             );
->>>>>>> b5b45c0a3e (Fix epoch reward: handle pre V5 epoch in reward calculation (#4513))
 
-<<<<<<< HEAD
-            let membership = coordinator.membership().read().await;
-            let stake_table = membership.stake_table(Some(prev_epoch));
-            let success_threshold = membership.success_threshold(Some(prev_epoch));
-            drop(membership);
-
-            let prev_epoch_leaf = instance_state
-                .state_catchup
-                .as_ref()
-                .fetch_leaf(prev_epoch_last_block, stake_table, success_threshold)
-||||||| parent of b5b45c0a3e (Fix epoch reward: handle pre V5 epoch in reward calculation (#4513))
-            let prev_snapshot = coordinator
-                .membership()
-                .snapshot(prev_epoch)
-                .with_context(|| format!("no committee for prev_epoch={prev_epoch}"))?;
-
-            let stake_table = HSStakeTable::from_iter(prev_snapshot.stake_table());
-            let success_threshold = prev_snapshot.success_threshold();
-
-            let prev_epoch_leaf = instance_state
-                .state_catchup
-                .as_ref()
-                .fetch_leaf(prev_epoch_last_block, stake_table, success_threshold)
-=======
             reward_calculator.spawn_background_task(
                 prev_epoch,
                 epoch_height,
@@ -1053,7 +1005,6 @@ impl Header {
 
             let result = reward_calculator
                 .get_result(prev_epoch)
->>>>>>> b5b45c0a3e (Fix epoch reward: handle pre V5 epoch in reward calculation (#4513))
                 .await
                 .context(format!("no pending reward task for epoch {prev_epoch}"))?
                 .context(format!(
