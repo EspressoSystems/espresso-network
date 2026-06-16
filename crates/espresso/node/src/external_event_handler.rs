@@ -19,7 +19,7 @@ use crate::context::TaskList;
 /// An external message that can be sent to or received from a node
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ExternalMessage {
-    RequestResponse(Vec<u8>),
+    RequestResponse(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 /// The external event handler

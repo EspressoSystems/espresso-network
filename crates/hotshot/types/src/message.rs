@@ -128,7 +128,7 @@ pub enum MessageKind<TYPES: NodeType> {
     /// Messages relating to sharing data between nodes
     Data(DataMessage<TYPES>),
     /// A (still serialized) message to be passed through to external listeners
-    External(Vec<u8>),
+    External(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 /// List of keys to send a message to, or broadcast to all known keys
