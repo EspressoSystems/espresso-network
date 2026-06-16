@@ -1409,14 +1409,9 @@ impl SequencerPersistence for Persistence {
         let qc_bytes: Vec<u8> = row.get("qc");
         let qc2: QuorumCertificate2<SeqTypes> = bincode::deserialize(&qc_bytes)?;
 
-        let next_qc_bytes: Vec<u8> = row.get("next_epoch_qc");
-        let maybe_next_qc2 = if next_qc_bytes.is_empty() {
-            None
-        } else {
-            let next_qc2: NextEpochQuorumCertificate2<SeqTypes> =
-                bincode::deserialize(&next_qc_bytes)?;
-            Some(next_qc2)
-        };
+        let maybe_next_qc_bytes: Option<Vec<u8>> = row.try_get("next_epoch_qc").ok();
+        let maybe_next_qc2 =
+            maybe_next_qc_bytes.and_then(|next_qc_bytes| bincode::deserialize(&next_qc_bytes).ok());
 
         let cert_pair = CertificatePair::new(qc2, maybe_next_qc2);
 
