@@ -12,7 +12,10 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber,
+        vid_disperse::vid_total_weight,
+    },
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
@@ -22,6 +25,7 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     utils::{epoch_from_block_number, is_epoch_root},
+    vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
     vote::HasViewNumber,
 };
 use metrics::Measurement;
@@ -1177,6 +1181,19 @@ where
         }
     }
 
+    /// The VID erasure parameters the committee fixes for `target_epoch`,
+    /// matching what an honest disperser derives. Used to reject shares whose
+    /// `common.param` is forged (the commitment binds `ns_commits`, not
+    /// `param`). `None` if the committee cannot be resolved.
+    fn expected_vid_param(&self, target_epoch: Option<EpochNumber>) -> Option<AvidmGf2Param> {
+        let membership = self
+            .membership_coordinator
+            .stake_table_for_epoch(target_epoch)
+            .ok()?;
+        let total_weight = vid_total_weight::<T, _>(membership.stake_table(), target_epoch);
+        init_avidm_gf2_param(total_weight).ok()
+    }
+
     fn on_proposal_and_vid_share(
         &mut self,
         validated: ValidatedProposal<T>,
@@ -1197,12 +1214,14 @@ where
             );
         }
 
+        let expected_param = self.expected_vid_param(vid_share.target_epoch);
         let proposal = &validated.message.proposal.data;
         self.vid_reconstructor.handle_proposal(
             proposal.view_number(),
             vid_share.payload_commitment,
             proposal.block_header.metadata().clone(),
             proposal.epoch,
+            expected_param,
         );
         // This is our own share, addressed to us by the leader and already
         // verified by the share validator.

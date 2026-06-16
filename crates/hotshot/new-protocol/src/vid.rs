@@ -12,7 +12,7 @@ use hotshot_types::{
     },
     epoch_membership::EpochMembershipCoordinator,
     traits::{block_contents::EncodeBytes, node_implementation::NodeType},
-    vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Scheme, AvidmGf2Share},
+    vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::warn;
@@ -35,15 +35,12 @@ pub struct VidReconstructOutput<T: NodeType> {
 /// Why a reconstruction attempt failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum VidReconstructErrorKind {
-    /// Decoding failed or the recovered payload did not re-commit to the
-    /// expected commitment, and the shares that failed verification were
-    /// weeded out. Reconstruction retries once the remaining shares cover
-    /// the recovery threshold again.
+    /// Unverifiable shares were weeded out; reconstruction retries once the
+    /// remaining shares cover the recovery threshold again.
     #[error("awaiting more shares after weeding out unverifiable ones")]
     AwaitingShares,
-    /// Every share verified against the commitment and the decoded payload
-    /// still does not re-commit to it: the disperser committed to a
-    /// non-codeword, so no subset of shares can ever recover this payload.
+    /// Every share verified yet the payload still does not re-commit: the
+    /// disperser committed to a non-codeword, so no subset can ever recover it.
     #[error("unrecoverable: verified shares cannot decode to a payload matching the commitment")]
     Unrecoverable,
 }
@@ -153,6 +150,11 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
     payload_commitment: VidCommitment2,
     metadata: Metadata<T>,
     epoch: EpochNumber,
+    /// The VID erasure parameters the committee fixes for this view, used to
+    /// reject shares carrying a forged `common.param` (see [`Self::accept`]).
+    /// `None` if the committee could not be resolved; the param check is then
+    /// skipped, matching the previously unchecked path.
+    expected_param: Option<AvidmGf2Param>,
     /// Common data pinned by the first admitted share; hash-bound to
     /// `payload_commitment` (see [`Self::accept`]).
     common: Option<AvidmGf2Common>,
@@ -169,11 +171,17 @@ pub(crate) struct VidShareAccumulator<T: NodeType> {
 }
 
 impl<T: NodeType> VidShareAccumulator<T> {
-    fn new(payload_commitment: VidCommitment2, metadata: Metadata<T>, epoch: EpochNumber) -> Self {
+    fn new(
+        payload_commitment: VidCommitment2,
+        metadata: Metadata<T>,
+        epoch: EpochNumber,
+        expected_param: Option<AvidmGf2Param>,
+    ) -> Self {
         Self {
             payload_commitment,
             metadata,
             epoch,
+            expected_param,
             common: None,
             shares: BTreeMap::new(),
             seen_keys: HashSet::new(),
@@ -181,14 +189,10 @@ impl<T: NodeType> VidShareAccumulator<T> {
         }
     }
 
-    /// Admit `share` (from the authenticated `sender`) if it claims the
-    /// proposal's commitment, carries the common data hash-bound to that
-    /// commitment, is from a new sender, and covers a well-formed shard range
-    /// that does not overlap an admitted share's. Honest dispersal assigns
-    /// disjoint ranges, so an overlap proves a squat; it is resolved by
-    /// verification in [`Self::resolve_conflict`] — the lazy trigger for the
-    /// otherwise-deferred per-share check. The non-overlapping fast path stays
-    /// crypto-free, and the decoder never sees a shard position twice.
+    /// Admit `share` from the authenticated `sender`, dropping it if it fails
+    /// any intake check. The non-overlapping path stays crypto-free; a
+    /// shard-range overlap is the only case that triggers per-share
+    /// verification, via [`Self::resolve_conflict`].
     fn accept(&mut self, view: ViewNumber, sender: T::SignatureKey, share: VidDisperseShare2<T>) {
         if self.exhausted {
             return;
@@ -197,9 +201,18 @@ impl<T: NodeType> VidShareAccumulator<T> {
             warn!(%view, ?sender, "VID share commitment differs from the proposal's");
             return;
         }
-        // The commitment hash-binds the common data; check that before
-        // trusting the common as the verification oracle used for weeding
-        // out bad shares. Every later share must carry the identical common.
+        // The commitment binds a share's `ns_commits` but not its `param`, so a
+        // Byzantine voter can pair real `ns_commits` with a forged `param` (e.g.
+        // an inflated `recovery_threshold`). Pinning that common as the
+        // verification oracle would reject every honest share, so reject it now.
+        if let Some(expected) = &self.expected_param {
+            if share.common.param != *expected {
+                warn!(%view, ?sender, "VID share common param differs from the committee's");
+                return;
+            }
+        }
+        // The commitment hash-binds the common, so trust it as the verification
+        // oracle only after that check; later shares must carry the same common.
         if let Some(common) = &self.common {
             if share.common != *common {
                 warn!(%view, ?sender, "VID share common differs from the accumulator's");
@@ -225,10 +238,8 @@ impl<T: NodeType> VidShareAccumulator<T> {
         if self.seen_keys.contains(&sender) {
             return;
         }
-        // Honest dispersal assigns disjoint shard ranges, so an overlap with an
-        // already-admitted share proves one of them is squatting. Resolving the
-        // conflict needs per-share verification, so defer it to
-        // `resolve_conflict`; the non-overlapping path stays crypto-free.
+        // Honest dispersal assigns disjoint ranges, so an overlap with an
+        // admitted share proves a squat; resolve it (needs verification) below.
         let conflicts: Vec<T::SignatureKey> = self
             .shares
             .iter()
@@ -247,14 +258,10 @@ impl<T: NodeType> VidShareAccumulator<T> {
         self.resolve_conflict(view, sender, share, conflicts);
     }
 
-    /// Resolve a shard-range collision between the incoming `share` (from the
-    /// authenticated `sender`) and the already-admitted `conflicts`. Because
-    /// honest dispersal assigns disjoint ranges, a collision means at least one
-    /// colliding share lies about its range. Verify them against the
-    /// commitment-bound common, evict the ones that fail, and admit the
-    /// newcomer only if it verifies and no verified share still covers its
-    /// range. This is the one intake path that runs per-share verification, and
-    /// only ever when a conflict appears.
+    /// Resolve a shard-range collision between the incoming `share` and the
+    /// already-admitted `conflicts`: verify each against the commitment-bound
+    /// common, evict those that fail, and admit the newcomer only if it
+    /// verifies and no surviving share still covers its range.
     fn resolve_conflict(
         &mut self,
         view: ViewNumber,
@@ -349,6 +356,7 @@ impl<T: NodeType> VidReconstructor<T> {
         payload_commitment: VidCommitment2,
         metadata: Metadata<T>,
         epoch: EpochNumber,
+        expected_param: Option<AvidmGf2Param>,
     ) {
         if self.reconstructed.contains(&view) {
             return;
@@ -361,10 +369,9 @@ impl<T: NodeType> VidReconstructor<T> {
             }
             return;
         }
-        let accumulator = self
-            .accumulators
-            .entry(view)
-            .or_insert_with(|| VidShareAccumulator::new(payload_commitment, metadata, epoch));
+        let accumulator = self.accumulators.entry(view).or_insert_with(|| {
+            VidShareAccumulator::new(payload_commitment, metadata, epoch, expected_param)
+        });
         for (sender, share) in self.pending.remove(&view).into_iter().flatten() {
             accumulator.accept(view, sender, share);
         }
@@ -377,11 +384,10 @@ impl<T: NodeType> VidReconstructor<T> {
         share: VidDisperseShare2<T>,
     ) {
         let view = share.view_number;
-        // A share carries the key of the voter it belongs to; only the
-        // authenticated sender may contribute its own share. This cheap
-        // equality check (no verification) bounds each node to one slot and
-        // protects the pre-proposal `pending` window, where a share cannot yet
-        // be verified against a commitment.
+        // A share carries the voter it belongs to; only the authenticated
+        // sender may contribute its own. This cheap check bounds each node to
+        // one slot and guards the pre-proposal `pending` window, where a share
+        // cannot yet be verified against a commitment.
         if share.recipient_key != sender {
             warn!(%view, ?sender, "VID share recipient key does not match its sender");
             return;

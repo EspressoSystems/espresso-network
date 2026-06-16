@@ -15,10 +15,9 @@ fn honest_share(view: &TestView, i: u64) -> VidDisperseShare2<TestTypes> {
     view.vid_share_for(&BLSPubKey::generated_from_seed_indexed([0u8; 32], i).0)
 }
 
-/// Build a share that claims the view's commitment and common but carries
-/// content from a *different* payload, so it fails merkle verification. It
-/// occupies voter `slot`'s shard range (same weights → same range partition)
-/// and is addressed to `recipient_key` — forge that to model squatting.
+/// A share claiming the view's commitment and common but carrying a different
+/// payload's content, so it fails merkle verification. Occupies voter `slot`'s
+/// shard range, addressed to `recipient_key` (forge it to model squatting).
 fn garbage_share(
     view: &TestView,
     recipient_key: BLSPubKey,
@@ -65,12 +64,14 @@ fn handle_proposal(reconstructor: &mut VidReconstructor<TestTypes>, view: &TestV
         view.vid_shares[0].payload_commitment,
         view.proposal.data.block_header.metadata,
         view.proposal.data.epoch,
+        // The committee-fixed param the coordinator derives; equals the honest
+        // shares' `common.param`.
+        Some(view.vid_shares[0].common.param.clone()),
     );
 }
 
-/// Feeding shares beyond the reconstruction threshold for the same view
-/// should produce exactly one BlockReconstructed result from `next()`,
-/// not one per extra share.
+/// Feeding shares beyond the threshold produces exactly one reconstruction
+/// result, not one per extra share.
 #[tokio::test]
 async fn test_no_duplicate_reconstruction_after_threshold() {
     let test_data = TestData::new(1).await;
@@ -78,12 +79,11 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
     handle_proposal(&mut reconstructor, view);
-    // Feed every node's share — enough to exceed the threshold.
+    // Feed every node's share — more than the threshold.
     for i in 0..view.vid_shares.len() as u64 {
         feed(&mut reconstructor, honest_share(view, i));
     }
 
-    // First call to `next()` should succeed.
     let first = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
         .await
         .expect("reconstruction should complete in time");
@@ -94,9 +94,7 @@ async fn test_no_duplicate_reconstruction_after_threshold() {
     let second =
         tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
 
-    // Either the future times out (Ok(None) from join_next returning None
-    // meaning no tasks left) or it returns None. Both are acceptable.
-    // What is NOT acceptable is getting Ok(Some(Ok(..))) — a duplicate result.
+    // Timeout or None is fine; a second Ok result means a duplicate task.
     match second {
         Err(_elapsed) => { /* timed out — no duplicate, good */ },
         Ok(None) => { /* no more tasks — no duplicate, good */ },
@@ -151,7 +149,6 @@ async fn test_shares_after_reconstruction_are_ignored() {
     let view = &test_data.views[0];
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
 
-    // Feed exactly threshold shares.
     handle_proposal(&mut reconstructor, view);
     for i in 0..THRESHOLD {
         feed(&mut reconstructor, honest_share(view, i));
@@ -164,12 +161,11 @@ async fn test_shares_after_reconstruction_are_ignored() {
         .expect("should have a result")
         .expect("reconstruction should succeed");
 
-    // Now feed more shares for the same view — they should be ignored.
+    // More shares for the same view should be ignored.
     for i in THRESHOLD..view.vid_shares.len() as u64 {
         feed(&mut reconstructor, honest_share(view, i));
     }
 
-    // No additional reconstruction should be spawned.
     let extra =
         tokio::time::timeout(std::time::Duration::from_millis(500), reconstructor.next()).await;
 
@@ -187,9 +183,8 @@ async fn test_shares_after_reconstruction_are_ignored() {
     }
 }
 
-/// Shares can arrive (via Vote1) before the view's proposal. They are held
-/// pending — no reconstruction is possible without the proposal's metadata —
-/// and admitted as soon as the proposal pins the view's commitment.
+/// Shares arriving before the view's proposal are held pending and admitted as
+/// soon as the proposal pins the view's commitment.
 #[tokio::test]
 async fn test_shares_before_proposal_reconstruct_on_proposal() {
     let test_data = TestData::new(1).await;
@@ -229,10 +224,8 @@ async fn test_shares_before_proposal_reconstruct_on_proposal() {
     );
 }
 
-/// Shares whose common data is not hash-bound to the proposal's commitment
-/// must be rejected at intake (the common is the verification oracle for
-/// weeding, so it has to be consistent with the commitment first) and must
-/// not interfere with honest reconstruction of the same view.
+/// Shares whose common is not hash-bound to the proposal's commitment are
+/// rejected at intake and don't block honest reconstruction of the view.
 #[tokio::test]
 async fn test_inconsistent_common_shares_ignored() {
     let test_data = TestData::new(1).await;
@@ -240,8 +233,8 @@ async fn test_inconsistent_common_shares_ignored() {
     let mut reconstructor = VidReconstructor::<TestTypes>::new();
     handle_proposal(&mut reconstructor, view);
 
-    // A valid common over different payload bytes: consistent with some
-    // commitment, but not with the proposal's.
+    // A valid common over different bytes: consistent with some commitment,
+    // but not the proposal's.
     let param = &view.vid_shares[0].common.param;
     let other_payload = vec![0xa5u8; 64];
     let (_, wrong_common) = AvidmGf2Scheme::commit(
@@ -251,9 +244,8 @@ async fn test_inconsistent_common_shares_ignored() {
     )
     .unwrap();
 
-    // Feed threshold-plus shares claiming the proposal's commitment but
-    // carrying the wrong common; all must be dropped at intake, so no
-    // reconstruction is ever attempted.
+    // Threshold-plus shares claiming the proposal's commitment but carrying the
+    // wrong common; all dropped at intake, so no reconstruction is attempted.
     for i in 0..THRESHOLD {
         let mut share = honest_share(view, i);
         share.common = wrong_common.clone();
@@ -295,10 +287,9 @@ async fn test_inconsistent_common_shares_ignored() {
     );
 }
 
-/// A share that claims the right commitment but carries content from a
-/// different payload poisons the first decode. The reconstructor must weed
-/// it out (reporting the offending voter), and recover automatically from
-/// the verified remainder.
+/// A share claiming the right commitment but carrying a different payload's
+/// content poisons the first decode. The reconstructor weeds it out (reporting
+/// the offending voter) and recovers from the verified remainder.
 #[tokio::test]
 async fn test_weeds_bad_shares_and_recovers() {
     let test_data = TestData::new(1).await;
@@ -312,10 +303,9 @@ async fn test_weeds_bad_shares_and_recovers() {
     // threshold.
     let recovery_threshold = common.param.recovery_threshold as u64;
 
-    // Disperse a different (non-empty, so guaranteed different from the test
-    // view's) payload with the same parameters and weights: the poison share
-    // is structurally valid but its content fails verification against the
-    // real commitment.
+    // Disperse a different payload with the same params and weights: the poison
+    // share is structurally valid but fails verification against the real
+    // commitment.
     let weights: Vec<u32> = view
         .vid_shares
         .iter()
@@ -342,8 +332,8 @@ async fn test_weeds_bad_shares_and_recovers() {
         common: common.clone(),
     };
 
-    // Feed one less than the recovery threshold honestly, then the poison
-    // share to trigger a (poisoned) reconstruction attempt.
+    // One short of the threshold honestly, then the poison share to trigger a
+    // poisoned attempt.
     handle_proposal(&mut reconstructor, view);
     for i in 0..recovery_threshold - 1 {
         feed(&mut reconstructor, honest_share(view, i));
@@ -384,10 +374,9 @@ async fn test_weeds_bad_shares_and_recovers() {
     assert_eq!(out.payload_commitment, payload_commitment);
 }
 
-/// A Byzantine voter replaying another voter's (valid) share under its own key
-/// contributes no new shard coverage: it collides with the genuine share's
-/// range and loses the conflict, so no reconstruction attempt runs until
-/// genuinely new shares cover the recovery threshold.
+/// Replaying another voter's valid share under your own key adds no coverage:
+/// it collides with the genuine share's range and loses the conflict, so no
+/// attempt runs until genuinely new shares cover the threshold.
 #[tokio::test]
 async fn test_replayed_share_does_not_fake_coverage() {
     let test_data = TestData::new(1).await;
@@ -407,9 +396,8 @@ async fn test_replayed_share_does_not_fake_coverage() {
     for i in 0..recovery_threshold - 1 {
         feed(&mut reconstructor, honest_share(view, i));
     }
-    // The replay covers an already-covered shard range: it loses the range
-    // conflict to the genuine (verified) share, so coverage stays below the
-    // threshold and no attempt is triggered.
+    // The replay covers an already-covered range: it loses the conflict to the
+    // genuine verified share, so coverage stays below the threshold.
     feed(&mut reconstructor, replay);
 
     let result =
@@ -440,9 +428,9 @@ async fn test_replayed_share_does_not_fake_coverage() {
     assert_eq!(out.payload_commitment, payload_commitment);
 }
 
-/// A share delivered by a sender that is not the voter it is addressed to is
-/// rejected at intake (cheap key-equality, no verification): a node can only
-/// contribute its own share, so impersonation cannot fake coverage.
+/// A share delivered by a sender other than the voter it is addressed to is
+/// rejected at intake (cheap key-equality): a node can only contribute its own
+/// share, so impersonation cannot fake coverage.
 #[tokio::test]
 async fn test_forged_recipient_key_rejected() {
     let test_data = TestData::new(1).await;
@@ -493,10 +481,9 @@ async fn test_forged_recipient_key_rejected() {
     );
 }
 
-/// Shares can arrive before the proposal and are held pending, keyed by the
-/// authenticated sender. A forged-recipient share (here garbage addressed to a
-/// victim) is rejected at intake, so it cannot squat the victim's pending slot
-/// via first-wins; the victim's real share lands and the view reconstructs.
+/// Pending shares are keyed by authenticated sender, so a forged-recipient
+/// share (garbage addressed to a victim) is rejected at intake and cannot squat
+/// the victim's pending slot; the victim's real share lands and reconstructs.
 #[tokio::test]
 async fn test_forged_recipient_does_not_squat_pending() {
     let test_data = TestData::new(1).await;
@@ -509,8 +496,7 @@ async fn test_forged_recipient_does_not_squat_pending() {
     let victim_key = honest_share(view, victim_slot as u64).recipient_key;
 
     // Before the proposal: the attacker forges the victim's recipient_key on a
-    // garbage share. The sender check rejects it, so the pending slot is never
-    // squatted.
+    // garbage share. The sender check rejects it, so the slot is never squatted.
     let squat = garbage_share(view, victim_key, victim_slot);
     reconstructor.handle_vid_share(attacker, squat);
 
@@ -533,11 +519,50 @@ async fn test_forged_recipient_does_not_squat_pending() {
     );
 }
 
+/// A Byzantine voter pins the view's `common` to one with the proposal's real
+/// `ns_commits` (so `is_consistent` passes) but a forged `param` (an inflated
+/// `recovery_threshold`). If admitted first it becomes the verification oracle,
+/// and since later shares must carry the identical common, every honest share
+/// is rejected for common-mismatch. A secure reconstructor rejects the forged
+/// `param` and reconstructs from the honest shares.
+#[tokio::test]
+async fn test_poisoned_common_param_does_not_block_reconstruction() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    let payload_commitment = view.vid_shares[0].payload_commitment;
+
+    // Attacker (slot 9, whose honest share we never feed) keeps its real share
+    // content — so the common stays `is_consistent` — but forges an unreachable
+    // `recovery_threshold`. Sent as voter 9's own share, so the sender check passes.
+    let mut poison = honest_share(view, 9);
+    poison.common.param.recovery_threshold = usize::MAX;
+
+    handle_proposal(&mut reconstructor, view);
+    // The attacker's poisoned share is the first admitted, so it pins the
+    // poisoned common before any honest share arrives.
+    feed(&mut reconstructor, poison);
+    // Every honest voter's share — far more than the real recovery threshold.
+    for i in 0..9u64 {
+        feed(&mut reconstructor, honest_share(view, i));
+    }
+
+    // A secure reconstructor rejects the poisoned common and reconstructs from
+    // the honest shares; vulnerable code pins it and `next()` yields nothing.
+    let out = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("reconstruction should complete in time")
+        .expect("should produce a result")
+        .expect("honest shares must reconstruct despite the poisoned-common share");
+    assert_eq!(out.view, view.view_number);
+    assert_eq!(out.payload_commitment, payload_commitment);
+}
+
 /// A squatter occupies an honest voter's shard range with garbage under its own
 /// key (admitted on the crypto-free fast path). When the genuine owner's share
-/// arrives, the range collision triggers verification: the garbage is evicted
-/// and the honest share admitted, so reconstruction succeeds on the first
-/// (all-honest) attempt — no poisoned decode is ever observed.
+/// arrives, the collision triggers verification: the garbage is evicted and the
+/// honest share admitted, so the first attempt is all-honest and succeeds.
 #[tokio::test]
 async fn test_overlapping_garbage_loses_conflict_to_honest_share() {
     let test_data = TestData::new(1).await;
@@ -554,16 +579,15 @@ async fn test_overlapping_garbage_loses_conflict_to_honest_share() {
         &mut reconstructor,
         garbage_share(view, squatter, victim_slot),
     );
-    // Honest shares for the other slots — not enough to reach the threshold
-    // yet, so no attempt runs while the garbage is still admitted.
+    // Honest shares for other slots — still below the threshold, so no attempt
+    // runs while the garbage is admitted.
     for i in 1..recovery_threshold - 1 {
         feed(&mut reconstructor, honest_share(view, i));
     }
-    // The victim's genuine share collides with the squatter's range: the
-    // garbage is verified, fails, and is evicted; the honest share is admitted.
+    // The victim's genuine share collides with the squatter's range: the garbage
+    // is verified, fails, and is evicted; the honest share is admitted.
     feed(&mut reconstructor, honest_share(view, victim_slot as u64));
-    // One more honest share reaches the threshold; the only attempt is over
-    // verified shares and succeeds.
+    // One more honest share reaches the threshold.
     feed(
         &mut reconstructor,
         honest_share(view, recovery_threshold - 1),
