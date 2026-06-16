@@ -1,6 +1,16 @@
+use std::{
+    collections::HashMap,
+    future::Future,
+    path::PathBuf,
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
+    time::Duration,
+};
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
-use std::{future::Future, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
@@ -45,6 +55,30 @@ const WRITE_BACKOFF: BackoffParams = BackoffParams::new(
         denominator: 10,
     },
 );
+
+/// In-memory LRU recency tracker shared across all clones of a [`SqliteStorage`].
+///
+/// `touch` is called on the read path (pure, no DB write). `drain` is called inside
+/// `insert_leaf` to flush pending recency updates as part of the existing write transaction.
+#[derive(Debug)]
+struct Recency {
+    /// Monotonically increasing tick counter. Persisted maximum is seeded at `connect` time so
+    /// ticks always exceed any value already stored in the DB after a restart.
+    next_tick: AtomicI64,
+    /// height -> latest tick; flushed to DB by the next `insert_leaf`.
+    dirty: std::sync::Mutex<HashMap<i64, i64>>,
+}
+
+impl Recency {
+    fn touch(&self, height: i64) {
+        let t = self.next_tick.fetch_add(1, Ordering::Relaxed);
+        self.dirty.lock().unwrap().insert(height, t);
+    }
+
+    fn drain(&self) -> Vec<(i64, i64)> {
+        self.dirty.lock().unwrap().drain().collect()
+    }
+}
 
 /// Client-side database for a [`LightClient`].
 pub trait Storage: Sized + Send + Sync + 'static {
@@ -122,20 +156,12 @@ pub trait Storage: Sized + Send + Sync + 'static {
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientSqliteOptions {
     /// Maximum number of simultaneous DB connections to allow.
-    ///
-    /// One connection serializes all access. With more, the read paths that
-    /// also write (the LRU `id` bump in `leaf_upper_bound`) contend for the WAL
-    /// write lock and return SQLITE_BUSY. The light client is the query
-    /// service's sole fetch provider, so a single such failure returns `None`
-    /// for that height and strands the aggregator (seen during a wiped node's
-    /// full-history backfill). The DB is a bounded cache, so serializing is
-    /// cheap.
     #[cfg_attr(
         feature = "clap",
         clap(
             long = "light-client-db-num-connections",
             env = "LIGHT_CLIENT_DB_NUM_CONNECTIONS",
-            default_value = "1",
+            default_value = "5",
         )
     )]
     pub num_connections: u32,
@@ -177,7 +203,7 @@ pub struct LightClientSqliteOptions {
 impl Default for LightClientSqliteOptions {
     fn default() -> Self {
         Self {
-            num_connections: 1,
+            num_connections: 5,
             num_leaves: 100,
             num_stake_tables: 100,
             lc_path: None,
@@ -217,10 +243,20 @@ impl LightClientSqliteOptions {
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
 
+        // Seed the tick counter so new ticks always exceed any value persisted in the DB.
+        let (max_used,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(last_used), 0) FROM leaf")
+            .fetch_one(&pool)
+            .await?;
+        let recency = Arc::new(Recency {
+            next_tick: AtomicI64::new(max_used + 1),
+            dirty: Default::default(),
+        });
+
         Ok(SqliteStorage {
             pool,
             num_leaves: self.num_leaves,
             num_stake_tables: self.num_stake_tables,
+            recency,
             _tmp,
         })
     }
@@ -232,6 +268,8 @@ pub struct SqliteStorage {
     pool: SqlitePool,
     num_leaves: u32,
     num_stake_tables: u32,
+    /// Shared across all clones; all map operations are sync and never held across `.await`.
+    recency: Arc<Recency>,
     _tmp: Option<Arc<TempDir>>,
 }
 
@@ -252,9 +290,7 @@ impl Storage for SqliteStorage {
         &self,
         id: impl Into<LeafRequest> + Send,
     ) -> Result<Option<LeafQueryData<SeqTypes>>> {
-        let mut tx = self.pool.begin().await?;
-
-        let mut q = QueryBuilder::new("SELECT height, data FROM leaf WHERE ");
+        let mut q = QueryBuilder::new("SELECT data FROM leaf WHERE ");
         match id.into() {
             LeafRequest::Leaf(LeafId::Number(n)) | LeafRequest::Header(BlockId::Number(n)) => {
                 q.push("height >= ")
@@ -275,26 +311,16 @@ impl Storage for SqliteStorage {
         }
         q.push(" LIMIT 1");
 
-        let Some((height, data)) = q
-            .build_query_as::<(i64, _)>()
-            .fetch_optional(tx.as_mut())
+        let Some((data,)) = q
+            .build_query_as::<(serde_json::Value,)>()
+            .fetch_optional(&self.pool)
             .await?
         else {
             return Ok(None);
         };
-        let leaf = serde_json::from_value(data)?;
 
-        // Mark this leaf as recently used.
-        let (id,): (i32,) = query_as("SELECT max(id) + 1 FROM leaf")
-            .fetch_one(tx.as_mut())
-            .await?;
-        query("UPDATE leaf SET id = $1 WHERE height = $2")
-            .bind(id)
-            .bind(height)
-            .execute(tx.as_mut())
-            .await?;
-        tx.commit().await?;
-
+        let leaf: LeafQueryData<SeqTypes> = serde_json::from_value(data)?;
+        self.recency.touch(leaf.height() as i64);
         Ok(Some(leaf))
     }
 
@@ -303,22 +329,21 @@ impl Storage for SqliteStorage {
         start_height: u32,
         end_height: u32,
     ) -> Result<Vec<LeafQueryData<SeqTypes>>> {
-        let mut tx = self.pool.begin().await?;
-
-        let leaves = query_as::<_, (i64, serde_json::Value)>(
+        query_as::<_, (i64, serde_json::Value)>(
             "SELECT height, data FROM leaf WHERE height >= $1 AND height < $2 ORDER BY height",
         )
         .bind(start_height as i64)
         .bind(end_height as i64)
-        .fetch_all(tx.as_mut())
+        .fetch_all(&self.pool)
         .await?
         .into_iter()
-        .map(|(_height, data)| serde_json::from_value(data))
-        .collect::<Result<Vec<_>, _>>()?;
-
-        tx.commit().await?;
-
-        Ok(leaves)
+        .map(|(height, data)| {
+            let leaf = serde_json::from_value(data)?;
+            self.recency.touch(height);
+            Ok(leaf)
+        })
+        .collect::<Result<Vec<_>, serde_json::Error>>()
+        .map_err(anyhow::Error::new)
     }
 
     async fn insert_leaf(&self, leaf: LeafQueryData<SeqTypes>) -> Result<()> {
@@ -328,7 +353,11 @@ impl Storage for SqliteStorage {
         let payload_hash = leaf.payload_hash().to_string();
         let data = serde_json::to_value(&leaf)?;
 
-        WRITE_BACKOFF
+        // Compute both values before the retry loop so retries reuse them (idempotent).
+        let pending = self.recency.drain();
+        let insert_tick = self.recency.next_tick.fetch_add(1, Ordering::Relaxed);
+
+        let result = WRITE_BACKOFF
             .retry_if(
                 WRITE_RETRY_MAX,
                 |_| true,
@@ -336,42 +365,48 @@ impl Storage for SqliteStorage {
                     let mut tx = self.pool.begin().await?;
 
                     tracing::debug!(height, hash, "inserting leaf");
-                    let (id,): (i32,) = query_as(
-                        "INSERT INTO leaf (height, hash, block_hash, payload_hash, data) VALUES \
-                         ($1, $2, $3, $4, $5)
-                    ON CONFLICT (height) DO UPDATE SET id = excluded.id
-                    RETURNING id",
+                    query(
+                        "INSERT INTO leaf (height, hash, block_hash, payload_hash, data, \
+                         last_used) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (height) DO \
+                         UPDATE SET data = excluded.data, last_used = excluded.last_used",
                     )
                     .bind(height)
                     .bind(&hash)
                     .bind(&block_hash)
                     .bind(&payload_hash)
                     .bind(&data)
-                    .fetch_one(tx.as_mut())
+                    .bind(insert_tick)
+                    .execute(tx.as_mut())
                     .await
                     .context("inserting new leaf")?;
-                    tracing::debug!(height, hash, id, "inserted leaf");
+                    tracing::debug!(height, hash, "inserted leaf");
 
-                    // Delete the oldest leaves as necessary until the number of leaves stored does
-                    // not exceed `num_leaves`.
+                    // Flush pending recency touches accumulated since the last insert.
+                    for (h, tick) in &pending {
+                        query("UPDATE leaf SET last_used = $1 WHERE height = $2")
+                            .bind(tick)
+                            .bind(h)
+                            .execute(tx.as_mut())
+                            .await
+                            .context("flushing recency touch")?;
+                    }
+
+                    // GC: evict least-recently-used leaves until count <= num_leaves.
                     let (num_leaves,): (u32,) = query_as("SELECT count(*) FROM leaf")
                         .fetch_one(tx.as_mut())
                         .await
                         .context("counting leaves")?;
                     let to_delete = num_leaves.saturating_sub(self.num_leaves);
                     if to_delete > 0 {
-                        let (id_to_delete,): (i64,) =
-                            query_as("SELECT id FROM leaf ORDER BY id LIMIT 1 OFFSET $1")
-                                .bind(to_delete - 1)
-                                .fetch_one(tx.as_mut())
-                                .await
-                                .context("finding timestamp for GC")?;
-                        tracing::info!(id_to_delete, "garbage collecting {to_delete} leaves");
-                        let res = query("DELETE FROM leaf WHERE id <= $1")
-                            .bind(id_to_delete)
-                            .execute(tx.as_mut())
-                            .await
-                            .context("deleting old leaves")?;
+                        tracing::info!("garbage collecting {to_delete} leaves");
+                        let res = query(
+                            "DELETE FROM leaf WHERE height IN (SELECT height FROM leaf ORDER BY \
+                             last_used ASC, height ASC LIMIT $1)",
+                        )
+                        .bind(to_delete)
+                        .execute(tx.as_mut())
+                        .await
+                        .context("deleting old leaves")?;
                         tracing::info!("deleted {} leaves", res.rows_affected());
                     }
 
@@ -379,7 +414,18 @@ impl Storage for SqliteStorage {
                     Ok(())
                 },
             )
-            .await
+            .await;
+
+        if result.is_err() {
+            // Restore drained touches so a recently-read leaf is not wrongly evicted later.
+            // Use `or_insert` so any newer touch already recorded for that height wins.
+            let mut dirty = self.recency.dirty.lock().unwrap();
+            for (h, tick) in pending {
+                dirty.entry(h).or_insert(tick);
+            }
+        }
+
+        result
     }
 
     async fn stake_table_lower_bound(
@@ -708,23 +754,13 @@ mod test {
         drop(db);
     }
 
-    // Regression: with more than one connection the read-then-write LRU bump in
-    // `leaf_upper_bound` contends for the WAL write lock and returns
-    // SQLITE_BUSY. The light client is the query service's sole fetch provider,
-    // so one such failure returns `None` for that height and strands the
-    // aggregator during a wiped node's backfill. The default must serialize
-    // access so heavy concurrent read+write never produces a lock error.
+    // Regression: `leaf_upper_bound` previously did a SELECT then an UPDATE
+    // (LRU recency bump) inside one write transaction, so every read took the
+    // WAL write lock and contended with concurrent inserts under a full-history
+    // backfill, producing SQLITE_BUSY. The read path is now a pure SELECT.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_concurrent_access_never_locks() {
-        let db = Arc::new(
-            LightClientSqliteOptions {
-                num_leaves: 10,
-                ..Default::default()
-            }
-            .connect()
-            .await
-            .unwrap(),
-        );
+    async fn test_concurrent_reads_do_not_lock() {
+        let db = Arc::new(SqliteStorage::default().await.unwrap());
         let leaves = leaf_chain(0..40, EPOCH_VERSION).await;
 
         let mut tasks = Vec::new();
@@ -931,9 +967,10 @@ mod test {
         assert_eq!(db.leaf_upper_bound(LeafId::Number(1)).await.unwrap(), None);
     }
 
+    // LRU GC: leaf touched by a read is kept; untouched leaf is evicted.
     #[tokio::test]
     #[test_log::test]
-    async fn test_gc_last_selected() {
+    async fn test_gc_evicts_least_recently_used() {
         let db = LightClientSqliteOptions {
             num_leaves: 2,
             ..Default::default()
@@ -946,39 +983,105 @@ mod test {
         db.insert_leaf(leaves[0].clone()).await.unwrap();
         db.insert_leaf(leaves[1].clone()).await.unwrap();
 
-        // Select leaf 0, making it more recently used than leaf 1.
-        assert_eq!(
-            db.leaf_upper_bound(LeafId::Number(0))
-                .await
-                .unwrap()
-                .unwrap(),
-            leaves[0]
-        );
+        // Touch leaf 0 via a read, making leaf 1 the least-recently-used.
+        db.leaf_upper_bound(LeafId::Number(0)).await.unwrap();
 
-        // Insert a third leaf, causing the least recently used (leaf 1) to be garbage collected.
+        // Insert leaf 2; GC evicts 1 (LRU) to bring count back to 2.
         db.insert_leaf(leaves[2].clone()).await.unwrap();
 
+        // Check exact presence/absence via hash lookups (the Number variant is an
+        // upper bound, so it would return a higher leaf instead of None).
         assert_eq!(
-            db.leaf_upper_bound(LeafId::Number(0))
+            db.leaf_upper_bound(LeafId::Hash(leaves[0].hash()))
                 .await
-                .unwrap()
                 .unwrap(),
-            leaves[0]
+            Some(leaves[0].clone()),
+            "leaf 0 was recently read and must be kept"
         );
         assert_eq!(
-            db.leaf_upper_bound(LeafId::Number(1))
+            db.leaf_upper_bound(LeafId::Hash(leaves[1].hash()))
                 .await
-                .unwrap()
                 .unwrap(),
-            leaves[2]
+            None,
+            "leaf 1 was least-recently-used and must be evicted"
         );
         assert_eq!(
-            db.leaf_upper_bound(LeafId::Number(2))
+            db.leaf_upper_bound(LeafId::Hash(leaves[2].hash()))
                 .await
-                .unwrap()
                 .unwrap(),
-            leaves[2]
+            Some(leaves[2].clone()),
+            "leaf 2 was just inserted and must be kept"
         );
+    }
+
+    // Recency (last_used) must survive a process restart so GC after reopen
+    // still honours access history. Specifically: `next_tick` must be seeded
+    // above the persisted MAX(last_used) so that a touch recorded after reopen
+    // outranks all pre-restart last_used values.
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_recency_survives_restart() {
+        let dir = tempdir().unwrap();
+        let lc_path = dir.path().join("lc.db");
+
+        let opts = || LightClientSqliteOptions {
+            lc_path: Some(lc_path.clone()),
+            num_leaves: 2,
+            ..Default::default()
+        };
+
+        let leaves = leaf_chain(0..=3, EPOCH_VERSION).await;
+
+        {
+            let db = opts().connect().await.unwrap();
+            db.insert_leaf(leaves[0].clone()).await.unwrap();
+            db.insert_leaf(leaves[1].clone()).await.unwrap();
+
+            // Touch leaf 0 so it has a higher last_used than leaf 1.
+            db.leaf_upper_bound(LeafId::Number(0)).await.unwrap();
+
+            // Insert leaf 2; GC evicts leaf 1 (LRU); flushes the touch for leaf 0.
+            // After GC: {leaf 0, leaf 2} remain.
+            db.insert_leaf(leaves[2].clone()).await.unwrap();
+        }
+
+        // Reopen. next_tick seeds from MAX(last_used) + 1, so any post-reopen
+        // tick is strictly greater than all persisted last_used values.
+        {
+            let db = opts().connect().await.unwrap();
+
+            // Touch leaf 2 after reopen; its tick now exceeds all pre-restart last_used.
+            db.leaf_upper_bound(LeafId::Hash(leaves[2].hash()))
+                .await
+                .unwrap();
+
+            // Insert leaf 3; GC evicts the leaf with the lowest last_used (leaf 0,
+            // whose pre-restart tick is lower than leaf 2's post-reopen tick).
+            // After GC: {leaf 2, leaf 3} remain.
+            db.insert_leaf(leaves[3].clone()).await.unwrap();
+
+            assert_eq!(
+                db.leaf_upper_bound(LeafId::Hash(leaves[0].hash()))
+                    .await
+                    .unwrap(),
+                None,
+                "leaf 0 had the lowest persisted last_used and must be evicted"
+            );
+            assert_eq!(
+                db.leaf_upper_bound(LeafId::Hash(leaves[2].hash()))
+                    .await
+                    .unwrap(),
+                Some(leaves[2].clone()),
+                "leaf 2 was touched after reopen and must survive"
+            );
+            assert_eq!(
+                db.leaf_upper_bound(LeafId::Hash(leaves[3].hash()))
+                    .await
+                    .unwrap(),
+                Some(leaves[3].clone()),
+                "leaf 3 was just inserted and must survive"
+            );
+        }
     }
 
     #[tokio::test]
