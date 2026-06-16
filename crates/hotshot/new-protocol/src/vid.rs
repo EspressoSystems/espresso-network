@@ -181,18 +181,18 @@ impl<T: NodeType> VidShareAccumulator<T> {
         }
     }
 
-    /// Admit `share` if it claims the proposal's commitment, carries the
-    /// common data hash-bound to that commitment, is from a new voter, and
-    /// covers a well-formed shard range disjoint from every admitted
-    /// share's. Deduplicating by range up front keeps coverage exact — a
-    /// replayed share verifies against the commitment (merkle proofs don't
-    /// bind the recipient) but cannot fake quorum — and the decoder never
-    /// sees a shard position twice.
-    fn accept(&mut self, view: ViewNumber, share: VidDisperseShare2<T>) {
+    /// Admit `share` (from the authenticated `sender`) if it claims the
+    /// proposal's commitment, carries the common data hash-bound to that
+    /// commitment, is from a new sender, and covers a well-formed shard range
+    /// that does not overlap an admitted share's. Honest dispersal assigns
+    /// disjoint ranges, so an overlap proves a squat; it is resolved by
+    /// verification in [`Self::resolve_conflict`] — the lazy trigger for the
+    /// otherwise-deferred per-share check. The non-overlapping fast path stays
+    /// crypto-free, and the decoder never sees a shard position twice.
+    fn accept(&mut self, view: ViewNumber, sender: T::SignatureKey, share: VidDisperseShare2<T>) {
         if self.exhausted {
             return;
         }
-        let sender = share.recipient_key;
         if share.payload_commitment != self.payload_commitment {
             warn!(%view, ?sender, "VID share commitment differs from the proposal's");
             return;
@@ -225,17 +225,77 @@ impl<T: NodeType> VidShareAccumulator<T> {
         if self.seen_keys.contains(&sender) {
             return;
         }
-        // Don't charge the sender's one submission for an overlap: their
-        // share may become admissible after a squatting share is weeded out.
-        if self
-            .ranges()
-            .any(|covered| covered.start < range.end && range.start < covered.end)
-        {
-            warn!(%view, ?sender, "VID share covers already-covered shard positions");
+        // Honest dispersal assigns disjoint shard ranges, so an overlap with an
+        // already-admitted share proves one of them is squatting. Resolving the
+        // conflict needs per-share verification, so defer it to
+        // `resolve_conflict`; the non-overlapping path stays crypto-free.
+        let conflicts: Vec<T::SignatureKey> = self
+            .shares
+            .iter()
+            .filter(|(_, admitted)| {
+                admitted
+                    .range()
+                    .is_some_and(|covered| covered.start < range.end && range.start < covered.end)
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        if conflicts.is_empty() {
+            self.seen_keys.insert(sender.clone());
+            self.shares.insert(sender, share.share);
             return;
         }
+        self.resolve_conflict(view, sender, share, conflicts);
+    }
+
+    /// Resolve a shard-range collision between the incoming `share` (from the
+    /// authenticated `sender`) and the already-admitted `conflicts`. Because
+    /// honest dispersal assigns disjoint ranges, a collision means at least one
+    /// colliding share lies about its range. Verify them against the
+    /// commitment-bound common, evict the ones that fail, and admit the
+    /// newcomer only if it verifies and no verified share still covers its
+    /// range. This is the one intake path that runs per-share verification, and
+    /// only ever when a conflict appears.
+    fn resolve_conflict(
+        &mut self,
+        view: ViewNumber,
+        sender: T::SignatureKey,
+        share: VidDisperseShare2<T>,
+        conflicts: Vec<T::SignatureKey>,
+    ) {
+        // A conflict implies a prior admission, which pinned the common.
+        let Some(common) = self.common.clone() else {
+            return;
+        };
+        // The sender has used its one slot regardless of the outcome.
         self.seen_keys.insert(sender.clone());
-        self.shares.insert(sender, share.share);
+        let mut survivor = false;
+        for key in conflicts {
+            let verified = self.shares.get(&key).is_some_and(|admitted| {
+                matches!(
+                    AvidmGf2Scheme::verify_share_with_verified_common(&common, admitted),
+                    Ok(Ok(()))
+                )
+            });
+            if verified {
+                survivor = true;
+            } else {
+                warn!(%view, ?key, "evicting unverifiable VID share squatting a shard range");
+                self.shares.remove(&key);
+            }
+        }
+        // A verified share still covers the contested range: the newcomer would
+        // double-cover it, so drop it.
+        if survivor {
+            return;
+        }
+        if matches!(
+            AvidmGf2Scheme::verify_share_with_verified_common(&common, &share.share),
+            Ok(Ok(()))
+        ) {
+            self.shares.insert(sender, share.share);
+        } else {
+            warn!(%view, ?sender, "dropping unverifiable VID share at intake conflict");
+        }
     }
 
     fn ranges(&self) -> impl Iterator<Item = &Range<usize>> {
@@ -305,14 +365,27 @@ impl<T: NodeType> VidReconstructor<T> {
             .accumulators
             .entry(view)
             .or_insert_with(|| VidShareAccumulator::new(payload_commitment, metadata, epoch));
-        for (_, share) in self.pending.remove(&view).into_iter().flatten() {
-            accumulator.accept(view, share);
+        for (sender, share) in self.pending.remove(&view).into_iter().flatten() {
+            accumulator.accept(view, sender, share);
         }
         self.try_reconstruct(view);
     }
 
-    pub(crate) fn handle_vid_share(&mut self, share: VidDisperseShare2<T>) {
+    pub(crate) fn handle_vid_share(
+        &mut self,
+        sender: T::SignatureKey,
+        share: VidDisperseShare2<T>,
+    ) {
         let view = share.view_number;
+        // A share carries the key of the voter it belongs to; only the
+        // authenticated sender may contribute its own share. This cheap
+        // equality check (no verification) bounds each node to one slot and
+        // protects the pre-proposal `pending` window, where a share cannot yet
+        // be verified against a commitment.
+        if share.recipient_key != sender {
+            warn!(%view, ?sender, "VID share recipient key does not match its sender");
+            return;
+        }
         if self.reconstructed.contains(&view) {
             return;
         }
@@ -322,11 +395,11 @@ impl<T: NodeType> VidReconstructor<T> {
             self.pending
                 .entry(view)
                 .or_default()
-                .entry(share.recipient_key.clone())
+                .entry(sender)
                 .or_insert(share);
             return;
         };
-        accumulator.accept(view, share);
+        accumulator.accept(view, sender, share);
         self.try_reconstruct(view);
     }
 

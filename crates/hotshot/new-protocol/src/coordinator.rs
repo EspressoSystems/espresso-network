@@ -952,6 +952,13 @@ where
                 ConsensusMessage::VidShare(share) => {
                     let view = share.data.view_number();
                     debug!(%node, %sender, %view, "recv vid share");
+                    // The leader unicasts each node only its own share. A share
+                    // addressed to anyone else is bogus and could otherwise
+                    // displace our own in the unpaired-share cache.
+                    if share.data.recipient_key != self.public_key {
+                        warn!(%node, %sender, %view, "ignoring vid share not addressed to this node");
+                        return None;
+                    }
                     if self.consensus.wants_proposal_for_view(&view) {
                         self.share_validator.validate(share);
                     }
@@ -980,7 +987,8 @@ where
                     } else {
                         self.vote1_collector.accumulate_vote(vote1.vote.clone());
                     }
-                    self.vid_reconstructor.handle_vid_share(vote1.vid_share);
+                    self.vid_reconstructor
+                        .handle_vid_share(message.sender.clone(), vote1.vid_share);
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
@@ -1196,7 +1204,10 @@ where
             proposal.block_header.metadata().clone(),
             proposal.epoch,
         );
-        self.vid_reconstructor.handle_vid_share(vid_share.clone());
+        // This is our own share, addressed to us by the leader and already
+        // verified by the share validator.
+        self.vid_reconstructor
+            .handle_vid_share(self.public_key.clone(), vid_share.clone());
 
         // GC for the cache
         let view = validated.message.proposal.data.view_number();
