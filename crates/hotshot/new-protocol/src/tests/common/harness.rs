@@ -89,7 +89,6 @@ impl TestHarness {
             epoch_height,
         );
 
-        let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
 
         let block_config = BlockBuilderConfig::default();
@@ -124,6 +123,13 @@ impl TestHarness {
         )
         .await
         .expect("cliquenet creation should succeed");
+
+        let vid_disperse_task = VidDisperser::new(
+            membership.clone(),
+            network.sender().clone(),
+            public_key,
+            private_key.clone(),
+        );
 
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)

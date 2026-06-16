@@ -21,6 +21,7 @@ use hotshot_example_types::{
     membership::TestableMembership,
     node_types::{MemoryImpl, TestTypes},
     state_types::TestInstanceState,
+    storage_types::TestStorage,
 };
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
@@ -214,10 +215,7 @@ async fn build_cutover_coordinator(
     client: crate::client::CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> Coordinator<
-    TestTypes,
-    hotshot_example_types::storage_types::TestStorage<TestTypes>,
-> {
+) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     use hotshot_example_types::{node_types::TEST_VERSIONS, state_types::TestValidatedState};
     use hotshot_types::{data::Leaf2, light_client::StateKeyPair};
 
@@ -288,6 +286,13 @@ async fn build_cutover_coordinator(
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
+
     Coordinator::builder()
         .consensus(consensus)
         .network(network)
@@ -300,7 +305,7 @@ async fn build_cutover_coordinator(
             membership.clone(),
             upgrade_lock.clone(),
         ))
-        .vid_disperser(VidDisperser::new(membership.clone()))
+        .vid_disperser(vid_disperser)
         .vid_reconstructor(VidReconstructor::new())
         .epoch_manager(EpochManager::new(epoch_height, membership.clone()))
         .block_builder(block_builder)
@@ -326,10 +331,7 @@ struct DecisionEvent {
 }
 
 async fn run_cutover_node(
-    mut coord: Coordinator<
-        TestTypes,
-        hotshot_example_types::storage_types::TestStorage<TestTypes>,
-    >,
+    mut coord: Coordinator<TestTypes, TestStorage<TestTypes>>,
     decision_tx: UnboundedSender<DecisionEvent>,
     external_events_tx: async_broadcast::Sender<Event<TestTypes>>,
     legacy: Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>,

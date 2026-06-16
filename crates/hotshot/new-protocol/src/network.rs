@@ -1,6 +1,9 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
-pub use cliquenet::Config as CliquenetConfig;
+pub use cliquenet::{Config as CliquenetConfig, NetAddr, Role};
 use cliquenet::{NetworkReceiver, NetworkSender, Slot, noise::Protocol, x25519::PublicKey};
 use hotshot_types::{
     PeerConnectInfo,
@@ -17,11 +20,7 @@ use hotshot_utils::anytrace;
 use parking_lot::RwLock;
 use tracing::{error, info};
 
-use crate::{
-    message::{Message, MessageType, Unchecked, Validated},
-};
-
-pub use cliquenet::{NetAddr, Role};
+use crate::message::{Message, MessageType, Unchecked, Validated};
 
 #[derive(Debug)]
 pub struct Cliquenet<T: NodeType> {
@@ -103,7 +102,7 @@ impl<T: NodeType> Cliquenet<T> {
                 })),
                 upgrade_lock,
             },
-            receiver: recv
+            receiver: recv,
         })
     }
 
@@ -125,7 +124,9 @@ impl<T: NodeType> Cliquenet<T> {
             .peers
             .get(&msg.sender)
             .map(|info| info.x25519_key)
-            .or_else(|| (msg.sender == self.inner.my_keys.0).then_some(self.inner.my_keys.1.into()));
+            .or_else(|| {
+                (msg.sender == self.inner.my_keys.0).then_some(self.inner.my_keys.1.into())
+            });
         if Some(src.into()) != key {
             return Err(NetworkError::InvalidSender {
                 msg: key,
@@ -421,11 +422,14 @@ pub enum NetworkError {
 
 impl NetworkError {
     pub fn is_critical(&self) -> bool {
-        matches!(self, Self::Cliquenet(
-            | cliquenet::NetworkError::Bind(..)
-            | cliquenet::NetworkError::ChannelClosed
-            | cliquenet::NetworkError::BudgetClosed
-        ))
+        matches!(
+            self,
+            Self::Cliquenet(
+                cliquenet::NetworkError::Bind(..)
+                    | cliquenet::NetworkError::ChannelClosed
+                    | cliquenet::NetworkError::BudgetClosed
+            )
+        )
     }
 }
 
@@ -557,4 +561,3 @@ impl cliquenet::Metrics for CliquenetMetrics {
         }
     }
 }
-

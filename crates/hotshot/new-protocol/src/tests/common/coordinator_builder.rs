@@ -87,7 +87,12 @@ pub async fn build_test_coordinator(
         epoch_height,
     );
 
-    let vid_disperser = VidDisperser::new(membership.clone());
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
     let vid_reconstructor = VidReconstructor::new();
 
     let block_builder = BlockBuilder::new(
