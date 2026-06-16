@@ -1,7 +1,9 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
-    data::VidDisperseShare2, traits::signature_key::SignatureKey, vid::avidm_gf2::AvidmGf2Scheme,
+    data::{VidCommitment2, VidDisperseShare2},
+    traits::signature_key::SignatureKey,
+    vid::avidm_gf2::AvidmGf2Scheme,
 };
 
 use super::common::utils::{TestData, TestView};
@@ -59,6 +61,45 @@ fn garbage_share(
         recipient_key,
         common,
     }
+}
+
+/// A dispersal that commits to a *non-codeword*: every returned share verifies
+/// against the returned common, yet no threshold-covering subset decodes to a
+/// payload that re-commits to the commitment. Built with the view's real VID
+/// param and weights so the committee's `expected_param` check admits the
+/// shares, and addressed to the same voter keys `honest_share` uses.
+fn non_codeword_shares(view: &TestView) -> (VidCommitment2, Vec<VidDisperseShare2<TestTypes>>) {
+    let template = &view.vid_shares[0];
+    let param = template.common.param.clone();
+    let weights: Vec<u32> = view
+        .vid_shares
+        .iter()
+        .map(|s| s.share.weight() as u32)
+        .collect();
+    // Content is irrelevant — the dispersal is poisoned regardless — but it
+    // must be long enough to produce recovery shards to corrupt.
+    let payload = vec![0x5au8; 64];
+    let (payload_commitment, common, shares) = AvidmGf2Scheme::ns_disperse_non_codeword(
+        &param,
+        &weights,
+        &payload,
+        std::iter::once(0..payload.len()),
+    )
+    .expect("non-codeword dispersal");
+    let shares = shares
+        .into_iter()
+        .enumerate()
+        .map(|(i, share)| VidDisperseShare2::<TestTypes> {
+            view_number: template.view_number,
+            epoch: template.epoch,
+            target_epoch: template.target_epoch,
+            payload_commitment,
+            share,
+            recipient_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], i as u64).0,
+            common: common.clone(),
+        })
+        .collect();
+    (payload_commitment, shares)
 }
 
 /// Feed a share as if it arrived from the voter it is addressed to (the
@@ -319,6 +360,74 @@ async fn test_weeds_bad_shares_and_recovers() {
     // Weeding plus the shares that arrived in flight put the coverage back
     // over the threshold: the retry happens without further input.
     expect_reconstruction(&mut reconstructor, view).await;
+}
+
+/// A disperser that commits to a non-codeword produces shares that each verify
+/// against the commitment yet cannot decode to a matching payload. The
+/// reconstructor blames no voter (the shares are all individually valid),
+/// reports the view as unrecoverable, and — having proven the disperser
+/// faulty — spawns no further attempt even as the remaining shares arrive.
+#[tokio::test]
+async fn test_non_codeword_payload_is_unrecoverable() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let mut reconstructor = VidReconstructor::<TestTypes>::new();
+
+    let (payload_commitment, shares) = non_codeword_shares(view);
+    let recovery_threshold = recovery_threshold(view);
+
+    // Pin the view to the poisoned commitment and the committee's real VID
+    // param (so the param check admits the shares).
+    reconstructor.handle_proposal(
+        view.view_number,
+        payload_commitment,
+        view.proposal.data.block_header.metadata,
+        view.proposal.data.epoch,
+        Some(shares[0].common.param.clone()),
+    );
+
+    // Feed just enough verifying shares to cover the recovery threshold.
+    let mut coverage = 0u64;
+    for share in &shares {
+        if coverage >= recovery_threshold {
+            break;
+        }
+        coverage += share.share.weight() as u64;
+        feed(&mut reconstructor, share.clone());
+    }
+
+    // Every share verifies, so no voter is blamed; but the shares decode to a
+    // payload that does not re-commit, so the view is unrecoverable.
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), reconstructor.next())
+        .await
+        .expect("attempt should complete in time")
+        .expect("should produce a result");
+    let err = match result {
+        Err(err) => err,
+        Ok(out) => panic!(
+            "BUG: non-codeword reconstruction for view {:?} produced a payload",
+            out.view
+        ),
+    };
+    assert_eq!(err.view, view.view_number);
+    assert_eq!(err.payload_commitment, payload_commitment);
+    assert_eq!(err.kind, VidReconstructErrorKind::Unrecoverable);
+    assert!(
+        err.bad_share_keys.is_empty(),
+        "no share is individually unverifiable: {:?}",
+        err.bad_share_keys
+    );
+
+    // The view is now exhausted: the remaining verified shares trigger no
+    // further attempt.
+    for share in &shares {
+        feed(&mut reconstructor, share.clone());
+    }
+    assert_no_reconstruction(
+        &mut reconstructor,
+        "shares for a view already proven unrecoverable",
+    )
+    .await;
 }
 
 /// Replaying another voter's valid share under your own key adds no coverage:

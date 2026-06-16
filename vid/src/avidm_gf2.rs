@@ -211,6 +211,87 @@ impl AvidmGf2Scheme {
         let mt = MerkleTree::from_elems(None, &share_digests)?;
         Ok((mt, shares))
     }
+
+    /// Test-only: disperse `payload` but corrupt the erasure-coded (recovery)
+    /// shards, so the committed shard set is **not** a valid codeword. Every
+    /// returned share still verifies against the returned commitment — its
+    /// merkle proofs are genuine — yet recovering from any threshold-covering
+    /// subset and re-committing yields a *different* commitment. This models a
+    /// Byzantine disperser that commits to a non-codeword, exercising the
+    /// unrecoverable reconstruction path.
+    ///
+    /// Requires `recovery_threshold < total_weights` so recovery shards exist
+    /// to corrupt.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn disperse_non_codeword(
+        param: &AvidmGf2Param,
+        distribution: &[u32],
+        payload: &[u8],
+    ) -> VidResult<(AvidmGf2Commit, Vec<AvidmGf2Share>)> {
+        let total_weights = distribution.iter().map(|&w| w as usize).sum::<usize>();
+        if total_weights != param.total_weights {
+            return Err(VidError::Argument(
+                "Weight distribution is inconsistent with the given param".to_string(),
+            ));
+        }
+        if distribution.contains(&0u32) {
+            return Err(VidError::Argument("Weight cannot be zero".to_string()));
+        }
+        let original_count = param.recovery_threshold;
+        let (_, mut shards) = Self::raw_disperse(param, payload)?;
+        if shards.len() <= original_count {
+            return Err(VidError::Argument(
+                "Payload has no recovery shards to corrupt".to_string(),
+            ));
+        }
+        // Flip a byte in every recovery shard. The original shards are
+        // untouched, so each shard still verifies against the rebuilt tree, but
+        // the recovery shards no longer match the Reed-Solomon encoding of the
+        // originals: the committed set is not a codeword and cannot re-commit.
+        for shard in &mut shards[original_count..] {
+            shard[0] ^= 0xff;
+        }
+        let share_digests: Vec<Blake3Node> = shards
+            .iter()
+            .map(|shard| Blake3Node::from(blake3::hash(shard)))
+            .collect();
+        let mt = MerkleTree::from_elems(None, &share_digests)?;
+        let commit = AvidmGf2Commit {
+            commit: mt.commitment(),
+        };
+        let ranges: Vec<_> = distribution
+            .iter()
+            .scan(0usize, |sum, w| {
+                let prefix_sum = *sum;
+                *sum += *w as usize;
+                Some(prefix_sum..*sum)
+            })
+            .collect();
+        let mut shards_iter = shards.into_iter();
+        let payloads: Vec<Vec<Vec<u8>>> = ranges
+            .iter()
+            .map(|range| shards_iter.by_ref().take(range.len()).collect())
+            .collect();
+        let mut proofs_iter = mt
+            .collect_leaves_with_proofs()
+            .into_iter()
+            .map(|(_, _, proof)| proof);
+        let proof_groups: Vec<Vec<MerkleProof>> = ranges
+            .iter()
+            .map(|range| proofs_iter.by_ref().take(range.len()).collect())
+            .collect();
+        let shares: Vec<_> = ranges
+            .into_iter()
+            .zip(payloads)
+            .zip(proof_groups)
+            .map(|((range, payload), mt_proofs)| AvidmGf2Share {
+                range,
+                payload,
+                mt_proofs,
+            })
+            .collect();
+        Ok((commit, shares))
+    }
 }
 
 impl VidScheme for AvidmGf2Scheme {
