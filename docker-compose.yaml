@@ -202,6 +202,8 @@ services:
       - ACCOUNT_INDEX=$ESP_TOKEN_INITIAL_GRANT_RECIPIENT_ACCOUNT_INDEX
       - ESP_TOKEN_CONTRACT_ADDRESS=$ESP_TOKEN_PROXY_ADDRESS
       - STAKE_TABLE_ADDRESS=$ESPRESSO_STAKE_TABLE_PROXY_ADDRESS
+      - DELEGATION_CONFIG
+      - NUM_DELEGATORS_PER_VALIDATOR
       - ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_0
       - ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_1
       - ESPRESSO_DEMO_NODE_STAKING_PRIVATE_KEY_2
@@ -374,6 +376,15 @@ services:
       deploy-prover-contracts:
         condition: service_completed_successfully
 
+  vector:
+    image: timberio/vector:0.55.0-alpine
+    command: --config /etc/vector/vector.yaml
+    ports:
+      - "${ESPRESSO_DEMO_TELEMETRY_OTLP_PORT}:4318"
+      - "${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}:9009"
+    volumes:
+      - "./crates/espresso/telemetry/demo/vector.yaml:/etc/vector/vector.yaml:ro"
+
   espresso-node-0:
     image: ghcr.io/espressosystems/espresso-network/espresso-node:${DOCKER_TAG:-main}
     ports:
@@ -381,6 +392,10 @@ services:
     # Run the full API server with all modules, Postgres storage
     command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config
     environment:
+      - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
+      - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
+      - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
@@ -443,6 +458,8 @@ services:
       - "$ESPRESSO_NODE_1_API_PORT:$ESPRESSO_NODE_1_API_PORT"
     command: espresso-node -- storage-sql -- http -- config -- query -- explorer
     environment:
+      - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_PRW_PORT}
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}
@@ -560,6 +577,9 @@ services:
       - "$ESPRESSO_NODE_3_API_PORT:$ESPRESSO_NODE_3_API_PORT"
     command: espresso-node -- http -- config -- query -- storage-fs
     environment:
+      - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
+      - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://vector:${ESPRESSO_DEMO_TELEMETRY_OTLP_PORT}
+      - ESPRESSO_NODE_TELEMETRY_LOG=info
       - ESPRESSO_NODE_EMBEDDED_DB=false
       - ESPRESSO_NODE_GENESIS_FILE=${ESPRESSO_NODE_GENESIS_FILE:-genesis/demo.toml}
       - ESPRESSO_NODE_ORCHESTRATOR_URL=http://orchestrator:${ESPRESSO_ORCHESTRATOR_PORT}

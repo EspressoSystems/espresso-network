@@ -7,7 +7,7 @@ use either::Either;
 use espresso_types::{
     BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
     traits::StateCatchup,
-    v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
+    v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::Delta,
 };
 use futures::{StreamExt, future::Future};
@@ -135,20 +135,16 @@ pub(crate) async fn compute_state_update(
 async fn store_state_update(
     tx: &mut impl SequencerStateUpdate,
     block_number: u64,
-    version: Version,
+    _version: Version,
     state: &ValidatedState,
     delta: &Delta,
 ) -> anyhow::Result<()> {
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
-        reward_merkle_tree_v1,
         ..
     } = state;
-    let Delta {
-        fees_delta,
-        rewards_delta,
-    } = delta;
+    let Delta { fees_delta, .. } = delta;
 
     // Collect fee merkle tree proofs for batch insertion
     let fee_proofs: Vec<_> = fees_delta
@@ -193,41 +189,6 @@ async fn store_state_update(
         )
         .await
         .context("failed to store block merkle nodes")?;
-    }
-
-    if version <= EPOCH_VERSION {
-        // Collect reward merkle tree v1 proofs for batch insertion
-        let reward_proofs: Vec<_> = rewards_delta
-            .iter()
-            .map(|delta| {
-                let key = RewardAccountV1::from(*delta);
-                let proof = match reward_merkle_tree_v1.universal_lookup(key) {
-                    LookupResult::Ok(_, proof) => proof,
-                    LookupResult::NotFound(proof) => proof,
-                    LookupResult::NotInMemory => {
-                        bail!("missing merkle path for reward account {delta}")
-                    },
-                };
-                let path = <RewardAccountV1 as ToTraversalPath<
-                        { RewardMerkleTreeV1::ARITY },
-                    >>::to_traversal_path(
-                        &key, reward_merkle_tree_v1.height()
-                    );
-                Ok((proof, path))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        tracing::debug!(
-            count = reward_proofs.len(),
-            "inserting v1 reward accounts in batch"
-        );
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>::insert_merkle_nodes_batch(
-            tx,
-            reward_proofs,
-            block_number,
-        )
-        .await
-        .context("failed to store reward merkle nodes")?;
     }
 
     Ok(())

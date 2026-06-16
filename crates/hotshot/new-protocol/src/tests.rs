@@ -10,4 +10,5 @@ mod integration;
 mod legacy_cutover;
 mod restarts;
 mod state;
+mod storage;
 mod vid;

@@ -489,7 +489,7 @@ pub enum LegacyEventType<TYPES: NodeType> {
     },
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
 /// A list of actions that we track for nodes
 pub enum HotShotAction {
     /// A quorum vote was sent

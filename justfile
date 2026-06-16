@@ -1,6 +1,7 @@
 mod hotshot
 mod py "scripts/py.just"
 mod binary-upgrade-tests "binary-upgrade-tests/justfile"
+mod soak "crates/process-metrics/justfile"
 
 default:
     just --list

@@ -21,6 +21,8 @@ pup auth login --scopes metrics_read,logs_read_data,monitors_read,dashboards_rea
 
 ### Logs
 
+Query the right network: water/milk/decaf/mainnet.
+
 Search for errors on a specific host/log stream:
 
 ```bash

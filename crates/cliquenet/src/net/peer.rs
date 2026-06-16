@@ -62,9 +62,6 @@ pub struct Peer {
     /// Receive notifications about changes to the GC threshold
     next_slot: watch::Receiver<Slot>,
 
-    /// Our current GC threshold.
-    lower_bound: Slot,
-
     /// The channel over which to deliver inbound messages to the application.
     tx: UnboundedSender<PeerMessage>,
 
@@ -117,7 +114,6 @@ impl Peer {
             conf: config.clone(),
             budget: Budget::new(budget),
             next_slot,
-            lower_bound: Slot::MIN,
             tx: inbound,
             conn: connection,
             retry: DelayQueue::new(config),
@@ -325,8 +321,6 @@ impl Peer {
                         return Err(NetworkError::ChannelClosed)
                     }
                     let s = *self.next_slot.borrow_and_update();
-                    debug_assert!(s > self.lower_bound);
-                    self.lower_bound = s;
                     self.retry.gc(s);
                 }
 
@@ -565,17 +559,11 @@ impl Peer {
                                                     );
                                                     return Err(NetworkError::InvalidTrailer);
                                                 };
-                                                let slot = match t {
-                                                    Trailer::Std { slot, id } => {
-                                                        obound_acks.push_back(Ack::from((slot, id)));
-                                                        Some(slot)
-                                                    }
-                                                    Trailer::NoAck { slot } => Some(slot),
-                                                    Trailer::Unknown => None
-                                                };
-                                                if let Some(s) = slot && s < self.lower_bound {
-                                                    rstate = ReadState::Header { off: 0, buf: [0; _] };
-                                                    continue
+                                                match t {
+                                                    Trailer::Std { slot, id } =>
+                                                        obound_acks.push_back(Ack::from((slot, id))),
+                                                    Trailer::NoAck { slot: _ } => (),
+                                                    Trailer::Unknown => ()
                                                 }
                                                 let p = read_permit.take();
                                                 debug_assert!(p.is_some());

@@ -460,7 +460,10 @@ where
                 .wait_for_all_nodes_ready(peer_config)
                 .await;
         } else {
-            tracing::error!("Cannot get info from orchestrator client");
+            // the network config was loaded from storage or fetched from
+            // peers, so there is no need of orchestrator
+            // This is the normal path for a node rejoining an existing network.
+            tracing::info!("no orchestrator configured");
         }
         tracing::warn!("starting consensus");
         self.consensus_handle.start_consensus().await;
@@ -505,7 +508,7 @@ where
     ///
     /// Under normal conditions, this function will block forever, which is a convenient way of
     /// keeping the main thread from exiting as long as there are still active background tasks.
-    pub async fn join(mut self) {
+    pub async fn join(&mut self) {
         self.tasks.join().await;
     }
 
@@ -611,6 +614,14 @@ async fn handle_events<N, P, C>(
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
+                }
+            },
+            CoordinatorEvent::BlockPayloadReconstructed { .. } => {
+                // Forward straight to the consumer: reconstructed payloads might not yet
+                // have been stored by consensus storage,
+                // Query service verifies the block against a decided leaf before storing it.
+                if let Err(err) = event_consumer.handle_event(&event).await {
+                    tracing::warn!("failed to handle reconstructed payload: {err:#}");
                 }
             },
             _ => {},

@@ -289,7 +289,7 @@ impl<T: NodeType, S> HasViewNumber for Message<T, S> {
             MessageType::Consensus(consensus_message) => consensus_message.view_number(),
             MessageType::Block(block_message) => block_message.view_number(),
             MessageType::ProposalFetch(message) => message.view_number(),
-            MessageType::External(_) => ViewNumber::new(0), // TODO: This can become a problem
+            MessageType::External(_) => ViewNumber::new(1), // TODO: This can become a problem
         }
     }
 }

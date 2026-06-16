@@ -58,9 +58,35 @@ pub struct AvidmGf2Share {
     /// Range of this share in the encoded payload.
     range: Range<usize>,
     /// Actual share content.
+    #[serde(with = "nested_bytes")]
     payload: Vec<Vec<u8>>,
     /// Merkle proof of the content.
     mt_proofs: Vec<MerkleProof>,
+}
+
+/// Optimised serialisation of a sequence of `Vec<u8>`s using `serde_bytes`.
+mod nested_bytes {
+    use serde::{Deserialize, Deserializer, Serializer, ser::SerializeSeq};
+    use serde_bytes::{ByteBuf, Bytes};
+
+    pub fn serialize<S>(v: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = s.serialize_seq(Some(v.len()))?;
+        for inner in v {
+            seq.serialize_element(Bytes::new(inner))?;
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D>(d: D) -> Result<Vec<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let v: Vec<ByteBuf> = Deserialize::deserialize(d)?;
+        Ok(v.into_iter().map(ByteBuf::into_vec).collect())
+    }
 }
 
 impl AvidmGf2Share {

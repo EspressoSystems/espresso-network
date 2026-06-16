@@ -421,8 +421,11 @@ pub mod explorer;
 pub mod fetching;
 pub mod merklized_state;
 pub mod metrics;
+pub mod migration;
 pub mod node;
 mod resolvable;
+#[cfg(feature = "sqlite-options")]
+pub mod sqlite_options;
 pub mod status;
 pub mod task;
 pub mod testing;
