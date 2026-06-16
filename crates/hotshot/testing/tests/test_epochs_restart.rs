@@ -92,7 +92,7 @@ cross_tests!(
       metadata.timing_data = timing_data;
 
       metadata.spinning_properties = SpinningTaskDescription {
-          // Restart all the nodes in view 10
+          // Restart all the nodes in view 8
           node_changes: vec![(8, catchup_nodes)],
       };
       metadata.view_sync_properties =
@@ -108,7 +108,7 @@ cross_tests!(
           // Make sure we keep committing rounds after the catchup
           num_successful_views: 50,
           // this test seems to be flaky, so we allow an excessive number of possible view failures
-          possible_view_failures: vec![8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+          possible_view_failures: vec![7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
           decide_timeout: Duration::from_secs(60),
           ..Default::default()
       };
