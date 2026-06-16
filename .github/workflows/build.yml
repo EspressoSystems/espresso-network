@@ -722,6 +722,7 @@ jobs:
       DOCKER_TAG: pr-${{ github.event.pull_request.number }}
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
       DURATION_SECONDS: 14400
+      RUST_LOG: error
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
@@ -781,6 +782,7 @@ jobs:
     env:
       ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
       DURATION_SECONDS: 14400
+      RUST_LOG: error
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
