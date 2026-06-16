@@ -858,9 +858,10 @@ impl Header {
     ///   validation.
     ///
     /// If the previous epoch's result is missing at the boundary (e.g. after a
-    /// restart or catchup), the function fetches the epoch's leaf, recovers the
-    /// leader counts and stake table, computes rewards synchronously, and applies
-    /// them before proceeding.
+    /// restart), the function spawns the calculation and awaits it before
+    /// applying. The background task fetches the epoch's leaf and recovers the
+    /// leader counts and stake table itself, returning zero rewards for epochs
+    /// whose header version is < V5
     ///
     /// # Returns
     /// `(total_rewards_applied, changed_accounts)` — the total reward amount
