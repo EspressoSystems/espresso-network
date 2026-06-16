@@ -1976,24 +1976,14 @@ where
 
     async fn count_transactions_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let start = match range.start_bound() {
-            Bound::Included(&n) => Bound::Included(n),
-            Bound::Excluded(&n) => Bound::Excluded(n),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let end = match range.end_bound() {
-            Bound::Included(&n) => Bound::Included(n),
-            Bound::Excluded(&n) => Bound::Excluded(n),
-            Bound::Unbounded => Bound::Unbounded,
-        };
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
             })?;
-            tx.count_transactions_in_range((start, end), namespace)
+            tx.count_transactions_in_range(range.clone(), namespace)
                 .await
         })
         .await
@@ -2001,24 +1991,14 @@ where
 
     async fn payload_size_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let start = match range.start_bound() {
-            Bound::Included(&n) => Bound::Included(n),
-            Bound::Excluded(&n) => Bound::Excluded(n),
-            Bound::Unbounded => Bound::Unbounded,
-        };
-        let end = match range.end_bound() {
-            Bound::Included(&n) => Bound::Included(n),
-            Bound::Excluded(&n) => Bound::Excluded(n),
-            Bound::Unbounded => Bound::Unbounded,
-        };
         serializable_retry!(self.fetcher.storage, || async {
             let mut tx = self.read().await.map_err(|err| QueryError::Error {
                 message: err.to_string(),
             })?;
-            tx.payload_size_in_range((start, end), namespace).await
+            tx.payload_size_in_range(range.clone(), namespace).await
         })
         .await
     }
