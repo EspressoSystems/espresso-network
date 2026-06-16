@@ -145,7 +145,13 @@ impl<T: NodeType> VidDisperser<T> {
                 sender: public_key.clone(),
                 message_type: MessageType::Consensus(ConsensusMessage::VidShare(proposal)),
             };
-            network.unicast(view, &recipient, &message)?
+            if let Err(err) = network.unicast(view, &recipient, &message) {
+                if err.is_critical() {
+                    return Err(err.into());
+                } else {
+                    warn!(%err, "network error while sending vid share")
+                }
+            }
         }
 
         Ok(VidDisperseOutput {
