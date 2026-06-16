@@ -722,14 +722,15 @@ pub trait SequencerPersistence:
         let epoch = genesis_epoch_from_version(upgrade.base);
 
         let config = self.load_config().await.context("loading config")?;
-        let epoch_height = config
-            .as_ref()
-            .map(|c| c.config.epoch_height)
-            .unwrap_or_default();
-        let epoch_start_block = config
-            .as_ref()
-            .map(|c| c.config.epoch_start_block)
-            .unwrap_or_default();
+        // Use epoch height from node state. Node state gets the epoch height from the genesis file.
+        let epoch_height = state.epoch_height.unwrap_or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.config.epoch_height)
+                .unwrap_or_default()
+        });
+        // Use epoch start block from node state. Node state gets it from the genesis file.
+        let epoch_start_block = state.epoch_start_block;
 
         let saved_proposals = self
             .load_quorum_proposals()
