@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::{
     block::BlockError, epoch::EpochManagerError, network::NetworkError, proposal::ValidationError,
+    vid::VidReconstructError,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +87,9 @@ pub enum ErrorSource {
 
     #[error("epoch manager error: {0}")]
     EpochManager(#[from] EpochManagerError),
+
+    #[error("vid reconstruction error: {0}")]
+    VidReconstruct(String),
 }
 
 impl From<NetworkError> for CoordinatorError {
@@ -95,6 +99,16 @@ impl From<NetworkError> for CoordinatorError {
         } else {
             Self::regular(e)
         }
+    }
+}
+
+// `VidReconstructError<K>` is generic over the signature key type, but
+// `ErrorSource` is not parameterized by it, so flatten to the error's
+// `Display` (view + kind). The attributable `bad_share_keys` are consumed by
+// the reconstructor itself, not by this error boundary.
+impl<K> From<VidReconstructError<K>> for ErrorSource {
+    fn from(e: VidReconstructError<K>) -> Self {
+        Self::VidReconstruct(e.to_string())
     }
 }
 
