@@ -338,8 +338,8 @@
 <a href=#338 id=338 data-nosnippet>338</a>    }
 <a href=#339 id=339 data-nosnippet>339</a>
 <a href=#340 id=340 data-nosnippet>340</a>    <span class="kw">pub async fn </span>stop(<span class="kw-2">mut </span><span class="self">self</span>) {
-<a href=#341 id=341 data-nosnippet>341</a>        <span class="self">self</span>.network.shutdown().<span class="kw">await
-<a href=#342 id=342 data-nosnippet>342</a>    </span>}
+<a href=#341 id=341 data-nosnippet>341</a>        <span class="macro">futures::join!</span>(<span class="self">self</span>.network.shutdown(), <span class="self">self</span>.storage.flush());
+<a href=#342 id=342 data-nosnippet>342</a>    }
 <a href=#343 id=343 data-nosnippet>343</a>
 <a href=#344 id=344 data-nosnippet>344</a>    <span class="kw">pub async fn </span>next_consensus_input(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;ConsensusInput&lt;T&gt;, CoordinatorError&gt; {
 <a href=#345 id=345 data-nosnippet>345</a>        <span class="kw">loop </span>{

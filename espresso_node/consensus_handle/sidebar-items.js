@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["broadcast_event","consensus_event","coordinator_event","run_coordinator"],"struct":["ConsensusHandle"]};
+window.SIDEBAR_ITEMS = {"fn":["apply_input","broadcast_event","consensus_event","coordinator_event","run_coordinator"],"struct":["ConsensusHandle"]};
