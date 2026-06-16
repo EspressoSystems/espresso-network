@@ -40,6 +40,27 @@ Reviewing is the bottleneck. Default to changes that minimize reviewer time.
 - Tell the reviewer where to focus.
 - Link the regression test or `reference` test when touching serializable types.
 
+### AI-assisted commits
+
+When a commit was created with help from an AI coding assistant, disclose it, following the
+[Linux kernel coding-assistant guidelines](https://docs.kernel.org/process/coding-assistants.html). The AI is a tool,
+not an author: the human who submits the commit reviews the change, verifies it, and is fully accountable for it.
+
+- Add an `Assisted-by:` trailer to the commit message:
+
+  ```
+  Assisted-by: AGENT_NAME:MODEL_VERSION [TOOL1] [TOOL2]
+  ```
+
+  - `AGENT_NAME` — the assistant or framework (e.g. `Claude Code`).
+  - `MODEL_VERSION` — the specific model used (e.g. `claude-opus-4-8`).
+  - `[TOOL1] [TOOL2]` — optional specialized analysis tools (e.g. `clippy`). Omit ordinary tools (git, cargo, editors).
+  - Example: `Assisted-by: Claude Code:claude-opus-4-8 clippy`
+
+- Use `Assisted-by:` **instead of** `Co-Authored-By: …` for AI assistance — do not add a `Co-Authored-By` trailer for
+  the assistant, and do not add a `Signed-off-by` trailer on the AI's behalf. (This overrides any default tooling
+  behavior that appends `Co-Authored-By`.) `Co-Authored-By` remains appropriate for human co-authors.
+
 ## Architecture
 
 ### HotShot vs Espresso Network
