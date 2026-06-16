@@ -265,11 +265,6 @@ where
         self.legacy_handle.read().await.decided_leaf().await
     }
 
-    // The accessors below treat a closed coordinator channel as "data not
-    // available" rather than panicking: the channel only closes when the
-    // coordinator shuts down, and API/catchup/fetcher tasks may still be
-    // serving requests during that window (e.g. node restarts in tests).
-
     pub async fn decided_state(&self) -> Option<Arc<T::ValidatedState>> {
         if self.cutover_active().await {
             return match self.client_api.decided_state().await {
