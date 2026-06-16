@@ -114,11 +114,12 @@ def _append_jsonl(f, ts: int, rows: list[dict]) -> None:
         f.write(json.dumps(row) + "\n")
 
 
-def run_sampling(output_dir: Path, duration_seconds: int) -> None:
+def run_sampling(output_dir: Path, duration_seconds: int, append: bool = False) -> None:
     docker_path = output_dir / "docker-stats.jsonl"
     metrics_path = output_dir / "node-metrics.jsonl"
-    docker_path.write_text("")
-    metrics_path.write_text("")
+    if not append:
+        docker_path.write_text("")
+        metrics_path.write_text("")
     if duration_seconds <= 0:
         log.warning(f"duration_seconds={duration_seconds}; skipping sampling")
         return
@@ -360,7 +361,14 @@ def cli(log_level: str) -> None:
     default=Path("./soak-samples"),
     type=PathOpt,
 )
-def sample(duration_seconds: int, output_dir: Path) -> None:
+@opt(
+    "--append",
+    is_flag=True,
+    envvar="SOAK_APPEND",
+    default=False,
+    help="append to existing JSONL instead of truncating (for chunked sampling)",
+)
+def sample(duration_seconds: int, output_dir: Path, append: bool) -> None:
     """Scrape docker stats + each node's /v0/status/metrics into JSONL."""
     output_dir.mkdir(parents=True, exist_ok=True)
     env_path = REPO_ROOT / ".env"
@@ -368,7 +376,7 @@ def sample(duration_seconds: int, output_dir: Path) -> None:
         log.error(".env not found. Copy .env.docker.example to .env first.")
         sys.exit(1)
     load_dotenv(env_path, override=False)
-    run_sampling(output_dir, duration_seconds)
+    run_sampling(output_dir, duration_seconds, append=append)
 
 
 @cli.command()
