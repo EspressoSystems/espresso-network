@@ -1470,14 +1470,14 @@ impl SequencerPersistence for Persistence {
             }))
     }
 
-    async fn load_anchor_leaf(
-        &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         let Some(row) = self
             .db
             .read()
             .await?
-            .fetch_optional("SELECT leaf, qc FROM anchor_leaf2 ORDER BY view DESC LIMIT 1")
+            .fetch_optional(
+                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 ORDER BY view DESC LIMIT 1",
+            )
             .await?
         else {
             return Ok(None);
@@ -1489,7 +1489,18 @@ impl SequencerPersistence for Persistence {
         let qc_bytes: Vec<u8> = row.get("qc");
         let qc2: QuorumCertificate2<SeqTypes> = bincode::deserialize(&qc_bytes)?;
 
-        Ok(Some((leaf2, qc2)))
+        let next_qc_bytes: Vec<u8> = row.get("next_epoch_qc");
+        let maybe_next_qc2 = if next_qc_bytes.is_empty() {
+            None
+        } else {
+            let next_qc2: NextEpochQuorumCertificate2<SeqTypes> =
+                bincode::deserialize(&next_qc_bytes)?;
+            Some(next_qc2)
+        };
+
+        let cert_pair = CertificatePair::new(qc2, maybe_next_qc2);
+
+        Ok(Some((leaf2, cert_pair)))
     }
 
     async fn load_anchor_view(&self) -> anyhow::Result<ViewNumber> {
