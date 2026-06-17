@@ -324,10 +324,6 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(proposal.epoch);
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
-        if proposal.view_number > self.last_decided_view {
-            self.last_decided_view = proposal.view_number;
-            self.last_decided_leaf = proposal.clone().into();
-        }
         self.proposals.insert(proposal.view_number, proposal);
         for (view, commitment) in reconstructed {
             self.blocks_reconstructed.insert((view, commitment));
