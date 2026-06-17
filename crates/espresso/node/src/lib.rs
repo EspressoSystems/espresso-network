@@ -1302,6 +1302,18 @@ pub mod testing {
             self
         }
 
+        pub fn builder_timeout(mut self, timeout: Duration) -> Self {
+            self.config.builder_timeout = timeout;
+            self
+        }
+
+        /// Override the base next-view (failure) timeout. Raise it when using a large
+        /// [`Self::builder_timeout`] so a slow-but-healthy view isn't mistaken for a failed one.
+        pub fn next_view_timeout(mut self, timeout: Duration) -> Self {
+            self.config.next_view_timeout = timeout.as_millis() as u64;
+            self
+        }
+
         /// Override the views during which the upgrade is proposed. Call after `set_upgrades`.
         pub fn upgrade_proposing_views(mut self, start: u64, stop: u64) -> Self {
             for upgrade in self.upgrades.values_mut() {
