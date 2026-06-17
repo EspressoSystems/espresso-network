@@ -68,6 +68,13 @@ jobs:
           cargo build --release -p espresso-node --bin espresso-node
           cargo build --release -p espresso-node-sqlite
 
+      - name: Sanity-check allocator linkage
+        run: |
+          for bin in target/release/espresso-node target/release/espresso-node-sqlite; do
+            count=$(nm "$bin" | grep -icE '_rjem_|mi_malloc|snmalloc|sn_rust_|tcmalloc' || true)
+            echo "$bin: $count ${{ matrix.allocator }} symbols"
+          done
+
       - name: Setup Docker BuildKit (buildx)
         uses: Wandalen/wretry.action@v3.8.0
         with:
