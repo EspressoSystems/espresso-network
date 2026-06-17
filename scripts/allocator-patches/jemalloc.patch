@@ -1,0 +1,23 @@
+diff --git a/crates/espresso/node/Cargo.toml b/crates/espresso/node/Cargo.toml
+index f253885809..d265592602 100644
+--- a/crates/espresso/node/Cargo.toml
++++ b/crates/espresso/node/Cargo.toml
+@@ -111,6 +111,7 @@ tempfile = { workspace = true }
+ test-utils = { workspace = true }
+ thiserror = { workspace = true }
+ tide-disco = { workspace = true }
++tikv-jemallocator = { version = "0.7.0", features = ["profiling"] }
+ time = { workspace = true }
+ tokio = { workspace = true }
+ tokio-util = { workspace = true }
+diff --git a/crates/espresso/node/src/lib.rs b/crates/espresso/node/src/lib.rs
+index 58c0745777..019d7c8eb1 100644
+--- a/crates/espresso/node/src/lib.rs
++++ b/crates/espresso/node/src/lib.rs
+@@ -1,3 +1,6 @@
++#[global_allocator]
++static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
++
+ mod external_event_handler;
+ mod message_compat_tests;
+ mod proposal_fetcher;

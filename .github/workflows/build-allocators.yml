@@ -12,7 +12,7 @@ on:
     paths:
       - .github/workflows/build-allocators.yml
       - docker/espresso-node-alloc.Dockerfile
-      - scripts/patch-allocator
+      - scripts/allocator-patches/**
   workflow_dispatch:
   push:
     tags:
@@ -58,7 +58,7 @@ jobs:
             protobuf-compiler cmake clang libclang-dev
 
       - name: Patch allocator
-        run: scripts/patch-allocator ${{ matrix.allocator }}
+        run: git apply scripts/allocator-patches/${{ matrix.allocator }}.patch
 
       - name: Build binaries
         # Separate invocations: building espresso-node-sqlite together with the postgres binary

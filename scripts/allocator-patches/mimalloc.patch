@@ -1,0 +1,23 @@
+diff --git a/crates/espresso/node/Cargo.toml b/crates/espresso/node/Cargo.toml
+index f253885809..0ddff575cb 100644
+--- a/crates/espresso/node/Cargo.toml
++++ b/crates/espresso/node/Cargo.toml
+@@ -82,6 +82,7 @@ jf-rescue = { workspace = true }
+ jf-signature = { workspace = true }
+ libp2p = { workspace = true }
+ light-client = { workspace = true }
++mimalloc = "0.1.52"
+ moka = { workspace = true }
+ num_enum = { workspace = true }
+ parking_lot = { workspace = true }
+diff --git a/crates/espresso/node/src/lib.rs b/crates/espresso/node/src/lib.rs
+index 58c0745777..72f6b45b6f 100644
+--- a/crates/espresso/node/src/lib.rs
++++ b/crates/espresso/node/src/lib.rs
+@@ -1,3 +1,6 @@
++#[global_allocator]
++static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
++
+ mod external_event_handler;
+ mod message_compat_tests;
+ mod proposal_fetcher;
