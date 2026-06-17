@@ -73,11 +73,11 @@
 <a href=#73 id=73 data-nosnippet>73</a>                    <span class="self">self</span>.completed.insert(view);
 <a href=#74 id=74 data-nosnippet>74</a>                    <span class="kw">return </span><span class="prelude-val">Some</span>((cert1, state_cert));
 <a href=#75 id=75 data-nosnippet>75</a>                },
-<a href=#76 id=76 data-nosnippet>76</a>                <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e)) <span class="kw">if </span>e.is_cancelled() =&gt; {
-<a href=#77 id=77 data-nosnippet>77</a>                    <span class="macro">debug!</span>(<span class="string">"Epoch-root vote collection task cancelled: {e}"</span>);
+<a href=#76 id=76 data-nosnippet>76</a>                <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(err)) <span class="kw">if </span>err.is_cancelled() =&gt; {
+<a href=#77 id=77 data-nosnippet>77</a>                    <span class="macro">debug!</span>(%err, <span class="string">"Epoch-root vote collection task cancelled"</span>);
 <a href=#78 id=78 data-nosnippet>78</a>                },
-<a href=#79 id=79 data-nosnippet>79</a>                <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(e)) =&gt; {
-<a href=#80 id=80 data-nosnippet>80</a>                    <span class="macro">warn!</span>(<span class="string">"Error in epoch-root vote collection task: {e}"</span>);
+<a href=#79 id=79 data-nosnippet>79</a>                <span class="prelude-val">Some</span>(<span class="prelude-val">Err</span>(err)) =&gt; {
+<a href=#80 id=80 data-nosnippet>80</a>                    <span class="macro">warn!</span>(%err, <span class="string">"Error in epoch-root vote collection task"</span>);
 <a href=#81 id=81 data-nosnippet>81</a>                },
 <a href=#82 id=82 data-nosnippet>82</a>                <span class="prelude-val">None </span>=&gt; <span class="kw">return </span><span class="prelude-val">None</span>,
 <a href=#83 id=83 data-nosnippet>83</a>            }
@@ -172,8 +172,8 @@
 <a href=#172 id=172 data-nosnippet>172</a>                            <span class="prelude-val">Ok</span>(()) =&gt; {
 <a href=#173 id=173 data-nosnippet>173</a>                                quorum_cert = <span class="prelude-val">Some</span>(cert);
 <a href=#174 id=174 data-nosnippet>174</a>                            },
-<a href=#175 id=175 data-nosnippet>175</a>                            <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#176 id=176 data-nosnippet>176</a>                                <span class="macro">warn!</span>(<span class="string">"Invalid quorum certificate formed at epoch-root view: {e}"</span>);
+<a href=#175 id=175 data-nosnippet>175</a>                            <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#176 id=176 data-nosnippet>176</a>                                <span class="macro">warn!</span>(%err, <span class="string">"Invalid quorum certificate formed at epoch-root view"</span>);
 <a href=#177 id=177 data-nosnippet>177</a>                                <span class="comment">// Retry from previously-seen votes (mirror VoteCollector recovery).
 <a href=#178 id=178 data-nosnippet>178</a>                                </span>quorum_votes.push(vote1.vote.clone());
 <a href=#179 id=179 data-nosnippet>179</a>                                quorum_votes.retain(|v| {
@@ -241,8 +241,8 @@
 <a href=#241 id=241 data-nosnippet>241</a>) -&gt; <span class="prelude-ty">Option</span>&lt;committable::Commitment&lt;VersionedVoteData&lt;T, V::Commitment&gt;&gt;&gt; {
 <a href=#242 id=242 data-nosnippet>242</a>    <span class="kw">match </span>VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock) {
 <a href=#243 id=243 data-nosnippet>243</a>        <span class="prelude-val">Ok</span>(data) =&gt; <span class="prelude-val">Some</span>(data.commit()),
-<a href=#244 id=244 data-nosnippet>244</a>        <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#245 id=245 data-nosnippet>245</a>            <span class="macro">tracing::warn!</span>(<span class="string">"Failed to generate versioned vote data: {e}"</span>);
+<a href=#244 id=244 data-nosnippet>244</a>        <span class="prelude-val">Err</span>(err) =&gt; {
+<a href=#245 id=245 data-nosnippet>245</a>            <span class="macro">tracing::warn!</span>(%err, <span class="string">"Failed to generate versioned vote data"</span>);
 <a href=#246 id=246 data-nosnippet>246</a>            <span class="prelude-val">None
 <a href=#247 id=247 data-nosnippet>247</a>        </span>},
 <a href=#248 id=248 data-nosnippet>248</a>    }
