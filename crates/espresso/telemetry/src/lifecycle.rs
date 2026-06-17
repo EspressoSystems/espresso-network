@@ -47,10 +47,18 @@ fn pubkey_slug(staking_key: &SignKey) -> String {
         .collect()
 }
 
-fn instance_id(node_name: Option<&str>, staking_key: &SignKey) -> String {
+fn segment(value: Option<&str>) -> String {
+    match value.unwrap_or("").trim() {
+        "" => "unk".to_owned(),
+        v => v.replace(' ', "-"),
+    }
+}
+
+fn instance_id(company: Option<&str>, node: Option<&str>, staking_key: &SignKey) -> String {
     format!(
-        "{}-{}",
-        node_name.unwrap_or("unknown"),
+        "{}-{}-{}",
+        segment(company),
+        segment(node),
         pubkey_slug(staking_key)
     )
     .to_lowercase()
@@ -373,7 +381,7 @@ pub fn init(
     let telemetry_log_filter: Arc<String> = Arc::new(opts.log_filter.clone());
     let rate_limit_warned: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
-    let instance = instance_id(node_name, staking_key);
+    let instance = instance_id(company_name, node_name, staking_key);
 
     let logger_provider = if logs_on {
         Some(build_logger_provider(jwt.clone(), &endpoint, &instance)?)
@@ -459,9 +467,13 @@ mod tests {
 
         let slug = slug.to_lowercase();
         assert_eq!(
-            instance_id(Some("Node-42"), &key),
-            format!("node-42-{slug}")
+            instance_id(Some("Acme Corp"), Some("Node 42"), &key),
+            format!("acme-corp-node-42-{slug}")
         );
-        assert_eq!(instance_id(None, &key), format!("unknown-{slug}"));
+        assert_eq!(instance_id(None, None, &key), format!("unk-unk-{slug}"));
+        assert_eq!(
+            instance_id(Some("  "), Some("node-1"), &key),
+            format!("unk-node-1-{slug}")
+        );
     }
 }
