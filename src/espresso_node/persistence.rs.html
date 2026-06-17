@@ -1917,7 +1917,7 @@
 <a href=#1917 id=1917 data-nosnippet>1917</a>            .map(|i| StateKeyPair::generate_from_seed_indexed([<span class="number">2</span>; <span class="number">32</span>], i <span class="kw">as </span>u64))
 <a href=#1918 id=1918 data-nosnippet>1918</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;();
 <a href=#1919 id=1919 data-nosnippet>1919</a>
-<a href=#1920 id=1920 data-nosnippet>1920</a>        <span class="kw">let </span>validators = staking_priv_keys(<span class="kw-2">&amp;</span>priv_keys, <span class="kw-2">&amp;</span>state_key_pairs, <span class="number">20</span>);
+<a href=#1920 id=1920 data-nosnippet>1920</a>        <span class="kw">let </span>validators = staking_priv_keys(<span class="kw-2">&amp;</span>priv_keys, <span class="kw-2">&amp;</span>state_key_pairs, <span class="kw-2">&amp;</span>[], <span class="number">20</span>);
 <a href=#1921 id=1921 data-nosnippet>1921</a>
 <a href=#1922 id=1922 data-nosnippet>1922</a>        <span class="kw">let </span>deployer = ProviderBuilder::new()
 <a href=#1923 id=1923 data-nosnippet>1923</a>            .wallet(EthereumWallet::from(network_config.signer().clone()))
