@@ -1130,9 +1130,6 @@ pub mod testing {
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
-        /// Per-node cliquenet coordinator bind addresses, reserved once so the
-        /// on-chain stake-table registration and each node's cliquenet bind
-        /// agree. See [`TestConfig::coordinator_addrs`].
         coordinator_addrs: Vec<NetAddr>,
     }
 
@@ -1153,11 +1150,8 @@ pub mod testing {
                 signer: eth,
                 bls: bls.clone().into(),
                 state: state.clone(),
-                // Derive the x25519 key from the BLS key (deterministic) so it
-                // matches the keypair `init_node` binds the cliquenet network
-                // with. The p2p address is the per-node coordinator address
-                // reserved at config-build time. Registering these on-chain lets
-                // the new-protocol coordinator resolve peers from the stake table.
+                // x25519 key derived from the BLS key, matching `init_node`'s
+                // cliquenet bind.
                 x25519: x25519::Keypair::derive_from::<PubKey>(bls)
                     .expect("x25519 keypair derivation should succeed"),
                 p2p_addr: coordinator_addrs
@@ -1349,11 +1343,7 @@ pub mod testing {
                 .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i as u64))
                 .collect::<Vec<_>>();
 
-            // Reserve one cliquenet coordinator port per node. These addresses
-            // are shared between the bootstrap committee's connect info (below),
-            // on-chain registration (set_upgrades / pos_hook), and each node's
-            // cliquenet bind in `init_node`, so the new-protocol coordinator can
-            // resolve and dial peers.
+            // Reserve one cliquenet coordinator port per node.
             let coordinator_addrs: Vec<NetAddr> = (0..num_nodes)
                 .map(|_| {
                     let port =
@@ -1362,11 +1352,6 @@ pub mod testing {
                 })
                 .collect();
 
-            // Each peer's `connect_info` carries the x25519 key (derived from
-            // the BLS key, matching `init_node`'s cliquenet bind) and the
-            // reserved coordinator address. The new protocol's `apply_epoch`
-            // reads this from the bootstrap committee to dial peers at startup,
-            // before any L1-derived stake table is available.
             let known_nodes_with_stake = pub_keys
                 .iter()
                 .zip(&priv_keys)
@@ -1470,12 +1455,7 @@ pub mod testing {
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
-        /// Per-node bind addresses for the new-protocol (cliquenet) coordinator
-        /// network, reserved once at build time. The new protocol runs over a
-        /// real TCP network, so every node must know every other node's address.
-        /// These addresses are both bound by [`TestConfig::init_node`] and
-        /// registered on-chain (via [`TestConfig::staking_priv_keys`]) so the
-        /// coordinator can resolve peers from the stake table. Indexed by node.
+        /// Per-node cliquenet coordinator bind addresses, indexed by node.
         coordinator_addrs: Vec<NetAddr>,
     }
 

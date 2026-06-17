@@ -51,9 +51,7 @@ pub struct NetworkNodeHandle<T: NodeType> {
     /// human readable id
     id: usize,
 
-    /// Handle to the spawned swarm event-loop task. Awaited on [`shutdown`] so
-    /// the swarm's listening socket is released before shutdown returns (so a
-    /// restart can re-bind the same port). `Option` so it can be taken once.
+    /// Handle to the spawned swarm event-loop task.
     swarm_task: Arc<Mutex<Option<SwarmTaskHandle>>>,
 }
 
@@ -147,10 +145,7 @@ impl<T: NodeType> NetworkNodeHandle<T> {
         self.send_request(ClientRequest::Shutdown)?;
 
         // Wait for the swarm event-loop task to actually finish, so its
-        // listening socket is released before we return. Without this, a
-        // restart can fail to re-bind the same port. Bounded by a timeout so a
-        // wedged swarm can't hang shutdown indefinitely; if the request channel
-        // was already closed the task may have ended on its own.
+        // listening socket is released before we return.
         let task = self.swarm_task.lock().take();
         if let Some(task) = task {
             match timeout(Duration::from_secs(5), task).await {
