@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Patch the espresso-node crate in place to use an alternative global allocator.
+#
+# usage: scripts/patch-allocator <jemalloc|mimalloc|snmalloc|tcmalloc>
+#
+# The selected allocator is added as a dependency of the espresso-node crate and
+# registered as `#[global_allocator]` in its lib.rs. The override lives in the
+# espresso_node library, so both the espresso-node and espresso-node-sqlite
+# binaries pick it up.
+set -euo pipefail
+
+allocator="${1:?usage: patch-allocator <jemalloc|mimalloc|snmalloc|tcmalloc>}"
+lib_rs="crates/espresso/node/src/lib.rs"
+
+case "$allocator" in
+    jemalloc)
+        dep=(tikv-jemallocator@0.7.0)
+        ty="tikv_jemallocator::Jemalloc"
+        ;;
+    mimalloc)
+        dep=(mimalloc@0.1.52)
+        ty="mimalloc::MiMalloc"
+        ;;
+    snmalloc)
+        dep=(snmalloc-rs@0.7.4)
+        ty="snmalloc_rs::SnMalloc"
+        ;;
+    tcmalloc)
+        dep=(tcmalloc@0.3 --features bundled)
+        ty="tcmalloc::TCMalloc"
+        ;;
+    *)
+        echo "unknown allocator: $allocator" >&2
+        exit 1
+        ;;
+esac
+
+cargo add "${dep[@]}" --package espresso-node
+
+tmp="$(mktemp)"
+{
+    printf '#[global_allocator]\nstatic ALLOC: %s = %s;\n\n' "$ty" "$ty"
+    cat "$lib_rs"
+} >"$tmp"
+mv "$tmp" "$lib_rs"
+
+echo "patched espresso-node with $allocator global allocator"
