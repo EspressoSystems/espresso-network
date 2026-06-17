@@ -67,7 +67,6 @@ impl Connection {
                 .build_responder()
                 .expect("valid noise params yield valid handshake state");
 
-            let addr = stream.peer_addr()?;
             let state = on_handshake(&mut stream, hs).await?;
 
             if let Some(key) = remote_static_key(&state) {
