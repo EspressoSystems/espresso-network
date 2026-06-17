@@ -10,8 +10,8 @@ use hotshot::traits::BlockPayload;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{
-        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
-        VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2,
+        ViewChangeEvidence2, ViewNumber,
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
@@ -44,7 +44,7 @@ use crate::{
     logging::KeyPrefix,
     message::{
         Certificate1, Certificate2, EpochChangeMessage, Proposal, ProposalFetchRequest,
-        ProposalMessage, Validated, VidShareMessage, Vote1, Vote2,
+        ProposalMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -108,7 +108,7 @@ pub enum ConsensusInput<T: NodeType> {
     Timeout(ViewNumber, EpochNumber),
     TimeoutCertificate(TimeoutCertificate2<T>),
     TimeoutOneHonest(ViewNumber, EpochNumber),
-    VidDisperseCreated(ViewNumber, VidDisperse2<T>),
+    VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
 }
 
@@ -120,7 +120,6 @@ pub enum ConsensusOutput<T: NodeType> {
     RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
     PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
-    SendVidShares(Vec<VidShareMessage<T>>),
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
@@ -619,14 +618,9 @@ impl<T: NodeType> Consensus<T> {
                 }
                 Protocol::Continue
             },
-            ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
+            ConsensusInput::VidDisperseCreated(view, payload_commitment) => {
                 debug!(%view, "apply: vid disperse created");
-                // Directly send the VID shares before making a proposal.
-                // As leader we already have the payload; record the commitment so
-                // voting doesn't have to wait on the (skipped) reconstruction path.
-                self.blocks_reconstructed
-                    .insert((view, vid_disperse.payload_commitment));
-                self.send_vid_shares(&view, vid_disperse, outbox);
+                self.blocks_reconstructed.insert((view, payload_commitment));
                 Protocol::Continue
             },
             ConsensusInput::DrbResult(epoch, drb_result) => {
@@ -1297,31 +1291,6 @@ impl<T: NodeType> Consensus<T> {
         self.certs.insert(cert1.view_number(), cert1);
         self.certs2.insert(cert2.view_number(), cert2);
         Protocol::Continue
-    }
-
-    // The leader's own share is also unicast back to itself (cliquenet
-    // self-loopback): it is the only way the leader's `handle_proposal_and_vid_share`
-    // path runs for its own proposal, populating `proposals`, `leaves`,
-    // `states_verified`, and seeding the VID reconstructor's metadata.
-    #[instrument(level = "debug", skip_all)]
-    fn send_vid_shares(
-        &self,
-        view: &ViewNumber,
-        vid_disperse: VidDisperse2<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
-        let vid_messages = vid_disperse
-            .to_shares()
-            .into_iter()
-            .filter_map(|share| {
-                let Some(proposal) = share.to_proposal(&self.private_key) else {
-                    warn!(%view, "failed to sign VID share proposal");
-                    return None;
-                };
-                Some(proposal)
-            })
-            .collect::<Vec<_>>();
-        outbox.push_back(ConsensusOutput::SendVidShares(vid_messages));
     }
 
     #[instrument(level = "debug", skip_all)]
