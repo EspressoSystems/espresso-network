@@ -26,8 +26,8 @@ case "$allocator" in
         ty="snmalloc_rs::SnMalloc"
         ;;
     tcmalloc)
-        dep=(tcmalloc@0.3 --features bundled)
-        ty="tcmalloc::TCMalloc"
+        dep=(tcmalloc-better)
+        ty="tcmalloc_better::TCMalloc"
         ;;
     *)
         echo "unknown allocator: $allocator" >&2
