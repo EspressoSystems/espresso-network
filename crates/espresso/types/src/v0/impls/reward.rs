@@ -1090,11 +1090,13 @@ impl EpochRewardsCalculator {
 
     /// Retrieve the completed reward calculation for `epoch`.
     ///
-    /// If a background task is pending for the requested epoch, this awaits its
-    /// completion and returns the result. If the pending task is for a
-    /// *different* epoch, it is left untouched and `None` is returned. Also
-    /// returns `None` when no pending task exists or the task failed/panicked.
-    pub async fn get_result(&mut self, epoch: EpochNumber) -> Option<EpochRewardsResult> {
+    /// Returns `None` when there is no pending task for the requested epoch
+    /// Otherwise awaits the task and returns `Some(Ok(result))` on success or
+    /// `Some(Err(..))` if it failed or panicked
+    pub async fn get_result(
+        &mut self,
+        epoch: EpochNumber,
+    ) -> Option<anyhow::Result<EpochRewardsResult>> {
         let (pending_epoch, handle) = self.pending.take()?;
         if pending_epoch != epoch {
             // Not the epoch we're looking for — put the task back.
@@ -1102,20 +1104,21 @@ impl EpochRewardsCalculator {
             return None;
         }
 
-        match handle.await {
+        let result = match handle.await {
             Ok(Ok(result)) => {
                 tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
-                Some(result)
+                Ok(result)
             },
             Ok(Err(e)) => {
                 tracing::error!(%epoch, error = %e, "epoch rewards calculation failed");
-                None
+                Err(e)
             },
             Err(e) => {
                 tracing::error!(%epoch, error = %e, "epoch rewards task panicked");
-                None
+                Err(anyhow::Error::new(e).context("epoch rewards task panicked"))
             },
-        }
+        };
+        Some(result)
     }
 
     /// Start a background task that calculates epoch rewards.
@@ -1221,11 +1224,19 @@ impl EpochRewardsCalculator {
                 "fetch_and_calculate: fetched leaf"
             );
 
-            anyhow::ensure!(
-                header.version() >= EPOCH_REWARD_VERSION,
-                "header version {} is pre-V6, cannot calculate rewards",
-                header.version()
-            );
+            if header.version() < EPOCH_REWARD_VERSION {
+                tracing::info!(
+                    %epoch,
+                    header_version = %header.version(),
+                    "no rewards to distribute"
+                );
+                return Ok(EpochRewardsResult {
+                    epoch,
+                    reward_tree,
+                    total_distributed: RewardAmount::default(),
+                    changed_accounts: HashSet::new(),
+                });
+            }
 
             // Validate the reward merkle tree against the header commitment.
             // If they don't match, use an empty tree so the rebuild logic

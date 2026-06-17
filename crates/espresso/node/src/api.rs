@@ -3262,8 +3262,8 @@ mod test {
     use tokio::time::sleep;
     use vbs::version::StaticVersion;
     use versions::{
-        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION, Upgrade,
-        version,
+        DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, EPOCH_VERSION, FEE_VERSION,
+        NEW_PROTOCOL_VERSION, Upgrade, version,
     };
 
     use self::{
@@ -5082,6 +5082,95 @@ mod test {
                 break;
             }
         }
+
+        Ok(())
+    }
+
+    /// Run a `TestNetwork` based directly on the new protocol version (V0_6,
+    /// no upgrade/cutover) and verify it produces blocks from genesis.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_new_protocol_produces_blocks() -> anyhow::Result<()> {
+        const EPOCH_HEIGHT: u64 = 100;
+        const NUM_NODES: usize = 5;
+        const TARGET_BLOCK_HEIGHT: u64 = 100;
+
+        const NEW_PROTOCOL: Upgrade = Upgrade::trivial(NEW_PROTOCOL_VERSION);
+
+        let network_config = TestConfigBuilder::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .epoch_start_block(0)
+            .build();
+
+        let api_port = reserve_tcp_port().expect("No ports free for query service");
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(api_port),
+            ))
+            .network_config(network_config)
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{api_port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .pos_hook(
+                DelegationConfig::MultipleDelegators,
+                StakeTableContractVersion::V3,
+                NEW_PROTOCOL,
+            )
+            .await
+            .unwrap()
+            .build();
+
+        let _network = TestNetwork::new(config, NEW_PROTOCOL).await;
+
+        let client: Client<ServerError, SequencerApiVersion> =
+            Client::new(format!("http://localhost:{api_port}").parse().unwrap());
+        client.connect(Some(Duration::from_secs(30))).await;
+
+        let mut leaves = client
+            .socket("availability/stream/leaves/0")
+            .subscribe::<LeafQueryData<SeqTypes>>()
+            .await
+            .expect("subscribe to leaf stream");
+
+        let mut height = 0;
+        while let Some(leaf) = leaves.next().await {
+            let leaf = leaf.expect("leaf stream yielded an error");
+            let header = leaf.header();
+            height = header.height();
+
+            if height > 0 {
+                assert_eq!(
+                    header.version(),
+                    NEW_PROTOCOL_VERSION,
+                    "block {height} should be produced under the new protocol version",
+                );
+            }
+
+            if height >= TARGET_BLOCK_HEIGHT {
+                break;
+            }
+        }
+
+        assert!(
+            height >= TARGET_BLOCK_HEIGHT,
+            "expected at least {TARGET_BLOCK_HEIGHT} blocks, got {height} (leaf stream ended \
+             early)",
+        );
 
         Ok(())
     }
@@ -8352,6 +8441,74 @@ mod test {
                     api_port,
                     axum_port,
                     &format!("availability/stream/blocks/{avail_block}/namespace/{avail_ns}"),
+                )
+                .await?;
+
+                // Merklized state parity (block-state and fee-state). Wait for
+                // both backends to have indexed the snapshot we'll query.
+                wait_until_block_height(&client, "block-state/block-height", avail_block).await;
+                wait_until_block_height(&client, "fee-state/block-height", avail_block).await;
+
+                // block-state/block-height and fee-state/block-height (latest
+                // height for which merklized state is available).
+                compare_endpoints(&http, api_port, axum_port, "block-state/block-height").await?;
+                compare_endpoints(&http, api_port, axum_port, "fee-state/block-height").await?;
+
+                // block-state path by height: the merkle tree at height H
+                // contains the headers of blocks [0, H), so a valid key is H-1.
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "block-state/{avail_block}/{}",
+                        avail_block.saturating_sub(1)
+                    ),
+                )
+                .await?;
+
+                // block-state path by commit. Use the tree commitment from
+                // the header at avail_block.
+                let block_mt_commit = avail_header.block_merkle_tree_root().to_string();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!(
+                        "block-state/commit/{block_mt_commit}/{}",
+                        avail_block.saturating_sub(1)
+                    ),
+                )
+                .await?;
+
+                // fee-state path by height for a known fee account, and
+                // fee-balance/latest for the same account.
+                let fee_account = validated_state
+                    .fee_merkle_tree
+                    .iter()
+                    .next()
+                    .map(|(addr, _)| *addr)
+                    .expect("fee tree should have at least one account");
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("fee-state/{avail_block}/{fee_account}"),
+                )
+                .await?;
+                let fee_mt_commit = avail_header.fee_merkle_tree_root().to_string();
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("fee-state/commit/{fee_mt_commit}/{fee_account}"),
+                )
+                .await?;
+                compare_endpoints(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("fee-state/fee-balance/latest/{fee_account}"),
                 )
                 .await?;
 

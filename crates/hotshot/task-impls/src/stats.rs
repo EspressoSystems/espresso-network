@@ -14,10 +14,7 @@ use hotshot_types::{
     traits::{BlockPayload, block_contents::BlockHeader, node_implementation::NodeType},
     vote::HasViewNumber,
 };
-use hotshot_utils::{
-    anytrace::{Error, Level, Result},
-    line_info, warn,
-};
+use hotshot_utils::{anytrace::Result, warn};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
