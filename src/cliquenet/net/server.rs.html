@@ -201,7 +201,7 @@
 <a href=#201 id=201 data-nosnippet>201</a>                    }
 <a href=#202 id=202 data-nosnippet>202</a>                    <span class="prelude-val">Err</span>(err) =&gt; {
 <a href=#203 id=203 data-nosnippet>203</a>                        <span class="self">self</span>.metrics.set(<span class="kw-2">&amp;</span><span class="self">self</span>.key, ACCEPT_TASKS, <span class="self">self</span>.accept_tasks.len());
-<a href=#204 id=204 data-nosnippet>204</a>                        <span class="kw">if </span>!err.is_cancelled() {
+<a href=#204 id=204 data-nosnippet>204</a>                        <span class="kw">if </span>err.is_panic() {
 <a href=#205 id=205 data-nosnippet>205</a>                            <span class="macro">error!</span>(
 <a href=#206 id=206 data-nosnippet>206</a>                                name = %<span class="self">self</span>.conf.name,
 <a href=#207 id=207 data-nosnippet>207</a>                                node = %<span class="self">self</span>.key,
@@ -297,7 +297,7 @@
 <a href=#297 id=297 data-nosnippet>297</a>                    }
 <a href=#298 id=298 data-nosnippet>298</a>                    (key, <span class="prelude-val">Err</span>(err)) =&gt; {
 <a href=#299 id=299 data-nosnippet>299</a>                        <span class="self">self</span>.metrics.set(<span class="kw-2">&amp;</span><span class="self">self</span>.key, HELLO_TASKS, <span class="self">self</span>.hello_tasks.len());
-<a href=#300 id=300 data-nosnippet>300</a>                        <span class="kw">if </span>!err.is_cancelled() {
+<a href=#300 id=300 data-nosnippet>300</a>                        <span class="kw">if </span>err.is_panic() {
 <a href=#301 id=301 data-nosnippet>301</a>                            <span class="macro">error!</span>(
 <a href=#302 id=302 data-nosnippet>302</a>                                name = %<span class="self">self</span>.conf.name,
 <a href=#303 id=303 data-nosnippet>303</a>                                node = %<span class="self">self</span>.key,
@@ -365,7 +365,7 @@
 <a href=#365 id=365 data-nosnippet>365</a>                    }
 <a href=#366 id=366 data-nosnippet>366</a>                    (key, <span class="prelude-val">Err</span>(err)) =&gt; {
 <a href=#367 id=367 data-nosnippet>367</a>                        <span class="self">self</span>.metrics.set(<span class="kw-2">&amp;</span><span class="self">self</span>.key, CONNECT_TASKS, <span class="self">self</span>.connect_tasks.len());
-<a href=#368 id=368 data-nosnippet>368</a>                        <span class="kw">if </span>!err.is_cancelled() {
+<a href=#368 id=368 data-nosnippet>368</a>                        <span class="kw">if </span>err.is_panic() {
 <a href=#369 id=369 data-nosnippet>369</a>                            <span class="macro">error!</span>(
 <a href=#370 id=370 data-nosnippet>370</a>                                name = %<span class="self">self</span>.conf.name,
 <a href=#371 id=371 data-nosnippet>371</a>                                node = %<span class="self">self</span>.key,
@@ -406,7 +406,7 @@
 <a href=#406 id=406 data-nosnippet>406</a>                    }
 <a href=#407 id=407 data-nosnippet>407</a>                    (key, <span class="prelude-val">Err</span>(err)) =&gt; {
 <a href=#408 id=408 data-nosnippet>408</a>                        <span class="self">self</span>.metrics.set(<span class="kw-2">&amp;</span><span class="self">self</span>.key, PEER_TASKS, <span class="self">self</span>.peer_tasks.len());
-<a href=#409 id=409 data-nosnippet>409</a>                        <span class="kw">if </span>!err.is_cancelled() {
+<a href=#409 id=409 data-nosnippet>409</a>                        <span class="kw">if </span>err.is_panic() {
 <a href=#410 id=410 data-nosnippet>410</a>                            <span class="macro">error!</span>(
 <a href=#411 id=411 data-nosnippet>411</a>                                name = %<span class="self">self</span>.conf.name,
 <a href=#412 id=412 data-nosnippet>412</a>                                node = %<span class="self">self</span>.key,

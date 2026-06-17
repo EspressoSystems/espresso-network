@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["VidDisperseOutput","VidDisperseRequest","VidDisperser","VidReconstructError","VidReconstructOutput","VidReconstructor","VidShareAccumulator"]};
+window.SIDEBAR_ITEMS = {"enum":["VidDisperseError"],"struct":["VidDisperseOutput","VidDisperseRequest","VidDisperser","VidReconstructError","VidReconstructOutput","VidReconstructor","VidShareAccumulator"]};
