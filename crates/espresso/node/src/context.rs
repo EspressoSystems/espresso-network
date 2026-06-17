@@ -508,7 +508,7 @@ where
     ///
     /// Under normal conditions, this function will block forever, which is a convenient way of
     /// keeping the main thread from exiting as long as there are still active background tasks.
-    pub async fn join(mut self) {
+    pub async fn join(&mut self) {
         self.tasks.join().await;
     }
 
