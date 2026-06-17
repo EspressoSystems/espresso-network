@@ -14,7 +14,7 @@ lib_rs="crates/espresso/node/src/lib.rs"
 
 case "$allocator" in
     jemalloc)
-        dep=(tikv-jemallocator@0.7.0)
+        dep=(tikv-jemallocator@0.7.0 --features profiling)
         ty="tikv_jemallocator::Jemalloc"
         ;;
     mimalloc)
