@@ -150,7 +150,7 @@ impl<T: NodeType> NetworkNodeHandle<T> {
         if let Some(task) = task {
             match timeout(Duration::from_secs(5), task).await {
                 Ok(Ok(_)) => {},
-                Ok(Err(e)) => debug!("swarm task ended with error during shutdown: {e}"),
+                Ok(Err(err)) => debug!(%err, "swarm task ended with error during shutdown"),
                 Err(_) => {
                     debug!("timed out waiting for swarm task to finish during shutdown");
                 },
