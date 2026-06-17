@@ -27,7 +27,6 @@ use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::{Compression, LogExporter, Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{Resource, logs::SdkLoggerProvider};
 use prometheus::Registry;
-use tagged_base64::TaggedBase64;
 use tokio::sync::oneshot;
 use tracing::Subscriber;
 use tracing_subscriber::{EnvFilter, Layer, registry::LookupSpan};
@@ -41,7 +40,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const PUBKEY_SLUG_LEN: usize = 24;
 
 fn pubkey_slug(staking_key: &SignKey) -> String {
-    TaggedBase64::from(&VerKey::from(staking_key))
+    VerKey::from(staking_key)
         .to_string()
         .chars()
         .take(PUBKEY_SLUG_LEN)
@@ -449,15 +448,11 @@ mod tests {
 
     use super::*;
 
-    fn staking_key() -> SignKey {
-        BLSOverBN254CurveSignatureScheme::key_gen(&(), &mut rand::thread_rng())
-            .unwrap()
-            .0
-    }
-
     #[test]
     fn instance_id_appends_pubkey_slug() {
-        let key = staking_key();
+        let key = BLSOverBN254CurveSignatureScheme::key_gen(&(), &mut rand::thread_rng())
+            .unwrap()
+            .0;
         let slug = pubkey_slug(&key);
         assert_eq!(slug.len(), PUBKEY_SLUG_LEN);
         assert!(slug.starts_with("BLS_VER_KEY~"));
