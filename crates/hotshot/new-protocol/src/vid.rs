@@ -103,7 +103,7 @@ impl<T: NodeType> VidDisperser<T> {
         if self.calculations.contains_key(&key) {
             return;
         }
-        let handle = self.tasks.spawn(Self::handle_vid_disperse_request(
+        let handle = self.tasks.spawn(handle_vid_disperse_request(
             self.epoch_membership_coordinator.clone(),
             vid_disperse_request,
         ));
@@ -120,29 +120,6 @@ impl<T: NodeType> VidDisperser<T> {
         }
     }
 
-    async fn handle_vid_disperse_request(
-        epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-        vid_disperse_request: VidDisperseRequest<T>,
-    ) -> Result<VidDisperseOutput<T>, ()> {
-        let Ok((disperse, _duration)) = VidDisperse2::calculate_vid_disperse(
-            &vid_disperse_request.block,
-            &epoch_membership_coordinator,
-            vid_disperse_request.view,
-            Some(vid_disperse_request.epoch),
-            Some(vid_disperse_request.epoch),
-            &vid_disperse_request.metadata,
-        )
-        .await
-        else {
-            // TODO: Handle error
-            return Err(());
-        };
-        Ok(VidDisperseOutput {
-            view: vid_disperse_request.view,
-            payload_commitment: disperse.payload_commitment,
-            disperse,
-        })
-    }
     pub fn gc(&mut self, view_number: ViewNumber) {
         let keep = self
             .calculations
@@ -152,6 +129,30 @@ impl<T: NodeType> VidDisperser<T> {
         }
         self.calculations = keep;
     }
+}
+
+async fn handle_vid_disperse_request<T: NodeType>(
+    epoch_membership_coordinator: EpochMembershipCoordinator<T>,
+    vid_disperse_request: VidDisperseRequest<T>,
+) -> Result<VidDisperseOutput<T>, ()> {
+    let Ok((disperse, _duration)) = VidDisperse2::calculate_vid_disperse(
+        &vid_disperse_request.block,
+        &epoch_membership_coordinator,
+        vid_disperse_request.view,
+        Some(vid_disperse_request.epoch),
+        Some(vid_disperse_request.epoch),
+        &vid_disperse_request.metadata,
+    )
+    .await
+    else {
+        // TODO: Handle error
+        return Err(());
+    };
+    Ok(VidDisperseOutput {
+        view: vid_disperse_request.view,
+        payload_commitment: disperse.payload_commitment,
+        disperse,
+    })
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
@@ -484,122 +485,9 @@ impl<T: NodeType> VidReconstructor<T> {
             .collect();
         let epoch = accumulator.epoch;
         let task = self.tasks.spawn_blocking(move || {
-            Self::reconstruct(view, epoch, payload_commitment, common, shares, metadata)
+            reconstruct::<T>(view, epoch, payload_commitment, common, shares, metadata)
         });
         self.calculations.insert(view, task);
-    }
-
-    /// Decode the shares and accept the result only if it re-commits to
-    /// `payload_commitment`. On failure, report the shares that fail
-    /// verification against the commitment (each share is self-authenticating
-    /// via its merkle proofs) so they can be weeded out. If every share
-    /// verifies, the payload is unrecoverable: the shares cover the recovery
-    /// threshold with disjoint ranges, so the disperser committed to a
-    /// non-codeword and no share subset can ever succeed.
-    fn reconstruct(
-        view: ViewNumber,
-        epoch: EpochNumber,
-        payload_commitment: VidCommitment2,
-        common: AvidmGf2Common,
-        shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
-        metadata: Metadata<T>,
-    ) -> ReconstructResult<T> {
-        let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
-        if let Some(bytes) =
-            Self::decode_and_recommit(view, &common, &shares, &payload_commitment, &metadata)
-        {
-            return Ok(Self::output(
-                view,
-                epoch,
-                payload_commitment,
-                &bytes,
-                metadata,
-            ));
-        }
-        let bad_share_keys: Vec<_> = keys
-            .into_iter()
-            .zip(&shares)
-            .filter(|(_, share)| !share_verifies(&common, share))
-            .map(|(key, _)| key)
-            .collect();
-        let kind = if bad_share_keys.is_empty() {
-            warn!(
-                %view,
-                %payload_commitment,
-                "verified shares cannot decode to a payload matching the commitment"
-            );
-            VidReconstructErrorKind::Unrecoverable
-        } else {
-            warn!(
-                %view,
-                %payload_commitment,
-                ?bad_share_keys,
-                "weeded out VID shares that failed verification"
-            );
-            VidReconstructErrorKind::AwaitingShares
-        };
-        Err(VidReconstructError {
-            view,
-            payload_commitment,
-            kind,
-            bad_share_keys,
-        })
-    }
-
-    /// Decode `shares` and return the payload bytes only if they re-commit to
-    /// `payload_commitment`. Recovery alone does not bind the decoded bytes
-    /// to the commitment: a Byzantine disperser can commit to a non-codeword,
-    /// and a bad share poisons the erasure decoding.
-    fn decode_and_recommit(
-        view: ViewNumber,
-        common: &AvidmGf2Common,
-        shares: &[AvidmGf2Share],
-        payload_commitment: &VidCommitment2,
-        metadata: &Metadata<T>,
-    ) -> Option<Vec<u8>> {
-        let bytes = match AvidmGf2Scheme::recover(common, shares) {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                warn!(%view, %err, "VID recovery failed");
-                return None;
-            },
-        };
-        let ns_table = parse_ns_table(bytes.len(), &metadata.encode());
-        match AvidmGf2Scheme::commit(&common.param, &bytes, ns_table) {
-            Ok((recomputed, _)) if recomputed == *payload_commitment => Some(bytes),
-            Ok((recomputed, _)) => {
-                warn!(
-                    %view,
-                    expected = %payload_commitment,
-                    %recomputed,
-                    "reconstructed payload does not match the payload commitment"
-                );
-                None
-            },
-            Err(err) => {
-                warn!(%view, %err, "failed to recommit reconstructed VID payload");
-                None
-            },
-        }
-    }
-
-    fn output(
-        view: ViewNumber,
-        epoch: EpochNumber,
-        payload_commitment: VidCommitment2,
-        bytes: &[u8],
-        metadata: Metadata<T>,
-    ) -> VidReconstructOutput<T> {
-        let payload = T::BlockPayload::from_bytes(bytes, &metadata);
-        let tx_commitments = payload.transaction_commitments(&metadata);
-        VidReconstructOutput {
-            view,
-            epoch,
-            payload_commitment,
-            payload,
-            metadata,
-            tx_commitments,
-        }
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
@@ -626,5 +514,112 @@ impl<T: NodeType> VidReconstructor<T> {
         if let Some(handle) = self.calculations.remove(&view) {
             handle.abort();
         }
+    }
+}
+
+/// Decode the shares and accept the result only if it re-commits to
+/// `payload_commitment`. On failure, report the shares that fail
+/// verification against the commitment (each share is self-authenticating
+/// via its merkle proofs) so they can be weeded out. If every share
+/// verifies, the payload is unrecoverable: the shares cover the recovery
+/// threshold with disjoint ranges, so the disperser committed to a
+/// non-codeword and no share subset can ever succeed.
+fn reconstruct<T: NodeType>(
+    view: ViewNumber,
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment2,
+    common: AvidmGf2Common,
+    shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
+    metadata: Metadata<T>,
+) -> ReconstructResult<T> {
+    let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
+    if let Some(bytes) =
+        decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
+    {
+        return Ok(output(view, epoch, payload_commitment, &bytes, metadata));
+    }
+    let bad_share_keys: Vec<_> = keys
+        .into_iter()
+        .zip(&shares)
+        .filter(|(_, share)| !share_verifies(&common, share))
+        .map(|(key, _)| key)
+        .collect();
+    let kind = if bad_share_keys.is_empty() {
+        warn!(
+            %view,
+            %payload_commitment,
+            "verified shares cannot decode to a payload matching the commitment"
+        );
+        VidReconstructErrorKind::Unrecoverable
+    } else {
+        warn!(
+            %view,
+            %payload_commitment,
+            ?bad_share_keys,
+            "weeded out VID shares that failed verification"
+        );
+        VidReconstructErrorKind::AwaitingShares
+    };
+    Err(VidReconstructError {
+        view,
+        payload_commitment,
+        kind,
+        bad_share_keys,
+    })
+}
+
+/// Decode `shares` and return the payload bytes only if they re-commit to
+/// `payload_commitment`. Recovery alone does not bind the decoded bytes
+/// to the commitment: a Byzantine disperser can commit to a non-codeword,
+/// and a bad share poisons the erasure decoding.
+fn decode_and_recommit<T: NodeType>(
+    view: ViewNumber,
+    common: &AvidmGf2Common,
+    shares: &[AvidmGf2Share],
+    payload_commitment: &VidCommitment2,
+    metadata: &Metadata<T>,
+) -> Option<Vec<u8>> {
+    let bytes = match AvidmGf2Scheme::recover(common, shares) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            warn!(%view, %err, "VID recovery failed");
+            return None;
+        },
+    };
+    let ns_table = parse_ns_table(bytes.len(), &metadata.encode());
+    match AvidmGf2Scheme::commit(&common.param, &bytes, ns_table) {
+        Ok((recomputed, _)) if recomputed == *payload_commitment => Some(bytes),
+        Ok((recomputed, _)) => {
+            warn!(
+                %view,
+                expected = %payload_commitment,
+                %recomputed,
+                "reconstructed payload does not match the payload commitment"
+            );
+            None
+        },
+        Err(err) => {
+            warn!(%view, %err, "failed to recommit reconstructed VID payload");
+            None
+        },
+    }
+}
+
+fn output<T: NodeType>(
+    view: ViewNumber,
+    epoch: EpochNumber,
+    payload_commitment: VidCommitment2,
+    bytes: &[u8],
+    metadata: Metadata<T>,
+) -> VidReconstructOutput<T> {
+    let payload = T::BlockPayload::from_bytes(bytes, &metadata);
+    let tx_commitments = payload.transaction_commitments(&metadata);
+    VidReconstructOutput {
+        view,
+        epoch,
+        payload_commitment,
+        payload,
+        metadata,
+        tx_commitments,
     }
 }
