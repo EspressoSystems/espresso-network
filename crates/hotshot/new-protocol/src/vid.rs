@@ -11,16 +11,23 @@ use hotshot_types::{
         ns_table::parse_ns_table,
     },
     epoch_membership::EpochMembershipCoordinator,
-    traits::{block_contents::EncodeBytes, node_implementation::NodeType},
+    traits::{
+        block_contents::EncodeBytes, node_implementation::NodeType, signature_key::SignatureKey,
+    },
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
+use hotshot_utils::anytrace;
 use tokio::task::{AbortHandle, JoinSet};
-use tracing::warn;
+use tracing::{error, warn};
 
-pub struct VidDisperseOutput<T: NodeType> {
+use crate::{
+    message::{ConsensusMessage, Message, MessageType},
+    network::{NetworkError, Sender},
+};
+
+pub struct VidDisperseOutput {
     pub view: ViewNumber,
     pub payload_commitment: VidCommitment2,
-    pub disperse: VidDisperse2<T>,
 }
 
 pub struct VidReconstructOutput<T: NodeType> {
@@ -83,14 +90,25 @@ pub struct VidDisperseRequest<T: NodeType> {
 pub struct VidDisperser<T: NodeType> {
     calculations: BTreeMap<(ViewNumber, VidCommitment2), AbortHandle>,
     epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-    tasks: JoinSet<Result<VidDisperseOutput<T>, ()>>,
+    network: Sender<T>,
+    public_key: T::SignatureKey,
+    private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
 }
 
 impl<T: NodeType> VidDisperser<T> {
-    pub fn new(epoch_membership_coordinator: EpochMembershipCoordinator<T>) -> Self {
+    pub fn new(
+        epoch_membership_coordinator: EpochMembershipCoordinator<T>,
+        network: Sender<T>,
+        public_key: T::SignatureKey,
+        private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    ) -> Self {
         Self {
             calculations: BTreeMap::new(),
             epoch_membership_coordinator,
+            network,
+            public_key,
+            private_key,
             tasks: JoinSet::new(),
         }
     }
@@ -103,21 +121,74 @@ impl<T: NodeType> VidDisperser<T> {
         if self.calculations.contains_key(&key) {
             return;
         }
-        let handle = self.tasks.spawn(handle_vid_disperse_request(
+        let handle = self.tasks.spawn(Self::handle_vid_disperse_request(
             self.epoch_membership_coordinator.clone(),
+            self.network.clone(),
+            self.public_key.clone(),
+            self.private_key.clone(),
             vid_disperse_request,
         ));
         self.calculations.insert(key, handle);
     }
 
-    pub async fn next(&mut self) -> Option<Result<VidDisperseOutput<T>, ()>> {
+    pub async fn next(&mut self) -> Option<Result<VidDisperseOutput, VidDisperseError>> {
         loop {
             match self.tasks.join_next().await {
                 Some(Ok(result)) => return Some(result),
-                Some(Err(_)) => continue,
+                Some(Err(err)) => {
+                    if err.is_panic() {
+                        error!(%err, "vid disperse task panic");
+                    }
+                    continue;
+                },
                 None => return None,
             }
         }
+    }
+
+    async fn handle_vid_disperse_request(
+        epoch_membership_coordinator: EpochMembershipCoordinator<T>,
+        network: Sender<T>,
+        public_key: T::SignatureKey,
+        private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+        vid_disperse_request: VidDisperseRequest<T>,
+    ) -> Result<VidDisperseOutput, VidDisperseError> {
+        let view = vid_disperse_request.view;
+        let (disperse, _) = VidDisperse2::calculate_vid_disperse(
+            &vid_disperse_request.block,
+            &epoch_membership_coordinator,
+            view,
+            Some(vid_disperse_request.epoch),
+            Some(vid_disperse_request.epoch),
+            &vid_disperse_request.metadata,
+        )
+        .await
+        .map_err(VidDisperseError::Vid)?;
+
+        let payload_commitment = disperse.payload_commitment;
+
+        let signature = T::SignatureKey::sign(&private_key, payload_commitment.as_ref())
+            .map_err(|err| VidDisperseError::Sign(err.into()))?;
+
+        for proposal in disperse.to_share_proposals(&signature) {
+            let recipient = proposal.data.recipient_key.clone();
+            let message = Message {
+                sender: public_key.clone(),
+                message_type: MessageType::Consensus(ConsensusMessage::VidShare(proposal)),
+            };
+            if let Err(err) = network.unicast(view, &recipient, &message) {
+                if err.is_critical() {
+                    return Err(err.into());
+                } else {
+                    warn!(%err, "network error while sending vid share")
+                }
+            }
+        }
+
+        Ok(VidDisperseOutput {
+            view,
+            payload_commitment,
+        })
     }
 
     pub fn gc(&mut self, view_number: ViewNumber) {
@@ -129,30 +200,6 @@ impl<T: NodeType> VidDisperser<T> {
         }
         self.calculations = keep;
     }
-}
-
-async fn handle_vid_disperse_request<T: NodeType>(
-    epoch_membership_coordinator: EpochMembershipCoordinator<T>,
-    vid_disperse_request: VidDisperseRequest<T>,
-) -> Result<VidDisperseOutput<T>, ()> {
-    let Ok((disperse, _duration)) = VidDisperse2::calculate_vid_disperse(
-        &vid_disperse_request.block,
-        &epoch_membership_coordinator,
-        vid_disperse_request.view,
-        Some(vid_disperse_request.epoch),
-        Some(vid_disperse_request.epoch),
-        &vid_disperse_request.metadata,
-    )
-    .await
-    else {
-        // TODO: Handle error
-        return Err(());
-    };
-    Ok(VidDisperseOutput {
-        view: vid_disperse_request.view,
-        payload_commitment: disperse.payload_commitment,
-        disperse,
-    })
 }
 
 pub(crate) struct VidShareAccumulator<T: NodeType> {
@@ -621,5 +668,26 @@ fn output<T: NodeType>(
         payload,
         metadata,
         tx_commitments,
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum VidDisperseError {
+    #[error("network error: {0}")]
+    Net(#[from] NetworkError),
+
+    #[error("vid error: {0}")]
+    Vid(#[source] anytrace::Error),
+
+    #[error("sign error: {0}")]
+    Sign(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl VidDisperseError {
+    pub fn is_critical(&self) -> bool {
+        match self {
+            Self::Net(e) => e.is_critical(),
+            Self::Vid(_) | Self::Sign(_) => false,
+        }
     }
 }

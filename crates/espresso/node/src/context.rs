@@ -19,7 +19,7 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::{coordinator::Coordinator, network::Network};
+use hotshot_new_protocol::{coordinator::Coordinator, network::Cliquenet};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -108,7 +108,7 @@ where
 {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init<T: Network<SeqTypes> + Send + 'static>(
+    pub async fn init(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -118,7 +118,7 @@ where
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
-        coordinator_network: T,
+        coordinator_network: Cliquenet<SeqTypes>,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
