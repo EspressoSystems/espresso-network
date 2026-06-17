@@ -26,7 +26,8 @@ case "$allocator" in
         ty="snmalloc_rs::SnMalloc"
         ;;
     tcmalloc)
-        dep=(tcmalloc-better)
+        # extension feature exposes process_background_actions_thread (see below).
+        dep=(tcmalloc-better --features extension)
         ty="tcmalloc_better::TCMalloc"
         ;;
     *)
@@ -43,5 +44,26 @@ tmp="$(mktemp)"
     cat "$lib_rs"
 } >"$tmp"
 mv "$tmp" "$lib_rs"
+
+# tcmalloc only returns freed memory to the OS from a background thread; start it as the
+# first statement of run::main so RSS reflects the allocator's real footprint in the soak.
+if [ "$allocator" = "tcmalloc" ]; then
+    run_rs="crates/espresso/node/src/run.rs"
+    tmp="$(mktemp)"
+    awk '
+        !done && /^pub async fn main\(/ {
+            print
+            print "    let _ = tcmalloc_better::TCMalloc::process_background_actions_thread();"
+            done = 1
+            next
+        }
+        { print }
+    ' "$run_rs" >"$tmp"
+    mv "$tmp" "$run_rs"
+    grep -q "process_background_actions_thread" "$run_rs" || {
+        echo "failed to inject tcmalloc background thread into $run_rs" >&2
+        exit 1
+    }
+fi
 
 echo "patched espresso-node with $allocator global allocator"
