@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["SERVICE_NAME","SHUTDOWN_TIMEOUT"],"fn":["build_logger_provider","init","join_bounded","registry","set_registry"],"static":["REGISTRY"],"struct":["MetricsPushHandle","TelemetryHandle","TelemetryOptions"]};
+window.SIDEBAR_ITEMS = {"constant":["PUBKEY_SLUG_LEN","SERVICE_NAME","SHUTDOWN_TIMEOUT"],"fn":["build_logger_provider","init","instance_id","join_bounded","pubkey_slug","registry","segment","set_registry"],"static":["REGISTRY"],"struct":["MetricsPushHandle","TelemetryHandle","TelemetryOptions"]};
