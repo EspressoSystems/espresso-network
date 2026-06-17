@@ -38,13 +38,9 @@ use crate::{UnauthenticatedToken, push_task, remote_write::Label};
 const SERVICE_NAME: &str = "espresso-node";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Length of the BLS key prefix used to disambiguate operators, matching the
-/// telemetry proxy's `node_id_from_token` slug.
+/// Matches the telemetry proxy's `node_id_from_token` pubkey slug length.
 const PUBKEY_SLUG_LEN: usize = 24;
 
-/// First [`PUBKEY_SLUG_LEN`] chars of the verification key's tagged-base64
-/// string, identical to the proxy's pubkey fallback so node-side and
-/// proxy-side ids agree.
 fn pubkey_slug(staking_key: &SignKey) -> String {
     TaggedBase64::from(&VerKey::from(staking_key))
         .to_string()
@@ -53,16 +49,15 @@ fn pubkey_slug(staking_key: &SignKey) -> String {
         .collect()
 }
 
-/// Partition key stamped on logs (`service.instance.id`) and metrics
-/// (`instance` label): `{node_name}-{pubkey_slug}`, with `node_name` defaulting
-/// to `unknown`. Anchors the key to the BLS key so the aggregator never falls
-/// back to a bare `unknown`. Set in-process, so spoofable.
+/// Partition key for logs and metrics: `{node_name|unknown}-{pubkey_slug}`,
+/// lowercased.
 fn instance_id(node_name: Option<&str>, staking_key: &SignKey) -> String {
     format!(
         "{}-{}",
         node_name.unwrap_or("unknown"),
         pubkey_slug(staking_key)
     )
+    .to_lowercase()
 }
 
 /// Join `thread`, detaching it after [`SHUTDOWN_TIMEOUT`] so a wedged exporter
@@ -441,7 +436,6 @@ fn build_logger_provider(
         .build()
         .context("build OTLP log exporter")?;
 
-    // service.instance.id distinguishes individual operators in the aggregator.
     let resource = Resource::builder()
         .with_service_name(SERVICE_NAME)
         .with_attribute(KeyValue::new("service.instance.id", instance.to_owned()));
@@ -471,8 +465,9 @@ mod tests {
         assert_eq!(slug.len(), PUBKEY_SLUG_LEN);
         assert!(slug.starts_with("BLS_VER_KEY~"));
 
+        let slug = slug.to_lowercase();
         assert_eq!(
-            instance_id(Some("node-42"), &key),
+            instance_id(Some("Node-42"), &key),
             format!("node-42-{slug}")
         );
         assert_eq!(instance_id(None, &key), format!("unknown-{slug}"));
