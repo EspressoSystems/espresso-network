@@ -8668,7 +8668,7 @@ mod test {
         // Blocks to produce after the restart before declaring success.
         const BLOCKS_AFTER_RESTART: u64 = 5;
 
-        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
+        const V5: Upgrade = Upgrade::trivial(versions::EPOCH_REWARD_VERSION);
 
         let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
 
