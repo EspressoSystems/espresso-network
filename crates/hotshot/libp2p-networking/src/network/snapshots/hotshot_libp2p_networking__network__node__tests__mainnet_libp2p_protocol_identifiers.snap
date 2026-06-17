@@ -1,0 +1,7 @@
+---
+source: crates/hotshot/libp2p-networking/src/network/node.rs
+expression: snapshot_for(None)
+---
+gossipsub_prefix: None
+kad: /ipfs/kad/1.0.0
+direct_message: /HotShot/direct_message/1.0
