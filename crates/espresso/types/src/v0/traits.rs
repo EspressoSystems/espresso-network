@@ -660,31 +660,44 @@ pub trait SequencerPersistence:
                 ViewNumber::genesis()
             },
         };
-        let next_epoch_high_qc = self
-            .load_next_epoch_quorum_certificate()
-            .await
-            .context("loading next epoch qc")?;
-        let (leaf, mut high_qc, anchor_view) = match self
+        let config = self.load_config().await.context("loading config")?;
+        let epoch_height = config
+            .as_ref()
+            .map(|c| c.config.epoch_height)
+            .unwrap_or_default();
+        let (leaf, cert_pair, anchor_view) = match self
             .load_anchor_leaf()
             .await
             .context("loading anchor leaf")?
         {
-            Some((leaf, high_qc)) => {
-                tracing::info!(?leaf, ?high_qc, "starting from saved leaf");
+            Some((leaf, cert_pair)) => {
+                tracing::info!(?leaf, ?cert_pair, "starting from saved leaf");
+                let high_qc = cert_pair.qc().clone();
+                let leaf_view = leaf.view_number();
                 ensure!(
-                    leaf.view_number() == high_qc.view_number,
+                    leaf_view == high_qc.view_number,
                     format!(
                         "loaded anchor leaf from view {}, but high QC is from view {}",
-                        leaf.view_number(),
-                        high_qc.view_number
+                        leaf_view, high_qc.view_number
+                    )
+                );
+                ensure!(
+                    epoch_height == 0 || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
+                    format!(
+                        "Next epoch QC is required but it's not present or doesn't match primary \
+                         QC\nPrimary QC: {:?}\nNext epoch QC: {:?}",
+                        cert_pair.qc(),
+                        cert_pair.next_epoch_qc()
                     )
                 );
 
                 let anchor_view = leaf.view_number();
-                (leaf, high_qc, Some(anchor_view))
+                (leaf, cert_pair, Some(anchor_view))
             },
             None => {
                 tracing::info!("no saved leaf, starting from genesis leaf");
+                let genesis_qc =
+                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await;
                 (
                     hotshot_types::data::Leaf2::genesis(
                         &genesis_validated_state,
@@ -692,16 +705,19 @@ pub trait SequencerPersistence:
                         upgrade.base,
                     )
                     .await,
-                    QuorumCertificate2::genesis(&genesis_validated_state, &state, upgrade).await,
+                    CertificatePair::new(genesis_qc, None),
                     None,
                 )
             },
         };
 
-        if let Some((extended_high_qc, _)) = self.load_eqc().await
+        let mut high_qc = cert_pair.qc().clone();
+        let mut next_epoch_high_qc = cert_pair.next_epoch_qc().cloned();
+        if let Some((extended_high_qc, extended_next_qc)) = self.load_eqc().await
             && extended_high_qc.view_number() > high_qc.view_number()
         {
-            high_qc = extended_high_qc
+            high_qc = extended_high_qc;
+            next_epoch_high_qc = Some(extended_next_qc);
         }
 
         let validated_state = if leaf.block_header().height() == 0 {
@@ -721,11 +737,6 @@ pub trait SequencerPersistence:
         // TODO:
         let epoch = genesis_epoch_from_version(upgrade.base);
 
-        let config = self.load_config().await.context("loading config")?;
-        let epoch_height = config
-            .as_ref()
-            .map(|c| c.config.epoch_height)
-            .unwrap_or_default();
         let epoch_start_block = config
             .as_ref()
             .map(|c| c.config.epoch_start_block)
@@ -856,9 +867,7 @@ pub trait SequencerPersistence:
         consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()>;
 
-    async fn load_anchor_leaf(
-        &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>>;
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>>;
     async fn append_vid(
         &self,
         proposal: &Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,

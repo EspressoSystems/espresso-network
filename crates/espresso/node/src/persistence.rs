@@ -851,10 +851,10 @@ mod tests {
         final_qc.view_number += 1;
         final_qc.data.leaf_commit = Committable::commit(&leaf);
         let qcs = [
-            leaves[1].justify_qc(),
-            leaves[2].justify_qc(),
-            leaves[3].justify_qc(),
-            final_qc,
+            CertificatePair::non_epoch_change(leaves[1].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[2].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[3].justify_qc()),
+            CertificatePair::non_epoch_change(final_qc),
         ];
 
         assert_eq!(
@@ -873,9 +873,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(2),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change((*qc).clone()))),
+                leaf_chain.iter().map(|(leaf, qc)| (leaf, (*qc).clone())),
                 None,
                 &consumer,
             )
@@ -937,10 +935,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(3),
-                vec![(
-                    &leaf_info(leaves[3].clone()),
-                    CertificatePair::non_epoch_change(qcs[3].clone()),
-                )],
+                vec![(&leaf_info(leaves[3].clone()), qcs[3].clone())],
                 None,
                 &consumer,
             )
@@ -963,7 +958,7 @@ mod tests {
         else {
             panic!("expected decide event, got {:?}", events[0]);
         };
-        assert_eq!(*committing_qc.qc(), qcs[3]);
+        assert_eq!(**committing_qc, qcs[3]);
         assert_eq!(leaf_chain.len(), 1);
         let info = &leaf_chain[0];
         assert_eq!(info.leaf, leaves[3]);
