@@ -559,6 +559,10 @@ class Node:
         code, _ = _get(f"{self.api_url}/availability/leaf/{index}")
         return code == 200
 
+    def aggregator_caught_up(self, height: int) -> bool:
+        code, _ = _get(f"{self.api_url}/node/transactions/count/{height}")
+        return code == 200
+
     def wait_consensus(
         self,
         target: int,
@@ -632,13 +636,32 @@ class Node:
             missing = [i for i in leaves if not self.leaf_available(i)]
             if not missing:
                 log.info(f"{self} availability/leaf {leaves} ok")
-                return
+                break
             if abort and (msg := abort()):
                 raise RuntimeError(f"Aborted waiting for {self} leaf {missing}: {msg}")
             if time.monotonic() >= leaf_deadline:
                 raise TimeoutError(
                     f"{self} leaf {missing} not available after 30s"
                     f" (storage_height={last_stor})"
+                )
+            time.sleep(2.0)
+
+        if not backfill:
+            return
+
+        # The transactions/count endpoint reads the aggregate table, which a
+        # background aggregator builds contiguously from height 0. Wait for it
+        # so the tx index finishes while peers are still up.
+        while True:
+            if self.aggregator_caught_up(target - 1):
+                log.info(f"{self} aggregator caught up to {target - 1}")
+                return
+            if abort and (msg := abort()):
+                raise RuntimeError(f"Aborted waiting for {self} aggregator: {msg}")
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"{self} aggregator did not catch up to {target - 1}"
+                    f" after {int(timeout)}s"
                 )
             time.sleep(2.0)
 
