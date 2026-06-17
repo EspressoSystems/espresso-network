@@ -888,8 +888,13 @@
 <a href=#888 id=888 data-nosnippet>888</a>    }
 <a href=#889 id=889 data-nosnippet>889</a>
 <a href=#890 id=890 data-nosnippet>890</a>    <span class="doccomment">/// Internally verify the share given necessary information
-<a href=#891 id=891 data-nosnippet>891</a>    </span><span class="kw">pub fn </span>verify(<span class="kw-2">&amp;</span><span class="self">self</span>, _total_weight: usize) -&gt; bool {
-<a href=#892 id=892 data-nosnippet>892</a>        <span class="self">self</span>.is_consistent() &amp;&amp; <span class="self">self</span>.verify_with_verified_common()
-<a href=#893 id=893 data-nosnippet>893</a>    }
-<a href=#894 id=894 data-nosnippet>894</a>}
+<a href=#891 id=891 data-nosnippet>891</a>    </span><span class="kw">pub fn </span>verify(<span class="kw-2">&amp;</span><span class="self">self</span>, total_weight: usize) -&gt; bool {
+<a href=#892 id=892 data-nosnippet>892</a>        <span class="comment">// A share's commitment hash-binds its `ns_commits` (via `is_consistent`)
+<a href=#893 id=893 data-nosnippet>893</a>        // but not its `param`, so check `param` against the committee-derived
+<a href=#894 id=894 data-nosnippet>894</a>        // expectation; otherwise a forged param would pass verification.
+<a href=#895 id=895 data-nosnippet>895</a>        </span>init_avidm_gf2_param(total_weight).is_ok_and(|expected| <span class="self">self</span>.common.param == expected)
+<a href=#896 id=896 data-nosnippet>896</a>            &amp;&amp; <span class="self">self</span>.is_consistent()
+<a href=#897 id=897 data-nosnippet>897</a>            &amp;&amp; <span class="self">self</span>.verify_with_verified_common()
+<a href=#898 id=898 data-nosnippet>898</a>    }
+<a href=#899 id=899 data-nosnippet>899</a>}
 </code></pre></div></section></main></body></html>
