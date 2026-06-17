@@ -342,7 +342,7 @@ where
     }
 
     pub async fn stop(mut self) {
-        self.network.shutdown().await
+        futures::join!(self.network.shutdown(), self.storage.flush());
     }
 
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
