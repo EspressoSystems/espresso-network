@@ -8355,795 +8355,863 @@
 <a href=#8355 id=8355 data-nosnippet>8355</a>                )
 <a href=#8356 id=8356 data-nosnippet>8356</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#8357 id=8357 data-nosnippet>8357</a>
-<a href=#8358 id=8358 data-nosnippet>8358</a>                <span class="comment">// Error equivalence: both tide-disco and Axum must return the same
-<a href=#8359 id=8359 data-nosnippet>8359</a>                // HTTP status codes for common failure cases that clients encounter.
-<a href=#8360 id=8360 data-nosnippet>8360</a>
-<a href=#8361 id=8361 data-nosnippet>8361</a>                // Requesting a leaf far ahead of the chain tip times out and returns
-<a href=#8362 id=8362 data-nosnippet>8362</a>                // 404 Not Found from both servers.
-<a href=#8363 id=8363 data-nosnippet>8363</a>                </span>compare_error_endpoints(
-<a href=#8364 id=8364 data-nosnippet>8364</a>                    <span class="kw-2">&amp;</span>http,
-<a href=#8365 id=8365 data-nosnippet>8365</a>                    api_port,
-<a href=#8366 id=8366 data-nosnippet>8366</a>                    axum_port,
-<a href=#8367 id=8367 data-nosnippet>8367</a>                    <span class="string">"availability/leaf/999999"</span>,
-<a href=#8368 id=8368 data-nosnippet>8368</a>                    <span class="number">404</span>,
-<a href=#8369 id=8369 data-nosnippet>8369</a>                )
-<a href=#8370 id=8370 data-nosnippet>8370</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#8371 id=8371 data-nosnippet>8371</a>
-<a href=#8372 id=8372 data-nosnippet>8372</a>                <span class="comment">// Requesting a block range that exceeds the per-request limit
-<a href=#8373 id=8373 data-nosnippet>8373</a>                // returns 400 Bad Request from both servers.
-<a href=#8374 id=8374 data-nosnippet>8374</a>                </span>compare_error_endpoints(
-<a href=#8375 id=8375 data-nosnippet>8375</a>                    <span class="kw-2">&amp;</span>http,
-<a href=#8376 id=8376 data-nosnippet>8376</a>                    api_port,
-<a href=#8377 id=8377 data-nosnippet>8377</a>                    axum_port,
-<a href=#8378 id=8378 data-nosnippet>8378</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/block/{avail_block}/{}"</span>, avail_block + <span class="number">200</span>),
-<a href=#8379 id=8379 data-nosnippet>8379</a>                    <span class="number">400</span>,
-<a href=#8380 id=8380 data-nosnippet>8380</a>                )
-<a href=#8381 id=8381 data-nosnippet>8381</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#8382 id=8382 data-nosnippet>8382</a>
-<a href=#8383 id=8383 data-nosnippet>8383</a>                <span class="comment">// Requesting a namespace proof range that exceeds the limit also
-<a href=#8384 id=8384 data-nosnippet>8384</a>                // returns 400 Bad Request from both servers.
-<a href=#8385 id=8385 data-nosnippet>8385</a>                </span>compare_error_endpoints(
-<a href=#8386 id=8386 data-nosnippet>8386</a>                    <span class="kw-2">&amp;</span>http,
-<a href=#8387 id=8387 data-nosnippet>8387</a>                    api_port,
-<a href=#8388 id=8388 data-nosnippet>8388</a>                    axum_port,
-<a href=#8389 id=8389 data-nosnippet>8389</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8390 id=8390 data-nosnippet>8390</a>                        <span class="string">"availability/block/{avail_block}/{}/namespace/{avail_ns}"</span>,
-<a href=#8391 id=8391 data-nosnippet>8391</a>                        avail_block + <span class="number">200
-<a href=#8392 id=8392 data-nosnippet>8392</a>                    </span>),
-<a href=#8393 id=8393 data-nosnippet>8393</a>                    <span class="number">400</span>,
-<a href=#8394 id=8394 data-nosnippet>8394</a>                )
-<a href=#8395 id=8395 data-nosnippet>8395</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#8396 id=8396 data-nosnippet>8396</a>            }
-<a href=#8397 id=8397 data-nosnippet>8397</a>
-<a href=#8398 id=8398 data-nosnippet>8398</a>            anyhow::Ok(())
-<a href=#8399 id=8399 data-nosnippet>8399</a>        };
-<a href=#8400 id=8400 data-nosnippet>8400</a>
-<a href=#8401 id=8401 data-nosnippet>8401</a>        <span class="comment">// `block_on` polls the future on the *calling* thread. The default test thread stack is
-<a href=#8402 id=8402 data-nosnippet>8402</a>        // 2 MiB on Linux, which isn't enough for this test's large async state machine. We spawn
-<a href=#8403 id=8403 data-nosnippet>8403</a>        // a fresh thread with 32 MiB and run the tokio runtime there instead.
-<a href=#8404 id=8404 data-nosnippet>8404</a>        </span>std::thread::Builder::new()
-<a href=#8405 id=8405 data-nosnippet>8405</a>            .stack_size(<span class="number">32 </span>* <span class="number">1024 </span>* <span class="number">1024</span>)
-<a href=#8406 id=8406 data-nosnippet>8406</a>            .spawn(<span class="kw">move </span>|| {
-<a href=#8407 id=8407 data-nosnippet>8407</a>                tokio::runtime::Builder::new_multi_thread()
-<a href=#8408 id=8408 data-nosnippet>8408</a>                    .enable_all()
-<a href=#8409 id=8409 data-nosnippet>8409</a>                    .build()
-<a href=#8410 id=8410 data-nosnippet>8410</a>                    .unwrap()
-<a href=#8411 id=8411 data-nosnippet>8411</a>                    .block_on(test)
-<a href=#8412 id=8412 data-nosnippet>8412</a>                    .unwrap()
-<a href=#8413 id=8413 data-nosnippet>8413</a>            })
-<a href=#8414 id=8414 data-nosnippet>8414</a>            .unwrap()
-<a href=#8415 id=8415 data-nosnippet>8415</a>            .join()
-<a href=#8416 id=8416 data-nosnippet>8416</a>            .unwrap()
-<a href=#8417 id=8417 data-nosnippet>8417</a>    }
-<a href=#8418 id=8418 data-nosnippet>8418</a>
-<a href=#8419 id=8419 data-nosnippet>8419</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#8420 id=8420 data-nosnippet>8420</a>    </span><span class="kw">async fn </span>test_all_validators_endpoint() -&gt; anyhow::Result&lt;()&gt; {
-<a href=#8421 id=8421 data-nosnippet>8421</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">20</span>;
-<a href=#8422 id=8422 data-nosnippet>8422</a>
-<a href=#8423 id=8423 data-nosnippet>8423</a>        <span class="kw">let </span>network_config = TestConfigBuilder::default()
-<a href=#8424 id=8424 data-nosnippet>8424</a>            .epoch_height(EPOCH_HEIGHT)
-<a href=#8425 id=8425 data-nosnippet>8425</a>            .build();
-<a href=#8426 id=8426 data-nosnippet>8426</a>
-<a href=#8427 id=8427 data-nosnippet>8427</a>        <span class="kw">let </span>api_port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#8358 id=8358 data-nosnippet>8358</a>                <span class="comment">// Merklized state parity (block-state and fee-state). Wait for
+<a href=#8359 id=8359 data-nosnippet>8359</a>                // both backends to have indexed the snapshot we'll query.
+<a href=#8360 id=8360 data-nosnippet>8360</a>                </span>wait_until_block_height(<span class="kw-2">&amp;</span>client, <span class="string">"block-state/block-height"</span>, avail_block).<span class="kw">await</span>;
+<a href=#8361 id=8361 data-nosnippet>8361</a>                wait_until_block_height(<span class="kw-2">&amp;</span>client, <span class="string">"fee-state/block-height"</span>, avail_block).<span class="kw">await</span>;
+<a href=#8362 id=8362 data-nosnippet>8362</a>
+<a href=#8363 id=8363 data-nosnippet>8363</a>                <span class="comment">// block-state/block-height and fee-state/block-height (latest
+<a href=#8364 id=8364 data-nosnippet>8364</a>                // height for which merklized state is available).
+<a href=#8365 id=8365 data-nosnippet>8365</a>                </span>compare_endpoints(<span class="kw-2">&amp;</span>http, api_port, axum_port, <span class="string">"block-state/block-height"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8366 id=8366 data-nosnippet>8366</a>                compare_endpoints(<span class="kw-2">&amp;</span>http, api_port, axum_port, <span class="string">"fee-state/block-height"</span>).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8367 id=8367 data-nosnippet>8367</a>
+<a href=#8368 id=8368 data-nosnippet>8368</a>                <span class="comment">// block-state path by height: the merkle tree at height H
+<a href=#8369 id=8369 data-nosnippet>8369</a>                // contains the headers of blocks [0, H), so a valid key is H-1.
+<a href=#8370 id=8370 data-nosnippet>8370</a>                </span>compare_endpoints(
+<a href=#8371 id=8371 data-nosnippet>8371</a>                    <span class="kw-2">&amp;</span>http,
+<a href=#8372 id=8372 data-nosnippet>8372</a>                    api_port,
+<a href=#8373 id=8373 data-nosnippet>8373</a>                    axum_port,
+<a href=#8374 id=8374 data-nosnippet>8374</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8375 id=8375 data-nosnippet>8375</a>                        <span class="string">"block-state/{avail_block}/{}"</span>,
+<a href=#8376 id=8376 data-nosnippet>8376</a>                        avail_block.saturating_sub(<span class="number">1</span>)
+<a href=#8377 id=8377 data-nosnippet>8377</a>                    ),
+<a href=#8378 id=8378 data-nosnippet>8378</a>                )
+<a href=#8379 id=8379 data-nosnippet>8379</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8380 id=8380 data-nosnippet>8380</a>
+<a href=#8381 id=8381 data-nosnippet>8381</a>                <span class="comment">// block-state path by commit. Use the tree commitment from
+<a href=#8382 id=8382 data-nosnippet>8382</a>                // the header at avail_block.
+<a href=#8383 id=8383 data-nosnippet>8383</a>                </span><span class="kw">let </span>block_mt_commit = avail_header.block_merkle_tree_root().to_string();
+<a href=#8384 id=8384 data-nosnippet>8384</a>                compare_endpoints(
+<a href=#8385 id=8385 data-nosnippet>8385</a>                    <span class="kw-2">&amp;</span>http,
+<a href=#8386 id=8386 data-nosnippet>8386</a>                    api_port,
+<a href=#8387 id=8387 data-nosnippet>8387</a>                    axum_port,
+<a href=#8388 id=8388 data-nosnippet>8388</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8389 id=8389 data-nosnippet>8389</a>                        <span class="string">"block-state/commit/{block_mt_commit}/{}"</span>,
+<a href=#8390 id=8390 data-nosnippet>8390</a>                        avail_block.saturating_sub(<span class="number">1</span>)
+<a href=#8391 id=8391 data-nosnippet>8391</a>                    ),
+<a href=#8392 id=8392 data-nosnippet>8392</a>                )
+<a href=#8393 id=8393 data-nosnippet>8393</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8394 id=8394 data-nosnippet>8394</a>
+<a href=#8395 id=8395 data-nosnippet>8395</a>                <span class="comment">// fee-state path by height for a known fee account, and
+<a href=#8396 id=8396 data-nosnippet>8396</a>                // fee-balance/latest for the same account.
+<a href=#8397 id=8397 data-nosnippet>8397</a>                </span><span class="kw">let </span>fee_account = validated_state
+<a href=#8398 id=8398 data-nosnippet>8398</a>                    .fee_merkle_tree
+<a href=#8399 id=8399 data-nosnippet>8399</a>                    .iter()
+<a href=#8400 id=8400 data-nosnippet>8400</a>                    .next()
+<a href=#8401 id=8401 data-nosnippet>8401</a>                    .map(|(addr, <span class="kw">_</span>)| <span class="kw-2">*</span>addr)
+<a href=#8402 id=8402 data-nosnippet>8402</a>                    .expect(<span class="string">"fee tree should have at least one account"</span>);
+<a href=#8403 id=8403 data-nosnippet>8403</a>                compare_endpoints(
+<a href=#8404 id=8404 data-nosnippet>8404</a>                    <span class="kw-2">&amp;</span>http,
+<a href=#8405 id=8405 data-nosnippet>8405</a>                    api_port,
+<a href=#8406 id=8406 data-nosnippet>8406</a>                    axum_port,
+<a href=#8407 id=8407 data-nosnippet>8407</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"fee-state/{avail_block}/{fee_account}"</span>),
+<a href=#8408 id=8408 data-nosnippet>8408</a>                )
+<a href=#8409 id=8409 data-nosnippet>8409</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8410 id=8410 data-nosnippet>8410</a>                <span class="kw">let </span>fee_mt_commit = avail_header.fee_merkle_tree_root().to_string();
+<a href=#8411 id=8411 data-nosnippet>8411</a>                compare_endpoints(
+<a href=#8412 id=8412 data-nosnippet>8412</a>                    <span class="kw-2">&amp;</span>http,
+<a href=#8413 id=8413 data-nosnippet>8413</a>                    api_port,
+<a href=#8414 id=8414 data-nosnippet>8414</a>                    axum_port,
+<a href=#8415 id=8415 data-nosnippet>8415</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"fee-state/commit/{fee_mt_commit}/{fee_account}"</span>),
+<a href=#8416 id=8416 data-nosnippet>8416</a>                )
+<a href=#8417 id=8417 data-nosnippet>8417</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8418 id=8418 data-nosnippet>8418</a>                compare_endpoints(
+<a href=#8419 id=8419 data-nosnippet>8419</a>                    <span class="kw-2">&amp;</span>http,
+<a href=#8420 id=8420 data-nosnippet>8420</a>                    api_port,
+<a href=#8421 id=8421 data-nosnippet>8421</a>                    axum_port,
+<a href=#8422 id=8422 data-nosnippet>8422</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"fee-state/fee-balance/latest/{fee_account}"</span>),
+<a href=#8423 id=8423 data-nosnippet>8423</a>                )
+<a href=#8424 id=8424 data-nosnippet>8424</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8425 id=8425 data-nosnippet>8425</a>
+<a href=#8426 id=8426 data-nosnippet>8426</a>                <span class="comment">// Error equivalence: both tide-disco and Axum must return the same
+<a href=#8427 id=8427 data-nosnippet>8427</a>                // HTTP status codes for common failure cases that clients encounter.
 <a href=#8428 id=8428 data-nosnippet>8428</a>
-<a href=#8429 id=8429 data-nosnippet>8429</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
-<a href=#8430 id=8430 data-nosnippet>8430</a>
-<a href=#8431 id=8431 data-nosnippet>8431</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
-<a href=#8432 id=8432 data-nosnippet>8432</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
-<a href=#8433 id=8433 data-nosnippet>8433</a>            .iter()
-<a href=#8434 id=8434 data-nosnippet>8434</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
-<a href=#8435 id=8435 data-nosnippet>8435</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#8436 id=8436 data-nosnippet>8436</a>            .try_into()
-<a href=#8437 id=8437 data-nosnippet>8437</a>            .unwrap();
-<a href=#8438 id=8438 data-nosnippet>8438</a>
-<a href=#8439 id=8439 data-nosnippet>8439</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::with_num_nodes()
-<a href=#8440 id=8440 data-nosnippet>8440</a>            .api_config(SqlDataSource::options(
-<a href=#8441 id=8441 data-nosnippet>8441</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
-<a href=#8442 id=8442 data-nosnippet>8442</a>                Options::with_port(api_port),
-<a href=#8443 id=8443 data-nosnippet>8443</a>            ))
-<a href=#8444 id=8444 data-nosnippet>8444</a>            .network_config(network_config)
-<a href=#8445 id=8445 data-nosnippet>8445</a>            .persistences(persistence.clone())
-<a href=#8446 id=8446 data-nosnippet>8446</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#8447 id=8447 data-nosnippet>8447</a>                StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
-<a href=#8448 id=8448 data-nosnippet>8448</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap()],
-<a href=#8449 id=8449 data-nosnippet>8449</a>                    Default::default(),
-<a href=#8450 id=8450 data-nosnippet>8450</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#8451 id=8451 data-nosnippet>8451</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#8452 id=8452 data-nosnippet>8452</a>                )
-<a href=#8453 id=8453 data-nosnippet>8453</a>            }))
-<a href=#8454 id=8454 data-nosnippet>8454</a>            .pos_hook(
-<a href=#8455 id=8455 data-nosnippet>8455</a>                DelegationConfig::MultipleDelegators,
-<a href=#8456 id=8456 data-nosnippet>8456</a>                Default::default(),
-<a href=#8457 id=8457 data-nosnippet>8457</a>                POS_V4,
-<a href=#8458 id=8458 data-nosnippet>8458</a>            )
-<a href=#8459 id=8459 data-nosnippet>8459</a>            .<span class="kw">await
-<a href=#8460 id=8460 data-nosnippet>8460</a>            </span>.unwrap()
-<a href=#8461 id=8461 data-nosnippet>8461</a>            .build();
-<a href=#8462 id=8462 data-nosnippet>8462</a>
-<a href=#8463 id=8463 data-nosnippet>8463</a>        <span class="kw">let </span>network = TestNetwork::new(config, POS_V4).<span class="kw">await</span>;
-<a href=#8464 id=8464 data-nosnippet>8464</a>        <span class="kw">let </span>client: Client&lt;ServerError, SequencerApiVersion&gt; =
-<a href=#8465 id=8465 data-nosnippet>8465</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap());
-<a href=#8466 id=8466 data-nosnippet>8466</a>
-<a href=#8467 id=8467 data-nosnippet>8467</a>        <span class="kw">let </span>err = client
-<a href=#8468 id=8468 data-nosnippet>8468</a>            .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/1/0/1001"</span>)
-<a href=#8469 id=8469 data-nosnippet>8469</a>            .header(<span class="string">"Accept"</span>, <span class="string">"application/json"</span>)
-<a href=#8470 id=8470 data-nosnippet>8470</a>            .send()
-<a href=#8471 id=8471 data-nosnippet>8471</a>            .<span class="kw">await
-<a href=#8472 id=8472 data-nosnippet>8472</a>            </span>.unwrap_err();
-<a href=#8473 id=8473 data-nosnippet>8473</a>
-<a href=#8474 id=8474 data-nosnippet>8474</a>        <span class="macro">assert_matches!</span>(err, ServerError { status, message} <span class="kw">if
-<a href=#8475 id=8475 data-nosnippet>8475</a>                </span>status == StatusCode::BAD_REQUEST
-<a href=#8476 id=8476 data-nosnippet>8476</a>                &amp;&amp; message.contains(<span class="string">"Limit cannot be greater than 1000"</span>)
-<a href=#8477 id=8477 data-nosnippet>8477</a>        );
-<a href=#8478 id=8478 data-nosnippet>8478</a>
-<a href=#8479 id=8479 data-nosnippet>8479</a>        <span class="comment">// Wait for the chain to progress beyond epoch 3
-<a href=#8480 id=8480 data-nosnippet>8480</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>events = network.peers[<span class="number">0</span>].event_stream();
-<a href=#8481 id=8481 data-nosnippet>8481</a>        wait_for_epochs(<span class="kw-2">&amp;mut </span>events, EPOCH_HEIGHT, <span class="number">3</span>).<span class="kw">await</span>;
-<a href=#8482 id=8482 data-nosnippet>8482</a>
-<a href=#8483 id=8483 data-nosnippet>8483</a>        <span class="comment">// Verify that there are no validators for epoch # 1 and epoch # 2
-<a href=#8484 id=8484 data-nosnippet>8484</a>        </span>{
-<a href=#8485 id=8485 data-nosnippet>8485</a>            client
-<a href=#8486 id=8486 data-nosnippet>8486</a>                .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/1/0/100"</span>)
-<a href=#8487 id=8487 data-nosnippet>8487</a>                .send()
-<a href=#8488 id=8488 data-nosnippet>8488</a>                .<span class="kw">await
-<a href=#8489 id=8489 data-nosnippet>8489</a>                </span>.unwrap()
-<a href=#8490 id=8490 data-nosnippet>8490</a>                .is_empty();
-<a href=#8491 id=8491 data-nosnippet>8491</a>
-<a href=#8492 id=8492 data-nosnippet>8492</a>            client
-<a href=#8493 id=8493 data-nosnippet>8493</a>                .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/2/0/100"</span>)
-<a href=#8494 id=8494 data-nosnippet>8494</a>                .send()
-<a href=#8495 id=8495 data-nosnippet>8495</a>                .<span class="kw">await
-<a href=#8496 id=8496 data-nosnippet>8496</a>                </span>.unwrap()
-<a href=#8497 id=8497 data-nosnippet>8497</a>                .is_empty();
-<a href=#8498 id=8498 data-nosnippet>8498</a>        }
-<a href=#8499 id=8499 data-nosnippet>8499</a>
-<a href=#8500 id=8500 data-nosnippet>8500</a>        <span class="comment">// Get the epoch # 3 validators
-<a href=#8501 id=8501 data-nosnippet>8501</a>        </span><span class="kw">let </span>validators = client
-<a href=#8502 id=8502 data-nosnippet>8502</a>            .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/3/0/100"</span>)
-<a href=#8503 id=8503 data-nosnippet>8503</a>            .send()
-<a href=#8504 id=8504 data-nosnippet>8504</a>            .<span class="kw">await
-<a href=#8505 id=8505 data-nosnippet>8505</a>            </span>.expect(<span class="string">"validators"</span>);
+<a href=#8429 id=8429 data-nosnippet>8429</a>                // Requesting a leaf far ahead of the chain tip times out and returns
+<a href=#8430 id=8430 data-nosnippet>8430</a>                // 404 Not Found from both servers.
+<a href=#8431 id=8431 data-nosnippet>8431</a>                </span>compare_error_endpoints(
+<a href=#8432 id=8432 data-nosnippet>8432</a>                    <span class="kw-2">&amp;</span>http,
+<a href=#8433 id=8433 data-nosnippet>8433</a>                    api_port,
+<a href=#8434 id=8434 data-nosnippet>8434</a>                    axum_port,
+<a href=#8435 id=8435 data-nosnippet>8435</a>                    <span class="string">"availability/leaf/999999"</span>,
+<a href=#8436 id=8436 data-nosnippet>8436</a>                    <span class="number">404</span>,
+<a href=#8437 id=8437 data-nosnippet>8437</a>                )
+<a href=#8438 id=8438 data-nosnippet>8438</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8439 id=8439 data-nosnippet>8439</a>
+<a href=#8440 id=8440 data-nosnippet>8440</a>                <span class="comment">// Requesting a block range that exceeds the per-request limit
+<a href=#8441 id=8441 data-nosnippet>8441</a>                // returns 400 Bad Request from both servers.
+<a href=#8442 id=8442 data-nosnippet>8442</a>                </span>compare_error_endpoints(
+<a href=#8443 id=8443 data-nosnippet>8443</a>                    <span class="kw-2">&amp;</span>http,
+<a href=#8444 id=8444 data-nosnippet>8444</a>                    api_port,
+<a href=#8445 id=8445 data-nosnippet>8445</a>                    axum_port,
+<a href=#8446 id=8446 data-nosnippet>8446</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/block/{avail_block}/{}"</span>, avail_block + <span class="number">200</span>),
+<a href=#8447 id=8447 data-nosnippet>8447</a>                    <span class="number">400</span>,
+<a href=#8448 id=8448 data-nosnippet>8448</a>                )
+<a href=#8449 id=8449 data-nosnippet>8449</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8450 id=8450 data-nosnippet>8450</a>
+<a href=#8451 id=8451 data-nosnippet>8451</a>                <span class="comment">// Requesting a namespace proof range that exceeds the limit also
+<a href=#8452 id=8452 data-nosnippet>8452</a>                // returns 400 Bad Request from both servers.
+<a href=#8453 id=8453 data-nosnippet>8453</a>                </span>compare_error_endpoints(
+<a href=#8454 id=8454 data-nosnippet>8454</a>                    <span class="kw-2">&amp;</span>http,
+<a href=#8455 id=8455 data-nosnippet>8455</a>                    api_port,
+<a href=#8456 id=8456 data-nosnippet>8456</a>                    axum_port,
+<a href=#8457 id=8457 data-nosnippet>8457</a>                    <span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8458 id=8458 data-nosnippet>8458</a>                        <span class="string">"availability/block/{avail_block}/{}/namespace/{avail_ns}"</span>,
+<a href=#8459 id=8459 data-nosnippet>8459</a>                        avail_block + <span class="number">200
+<a href=#8460 id=8460 data-nosnippet>8460</a>                    </span>),
+<a href=#8461 id=8461 data-nosnippet>8461</a>                    <span class="number">400</span>,
+<a href=#8462 id=8462 data-nosnippet>8462</a>                )
+<a href=#8463 id=8463 data-nosnippet>8463</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#8464 id=8464 data-nosnippet>8464</a>            }
+<a href=#8465 id=8465 data-nosnippet>8465</a>
+<a href=#8466 id=8466 data-nosnippet>8466</a>            anyhow::Ok(())
+<a href=#8467 id=8467 data-nosnippet>8467</a>        };
+<a href=#8468 id=8468 data-nosnippet>8468</a>
+<a href=#8469 id=8469 data-nosnippet>8469</a>        <span class="comment">// `block_on` polls the future on the *calling* thread. The default test thread stack is
+<a href=#8470 id=8470 data-nosnippet>8470</a>        // 2 MiB on Linux, which isn't enough for this test's large async state machine. We spawn
+<a href=#8471 id=8471 data-nosnippet>8471</a>        // a fresh thread with 32 MiB and run the tokio runtime there instead.
+<a href=#8472 id=8472 data-nosnippet>8472</a>        </span>std::thread::Builder::new()
+<a href=#8473 id=8473 data-nosnippet>8473</a>            .stack_size(<span class="number">32 </span>* <span class="number">1024 </span>* <span class="number">1024</span>)
+<a href=#8474 id=8474 data-nosnippet>8474</a>            .spawn(<span class="kw">move </span>|| {
+<a href=#8475 id=8475 data-nosnippet>8475</a>                tokio::runtime::Builder::new_multi_thread()
+<a href=#8476 id=8476 data-nosnippet>8476</a>                    .enable_all()
+<a href=#8477 id=8477 data-nosnippet>8477</a>                    .build()
+<a href=#8478 id=8478 data-nosnippet>8478</a>                    .unwrap()
+<a href=#8479 id=8479 data-nosnippet>8479</a>                    .block_on(test)
+<a href=#8480 id=8480 data-nosnippet>8480</a>                    .unwrap()
+<a href=#8481 id=8481 data-nosnippet>8481</a>            })
+<a href=#8482 id=8482 data-nosnippet>8482</a>            .unwrap()
+<a href=#8483 id=8483 data-nosnippet>8483</a>            .join()
+<a href=#8484 id=8484 data-nosnippet>8484</a>            .unwrap()
+<a href=#8485 id=8485 data-nosnippet>8485</a>    }
+<a href=#8486 id=8486 data-nosnippet>8486</a>
+<a href=#8487 id=8487 data-nosnippet>8487</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#8488 id=8488 data-nosnippet>8488</a>    </span><span class="kw">async fn </span>test_all_validators_endpoint() -&gt; anyhow::Result&lt;()&gt; {
+<a href=#8489 id=8489 data-nosnippet>8489</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">20</span>;
+<a href=#8490 id=8490 data-nosnippet>8490</a>
+<a href=#8491 id=8491 data-nosnippet>8491</a>        <span class="kw">let </span>network_config = TestConfigBuilder::default()
+<a href=#8492 id=8492 data-nosnippet>8492</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#8493 id=8493 data-nosnippet>8493</a>            .build();
+<a href=#8494 id=8494 data-nosnippet>8494</a>
+<a href=#8495 id=8495 data-nosnippet>8495</a>        <span class="kw">let </span>api_port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#8496 id=8496 data-nosnippet>8496</a>
+<a href=#8497 id=8497 data-nosnippet>8497</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#8498 id=8498 data-nosnippet>8498</a>
+<a href=#8499 id=8499 data-nosnippet>8499</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#8500 id=8500 data-nosnippet>8500</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#8501 id=8501 data-nosnippet>8501</a>            .iter()
+<a href=#8502 id=8502 data-nosnippet>8502</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#8503 id=8503 data-nosnippet>8503</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#8504 id=8504 data-nosnippet>8504</a>            .try_into()
+<a href=#8505 id=8505 data-nosnippet>8505</a>            .unwrap();
 <a href=#8506 id=8506 data-nosnippet>8506</a>
-<a href=#8507 id=8507 data-nosnippet>8507</a>        <span class="macro">assert!</span>(!validators.is_empty());
-<a href=#8508 id=8508 data-nosnippet>8508</a>
-<a href=#8509 id=8509 data-nosnippet>8509</a>        <span class="prelude-val">Ok</span>(())
-<a href=#8510 id=8510 data-nosnippet>8510</a>    }
-<a href=#8511 id=8511 data-nosnippet>8511</a>
-<a href=#8512 id=8512 data-nosnippet>8512</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#8513 id=8513 data-nosnippet>8513</a>    </span><span class="kw">async fn </span>test_reward_accounts_catchup_endpoint() -&gt; anyhow::Result&lt;()&gt; {
-<a href=#8514 id=8514 data-nosnippet>8514</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
-<a href=#8515 id=8515 data-nosnippet>8515</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">3</span>;
-<a href=#8516 id=8516 data-nosnippet>8516</a>
-<a href=#8517 id=8517 data-nosnippet>8517</a>        <span class="kw">let </span>network_config = TestConfigBuilder::default()
-<a href=#8518 id=8518 data-nosnippet>8518</a>            .epoch_height(EPOCH_HEIGHT)
-<a href=#8519 id=8519 data-nosnippet>8519</a>            .build();
-<a href=#8520 id=8520 data-nosnippet>8520</a>
-<a href=#8521 id=8521 data-nosnippet>8521</a>        <span class="kw">let </span>api_port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#8522 id=8522 data-nosnippet>8522</a>        <span class="macro">println!</span>(<span class="string">"API PORT = {api_port}"</span>);
-<a href=#8523 id=8523 data-nosnippet>8523</a>
-<a href=#8524 id=8524 data-nosnippet>8524</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
-<a href=#8525 id=8525 data-nosnippet>8525</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
-<a href=#8526 id=8526 data-nosnippet>8526</a>            .iter()
-<a href=#8527 id=8527 data-nosnippet>8527</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
-<a href=#8528 id=8528 data-nosnippet>8528</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#8529 id=8529 data-nosnippet>8529</a>            .try_into()
-<a href=#8530 id=8530 data-nosnippet>8530</a>            .unwrap();
-<a href=#8531 id=8531 data-nosnippet>8531</a>
-<a href=#8532 id=8532 data-nosnippet>8532</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::with_num_nodes()
-<a href=#8533 id=8533 data-nosnippet>8533</a>            .api_config(SqlDataSource::options(
-<a href=#8534 id=8534 data-nosnippet>8534</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
-<a href=#8535 id=8535 data-nosnippet>8535</a>                Options::with_port(api_port).catchup(Default::default()),
-<a href=#8536 id=8536 data-nosnippet>8536</a>            ))
-<a href=#8537 id=8537 data-nosnippet>8537</a>            .network_config(network_config)
-<a href=#8538 id=8538 data-nosnippet>8538</a>            .persistences(persistence.clone())
-<a href=#8539 id=8539 data-nosnippet>8539</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#8540 id=8540 data-nosnippet>8540</a>                StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
-<a href=#8541 id=8541 data-nosnippet>8541</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap()],
-<a href=#8542 id=8542 data-nosnippet>8542</a>                    Default::default(),
-<a href=#8543 id=8543 data-nosnippet>8543</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#8544 id=8544 data-nosnippet>8544</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#8545 id=8545 data-nosnippet>8545</a>                )
-<a href=#8546 id=8546 data-nosnippet>8546</a>            }))
-<a href=#8547 id=8547 data-nosnippet>8547</a>            .pos_hook(
-<a href=#8548 id=8548 data-nosnippet>8548</a>                DelegationConfig::MultipleDelegators,
-<a href=#8549 id=8549 data-nosnippet>8549</a>                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
-<a href=#8550 id=8550 data-nosnippet>8550</a>                POS_V4,
-<a href=#8551 id=8551 data-nosnippet>8551</a>            )
-<a href=#8552 id=8552 data-nosnippet>8552</a>            .<span class="kw">await
-<a href=#8553 id=8553 data-nosnippet>8553</a>            </span>.unwrap()
-<a href=#8554 id=8554 data-nosnippet>8554</a>            .build();
-<a href=#8555 id=8555 data-nosnippet>8555</a>
-<a href=#8556 id=8556 data-nosnippet>8556</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, POS_V4).<span class="kw">await</span>;
-<a href=#8557 id=8557 data-nosnippet>8557</a>
-<a href=#8558 id=8558 data-nosnippet>8558</a>        <span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; =
-<a href=#8559 id=8559 data-nosnippet>8559</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap());
-<a href=#8560 id=8560 data-nosnippet>8560</a>
-<a href=#8561 id=8561 data-nosnippet>8561</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-<a href=#8562 id=8562 data-nosnippet>8562</a>
-<a href=#8563 id=8563 data-nosnippet>8563</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
-<a href=#8564 id=8564 data-nosnippet>8564</a>        wait_for_epochs(<span class="kw-2">&amp;mut </span>events, EPOCH_HEIGHT, <span class="number">3</span>).<span class="kw">await</span>;
-<a href=#8565 id=8565 data-nosnippet>8565</a>
-<a href=#8566 id=8566 data-nosnippet>8566</a>        network.stop_consensus().<span class="kw">await</span>;
-<a href=#8567 id=8567 data-nosnippet>8567</a>        <span class="kw">let </span>height = network.server.decided_leaf().<span class="kw">await</span>.height();
-<a href=#8568 id=8568 data-nosnippet>8568</a>        wait_until_block_height(<span class="kw-2">&amp;</span>client, <span class="string">"reward-state-v2/block-height"</span>, height).<span class="kw">await</span>;
-<a href=#8569 id=8569 data-nosnippet>8569</a>
-<a href=#8570 id=8570 data-nosnippet>8570</a>        <span class="kw">let </span>err = client
-<a href=#8571 id=8571 data-nosnippet>8571</a>            .get::&lt;Vec&lt;(RewardAccountV2, RewardAmount)&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8572 id=8572 data-nosnippet>8572</a>                <span class="string">"reward-state-v2/reward-amounts/{height}/0/10001"
-<a href=#8573 id=8573 data-nosnippet>8573</a>            </span>))
-<a href=#8574 id=8574 data-nosnippet>8574</a>            .send()
-<a href=#8575 id=8575 data-nosnippet>8575</a>            .<span class="kw">await
-<a href=#8576 id=8576 data-nosnippet>8576</a>            </span>.unwrap_err();
-<a href=#8577 id=8577 data-nosnippet>8577</a>
-<a href=#8578 id=8578 data-nosnippet>8578</a>        <span class="macro">assert_matches!</span>(err, ServerError { status, .. } <span class="kw">if
-<a href=#8579 id=8579 data-nosnippet>8579</a>            </span>status == StatusCode::BAD_REQUEST
-<a href=#8580 id=8580 data-nosnippet>8580</a>
-<a href=#8581 id=8581 data-nosnippet>8581</a>        );
-<a href=#8582 id=8582 data-nosnippet>8582</a>
-<a href=#8583 id=8583 data-nosnippet>8583</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected: Vec&lt;<span class="kw">_</span>&gt; = network
-<a href=#8584 id=8584 data-nosnippet>8584</a>            .server
-<a href=#8585 id=8585 data-nosnippet>8585</a>            .decided_state()
-<a href=#8586 id=8586 data-nosnippet>8586</a>            .<span class="kw">await
-<a href=#8587 id=8587 data-nosnippet>8587</a>            </span>.unwrap()
-<a href=#8588 id=8588 data-nosnippet>8588</a>            .reward_merkle_tree_v2
-<a href=#8589 id=8589 data-nosnippet>8589</a>            .iter()
-<a href=#8590 id=8590 data-nosnippet>8590</a>            .map(|(addr, amt)| (<span class="kw-2">*</span>addr, <span class="kw-2">*</span>amt))
-<a href=#8591 id=8591 data-nosnippet>8591</a>            .collect();
-<a href=#8592 id=8592 data-nosnippet>8592</a>        <span class="comment">// Results are sorted by account address descending
-<a href=#8593 id=8593 data-nosnippet>8593</a>        </span>expected.sort_by_key(|(acct, <span class="kw">_</span>)| std::cmp::Reverse(<span class="kw-2">*</span>acct));
-<a href=#8594 id=8594 data-nosnippet>8594</a>
-<a href=#8595 id=8595 data-nosnippet>8595</a>        <span class="macro">tracing::info!</span>(<span class="string">"expected accounts = {expected:?}"</span>);
-<a href=#8596 id=8596 data-nosnippet>8596</a>        <span class="kw">let </span>limit = expected.len().min(<span class="number">10_000</span>) <span class="kw">as </span>u64;
-<a href=#8597 id=8597 data-nosnippet>8597</a>        <span class="kw">let </span>offset = <span class="number">0u64</span>;
-<a href=#8598 id=8598 data-nosnippet>8598</a>        <span class="kw">let </span>expected: Vec&lt;<span class="kw">_</span>&gt; = expected.into_iter().take(limit <span class="kw">as </span>usize).collect();
+<a href=#8507 id=8507 data-nosnippet>8507</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::with_num_nodes()
+<a href=#8508 id=8508 data-nosnippet>8508</a>            .api_config(SqlDataSource::options(
+<a href=#8509 id=8509 data-nosnippet>8509</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
+<a href=#8510 id=8510 data-nosnippet>8510</a>                Options::with_port(api_port),
+<a href=#8511 id=8511 data-nosnippet>8511</a>            ))
+<a href=#8512 id=8512 data-nosnippet>8512</a>            .network_config(network_config)
+<a href=#8513 id=8513 data-nosnippet>8513</a>            .persistences(persistence.clone())
+<a href=#8514 id=8514 data-nosnippet>8514</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#8515 id=8515 data-nosnippet>8515</a>                StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
+<a href=#8516 id=8516 data-nosnippet>8516</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap()],
+<a href=#8517 id=8517 data-nosnippet>8517</a>                    Default::default(),
+<a href=#8518 id=8518 data-nosnippet>8518</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#8519 id=8519 data-nosnippet>8519</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#8520 id=8520 data-nosnippet>8520</a>                )
+<a href=#8521 id=8521 data-nosnippet>8521</a>            }))
+<a href=#8522 id=8522 data-nosnippet>8522</a>            .pos_hook(
+<a href=#8523 id=8523 data-nosnippet>8523</a>                DelegationConfig::MultipleDelegators,
+<a href=#8524 id=8524 data-nosnippet>8524</a>                Default::default(),
+<a href=#8525 id=8525 data-nosnippet>8525</a>                POS_V4,
+<a href=#8526 id=8526 data-nosnippet>8526</a>            )
+<a href=#8527 id=8527 data-nosnippet>8527</a>            .<span class="kw">await
+<a href=#8528 id=8528 data-nosnippet>8528</a>            </span>.unwrap()
+<a href=#8529 id=8529 data-nosnippet>8529</a>            .build();
+<a href=#8530 id=8530 data-nosnippet>8530</a>
+<a href=#8531 id=8531 data-nosnippet>8531</a>        <span class="kw">let </span>network = TestNetwork::new(config, POS_V4).<span class="kw">await</span>;
+<a href=#8532 id=8532 data-nosnippet>8532</a>        <span class="kw">let </span>client: Client&lt;ServerError, SequencerApiVersion&gt; =
+<a href=#8533 id=8533 data-nosnippet>8533</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap());
+<a href=#8534 id=8534 data-nosnippet>8534</a>
+<a href=#8535 id=8535 data-nosnippet>8535</a>        <span class="kw">let </span>err = client
+<a href=#8536 id=8536 data-nosnippet>8536</a>            .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/1/0/1001"</span>)
+<a href=#8537 id=8537 data-nosnippet>8537</a>            .header(<span class="string">"Accept"</span>, <span class="string">"application/json"</span>)
+<a href=#8538 id=8538 data-nosnippet>8538</a>            .send()
+<a href=#8539 id=8539 data-nosnippet>8539</a>            .<span class="kw">await
+<a href=#8540 id=8540 data-nosnippet>8540</a>            </span>.unwrap_err();
+<a href=#8541 id=8541 data-nosnippet>8541</a>
+<a href=#8542 id=8542 data-nosnippet>8542</a>        <span class="macro">assert_matches!</span>(err, ServerError { status, message} <span class="kw">if
+<a href=#8543 id=8543 data-nosnippet>8543</a>                </span>status == StatusCode::BAD_REQUEST
+<a href=#8544 id=8544 data-nosnippet>8544</a>                &amp;&amp; message.contains(<span class="string">"Limit cannot be greater than 1000"</span>)
+<a href=#8545 id=8545 data-nosnippet>8545</a>        );
+<a href=#8546 id=8546 data-nosnippet>8546</a>
+<a href=#8547 id=8547 data-nosnippet>8547</a>        <span class="comment">// Wait for the chain to progress beyond epoch 3
+<a href=#8548 id=8548 data-nosnippet>8548</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>events = network.peers[<span class="number">0</span>].event_stream();
+<a href=#8549 id=8549 data-nosnippet>8549</a>        wait_for_epochs(<span class="kw-2">&amp;mut </span>events, EPOCH_HEIGHT, <span class="number">3</span>).<span class="kw">await</span>;
+<a href=#8550 id=8550 data-nosnippet>8550</a>
+<a href=#8551 id=8551 data-nosnippet>8551</a>        <span class="comment">// Verify that there are no validators for epoch # 1 and epoch # 2
+<a href=#8552 id=8552 data-nosnippet>8552</a>        </span>{
+<a href=#8553 id=8553 data-nosnippet>8553</a>            client
+<a href=#8554 id=8554 data-nosnippet>8554</a>                .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/1/0/100"</span>)
+<a href=#8555 id=8555 data-nosnippet>8555</a>                .send()
+<a href=#8556 id=8556 data-nosnippet>8556</a>                .<span class="kw">await
+<a href=#8557 id=8557 data-nosnippet>8557</a>                </span>.unwrap()
+<a href=#8558 id=8558 data-nosnippet>8558</a>                .is_empty();
+<a href=#8559 id=8559 data-nosnippet>8559</a>
+<a href=#8560 id=8560 data-nosnippet>8560</a>            client
+<a href=#8561 id=8561 data-nosnippet>8561</a>                .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/2/0/100"</span>)
+<a href=#8562 id=8562 data-nosnippet>8562</a>                .send()
+<a href=#8563 id=8563 data-nosnippet>8563</a>                .<span class="kw">await
+<a href=#8564 id=8564 data-nosnippet>8564</a>                </span>.unwrap()
+<a href=#8565 id=8565 data-nosnippet>8565</a>                .is_empty();
+<a href=#8566 id=8566 data-nosnippet>8566</a>        }
+<a href=#8567 id=8567 data-nosnippet>8567</a>
+<a href=#8568 id=8568 data-nosnippet>8568</a>        <span class="comment">// Get the epoch # 3 validators
+<a href=#8569 id=8569 data-nosnippet>8569</a>        </span><span class="kw">let </span>validators = client
+<a href=#8570 id=8570 data-nosnippet>8570</a>            .get::&lt;Vec&lt;RegisteredValidator&lt;PubKey&gt;&gt;&gt;(<span class="string">"node/all-validators/3/0/100"</span>)
+<a href=#8571 id=8571 data-nosnippet>8571</a>            .send()
+<a href=#8572 id=8572 data-nosnippet>8572</a>            .<span class="kw">await
+<a href=#8573 id=8573 data-nosnippet>8573</a>            </span>.expect(<span class="string">"validators"</span>);
+<a href=#8574 id=8574 data-nosnippet>8574</a>
+<a href=#8575 id=8575 data-nosnippet>8575</a>        <span class="macro">assert!</span>(!validators.is_empty());
+<a href=#8576 id=8576 data-nosnippet>8576</a>
+<a href=#8577 id=8577 data-nosnippet>8577</a>        <span class="prelude-val">Ok</span>(())
+<a href=#8578 id=8578 data-nosnippet>8578</a>    }
+<a href=#8579 id=8579 data-nosnippet>8579</a>
+<a href=#8580 id=8580 data-nosnippet>8580</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#8581 id=8581 data-nosnippet>8581</a>    </span><span class="kw">async fn </span>test_reward_accounts_catchup_endpoint() -&gt; anyhow::Result&lt;()&gt; {
+<a href=#8582 id=8582 data-nosnippet>8582</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
+<a href=#8583 id=8583 data-nosnippet>8583</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">3</span>;
+<a href=#8584 id=8584 data-nosnippet>8584</a>
+<a href=#8585 id=8585 data-nosnippet>8585</a>        <span class="kw">let </span>network_config = TestConfigBuilder::default()
+<a href=#8586 id=8586 data-nosnippet>8586</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#8587 id=8587 data-nosnippet>8587</a>            .build();
+<a href=#8588 id=8588 data-nosnippet>8588</a>
+<a href=#8589 id=8589 data-nosnippet>8589</a>        <span class="kw">let </span>api_port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#8590 id=8590 data-nosnippet>8590</a>        <span class="macro">println!</span>(<span class="string">"API PORT = {api_port}"</span>);
+<a href=#8591 id=8591 data-nosnippet>8591</a>
+<a href=#8592 id=8592 data-nosnippet>8592</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#8593 id=8593 data-nosnippet>8593</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#8594 id=8594 data-nosnippet>8594</a>            .iter()
+<a href=#8595 id=8595 data-nosnippet>8595</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#8596 id=8596 data-nosnippet>8596</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#8597 id=8597 data-nosnippet>8597</a>            .try_into()
+<a href=#8598 id=8598 data-nosnippet>8598</a>            .unwrap();
 <a href=#8599 id=8599 data-nosnippet>8599</a>
-<a href=#8600 id=8600 data-nosnippet>8600</a>        <span class="kw">let </span>res = client
-<a href=#8601 id=8601 data-nosnippet>8601</a>            .get::&lt;Vec&lt;(RewardAccountV2, RewardAmount)&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8602 id=8602 data-nosnippet>8602</a>                <span class="string">"reward-state-v2/reward-amounts/{height}/{offset}/{limit}"
-<a href=#8603 id=8603 data-nosnippet>8603</a>            </span>))
-<a href=#8604 id=8604 data-nosnippet>8604</a>            .send()
-<a href=#8605 id=8605 data-nosnippet>8605</a>            .<span class="kw">await
-<a href=#8606 id=8606 data-nosnippet>8606</a>            </span>.unwrap();
-<a href=#8607 id=8607 data-nosnippet>8607</a>
-<a href=#8608 id=8608 data-nosnippet>8608</a>        <span class="macro">assert_eq!</span>(res, expected);
-<a href=#8609 id=8609 data-nosnippet>8609</a>
-<a href=#8610 id=8610 data-nosnippet>8610</a>        <span class="prelude-val">Ok</span>(())
-<a href=#8611 id=8611 data-nosnippet>8611</a>    }
-<a href=#8612 id=8612 data-nosnippet>8612</a>
-<a href=#8613 id=8613 data-nosnippet>8613</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#8614 id=8614 data-nosnippet>8614</a>    </span><span class="kw">async fn </span>test_namespace_query_compat_v0_2() {
-<a href=#8615 id=8615 data-nosnippet>8615</a>        test_namespace_query_compat_helper(Upgrade::trivial(FEE_VERSION)).<span class="kw">await</span>;
-<a href=#8616 id=8616 data-nosnippet>8616</a>    }
-<a href=#8617 id=8617 data-nosnippet>8617</a>
-<a href=#8618 id=8618 data-nosnippet>8618</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#8619 id=8619 data-nosnippet>8619</a>    </span><span class="kw">async fn </span>test_namespace_query_compat_v0_3() {
-<a href=#8620 id=8620 data-nosnippet>8620</a>        test_namespace_query_compat_helper(Upgrade::trivial(EPOCH_VERSION)).<span class="kw">await</span>;
-<a href=#8621 id=8621 data-nosnippet>8621</a>    }
-<a href=#8622 id=8622 data-nosnippet>8622</a>
-<a href=#8623 id=8623 data-nosnippet>8623</a>    <span class="kw">async fn </span>test_namespace_query_compat_helper(upgrade: Upgrade) {
-<a href=#8624 id=8624 data-nosnippet>8624</a>        <span class="comment">// Number of nodes running in the test network.
-<a href=#8625 id=8625 data-nosnippet>8625</a>        </span><span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
-<a href=#8626 id=8626 data-nosnippet>8626</a>
-<a href=#8627 id=8627 data-nosnippet>8627</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#8628 id=8628 data-nosnippet>8628</a>        <span class="kw">let </span>url: Url = <span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap();
-<a href=#8629 id=8629 data-nosnippet>8629</a>
-<a href=#8630 id=8630 data-nosnippet>8630</a>        <span class="kw">let </span>test_config = TestConfigBuilder::default().build();
-<a href=#8631 id=8631 data-nosnippet>8631</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
-<a href=#8632 id=8632 data-nosnippet>8632</a>            .api_config(Options::from(options::Http {
-<a href=#8633 id=8633 data-nosnippet>8633</a>                port,
-<a href=#8634 id=8634 data-nosnippet>8634</a>                max_connections: <span class="prelude-val">None</span>,
-<a href=#8635 id=8635 data-nosnippet>8635</a>                axum_port: <span class="prelude-val">None</span>,
-<a href=#8636 id=8636 data-nosnippet>8636</a>                tonic_port: <span class="prelude-val">None</span>,
-<a href=#8637 id=8637 data-nosnippet>8637</a>            }))
-<a href=#8638 id=8638 data-nosnippet>8638</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#8639 id=8639 data-nosnippet>8639</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
-<a href=#8640 id=8640 data-nosnippet>8640</a>                    <span class="macro">vec!</span>[url.clone()],
-<a href=#8641 id=8641 data-nosnippet>8641</a>                    Default::default(),
-<a href=#8642 id=8642 data-nosnippet>8642</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#8643 id=8643 data-nosnippet>8643</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#8644 id=8644 data-nosnippet>8644</a>                )
-<a href=#8645 id=8645 data-nosnippet>8645</a>            }))
-<a href=#8646 id=8646 data-nosnippet>8646</a>            .network_config(test_config)
-<a href=#8647 id=8647 data-nosnippet>8647</a>            .build();
+<a href=#8600 id=8600 data-nosnippet>8600</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::with_num_nodes()
+<a href=#8601 id=8601 data-nosnippet>8601</a>            .api_config(SqlDataSource::options(
+<a href=#8602 id=8602 data-nosnippet>8602</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
+<a href=#8603 id=8603 data-nosnippet>8603</a>                Options::with_port(api_port).catchup(Default::default()),
+<a href=#8604 id=8604 data-nosnippet>8604</a>            ))
+<a href=#8605 id=8605 data-nosnippet>8605</a>            .network_config(network_config)
+<a href=#8606 id=8606 data-nosnippet>8606</a>            .persistences(persistence.clone())
+<a href=#8607 id=8607 data-nosnippet>8607</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#8608 id=8608 data-nosnippet>8608</a>                StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
+<a href=#8609 id=8609 data-nosnippet>8609</a>                    <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap()],
+<a href=#8610 id=8610 data-nosnippet>8610</a>                    Default::default(),
+<a href=#8611 id=8611 data-nosnippet>8611</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#8612 id=8612 data-nosnippet>8612</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#8613 id=8613 data-nosnippet>8613</a>                )
+<a href=#8614 id=8614 data-nosnippet>8614</a>            }))
+<a href=#8615 id=8615 data-nosnippet>8615</a>            .pos_hook(
+<a href=#8616 id=8616 data-nosnippet>8616</a>                DelegationConfig::MultipleDelegators,
+<a href=#8617 id=8617 data-nosnippet>8617</a>                hotshot_contract_adapter::stake_table::StakeTableContractVersion::V3,
+<a href=#8618 id=8618 data-nosnippet>8618</a>                POS_V4,
+<a href=#8619 id=8619 data-nosnippet>8619</a>            )
+<a href=#8620 id=8620 data-nosnippet>8620</a>            .<span class="kw">await
+<a href=#8621 id=8621 data-nosnippet>8621</a>            </span>.unwrap()
+<a href=#8622 id=8622 data-nosnippet>8622</a>            .build();
+<a href=#8623 id=8623 data-nosnippet>8623</a>
+<a href=#8624 id=8624 data-nosnippet>8624</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, POS_V4).<span class="kw">await</span>;
+<a href=#8625 id=8625 data-nosnippet>8625</a>
+<a href=#8626 id=8626 data-nosnippet>8626</a>        <span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; =
+<a href=#8627 id=8627 data-nosnippet>8627</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{api_port}"</span>).parse().unwrap());
+<a href=#8628 id=8628 data-nosnippet>8628</a>
+<a href=#8629 id=8629 data-nosnippet>8629</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#8630 id=8630 data-nosnippet>8630</a>
+<a href=#8631 id=8631 data-nosnippet>8631</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
+<a href=#8632 id=8632 data-nosnippet>8632</a>        wait_for_epochs(<span class="kw-2">&amp;mut </span>events, EPOCH_HEIGHT, <span class="number">3</span>).<span class="kw">await</span>;
+<a href=#8633 id=8633 data-nosnippet>8633</a>
+<a href=#8634 id=8634 data-nosnippet>8634</a>        network.stop_consensus().<span class="kw">await</span>;
+<a href=#8635 id=8635 data-nosnippet>8635</a>        <span class="kw">let </span>height = network.server.decided_leaf().<span class="kw">await</span>.height();
+<a href=#8636 id=8636 data-nosnippet>8636</a>        wait_until_block_height(<span class="kw-2">&amp;</span>client, <span class="string">"reward-state-v2/block-height"</span>, height).<span class="kw">await</span>;
+<a href=#8637 id=8637 data-nosnippet>8637</a>
+<a href=#8638 id=8638 data-nosnippet>8638</a>        <span class="kw">let </span>err = client
+<a href=#8639 id=8639 data-nosnippet>8639</a>            .get::&lt;Vec&lt;(RewardAccountV2, RewardAmount)&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8640 id=8640 data-nosnippet>8640</a>                <span class="string">"reward-state-v2/reward-amounts/{height}/0/10001"
+<a href=#8641 id=8641 data-nosnippet>8641</a>            </span>))
+<a href=#8642 id=8642 data-nosnippet>8642</a>            .send()
+<a href=#8643 id=8643 data-nosnippet>8643</a>            .<span class="kw">await
+<a href=#8644 id=8644 data-nosnippet>8644</a>            </span>.unwrap_err();
+<a href=#8645 id=8645 data-nosnippet>8645</a>
+<a href=#8646 id=8646 data-nosnippet>8646</a>        <span class="macro">assert_matches!</span>(err, ServerError { status, .. } <span class="kw">if
+<a href=#8647 id=8647 data-nosnippet>8647</a>            </span>status == StatusCode::BAD_REQUEST
 <a href=#8648 id=8648 data-nosnippet>8648</a>
-<a href=#8649 id=8649 data-nosnippet>8649</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, upgrade).<span class="kw">await</span>;
-<a href=#8650 id=8650 data-nosnippet>8650</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
-<a href=#8651 id=8651 data-nosnippet>8651</a>
-<a href=#8652 id=8652 data-nosnippet>8652</a>        <span class="comment">// Submit a transaction.
-<a href=#8653 id=8653 data-nosnippet>8653</a>        </span><span class="kw">let </span>ns = NamespaceId::from(<span class="number">10_000u64</span>);
-<a href=#8654 id=8654 data-nosnippet>8654</a>        <span class="kw">let </span>tx = Transaction::new(ns, <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
-<a href=#8655 id=8655 data-nosnippet>8655</a>        network.server.submit_transaction(tx.clone()).<span class="kw">await</span>.unwrap();
-<a href=#8656 id=8656 data-nosnippet>8656</a>        <span class="kw">let </span>block = wait_for_decide_on_handle(<span class="kw-2">&amp;mut </span>events, <span class="kw-2">&amp;</span>tx).<span class="kw">await</span>.<span class="number">0</span>;
-<a href=#8657 id=8657 data-nosnippet>8657</a>
-<a href=#8658 id=8658 data-nosnippet>8658</a>        <span class="comment">// Check namespace proof queries.
-<a href=#8659 id=8659 data-nosnippet>8659</a>        </span><span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; = Client::new(url);
-<a href=#8660 id=8660 data-nosnippet>8660</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-<a href=#8661 id=8661 data-nosnippet>8661</a>
-<a href=#8662 id=8662 data-nosnippet>8662</a>        <span class="kw">let </span>(header, common): (Header, VidCommonQueryData&lt;SeqTypes&gt;) = <span class="macro">try_join!</span>(
-<a href=#8663 id=8663 data-nosnippet>8663</a>            client.get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/header/{block}"</span>)).send(),
-<a href=#8664 id=8664 data-nosnippet>8664</a>            client
-<a href=#8665 id=8665 data-nosnippet>8665</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/vid/common/{block}"</span>))
-<a href=#8666 id=8666 data-nosnippet>8666</a>                .send()
-<a href=#8667 id=8667 data-nosnippet>8667</a>        )
-<a href=#8668 id=8668 data-nosnippet>8668</a>        .unwrap();
-<a href=#8669 id=8669 data-nosnippet>8669</a>        <span class="kw">let </span>version = header.version();
-<a href=#8670 id=8670 data-nosnippet>8670</a>
-<a href=#8671 id=8671 data-nosnippet>8671</a>        <span class="comment">// The latest version of the API (whether we specifically ask for v1 or let the redirect
-<a href=#8672 id=8672 data-nosnippet>8672</a>        // occur) will give us a namespace proof no matter which VID version is in use.
-<a href=#8673 id=8673 data-nosnippet>8673</a>        </span><span class="kw">for </span>api_ver <span class="kw">in </span>[<span class="string">"/v1"</span>, <span class="string">""</span>] {
-<a href=#8674 id=8674 data-nosnippet>8674</a>            <span class="macro">tracing::info!</span>(<span class="string">"test namespace API version: {api_ver}"</span>);
+<a href=#8649 id=8649 data-nosnippet>8649</a>        );
+<a href=#8650 id=8650 data-nosnippet>8650</a>
+<a href=#8651 id=8651 data-nosnippet>8651</a>        <span class="kw">let </span><span class="kw-2">mut </span>expected: Vec&lt;<span class="kw">_</span>&gt; = network
+<a href=#8652 id=8652 data-nosnippet>8652</a>            .server
+<a href=#8653 id=8653 data-nosnippet>8653</a>            .decided_state()
+<a href=#8654 id=8654 data-nosnippet>8654</a>            .<span class="kw">await
+<a href=#8655 id=8655 data-nosnippet>8655</a>            </span>.unwrap()
+<a href=#8656 id=8656 data-nosnippet>8656</a>            .reward_merkle_tree_v2
+<a href=#8657 id=8657 data-nosnippet>8657</a>            .iter()
+<a href=#8658 id=8658 data-nosnippet>8658</a>            .map(|(addr, amt)| (<span class="kw-2">*</span>addr, <span class="kw-2">*</span>amt))
+<a href=#8659 id=8659 data-nosnippet>8659</a>            .collect();
+<a href=#8660 id=8660 data-nosnippet>8660</a>        <span class="comment">// Results are sorted by account address descending
+<a href=#8661 id=8661 data-nosnippet>8661</a>        </span>expected.sort_by_key(|(acct, <span class="kw">_</span>)| std::cmp::Reverse(<span class="kw-2">*</span>acct));
+<a href=#8662 id=8662 data-nosnippet>8662</a>
+<a href=#8663 id=8663 data-nosnippet>8663</a>        <span class="macro">tracing::info!</span>(<span class="string">"expected accounts = {expected:?}"</span>);
+<a href=#8664 id=8664 data-nosnippet>8664</a>        <span class="kw">let </span>limit = expected.len().min(<span class="number">10_000</span>) <span class="kw">as </span>u64;
+<a href=#8665 id=8665 data-nosnippet>8665</a>        <span class="kw">let </span>offset = <span class="number">0u64</span>;
+<a href=#8666 id=8666 data-nosnippet>8666</a>        <span class="kw">let </span>expected: Vec&lt;<span class="kw">_</span>&gt; = expected.into_iter().take(limit <span class="kw">as </span>usize).collect();
+<a href=#8667 id=8667 data-nosnippet>8667</a>
+<a href=#8668 id=8668 data-nosnippet>8668</a>        <span class="kw">let </span>res = client
+<a href=#8669 id=8669 data-nosnippet>8669</a>            .get::&lt;Vec&lt;(RewardAccountV2, RewardAmount)&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8670 id=8670 data-nosnippet>8670</a>                <span class="string">"reward-state-v2/reward-amounts/{height}/{offset}/{limit}"
+<a href=#8671 id=8671 data-nosnippet>8671</a>            </span>))
+<a href=#8672 id=8672 data-nosnippet>8672</a>            .send()
+<a href=#8673 id=8673 data-nosnippet>8673</a>            .<span class="kw">await
+<a href=#8674 id=8674 data-nosnippet>8674</a>            </span>.unwrap();
 <a href=#8675 id=8675 data-nosnippet>8675</a>
-<a href=#8676 id=8676 data-nosnippet>8676</a>            <span class="kw">let </span>ns_proof: NamespaceProofQueryData = client
-<a href=#8677 id=8677 data-nosnippet>8677</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8678 id=8678 data-nosnippet>8678</a>                    <span class="string">"{api_ver}/availability/block/{block}/namespace/{ns}"
-<a href=#8679 id=8679 data-nosnippet>8679</a>                </span>))
-<a href=#8680 id=8680 data-nosnippet>8680</a>                .send()
-<a href=#8681 id=8681 data-nosnippet>8681</a>                .<span class="kw">await
-<a href=#8682 id=8682 data-nosnippet>8682</a>                </span>.unwrap();
-<a href=#8683 id=8683 data-nosnippet>8683</a>            <span class="kw">let </span>proof = ns_proof.proof.as_ref().unwrap();
-<a href=#8684 id=8684 data-nosnippet>8684</a>            <span class="kw">if </span>version &lt; EPOCH_VERSION {
-<a href=#8685 id=8685 data-nosnippet>8685</a>                <span class="macro">assert!</span>(<span class="macro">matches!</span>(proof, NsProof::V0(..)));
-<a href=#8686 id=8686 data-nosnippet>8686</a>            } <span class="kw">else </span>{
-<a href=#8687 id=8687 data-nosnippet>8687</a>                <span class="macro">assert!</span>(<span class="macro">matches!</span>(proof, NsProof::V1(..)));
-<a href=#8688 id=8688 data-nosnippet>8688</a>            }
-<a href=#8689 id=8689 data-nosnippet>8689</a>            <span class="kw">let </span>(txs, ns_from_proof) = proof
-<a href=#8690 id=8690 data-nosnippet>8690</a>                .verify(
-<a href=#8691 id=8691 data-nosnippet>8691</a>                    header.ns_table(),
-<a href=#8692 id=8692 data-nosnippet>8692</a>                    <span class="kw-2">&amp;</span>header.payload_commitment(),
-<a href=#8693 id=8693 data-nosnippet>8693</a>                    common.common(),
-<a href=#8694 id=8694 data-nosnippet>8694</a>                )
-<a href=#8695 id=8695 data-nosnippet>8695</a>                .unwrap();
-<a href=#8696 id=8696 data-nosnippet>8696</a>            <span class="macro">assert_eq!</span>(ns_from_proof, ns);
-<a href=#8697 id=8697 data-nosnippet>8697</a>            <span class="macro">assert_eq!</span>(txs, ns_proof.transactions);
-<a href=#8698 id=8698 data-nosnippet>8698</a>            <span class="macro">assert_eq!</span>(txs, std::slice::from_ref(<span class="kw-2">&amp;</span>tx));
-<a href=#8699 id=8699 data-nosnippet>8699</a>
-<a href=#8700 id=8700 data-nosnippet>8700</a>            <span class="comment">// Test range endpoint.
-<a href=#8701 id=8701 data-nosnippet>8701</a>            </span><span class="kw">let </span>ns_proofs: Vec&lt;NamespaceProofQueryData&gt; = client
-<a href=#8702 id=8702 data-nosnippet>8702</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8703 id=8703 data-nosnippet>8703</a>                    <span class="string">"{api_ver}/availability/block/{}/{}/namespace/{ns}"</span>,
-<a href=#8704 id=8704 data-nosnippet>8704</a>                    block,
-<a href=#8705 id=8705 data-nosnippet>8705</a>                    block + <span class="number">1
-<a href=#8706 id=8706 data-nosnippet>8706</a>                </span>))
-<a href=#8707 id=8707 data-nosnippet>8707</a>                .send()
-<a href=#8708 id=8708 data-nosnippet>8708</a>                .<span class="kw">await
-<a href=#8709 id=8709 data-nosnippet>8709</a>                </span>.unwrap();
-<a href=#8710 id=8710 data-nosnippet>8710</a>            <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>ns_proofs, std::slice::from_ref(<span class="kw-2">&amp;</span>ns_proof));
-<a href=#8711 id=8711 data-nosnippet>8711</a>
-<a href=#8712 id=8712 data-nosnippet>8712</a>            <span class="comment">// Any API version can correctly tell us that the namespace does not exist.
-<a href=#8713 id=8713 data-nosnippet>8713</a>            </span><span class="kw">let </span>ns_proof: NamespaceProofQueryData = client
-<a href=#8714 id=8714 data-nosnippet>8714</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8715 id=8715 data-nosnippet>8715</a>                    <span class="string">"{api_ver}/availability/block/{}/namespace/{ns}"</span>,
-<a href=#8716 id=8716 data-nosnippet>8716</a>                    block - <span class="number">1
-<a href=#8717 id=8717 data-nosnippet>8717</a>                </span>))
-<a href=#8718 id=8718 data-nosnippet>8718</a>                .send()
-<a href=#8719 id=8719 data-nosnippet>8719</a>                .<span class="kw">await
-<a href=#8720 id=8720 data-nosnippet>8720</a>                </span>.unwrap();
-<a href=#8721 id=8721 data-nosnippet>8721</a>            <span class="macro">assert_eq!</span>(ns_proof.proof, <span class="prelude-val">None</span>);
-<a href=#8722 id=8722 data-nosnippet>8722</a>            <span class="macro">assert_eq!</span>(ns_proof.transactions, <span class="macro">vec!</span>[]);
-<a href=#8723 id=8723 data-nosnippet>8723</a>
-<a href=#8724 id=8724 data-nosnippet>8724</a>            <span class="comment">// Test streaming.
-<a href=#8725 id=8725 data-nosnippet>8725</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>proofs = client
-<a href=#8726 id=8726 data-nosnippet>8726</a>                .socket(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8727 id=8727 data-nosnippet>8727</a>                    <span class="string">"{api_ver}/availability/stream/blocks/0/namespace/{ns}"
-<a href=#8728 id=8728 data-nosnippet>8728</a>                </span>))
-<a href=#8729 id=8729 data-nosnippet>8729</a>                .subscribe()
-<a href=#8730 id=8730 data-nosnippet>8730</a>                .<span class="kw">await
-<a href=#8731 id=8731 data-nosnippet>8731</a>                </span>.unwrap();
-<a href=#8732 id=8732 data-nosnippet>8732</a>            <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>.. {
-<a href=#8733 id=8733 data-nosnippet>8733</a>                <span class="macro">tracing::info!</span>(i, <span class="string">"stream proof"</span>);
-<a href=#8734 id=8734 data-nosnippet>8734</a>                <span class="kw">let </span>proof: NamespaceProofQueryData = proofs.next().<span class="kw">await</span>.unwrap().unwrap();
-<a href=#8735 id=8735 data-nosnippet>8735</a>                <span class="kw">if </span>proof.proof.is_none() {
-<a href=#8736 id=8736 data-nosnippet>8736</a>                    <span class="macro">tracing::info!</span>(<span class="string">"waiting for non-trivial proof from stream"</span>);
-<a href=#8737 id=8737 data-nosnippet>8737</a>                    <span class="kw">continue</span>;
-<a href=#8738 id=8738 data-nosnippet>8738</a>                }
-<a href=#8739 id=8739 data-nosnippet>8739</a>                <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>proof.transactions, std::slice::from_ref(<span class="kw-2">&amp;</span>tx));
-<a href=#8740 id=8740 data-nosnippet>8740</a>                <span class="kw">break</span>;
-<a href=#8741 id=8741 data-nosnippet>8741</a>            }
-<a href=#8742 id=8742 data-nosnippet>8742</a>        }
+<a href=#8676 id=8676 data-nosnippet>8676</a>        <span class="macro">assert_eq!</span>(res, expected);
+<a href=#8677 id=8677 data-nosnippet>8677</a>
+<a href=#8678 id=8678 data-nosnippet>8678</a>        <span class="prelude-val">Ok</span>(())
+<a href=#8679 id=8679 data-nosnippet>8679</a>    }
+<a href=#8680 id=8680 data-nosnippet>8680</a>
+<a href=#8681 id=8681 data-nosnippet>8681</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#8682 id=8682 data-nosnippet>8682</a>    </span><span class="kw">async fn </span>test_namespace_query_compat_v0_2() {
+<a href=#8683 id=8683 data-nosnippet>8683</a>        test_namespace_query_compat_helper(Upgrade::trivial(FEE_VERSION)).<span class="kw">await</span>;
+<a href=#8684 id=8684 data-nosnippet>8684</a>    }
+<a href=#8685 id=8685 data-nosnippet>8685</a>
+<a href=#8686 id=8686 data-nosnippet>8686</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#8687 id=8687 data-nosnippet>8687</a>    </span><span class="kw">async fn </span>test_namespace_query_compat_v0_3() {
+<a href=#8688 id=8688 data-nosnippet>8688</a>        test_namespace_query_compat_helper(Upgrade::trivial(EPOCH_VERSION)).<span class="kw">await</span>;
+<a href=#8689 id=8689 data-nosnippet>8689</a>    }
+<a href=#8690 id=8690 data-nosnippet>8690</a>
+<a href=#8691 id=8691 data-nosnippet>8691</a>    <span class="kw">async fn </span>test_namespace_query_compat_helper(upgrade: Upgrade) {
+<a href=#8692 id=8692 data-nosnippet>8692</a>        <span class="comment">// Number of nodes running in the test network.
+<a href=#8693 id=8693 data-nosnippet>8693</a>        </span><span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#8694 id=8694 data-nosnippet>8694</a>
+<a href=#8695 id=8695 data-nosnippet>8695</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#8696 id=8696 data-nosnippet>8696</a>        <span class="kw">let </span>url: Url = <span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap();
+<a href=#8697 id=8697 data-nosnippet>8697</a>
+<a href=#8698 id=8698 data-nosnippet>8698</a>        <span class="kw">let </span>test_config = TestConfigBuilder::default().build();
+<a href=#8699 id=8699 data-nosnippet>8699</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
+<a href=#8700 id=8700 data-nosnippet>8700</a>            .api_config(Options::from(options::Http {
+<a href=#8701 id=8701 data-nosnippet>8701</a>                port,
+<a href=#8702 id=8702 data-nosnippet>8702</a>                max_connections: <span class="prelude-val">None</span>,
+<a href=#8703 id=8703 data-nosnippet>8703</a>                axum_port: <span class="prelude-val">None</span>,
+<a href=#8704 id=8704 data-nosnippet>8704</a>                tonic_port: <span class="prelude-val">None</span>,
+<a href=#8705 id=8705 data-nosnippet>8705</a>            }))
+<a href=#8706 id=8706 data-nosnippet>8706</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#8707 id=8707 data-nosnippet>8707</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
+<a href=#8708 id=8708 data-nosnippet>8708</a>                    <span class="macro">vec!</span>[url.clone()],
+<a href=#8709 id=8709 data-nosnippet>8709</a>                    Default::default(),
+<a href=#8710 id=8710 data-nosnippet>8710</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#8711 id=8711 data-nosnippet>8711</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#8712 id=8712 data-nosnippet>8712</a>                )
+<a href=#8713 id=8713 data-nosnippet>8713</a>            }))
+<a href=#8714 id=8714 data-nosnippet>8714</a>            .network_config(test_config)
+<a href=#8715 id=8715 data-nosnippet>8715</a>            .build();
+<a href=#8716 id=8716 data-nosnippet>8716</a>
+<a href=#8717 id=8717 data-nosnippet>8717</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, upgrade).<span class="kw">await</span>;
+<a href=#8718 id=8718 data-nosnippet>8718</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = network.server.event_stream();
+<a href=#8719 id=8719 data-nosnippet>8719</a>
+<a href=#8720 id=8720 data-nosnippet>8720</a>        <span class="comment">// Submit a transaction.
+<a href=#8721 id=8721 data-nosnippet>8721</a>        </span><span class="kw">let </span>ns = NamespaceId::from(<span class="number">10_000u64</span>);
+<a href=#8722 id=8722 data-nosnippet>8722</a>        <span class="kw">let </span>tx = Transaction::new(ns, <span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]);
+<a href=#8723 id=8723 data-nosnippet>8723</a>        network.server.submit_transaction(tx.clone()).<span class="kw">await</span>.unwrap();
+<a href=#8724 id=8724 data-nosnippet>8724</a>        <span class="kw">let </span>block = wait_for_decide_on_handle(<span class="kw-2">&amp;mut </span>events, <span class="kw-2">&amp;</span>tx).<span class="kw">await</span>.<span class="number">0</span>;
+<a href=#8725 id=8725 data-nosnippet>8725</a>
+<a href=#8726 id=8726 data-nosnippet>8726</a>        <span class="comment">// Check namespace proof queries.
+<a href=#8727 id=8727 data-nosnippet>8727</a>        </span><span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; = Client::new(url);
+<a href=#8728 id=8728 data-nosnippet>8728</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#8729 id=8729 data-nosnippet>8729</a>
+<a href=#8730 id=8730 data-nosnippet>8730</a>        <span class="kw">let </span>(header, common): (Header, VidCommonQueryData&lt;SeqTypes&gt;) = <span class="macro">try_join!</span>(
+<a href=#8731 id=8731 data-nosnippet>8731</a>            client.get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/header/{block}"</span>)).send(),
+<a href=#8732 id=8732 data-nosnippet>8732</a>            client
+<a href=#8733 id=8733 data-nosnippet>8733</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"availability/vid/common/{block}"</span>))
+<a href=#8734 id=8734 data-nosnippet>8734</a>                .send()
+<a href=#8735 id=8735 data-nosnippet>8735</a>        )
+<a href=#8736 id=8736 data-nosnippet>8736</a>        .unwrap();
+<a href=#8737 id=8737 data-nosnippet>8737</a>        <span class="kw">let </span>version = header.version();
+<a href=#8738 id=8738 data-nosnippet>8738</a>
+<a href=#8739 id=8739 data-nosnippet>8739</a>        <span class="comment">// The latest version of the API (whether we specifically ask for v1 or let the redirect
+<a href=#8740 id=8740 data-nosnippet>8740</a>        // occur) will give us a namespace proof no matter which VID version is in use.
+<a href=#8741 id=8741 data-nosnippet>8741</a>        </span><span class="kw">for </span>api_ver <span class="kw">in </span>[<span class="string">"/v1"</span>, <span class="string">""</span>] {
+<a href=#8742 id=8742 data-nosnippet>8742</a>            <span class="macro">tracing::info!</span>(<span class="string">"test namespace API version: {api_ver}"</span>);
 <a href=#8743 id=8743 data-nosnippet>8743</a>
-<a href=#8744 id=8744 data-nosnippet>8744</a>        <span class="comment">// The legacy version of the API only works for old VID.
-<a href=#8745 id=8745 data-nosnippet>8745</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"test namespace API version: v0"</span>);
-<a href=#8746 id=8746 data-nosnippet>8746</a>        <span class="kw">if </span>version &lt; EPOCH_VERSION {
-<a href=#8747 id=8747 data-nosnippet>8747</a>            <span class="kw">let </span>ns_proof: ADVZNamespaceProofQueryData = client
-<a href=#8748 id=8748 data-nosnippet>8748</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"v0/availability/block/{block}/namespace/{ns}"</span>))
-<a href=#8749 id=8749 data-nosnippet>8749</a>                .send()
-<a href=#8750 id=8750 data-nosnippet>8750</a>                .<span class="kw">await
-<a href=#8751 id=8751 data-nosnippet>8751</a>                </span>.unwrap();
-<a href=#8752 id=8752 data-nosnippet>8752</a>            <span class="kw">let </span>proof = ns_proof.proof.as_ref().unwrap();
-<a href=#8753 id=8753 data-nosnippet>8753</a>            <span class="kw">let </span>VidCommon::V0(common) = common.common() <span class="kw">else </span>{
-<a href=#8754 id=8754 data-nosnippet>8754</a>                <span class="macro">panic!</span>(<span class="string">"wrong VID common version"</span>);
-<a href=#8755 id=8755 data-nosnippet>8755</a>            };
-<a href=#8756 id=8756 data-nosnippet>8756</a>            <span class="kw">let </span>(txs, ns_from_proof) = proof
-<a href=#8757 id=8757 data-nosnippet>8757</a>                .verify(header.ns_table(), <span class="kw-2">&amp;</span>header.payload_commitment(), common)
-<a href=#8758 id=8758 data-nosnippet>8758</a>                .unwrap();
-<a href=#8759 id=8759 data-nosnippet>8759</a>            <span class="macro">assert_eq!</span>(ns_from_proof, ns);
-<a href=#8760 id=8760 data-nosnippet>8760</a>            <span class="macro">assert_eq!</span>(txs, ns_proof.transactions);
-<a href=#8761 id=8761 data-nosnippet>8761</a>            <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>txs, std::slice::from_ref(<span class="kw-2">&amp;</span>tx));
-<a href=#8762 id=8762 data-nosnippet>8762</a>
-<a href=#8763 id=8763 data-nosnippet>8763</a>            <span class="comment">// Test range endpoint.
-<a href=#8764 id=8764 data-nosnippet>8764</a>            </span><span class="kw">let </span>ns_proofs: Vec&lt;ADVZNamespaceProofQueryData&gt; = client
-<a href=#8765 id=8765 data-nosnippet>8765</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8766 id=8766 data-nosnippet>8766</a>                    <span class="string">"v0/availability/block/{}/{}/namespace/{ns}"</span>,
-<a href=#8767 id=8767 data-nosnippet>8767</a>                    block,
-<a href=#8768 id=8768 data-nosnippet>8768</a>                    block + <span class="number">1
-<a href=#8769 id=8769 data-nosnippet>8769</a>                </span>))
-<a href=#8770 id=8770 data-nosnippet>8770</a>                .send()
-<a href=#8771 id=8771 data-nosnippet>8771</a>                .<span class="kw">await
-<a href=#8772 id=8772 data-nosnippet>8772</a>                </span>.unwrap();
-<a href=#8773 id=8773 data-nosnippet>8773</a>            <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>ns_proofs, std::slice::from_ref(<span class="kw-2">&amp;</span>ns_proof));
-<a href=#8774 id=8774 data-nosnippet>8774</a>        } <span class="kw">else </span>{
-<a href=#8775 id=8775 data-nosnippet>8775</a>            <span class="comment">// It will fail if we ask for a proof for a block using new VID.
-<a href=#8776 id=8776 data-nosnippet>8776</a>            </span>client
-<a href=#8777 id=8777 data-nosnippet>8777</a>                .get::&lt;ADVZNamespaceProofQueryData&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8778 id=8778 data-nosnippet>8778</a>                    <span class="string">"v0/availability/block/{block}/namespace/{ns}"
-<a href=#8779 id=8779 data-nosnippet>8779</a>                </span>))
-<a href=#8780 id=8780 data-nosnippet>8780</a>                .send()
-<a href=#8781 id=8781 data-nosnippet>8781</a>                .<span class="kw">await
-<a href=#8782 id=8782 data-nosnippet>8782</a>                </span>.unwrap_err();
-<a href=#8783 id=8783 data-nosnippet>8783</a>        }
-<a href=#8784 id=8784 data-nosnippet>8784</a>
-<a href=#8785 id=8785 data-nosnippet>8785</a>        <span class="comment">// Any API version can correctly tell us that the namespace does not exist.
-<a href=#8786 id=8786 data-nosnippet>8786</a>        </span><span class="kw">let </span>ns_proof: ADVZNamespaceProofQueryData = client
-<a href=#8787 id=8787 data-nosnippet>8787</a>            .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
-<a href=#8788 id=8788 data-nosnippet>8788</a>                <span class="string">"v0/availability/block/{}/namespace/{ns}"</span>,
-<a href=#8789 id=8789 data-nosnippet>8789</a>                block - <span class="number">1
-<a href=#8790 id=8790 data-nosnippet>8790</a>            </span>))
-<a href=#8791 id=8791 data-nosnippet>8791</a>            .send()
-<a href=#8792 id=8792 data-nosnippet>8792</a>            .<span class="kw">await
-<a href=#8793 id=8793 data-nosnippet>8793</a>            </span>.unwrap();
-<a href=#8794 id=8794 data-nosnippet>8794</a>        <span class="macro">assert_eq!</span>(ns_proof.proof, <span class="prelude-val">None</span>);
-<a href=#8795 id=8795 data-nosnippet>8795</a>        <span class="macro">assert_eq!</span>(ns_proof.transactions, <span class="macro">vec!</span>[]);
-<a href=#8796 id=8796 data-nosnippet>8796</a>
-<a href=#8797 id=8797 data-nosnippet>8797</a>        <span class="comment">// Use the legacy API to stream namespace proofs until we get to a non-trivial proof or a
-<a href=#8798 id=8798 data-nosnippet>8798</a>        // VID version we can't deal with.
-<a href=#8799 id=8799 data-nosnippet>8799</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>proofs = client
-<a href=#8800 id=8800 data-nosnippet>8800</a>            .socket(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"v0/availability/stream/blocks/0/namespace/{ns}"</span>))
-<a href=#8801 id=8801 data-nosnippet>8801</a>            .subscribe()
-<a href=#8802 id=8802 data-nosnippet>8802</a>            .<span class="kw">await
-<a href=#8803 id=8803 data-nosnippet>8803</a>            </span>.unwrap();
-<a href=#8804 id=8804 data-nosnippet>8804</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>.. {
-<a href=#8805 id=8805 data-nosnippet>8805</a>            <span class="macro">tracing::info!</span>(i, <span class="string">"stream proof"</span>);
-<a href=#8806 id=8806 data-nosnippet>8806</a>            <span class="kw">let </span>proof: ADVZNamespaceProofQueryData = <span class="kw">match </span>proofs.next().<span class="kw">await </span>{
-<a href=#8807 id=8807 data-nosnippet>8807</a>                <span class="prelude-val">Some</span>(proof) =&gt; proof.unwrap(),
-<a href=#8808 id=8808 data-nosnippet>8808</a>                <span class="prelude-val">None </span>=&gt; {
-<a href=#8809 id=8809 data-nosnippet>8809</a>                    <span class="comment">// Steam not expected to end on legacy consensus version.
-<a href=#8810 id=8810 data-nosnippet>8810</a>                    </span><span class="macro">assert!</span>(
-<a href=#8811 id=8811 data-nosnippet>8811</a>                        version &gt;= EPOCH_VERSION,
-<a href=#8812 id=8812 data-nosnippet>8812</a>                        <span class="string">"legacy steam ended while still on legacy consensus"
-<a href=#8813 id=8813 data-nosnippet>8813</a>                    </span>);
-<a href=#8814 id=8814 data-nosnippet>8814</a>                    <span class="kw">break</span>;
-<a href=#8815 id=8815 data-nosnippet>8815</a>                },
-<a href=#8816 id=8816 data-nosnippet>8816</a>            };
-<a href=#8817 id=8817 data-nosnippet>8817</a>            <span class="kw">if </span>proof.proof.is_none() {
-<a href=#8818 id=8818 data-nosnippet>8818</a>                <span class="macro">tracing::info!</span>(<span class="string">"waiting for non-trivial proof from stream"</span>);
-<a href=#8819 id=8819 data-nosnippet>8819</a>                <span class="kw">continue</span>;
-<a href=#8820 id=8820 data-nosnippet>8820</a>            }
-<a href=#8821 id=8821 data-nosnippet>8821</a>            <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>proof.transactions, std::slice::from_ref(<span class="kw-2">&amp;</span>tx));
-<a href=#8822 id=8822 data-nosnippet>8822</a>            <span class="kw">break</span>;
-<a href=#8823 id=8823 data-nosnippet>8823</a>        }
-<a href=#8824 id=8824 data-nosnippet>8824</a>
-<a href=#8825 id=8825 data-nosnippet>8825</a>        network.server.shut_down().<span class="kw">await</span>;
-<a href=#8826 id=8826 data-nosnippet>8826</a>    }
-<a href=#8827 id=8827 data-nosnippet>8827</a>
-<a href=#8828 id=8828 data-nosnippet>8828</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#8829 id=8829 data-nosnippet>8829</a>    </span><span class="kw">async fn </span>test_light_client_completeness() {
-<a href=#8830 id=8830 data-nosnippet>8830</a>        <span class="comment">// Run the through a protocol upgrade and epoch change, then check that we are able to get a
-<a href=#8831 id=8831 data-nosnippet>8831</a>        // correct light client proof for every finalized leaf.
-<a href=#8832 id=8832 data-nosnippet>8832</a>
-<a href=#8833 id=8833 data-nosnippet>8833</a>        </span><span class="kw">const </span>NUM_NODES: usize = <span class="number">1</span>;
-<a href=#8834 id=8834 data-nosnippet>8834</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">200</span>;
-<a href=#8835 id=8835 data-nosnippet>8835</a>
-<a href=#8836 id=8836 data-nosnippet>8836</a>        <span class="kw">let </span>upgrade = Upgrade::new(LEGACY_VERSION, EPOCH_VERSION);
-<a href=#8837 id=8837 data-nosnippet>8837</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
-<a href=#8838 id=8838 data-nosnippet>8838</a>        <span class="kw">let </span>url: Url = <span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap();
-<a href=#8839 id=8839 data-nosnippet>8839</a>
-<a href=#8840 id=8840 data-nosnippet>8840</a>        <span class="kw">let </span>test_config = TestConfigBuilder::default()
-<a href=#8841 id=8841 data-nosnippet>8841</a>            .epoch_height(EPOCH_HEIGHT)
-<a href=#8842 id=8842 data-nosnippet>8842</a>            .epoch_start_block(<span class="number">321</span>)
-<a href=#8843 id=8843 data-nosnippet>8843</a>            .set_upgrades(upgrade.target)
-<a href=#8844 id=8844 data-nosnippet>8844</a>            .<span class="kw">await
-<a href=#8845 id=8845 data-nosnippet>8845</a>            </span>.build();
-<a href=#8846 id=8846 data-nosnippet>8846</a>
-<a href=#8847 id=8847 data-nosnippet>8847</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
-<a href=#8848 id=8848 data-nosnippet>8848</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
-<a href=#8849 id=8849 data-nosnippet>8849</a>            .iter()
-<a href=#8850 id=8850 data-nosnippet>8850</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
-<a href=#8851 id=8851 data-nosnippet>8851</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#8852 id=8852 data-nosnippet>8852</a>            .try_into()
-<a href=#8853 id=8853 data-nosnippet>8853</a>            .unwrap();
-<a href=#8854 id=8854 data-nosnippet>8854</a>
-<a href=#8855 id=8855 data-nosnippet>8855</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
-<a href=#8856 id=8856 data-nosnippet>8856</a>            .api_config(
-<a href=#8857 id=8857 data-nosnippet>8857</a>                SqlDataSource::options(<span class="kw-2">&amp;</span>storage[<span class="number">0</span>], Options::with_port(port))
-<a href=#8858 id=8858 data-nosnippet>8858</a>                    .light_client(Default::default()),
-<a href=#8859 id=8859 data-nosnippet>8859</a>            )
-<a href=#8860 id=8860 data-nosnippet>8860</a>            .persistences(persistence.clone())
-<a href=#8861 id=8861 data-nosnippet>8861</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#8862 id=8862 data-nosnippet>8862</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
-<a href=#8863 id=8863 data-nosnippet>8863</a>                    <span class="macro">vec!</span>[url.clone()],
-<a href=#8864 id=8864 data-nosnippet>8864</a>                    Default::default(),
-<a href=#8865 id=8865 data-nosnippet>8865</a>                    Duration::from_secs(<span class="number">2</span>),
-<a href=#8866 id=8866 data-nosnippet>8866</a>                    <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#8867 id=8867 data-nosnippet>8867</a>                )
-<a href=#8868 id=8868 data-nosnippet>8868</a>            }))
-<a href=#8869 id=8869 data-nosnippet>8869</a>            .network_config(test_config)
-<a href=#8870 id=8870 data-nosnippet>8870</a>            .build();
-<a href=#8871 id=8871 data-nosnippet>8871</a>
-<a href=#8872 id=8872 data-nosnippet>8872</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, upgrade).<span class="kw">await</span>;
-<a href=#8873 id=8873 data-nosnippet>8873</a>        <span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; = Client::new(url);
-<a href=#8874 id=8874 data-nosnippet>8874</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
-<a href=#8875 id=8875 data-nosnippet>8875</a>
-<a href=#8876 id=8876 data-nosnippet>8876</a>        <span class="comment">// Get a leaf stream so that we can wait for various events. Also keep track of each leaf
-<a href=#8877 id=8877 data-nosnippet>8877</a>        // yielded, which we can use as ground truth later in the test.
-<a href=#8878 id=8878 data-nosnippet>8878</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>actual_leaves = <span class="macro">vec!</span>[];
-<a href=#8879 id=8879 data-nosnippet>8879</a>        <span class="kw">let </span><span class="kw-2">mut </span>actual_blocks = <span class="macro">vec!</span>[];
-<a href=#8880 id=8880 data-nosnippet>8880</a>        <span class="kw">let </span><span class="kw-2">mut </span>leaves = client
-<a href=#8881 id=8881 data-nosnippet>8881</a>            .socket(<span class="string">"availability/stream/leaves/0"</span>)
-<a href=#8882 id=8882 data-nosnippet>8882</a>            .subscribe::&lt;LeafQueryData&lt;SeqTypes&gt;&gt;()
-<a href=#8883 id=8883 data-nosnippet>8883</a>            .<span class="kw">await
-<a href=#8884 id=8884 data-nosnippet>8884</a>            </span>.unwrap()
-<a href=#8885 id=8885 data-nosnippet>8885</a>            .zip(
-<a href=#8886 id=8886 data-nosnippet>8886</a>                client
-<a href=#8887 id=8887 data-nosnippet>8887</a>                    .socket(<span class="string">"availability/stream/blocks/0"</span>)
-<a href=#8888 id=8888 data-nosnippet>8888</a>                    .subscribe::&lt;BlockQueryData&lt;SeqTypes&gt;&gt;()
-<a href=#8889 id=8889 data-nosnippet>8889</a>                    .<span class="kw">await
-<a href=#8890 id=8890 data-nosnippet>8890</a>                    </span>.unwrap(),
-<a href=#8891 id=8891 data-nosnippet>8891</a>            )
-<a href=#8892 id=8892 data-nosnippet>8892</a>            .map(|(leaf, block)| {
-<a href=#8893 id=8893 data-nosnippet>8893</a>                <span class="kw">let </span>leaf = leaf.unwrap();
-<a href=#8894 id=8894 data-nosnippet>8894</a>                <span class="kw">let </span>block = block.unwrap();
-<a href=#8895 id=8895 data-nosnippet>8895</a>                actual_leaves.push(leaf.clone());
-<a href=#8896 id=8896 data-nosnippet>8896</a>                actual_blocks.push(block);
-<a href=#8897 id=8897 data-nosnippet>8897</a>                leaf
-<a href=#8898 id=8898 data-nosnippet>8898</a>            });
-<a href=#8899 id=8899 data-nosnippet>8899</a>
-<a href=#8900 id=8900 data-nosnippet>8900</a>        <span class="comment">// Wait for the upgrade to take effect.
-<a href=#8901 id=8901 data-nosnippet>8901</a>        </span><span class="kw">let </span>(upgrade_height, first_epoch) = <span class="kw">loop </span>{
-<a href=#8902 id=8902 data-nosnippet>8902</a>            <span class="kw">let </span>leaf: LeafQueryData&lt;SeqTypes&gt; = leaves.next().<span class="kw">await</span>.unwrap();
-<a href=#8903 id=8903 data-nosnippet>8903</a>            <span class="kw">if </span>leaf.header().version() &lt; EPOCH_VERSION {
-<a href=#8904 id=8904 data-nosnippet>8904</a>                <span class="macro">tracing::info!</span>(version = %leaf.header().version(), height = leaf.header().height(), view = <span class="question-mark">?</span>leaf.leaf().view_number(), <span class="string">"waiting for epoch upgrade"</span>);
-<a href=#8905 id=8905 data-nosnippet>8905</a>                <span class="kw">continue</span>;
-<a href=#8906 id=8906 data-nosnippet>8906</a>            }
-<a href=#8907 id=8907 data-nosnippet>8907</a>            <span class="kw">break </span>(leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT).unwrap());
-<a href=#8908 id=8908 data-nosnippet>8908</a>        };
-<a href=#8909 id=8909 data-nosnippet>8909</a>        <span class="macro">tracing::info!</span>(upgrade_height, <span class="question-mark">?</span>first_epoch, <span class="string">"epochs enabled"</span>);
-<a href=#8910 id=8910 data-nosnippet>8910</a>
-<a href=#8911 id=8911 data-nosnippet>8911</a>        <span class="comment">// Wait for two epoch changes (so we get to the first epoch that actually uses the stake
-<a href=#8912 id=8912 data-nosnippet>8912</a>        // table).
-<a href=#8913 id=8913 data-nosnippet>8913</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>epoch_heights = [<span class="number">0</span>; <span class="number">2</span>];
-<a href=#8914 id=8914 data-nosnippet>8914</a>        <span class="kw">for </span>(i, epoch_height) <span class="kw">in </span>epoch_heights.iter_mut().enumerate() {
-<a href=#8915 id=8915 data-nosnippet>8915</a>            <span class="kw">let </span>desired_epoch = first_epoch + (i <span class="kw">as </span>u64) + <span class="number">1</span>;
-<a href=#8916 id=8916 data-nosnippet>8916</a>            <span class="kw-2">*</span>epoch_height = <span class="kw">loop </span>{
-<a href=#8917 id=8917 data-nosnippet>8917</a>                <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
-<a href=#8918 id=8918 data-nosnippet>8918</a>                <span class="kw">let </span>epoch = leaf.leaf().epoch(EPOCH_HEIGHT).unwrap();
-<a href=#8919 id=8919 data-nosnippet>8919</a>                <span class="kw">if </span>epoch &gt; desired_epoch {
-<a href=#8920 id=8920 data-nosnippet>8920</a>                    <span class="macro">tracing::info!</span>(
-<a href=#8921 id=8921 data-nosnippet>8921</a>                        height = leaf.height(),
-<a href=#8922 id=8922 data-nosnippet>8922</a>                        <span class="question-mark">?</span>desired_epoch,
-<a href=#8923 id=8923 data-nosnippet>8923</a>                        <span class="question-mark">?</span>epoch,
-<a href=#8924 id=8924 data-nosnippet>8924</a>                        <span class="string">"changed epoch"
-<a href=#8925 id=8925 data-nosnippet>8925</a>                    </span>);
-<a href=#8926 id=8926 data-nosnippet>8926</a>                    <span class="kw">break </span>leaf.height();
-<a href=#8927 id=8927 data-nosnippet>8927</a>                }
-<a href=#8928 id=8928 data-nosnippet>8928</a>                <span class="macro">tracing::info!</span>(
-<a href=#8929 id=8929 data-nosnippet>8929</a>                    <span class="question-mark">?</span>desired_epoch,
-<a href=#8930 id=8930 data-nosnippet>8930</a>                    height = leaf.header().height(),
-<a href=#8931 id=8931 data-nosnippet>8931</a>                    view = <span class="question-mark">?</span>leaf.leaf().view_number(),
-<a href=#8932 id=8932 data-nosnippet>8932</a>                    <span class="string">"waiting for epoch change"
-<a href=#8933 id=8933 data-nosnippet>8933</a>                </span>);
-<a href=#8934 id=8934 data-nosnippet>8934</a>            };
-<a href=#8935 id=8935 data-nosnippet>8935</a>        }
-<a href=#8936 id=8936 data-nosnippet>8936</a>
-<a href=#8937 id=8937 data-nosnippet>8937</a>        <span class="comment">// Wait a few more blocks.
-<a href=#8938 id=8938 data-nosnippet>8938</a>        </span><span class="kw">let </span>max_block = epoch_heights[<span class="number">1</span>] + <span class="number">1</span>;
-<a href=#8939 id=8939 data-nosnippet>8939</a>        <span class="kw">loop </span>{
-<a href=#8940 id=8940 data-nosnippet>8940</a>            <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
-<a href=#8941 id=8941 data-nosnippet>8941</a>            <span class="kw">if </span>leaf.height() &gt; max_block {
-<a href=#8942 id=8942 data-nosnippet>8942</a>                <span class="kw">break</span>;
-<a href=#8943 id=8943 data-nosnippet>8943</a>            }
-<a href=#8944 id=8944 data-nosnippet>8944</a>            <span class="macro">tracing::info!</span>(max_block, height = leaf.height(), <span class="string">"waiting for block"</span>);
-<a href=#8945 id=8945 data-nosnippet>8945</a>        }
-<a href=#8946 id=8946 data-nosnippet>8946</a>
-<a href=#8947 id=8947 data-nosnippet>8947</a>        <span class="comment">// Stop consensus. All the blocks we are going to query have already been produced.
-<a href=#8948 id=8948 data-nosnippet>8948</a>        // Continuing to run consensus would just waste resources while we check stuff.
-<a href=#8949 id=8949 data-nosnippet>8949</a>        </span>network.stop_consensus().<span class="kw">await</span>;
-<a href=#8950 id=8950 data-nosnippet>8950</a>
-<a href=#8951 id=8951 data-nosnippet>8951</a>        <span class="comment">// Check light client. Querying every single block is too slow, so we'll check a few blocks
-<a href=#8952 id=8952 data-nosnippet>8952</a>        // around various critical points:
-<a href=#8953 id=8953 data-nosnippet>8953</a>        </span><span class="kw">let </span>heights =
-<a href=#8954 id=8954 data-nosnippet>8954</a>        <span class="comment">// * The first few blocks, including genesis
-<a href=#8955 id=8955 data-nosnippet>8955</a>            </span>(<span class="number">0</span>..=<span class="number">1</span>)
-<a href=#8956 id=8956 data-nosnippet>8956</a>        <span class="comment">// * A few blocks just before and after the upgrade
-<a href=#8957 id=8957 data-nosnippet>8957</a>            </span>.chain(upgrade_height-<span class="number">1</span>..=upgrade_height+<span class="number">1</span>)
-<a href=#8958 id=8958 data-nosnippet>8958</a>        <span class="comment">// * A few blocks just before and after the first epoch change
-<a href=#8959 id=8959 data-nosnippet>8959</a>            </span>.chain(epoch_heights[<span class="number">0</span>]-<span class="number">1</span>..=epoch_heights[<span class="number">0</span>] + <span class="number">1</span>)
-<a href=#8960 id=8960 data-nosnippet>8960</a>        <span class="comment">// * A few blocks just before and after the stake table comes into effect
-<a href=#8961 id=8961 data-nosnippet>8961</a>            </span>.chain(epoch_heights[<span class="number">1</span>]-<span class="number">1</span>..=max_block);
-<a href=#8962 id=8962 data-nosnippet>8962</a>
-<a href=#8963 id=8963 data-nosnippet>8963</a>        <span class="kw">let </span>quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
-<a href=#8964 id=8964 data-nosnippet>8964</a>        <span class="kw">for </span>i <span class="kw">in </span>heights {
-<a href=#8965 id=8965 data-nosnippet>8965</a>            <span class="kw">let </span>leaf = <span class="kw-2">&amp;</span>actual_leaves[i <span class="kw">as </span>usize];
-<a href=#8966 id=8966 data-nosnippet>8966</a>            <span class="kw">let </span>block = <span class="kw-2">&amp;</span>actual_blocks[i <span class="kw">as </span>usize];
-<a href=#8967 id=8967 data-nosnippet>8967</a>            <span class="macro">tracing::info!</span>(i, <span class="question-mark">?</span>leaf, <span class="question-mark">?</span>block, <span class="string">"check leaf"</span>);
-<a href=#8968 id=8968 data-nosnippet>8968</a>
-<a href=#8969 id=8969 data-nosnippet>8969</a>            <span class="comment">// Get the same leaf proof by various IDs.
-<a href=#8970 id=8970 data-nosnippet>8970</a>            </span><span class="kw">let </span>client = <span class="kw-2">&amp;</span>client;
-<a href=#8971 id=8971 data-nosnippet>8971</a>            <span class="kw">let </span>proofs = try_join_all(
-<a href=#8972 id=8972 data-nosnippet>8972</a>                [
-<a href=#8973 id=8973 data-nosnippet>8973</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/{i}"</span>),
-<a href=#8974 id=8974 data-nosnippet>8974</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/hash/{}"</span>, leaf.hash()),
-<a href=#8975 id=8975 data-nosnippet>8975</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/block-hash/{}"</span>, leaf.block_hash()),
-<a href=#8976 id=8976 data-nosnippet>8976</a>                ]
-<a href=#8977 id=8977 data-nosnippet>8977</a>                .into_iter()
-<a href=#8978 id=8978 data-nosnippet>8978</a>                .map(|path| <span class="kw">async move </span>{
-<a href=#8979 id=8979 data-nosnippet>8979</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"fetch leaf proof"</span>);
-<a href=#8980 id=8980 data-nosnippet>8980</a>                    <span class="kw">let </span>proof = client.get::&lt;LeafProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#8981 id=8981 data-nosnippet>8981</a>                    Ok::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
-<a href=#8982 id=8982 data-nosnippet>8982</a>                }),
-<a href=#8983 id=8983 data-nosnippet>8983</a>            )
-<a href=#8984 id=8984 data-nosnippet>8984</a>            .<span class="kw">await
-<a href=#8985 id=8985 data-nosnippet>8985</a>            </span>.unwrap();
-<a href=#8986 id=8986 data-nosnippet>8986</a>
-<a href=#8987 id=8987 data-nosnippet>8987</a>            <span class="comment">// Check proofs against expected leaf.
-<a href=#8988 id=8988 data-nosnippet>8988</a>            </span><span class="kw">for </span>(path, proof) <span class="kw">in </span>proofs {
-<a href=#8989 id=8989 data-nosnippet>8989</a>                <span class="macro">tracing::info!</span>(i, path, <span class="question-mark">?</span>proof, <span class="string">"check leaf proof"</span>);
-<a href=#8990 id=8990 data-nosnippet>8990</a>                <span class="macro">assert_eq!</span>(
-<a href=#8991 id=8991 data-nosnippet>8991</a>                    proof.verify(LeafProofHint::Quorum(<span class="kw-2">&amp;</span>quorum)).<span class="kw">await</span>.unwrap(),
-<a href=#8992 id=8992 data-nosnippet>8992</a>                    <span class="kw-2">*</span>leaf
-<a href=#8993 id=8993 data-nosnippet>8993</a>                );
-<a href=#8994 id=8994 data-nosnippet>8994</a>            }
-<a href=#8995 id=8995 data-nosnippet>8995</a>
-<a href=#8996 id=8996 data-nosnippet>8996</a>            <span class="comment">// Get the corresponding header.
-<a href=#8997 id=8997 data-nosnippet>8997</a>            </span><span class="kw">let </span>root_height = i + <span class="number">1</span>;
-<a href=#8998 id=8998 data-nosnippet>8998</a>            <span class="kw">let </span>root = actual_leaves[root_height <span class="kw">as </span>usize].header();
-<a href=#8999 id=8999 data-nosnippet>8999</a>            <span class="kw">let </span>proofs = try_join_all(
-<a href=#9000 id=9000 data-nosnippet>9000</a>                [
-<a href=#9001 id=9001 data-nosnippet>9001</a>                    <span class="macro">format!</span>(<span class="string">"light-client/header/{root_height}/{i}"</span>),
-<a href=#9002 id=9002 data-nosnippet>9002</a>                    <span class="macro">format!</span>(
-<a href=#9003 id=9003 data-nosnippet>9003</a>                        <span class="string">"light-client/header/{root_height}/hash/{}"</span>,
-<a href=#9004 id=9004 data-nosnippet>9004</a>                        leaf.block_hash()
-<a href=#9005 id=9005 data-nosnippet>9005</a>                    ),
-<a href=#9006 id=9006 data-nosnippet>9006</a>                ]
-<a href=#9007 id=9007 data-nosnippet>9007</a>                .into_iter()
-<a href=#9008 id=9008 data-nosnippet>9008</a>                .map(|path| <span class="kw">async move </span>{
-<a href=#9009 id=9009 data-nosnippet>9009</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"get header proof"</span>);
-<a href=#9010 id=9010 data-nosnippet>9010</a>                    <span class="kw">let </span>proof = client.get::&lt;HeaderProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#9011 id=9011 data-nosnippet>9011</a>                    Ok::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
-<a href=#9012 id=9012 data-nosnippet>9012</a>                }),
-<a href=#9013 id=9013 data-nosnippet>9013</a>            )
-<a href=#9014 id=9014 data-nosnippet>9014</a>            .<span class="kw">await
-<a href=#9015 id=9015 data-nosnippet>9015</a>            </span>.unwrap();
-<a href=#9016 id=9016 data-nosnippet>9016</a>            <span class="kw">for </span>(path, proof) <span class="kw">in </span>proofs {
-<a href=#9017 id=9017 data-nosnippet>9017</a>                <span class="macro">tracing::info!</span>(i, path, <span class="question-mark">?</span>proof, <span class="string">"check header proof"</span>);
-<a href=#9018 id=9018 data-nosnippet>9018</a>                <span class="macro">assert_eq!</span>(
-<a href=#9019 id=9019 data-nosnippet>9019</a>                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
-<a href=#9020 id=9020 data-nosnippet>9020</a>                    leaf.header()
-<a href=#9021 id=9021 data-nosnippet>9021</a>                );
-<a href=#9022 id=9022 data-nosnippet>9022</a>            }
-<a href=#9023 id=9023 data-nosnippet>9023</a>
-<a href=#9024 id=9024 data-nosnippet>9024</a>            <span class="comment">// Get the corresponding payload.
-<a href=#9025 id=9025 data-nosnippet>9025</a>            </span><span class="kw">let </span>proof = client
-<a href=#9026 id=9026 data-nosnippet>9026</a>                .get::&lt;PayloadProof&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/payload/{i}"</span>))
-<a href=#9027 id=9027 data-nosnippet>9027</a>                .send()
-<a href=#9028 id=9028 data-nosnippet>9028</a>                .<span class="kw">await
-<a href=#9029 id=9029 data-nosnippet>9029</a>                </span>.unwrap();
-<a href=#9030 id=9030 data-nosnippet>9030</a>            <span class="macro">assert_eq!</span>(proof.verify(leaf.header()).unwrap(), <span class="kw-2">*</span>block.payload());
-<a href=#9031 id=9031 data-nosnippet>9031</a>        }
-<a href=#9032 id=9032 data-nosnippet>9032</a>
-<a href=#9033 id=9033 data-nosnippet>9033</a>        <span class="comment">// Check light client stake table.
-<a href=#9034 id=9034 data-nosnippet>9034</a>        </span><span class="kw">let </span>events: Vec&lt;StakeTableEvent&gt; = client
-<a href=#9035 id=9035 data-nosnippet>9035</a>            .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/stake-table/{}"</span>, first_epoch + <span class="number">2</span>))
-<a href=#9036 id=9036 data-nosnippet>9036</a>            .send()
-<a href=#9037 id=9037 data-nosnippet>9037</a>            .<span class="kw">await
-<a href=#9038 id=9038 data-nosnippet>9038</a>            </span>.unwrap();
-<a href=#9039 id=9039 data-nosnippet>9039</a>        <span class="kw">let </span><span class="kw-2">mut </span>state_from_events = StakeTableState::default();
-<a href=#9040 id=9040 data-nosnippet>9040</a>        <span class="kw">for </span>event <span class="kw">in </span>events {
-<a href=#9041 id=9041 data-nosnippet>9041</a>            state_from_events.apply_event(event).unwrap().unwrap();
-<a href=#9042 id=9042 data-nosnippet>9042</a>        }
-<a href=#9043 id=9043 data-nosnippet>9043</a>
-<a href=#9044 id=9044 data-nosnippet>9044</a>        <span class="macro">assert_eq!</span>(
-<a href=#9045 id=9045 data-nosnippet>9045</a>            state_from_events.into_validators(),
-<a href=#9046 id=9046 data-nosnippet>9046</a>            network
-<a href=#9047 id=9047 data-nosnippet>9047</a>                .server
-<a href=#9048 id=9048 data-nosnippet>9048</a>                .consensus_handle()
-<a href=#9049 id=9049 data-nosnippet>9049</a>                .storage()
-<a href=#9050 id=9050 data-nosnippet>9050</a>                .<span class="kw">await
-<a href=#9051 id=9051 data-nosnippet>9051</a>                </span>.load_all_validators(first_epoch + <span class="number">2</span>, <span class="number">0</span>, <span class="number">1_000_000</span>)
-<a href=#9052 id=9052 data-nosnippet>9052</a>                .<span class="kw">await
-<a href=#9053 id=9053 data-nosnippet>9053</a>                </span>.unwrap()
-<a href=#9054 id=9054 data-nosnippet>9054</a>                .into_iter()
-<a href=#9055 id=9055 data-nosnippet>9055</a>                .map(|v| (v.account, v))
-<a href=#9056 id=9056 data-nosnippet>9056</a>                .collect::&lt;RegisteredValidatorMap&gt;()
-<a href=#9057 id=9057 data-nosnippet>9057</a>        );
-<a href=#9058 id=9058 data-nosnippet>9058</a>
-<a href=#9059 id=9059 data-nosnippet>9059</a>        <span class="comment">// Querying for a stake table before the first real epoch is an error.
-<a href=#9060 id=9060 data-nosnippet>9060</a>        </span><span class="kw">let </span>err = client
-<a href=#9061 id=9061 data-nosnippet>9061</a>            .get::&lt;Vec&lt;StakeTableEvent&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/stake-table/{}"</span>, first_epoch + <span class="number">1</span>))
-<a href=#9062 id=9062 data-nosnippet>9062</a>            .send()
-<a href=#9063 id=9063 data-nosnippet>9063</a>            .<span class="kw">await
-<a href=#9064 id=9064 data-nosnippet>9064</a>            </span>.unwrap_err();
-<a href=#9065 id=9065 data-nosnippet>9065</a>        <span class="macro">assert_eq!</span>(err.status(), StatusCode::BAD_REQUEST);
-<a href=#9066 id=9066 data-nosnippet>9066</a>    }
-<a href=#9067 id=9067 data-nosnippet>9067</a>
-<a href=#9068 id=9068 data-nosnippet>9068</a>    <span class="doccomment">/// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
-<a href=#9069 id=9069 data-nosnippet>9069</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
-<a href=#9070 id=9070 data-nosnippet>9070</a>    </span><span class="kw">async fn </span>test_fetch_leaf_returns_exact_height() -&gt; anyhow::Result&lt;()&gt; {
-<a href=#9071 id=9071 data-nosnippet>9071</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
-<a href=#9072 id=9072 data-nosnippet>9072</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
-<a href=#9073 id=9073 data-nosnippet>9073</a>        <span class="kw">const </span>TARGET_HEIGHT: u64 = EPOCH_HEIGHT * <span class="number">3 </span>+ <span class="number">2</span>;
-<a href=#9074 id=9074 data-nosnippet>9074</a>
-<a href=#9075 id=9075 data-nosnippet>9075</a>        <span class="kw">let </span>network_config = TestConfigBuilder::default()
-<a href=#9076 id=9076 data-nosnippet>9076</a>            .epoch_height(EPOCH_HEIGHT)
-<a href=#9077 id=9077 data-nosnippet>9077</a>            .build();
-<a href=#9078 id=9078 data-nosnippet>9078</a>
-<a href=#9079 id=9079 data-nosnippet>9079</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"No ports free for query service"</span>);
-<a href=#9080 id=9080 data-nosnippet>9080</a>
-<a href=#9081 id=9081 data-nosnippet>9081</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
-<a href=#9082 id=9082 data-nosnippet>9082</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
-<a href=#9083 id=9083 data-nosnippet>9083</a>            .iter()
-<a href=#9084 id=9084 data-nosnippet>9084</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
-<a href=#9085 id=9085 data-nosnippet>9085</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
-<a href=#9086 id=9086 data-nosnippet>9086</a>            .try_into()
-<a href=#9087 id=9087 data-nosnippet>9087</a>            .unwrap();
-<a href=#9088 id=9088 data-nosnippet>9088</a>
-<a href=#9089 id=9089 data-nosnippet>9089</a>        <span class="kw">let </span>catchup_peers = std::array::from_fn(|<span class="kw">_</span>| {
-<a href=#9090 id=9090 data-nosnippet>9090</a>            StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
-<a href=#9091 id=9091 data-nosnippet>9091</a>                <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
-<a href=#9092 id=9092 data-nosnippet>9092</a>                Default::default(),
-<a href=#9093 id=9093 data-nosnippet>9093</a>                Duration::from_secs(<span class="number">2</span>),
-<a href=#9094 id=9094 data-nosnippet>9094</a>                <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#9095 id=9095 data-nosnippet>9095</a>            )
-<a href=#9096 id=9096 data-nosnippet>9096</a>        });
-<a href=#9097 id=9097 data-nosnippet>9097</a>
-<a href=#9098 id=9098 data-nosnippet>9098</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::with_num_nodes()
-<a href=#9099 id=9099 data-nosnippet>9099</a>            .api_config(SqlDataSource::options(
-<a href=#9100 id=9100 data-nosnippet>9100</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
-<a href=#9101 id=9101 data-nosnippet>9101</a>                Options::with_port(port),
-<a href=#9102 id=9102 data-nosnippet>9102</a>            ))
-<a href=#9103 id=9103 data-nosnippet>9103</a>            .network_config(network_config)
-<a href=#9104 id=9104 data-nosnippet>9104</a>            .persistences(persistence)
-<a href=#9105 id=9105 data-nosnippet>9105</a>            .catchups(catchup_peers)
-<a href=#9106 id=9106 data-nosnippet>9106</a>            .pos_hook(
-<a href=#9107 id=9107 data-nosnippet>9107</a>                DelegationConfig::MultipleDelegators,
-<a href=#9108 id=9108 data-nosnippet>9108</a>                Default::default(),
-<a href=#9109 id=9109 data-nosnippet>9109</a>                POS_V4,
-<a href=#9110 id=9110 data-nosnippet>9110</a>            )
-<a href=#9111 id=9111 data-nosnippet>9111</a>            .<span class="kw">await</span><span class="question-mark">?
-<a href=#9112 id=9112 data-nosnippet>9112</a>            </span>.build();
-<a href=#9113 id=9113 data-nosnippet>9113</a>
-<a href=#9114 id=9114 data-nosnippet>9114</a>        <span class="kw">let </span>network = TestNetwork::new(config, POS_V4).<span class="kw">await</span>;
-<a href=#9115 id=9115 data-nosnippet>9115</a>
-<a href=#9116 id=9116 data-nosnippet>9116</a>        <span class="comment">// Wait for chain to advance past our target height
-<a href=#9117 id=9117 data-nosnippet>9117</a>        </span><span class="kw">let </span>height_client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; =
-<a href=#9118 id=9118 data-nosnippet>9118</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap());
-<a href=#9119 id=9119 data-nosnippet>9119</a>        wait_until_block_height(<span class="kw-2">&amp;</span>height_client, <span class="string">"node/block-height"</span>, TARGET_HEIGHT + <span class="number">5</span>).<span class="kw">await</span>;
-<a href=#9120 id=9120 data-nosnippet>9120</a>
-<a href=#9121 id=9121 data-nosnippet>9121</a>        <span class="comment">// Get the stake table and threshold for the epoch containing TARGET_HEIGHT
-<a href=#9122 id=9122 data-nosnippet>9122</a>        </span><span class="kw">let </span>coordinator = network.server.node_state().coordinator;
-<a href=#9123 id=9123 data-nosnippet>9123</a>        <span class="kw">let </span>epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
-<a href=#9124 id=9124 data-nosnippet>9124</a>        <span class="kw">let </span>snapshot = coordinator.membership().snapshot(epoch).expect(<span class="string">"snapshot"</span>);
-<a href=#9125 id=9125 data-nosnippet>9125</a>        <span class="kw">let </span>stake_table = HSStakeTable::from_iter(snapshot.stake_table());
-<a href=#9126 id=9126 data-nosnippet>9126</a>        <span class="kw">let </span>success_threshold = snapshot.success_threshold();
-<a href=#9127 id=9127 data-nosnippet>9127</a>
-<a href=#9128 id=9128 data-nosnippet>9128</a>        <span class="comment">// Use StatePeers to fetch the leaf at the exact target height
-<a href=#9129 id=9129 data-nosnippet>9129</a>        </span><span class="kw">let </span>catchup = StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
-<a href=#9130 id=9130 data-nosnippet>9130</a>            <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
-<a href=#9131 id=9131 data-nosnippet>9131</a>            Default::default(),
-<a href=#9132 id=9132 data-nosnippet>9132</a>            Duration::from_secs(<span class="number">5</span>),
-<a href=#9133 id=9133 data-nosnippet>9133</a>            <span class="kw-2">&amp;</span>NoMetrics,
-<a href=#9134 id=9134 data-nosnippet>9134</a>        );
+<a href=#8744 id=8744 data-nosnippet>8744</a>            <span class="kw">let </span>ns_proof: NamespaceProofQueryData = client
+<a href=#8745 id=8745 data-nosnippet>8745</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8746 id=8746 data-nosnippet>8746</a>                    <span class="string">"{api_ver}/availability/block/{block}/namespace/{ns}"
+<a href=#8747 id=8747 data-nosnippet>8747</a>                </span>))
+<a href=#8748 id=8748 data-nosnippet>8748</a>                .send()
+<a href=#8749 id=8749 data-nosnippet>8749</a>                .<span class="kw">await
+<a href=#8750 id=8750 data-nosnippet>8750</a>                </span>.unwrap();
+<a href=#8751 id=8751 data-nosnippet>8751</a>            <span class="kw">let </span>proof = ns_proof.proof.as_ref().unwrap();
+<a href=#8752 id=8752 data-nosnippet>8752</a>            <span class="kw">if </span>version &lt; EPOCH_VERSION {
+<a href=#8753 id=8753 data-nosnippet>8753</a>                <span class="macro">assert!</span>(<span class="macro">matches!</span>(proof, NsProof::V0(..)));
+<a href=#8754 id=8754 data-nosnippet>8754</a>            } <span class="kw">else </span>{
+<a href=#8755 id=8755 data-nosnippet>8755</a>                <span class="macro">assert!</span>(<span class="macro">matches!</span>(proof, NsProof::V1(..)));
+<a href=#8756 id=8756 data-nosnippet>8756</a>            }
+<a href=#8757 id=8757 data-nosnippet>8757</a>            <span class="kw">let </span>(txs, ns_from_proof) = proof
+<a href=#8758 id=8758 data-nosnippet>8758</a>                .verify(
+<a href=#8759 id=8759 data-nosnippet>8759</a>                    header.ns_table(),
+<a href=#8760 id=8760 data-nosnippet>8760</a>                    <span class="kw-2">&amp;</span>header.payload_commitment(),
+<a href=#8761 id=8761 data-nosnippet>8761</a>                    common.common(),
+<a href=#8762 id=8762 data-nosnippet>8762</a>                )
+<a href=#8763 id=8763 data-nosnippet>8763</a>                .unwrap();
+<a href=#8764 id=8764 data-nosnippet>8764</a>            <span class="macro">assert_eq!</span>(ns_from_proof, ns);
+<a href=#8765 id=8765 data-nosnippet>8765</a>            <span class="macro">assert_eq!</span>(txs, ns_proof.transactions);
+<a href=#8766 id=8766 data-nosnippet>8766</a>            <span class="macro">assert_eq!</span>(txs, std::slice::from_ref(<span class="kw-2">&amp;</span>tx));
+<a href=#8767 id=8767 data-nosnippet>8767</a>
+<a href=#8768 id=8768 data-nosnippet>8768</a>            <span class="comment">// Test range endpoint.
+<a href=#8769 id=8769 data-nosnippet>8769</a>            </span><span class="kw">let </span>ns_proofs: Vec&lt;NamespaceProofQueryData&gt; = client
+<a href=#8770 id=8770 data-nosnippet>8770</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8771 id=8771 data-nosnippet>8771</a>                    <span class="string">"{api_ver}/availability/block/{}/{}/namespace/{ns}"</span>,
+<a href=#8772 id=8772 data-nosnippet>8772</a>                    block,
+<a href=#8773 id=8773 data-nosnippet>8773</a>                    block + <span class="number">1
+<a href=#8774 id=8774 data-nosnippet>8774</a>                </span>))
+<a href=#8775 id=8775 data-nosnippet>8775</a>                .send()
+<a href=#8776 id=8776 data-nosnippet>8776</a>                .<span class="kw">await
+<a href=#8777 id=8777 data-nosnippet>8777</a>                </span>.unwrap();
+<a href=#8778 id=8778 data-nosnippet>8778</a>            <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>ns_proofs, std::slice::from_ref(<span class="kw-2">&amp;</span>ns_proof));
+<a href=#8779 id=8779 data-nosnippet>8779</a>
+<a href=#8780 id=8780 data-nosnippet>8780</a>            <span class="comment">// Any API version can correctly tell us that the namespace does not exist.
+<a href=#8781 id=8781 data-nosnippet>8781</a>            </span><span class="kw">let </span>ns_proof: NamespaceProofQueryData = client
+<a href=#8782 id=8782 data-nosnippet>8782</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8783 id=8783 data-nosnippet>8783</a>                    <span class="string">"{api_ver}/availability/block/{}/namespace/{ns}"</span>,
+<a href=#8784 id=8784 data-nosnippet>8784</a>                    block - <span class="number">1
+<a href=#8785 id=8785 data-nosnippet>8785</a>                </span>))
+<a href=#8786 id=8786 data-nosnippet>8786</a>                .send()
+<a href=#8787 id=8787 data-nosnippet>8787</a>                .<span class="kw">await
+<a href=#8788 id=8788 data-nosnippet>8788</a>                </span>.unwrap();
+<a href=#8789 id=8789 data-nosnippet>8789</a>            <span class="macro">assert_eq!</span>(ns_proof.proof, <span class="prelude-val">None</span>);
+<a href=#8790 id=8790 data-nosnippet>8790</a>            <span class="macro">assert_eq!</span>(ns_proof.transactions, <span class="macro">vec!</span>[]);
+<a href=#8791 id=8791 data-nosnippet>8791</a>
+<a href=#8792 id=8792 data-nosnippet>8792</a>            <span class="comment">// Test streaming.
+<a href=#8793 id=8793 data-nosnippet>8793</a>            </span><span class="kw">let </span><span class="kw-2">mut </span>proofs = client
+<a href=#8794 id=8794 data-nosnippet>8794</a>                .socket(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8795 id=8795 data-nosnippet>8795</a>                    <span class="string">"{api_ver}/availability/stream/blocks/0/namespace/{ns}"
+<a href=#8796 id=8796 data-nosnippet>8796</a>                </span>))
+<a href=#8797 id=8797 data-nosnippet>8797</a>                .subscribe()
+<a href=#8798 id=8798 data-nosnippet>8798</a>                .<span class="kw">await
+<a href=#8799 id=8799 data-nosnippet>8799</a>                </span>.unwrap();
+<a href=#8800 id=8800 data-nosnippet>8800</a>            <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>.. {
+<a href=#8801 id=8801 data-nosnippet>8801</a>                <span class="macro">tracing::info!</span>(i, <span class="string">"stream proof"</span>);
+<a href=#8802 id=8802 data-nosnippet>8802</a>                <span class="kw">let </span>proof: NamespaceProofQueryData = proofs.next().<span class="kw">await</span>.unwrap().unwrap();
+<a href=#8803 id=8803 data-nosnippet>8803</a>                <span class="kw">if </span>proof.proof.is_none() {
+<a href=#8804 id=8804 data-nosnippet>8804</a>                    <span class="macro">tracing::info!</span>(<span class="string">"waiting for non-trivial proof from stream"</span>);
+<a href=#8805 id=8805 data-nosnippet>8805</a>                    <span class="kw">continue</span>;
+<a href=#8806 id=8806 data-nosnippet>8806</a>                }
+<a href=#8807 id=8807 data-nosnippet>8807</a>                <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>proof.transactions, std::slice::from_ref(<span class="kw-2">&amp;</span>tx));
+<a href=#8808 id=8808 data-nosnippet>8808</a>                <span class="kw">break</span>;
+<a href=#8809 id=8809 data-nosnippet>8809</a>            }
+<a href=#8810 id=8810 data-nosnippet>8810</a>        }
+<a href=#8811 id=8811 data-nosnippet>8811</a>
+<a href=#8812 id=8812 data-nosnippet>8812</a>        <span class="comment">// The legacy version of the API only works for old VID.
+<a href=#8813 id=8813 data-nosnippet>8813</a>        </span><span class="macro">tracing::info!</span>(<span class="string">"test namespace API version: v0"</span>);
+<a href=#8814 id=8814 data-nosnippet>8814</a>        <span class="kw">if </span>version &lt; EPOCH_VERSION {
+<a href=#8815 id=8815 data-nosnippet>8815</a>            <span class="kw">let </span>ns_proof: ADVZNamespaceProofQueryData = client
+<a href=#8816 id=8816 data-nosnippet>8816</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"v0/availability/block/{block}/namespace/{ns}"</span>))
+<a href=#8817 id=8817 data-nosnippet>8817</a>                .send()
+<a href=#8818 id=8818 data-nosnippet>8818</a>                .<span class="kw">await
+<a href=#8819 id=8819 data-nosnippet>8819</a>                </span>.unwrap();
+<a href=#8820 id=8820 data-nosnippet>8820</a>            <span class="kw">let </span>proof = ns_proof.proof.as_ref().unwrap();
+<a href=#8821 id=8821 data-nosnippet>8821</a>            <span class="kw">let </span>VidCommon::V0(common) = common.common() <span class="kw">else </span>{
+<a href=#8822 id=8822 data-nosnippet>8822</a>                <span class="macro">panic!</span>(<span class="string">"wrong VID common version"</span>);
+<a href=#8823 id=8823 data-nosnippet>8823</a>            };
+<a href=#8824 id=8824 data-nosnippet>8824</a>            <span class="kw">let </span>(txs, ns_from_proof) = proof
+<a href=#8825 id=8825 data-nosnippet>8825</a>                .verify(header.ns_table(), <span class="kw-2">&amp;</span>header.payload_commitment(), common)
+<a href=#8826 id=8826 data-nosnippet>8826</a>                .unwrap();
+<a href=#8827 id=8827 data-nosnippet>8827</a>            <span class="macro">assert_eq!</span>(ns_from_proof, ns);
+<a href=#8828 id=8828 data-nosnippet>8828</a>            <span class="macro">assert_eq!</span>(txs, ns_proof.transactions);
+<a href=#8829 id=8829 data-nosnippet>8829</a>            <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>txs, std::slice::from_ref(<span class="kw-2">&amp;</span>tx));
+<a href=#8830 id=8830 data-nosnippet>8830</a>
+<a href=#8831 id=8831 data-nosnippet>8831</a>            <span class="comment">// Test range endpoint.
+<a href=#8832 id=8832 data-nosnippet>8832</a>            </span><span class="kw">let </span>ns_proofs: Vec&lt;ADVZNamespaceProofQueryData&gt; = client
+<a href=#8833 id=8833 data-nosnippet>8833</a>                .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8834 id=8834 data-nosnippet>8834</a>                    <span class="string">"v0/availability/block/{}/{}/namespace/{ns}"</span>,
+<a href=#8835 id=8835 data-nosnippet>8835</a>                    block,
+<a href=#8836 id=8836 data-nosnippet>8836</a>                    block + <span class="number">1
+<a href=#8837 id=8837 data-nosnippet>8837</a>                </span>))
+<a href=#8838 id=8838 data-nosnippet>8838</a>                .send()
+<a href=#8839 id=8839 data-nosnippet>8839</a>                .<span class="kw">await
+<a href=#8840 id=8840 data-nosnippet>8840</a>                </span>.unwrap();
+<a href=#8841 id=8841 data-nosnippet>8841</a>            <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>ns_proofs, std::slice::from_ref(<span class="kw-2">&amp;</span>ns_proof));
+<a href=#8842 id=8842 data-nosnippet>8842</a>        } <span class="kw">else </span>{
+<a href=#8843 id=8843 data-nosnippet>8843</a>            <span class="comment">// It will fail if we ask for a proof for a block using new VID.
+<a href=#8844 id=8844 data-nosnippet>8844</a>            </span>client
+<a href=#8845 id=8845 data-nosnippet>8845</a>                .get::&lt;ADVZNamespaceProofQueryData&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8846 id=8846 data-nosnippet>8846</a>                    <span class="string">"v0/availability/block/{block}/namespace/{ns}"
+<a href=#8847 id=8847 data-nosnippet>8847</a>                </span>))
+<a href=#8848 id=8848 data-nosnippet>8848</a>                .send()
+<a href=#8849 id=8849 data-nosnippet>8849</a>                .<span class="kw">await
+<a href=#8850 id=8850 data-nosnippet>8850</a>                </span>.unwrap_err();
+<a href=#8851 id=8851 data-nosnippet>8851</a>        }
+<a href=#8852 id=8852 data-nosnippet>8852</a>
+<a href=#8853 id=8853 data-nosnippet>8853</a>        <span class="comment">// Any API version can correctly tell us that the namespace does not exist.
+<a href=#8854 id=8854 data-nosnippet>8854</a>        </span><span class="kw">let </span>ns_proof: ADVZNamespaceProofQueryData = client
+<a href=#8855 id=8855 data-nosnippet>8855</a>            .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(
+<a href=#8856 id=8856 data-nosnippet>8856</a>                <span class="string">"v0/availability/block/{}/namespace/{ns}"</span>,
+<a href=#8857 id=8857 data-nosnippet>8857</a>                block - <span class="number">1
+<a href=#8858 id=8858 data-nosnippet>8858</a>            </span>))
+<a href=#8859 id=8859 data-nosnippet>8859</a>            .send()
+<a href=#8860 id=8860 data-nosnippet>8860</a>            .<span class="kw">await
+<a href=#8861 id=8861 data-nosnippet>8861</a>            </span>.unwrap();
+<a href=#8862 id=8862 data-nosnippet>8862</a>        <span class="macro">assert_eq!</span>(ns_proof.proof, <span class="prelude-val">None</span>);
+<a href=#8863 id=8863 data-nosnippet>8863</a>        <span class="macro">assert_eq!</span>(ns_proof.transactions, <span class="macro">vec!</span>[]);
+<a href=#8864 id=8864 data-nosnippet>8864</a>
+<a href=#8865 id=8865 data-nosnippet>8865</a>        <span class="comment">// Use the legacy API to stream namespace proofs until we get to a non-trivial proof or a
+<a href=#8866 id=8866 data-nosnippet>8866</a>        // VID version we can't deal with.
+<a href=#8867 id=8867 data-nosnippet>8867</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>proofs = client
+<a href=#8868 id=8868 data-nosnippet>8868</a>            .socket(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"v0/availability/stream/blocks/0/namespace/{ns}"</span>))
+<a href=#8869 id=8869 data-nosnippet>8869</a>            .subscribe()
+<a href=#8870 id=8870 data-nosnippet>8870</a>            .<span class="kw">await
+<a href=#8871 id=8871 data-nosnippet>8871</a>            </span>.unwrap();
+<a href=#8872 id=8872 data-nosnippet>8872</a>        <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>.. {
+<a href=#8873 id=8873 data-nosnippet>8873</a>            <span class="macro">tracing::info!</span>(i, <span class="string">"stream proof"</span>);
+<a href=#8874 id=8874 data-nosnippet>8874</a>            <span class="kw">let </span>proof: ADVZNamespaceProofQueryData = <span class="kw">match </span>proofs.next().<span class="kw">await </span>{
+<a href=#8875 id=8875 data-nosnippet>8875</a>                <span class="prelude-val">Some</span>(proof) =&gt; proof.unwrap(),
+<a href=#8876 id=8876 data-nosnippet>8876</a>                <span class="prelude-val">None </span>=&gt; {
+<a href=#8877 id=8877 data-nosnippet>8877</a>                    <span class="comment">// Steam not expected to end on legacy consensus version.
+<a href=#8878 id=8878 data-nosnippet>8878</a>                    </span><span class="macro">assert!</span>(
+<a href=#8879 id=8879 data-nosnippet>8879</a>                        version &gt;= EPOCH_VERSION,
+<a href=#8880 id=8880 data-nosnippet>8880</a>                        <span class="string">"legacy steam ended while still on legacy consensus"
+<a href=#8881 id=8881 data-nosnippet>8881</a>                    </span>);
+<a href=#8882 id=8882 data-nosnippet>8882</a>                    <span class="kw">break</span>;
+<a href=#8883 id=8883 data-nosnippet>8883</a>                },
+<a href=#8884 id=8884 data-nosnippet>8884</a>            };
+<a href=#8885 id=8885 data-nosnippet>8885</a>            <span class="kw">if </span>proof.proof.is_none() {
+<a href=#8886 id=8886 data-nosnippet>8886</a>                <span class="macro">tracing::info!</span>(<span class="string">"waiting for non-trivial proof from stream"</span>);
+<a href=#8887 id=8887 data-nosnippet>8887</a>                <span class="kw">continue</span>;
+<a href=#8888 id=8888 data-nosnippet>8888</a>            }
+<a href=#8889 id=8889 data-nosnippet>8889</a>            <span class="macro">assert_eq!</span>(<span class="kw-2">&amp;</span>proof.transactions, std::slice::from_ref(<span class="kw-2">&amp;</span>tx));
+<a href=#8890 id=8890 data-nosnippet>8890</a>            <span class="kw">break</span>;
+<a href=#8891 id=8891 data-nosnippet>8891</a>        }
+<a href=#8892 id=8892 data-nosnippet>8892</a>
+<a href=#8893 id=8893 data-nosnippet>8893</a>        network.server.shut_down().<span class="kw">await</span>;
+<a href=#8894 id=8894 data-nosnippet>8894</a>    }
+<a href=#8895 id=8895 data-nosnippet>8895</a>
+<a href=#8896 id=8896 data-nosnippet>8896</a>    <span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#8897 id=8897 data-nosnippet>8897</a>    </span><span class="kw">async fn </span>test_light_client_completeness() {
+<a href=#8898 id=8898 data-nosnippet>8898</a>        <span class="comment">// Run the through a protocol upgrade and epoch change, then check that we are able to get a
+<a href=#8899 id=8899 data-nosnippet>8899</a>        // correct light client proof for every finalized leaf.
+<a href=#8900 id=8900 data-nosnippet>8900</a>
+<a href=#8901 id=8901 data-nosnippet>8901</a>        </span><span class="kw">const </span>NUM_NODES: usize = <span class="number">1</span>;
+<a href=#8902 id=8902 data-nosnippet>8902</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">200</span>;
+<a href=#8903 id=8903 data-nosnippet>8903</a>
+<a href=#8904 id=8904 data-nosnippet>8904</a>        <span class="kw">let </span>upgrade = Upgrade::new(LEGACY_VERSION, EPOCH_VERSION);
+<a href=#8905 id=8905 data-nosnippet>8905</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"OS should have ephemeral ports available"</span>);
+<a href=#8906 id=8906 data-nosnippet>8906</a>        <span class="kw">let </span>url: Url = <span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap();
+<a href=#8907 id=8907 data-nosnippet>8907</a>
+<a href=#8908 id=8908 data-nosnippet>8908</a>        <span class="kw">let </span>test_config = TestConfigBuilder::default()
+<a href=#8909 id=8909 data-nosnippet>8909</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#8910 id=8910 data-nosnippet>8910</a>            .epoch_start_block(<span class="number">321</span>)
+<a href=#8911 id=8911 data-nosnippet>8911</a>            .set_upgrades(upgrade.target)
+<a href=#8912 id=8912 data-nosnippet>8912</a>            .<span class="kw">await
+<a href=#8913 id=8913 data-nosnippet>8913</a>            </span>.build();
+<a href=#8914 id=8914 data-nosnippet>8914</a>
+<a href=#8915 id=8915 data-nosnippet>8915</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#8916 id=8916 data-nosnippet>8916</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#8917 id=8917 data-nosnippet>8917</a>            .iter()
+<a href=#8918 id=8918 data-nosnippet>8918</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#8919 id=8919 data-nosnippet>8919</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#8920 id=8920 data-nosnippet>8920</a>            .try_into()
+<a href=#8921 id=8921 data-nosnippet>8921</a>            .unwrap();
+<a href=#8922 id=8922 data-nosnippet>8922</a>
+<a href=#8923 id=8923 data-nosnippet>8923</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::&lt;NUM_NODES, <span class="kw">_</span>, <span class="kw">_</span>&gt;::with_num_nodes()
+<a href=#8924 id=8924 data-nosnippet>8924</a>            .api_config(
+<a href=#8925 id=8925 data-nosnippet>8925</a>                SqlDataSource::options(<span class="kw-2">&amp;</span>storage[<span class="number">0</span>], Options::with_port(port))
+<a href=#8926 id=8926 data-nosnippet>8926</a>                    .light_client(Default::default()),
+<a href=#8927 id=8927 data-nosnippet>8927</a>            )
+<a href=#8928 id=8928 data-nosnippet>8928</a>            .persistences(persistence.clone())
+<a href=#8929 id=8929 data-nosnippet>8929</a>            .catchups(std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#8930 id=8930 data-nosnippet>8930</a>                StatePeers::&lt;SequencerApiVersion&gt;::from_urls(
+<a href=#8931 id=8931 data-nosnippet>8931</a>                    <span class="macro">vec!</span>[url.clone()],
+<a href=#8932 id=8932 data-nosnippet>8932</a>                    Default::default(),
+<a href=#8933 id=8933 data-nosnippet>8933</a>                    Duration::from_secs(<span class="number">2</span>),
+<a href=#8934 id=8934 data-nosnippet>8934</a>                    <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#8935 id=8935 data-nosnippet>8935</a>                )
+<a href=#8936 id=8936 data-nosnippet>8936</a>            }))
+<a href=#8937 id=8937 data-nosnippet>8937</a>            .network_config(test_config)
+<a href=#8938 id=8938 data-nosnippet>8938</a>            .build();
+<a href=#8939 id=8939 data-nosnippet>8939</a>
+<a href=#8940 id=8940 data-nosnippet>8940</a>        <span class="kw">let </span><span class="kw-2">mut </span>network = TestNetwork::new(config, upgrade).<span class="kw">await</span>;
+<a href=#8941 id=8941 data-nosnippet>8941</a>        <span class="kw">let </span>client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; = Client::new(url);
+<a href=#8942 id=8942 data-nosnippet>8942</a>        client.connect(<span class="prelude-val">None</span>).<span class="kw">await</span>;
+<a href=#8943 id=8943 data-nosnippet>8943</a>
+<a href=#8944 id=8944 data-nosnippet>8944</a>        <span class="comment">// Get a leaf stream so that we can wait for various events. Also keep track of each leaf
+<a href=#8945 id=8945 data-nosnippet>8945</a>        // yielded, which we can use as ground truth later in the test.
+<a href=#8946 id=8946 data-nosnippet>8946</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>actual_leaves = <span class="macro">vec!</span>[];
+<a href=#8947 id=8947 data-nosnippet>8947</a>        <span class="kw">let </span><span class="kw-2">mut </span>actual_blocks = <span class="macro">vec!</span>[];
+<a href=#8948 id=8948 data-nosnippet>8948</a>        <span class="kw">let </span><span class="kw-2">mut </span>leaves = client
+<a href=#8949 id=8949 data-nosnippet>8949</a>            .socket(<span class="string">"availability/stream/leaves/0"</span>)
+<a href=#8950 id=8950 data-nosnippet>8950</a>            .subscribe::&lt;LeafQueryData&lt;SeqTypes&gt;&gt;()
+<a href=#8951 id=8951 data-nosnippet>8951</a>            .<span class="kw">await
+<a href=#8952 id=8952 data-nosnippet>8952</a>            </span>.unwrap()
+<a href=#8953 id=8953 data-nosnippet>8953</a>            .zip(
+<a href=#8954 id=8954 data-nosnippet>8954</a>                client
+<a href=#8955 id=8955 data-nosnippet>8955</a>                    .socket(<span class="string">"availability/stream/blocks/0"</span>)
+<a href=#8956 id=8956 data-nosnippet>8956</a>                    .subscribe::&lt;BlockQueryData&lt;SeqTypes&gt;&gt;()
+<a href=#8957 id=8957 data-nosnippet>8957</a>                    .<span class="kw">await
+<a href=#8958 id=8958 data-nosnippet>8958</a>                    </span>.unwrap(),
+<a href=#8959 id=8959 data-nosnippet>8959</a>            )
+<a href=#8960 id=8960 data-nosnippet>8960</a>            .map(|(leaf, block)| {
+<a href=#8961 id=8961 data-nosnippet>8961</a>                <span class="kw">let </span>leaf = leaf.unwrap();
+<a href=#8962 id=8962 data-nosnippet>8962</a>                <span class="kw">let </span>block = block.unwrap();
+<a href=#8963 id=8963 data-nosnippet>8963</a>                actual_leaves.push(leaf.clone());
+<a href=#8964 id=8964 data-nosnippet>8964</a>                actual_blocks.push(block);
+<a href=#8965 id=8965 data-nosnippet>8965</a>                leaf
+<a href=#8966 id=8966 data-nosnippet>8966</a>            });
+<a href=#8967 id=8967 data-nosnippet>8967</a>
+<a href=#8968 id=8968 data-nosnippet>8968</a>        <span class="comment">// Wait for the upgrade to take effect.
+<a href=#8969 id=8969 data-nosnippet>8969</a>        </span><span class="kw">let </span>(upgrade_height, first_epoch) = <span class="kw">loop </span>{
+<a href=#8970 id=8970 data-nosnippet>8970</a>            <span class="kw">let </span>leaf: LeafQueryData&lt;SeqTypes&gt; = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#8971 id=8971 data-nosnippet>8971</a>            <span class="kw">if </span>leaf.header().version() &lt; EPOCH_VERSION {
+<a href=#8972 id=8972 data-nosnippet>8972</a>                <span class="macro">tracing::info!</span>(version = %leaf.header().version(), height = leaf.header().height(), view = <span class="question-mark">?</span>leaf.leaf().view_number(), <span class="string">"waiting for epoch upgrade"</span>);
+<a href=#8973 id=8973 data-nosnippet>8973</a>                <span class="kw">continue</span>;
+<a href=#8974 id=8974 data-nosnippet>8974</a>            }
+<a href=#8975 id=8975 data-nosnippet>8975</a>            <span class="kw">break </span>(leaf.height(), leaf.leaf().epoch(EPOCH_HEIGHT).unwrap());
+<a href=#8976 id=8976 data-nosnippet>8976</a>        };
+<a href=#8977 id=8977 data-nosnippet>8977</a>        <span class="macro">tracing::info!</span>(upgrade_height, <span class="question-mark">?</span>first_epoch, <span class="string">"epochs enabled"</span>);
+<a href=#8978 id=8978 data-nosnippet>8978</a>
+<a href=#8979 id=8979 data-nosnippet>8979</a>        <span class="comment">// Wait for two epoch changes (so we get to the first epoch that actually uses the stake
+<a href=#8980 id=8980 data-nosnippet>8980</a>        // table).
+<a href=#8981 id=8981 data-nosnippet>8981</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>epoch_heights = [<span class="number">0</span>; <span class="number">2</span>];
+<a href=#8982 id=8982 data-nosnippet>8982</a>        <span class="kw">for </span>(i, epoch_height) <span class="kw">in </span>epoch_heights.iter_mut().enumerate() {
+<a href=#8983 id=8983 data-nosnippet>8983</a>            <span class="kw">let </span>desired_epoch = first_epoch + (i <span class="kw">as </span>u64) + <span class="number">1</span>;
+<a href=#8984 id=8984 data-nosnippet>8984</a>            <span class="kw-2">*</span>epoch_height = <span class="kw">loop </span>{
+<a href=#8985 id=8985 data-nosnippet>8985</a>                <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#8986 id=8986 data-nosnippet>8986</a>                <span class="kw">let </span>epoch = leaf.leaf().epoch(EPOCH_HEIGHT).unwrap();
+<a href=#8987 id=8987 data-nosnippet>8987</a>                <span class="kw">if </span>epoch &gt; desired_epoch {
+<a href=#8988 id=8988 data-nosnippet>8988</a>                    <span class="macro">tracing::info!</span>(
+<a href=#8989 id=8989 data-nosnippet>8989</a>                        height = leaf.height(),
+<a href=#8990 id=8990 data-nosnippet>8990</a>                        <span class="question-mark">?</span>desired_epoch,
+<a href=#8991 id=8991 data-nosnippet>8991</a>                        <span class="question-mark">?</span>epoch,
+<a href=#8992 id=8992 data-nosnippet>8992</a>                        <span class="string">"changed epoch"
+<a href=#8993 id=8993 data-nosnippet>8993</a>                    </span>);
+<a href=#8994 id=8994 data-nosnippet>8994</a>                    <span class="kw">break </span>leaf.height();
+<a href=#8995 id=8995 data-nosnippet>8995</a>                }
+<a href=#8996 id=8996 data-nosnippet>8996</a>                <span class="macro">tracing::info!</span>(
+<a href=#8997 id=8997 data-nosnippet>8997</a>                    <span class="question-mark">?</span>desired_epoch,
+<a href=#8998 id=8998 data-nosnippet>8998</a>                    height = leaf.header().height(),
+<a href=#8999 id=8999 data-nosnippet>8999</a>                    view = <span class="question-mark">?</span>leaf.leaf().view_number(),
+<a href=#9000 id=9000 data-nosnippet>9000</a>                    <span class="string">"waiting for epoch change"
+<a href=#9001 id=9001 data-nosnippet>9001</a>                </span>);
+<a href=#9002 id=9002 data-nosnippet>9002</a>            };
+<a href=#9003 id=9003 data-nosnippet>9003</a>        }
+<a href=#9004 id=9004 data-nosnippet>9004</a>
+<a href=#9005 id=9005 data-nosnippet>9005</a>        <span class="comment">// Wait a few more blocks.
+<a href=#9006 id=9006 data-nosnippet>9006</a>        </span><span class="kw">let </span>max_block = epoch_heights[<span class="number">1</span>] + <span class="number">1</span>;
+<a href=#9007 id=9007 data-nosnippet>9007</a>        <span class="kw">loop </span>{
+<a href=#9008 id=9008 data-nosnippet>9008</a>            <span class="kw">let </span>leaf = leaves.next().<span class="kw">await</span>.unwrap();
+<a href=#9009 id=9009 data-nosnippet>9009</a>            <span class="kw">if </span>leaf.height() &gt; max_block {
+<a href=#9010 id=9010 data-nosnippet>9010</a>                <span class="kw">break</span>;
+<a href=#9011 id=9011 data-nosnippet>9011</a>            }
+<a href=#9012 id=9012 data-nosnippet>9012</a>            <span class="macro">tracing::info!</span>(max_block, height = leaf.height(), <span class="string">"waiting for block"</span>);
+<a href=#9013 id=9013 data-nosnippet>9013</a>        }
+<a href=#9014 id=9014 data-nosnippet>9014</a>
+<a href=#9015 id=9015 data-nosnippet>9015</a>        <span class="comment">// Stop consensus. All the blocks we are going to query have already been produced.
+<a href=#9016 id=9016 data-nosnippet>9016</a>        // Continuing to run consensus would just waste resources while we check stuff.
+<a href=#9017 id=9017 data-nosnippet>9017</a>        </span>network.stop_consensus().<span class="kw">await</span>;
+<a href=#9018 id=9018 data-nosnippet>9018</a>
+<a href=#9019 id=9019 data-nosnippet>9019</a>        <span class="comment">// Check light client. Querying every single block is too slow, so we'll check a few blocks
+<a href=#9020 id=9020 data-nosnippet>9020</a>        // around various critical points:
+<a href=#9021 id=9021 data-nosnippet>9021</a>        </span><span class="kw">let </span>heights =
+<a href=#9022 id=9022 data-nosnippet>9022</a>        <span class="comment">// * The first few blocks, including genesis
+<a href=#9023 id=9023 data-nosnippet>9023</a>            </span>(<span class="number">0</span>..=<span class="number">1</span>)
+<a href=#9024 id=9024 data-nosnippet>9024</a>        <span class="comment">// * A few blocks just before and after the upgrade
+<a href=#9025 id=9025 data-nosnippet>9025</a>            </span>.chain(upgrade_height-<span class="number">1</span>..=upgrade_height+<span class="number">1</span>)
+<a href=#9026 id=9026 data-nosnippet>9026</a>        <span class="comment">// * A few blocks just before and after the first epoch change
+<a href=#9027 id=9027 data-nosnippet>9027</a>            </span>.chain(epoch_heights[<span class="number">0</span>]-<span class="number">1</span>..=epoch_heights[<span class="number">0</span>] + <span class="number">1</span>)
+<a href=#9028 id=9028 data-nosnippet>9028</a>        <span class="comment">// * A few blocks just before and after the stake table comes into effect
+<a href=#9029 id=9029 data-nosnippet>9029</a>            </span>.chain(epoch_heights[<span class="number">1</span>]-<span class="number">1</span>..=max_block);
+<a href=#9030 id=9030 data-nosnippet>9030</a>
+<a href=#9031 id=9031 data-nosnippet>9031</a>        <span class="kw">let </span>quorum = EpochChangeQuorum::new(EPOCH_HEIGHT);
+<a href=#9032 id=9032 data-nosnippet>9032</a>        <span class="kw">for </span>i <span class="kw">in </span>heights {
+<a href=#9033 id=9033 data-nosnippet>9033</a>            <span class="kw">let </span>leaf = <span class="kw-2">&amp;</span>actual_leaves[i <span class="kw">as </span>usize];
+<a href=#9034 id=9034 data-nosnippet>9034</a>            <span class="kw">let </span>block = <span class="kw-2">&amp;</span>actual_blocks[i <span class="kw">as </span>usize];
+<a href=#9035 id=9035 data-nosnippet>9035</a>            <span class="macro">tracing::info!</span>(i, <span class="question-mark">?</span>leaf, <span class="question-mark">?</span>block, <span class="string">"check leaf"</span>);
+<a href=#9036 id=9036 data-nosnippet>9036</a>
+<a href=#9037 id=9037 data-nosnippet>9037</a>            <span class="comment">// Get the same leaf proof by various IDs.
+<a href=#9038 id=9038 data-nosnippet>9038</a>            </span><span class="kw">let </span>client = <span class="kw-2">&amp;</span>client;
+<a href=#9039 id=9039 data-nosnippet>9039</a>            <span class="kw">let </span>proofs = try_join_all(
+<a href=#9040 id=9040 data-nosnippet>9040</a>                [
+<a href=#9041 id=9041 data-nosnippet>9041</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/{i}"</span>),
+<a href=#9042 id=9042 data-nosnippet>9042</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/hash/{}"</span>, leaf.hash()),
+<a href=#9043 id=9043 data-nosnippet>9043</a>                    <span class="macro">format!</span>(<span class="string">"light-client/leaf/block-hash/{}"</span>, leaf.block_hash()),
+<a href=#9044 id=9044 data-nosnippet>9044</a>                ]
+<a href=#9045 id=9045 data-nosnippet>9045</a>                .into_iter()
+<a href=#9046 id=9046 data-nosnippet>9046</a>                .map(|path| <span class="kw">async move </span>{
+<a href=#9047 id=9047 data-nosnippet>9047</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"fetch leaf proof"</span>);
+<a href=#9048 id=9048 data-nosnippet>9048</a>                    <span class="kw">let </span>proof = client.get::&lt;LeafProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#9049 id=9049 data-nosnippet>9049</a>                    Ok::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
+<a href=#9050 id=9050 data-nosnippet>9050</a>                }),
+<a href=#9051 id=9051 data-nosnippet>9051</a>            )
+<a href=#9052 id=9052 data-nosnippet>9052</a>            .<span class="kw">await
+<a href=#9053 id=9053 data-nosnippet>9053</a>            </span>.unwrap();
+<a href=#9054 id=9054 data-nosnippet>9054</a>
+<a href=#9055 id=9055 data-nosnippet>9055</a>            <span class="comment">// Check proofs against expected leaf.
+<a href=#9056 id=9056 data-nosnippet>9056</a>            </span><span class="kw">for </span>(path, proof) <span class="kw">in </span>proofs {
+<a href=#9057 id=9057 data-nosnippet>9057</a>                <span class="macro">tracing::info!</span>(i, path, <span class="question-mark">?</span>proof, <span class="string">"check leaf proof"</span>);
+<a href=#9058 id=9058 data-nosnippet>9058</a>                <span class="macro">assert_eq!</span>(
+<a href=#9059 id=9059 data-nosnippet>9059</a>                    proof.verify(LeafProofHint::Quorum(<span class="kw-2">&amp;</span>quorum)).<span class="kw">await</span>.unwrap(),
+<a href=#9060 id=9060 data-nosnippet>9060</a>                    <span class="kw-2">*</span>leaf
+<a href=#9061 id=9061 data-nosnippet>9061</a>                );
+<a href=#9062 id=9062 data-nosnippet>9062</a>            }
+<a href=#9063 id=9063 data-nosnippet>9063</a>
+<a href=#9064 id=9064 data-nosnippet>9064</a>            <span class="comment">// Get the corresponding header.
+<a href=#9065 id=9065 data-nosnippet>9065</a>            </span><span class="kw">let </span>root_height = i + <span class="number">1</span>;
+<a href=#9066 id=9066 data-nosnippet>9066</a>            <span class="kw">let </span>root = actual_leaves[root_height <span class="kw">as </span>usize].header();
+<a href=#9067 id=9067 data-nosnippet>9067</a>            <span class="kw">let </span>proofs = try_join_all(
+<a href=#9068 id=9068 data-nosnippet>9068</a>                [
+<a href=#9069 id=9069 data-nosnippet>9069</a>                    <span class="macro">format!</span>(<span class="string">"light-client/header/{root_height}/{i}"</span>),
+<a href=#9070 id=9070 data-nosnippet>9070</a>                    <span class="macro">format!</span>(
+<a href=#9071 id=9071 data-nosnippet>9071</a>                        <span class="string">"light-client/header/{root_height}/hash/{}"</span>,
+<a href=#9072 id=9072 data-nosnippet>9072</a>                        leaf.block_hash()
+<a href=#9073 id=9073 data-nosnippet>9073</a>                    ),
+<a href=#9074 id=9074 data-nosnippet>9074</a>                ]
+<a href=#9075 id=9075 data-nosnippet>9075</a>                .into_iter()
+<a href=#9076 id=9076 data-nosnippet>9076</a>                .map(|path| <span class="kw">async move </span>{
+<a href=#9077 id=9077 data-nosnippet>9077</a>                    <span class="macro">tracing::info!</span>(i, path, <span class="string">"get header proof"</span>);
+<a href=#9078 id=9078 data-nosnippet>9078</a>                    <span class="kw">let </span>proof = client.get::&lt;HeaderProof&gt;(<span class="kw-2">&amp;</span>path).send().<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#9079 id=9079 data-nosnippet>9079</a>                    Ok::&lt;<span class="kw">_</span>, anyhow::Error&gt;((path, proof))
+<a href=#9080 id=9080 data-nosnippet>9080</a>                }),
+<a href=#9081 id=9081 data-nosnippet>9081</a>            )
+<a href=#9082 id=9082 data-nosnippet>9082</a>            .<span class="kw">await
+<a href=#9083 id=9083 data-nosnippet>9083</a>            </span>.unwrap();
+<a href=#9084 id=9084 data-nosnippet>9084</a>            <span class="kw">for </span>(path, proof) <span class="kw">in </span>proofs {
+<a href=#9085 id=9085 data-nosnippet>9085</a>                <span class="macro">tracing::info!</span>(i, path, <span class="question-mark">?</span>proof, <span class="string">"check header proof"</span>);
+<a href=#9086 id=9086 data-nosnippet>9086</a>                <span class="macro">assert_eq!</span>(
+<a href=#9087 id=9087 data-nosnippet>9087</a>                    proof.verify_ref(root.block_merkle_tree_root()).unwrap(),
+<a href=#9088 id=9088 data-nosnippet>9088</a>                    leaf.header()
+<a href=#9089 id=9089 data-nosnippet>9089</a>                );
+<a href=#9090 id=9090 data-nosnippet>9090</a>            }
+<a href=#9091 id=9091 data-nosnippet>9091</a>
+<a href=#9092 id=9092 data-nosnippet>9092</a>            <span class="comment">// Get the corresponding payload.
+<a href=#9093 id=9093 data-nosnippet>9093</a>            </span><span class="kw">let </span>proof = client
+<a href=#9094 id=9094 data-nosnippet>9094</a>                .get::&lt;PayloadProof&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/payload/{i}"</span>))
+<a href=#9095 id=9095 data-nosnippet>9095</a>                .send()
+<a href=#9096 id=9096 data-nosnippet>9096</a>                .<span class="kw">await
+<a href=#9097 id=9097 data-nosnippet>9097</a>                </span>.unwrap();
+<a href=#9098 id=9098 data-nosnippet>9098</a>            <span class="macro">assert_eq!</span>(proof.verify(leaf.header()).unwrap(), <span class="kw-2">*</span>block.payload());
+<a href=#9099 id=9099 data-nosnippet>9099</a>        }
+<a href=#9100 id=9100 data-nosnippet>9100</a>
+<a href=#9101 id=9101 data-nosnippet>9101</a>        <span class="comment">// Check light client stake table.
+<a href=#9102 id=9102 data-nosnippet>9102</a>        </span><span class="kw">let </span>events: Vec&lt;StakeTableEvent&gt; = client
+<a href=#9103 id=9103 data-nosnippet>9103</a>            .get(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/stake-table/{}"</span>, first_epoch + <span class="number">2</span>))
+<a href=#9104 id=9104 data-nosnippet>9104</a>            .send()
+<a href=#9105 id=9105 data-nosnippet>9105</a>            .<span class="kw">await
+<a href=#9106 id=9106 data-nosnippet>9106</a>            </span>.unwrap();
+<a href=#9107 id=9107 data-nosnippet>9107</a>        <span class="kw">let </span><span class="kw-2">mut </span>state_from_events = StakeTableState::default();
+<a href=#9108 id=9108 data-nosnippet>9108</a>        <span class="kw">for </span>event <span class="kw">in </span>events {
+<a href=#9109 id=9109 data-nosnippet>9109</a>            state_from_events.apply_event(event).unwrap().unwrap();
+<a href=#9110 id=9110 data-nosnippet>9110</a>        }
+<a href=#9111 id=9111 data-nosnippet>9111</a>
+<a href=#9112 id=9112 data-nosnippet>9112</a>        <span class="macro">assert_eq!</span>(
+<a href=#9113 id=9113 data-nosnippet>9113</a>            state_from_events.into_validators(),
+<a href=#9114 id=9114 data-nosnippet>9114</a>            network
+<a href=#9115 id=9115 data-nosnippet>9115</a>                .server
+<a href=#9116 id=9116 data-nosnippet>9116</a>                .consensus_handle()
+<a href=#9117 id=9117 data-nosnippet>9117</a>                .storage()
+<a href=#9118 id=9118 data-nosnippet>9118</a>                .<span class="kw">await
+<a href=#9119 id=9119 data-nosnippet>9119</a>                </span>.load_all_validators(first_epoch + <span class="number">2</span>, <span class="number">0</span>, <span class="number">1_000_000</span>)
+<a href=#9120 id=9120 data-nosnippet>9120</a>                .<span class="kw">await
+<a href=#9121 id=9121 data-nosnippet>9121</a>                </span>.unwrap()
+<a href=#9122 id=9122 data-nosnippet>9122</a>                .into_iter()
+<a href=#9123 id=9123 data-nosnippet>9123</a>                .map(|v| (v.account, v))
+<a href=#9124 id=9124 data-nosnippet>9124</a>                .collect::&lt;RegisteredValidatorMap&gt;()
+<a href=#9125 id=9125 data-nosnippet>9125</a>        );
+<a href=#9126 id=9126 data-nosnippet>9126</a>
+<a href=#9127 id=9127 data-nosnippet>9127</a>        <span class="comment">// Querying for a stake table before the first real epoch is an error.
+<a href=#9128 id=9128 data-nosnippet>9128</a>        </span><span class="kw">let </span>err = client
+<a href=#9129 id=9129 data-nosnippet>9129</a>            .get::&lt;Vec&lt;StakeTableEvent&gt;&gt;(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"light-client/stake-table/{}"</span>, first_epoch + <span class="number">1</span>))
+<a href=#9130 id=9130 data-nosnippet>9130</a>            .send()
+<a href=#9131 id=9131 data-nosnippet>9131</a>            .<span class="kw">await
+<a href=#9132 id=9132 data-nosnippet>9132</a>            </span>.unwrap_err();
+<a href=#9133 id=9133 data-nosnippet>9133</a>        <span class="macro">assert_eq!</span>(err.status(), StatusCode::BAD_REQUEST);
+<a href=#9134 id=9134 data-nosnippet>9134</a>    }
 <a href=#9135 id=9135 data-nosnippet>9135</a>
-<a href=#9136 id=9136 data-nosnippet>9136</a>        <span class="kw">let </span>leaf = catchup
-<a href=#9137 id=9137 data-nosnippet>9137</a>            .fetch_leaf(TARGET_HEIGHT, stake_table, success_threshold)
-<a href=#9138 id=9138 data-nosnippet>9138</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#9139 id=9139 data-nosnippet>9139</a>
-<a href=#9140 id=9140 data-nosnippet>9140</a>        <span class="macro">assert_eq!</span>(
-<a href=#9141 id=9141 data-nosnippet>9141</a>            leaf.height(),
-<a href=#9142 id=9142 data-nosnippet>9142</a>            TARGET_HEIGHT,
-<a href=#9143 id=9143 data-nosnippet>9143</a>            <span class="string">"fetch_leaf must return the leaf at exactly the requested height"
-<a href=#9144 id=9144 data-nosnippet>9144</a>        </span>);
-<a href=#9145 id=9145 data-nosnippet>9145</a>
-<a href=#9146 id=9146 data-nosnippet>9146</a>        <span class="prelude-val">Ok</span>(())
-<a href=#9147 id=9147 data-nosnippet>9147</a>    }
-<a href=#9148 id=9148 data-nosnippet>9148</a>}
+<a href=#9136 id=9136 data-nosnippet>9136</a>    <span class="doccomment">/// Test that `fetch_leaf` returns a leaf with exactly the requested block height.
+<a href=#9137 id=9137 data-nosnippet>9137</a>    </span><span class="attr">#[test_log::test(tokio::test(flavor = <span class="string">"multi_thread"</span>))]
+<a href=#9138 id=9138 data-nosnippet>9138</a>    </span><span class="kw">async fn </span>test_fetch_leaf_returns_exact_height() -&gt; anyhow::Result&lt;()&gt; {
+<a href=#9139 id=9139 data-nosnippet>9139</a>        <span class="kw">const </span>EPOCH_HEIGHT: u64 = <span class="number">10</span>;
+<a href=#9140 id=9140 data-nosnippet>9140</a>        <span class="kw">const </span>NUM_NODES: usize = <span class="number">5</span>;
+<a href=#9141 id=9141 data-nosnippet>9141</a>        <span class="kw">const </span>TARGET_HEIGHT: u64 = EPOCH_HEIGHT * <span class="number">3 </span>+ <span class="number">2</span>;
+<a href=#9142 id=9142 data-nosnippet>9142</a>
+<a href=#9143 id=9143 data-nosnippet>9143</a>        <span class="kw">let </span>network_config = TestConfigBuilder::default()
+<a href=#9144 id=9144 data-nosnippet>9144</a>            .epoch_height(EPOCH_HEIGHT)
+<a href=#9145 id=9145 data-nosnippet>9145</a>            .build();
+<a href=#9146 id=9146 data-nosnippet>9146</a>
+<a href=#9147 id=9147 data-nosnippet>9147</a>        <span class="kw">let </span>port = reserve_tcp_port().expect(<span class="string">"No ports free for query service"</span>);
+<a href=#9148 id=9148 data-nosnippet>9148</a>
+<a href=#9149 id=9149 data-nosnippet>9149</a>        <span class="kw">let </span>storage = join_all((<span class="number">0</span>..NUM_NODES).map(|<span class="kw">_</span>| SqlDataSource::create_storage())).<span class="kw">await</span>;
+<a href=#9150 id=9150 data-nosnippet>9150</a>        <span class="kw">let </span>persistence: [<span class="kw">_</span>; NUM_NODES] = storage
+<a href=#9151 id=9151 data-nosnippet>9151</a>            .iter()
+<a href=#9152 id=9152 data-nosnippet>9152</a>            .map(&lt;SqlDataSource <span class="kw">as </span>TestableSequencerDataSource&gt;::persistence_options)
+<a href=#9153 id=9153 data-nosnippet>9153</a>            .collect::&lt;Vec&lt;<span class="kw">_</span>&gt;&gt;()
+<a href=#9154 id=9154 data-nosnippet>9154</a>            .try_into()
+<a href=#9155 id=9155 data-nosnippet>9155</a>            .unwrap();
+<a href=#9156 id=9156 data-nosnippet>9156</a>
+<a href=#9157 id=9157 data-nosnippet>9157</a>        <span class="kw">let </span>catchup_peers = std::array::from_fn(|<span class="kw">_</span>| {
+<a href=#9158 id=9158 data-nosnippet>9158</a>            StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
+<a href=#9159 id=9159 data-nosnippet>9159</a>                <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
+<a href=#9160 id=9160 data-nosnippet>9160</a>                Default::default(),
+<a href=#9161 id=9161 data-nosnippet>9161</a>                Duration::from_secs(<span class="number">2</span>),
+<a href=#9162 id=9162 data-nosnippet>9162</a>                <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#9163 id=9163 data-nosnippet>9163</a>            )
+<a href=#9164 id=9164 data-nosnippet>9164</a>        });
+<a href=#9165 id=9165 data-nosnippet>9165</a>
+<a href=#9166 id=9166 data-nosnippet>9166</a>        <span class="kw">let </span>config = TestNetworkConfigBuilder::with_num_nodes()
+<a href=#9167 id=9167 data-nosnippet>9167</a>            .api_config(SqlDataSource::options(
+<a href=#9168 id=9168 data-nosnippet>9168</a>                <span class="kw-2">&amp;</span>storage[<span class="number">0</span>],
+<a href=#9169 id=9169 data-nosnippet>9169</a>                Options::with_port(port),
+<a href=#9170 id=9170 data-nosnippet>9170</a>            ))
+<a href=#9171 id=9171 data-nosnippet>9171</a>            .network_config(network_config)
+<a href=#9172 id=9172 data-nosnippet>9172</a>            .persistences(persistence)
+<a href=#9173 id=9173 data-nosnippet>9173</a>            .catchups(catchup_peers)
+<a href=#9174 id=9174 data-nosnippet>9174</a>            .pos_hook(
+<a href=#9175 id=9175 data-nosnippet>9175</a>                DelegationConfig::MultipleDelegators,
+<a href=#9176 id=9176 data-nosnippet>9176</a>                Default::default(),
+<a href=#9177 id=9177 data-nosnippet>9177</a>                POS_V4,
+<a href=#9178 id=9178 data-nosnippet>9178</a>            )
+<a href=#9179 id=9179 data-nosnippet>9179</a>            .<span class="kw">await</span><span class="question-mark">?
+<a href=#9180 id=9180 data-nosnippet>9180</a>            </span>.build();
+<a href=#9181 id=9181 data-nosnippet>9181</a>
+<a href=#9182 id=9182 data-nosnippet>9182</a>        <span class="kw">let </span>network = TestNetwork::new(config, POS_V4).<span class="kw">await</span>;
+<a href=#9183 id=9183 data-nosnippet>9183</a>
+<a href=#9184 id=9184 data-nosnippet>9184</a>        <span class="comment">// Wait for chain to advance past our target height
+<a href=#9185 id=9185 data-nosnippet>9185</a>        </span><span class="kw">let </span>height_client: Client&lt;ServerError, StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt; =
+<a href=#9186 id=9186 data-nosnippet>9186</a>            Client::new(<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap());
+<a href=#9187 id=9187 data-nosnippet>9187</a>        wait_until_block_height(<span class="kw-2">&amp;</span>height_client, <span class="string">"node/block-height"</span>, TARGET_HEIGHT + <span class="number">5</span>).<span class="kw">await</span>;
+<a href=#9188 id=9188 data-nosnippet>9188</a>
+<a href=#9189 id=9189 data-nosnippet>9189</a>        <span class="comment">// Get the stake table and threshold for the epoch containing TARGET_HEIGHT
+<a href=#9190 id=9190 data-nosnippet>9190</a>        </span><span class="kw">let </span>coordinator = network.server.node_state().coordinator;
+<a href=#9191 id=9191 data-nosnippet>9191</a>        <span class="kw">let </span>epoch = EpochNumber::new(epoch_from_block_number(TARGET_HEIGHT, EPOCH_HEIGHT));
+<a href=#9192 id=9192 data-nosnippet>9192</a>        <span class="kw">let </span>snapshot = coordinator.membership().snapshot(epoch).expect(<span class="string">"snapshot"</span>);
+<a href=#9193 id=9193 data-nosnippet>9193</a>        <span class="kw">let </span>stake_table = HSStakeTable::from_iter(snapshot.stake_table());
+<a href=#9194 id=9194 data-nosnippet>9194</a>        <span class="kw">let </span>success_threshold = snapshot.success_threshold();
+<a href=#9195 id=9195 data-nosnippet>9195</a>
+<a href=#9196 id=9196 data-nosnippet>9196</a>        <span class="comment">// Use StatePeers to fetch the leaf at the exact target height
+<a href=#9197 id=9197 data-nosnippet>9197</a>        </span><span class="kw">let </span>catchup = StatePeers::&lt;StaticVersion&lt;<span class="number">0</span>, <span class="number">1</span>&gt;&gt;::from_urls(
+<a href=#9198 id=9198 data-nosnippet>9198</a>            <span class="macro">vec!</span>[<span class="macro">format!</span>(<span class="string">"http://localhost:{port}"</span>).parse().unwrap()],
+<a href=#9199 id=9199 data-nosnippet>9199</a>            Default::default(),
+<a href=#9200 id=9200 data-nosnippet>9200</a>            Duration::from_secs(<span class="number">5</span>),
+<a href=#9201 id=9201 data-nosnippet>9201</a>            <span class="kw-2">&amp;</span>NoMetrics,
+<a href=#9202 id=9202 data-nosnippet>9202</a>        );
+<a href=#9203 id=9203 data-nosnippet>9203</a>
+<a href=#9204 id=9204 data-nosnippet>9204</a>        <span class="kw">let </span>leaf = catchup
+<a href=#9205 id=9205 data-nosnippet>9205</a>            .fetch_leaf(TARGET_HEIGHT, stake_table, success_threshold)
+<a href=#9206 id=9206 data-nosnippet>9206</a>            .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#9207 id=9207 data-nosnippet>9207</a>
+<a href=#9208 id=9208 data-nosnippet>9208</a>        <span class="macro">assert_eq!</span>(
+<a href=#9209 id=9209 data-nosnippet>9209</a>            leaf.height(),
+<a href=#9210 id=9210 data-nosnippet>9210</a>            TARGET_HEIGHT,
+<a href=#9211 id=9211 data-nosnippet>9211</a>            <span class="string">"fetch_leaf must return the leaf at exactly the requested height"
+<a href=#9212 id=9212 data-nosnippet>9212</a>        </span>);
+<a href=#9213 id=9213 data-nosnippet>9213</a>
+<a href=#9214 id=9214 data-nosnippet>9214</a>        <span class="prelude-val">Ok</span>(())
+<a href=#9215 id=9215 data-nosnippet>9215</a>    }
+<a href=#9216 id=9216 data-nosnippet>9216</a>}
 </code></pre></div></section></main></body></html>
