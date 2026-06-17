@@ -21,7 +21,7 @@ use std::{
 use anyhow::Context;
 use clap::Parser;
 use derivative::Derivative;
-use jf_signature::bls_over_bn254::SignKey;
+use jf_signature::bls_over_bn254::{SignKey, VerKey};
 use opentelemetry::KeyValue;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::{Compression, LogExporter, Protocol, WithExportConfig, WithHttpConfig};
@@ -36,6 +36,33 @@ use crate::{UnauthenticatedToken, push_task, remote_write::Label};
 
 const SERVICE_NAME: &str = "espresso-node";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+const PUBKEY_SLUG_LEN: usize = 24;
+
+fn pubkey_slug(staking_key: &SignKey) -> String {
+    VerKey::from(staking_key)
+        .to_string()
+        .chars()
+        .take(PUBKEY_SLUG_LEN)
+        .collect()
+}
+
+fn segment(value: Option<&str>) -> String {
+    match value.unwrap_or("").trim() {
+        "" => "unk".to_owned(),
+        v => v.replace(' ', "-"),
+    }
+}
+
+fn instance_id(company: Option<&str>, node: Option<&str>, staking_key: &SignKey) -> String {
+    format!(
+        "{}-{}-{}",
+        segment(company),
+        segment(node),
+        pubkey_slug(staking_key)
+    )
+    .to_lowercase()
+}
 
 /// Join `thread`, detaching it after [`SHUTDOWN_TIMEOUT`] so a wedged exporter
 /// can't hang shutdown on the main thread.
@@ -354,23 +381,25 @@ pub fn init(
     let telemetry_log_filter: Arc<String> = Arc::new(opts.log_filter.clone());
     let rate_limit_warned: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
+    let instance = instance_id(company_name, node_name, staking_key);
+
     let logger_provider = if logs_on {
-        Some(build_logger_provider(jwt.clone(), &endpoint, node_name)?)
+        Some(build_logger_provider(jwt.clone(), &endpoint, &instance)?)
     } else {
         None
     };
 
     let metrics_interval = Duration::from_secs(opts.metrics_interval_secs.max(1));
-    let mut metrics_external_labels = vec![Label {
-        name: "service".to_owned(),
-        value: SERVICE_NAME.to_owned(),
-    }];
-    if let Some(name) = node_name {
-        metrics_external_labels.push(Label {
+    let metrics_external_labels = vec![
+        Label {
+            name: "service".to_owned(),
+            value: SERVICE_NAME.to_owned(),
+        },
+        Label {
             name: "instance".to_owned(),
-            value: name.to_owned(),
-        });
-    }
+            value: instance,
+        },
+    ];
     let mut handle = TelemetryHandle {
         logger_provider,
         log_filter: opts.log_filter.clone(),
@@ -394,7 +423,7 @@ pub fn init(
 fn build_logger_provider(
     jwt: String,
     endpoint: &str,
-    node_name: Option<&str>,
+    instance: &str,
 ) -> anyhow::Result<SdkLoggerProvider> {
     let logs_endpoint = format!("{}/v1/logs", endpoint.trim_end_matches('/'));
 
@@ -411,14 +440,40 @@ fn build_logger_provider(
         .build()
         .context("build OTLP log exporter")?;
 
-    let mut resource = Resource::builder().with_service_name(SERVICE_NAME);
-    if let Some(name) = node_name {
-        // service.instance.id distinguishes individual operators in the aggregator.
-        resource = resource.with_attribute(KeyValue::new("service.instance.id", name.to_owned()));
-    }
+    let resource = Resource::builder()
+        .with_service_name(SERVICE_NAME)
+        .with_attribute(KeyValue::new("service.instance.id", instance.to_owned()));
 
     Ok(SdkLoggerProvider::builder()
         .with_resource(resource.build())
         .with_batch_exporter(exporter)
         .build())
+}
+
+#[cfg(test)]
+mod tests {
+    use jf_signature::{SignatureScheme, bls_over_bn254::BLSOverBN254CurveSignatureScheme};
+
+    use super::*;
+
+    #[test]
+    fn instance_id_appends_pubkey_slug() {
+        let key = BLSOverBN254CurveSignatureScheme::key_gen(&(), &mut rand::thread_rng())
+            .unwrap()
+            .0;
+        let slug = pubkey_slug(&key);
+        assert_eq!(slug.len(), PUBKEY_SLUG_LEN);
+        assert!(slug.starts_with("BLS_VER_KEY~"));
+
+        let slug = slug.to_lowercase();
+        assert_eq!(
+            instance_id(Some("Acme Corp"), Some("Node 42"), &key),
+            format!("acme-corp-node-42-{slug}")
+        );
+        assert_eq!(instance_id(None, None, &key), format!("unk-unk-{slug}"));
+        assert_eq!(
+            instance_id(Some("  "), Some("node-1"), &key),
+            format!("unk-node-1-{slug}")
+        );
+    }
 }
