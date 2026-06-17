@@ -9302,4 +9302,149 @@ mod test {
 
         Ok(())
     }
+
+    /// Start a network at V5 from genesis, restart ALL nodes just before an epoch transition block
+    /// (`boundary - 3`), and confirm the chain keeps producing blocks afterward.
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_v5_restart_before_epoch_boundary() {
+        const NUM_NODES: usize = 3;
+        const EPOCH_HEIGHT: u64 = 10;
+        // Rewards start in epoch 4. Restart 3 blocks before the boundary that closes epoch 4, so
+        // the restarted network produces the boundary block (`4 * EPOCH_HEIGHT`) itself.
+        const RESTART_EPOCH: u64 = 4;
+        const RESTART_BOUNDARY: u64 = RESTART_EPOCH * EPOCH_HEIGHT;
+        const RESTART_HEIGHT: u64 = RESTART_BOUNDARY - 3;
+        // Blocks to produce after the restart before declaring success.
+        const BLOCKS_AFTER_RESTART: u64 = 5;
+
+        const V5: Upgrade = Upgrade::trivial(EPOCH_REWARD_VERSION);
+
+        let port = reserve_tcp_port().expect("OS should have ephemeral ports available");
+
+        // Slow empty-block production so we comfortably stop at the exact target height. On an idle
+        // chain the empty-block time is ~`builder_timeout`; raise `next_view_timeout` above it so
+        // the slow (but healthy) views aren't treated as failures.
+        let network_config = TestConfigBuilder::<NUM_NODES>::default()
+            .epoch_height(EPOCH_HEIGHT)
+            .builder_timeout(Duration::from_secs(3))
+            .next_view_timeout(Duration::from_secs(10))
+            .build();
+
+        let storage = join_all((0..NUM_NODES).map(|_| SqlDataSource::create_storage())).await;
+        let persistence: [_; NUM_NODES] = storage
+            .iter()
+            .map(<SqlDataSource as TestableSequencerDataSource>::persistence_options)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port),
+            ))
+            .persistences(persistence.clone())
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{port}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(network_config)
+            .pos_hook(DelegationConfig::MultipleDelegators, Default::default(), V5)
+            .await
+            .unwrap()
+            .build();
+
+        let mut network = TestNetwork::new(config, V5).await;
+
+        // Watch the decide stream and stop as soon as `boundary - 3` is decided. Consuming the
+        // stream (rather than polling `decided_leaf`) makes this independent of block timing: we
+        // see every decided leaf and stop the network the moment the target height appears, so we
+        // can never race past it regardless of how fast blocks are produced.
+        {
+            let mut events = network.server.event_stream();
+            'wait: loop {
+                let event = events
+                    .next()
+                    .await
+                    .expect("event stream ended unexpectedly");
+                let CoordinatorEvent::LegacyEvent(Event {
+                    event: EventType::Decide { leaf_chain, .. },
+                    ..
+                }) = event
+                else {
+                    continue;
+                };
+                // `leaf_chain` is newest-first; once any decided leaf has reached the target
+                // height, the chain is at or past it.
+                for LeafInfo { leaf, .. } in leaf_chain.iter() {
+                    if leaf.block_header().height() >= RESTART_HEIGHT {
+                        break 'wait;
+                    }
+                }
+            }
+        }
+
+        let restart_height = network.server.decided_leaf().await.height();
+        tracing::info!(
+            restart_height,
+            restart_epoch = RESTART_EPOCH,
+            restart_boundary = RESTART_BOUNDARY,
+            "restarting all nodes 3 blocks before an epoch boundary"
+        );
+
+        // Clone the TestConfig before dropping the network so the anvil/L1/contracts stay alive.
+        let saved_cfg = network.cfg.clone();
+
+        network.stop_consensus().await;
+        drop(network);
+
+        // Rebuild reusing the same persistence so nodes resume from stored state.
+        let port2 = reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let config2 = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
+            .api_config(SqlDataSource::options(
+                &storage[0],
+                Options::with_port(port2),
+            ))
+            .persistences(persistence)
+            .catchups(std::array::from_fn(|_| {
+                StatePeers::<SequencerApiVersion>::from_urls(
+                    vec![format!("http://localhost:{port2}").parse().unwrap()],
+                    Default::default(),
+                    Duration::from_secs(2),
+                    &NoMetrics,
+                )
+            }))
+            .network_config(saved_cfg)
+            .build();
+        let network2 = TestNetwork::new(config2, V5).await;
+
+        // The restarted network must keep advancing, including across the next epoch boundary.
+        // Require BLOCKS_AFTER_RESTART new decides, using a lack-of-progress watchdog so a
+        // healthy-but-slow chain still passes.
+        let target_height = restart_height + BLOCKS_AFTER_RESTART;
+        let stall_limit = 30; // 30 polls * 2s = 60s without a new decide => stalled
+        let mut last_height = network2.server.decided_leaf().await.height();
+        let mut stalled_polls = 0;
+        while last_height < target_height {
+            sleep(Duration::from_secs(2)).await;
+            let height = network2.server.decided_leaf().await.height();
+            if height > last_height {
+                last_height = height;
+                stalled_polls = 0;
+            } else {
+                stalled_polls += 1;
+                if stalled_polls >= stall_limit {
+                    panic!(
+                        "chain stalled after restart 3 blocks before boundary {RESTART_BOUNDARY}: \
+                         no new decide for 60s at height {last_height}, unable to produce/cross \
+                         the epoch boundary (target height was {target_height})."
+                    );
+                }
+            }
+        }
+    }
 }
