@@ -84,10 +84,7 @@ use vbs::version::Version;
 use vec1::vec1;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-/// Extract the decided leaf chain from a consensus event, regardless of which
-/// protocol produced it. Legacy HotShot emits `LegacyEvent(Decide)`; the new
-/// protocol (V6+) emits `NewDecide`. Both carry the chain as `Vec<LeafInfo>`.
-/// Returns `None` for non-decide events.
+/// Extract the decided leaf chain from a consensus event, or `None` if it isn't a decide.
 fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
     match event {
         CoordinatorEvent::LegacyEvent(Event {
@@ -99,9 +96,7 @@ fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTy
     }
 }
 
-/// Epoch of the certificate committing a decide event, for either protocol.
-/// Legacy uses the decide's `committing_qc`; the new protocol uses the
-/// `NewDecide` `cert1`. Returns `None` for non-decide events.
+/// Epoch of the certificate committing a decide event, or `None` if it isn't a decide.
 fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
     match event {
         CoordinatorEvent::LegacyEvent(Event {
