@@ -42,15 +42,17 @@ type Prologue = Vec<u8>;
 impl Connection {
     pub async fn accept(conf: Arc<Config>, mut stream: TcpStream) -> Result<Self> {
         let node = conf.keypair.public_key();
+        let addr = stream.peer_addr()?;
 
         if let Err(err) = stream.set_nodelay(true) {
             warn!(name = %conf.name, %node, %err, "failed to enable NO_DELAY option")
         }
 
         until(conf.handshake_timeout, async move {
-            let (version, prologue) = select_version(&conf, &mut stream, false).await?;
+            let (version, prologue) =
+                select_version(&node, &addr, &conf, &mut stream, false).await?;
 
-            debug!(name = %conf.name, %node, %version, "negotiated version");
+            debug!(name = %conf.name, %node, %addr, %version, "negotiated version");
 
             let noise_proto = conf
                 .noise_protocols
@@ -201,7 +203,7 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
     }
 
     until(conf.handshake_timeout, async move {
-        let (version, prologue) = select_version(conf, &mut stream, true).await?;
+        let (version, prologue) = select_version(&node, &addr, conf, &mut stream, true).await?;
 
         debug!(name = %conf.name, %node, %peer, %addr, %version, "negotiated version");
 
@@ -241,6 +243,8 @@ fn remote_static_key(state: &TransportState) -> Option<PublicKey> {
 ///
 /// This will be the minimum of the max. supported ones from both sides.
 async fn select_version(
+    node: &PublicKey,
+    addr: &SocketAddr,
     conf: &Config,
     stream: &mut TcpStream,
     is_initiator: bool,
@@ -265,10 +269,15 @@ async fn select_version(
     let selected = min(our_max, their_max);
 
     if selected < their_min || selected < our_min {
-        return Err(NetworkError::IncompatibleVersions {
-            ours: (our_min, our_max),
-            theirs: (their_min, their_max),
-        });
+        warn!(
+            name = %conf.name,
+            %node,
+            %addr,
+            local  = ?(u16::from(our_min), u16::from(our_max)),
+            remote = ?(u16::from(their_min), u16::from(their_max)),
+            "incompatible versions"
+        );
+        return Err(NetworkError::IncompatibleVersions);
     }
 
     // Construct the prologue so that both sides end up with the same value.
@@ -384,11 +393,11 @@ mod tests {
         tokio::join!(
             async {
                 let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-                select_version(a, &mut s, true).await
+                select_version(&a.public_key(), &s.peer_addr().unwrap(), a, &mut s, true).await
             },
             async {
                 let (mut s, _) = listener.accept().await.unwrap();
-                select_version(b, &mut s, false).await
+                select_version(&b.public_key(), &s.peer_addr().unwrap(), b, &mut s, false).await
             },
         )
     }
@@ -426,7 +435,7 @@ mod tests {
     #[tokio::test]
     async fn disjoint_ranges_fail() {
         let (ra, rb) = negotiate(&config([1]), &config([2])).await;
-        assert!(matches!(ra, Err(NetworkError::IncompatibleVersions { .. })));
-        assert!(matches!(rb, Err(NetworkError::IncompatibleVersions { .. })));
+        assert!(matches!(ra, Err(NetworkError::IncompatibleVersions)));
+        assert!(matches!(rb, Err(NetworkError::IncompatibleVersions)));
     }
 }
