@@ -21,12 +21,13 @@ use std::{
 use anyhow::Context;
 use clap::Parser;
 use derivative::Derivative;
-use jf_signature::bls_over_bn254::SignKey;
+use jf_signature::bls_over_bn254::{SignKey, VerKey};
 use opentelemetry::KeyValue;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::{Compression, LogExporter, Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{Resource, logs::SdkLoggerProvider};
 use prometheus::Registry;
+use tagged_base64::TaggedBase64;
 use tokio::sync::oneshot;
 use tracing::Subscriber;
 use tracing_subscriber::{EnvFilter, Layer, registry::LookupSpan};
@@ -36,6 +37,33 @@ use crate::{UnauthenticatedToken, push_task, remote_write::Label};
 
 const SERVICE_NAME: &str = "espresso-node";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Length of the BLS key prefix used to disambiguate operators, matching the
+/// telemetry proxy's `node_id_from_token` slug.
+const PUBKEY_SLUG_LEN: usize = 24;
+
+/// First [`PUBKEY_SLUG_LEN`] chars of the verification key's tagged-base64
+/// string, identical to the proxy's pubkey fallback so node-side and
+/// proxy-side ids agree.
+fn pubkey_slug(staking_key: &SignKey) -> String {
+    TaggedBase64::from(&VerKey::from(staking_key))
+        .to_string()
+        .chars()
+        .take(PUBKEY_SLUG_LEN)
+        .collect()
+}
+
+/// Partition key stamped on logs (`service.instance.id`) and metrics
+/// (`instance` label): `{node_name}-{pubkey_slug}`, with `node_name` defaulting
+/// to `unknown`. Anchors the key to the BLS key so the aggregator never falls
+/// back to a bare `unknown`. Set in-process, so spoofable.
+fn instance_id(node_name: Option<&str>, staking_key: &SignKey) -> String {
+    format!(
+        "{}-{}",
+        node_name.unwrap_or("unknown"),
+        pubkey_slug(staking_key)
+    )
+}
 
 /// Join `thread`, detaching it after [`SHUTDOWN_TIMEOUT`] so a wedged exporter
 /// can't hang shutdown on the main thread.
@@ -354,23 +382,25 @@ pub fn init(
     let telemetry_log_filter: Arc<String> = Arc::new(opts.log_filter.clone());
     let rate_limit_warned: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
+    let instance = instance_id(node_name, staking_key);
+
     let logger_provider = if logs_on {
-        Some(build_logger_provider(jwt.clone(), &endpoint, node_name)?)
+        Some(build_logger_provider(jwt.clone(), &endpoint, &instance)?)
     } else {
         None
     };
 
     let metrics_interval = Duration::from_secs(opts.metrics_interval_secs.max(1));
-    let mut metrics_external_labels = vec![Label {
-        name: "service".to_owned(),
-        value: SERVICE_NAME.to_owned(),
-    }];
-    if let Some(name) = node_name {
-        metrics_external_labels.push(Label {
+    let metrics_external_labels = vec![
+        Label {
+            name: "service".to_owned(),
+            value: SERVICE_NAME.to_owned(),
+        },
+        Label {
             name: "instance".to_owned(),
-            value: name.to_owned(),
-        });
-    }
+            value: instance,
+        },
+    ];
     let mut handle = TelemetryHandle {
         logger_provider,
         log_filter: opts.log_filter.clone(),
@@ -394,7 +424,7 @@ pub fn init(
 fn build_logger_provider(
     jwt: String,
     endpoint: &str,
-    node_name: Option<&str>,
+    instance: &str,
 ) -> anyhow::Result<SdkLoggerProvider> {
     let logs_endpoint = format!("{}/v1/logs", endpoint.trim_end_matches('/'));
 
@@ -411,14 +441,40 @@ fn build_logger_provider(
         .build()
         .context("build OTLP log exporter")?;
 
-    let mut resource = Resource::builder().with_service_name(SERVICE_NAME);
-    if let Some(name) = node_name {
-        // service.instance.id distinguishes individual operators in the aggregator.
-        resource = resource.with_attribute(KeyValue::new("service.instance.id", name.to_owned()));
-    }
+    // service.instance.id distinguishes individual operators in the aggregator.
+    let resource = Resource::builder()
+        .with_service_name(SERVICE_NAME)
+        .with_attribute(KeyValue::new("service.instance.id", instance.to_owned()));
 
     Ok(SdkLoggerProvider::builder()
         .with_resource(resource.build())
         .with_batch_exporter(exporter)
         .build())
+}
+
+#[cfg(test)]
+mod tests {
+    use jf_signature::{SignatureScheme, bls_over_bn254::BLSOverBN254CurveSignatureScheme};
+
+    use super::*;
+
+    fn staking_key() -> SignKey {
+        BLSOverBN254CurveSignatureScheme::key_gen(&(), &mut rand::thread_rng())
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn instance_id_appends_pubkey_slug() {
+        let key = staking_key();
+        let slug = pubkey_slug(&key);
+        assert_eq!(slug.len(), PUBKEY_SLUG_LEN);
+        assert!(slug.starts_with("BLS_VER_KEY~"));
+
+        assert_eq!(
+            instance_id(Some("node-42"), &key),
+            format!("node-42-{slug}")
+        );
+        assert_eq!(instance_id(None, &key), format!("unknown-{slug}"));
+    }
 }
