@@ -56,7 +56,7 @@ impl DHTBootstrapTask {
                         break;
                     },
                     Some(InputEvent::StartBootstrap) => {
-                        tracing::warn!("Trying to start bootstrap that's already in progress");
+                        tracing::debug!("Trying to start bootstrap that's already in progress");
                         continue;
                     },
                     None => {
