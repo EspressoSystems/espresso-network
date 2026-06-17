@@ -42,5 +42,10 @@ url = { workspace = true }
 vec1 = { workspace = true }
 versions = { workspace = true }
 
+[dev-dependencies]
+# Enables `vid/testing` for tests only: constructs non-codeword dispersals to
+# exercise the unrecoverable VID reconstruction path.
+vid = { workspace = true, features = ["testing"] }
+
 [lints]
 workspace = true

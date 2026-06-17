@@ -92,7 +92,7 @@ pub enum ErrorSource {
     EpochManager(#[from] EpochManagerError),
 
     #[error("vid reconstruction error: {0}")]
-    VidReconstruct(#[from] VidReconstructError),
+    VidReconstruct(String),
 
     #[error("vid disperse error: {0}")]
     VidDisperse(#[from] VidDisperseError),
@@ -115,6 +115,16 @@ impl From<VidDisperseError> for CoordinatorError {
         } else {
             Self::regular(e)
         }
+    }
+}
+
+// `VidReconstructError<K>` is generic over the signature key type, but
+// `ErrorSource` is not parameterized by it, so flatten to the error's
+// `Display` (view + kind). The attributable `bad_share_keys` are consumed by
+// the reconstructor itself, not by this error boundary.
+impl<K> From<VidReconstructError<K>> for ErrorSource {
+    fn from(e: VidReconstructError<K>) -> Self {
+        Self::VidReconstruct(e.to_string())
     }
 }
 

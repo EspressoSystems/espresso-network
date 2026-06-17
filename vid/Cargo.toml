@@ -11,6 +11,9 @@ parallel = ["ark-ff/parallel", "jf-utils/parallel", "p3-maybe-rayon/parallel"]
 print-trace = ["ark-std/print-trace"]
 sha256 = []
 keccak256 = []
+# Exposes constructors for malformed dispersals (e.g. non-codeword
+# commitments) so downstream crates can test reconstruction failure paths.
+testing = []
 
 [dependencies]
 anyhow = { workspace = true }

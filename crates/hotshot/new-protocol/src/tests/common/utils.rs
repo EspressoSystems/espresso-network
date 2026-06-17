@@ -213,7 +213,9 @@ impl TestView {
         };
 
         Message {
-            sender: self.leader_public_key,
+            // A Vote1 is broadcast by the voting validator itself, and carries
+            // that validator's own VID share (recipient_key == pub_key).
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote1(Vote1 {
                 vote,
                 vid_share,

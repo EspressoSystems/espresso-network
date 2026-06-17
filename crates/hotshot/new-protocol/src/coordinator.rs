@@ -12,7 +12,10 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber,
+        vid_disperse::vid_total_weight,
+    },
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
@@ -22,6 +25,7 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     utils::{epoch_from_block_number, is_epoch_root},
+    vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
     vote::HasViewNumber,
 };
 use metrics::Measurement;
@@ -944,6 +948,13 @@ where
                 ConsensusMessage::VidShare(share) => {
                     let view = share.data.view_number();
                     debug!(%node, %sender, %view, "recv vid share");
+                    // The leader unicasts each node only its own share. A share
+                    // addressed to anyone else is bogus and could otherwise
+                    // displace our own in the unpaired-share cache.
+                    if share.data.recipient_key != self.public_key {
+                        warn!(%node, %sender, %view, "ignoring vid share not addressed to this node");
+                        return None;
+                    }
                     if self.consensus.wants_proposal_for_view(&view) {
                         self.share_validator.validate(share);
                     }
@@ -973,7 +984,7 @@ where
                         self.vote1_collector.accumulate_vote(vote1.vote.clone());
                     }
                     self.vid_reconstructor
-                        .handle_vid_share(vote1.vid_share, None);
+                        .handle_vid_share(message.sender.clone(), vote1.vid_share);
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
@@ -1162,6 +1173,19 @@ where
         }
     }
 
+    /// The VID erasure parameters the committee fixes for `target_epoch`,
+    /// matching what an honest disperser derives. Used to reject shares whose
+    /// `common.param` is forged (the commitment binds `ns_commits`, not
+    /// `param`). `None` if the committee cannot be resolved.
+    fn expected_vid_param(&self, target_epoch: Option<EpochNumber>) -> Option<AvidmGf2Param> {
+        let membership = self
+            .membership_coordinator
+            .stake_table_for_epoch(target_epoch)
+            .ok()?;
+        let total_weight = vid_total_weight::<T, _>(membership.stake_table(), target_epoch);
+        init_avidm_gf2_param(total_weight).ok()
+    }
+
     fn on_proposal_and_vid_share(
         &mut self,
         validated: ValidatedProposal<T>,
@@ -1182,15 +1206,19 @@ where
             );
         }
 
-        let m = validated
-            .message
-            .proposal
-            .data
-            .block_header
-            .metadata()
-            .clone();
+        let expected_param = self.expected_vid_param(vid_share.target_epoch);
+        let proposal = &validated.message.proposal.data;
+        self.vid_reconstructor.handle_proposal(
+            proposal.view_number(),
+            vid_share.payload_commitment,
+            proposal.block_header.metadata().clone(),
+            proposal.epoch,
+            expected_param,
+        );
+        // This is our own share, addressed to us by the leader and already
+        // verified by the share validator.
         self.vid_reconstructor
-            .handle_vid_share(vid_share.clone(), m);
+            .handle_vid_share(self.public_key.clone(), vid_share.clone());
 
         // GC for the cache
         let view = validated.message.proposal.data.view_number();
