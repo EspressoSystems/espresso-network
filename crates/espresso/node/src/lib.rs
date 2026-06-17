@@ -1302,11 +1302,6 @@ pub mod testing {
             self
         }
 
-        /// Override the builder timeout. On an idle chain the test builder returns no block (so it
-        /// doesn't drive empty blocks at full speed); the leader retries until this timeout elapses
-        /// and only then proposes an empty block itself. So for an empty mempool this is effectively
-        /// the empty-block time. Keep it below [`Self::next_view_timeout`] or views time out before
-        /// the leader proposes.
         pub fn builder_timeout(mut self, timeout: Duration) -> Self {
             self.config.builder_timeout = timeout;
             self
