@@ -125,7 +125,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        allocator: [jemalloc, mimalloc, snmalloc, tcmalloc, hoard]
+        allocator: [jemalloc, mimalloc, snmalloc, tcmalloc]
     steps:
       - uses: actions/checkout@v6
 
