@@ -38,7 +38,6 @@ use crate::{UnauthenticatedToken, push_task, remote_write::Label};
 const SERVICE_NAME: &str = "espresso-node";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Matches the telemetry proxy's `node_id_from_token` pubkey slug length.
 const PUBKEY_SLUG_LEN: usize = 24;
 
 fn pubkey_slug(staking_key: &SignKey) -> String {
@@ -49,8 +48,6 @@ fn pubkey_slug(staking_key: &SignKey) -> String {
         .collect()
 }
 
-/// Partition key for logs and metrics: `{node_name|unknown}-{pubkey_slug}`,
-/// lowercased.
 fn instance_id(node_name: Option<&str>, staking_key: &SignKey) -> String {
     format!(
         "{}-{}",
