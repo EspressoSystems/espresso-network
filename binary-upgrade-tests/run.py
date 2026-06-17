@@ -50,6 +50,10 @@ EPOCH_HEIGHT = 30
 # odds there.
 SAFE_STOP_WINDOW = (2, 10)
 
+# A wiped pg node rebuilds its transaction index by fetching and verifying every
+# payload from genesis; give that its own budget, separate from the storage wait.
+AGGREGATOR_TIMEOUT = 600.0
+
 
 # Services NOT touched by the binary upgrade test:
 #   - one-shots that already ran in phase 1 (deploy-*, fund-builder,
@@ -650,18 +654,20 @@ class Node:
             return
 
         # The transactions/count endpoint reads the aggregate table, which a
-        # background aggregator builds contiguously from height 0. Wait for it
-        # so the tx index finishes while peers are still up.
+        # background aggregator builds contiguously from height 0. Rebuilding
+        # the full index for a wiped node fetches and verifies every payload, so
+        # give it its own generous budget rather than the storage deadline.
+        agg_deadline = time.monotonic() + AGGREGATOR_TIMEOUT
         while True:
             if self.aggregator_caught_up(target - 1):
                 log.info(f"{self} aggregator caught up to {target - 1}")
                 return
             if abort and (msg := abort()):
                 raise RuntimeError(f"Aborted waiting for {self} aggregator: {msg}")
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= agg_deadline:
                 raise TimeoutError(
                     f"{self} aggregator did not catch up to {target - 1}"
-                    f" after {int(timeout)}s"
+                    f" after {int(AGGREGATOR_TIMEOUT)}s"
                 )
             time.sleep(2.0)
 
