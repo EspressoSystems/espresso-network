@@ -19,10 +19,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use hotshot::types::Event;
 use hotshot_events_service::events_source::{EventFilterSet, EventsSource, StartupInfo};
-use hotshot_types::{
-    data::VidShare, event::LegacyEvent, new_protocol::CoordinatorEvent,
-    traits::node_implementation::NodeType,
-};
+use hotshot_types::{data::VidShare, event::LegacyEvent, traits::node_implementation::NodeType};
 use jf_merkle_tree_compat::prelude::MerkleProof;
 use tagged_base64::TaggedBase64;
 
@@ -568,6 +565,7 @@ where
 #[cfg(any(test, feature = "testing"))]
 mod impl_testable_data_source {
     use hotshot::types::Event;
+    use hotshot_types::new_protocol::CoordinatorEvent;
 
     use super::*;
     use crate::{

@@ -55,6 +55,7 @@ either = { workspace = true }
 espresso-api = { path = "../api" }
 espresso-contract-deployer = { workspace = true }
 espresso-keyset = { workspace = true }
+espresso-telemetry = { workspace = true }
 espresso-types = { workspace = true }
 espresso-utils = { workspace = true }
 futures = { workspace = true }
@@ -86,6 +87,7 @@ num_enum = { workspace = true }
 parking_lot = { workspace = true }
 priority-queue = { workspace = true }
 process-metrics = { workspace = true }
+prometheus = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }

@@ -21,6 +21,7 @@ use hotshot_example_types::{
     membership::TestableMembership,
     node_types::{MemoryImpl, TestTypes},
     state_types::TestInstanceState,
+    storage_types::TestStorage,
 };
 use hotshot_testing::{
     block_builder::{SimpleBuilderImplementation, TestBuilderImplementation},
@@ -53,7 +54,7 @@ use crate::{
     coordinator::{Coordinator, CoordinatorOutput, error::Severity, timer::Timer},
     cutover::{CutoverGate, forward_legacy_high_qc, forward_legacy_timeout_votes},
     helpers::test_upgrade_lock,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     tests::common::{utils::mock_membership_with_client, views},
 };
@@ -214,11 +215,7 @@ async fn build_cutover_coordinator(
     client: crate::client::CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
-) -> Coordinator<
-    TestTypes,
-    Cliquenet<TestTypes>,
-    hotshot_example_types::storage_types::TestStorage<TestTypes>,
-> {
+) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     use hotshot_example_types::{node_types::TEST_VERSIONS, state_types::TestValidatedState};
     use hotshot_types::{data::Leaf2, light_client::StateKeyPair};
 
@@ -289,6 +286,13 @@ async fn build_cutover_coordinator(
     let share_validator =
         VidShareValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
 
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
+
     Coordinator::builder()
         .consensus(consensus)
         .network(network)
@@ -301,7 +305,7 @@ async fn build_cutover_coordinator(
             membership.clone(),
             upgrade_lock.clone(),
         ))
-        .vid_disperser(VidDisperser::new(membership.clone()))
+        .vid_disperser(vid_disperser)
         .vid_reconstructor(VidReconstructor::new())
         .epoch_manager(EpochManager::new(epoch_height, membership.clone()))
         .block_builder(block_builder)
@@ -327,11 +331,7 @@ struct DecisionEvent {
 }
 
 async fn run_cutover_node(
-    mut coord: Coordinator<
-        TestTypes,
-        Cliquenet<TestTypes>,
-        hotshot_example_types::storage_types::TestStorage<TestTypes>,
-    >,
+    mut coord: Coordinator<TestTypes, TestStorage<TestTypes>>,
     decision_tx: UnboundedSender<DecisionEvent>,
     external_events_tx: async_broadcast::Sender<Event<TestTypes>>,
     legacy: Arc<RwLock<SystemContextHandle<TestTypes, MemoryImpl>>>,
@@ -401,7 +401,7 @@ async fn spawn_node(
 ) -> NodeState {
     let network = build_new_protocol_network(i, parties, new_proto_lock).await;
     let (membership, storage, client, external_events_tx) =
-        mock_membership_with_client(num_nodes, EPOCH_HEIGHT, parties[i].1);
+        mock_membership_with_client(num_nodes, EPOCH_HEIGHT, parties[i].1, Default::default());
 
     let coord = build_cutover_coordinator(
         i as u64,

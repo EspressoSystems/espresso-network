@@ -315,6 +315,45 @@ impl v1::HotShotAvailabilityApi for TestApi {
     }
 }
 
+#[async_trait]
+impl v1::BlockStateApi for TestApi {
+    type MerkleProof = serde_json::Value;
+
+    async fn get_block_state_path(
+        &self,
+        _snapshot: v1::Snapshot,
+        _key: String,
+    ) -> Result<Self::MerkleProof> {
+        Ok(serde_json::Value::Null)
+    }
+
+    async fn get_block_state_height(&self) -> Result<u64> {
+        Ok(0)
+    }
+}
+
+#[async_trait]
+impl v1::FeeStateApi for TestApi {
+    type MerkleProof = serde_json::Value;
+    type FeeAmount = u128;
+
+    async fn get_fee_state_path(
+        &self,
+        _snapshot: v1::Snapshot,
+        _key: String,
+    ) -> Result<Self::MerkleProof> {
+        Ok(serde_json::Value::Null)
+    }
+
+    async fn get_fee_state_height(&self) -> Result<u64> {
+        Ok(0)
+    }
+
+    async fn get_fee_balance_latest(&self, _address: String) -> Result<Option<Self::FeeAmount>> {
+        Ok(None)
+    }
+}
+
 // Implement v2::RewardApi (simplified API - latest-only for claim/balance/proof)
 #[async_trait]
 impl v2::RewardApi for TestApi {

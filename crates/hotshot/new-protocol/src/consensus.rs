@@ -5,13 +5,13 @@ use std::{
     sync::Arc,
 };
 
-use committable::{Commitment, Committable};
+use committable::{Commitment, CommitmentBoundsArkless, Committable};
 use hotshot::traits::BlockPayload;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{
-        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
-        VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2,
+        ViewChangeEvidence2, ViewNumber,
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
@@ -39,15 +39,16 @@ use tracing::{debug, info, instrument, warn};
 
 use crate::{
     block::BlockAndHeaderRequest,
-    coordinator::GcScope,
+    coordinator::{GcScope, VID_RECONSTRUCT_GC_MARGIN},
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
         Certificate1, Certificate2, EpochChangeMessage, Proposal, ProposalFetchRequest,
-        ProposalMessage, Validated, VidShareMessage, Vote1, Vote2,
+        ProposalMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
+    storage::{ActionKind, StorageOutput},
 };
 
 /// Inputs to [`Consensus::apply_pre_cutover_seed`].
@@ -103,10 +104,11 @@ pub enum ConsensusInput<T: NodeType> {
     ),
     StateValidated(StateResponse<T>),
     StateValidationFailed(StateResponse<T>),
+    Stored(StorageOutput<T>),
     Timeout(ViewNumber, EpochNumber),
     TimeoutCertificate(TimeoutCertificate2<T>),
     TimeoutOneHonest(ViewNumber, EpochNumber),
-    VidDisperseCreated(ViewNumber, VidDisperse2<T>),
+    VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
 }
 
@@ -115,8 +117,9 @@ pub enum ConsensusOutput<T: NodeType> {
     RequestBlockAndHeader(BlockAndHeaderRequest<T>),
     RequestState(StateRequest<T>),
     RequestDrbResult(EpochNumber),
+    RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
+    PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
-    SendVidShares(Vec<VidShareMessage<T>>),
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
@@ -140,6 +143,8 @@ pub enum ConsensusOutput<T: NodeType> {
     },
     LockUpdated(Certificate2<T>),
     ViewChanged(ViewNumber, EpochNumber),
+    /// A view timed out with a timeout certificate.
+    ViewTimedOut(ViewNumber),
     ProposalValidated {
         proposal: SignedProposal<T, Proposal<T>>,
         sender: T::SignatureKey,
@@ -175,6 +180,18 @@ pub struct Consensus<T: NodeType> {
 
     voted_1_views: BTreeSet<ViewNumber>,
     voted_2_views: BTreeSet<ViewNumber>,
+
+    /// Storage confirmations; sends are gated on these facts.
+    stored_proposals: BTreeMap<ViewNumber, Vec<Commitment<Leaf2<T>>>>,
+    stored_vids: BTreeSet<ViewNumber>,
+    stored_actions: BTreeSet<(ViewNumber, ActionKind)>,
+    requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
+
+    /// Messages constructed and accounted for in `voted_*_views` /
+    /// `proposed_views`, awaiting their storage confirmations.
+    pending_vote1: BTreeMap<ViewNumber, Vote1<T>>,
+    pending_vote2: BTreeMap<ViewNumber, Vote2<T>>,
+    pending_proposal: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
 
     /// Skipped by `maybe_vote_2_and_update_lock` (V1 AvidM dispersal).
     pre_cutover_views: BTreeSet<ViewNumber>,
@@ -268,6 +285,13 @@ impl<T: NodeType> Consensus<T> {
             stake_table_coordinator: membership_coordinator,
             voted_1_views: BTreeSet::new(),
             voted_2_views: BTreeSet::new(),
+            stored_proposals: BTreeMap::new(),
+            stored_vids: BTreeSet::new(),
+            stored_actions: BTreeSet::new(),
+            requested_actions: BTreeSet::new(),
+            pending_vote1: BTreeMap::new(),
+            pending_vote2: BTreeMap::new(),
+            pending_proposal: BTreeMap::new(),
             pre_cutover_views: BTreeSet::new(),
             pending_certs1: BTreeMap::new(),
             pending_certs2: BTreeMap::new(),
@@ -549,6 +573,11 @@ impl<T: NodeType> Consensus<T> {
                 self.headers.insert((view, commitment), header);
                 Protocol::Continue
             },
+            ConsensusInput::Stored(stored) => {
+                debug!(?stored, "apply: stored");
+                self.handle_stored(stored, outbox);
+                Protocol::Continue
+            },
             ConsensusInput::StateValidationFailed(state_response) => {
                 let view = state_response.view;
                 let stored_proposal = self.proposals.get(&view);
@@ -616,19 +645,18 @@ impl<T: NodeType> Consensus<T> {
                 }
                 Protocol::Continue
             },
-            ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
+            ConsensusInput::VidDisperseCreated(view, payload_commitment) => {
                 debug!(%view, "apply: vid disperse created");
-                // Directly send the VID shares before making a proposal.
+                // Share sending moved into the disperser task (main PR #4517)
+                // — at this point the dispersal has *finished*, so the
+                // NsDisperseEnd trace marks the end of the whole disperse
+                // path from the consensus side.
                 crate::trace_leader_event!(
                     self.tracer,
                     view,
                     crate::leader_trace::LeaderEvent::NsDisperseEnd
                 );
-                // As leader we already have the payload; record the commitment so
-                // voting doesn't have to wait on the (skipped) reconstruction path.
-                self.blocks_reconstructed
-                    .insert((view, vid_disperse.payload_commitment));
-                self.send_vid_shares(&view, vid_disperse, outbox);
+                self.blocks_reconstructed.insert((view, payload_commitment));
                 Protocol::Continue
             },
             ConsensusInput::DrbResult(epoch, drb_result) => {
@@ -696,6 +724,31 @@ impl<T: NodeType> Consensus<T> {
         self.current_epoch = Some(epoch);
     }
 
+    /// Position the view state on restart at the first view this node may
+    /// act in: past the decided anchor, no earlier than the view it was in
+    /// at shutdown, and past any view it recorded an action for. Raising
+    /// `timeout_view` bars voting and proposing in everything earlier.
+    ///
+    /// `current_view` lands one view before the first allowed view because
+    /// `Coordinator::start` enters `current_view + 1` through the normal
+    /// `ViewChanged` path, which arms the timer and kicks off the leader's
+    /// block request. Forward-only: never regresses either view.
+    pub fn resume_from_restart(
+        &mut self,
+        anchor_view: ViewNumber,
+        restart_view: ViewNumber,
+        last_actioned_view: ViewNumber,
+    ) {
+        let first_allowed = max(anchor_view + 1, max(restart_view, last_actioned_view + 1));
+        let last_barred = first_allowed - 1;
+        if last_barred > self.timeout_view {
+            self.timeout_view = last_barred;
+        }
+        if last_barred > self.current_view {
+            self.current_view = last_barred;
+        }
+    }
+
     pub fn wants_proposal_for_view(&self, view: &ViewNumber) -> bool {
         let locked_too_new = self
             .locked_cert
@@ -718,8 +771,8 @@ impl<T: NodeType> Consensus<T> {
     pub fn gc(&mut self, scope: GcScope) {
         match scope {
             GcScope::Local(view) => {
-                self.headers
-                    .retain(|(header_view, _), _| *header_view >= view);
+                let c = Commitment::default_commitment_no_preimage();
+                self.headers = self.headers.split_off(&(view, c));
                 self.proposed_views = self.proposed_views.split_off(&view);
                 self.states_verified = self.states_verified.split_off(&view);
                 self.timeout_certs = self.timeout_certs.split_off(&view);
@@ -727,24 +780,52 @@ impl<T: NodeType> Consensus<T> {
                 self.voted_2_views = self.voted_2_views.split_off(&view);
             },
             GcScope::Decided(view) => {
-                self.blocks = self.blocks.split_off(&(view, VidCommitment2::default()));
-                self.blocks_reconstructed = self
-                    .blocks_reconstructed
-                    .split_off(&(view, VidCommitment2::default()));
+                let vc = VidCommitment2::default();
+                self.blocks = self.blocks.split_off(&(view, vc));
+                self.blocks_reconstructed = self.blocks_reconstructed.split_off(&(view, vc));
                 self.certs = self.certs.split_off(&view);
                 self.certs2 = self.certs2.split_off(&view);
                 self.leaves = self.leaves.split_off(&view);
                 self.pending_certs1 = self.pending_certs1.split_off(&view);
                 self.pending_certs2 = self.pending_certs2.split_off(&view);
                 self.pending_timeout_certs = self.pending_timeout_certs.split_off(&view);
-                self.proposals = self.proposals.split_off(&view);
+                // Keep proposals within the reconstructor's margin so a late
+                // reconstruction can still emit `BlockPayloadReconstructed`,
+                // which needs the proposal's block header.
+                self.proposals = self
+                    .proposals
+                    .split_off(&view.saturating_sub(VID_RECONSTRUCT_GC_MARGIN).into());
                 self.signed_proposals = self.signed_proposals.split_off(&view);
                 self.vid_shares = self.vid_shares.split_off(&view);
+                self.stored_proposals = self.stored_proposals.split_off(&view);
+                self.stored_vids = self.stored_vids.split_off(&view);
+                self.stored_actions = self.stored_actions.split_off(&(view, ActionKind::Vote));
+                self.requested_actions =
+                    self.requested_actions.split_off(&(view, ActionKind::Vote));
+                self.pending_vote1 = self.pending_vote1.split_off(&view);
+                self.pending_vote2 = self.pending_vote2.split_off(&view);
+                self.pending_proposal = self.pending_proposal.split_off(&view);
                 if let Some(epoch) = self.current_epoch {
                     let epoch = EpochNumber::new(epoch.saturating_sub(1));
                     self.drb_results = self.drb_results.split_off(&epoch);
                     self.state_certs = self.state_certs.split_off(&epoch);
                 }
+            },
+            GcScope::Timeout(view) => {
+                // A view with a quorum certificate is still undecided.
+                if self.certs.contains_key(&view) || self.certs2.contains_key(&view) {
+                    return;
+                }
+                self.proposals.remove(&view);
+                self.signed_proposals.remove(&view);
+                self.vid_shares.remove(&view);
+                let vc = VidCommitment2::default();
+                self.blocks
+                    .extract_if((view, vc)..(view + 1, vc), |_, _| true)
+                    .for_each(drop);
+                self.blocks_reconstructed
+                    .extract_if((view, vc)..(view + 1, vc), |_| true)
+                    .for_each(drop);
             },
         }
     }
@@ -1133,6 +1214,7 @@ impl<T: NodeType> Consensus<T> {
         self.timeout_certs.insert(view, certificate.clone());
         self.current_epoch = Some(epoch);
         outbox.push_back(ConsensusOutput::ViewChanged(view, epoch));
+        outbox.push_back(ConsensusOutput::ViewTimedOut(certificate.view_number()));
         outbox.push_back(ConsensusOutput::SendTimeoutCertificate(
             certificate,
             view,
@@ -1257,45 +1339,11 @@ impl<T: NodeType> Consensus<T> {
         Protocol::Continue
     }
 
-    // The leader's own share is also unicast back to itself (cliquenet
-    // self-loopback): it is the only way the leader's `handle_proposal_and_vid_share`
-    // path runs for its own proposal, populating `proposals`, `leaves`,
-    // `states_verified`, and seeding the VID reconstructor's metadata.
-    #[instrument(level = "debug", skip_all)]
-    fn send_vid_shares(
-        &self,
-        view: &ViewNumber,
-        vid_disperse: VidDisperse2<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
-        crate::trace_leader_event!(
-            self.tracer,
-            *view,
-            crate::leader_trace::LeaderEvent::ShareSignLoopStart
-        );
-        let vid_messages = vid_disperse
-            .to_shares()
-            .into_iter()
-            .filter_map(|share| {
-                let Some(proposal) = share.to_proposal(&self.private_key) else {
-                    warn!(%view, "failed to sign VID share proposal");
-                    return None;
-                };
-                Some(proposal)
-            })
-            .collect::<Vec<_>>();
-        crate::trace_leader_event!(
-            self.tracer,
-            *view,
-            crate::leader_trace::LeaderEvent::ShareSignLoopEnd
-        );
-        outbox.push_back(ConsensusOutput::SendVidShares(vid_messages));
-        crate::trace_leader_event!(
-            self.tracer,
-            *view,
-            crate::leader_trace::LeaderEvent::VidSharesQueued
-        );
-    }
+    // `send_vid_shares` removed: main PR #4517 ("Send VID shares from
+    // dispersal task") moved the share-signing + send loop into the
+    // VidDisperser task, so consensus no longer signs/sends shares.  The
+    // ShareSignLoop / VidSharesQueued trace events from that path no longer
+    // fire — the new equivalent trace events live inside the disperser.
 
     #[instrument(level = "debug", skip_all)]
     fn maybe_propose(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
@@ -1476,12 +1524,18 @@ impl<T: NodeType> Consensus<T> {
         };
 
         self.proposed_views.insert(view);
-        outbox.push_back(ConsensusOutput::SendProposal(message));
+        // Main PR #4494 routes the proposal through storage first, then sends
+        // it once the action is recorded.  We trace the moment the proposal
+        // is queued for that pipeline (same intent as the old ProposalQueued
+        // event — the proposal is now "in flight").
+        outbox.push_back(ConsensusOutput::PersistProposal(message.clone()));
+        self.request_action(view, Some(proposal_epoch), ActionKind::Propose, outbox);
         crate::trace_leader_event!(
             self.tracer,
             view,
             crate::leader_trace::LeaderEvent::ProposalQueued
         );
+        self.pending_proposal.insert(view, message);
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1625,6 +1679,87 @@ impl<T: NodeType> Consensus<T> {
             auth_root,
             signed_state_digest,
         })
+    }
+
+    fn handle_stored(&mut self, stored: StorageOutput<T>, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let view = stored.view_number();
+        match stored {
+            StorageOutput::Proposal(view, commitment) => {
+                self.stored_proposals
+                    .entry(view)
+                    .or_default()
+                    .push(commitment);
+            },
+            StorageOutput::Vid(view) => {
+                self.stored_vids.insert(view);
+            },
+            StorageOutput::Action(view, kind) => {
+                self.stored_actions.insert((view, kind));
+            },
+        }
+        self.release_vote1(view, outbox);
+        self.release_vote2(view, outbox);
+        self.release_proposal(view, outbox);
+    }
+
+    fn release_vote1(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let Some(vote1) = self.pending_vote1.get(&view) else {
+            return;
+        };
+        if !self.stored_actions.contains(&(view, ActionKind::Vote))
+            || !self.is_proposal_stored(view, &vote1.vote.data.leaf_commit)
+        {
+            return;
+        }
+        let vote1 = self.pending_vote1.remove(&view).expect("checked above");
+        if view <= self.timeout_view {
+            debug!(%view, "dropping pending vote1 for timed-out view");
+            return;
+        }
+        outbox.push_back(ConsensusOutput::SendVote1(vote1));
+    }
+
+    fn release_vote2(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        if !self.stored_actions.contains(&(view, ActionKind::Vote))
+            || !self.stored_vids.contains(&view)
+        {
+            return;
+        }
+        let Some(vote2) = self.pending_vote2.remove(&view) else {
+            return;
+        };
+        outbox.push_back(ConsensusOutput::SendVote2(vote2));
+    }
+
+    fn release_proposal(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let Some(message) = self.pending_proposal.get(&view) else {
+            return;
+        };
+        if !self.stored_actions.contains(&(view, ActionKind::Propose))
+            || !self.is_proposal_stored(view, &proposal_commitment(&message.data))
+        {
+            return;
+        }
+        let message = self.pending_proposal.remove(&view).expect("checked above");
+        outbox.push_back(ConsensusOutput::SendProposal(message));
+    }
+
+    fn is_proposal_stored(&self, view: ViewNumber, commitment: &Commitment<Leaf2<T>>) -> bool {
+        self.stored_proposals
+            .get(&view)
+            .is_some_and(|commitments| commitments.contains(commitment))
+    }
+
+    fn request_action(
+        &mut self,
+        view: ViewNumber,
+        epoch: Option<EpochNumber>,
+        kind: ActionKind,
+        outbox: &mut Outbox<ConsensusOutput<T>>,
+    ) {
+        if self.requested_actions.insert((view, kind)) {
+            outbox.push_back(ConsensusOutput::RecordAction(view, epoch, kind));
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1790,8 +1925,15 @@ impl<T: NodeType> Consensus<T> {
             },
             state_vote,
         };
-        outbox.push_back(ConsensusOutput::SendVote1(vote));
         self.voted_1_views.insert(view);
+        if self.stored_actions.contains(&(view, ActionKind::Vote))
+            && self.is_proposal_stored(view, &proposal_commit)
+        {
+            outbox.push_back(ConsensusOutput::SendVote1(vote));
+        } else {
+            self.request_action(view, Some(epoch), ActionKind::Vote, outbox);
+            self.pending_vote1.insert(view, vote);
+        }
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -1889,13 +2031,25 @@ impl<T: NodeType> Consensus<T> {
             view,
             crate::leader_trace::LeaderEvent::Vote2VMinus1Signed
         );
-        outbox.push_back(ConsensusOutput::SendVote2(vote));
+        self.voted_2_views.insert(view);
+        // Main PR #4494: vote2 is only sent when the storage action AND the
+        // VID share have both been recorded — otherwise it's queued in
+        // `pending_vote2` waiting for those signals.  Either way, from the
+        // observer's perspective the vote is "queued" once this branch
+        // resolves, so the trace event fires after the conditional.
+        if self.stored_actions.contains(&(view, ActionKind::Vote))
+            && self.stored_vids.contains(&view)
+        {
+            outbox.push_back(ConsensusOutput::SendVote2(vote));
+        } else {
+            self.request_action(view, Some(proposal_epoch), ActionKind::Vote, outbox);
+            self.pending_vote2.insert(view, vote);
+        }
         crate::trace_leader_event!(
             self.tracer,
             view,
             crate::leader_trace::LeaderEvent::Vote2VMinus1Queued
         );
-        self.voted_2_views.insert(view);
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -2199,6 +2353,7 @@ impl<T: NodeType> ConsensusInput<T> {
             ConsensusInput::ProposalWithVidShare(_, prop, _) => prop.view_number(),
             ConsensusInput::StateValidated(response) => response.view,
             ConsensusInput::StateValidationFailed(request) => request.view,
+            ConsensusInput::Stored(stored) => stored.view_number(),
             ConsensusInput::Timeout(view, _) => *view,
             ConsensusInput::TimeoutOneHonest(view, _) => *view,
             ConsensusInput::TimeoutCertificate(cert) => {

@@ -201,7 +201,7 @@ impl Server {
                     }
                     Err(err) => {
                         self.metrics.set(&self.key, ACCEPT_TASKS, self.accept_tasks.len());
-                        if !err.is_cancelled() {
+                        if err.is_panic() {
                             error!(
                                 name = %self.conf.name,
                                 node = %self.key,
@@ -297,7 +297,7 @@ impl Server {
                     }
                     (key, Err(err)) => {
                         self.metrics.set(&self.key, HELLO_TASKS, self.hello_tasks.len());
-                        if !err.is_cancelled() {
+                        if err.is_panic() {
                             error!(
                                 name = %self.conf.name,
                                 node = %self.key,
@@ -365,7 +365,7 @@ impl Server {
                     }
                     (key, Err(err)) => {
                         self.metrics.set(&self.key, CONNECT_TASKS, self.connect_tasks.len());
-                        if !err.is_cancelled() {
+                        if err.is_panic() {
                             error!(
                                 name = %self.conf.name,
                                 node = %self.key,
@@ -406,7 +406,7 @@ impl Server {
                     }
                     (key, Err(err)) => {
                         self.metrics.set(&self.key, PEER_TASKS, self.peer_tasks.len());
-                        if !err.is_cancelled() {
+                        if err.is_panic() {
                             error!(
                                 name = %self.conf.name,
                                 node = %self.key,
@@ -431,7 +431,7 @@ impl Server {
                         return
                     }
                     let s = *self.next_slot.borrow_and_update();
-                    debug_assert!(s > self.lower_bound); // ensured by controller
+                    debug_assert!(s > self.lower_bound); // ensured by `NetworkSender::gc`
                     self.lower_bound = s;
                     self.metrics.set(&self.key, LOWER_BOUND, u64::from(s) as usize);
                     for party in self.parties.values() {

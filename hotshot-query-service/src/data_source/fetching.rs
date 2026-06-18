@@ -865,10 +865,42 @@ where
     /// has produced the block payload, so [`append`](Self::append) may persist
     /// a leaf with no payload attached. The payload is then back-filled here
     /// once it becomes available, leaving the rest of the block info untouched.
+    ///
+    /// Reconstruction runs on views that are not yet (and may never be)
+    /// decided, so the block is only stored if it matches the decided leaf at
+    /// the same height. If that leaf hasn't been ingested yet the payload is
+    /// dropped: when the decide arrives, [`append`](Self::append) spawns a
+    /// fetch that back-fills the payload from a peer.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        // Write to storage and notify any pending fetchers waiting on this height.
-        self.fetcher.store(&block).await;
-        block.notify(&self.fetcher.notifiers).await;
+        let height = block.height();
+        let leaf = {
+            let mut tx = self.read().await.context("opening read transaction")?;
+            match tx.get_leaf(LeafId::Number(height as usize)).await {
+                Ok(leaf) => leaf,
+                Err(QueryError::Missing | QueryError::NotFound) => {
+                    tracing::info!(
+                        height,
+                        "dropping reconstructed payload; leaf not yet available"
+                    );
+                    return Ok(());
+                },
+                Err(err) => {
+                    return Err(err).context(format!(
+                        "loading leaf {height} to verify reconstructed payload"
+                    ));
+                },
+            }
+        };
+        if leaf.block_hash() != block.hash() {
+            tracing::warn!(
+                height,
+                decided = %leaf.block_hash(),
+                reconstructed = %block.hash(),
+                "reconstructed payload does not match decided block; discarding"
+            );
+            return Ok(());
+        }
+        self.fetcher.store_and_notify(&block).await;
         Ok(())
     }
 }

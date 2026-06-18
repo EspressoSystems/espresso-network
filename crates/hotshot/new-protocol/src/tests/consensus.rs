@@ -13,18 +13,19 @@ use hotshot_types::{
 
 use super::common::utils::TestData;
 use crate::{
-    consensus::ConsensusInput,
+    consensus::{ConsensusInput, ConsensusOutput},
     helpers::proposal_commitment,
     message::Proposal,
     outbox::Outbox,
     state::StateResponse,
+    storage::{ActionKind, StorageOutput},
     tests::common::{
         assertions::{
-            any, count_matching, is_leaf_decided, is_proposal, is_request_block_and_header,
-            is_request_state, is_send_timeout_cert, is_send_timeout_vote, is_view_changed,
-            is_vote1, is_vote2, node_index_for_key,
+            any, count_matching, is_leaf_decided, is_persist_proposal, is_proposal,
+            is_record_action, is_request_block_and_header, is_request_state, is_send_timeout_cert,
+            is_send_timeout_vote, is_view_changed, is_vote1, is_vote2, node_index_for_key,
         },
-        utils::{ConsensusHarness, MockBlock},
+        utils::{ConsensusHarness, MockBlock, state_verified_input},
     },
 };
 
@@ -894,5 +895,172 @@ async fn test_stale_timeout_certificate_ignored() {
     assert!(
         any(harness.outputs(), is_send_timeout_cert),
         "timeout certificate over the current view must still be forwarded"
+    );
+}
+
+/// Vote1 is held until the Vote action and the proposal are durably stored,
+/// and the action record is requested exactly once.
+#[tokio::test]
+async fn test_vote1_gated_on_storage() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(2).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = ViewNumber::new(1);
+    let commit = proposal_commitment(&test_data.views[0].proposal.data);
+    let consensus = &mut harness.consensus;
+    let mut outbox = Outbox::new();
+
+    consensus.apply(
+        test_data.views[0].proposal_input_consensus(&node_key),
+        &mut outbox,
+    );
+    consensus.apply(
+        state_verified_input(&test_data.views[0].proposal.data, view),
+        &mut outbox,
+    );
+
+    assert!(!any(&outbox, is_vote1), "vote1 must wait for storage");
+    assert_eq!(count_matching(&outbox, is_record_action), 1);
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Action(view, ActionKind::Vote)),
+        &mut outbox,
+    );
+    assert!(!any(&outbox, is_vote1), "vote1 must wait for the proposal");
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Proposal(view, commit)),
+        &mut outbox,
+    );
+    assert_eq!(count_matching(&outbox, is_vote1), 1);
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Proposal(view, commit)),
+        &mut outbox,
+    );
+    assert_eq!(
+        count_matching(&outbox, is_vote1),
+        1,
+        "re-delivered confirmations must not double-send"
+    );
+}
+
+/// The lock update and view change fire as soon as cert1 is valid, but
+/// vote2 is held until the node's own VID share is durably stored.  Vote1
+/// and vote2 for the same view share a single action record.
+#[tokio::test]
+async fn test_vote2_gated_on_vid_storage() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = ViewNumber::new(1);
+    let commit = proposal_commitment(&test_data.views[0].proposal.data);
+    let consensus = &mut harness.consensus;
+    let mut outbox = Outbox::new();
+
+    consensus.apply(
+        test_data.views[0].proposal_input_consensus(&node_key),
+        &mut outbox,
+    );
+    consensus.apply(
+        state_verified_input(&test_data.views[0].proposal.data, view),
+        &mut outbox,
+    );
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Action(view, ActionKind::Vote)),
+        &mut outbox,
+    );
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Proposal(view, commit)),
+        &mut outbox,
+    );
+    assert_eq!(count_matching(&outbox, is_vote1), 1);
+
+    consensus.apply(test_data.views[0].block_reconstructed_input(), &mut outbox);
+    consensus.apply(test_data.views[0].cert1_input(), &mut outbox);
+
+    assert!(any(&outbox, is_view_changed), "lock update is not gated");
+    assert!(!any(&outbox, is_vote2), "vote2 must wait for the VID share");
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Vid(view)),
+        &mut outbox,
+    );
+    assert_eq!(count_matching(&outbox, is_vote2), 1);
+    assert_eq!(
+        count_matching(&outbox, is_record_action),
+        1,
+        "vote1 and vote2 share one action record per view"
+    );
+}
+
+/// A pending vote1 is dropped if its view times out before the storage
+/// confirmations arrive.
+#[tokio::test]
+async fn test_pending_vote1_dropped_on_timeout() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(2).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+    let view = ViewNumber::new(1);
+    let commit = proposal_commitment(&test_data.views[0].proposal.data);
+    let consensus = &mut harness.consensus;
+    let mut outbox = Outbox::new();
+
+    consensus.apply(
+        test_data.views[0].proposal_input_consensus(&node_key),
+        &mut outbox,
+    );
+    consensus.apply(
+        state_verified_input(&test_data.views[0].proposal.data, view),
+        &mut outbox,
+    );
+    assert_eq!(count_matching(&outbox, is_record_action), 1);
+
+    consensus.apply(
+        ConsensusInput::Timeout(view, EpochNumber::genesis()),
+        &mut outbox,
+    );
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Action(view, ActionKind::Vote)),
+        &mut outbox,
+    );
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::Proposal(view, commit)),
+        &mut outbox,
+    );
+    assert!(
+        !any(&outbox, is_vote1),
+        "vote1 for a timed-out view must not be released"
+    );
+}
+
+/// SendProposal is released only after the proposal is persisted and the
+/// Propose action is recorded.
+#[tokio::test]
+async fn test_proposal_release_follows_storage() {
+    let test_data = TestData::new(4).await;
+    let leader_for_view_2 = test_data.views[1].leader_public_key;
+    let leader_index = node_index_for_key(&leader_for_view_2);
+    let mut harness = ConsensusHarness::new(leader_index).await;
+
+    harness
+        .apply(test_data.views[0].proposal_input_consensus(&leader_for_view_2))
+        .await;
+    harness.apply(test_data.views[0].cert1_input()).await;
+
+    let outputs: Vec<_> = harness.outputs().iter().cloned().collect();
+    let send = outputs.iter().position(is_proposal).expect("proposal sent");
+    let persist = outputs
+        .iter()
+        .position(is_persist_proposal)
+        .expect("proposal persisted");
+    let action = outputs
+        .iter()
+        .position(|o| matches!(o, ConsensusOutput::RecordAction(_, _, ActionKind::Propose)))
+        .expect("propose action recorded");
+    assert!(persist < send, "proposal must be persisted before sending");
+    assert!(
+        action < send,
+        "propose action must be recorded before sending"
     );
 }

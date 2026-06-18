@@ -1,6 +1,8 @@
 use clap::{Parser, ValueEnum};
-use hotshot::helpers::initialize_logging;
+pub use hotshot::helpers::FmtSubscriber;
+use hotshot::helpers::{initialize_logging, initialize_logging_with};
 use log_panics::BacktraceMode;
+use tracing_subscriber::Layer;
 
 /// Controls how backtraces are logged on panic.
 ///
@@ -36,7 +38,19 @@ impl Config {
     /// Initialize logging and panic handlers based on this configuration.
     pub fn init(&self) {
         initialize_logging();
+        self.install_panic_hook();
+    }
 
+    /// Like `init`, but also attaches an extra tracing `Layer` (e.g. an OTel bridge).
+    pub fn init_with_otel<L>(&self, otel_layer: Option<L>)
+    where
+        L: Layer<FmtSubscriber> + Send + Sync + 'static,
+    {
+        initialize_logging_with(otel_layer);
+        self.install_panic_hook();
+    }
+
+    fn install_panic_hook(&self) {
         if let BacktraceLoggingMode::Json = self.backtrace_mode.unwrap_or_default() {
             log_panics::Config::new()
                 .backtrace_mode(BacktraceMode::Resolved)

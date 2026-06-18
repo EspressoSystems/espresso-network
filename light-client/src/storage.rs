@@ -14,7 +14,7 @@ use hotshot_query_service_types::{
     availability::{BlockId, LeafId, LeafQueryData},
 };
 use hotshot_types::{data::EpochNumber, light_client::StateVerKey, x25519};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{QueryBuilder, SqlitePool, query, query_as, sqlite::SqlitePoolOptions};
 use tempfile::{Builder, TempDir};
@@ -118,7 +118,7 @@ pub trait Storage: Sized + Send + Sync + 'static {
     ) -> impl Send + Future<Output = Result<()>>;
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientSqliteOptions {
     /// Maximum number of simultaneous DB connections to allow.
@@ -1163,13 +1163,20 @@ mod test {
         let candidate: RegisteredValidator<PubKey> = validator.clone().into();
         let x25519_key =
             x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
+        let candidate_bls = candidate
+            .stake_table_key
+            .expect("random_validator returns authenticated validator");
         StakeTableState::new(
             [(candidate.account, candidate.clone())]
                 .into_iter()
                 .collect(),
             [Address::random()].into_iter().collect(),
-            [candidate.stake_table_key].into_iter().collect(),
-            [candidate.state_ver_key].into_iter().collect(),
+            [candidate_bls].into_iter().collect(),
+            [candidate
+                .state_ver_key
+                .expect("random_validator has valid schnorr key")]
+            .into_iter()
+            .collect(),
             [x25519_key].into_iter().collect(),
         )
     }
@@ -1178,6 +1185,9 @@ mod test {
     fn chain_stake_table(state: &StakeTableState) -> StakeTableState {
         let new_validator = random_validator();
         let new_candidate: RegisteredValidator<PubKey> = new_validator.clone().into();
+        let new_candidate_bls = new_candidate
+            .stake_table_key
+            .expect("random_validator returns authenticated validator");
         let new_exit = Address::random();
         let new_x25519 =
             x25519::PublicKey::try_from(rand::random::<[u8; 32]>().as_slice()).unwrap();
@@ -1197,13 +1207,16 @@ mod test {
             state
                 .used_bls_keys()
                 .iter()
-                .chain([&new_candidate.stake_table_key])
+                .chain([&new_candidate_bls])
                 .cloned()
                 .collect(),
             state
                 .used_schnorr_keys()
                 .iter()
-                .chain([&new_candidate.state_ver_key])
+                .chain([new_candidate
+                    .state_ver_key
+                    .as_ref()
+                    .expect("random_validator has valid schnorr key")])
                 .cloned()
                 .collect(),
             state

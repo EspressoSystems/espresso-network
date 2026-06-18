@@ -59,6 +59,7 @@ use crate::{
     },
     outbox::Outbox,
     state::StateResponse,
+    storage::StorageOutput,
 };
 
 /// DRB result used by `TestData` for epoch transition proposals.
@@ -102,8 +103,8 @@ impl TestView {
     }
 
     /// Build a leader-signed VID share envelope (the wire form). The leader's
-    /// signature is over the share's `payload_commitment`, matching what
-    /// `Coordinator::SendVidShares` produces in production.
+    /// signature is over the share's `payload_commitment`, matching what the
+    /// `VidDisperser` produces in production.
     pub fn vid_share_message(
         &self,
         recipient_key: &BLSPubKey,
@@ -212,7 +213,9 @@ impl TestView {
         };
 
         Message {
-            sender: self.leader_public_key,
+            // A Vote1 is broadcast by the voting validator itself, and carries
+            // that validator's own VID share (recipient_key == pub_key).
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote1(Vote1 {
                 vote,
                 vid_share: Some(vid_share),
@@ -574,7 +577,7 @@ pub fn mock_membership_with_num_nodes(
     CoordinatorClient<TestTypes>,
 ) {
     let (coord, storage, client, _external_events_tx) =
-        mock_membership_with_client(num_nodes, epoch_height, public_key);
+        mock_membership_with_client(num_nodes, epoch_height, public_key, TestStorage::default());
     (coord, storage, client)
 }
 
@@ -582,6 +585,7 @@ pub fn mock_membership_with_client(
     num_nodes: usize,
     epoch_height: u64,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -595,6 +599,7 @@ pub fn mock_membership_with_client(
         epoch_height,
         leaf_fetcher_network,
         public_key,
+        storage,
     );
     (coord, storage, client, external_events_tx)
 }
@@ -606,6 +611,7 @@ pub fn mock_membership_with_leaf_fetcher_network(
         dyn hotshot_types::traits::leaf_fetcher_network::LeafFetcherNetwork<TestTypes>,
     >,
     public_key: BLSPubKey,
+    storage: TestStorage<TestTypes>,
 ) -> (
     EpochMembershipCoordinator<TestTypes>,
     TestStorage<TestTypes>,
@@ -617,7 +623,6 @@ pub fn mock_membership_with_leaf_fetcher_network(
         &TestNodeStakes::default(),
     )
     .0;
-    let storage = TestStorage::<TestTypes>::default();
     let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
         members.clone(),
         members.clone(),
@@ -890,6 +895,20 @@ impl ConsensusHarness {
     /// actions that consensus expects feedback for.
     pub async fn apply(&mut self, input: ConsensusInput<TestTypes>) {
         let mut outbox = Outbox::new();
+        // The coordinator persists incoming proposals and VID shares before
+        // consensus sees them; simulate those storage confirmations.
+        if let ConsensusInput::ProposalWithVidShare(_, msg, vid_share) = &input {
+            let view = msg.proposal.data.view_number;
+            let commitment = proposal_commitment(&msg.proposal.data);
+            self.consensus.apply(
+                ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                &mut outbox,
+            );
+            self.consensus.apply(
+                ConsensusInput::Stored(StorageOutput::Vid(vid_share.view_number)),
+                &mut outbox,
+            );
+        }
         self.consensus.apply(input, &mut outbox);
         self.drain_outbox(&mut outbox).await;
     }
@@ -910,6 +929,20 @@ impl ConsensusHarness {
             ConsensusOutput::RequestState(req) => {
                 let input = state_verified_input(&req.proposal, req.view);
                 self.consensus.apply(input, outbox);
+            },
+            ConsensusOutput::RecordAction(view, _, kind) => {
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
+                    outbox,
+                );
+            },
+            ConsensusOutput::PersistProposal(proposal) => {
+                let view = proposal.data.view_number;
+                let commitment = proposal_commitment(&proposal.data);
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::Proposal(view, commitment)),
+                    outbox,
+                );
             },
             ConsensusOutput::RequestBlockAndHeader(req) => {
                 let mock_block = MockBlock::new();
@@ -957,8 +990,8 @@ impl ConsensusHarness {
                 let VidDisperse::V2(vid) = vid_disperse.disperse else {
                     panic!("VidDisperse is not a V2");
                 };
-                self.consensus
-                    .apply(ConsensusInput::VidDisperseCreated(*view, vid), outbox);
+                let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
+                self.consensus.apply(input, outbox);
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 self.consensus

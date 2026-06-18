@@ -16,7 +16,7 @@ use hotshot_new_protocol::{
     epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
     leader_trace::LeaderTracerHandle,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -44,11 +44,11 @@ use crate::{
 // `TestStorage` accumulates every dispersed payload + decided proposal in an
 // in-memory map; for a 150-view 50MB bench that means +6 GB/min RSS growth
 // and OOM in ~2 min on a 16 GB node.  See `memory_leak.py` analysis.
-type BenchCoordinator = Coordinator<
-    TestTypes,
-    Cliquenet<TestTypes>,
-    hotshot_new_protocol::storage::NullStorage<TestTypes>,
->;
+//
+// Note: main collapsed the network type parameter into a concrete
+// `Cliquenet<T>` field, so the alias is just `Coordinator<T, S>` now.
+type BenchCoordinator =
+    Coordinator<TestTypes, hotshot_new_protocol::storage::NullStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -192,7 +192,18 @@ async fn build_coordinator(
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_disperser = VidDisperser::new(membership.clone());
+    // Main's VidDisperser sends shares directly from the dispersal task
+    // (PR #4517), so it needs a network sender + signing keys.
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
+
+    // HEAD adds per-view trace events inside the recover spawn_blocking
+    // (recover_v_minus_1_decode_end splits the parallel-AvidM phase from
+    // the serial Keccak tail).  Wire the tracer so they get emitted.
     let mut vid_reconstructor = VidReconstructor::new();
     vid_reconstructor.set_tracer(Some(tracer.clone()));
 

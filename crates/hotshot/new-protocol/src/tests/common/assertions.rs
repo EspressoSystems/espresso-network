@@ -38,6 +38,14 @@ pub(crate) fn is_request_block_and_header(output: &ConsensusOutput<TestTypes>) -
     matches!(output, ConsensusOutput::RequestBlockAndHeader(_))
 }
 
+pub(crate) fn is_record_action(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::RecordAction(..))
+}
+
+pub(crate) fn is_persist_proposal(output: &ConsensusOutput<TestTypes>) -> bool {
+    matches!(output, ConsensusOutput::PersistProposal(_))
+}
+
 pub(crate) fn is_request_vid_disperse(output: &ConsensusOutput<TestTypes>) -> bool {
     matches!(output, ConsensusOutput::RequestVidDisperse { .. })
 }

@@ -19,7 +19,7 @@ use futures::{
 };
 use hotshot::SystemContext;
 use hotshot_events_service::events_source::{EventConsumer, EventsStreamer};
-use hotshot_new_protocol::{coordinator::Coordinator, network::Network};
+use hotshot_new_protocol::{coordinator::Coordinator, network::Cliquenet};
 use hotshot_orchestrator::client::OrchestratorClient;
 use hotshot_types::{
     PeerConfig, ValidatorConfig,
@@ -108,7 +108,7 @@ where
 {
     #[tracing::instrument(skip_all, fields(node_id = instance_state.node_id))]
     #[allow(clippy::too_many_arguments)]
-    pub async fn init<T: Network<SeqTypes> + Send + 'static>(
+    pub async fn init(
         network_config: NetworkConfig<SeqTypes>,
         upgrade: versions::Upgrade,
         validator_config: ValidatorConfig<SeqTypes>,
@@ -118,7 +118,7 @@ where
         state_catchup: ParallelStateCatchup,
         persistence: Arc<P>,
         network: Arc<N>,
-        coordinator_network: T,
+        coordinator_network: Cliquenet<SeqTypes>,
         state_relay_server: Option<Url>,
         metrics: &dyn Metrics,
         stake_table_capacity: usize,
@@ -508,7 +508,7 @@ where
     ///
     /// Under normal conditions, this function will block forever, which is a convenient way of
     /// keeping the main thread from exiting as long as there are still active background tasks.
-    pub async fn join(mut self) {
+    pub async fn join(&mut self) {
         self.tasks.join().await;
     }
 
@@ -606,7 +606,7 @@ async fn handle_events<N, P, C>(
                     hotshot_event.event
                     && let Err(err) = external_event_handler.handle_event(data).await
                 {
-                    tracing::warn!("Failed to handle legacy external message: {:?}", err);
+                    tracing::warn!(%err, "Failed to handle legacy external message");
                 }
                 // Check if we're ready to start the new protocol
                 consensus_handle.cutover_active().await;
@@ -614,6 +614,14 @@ async fn handle_events<N, P, C>(
             CoordinatorEvent::ExternalMessageReceived { data, .. } => {
                 if let Err(err) = external_event_handler.handle_event(data).await {
                     tracing::warn!("Failed to handle external message: {:?}", err);
+                }
+            },
+            CoordinatorEvent::BlockPayloadReconstructed { .. } => {
+                // Forward straight to the consumer: reconstructed payloads might not yet
+                // have been stored by consensus storage,
+                // Query service verifies the block against a decided leaf before storing it.
+                if let Err(err) = event_consumer.handle_event(&event).await {
+                    tracing::warn!("failed to handle reconstructed payload: {err:#}");
                 }
             },
             _ => {},

@@ -1,5 +1,5 @@
 use hotshot_example_types::{node_types::TestTypes, storage_types::TestStorage};
 
-use crate::{coordinator::Coordinator, network::cliquenet::Cliquenet};
+use crate::coordinator::Coordinator;
 
-pub type MockCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
+pub type MockCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;

@@ -119,6 +119,9 @@ async fn test_sequential_vote1() {
             count_matching(inputs, is_state_validated) >= 2
         })
         .await;
+    harness
+        .process_until_output(|outputs| count_matching(outputs, is_vote1) >= 2)
+        .await;
 
     assert_eq!(
         count_matching(harness.outputs(), is_vote1),
@@ -138,14 +141,9 @@ async fn test_cert1_formed_and_vote2_sent() {
     // View 1: proposal + Vote1 messages → CPU forms cert1 + reconstructs block
     send_proposal_and_vote1s(&mut harness, &test_data, 0, &node_key).await;
 
-    assert!(
-        any(harness.outputs(), is_vote1),
-        "Vote1 should be sent for proposal"
-    );
-    assert!(
-        any(harness.outputs(), is_vote2),
-        "Vote2 should be sent for proposal"
-    );
+    harness
+        .process_until_output(|outputs| any(outputs, is_vote1) && any(outputs, is_vote2))
+        .await;
 }
 
 /// Full decide path: Certificate1, Certificate2, and block reconstruction
@@ -168,8 +166,9 @@ async fn test_full_decide() {
     send_proposal_and_vote1s(&mut harness, &test_data, 1, &node_key).await;
     send_vote2s(&mut harness, &test_data, 1).await;
 
-    assert!(any(harness.outputs(), is_vote1), "Vote1 should be sent");
-    assert!(any(harness.outputs(), is_vote2), "Vote2 should be sent");
+    harness
+        .process_until_output(|outputs| any(outputs, is_vote1) && any(outputs, is_vote2))
+        .await;
 
     assert!(
         any(harness.outputs(), is_send_cert1),
@@ -225,10 +224,9 @@ async fn test_leader_proposal() {
 
     // SendProposal proves the CPU VidDisperseTask computed the VID
     // disperse — consensus cannot send a proposal without it.
-    assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should send proposal (requires CPU VID disperse)"
-    );
+    harness
+        .process_until_output(|outputs| any(outputs, is_proposal))
+        .await;
 }
 
 /// Multi-view chain: certificates are formed for each view, leading to
@@ -321,10 +319,10 @@ async fn test_leader_proposes_after_timeout() {
         any(harness.outputs(), is_request_vid_disperse),
         "Leader should request VID disperse after TC"
     );
-    assert!(
-        any(harness.outputs(), is_proposal),
-        "Leader should send proposal with timeout view change evidence"
-    );
+    // Proposal with timeout view change evidence, released once stored.
+    harness
+        .process_until_output(|outputs| any(outputs, is_proposal))
+        .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -507,11 +505,11 @@ async fn test_leader_proposes_with_computed_drb_in_epoch3() {
     harness
         .process_until(|inputs| any(inputs, |i| is_header_created_for_view(i, 28)))
         .await;
-    assert!(
-        any(harness.outputs(), |o| is_proposal_for_view(o, 28)),
-        "Leader should propose view 28 in epoch 3's transition window using the DRB result \
-         computed in epoch 1"
-    );
+    // Leader proposes view 28 in epoch 3's transition window using the DRB
+    // result computed in epoch 1.
+    harness
+        .process_until_output(|outputs| any(outputs, |o| is_proposal_for_view(o, 28)))
+        .await;
 }
 
 /// Same three-epoch setup but from a non-leader node's perspective:
@@ -558,10 +556,11 @@ async fn test_node_votes_with_computed_drb_in_epoch3() {
     // this proposal using the DRB result computed by the EpochManager.
     run_views_integration(&mut harness, &test_data, &node_key, 26..27).await;
 
-    assert!(
-        count_matching(harness.outputs(), is_vote1) > vote_count_before,
-        "Node should vote on epoch 3 transition-window proposal with the computed DRB result"
-    );
+    // The node votes on the epoch 3 transition-window proposal with the
+    // computed DRB result.
+    harness
+        .process_until_output(|outputs| count_matching(outputs, is_vote1) > vote_count_before)
+        .await;
 }
 
 /// f+1 timeout votes (OneHonestThreshold) trigger a TimeoutOneHonest input,

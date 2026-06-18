@@ -20,7 +20,7 @@ use crate::{
     helpers::test_upgrade_lock,
     logging::KeyPrefix,
     message::Message,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -89,7 +89,6 @@ impl TestHarness {
             epoch_height,
         );
 
-        let vid_disperse_task = VidDisperser::new(membership.clone());
         let vid_reconstruction_task = VidReconstructor::new();
 
         let block_config = BlockBuilderConfig::default();
@@ -124,6 +123,13 @@ impl TestHarness {
         )
         .await
         .expect("cliquenet creation should succeed");
+
+        let vid_disperse_task = VidDisperser::new(
+            membership.clone(),
+            network.sender().clone(),
+            public_key,
+            private_key.clone(),
+        );
 
         let coordinator = MockCoordinator::builder()
             .consensus(consensus)
@@ -209,6 +215,25 @@ impl TestHarness {
             }
         }
         inputs
+    }
+
+    /// Process events from the coordinator until the collected outputs
+    /// satisfy `predicate`. Use for outputs that are gated on storage
+    /// confirmations (votes, proposals) and thus need extra loop turns
+    /// after their triggering input has been observed.
+    pub async fn process_until_output<P>(&mut self, pred: P)
+    where
+        P: Fn(&Outbox<ConsensusOutput<TestTypes>>) -> bool,
+    {
+        while !pred(&self.outputs) {
+            match self.coordinator.next_consensus_input().await {
+                Ok(input) => self.apply_and_process(input).await,
+                Err(err) if err.severity == Severity::Critical => {
+                    panic!("Critical coordinator error: {err}")
+                },
+                Err(_err) => {},
+            }
+        }
     }
 
     pub fn outputs(&self) -> &Outbox<ConsensusOutput<TestTypes>> {
