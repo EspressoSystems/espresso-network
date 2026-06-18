@@ -862,7 +862,7 @@ fn spawn_pg_stat_activity_log(pool: Pool<Db>, op: &'static str) {
                 }
             },
             Err(e) => {
-                tracing::warn!(op, "failed to query pg_stat_activity: {e:#}");
+                tracing::error!(op, "failed to query pg_stat_activity: {e:#}");
             },
         }
 
