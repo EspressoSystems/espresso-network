@@ -552,6 +552,21 @@ pub struct Proposal<TYPES: NodeType, PROPOSAL: HasViewNumber + HasEpoch + Deseri
     pub _pd: PhantomData<TYPES>,
 }
 
+impl<TYPES: NodeType, PROPOSAL: HasViewNumber + HasEpoch + DeserializeOwned>
+    Proposal<TYPES, PROPOSAL>
+{
+    pub fn new(
+        data: PROPOSAL,
+        signature: <TYPES::SignatureKey as SignatureKey>::PureAssembledSignatureType,
+    ) -> Self {
+        Self {
+            data,
+            signature,
+            _pd: PhantomData,
+        }
+    }
+}
+
 /// Convert a `Proposal` by converting the underlying proposal type
 pub fn convert_proposal<TYPES, PROPOSAL, PROPOSAL2>(
     proposal: Proposal<TYPES, PROPOSAL>,

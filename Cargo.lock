@@ -6459,6 +6459,7 @@ dependencies = [
  "hotshot-utils",
  "parking_lot",
  "rand 0.8.6",
+ "rayon",
  "serde",
  "serde_bytes",
  "test-utils",

@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, btree_map::Entry},
+    mem,
     ops::Range,
 };
 
@@ -9,14 +10,17 @@ use hotshot_types::{
     data::{
         EpochNumber, VidCommitment2, VidDisperse2, VidDisperseShare2, ViewNumber,
         ns_table::parse_ns_table,
+        vid_disperse::{AvidmGf2DisperseShareFragment, AvidmGf2NamespacePiece},
     },
     epoch_membership::EpochMembershipCoordinator,
+    message::Proposal as SignedProposal,
     traits::{
         block_contents::EncodeBytes, node_implementation::NodeType, signature_key::SignatureKey,
     },
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
-use hotshot_utils::anytrace;
+use hotshot_utils::anytrace::{self, Wrap};
+use rayon::prelude::*;
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
 
@@ -93,6 +97,7 @@ pub struct VidDisperser<T: NodeType> {
     network: Sender<T>,
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
+    bucket_threshold: usize,
     tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
 }
 
@@ -109,8 +114,14 @@ impl<T: NodeType> VidDisperser<T> {
             network,
             public_key,
             private_key,
+            bucket_threshold: 128 * 1024,
             tasks: JoinSet::new(),
         }
+    }
+
+    pub fn with_bucket_threshold(mut self, len: usize) -> Self {
+        self.bucket_threshold = len;
+        self
     }
 
     pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
@@ -121,13 +132,21 @@ impl<T: NodeType> VidDisperser<T> {
         if self.calculations.contains_key(&key) {
             return;
         }
-        let handle = self.tasks.spawn(Self::handle_vid_disperse_request(
-            self.epoch_membership_coordinator.clone(),
-            self.network.clone(),
-            self.public_key.clone(),
-            self.private_key.clone(),
-            vid_disperse_request,
-        ));
+        let membership = self.epoch_membership_coordinator.clone();
+        let network = self.network.clone();
+        let public_key = self.public_key.clone();
+        let private_key = self.private_key.clone();
+        let bucket_threshold = self.bucket_threshold;
+        let handle = self.tasks.spawn_blocking(move || {
+            Self::handle_vid_disperse_request(
+                membership,
+                network,
+                public_key,
+                private_key,
+                vid_disperse_request,
+                bucket_threshold,
+            )
+        });
         self.calculations.insert(key, handle);
     }
 
@@ -146,44 +165,91 @@ impl<T: NodeType> VidDisperser<T> {
         }
     }
 
-    async fn handle_vid_disperse_request(
+    fn handle_vid_disperse_request(
         epoch_membership_coordinator: EpochMembershipCoordinator<T>,
         network: Sender<T>,
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         vid_disperse_request: VidDisperseRequest<T>,
+        bucket_threshold: usize,
     ) -> Result<VidDisperseOutput, VidDisperseError> {
         let view = vid_disperse_request.view;
-        let (disperse, _) = VidDisperse2::calculate_vid_disperse(
+        let epoch = vid_disperse_request.epoch;
+        let payload_commitment = vid_disperse_request.payload_commitment;
+
+        let params = VidDisperse2::<T>::disperse_params(
             &vid_disperse_request.block,
             &epoch_membership_coordinator,
-            view,
-            Some(vid_disperse_request.epoch),
-            Some(vid_disperse_request.epoch),
+            Some(epoch),
             &vid_disperse_request.metadata,
         )
-        .await
         .map_err(VidDisperseError::Vid)?;
-
-        let payload_commitment = disperse.payload_commitment;
 
         let signature = T::SignatureKey::sign(&private_key, payload_commitment.as_ref())
             .map_err(|err| VidDisperseError::Sign(err.into()))?;
 
-        for proposal in disperse.to_share_proposals(&signature) {
-            let recipient = proposal.data.recipient_key.clone();
-            let message = Message {
-                sender: public_key.clone(),
-                message_type: MessageType::Consensus(ConsensusMessage::VidShare(proposal)),
-            };
-            if let Err(err) = network.unicast(view, &recipient, &message) {
-                if err.is_critical() {
-                    return Err(err.into());
-                } else {
-                    warn!(%err, "network error while sending vid share")
+        let num_namespaces = params.ns_table.len();
+
+        // Coalesce small namespaces into balanced buckets so a block of many
+        // tiny namespaces is sent as a few messages per recipient rather than
+        // one tiny message each. Each bucket is one parallel unit and one
+        // message per recipient.
+        let buckets: Vec<Vec<usize>> = bucketize(&params.ns_table, bucket_threshold);
+
+        buckets.par_iter().try_for_each_with(
+            network,
+            |network, bucket| -> Result<(), VidDisperseError> {
+                let mut pieces = vec![Vec::new(); params.recipients.len()];
+
+                for &ns_index in bucket {
+                    let dispersal = AvidmGf2Scheme::ns_disperse_one(
+                        &params.param,
+                        &params.weights,
+                        &params.payload[params.ns_table[ns_index].clone()],
+                        ns_index,
+                    )
+                    .wrap()
+                    .map_err(VidDisperseError::Vid)?;
+
+                    let ns_payload_byte_len = dispersal.payload_byte_len;
+                    let ns_commit = dispersal.commit;
+                    for (pieces, ns_share) in pieces.iter_mut().zip(dispersal.shares) {
+                        pieces.push(AvidmGf2NamespacePiece {
+                            ns_index: dispersal.ns_index,
+                            ns_payload_byte_len,
+                            ns_commit,
+                            ns_share,
+                        });
+                    }
                 }
-            }
-        }
+
+                for (recipient, pieces) in params.recipients.iter().zip(pieces) {
+                    let fragment = AvidmGf2DisperseShareFragment {
+                        view_number: view,
+                        epoch: Some(epoch),
+                        target_epoch: Some(epoch),
+                        payload_commitment,
+                        recipient_key: recipient.clone(),
+                        param: params.param.clone(),
+                        num_namespaces,
+                        namespaces: pieces,
+                    };
+                    let message = Message {
+                        sender: public_key.clone(),
+                        message_type: MessageType::Consensus(ConsensusMessage::VidShareFragment(
+                            SignedProposal::new(fragment, signature.clone()),
+                        )),
+                    };
+                    if let Err(err) = network.unicast(view, recipient, &message) {
+                        if err.is_critical() {
+                            return Err(err.into());
+                        }
+                        warn!(%err, "network error while sending vid share fragment");
+                    }
+                }
+                Ok(())
+            },
+        )?;
 
         Ok(VidDisperseOutput {
             view,
@@ -199,6 +265,154 @@ impl<T: NodeType> VidDisperser<T> {
             handle.abort();
         }
         self.calculations = keep;
+    }
+}
+
+/// Group namespace indices into buckets whose payload sizes are each at least
+/// `threshold` bytes (except possibly the last), coalescing small namespaces so
+/// the disperser sends one message per bucket rather than one per namespace.
+///
+/// A `threshold` of 0 puts every namespace in its own bucket (no coalescing); a
+/// threshold larger than the whole payload yields a single bucket. A namespace
+/// at least `threshold` bytes on its own seals its bucket immediately, so large
+/// namespaces stay separate while small ones accumulate.
+fn bucketize(ns_table: &[Range<usize>], threshold: usize) -> Vec<Vec<usize>> {
+    let mut buckets = Vec::new();
+    let mut current = Vec::new();
+    let mut current_bytes = 0usize;
+    for (ns_index, range) in ns_table.iter().enumerate() {
+        current.push(ns_index);
+        current_bytes += range.len();
+        if current_bytes >= threshold {
+            buckets.push(mem::take(&mut current));
+            current_bytes = 0;
+        }
+    }
+    if !current.is_empty() {
+        buckets.push(current);
+    }
+    buckets
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum VidFragmentError {
+    #[error("fragment disagrees with the view's pinned metadata")]
+    Inconsistent,
+    #[error("namespace index {index} out of range for {num_namespaces} namespaces")]
+    IndexOutOfRange { index: usize, num_namespaces: usize },
+    #[error("duplicate fragment for namespace index {0}")]
+    DuplicateIndex(usize),
+}
+
+/// A view's partially-collected namespace pieces, keyed by namespace index.
+struct PendingShare<T: NodeType> {
+    epoch: Option<EpochNumber>,
+    target_epoch: Option<EpochNumber>,
+    payload_commitment: VidCommitment2,
+    recipient_key: T::SignatureKey,
+    param: AvidmGf2Param,
+    num_namespaces: usize,
+    pieces: BTreeMap<usize, AvidmGf2NamespacePiece>,
+}
+
+#[derive(Default)]
+pub struct VidFragmentAccumulator<T: NodeType> {
+    pending: BTreeMap<ViewNumber, PendingShare<T>>,
+    completed: BTreeSet<ViewNumber>,
+}
+
+impl<T: NodeType> VidFragmentAccumulator<T> {
+    /// Buffer a `fragment` addressed to this node.
+    ///
+    /// Returns `Ok(None)` while namespaces are still outstanding,
+    /// `Ok(Some(share))` once the final namespace completes the view, and
+    /// `Err` if the fragment is malformed or inconsistent with the view's
+    /// already-pinned metadata.
+    pub(crate) fn accept(
+        &mut self,
+        fragment: AvidmGf2DisperseShareFragment<T>,
+    ) -> Result<Option<VidDisperseShare2<T>>, VidFragmentError> {
+        let view = fragment.view_number;
+        if self.completed.contains(&view) {
+            return Ok(None);
+        }
+        if fragment.num_namespaces == 0 {
+            return Err(VidFragmentError::IndexOutOfRange {
+                index: 0,
+                num_namespaces: 0,
+            });
+        }
+        let pending = match self.pending.entry(view) {
+            Entry::Vacant(slot) => slot.insert(PendingShare {
+                epoch: fragment.epoch,
+                target_epoch: fragment.target_epoch,
+                payload_commitment: fragment.payload_commitment,
+                recipient_key: fragment.recipient_key.clone(),
+                param: fragment.param.clone(),
+                num_namespaces: fragment.num_namespaces,
+                pieces: BTreeMap::new(),
+            }),
+            Entry::Occupied(slot) => {
+                let pending = slot.into_mut();
+                if pending.num_namespaces != fragment.num_namespaces
+                    || pending.epoch != fragment.epoch
+                    || pending.target_epoch != fragment.target_epoch
+                    || pending.payload_commitment != fragment.payload_commitment
+                    || pending.recipient_key != fragment.recipient_key
+                    || pending.param != fragment.param
+                {
+                    return Err(VidFragmentError::Inconsistent);
+                }
+                pending
+            },
+        };
+        for piece in fragment.namespaces {
+            let ns_index = piece.ns_index;
+            if ns_index >= pending.num_namespaces {
+                return Err(VidFragmentError::IndexOutOfRange {
+                    index: ns_index,
+                    num_namespaces: pending.num_namespaces,
+                });
+            }
+            if pending.pieces.contains_key(&ns_index) {
+                return Err(VidFragmentError::DuplicateIndex(ns_index));
+            }
+            pending.pieces.insert(ns_index, piece);
+        }
+        if pending.pieces.len() != pending.num_namespaces {
+            return Ok(None);
+        }
+        // Every namespace is present and indices are distinct and in range, so
+        // they cover `0..num_namespaces` exactly; the `BTreeMap` yields them in
+        // that order.
+        let pending = self.pending.remove(&view).expect("just inserted above");
+        self.completed.insert(view);
+        let mut ns_commits = Vec::with_capacity(pending.num_namespaces);
+        let mut ns_lens = Vec::with_capacity(pending.num_namespaces);
+        let mut ns_shares = Vec::with_capacity(pending.num_namespaces);
+        for piece in pending.pieces.into_values() {
+            ns_commits.push(piece.ns_commit);
+            ns_lens.push(piece.ns_payload_byte_len);
+            ns_shares.push(piece.ns_share);
+        }
+        Ok(Some(VidDisperseShare2 {
+            view_number: view,
+            epoch: pending.epoch,
+            target_epoch: pending.target_epoch,
+            payload_commitment: pending.payload_commitment,
+            share: ns_shares.into(),
+            recipient_key: pending.recipient_key,
+            common: AvidmGf2Common {
+                param: pending.param,
+                ns_commits,
+                ns_lens,
+            },
+        }))
+    }
+
+    pub(crate) fn gc(&mut self, view_number: ViewNumber) {
+        self.pending = self.pending.split_off(&view_number);
+        self.completed = self.completed.split_off(&view_number);
     }
 }
 

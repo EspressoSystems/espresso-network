@@ -7,7 +7,10 @@ use hotshot_types::{
 };
 
 use super::common::utils::{TestData, TestView};
-use crate::vid::{VidReconstructErrorKind, VidReconstructor};
+use crate::{
+    tests::common::utils::vid_fragments,
+    vid::{VidFragmentAccumulator, VidFragmentError, VidReconstructErrorKind, VidReconstructor},
+};
 
 /// Threshold for SuccessThreshold with 10 nodes of stake 1: (10*2)/3 + 1 = 7.
 const THRESHOLD: u64 = 7;
@@ -592,4 +595,86 @@ async fn test_overlapping_garbage_loses_conflict_to_honest_share() {
     );
 
     expect_reconstruction(&mut reconstructor, view).await;
+}
+
+/// Feeding a view's namespace fragments — in any order — reassembles exactly
+/// the combined share the leader would otherwise have sent, and only the final
+/// fragment yields it.
+#[tokio::test]
+async fn fragment_accumulator_reassembles_share() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let original = honest_share(view, 0);
+
+    // Reverse the fragments to prove order independence.
+    let mut fragments = vid_fragments(&original).collect::<Vec<_>>();
+    fragments.reverse();
+    let last = fragments.len() - 1;
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    let mut reassembled = None;
+    for (i, fragment) in fragments.into_iter().enumerate() {
+        let out = accumulator.accept(fragment).expect("fragment accepted");
+        if i == last {
+            reassembled = out;
+        } else {
+            assert!(out.is_none(), "share completed before its last fragment");
+        }
+    }
+    assert_eq!(reassembled, Some(original));
+}
+
+/// A fragment whose namespace index is outside `0..num_namespaces` is rejected,
+/// a second fragment for an already-buffered index is a duplicate, and a
+/// fragment disagreeing with the pinned metadata is inconsistent.
+#[tokio::test]
+async fn fragment_accumulator_rejects_malformed_fragments() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    // A real fragment to use as a template; its content is irrelevant since the
+    // accumulator's intake checks are purely structural.
+    let template = vid_fragments(&honest_share(view, 0))
+        .collect::<Vec<_>>()
+        .remove(0);
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+
+    // Out-of-range index.
+    let mut out_of_range = template.clone();
+    out_of_range.num_namespaces = 2;
+    out_of_range.namespaces[0].ns_index = 2;
+    assert!(matches!(
+        accumulator.accept(out_of_range),
+        Err(VidFragmentError::IndexOutOfRange {
+            index: 2,
+            num_namespaces: 2
+        })
+    ));
+
+    // First fragment of a two-namespace share: buffered, incomplete.
+    let mut first = template.clone();
+    first.num_namespaces = 2;
+    first.namespaces[0].ns_index = 0;
+    assert!(
+        accumulator
+            .accept(first.clone())
+            .expect("accepted")
+            .is_none()
+    );
+
+    // A second fragment for the same index is a duplicate.
+    assert!(matches!(
+        accumulator.accept(first),
+        Err(VidFragmentError::DuplicateIndex(0))
+    ));
+
+    // A fragment that disagrees with the pinned commitment is inconsistent.
+    let mut wrong_commitment = template;
+    wrong_commitment.num_namespaces = 2;
+    wrong_commitment.namespaces[0].ns_index = 1;
+    wrong_commitment.payload_commitment = VidCommitment2::default();
+    assert!(matches!(
+        accumulator.accept(wrong_commitment),
+        Err(VidFragmentError::Inconsistent)
+    ));
 }

@@ -29,6 +29,7 @@ hotshot-types = { workspace = true }
 hotshot-utils = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 test-utils = { workspace = true }
