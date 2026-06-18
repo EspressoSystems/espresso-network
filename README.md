@@ -70,7 +70,7 @@ make doc
 
 ## Building and running
 
-Docker images and the [docker-compose-demo.yaml](docker-compose-demo.yaml) file are provided for convenience. The
+Docker images and the [docker-compose.yaml](docker-compose.yaml) file are provided for convenience. The
 Docker-based demo fetches the images from the `ghcr` repository, where they are updated with every push to `main` on
 GitHub. For testing uncommitted changes, you can also run the binaries by manually building and running the services.
 
