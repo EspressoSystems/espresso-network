@@ -20,7 +20,7 @@
 <a href=#20 id=20 data-nosnippet>20</a>    v0_3::{EventKey, IndexedStake, StakeTableEvent},
 <a href=#21 id=21 data-nosnippet>21</a>};
 <a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span>crate::{
-<a href=#23 id=23 data-nosnippet>23</a>    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
+<a href=#23 id=23 data-nosnippet>23</a>    AuthenticatedValidatorMap, PubKey, RegisteredValidatorMap,
 <a href=#24 id=24 data-nosnippet>24</a>    v0::{
 <a href=#25 id=25 data-nosnippet>25</a>        GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
 <a href=#26 id=26 data-nosnippet>26</a>        impls::{StakeTableHash, fetch_and_calculate_block_reward, reward::EpochRewardsCalculator},
@@ -273,7 +273,7 @@
 <a href=#273 id=273 data-nosnippet>273</a>        <span class="kw">use </span>hotshot_example_types::storage_types::TestStorage;
 <a href=#274 id=274 data-nosnippet>274</a>        <span class="kw">use </span>versions::version;
 <a href=#275 id=275 data-nosnippet>275</a>
-<a href=#276 id=276 data-nosnippet>276</a>        <span class="kw">use </span><span class="kw">crate</span>::v0_3::Fetcher;
+<a href=#276 id=276 data-nosnippet>276</a>        <span class="kw">use </span>crate::{EpochCommittees, v0_3::Fetcher};
 <a href=#277 id=277 data-nosnippet>277</a>
 <a href=#278 id=278 data-nosnippet>278</a>        <span class="kw">let </span>chain_config = ChainConfig::default();
 <a href=#279 id=279 data-nosnippet>279</a>        <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[<span class="string">"http://localhost:3331"</span>.parse().unwrap()])
@@ -300,7 +300,7 @@
 <a href=#300 id=300 data-nosnippet>300</a>        <span class="kw">use </span>hotshot_example_types::storage_types::TestStorage;
 <a href=#301 id=301 data-nosnippet>301</a>        <span class="kw">use </span>versions::version;
 <a href=#302 id=302 data-nosnippet>302</a>
-<a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">use </span><span class="kw">crate</span>::v0_3::Fetcher;
+<a href=#303 id=303 data-nosnippet>303</a>        <span class="kw">use </span>crate::{EpochCommittees, v0_3::Fetcher};
 <a href=#304 id=304 data-nosnippet>304</a>
 <a href=#305 id=305 data-nosnippet>305</a>        <span class="kw">let </span>chain_config = ChainConfig::default();
 <a href=#306 id=306 data-nosnippet>306</a>        <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[<span class="string">"http://localhost:3331"</span>.parse().unwrap()])
@@ -327,7 +327,7 @@
 <a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">use </span>hotshot_example_types::storage_types::TestStorage;
 <a href=#328 id=328 data-nosnippet>328</a>        <span class="kw">use </span>versions::version;
 <a href=#329 id=329 data-nosnippet>329</a>
-<a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">use </span><span class="kw">crate</span>::v0_3::Fetcher;
+<a href=#330 id=330 data-nosnippet>330</a>        <span class="kw">use </span>crate::{EpochCommittees, v0_3::Fetcher};
 <a href=#331 id=331 data-nosnippet>331</a>        <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[<span class="string">"http://localhost:3331"</span>.parse().unwrap()])
 <a href=#332 id=332 data-nosnippet>332</a>            .expect(<span class="string">"Failed to create L1 client"</span>);
 <a href=#333 id=333 data-nosnippet>333</a>
@@ -415,7 +415,7 @@
 <a href=#415 id=415 data-nosnippet>415</a>        <span class="kw">use </span>hotshot_example_types::storage_types::TestStorage;
 <a href=#416 id=416 data-nosnippet>416</a>        <span class="kw">use </span>versions::version;
 <a href=#417 id=417 data-nosnippet>417</a>
-<a href=#418 id=418 data-nosnippet>418</a>        <span class="kw">use </span><span class="kw">crate</span>::v0_3::Fetcher;
+<a href=#418 id=418 data-nosnippet>418</a>        <span class="kw">use </span>crate::{EpochCommittees, v0_3::Fetcher};
 <a href=#419 id=419 data-nosnippet>419</a>
 <a href=#420 id=420 data-nosnippet>420</a>        <span class="kw">let </span>chain_config = ChainConfig::default();
 <a href=#421 id=421 data-nosnippet>421</a>        <span class="kw">let </span>l1 = L1Client::new(<span class="macro">vec!</span>[<span class="string">"http://localhost:3331"</span>.parse().unwrap()])

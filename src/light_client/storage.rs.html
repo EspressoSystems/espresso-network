@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a>    availability::{BlockId, LeafId, LeafQueryData},
 <a href=#15 id=15 data-nosnippet>15</a>};
 <a href=#16 id=16 data-nosnippet>16</a><span class="kw">use </span>hotshot_types::{data::EpochNumber, light_client::StateVerKey, x25519};
-<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>serde::Serialize;
+<a href=#17 id=17 data-nosnippet>17</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">use </span>serde_json::Value;
 <a href=#19 id=19 data-nosnippet>19</a><span class="kw">use </span>sqlx::{QueryBuilder, SqlitePool, query, query_as, sqlite::SqlitePoolOptions};
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span>tempfile::{Builder, TempDir};
@@ -118,7 +118,7 @@
 <a href=#118 id=118 data-nosnippet>118</a>    ) -&gt; <span class="kw">impl </span>Send + Future&lt;Output = <span class="prelude-ty">Result</span>&lt;()&gt;&gt;;
 <a href=#119 id=119 data-nosnippet>119</a>}
 <a href=#120 id=120 data-nosnippet>120</a>
-<a href=#121 id=121 data-nosnippet>121</a><span class="attr">#[derive(Clone, Debug, Serialize)]
+<a href=#121 id=121 data-nosnippet>121</a><span class="attr">#[derive(Clone, Debug, Serialize, Deserialize)]
 <a href=#122 id=122 data-nosnippet>122</a>#[cfg_attr(feature = <span class="string">"clap"</span>, derive(clap::Parser))]
 <a href=#123 id=123 data-nosnippet>123</a></span><span class="kw">pub struct </span>LightClientSqliteOptions {
 <a href=#124 id=124 data-nosnippet>124</a>    <span class="doccomment">/// Maximum number of simultaneous DB connections to allow.
