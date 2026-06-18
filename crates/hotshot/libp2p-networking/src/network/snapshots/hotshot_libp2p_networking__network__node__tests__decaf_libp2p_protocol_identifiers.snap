@@ -5,3 +5,4 @@ expression: "snapshot_for(Some(U256::from(0xdecafu64)))"
 gossipsub_prefix: Some("/HotShot/gossipsub/1.0/0xdecaf")
 kad: /ipfs/kad/1.0.0/0xdecaf
 direct_message: /HotShot/direct_message/1.0/0xdecaf
+identify: HotShot/identify/1.0/0xdecaf
