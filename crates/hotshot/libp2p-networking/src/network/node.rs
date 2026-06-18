@@ -49,6 +49,7 @@ use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    task::JoinHandle,
 };
 use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
@@ -79,6 +80,9 @@ use crate::network::{
     },
     log_summary::LogEvent,
 };
+
+/// Join handle for the spawned swarm event-loop task.
+pub type SwarmTaskHandle = JoinHandle<Result<(), NetworkError>>;
 
 /// Maximum size of a message
 pub const MAX_GOSSIP_MSG_SIZE: usize = 2_000_000_000;
@@ -863,6 +867,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         (
             UnboundedSender<ClientRequest>,
             UnboundedReceiver<NetworkEvent>,
+            SwarmTaskHandle,
         ),
         NetworkError,
     > {
@@ -873,7 +878,9 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         self.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
 
         DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
-        spawn(
+        // Keep the task's `JoinHandle` so callers can await the swarm loop
+        // ending on shutdown, ensuring the listening socket is released.
+        let task = spawn(
             async move {
                 loop {
                     select! {
@@ -894,11 +901,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         }
                     }
                 }
+                drop(self.swarm);
                 Ok::<(), NetworkError>(())
             }
             .instrument(info_span!("Libp2p NetworkBehaviour Handler")),
         );
-        Ok((s_input, r_output))
+        Ok((s_input, r_output, task))
     }
 
     /// Get a reference to the network node's peer id.

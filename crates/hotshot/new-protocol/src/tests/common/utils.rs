@@ -103,8 +103,8 @@ impl TestView {
     }
 
     /// Build a leader-signed VID share envelope (the wire form). The leader's
-    /// signature is over the share's `payload_commitment`, matching what
-    /// `Coordinator::SendVidShares` produces in production.
+    /// signature is over the share's `payload_commitment`, matching what the
+    /// `VidDisperser` produces in production.
     pub fn vid_share_message(
         &self,
         recipient_key: &BLSPubKey,
@@ -213,7 +213,9 @@ impl TestView {
         };
 
         Message {
-            sender: self.leader_public_key,
+            // A Vote1 is broadcast by the voting validator itself, and carries
+            // that validator's own VID share (recipient_key == pub_key).
+            sender: pub_key,
             message_type: MessageType::Consensus(ConsensusMessage::Vote1(Vote1 {
                 vote,
                 vid_share,
@@ -987,8 +989,8 @@ impl ConsensusHarness {
                 let VidDisperse::V2(vid) = vid_disperse.disperse else {
                     panic!("VidDisperse is not a V2");
                 };
-                self.consensus
-                    .apply(ConsensusInput::VidDisperseCreated(*view, vid), outbox);
+                let input = ConsensusInput::VidDisperseCreated(*view, vid.payload_commitment);
+                self.consensus.apply(input, outbox);
             },
             ConsensusOutput::RequestDrbResult(epoch) => {
                 self.consensus

@@ -36,7 +36,6 @@ use hotshot_contract_adapter::{
     stake_table::StakeTableSolError,
 };
 use hotshot_types::{
-    PeerConfig,
     addr::NetAddr,
     data::{EpochNumber, vid_disperse::VID_TARGET_TOTAL_STAKE},
     x25519,
@@ -53,7 +52,7 @@ use vbs::version::Version;
 #[cfg(any(test, feature = "testing"))]
 use super::v0_3::DAMembers;
 use super::{
-    Header, L1Client, SeqTypes,
+    Header, L1Client,
     traits::{MembershipPersistence, StateCatchup},
     v0_3::{
         AuthenticatedValidator, ChainConfig, EventKey, Fetcher, MAX_VALIDATORS,
@@ -1752,6 +1751,10 @@ enum GetStakeTablesError {
 impl super::v0_3::StakeTable {
     /// Generate a `StakeTable` with `n` members.
     pub fn mock(n: u64) -> Self {
+        use hotshot_types::PeerConfig;
+
+        use super::SeqTypes;
+
         [..n]
             .iter()
             .map(|_| PeerConfig::test_default())
@@ -1764,6 +1767,10 @@ impl super::v0_3::StakeTable {
 impl DAMembers {
     /// Generate a `DaMembers` (alias committee) with `n` members.
     pub fn mock(n: u64) -> Self {
+        use hotshot_types::PeerConfig;
+
+        use super::SeqTypes;
+
         [..n]
             .iter()
             .map(|_| PeerConfig::test_default())

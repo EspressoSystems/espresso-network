@@ -638,10 +638,10 @@ impl Inner {
         Ok(Some(vid_share))
     }
 
-    fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         tracing::info!("Checking `Leaf2` to load the anchor leaf.");
         if self.decided_leaf2_path().is_dir() {
-            let mut anchor: Option<(Leaf2, QuorumCertificate2<SeqTypes>)> = None;
+            let mut anchor: Option<(Leaf2, CertificatePair<SeqTypes>)> = None;
 
             // Return the latest decided leaf.
             for (_, path) in view_files(self.decided_leaf2_path())? {
@@ -650,10 +650,10 @@ impl Inner {
                 let (leaf, cert) = self.parse_decided_leaf(&bytes)?;
                 if let Some((anchor_leaf, _)) = &anchor {
                     if leaf.view_number() > anchor_leaf.view_number() {
-                        anchor = Some((leaf, cert.qc().clone()));
+                        anchor = Some((leaf, cert));
                     }
                 } else {
-                    anchor = Some((leaf, cert.qc().clone()));
+                    anchor = Some((leaf, cert));
                 }
             }
 
@@ -675,7 +675,10 @@ impl Inner {
                 .bytes()
                 .collect::<Result<Vec<_>, _>>()
                 .context("read")?;
-            return Ok(Some(bincode::deserialize(&bytes).context("deserialize")?));
+            let (leaf2, qc2): (Leaf2, QuorumCertificate2<SeqTypes>) =
+                bincode::deserialize(&bytes).context("deserialize")?;
+            let cert_pair = CertificatePair::new(qc2, None);
+            return Ok(Some((leaf2, cert_pair)));
         }
 
         Ok(None)
@@ -877,9 +880,7 @@ impl SequencerPersistence for Persistence {
         Ok(processed)
     }
 
-    async fn load_anchor_leaf(
-        &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         self.inner.read().await.load_anchor_leaf()
     }
 

@@ -34,7 +34,7 @@ use crate::{
     consensus::{ConsensusOutput, PreCutoverSeed},
     coordinator::{Coordinator, CoordinatorOutput, error::Severity},
     helpers::test_upgrade_lock,
-    network::{Network, cliquenet::Cliquenet},
+    network::Cliquenet,
     tests::common::{
         coordinator_builder::build_test_coordinator, utils::mock_membership_with_client,
     },
@@ -614,8 +614,8 @@ async fn create_network(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_node<N: Network<TestTypes>>(
-    mut coord: Coordinator<TestTypes, N, TestStorage<TestTypes>>,
+async fn run_node(
+    mut coord: Coordinator<TestTypes, TestStorage<TestTypes>>,
     storage: TestStorage<TestTypes>,
     output_tx: UnboundedSender<TaggedEvent>,
     idx: usize,

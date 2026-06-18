@@ -1602,7 +1602,9 @@ impl SequencerPersistence for Persistence {
                 .db
                 .read()
                 .await?
-                .fetch_optional("SELECT leaf, qc FROM anchor_leaf2 ORDER BY view DESC LIMIT 1")
+                .fetch_optional(
+                    "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 ORDER BY view DESC LIMIT 1",
+                )
                 .await?
             else {
                 return Ok(None);
@@ -1611,10 +1613,13 @@ impl SequencerPersistence for Persistence {
             let leaf_bytes: Vec<u8> = row.get("leaf");
             let leaf2: Leaf2 = bincode::deserialize(&leaf_bytes)?;
 
-            let qc_bytes: Vec<u8> = row.get("qc");
-            let qc2: QuorumCertificate2<SeqTypes> = bincode::deserialize(&qc_bytes)?;
+            let maybe_next_qc_bytes: Option<Vec<u8>> = row.try_get("next_epoch_qc").ok();
+            let maybe_next_qc2 = maybe_next_qc_bytes
+                .and_then(|next_qc_bytes| bincode::deserialize(&next_qc_bytes).ok());
 
-            Ok(Some((leaf2, qc2)))
+            let cert_pair = CertificatePair::new(qc2, maybe_next_qc2);
+
+            Ok(Some((leaf2, cert_pair)))
         })
         .await
     }
