@@ -192,18 +192,14 @@ async fn build_coordinator(
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    // Main's VidDisperser sends shares directly from the dispersal task
-    // (PR #4517), so it needs a network sender + signing keys.
-    let vid_disperser = VidDisperser::new(
+    let mut vid_disperser = VidDisperser::new(
         membership.clone(),
         network.sender().clone(),
         public_key,
         private_key.clone(),
     );
+    vid_disperser.set_tracer(Some(tracer.clone()));
 
-    // HEAD adds per-view trace events inside the recover spawn_blocking
-    // (recover_v_minus_1_decode_end splits the parallel-AvidM phase from
-    // the serial Keccak tail).  Wire the tracer so they get emitted.
     let mut vid_reconstructor = VidReconstructor::new();
     vid_reconstructor.set_tracer(Some(tracer.clone()));
 

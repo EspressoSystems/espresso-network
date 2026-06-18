@@ -95,6 +95,12 @@ pub struct VidDisperser<T: NodeType> {
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
+    /// Optional leader-event tracer (wired by the bench).  Threaded through
+    /// to each `handle_vid_disperse_request` task so the share-sign loop and
+    /// parallel fan-out window emit their `ShareSignLoop*` / `VidSharesQueued`
+    /// / `VidSharesUnicast*` trace events from inside the disperser (where
+    /// the work actually happens, post main PR #4517).
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 }
 
 impl<T: NodeType> VidDisperser<T> {
@@ -111,7 +117,15 @@ impl<T: NodeType> VidDisperser<T> {
             public_key,
             private_key,
             tasks: JoinSet::new(),
+            tracer: None,
         }
+    }
+
+    /// Register a leader-event tracer.  Production builds leave this `None`.
+    /// The bench wires this so each dispersal task emits its `ShareSignLoop*`,
+    /// `VidSharesQueued`, and `VidSharesUnicast*` events to the leader trace.
+    pub fn set_tracer(&mut self, tracer: Option<crate::leader_trace::LeaderTracerHandle>) {
+        self.tracer = tracer;
     }
 
     pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
@@ -128,6 +142,7 @@ impl<T: NodeType> VidDisperser<T> {
             self.public_key.clone(),
             self.private_key.clone(),
             vid_disperse_request,
+            self.tracer.clone(),
         ));
         self.calculations.insert(key, handle);
     }
@@ -160,6 +175,7 @@ impl<T: NodeType> VidDisperser<T> {
         public_key: T::SignatureKey,
         private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
         vid_disperse_request: VidDisperseRequest<T>,
+        tracer: Option<crate::leader_trace::LeaderTracerHandle>,
     ) -> Result<VidDisperseOutput, VidDisperseError> {
         let view = vid_disperse_request.view;
         let (disperse, _) = VidDisperse2::calculate_vid_disperse(
@@ -175,16 +191,42 @@ impl<T: NodeType> VidDisperser<T> {
 
         let payload_commitment = disperse.payload_commitment;
 
+        // ShareSignLoop brackets the per-share signing path: previously in
+        // consensus's `send_vid_shares`, now living here in the disperser.
+        crate::trace_leader_event!(
+            tracer,
+            view,
+            crate::leader_trace::LeaderEvent::ShareSignLoopStart
+        );
         let signature = T::SignatureKey::sign(&private_key, payload_commitment.as_ref())
             .map_err(|err| VidDisperseError::Sign(err.into()))?;
+        let share_proposals = disperse.to_share_proposals(&signature);
+        crate::trace_leader_event!(
+            tracer,
+            view,
+            crate::leader_trace::LeaderEvent::ShareSignLoopEnd
+        );
+
+        // The signed shares are now ready to be handed off to the network.
+        // Trace event preserved for cycle-breakdown plots (was emitted from
+        // consensus before main PR #4517 moved share-sending here).
+        crate::trace_leader_event!(
+            tracer,
+            view,
+            crate::leader_trace::LeaderEvent::VidSharesQueued
+        );
 
         // Parallel fan-out: each per-recipient `unicast` is independent, so
         // the per-peer serialize + send work runs across the rayon pool
         // instead of in a serial loop on the disperser task.  A critical
         // network error from any worker fails the whole dispersal; other
         // errors are logged and skipped.
-        disperse
-            .to_share_proposals(&signature)
+        crate::trace_leader_event!(
+            tracer,
+            view,
+            crate::leader_trace::LeaderEvent::VidSharesUnicastStart
+        );
+        share_proposals
             .into_par_iter()
             .try_for_each(|proposal| -> Result<(), VidDisperseError> {
                 let recipient = proposal.data.recipient_key.clone();
@@ -201,6 +243,11 @@ impl<T: NodeType> VidDisperser<T> {
                 }
                 Ok(())
             })?;
+        crate::trace_leader_event!(
+            tracer,
+            view,
+            crate::leader_trace::LeaderEvent::VidSharesUnicastEnd
+        );
 
         Ok(VidDisperseOutput {
             view,
@@ -566,10 +613,8 @@ impl<T: NodeType> VidReconstructor<T> {
         );
         // Bracket the whole `reconstruct` call with start/end so the bench
         // can measure end-to-end recover wall time.  `RecoverVMinus1DecodeEnd`
-        // (the parallel-AvidM vs serial-Keccak split) used to fire between
-        // `AvidmGf2Scheme::recover` and `from_bytes + transaction_commitments`
-        // — under main's refactor those live inside `reconstruct()`; pass the
-        // tracer in there if/when fine-grained split is needed again.
+        // fires from inside `reconstruct()` between the parallel AvidM par_iter
+        // (`decode_and_recommit`) and the serial Keccak tail (`output`).
         let tracer = self.tracer.clone();
         let task = self.tasks.spawn_blocking(move || {
             crate::trace_leader_event!(
@@ -577,8 +622,15 @@ impl<T: NodeType> VidReconstructor<T> {
                 view,
                 crate::leader_trace::LeaderEvent::RecoverVMinus1Start
             );
-            let result =
-                reconstruct::<T>(view, epoch, payload_commitment, common, shares, metadata);
+            let result = reconstruct::<T>(
+                view,
+                epoch,
+                payload_commitment,
+                common,
+                shares,
+                metadata,
+                tracer.clone(),
+            );
             crate::trace_leader_event!(
                 tracer,
                 view,
@@ -631,11 +683,21 @@ fn reconstruct<T: NodeType>(
     common: AvidmGf2Common,
     shares: Vec<(T::SignatureKey, AvidmGf2Share)>,
     metadata: Metadata<T>,
+    tracer: Option<crate::leader_trace::LeaderTracerHandle>,
 ) -> ReconstructResult<T> {
     let (keys, shares): (Vec<_>, Vec<_>) = shares.into_iter().unzip();
     if let Some(bytes) =
         decode_and_recommit::<T>(view, &common, &shares, &payload_commitment, &metadata)
     {
+        // Split the trace span: everything before this is the parallel
+        // AvidM par_iter over namespaces; `output()` below does the
+        // single-threaded `from_bytes` + Keccak256-of-every-transaction tail.
+        // Two intervals let the bench attribute CPU saturation honestly.
+        crate::trace_leader_event!(
+            tracer,
+            view,
+            crate::leader_trace::LeaderEvent::RecoverVMinus1DecodeEnd
+        );
         return Ok(output(view, epoch, payload_commitment, &bytes, metadata));
     }
     let bad_share_keys: Vec<_> = keys
