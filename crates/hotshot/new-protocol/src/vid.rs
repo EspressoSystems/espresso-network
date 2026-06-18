@@ -17,6 +17,7 @@ use hotshot_types::{
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param, AvidmGf2Scheme, AvidmGf2Share},
 };
 use hotshot_utils::anytrace;
+use p3_maybe_rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use tokio::task::{AbortHandle, JoinSet};
 use tracing::{error, warn};
 
@@ -177,20 +178,29 @@ impl<T: NodeType> VidDisperser<T> {
         let signature = T::SignatureKey::sign(&private_key, payload_commitment.as_ref())
             .map_err(|err| VidDisperseError::Sign(err.into()))?;
 
-        for proposal in disperse.to_share_proposals(&signature) {
-            let recipient = proposal.data.recipient_key.clone();
-            let message = Message {
-                sender: public_key.clone(),
-                message_type: MessageType::Consensus(ConsensusMessage::VidShare(proposal)),
-            };
-            if let Err(err) = network.unicast(view, &recipient, &message) {
-                if err.is_critical() {
-                    return Err(err.into());
-                } else {
-                    warn!(%err, "network error while sending vid share")
+        // Parallel fan-out: each per-recipient `unicast` is independent, so
+        // the per-peer serialize + send work runs across the rayon pool
+        // instead of in a serial loop on the disperser task.  A critical
+        // network error from any worker fails the whole dispersal; other
+        // errors are logged and skipped.
+        disperse
+            .to_share_proposals(&signature)
+            .into_par_iter()
+            .try_for_each(|proposal| -> Result<(), VidDisperseError> {
+                let recipient = proposal.data.recipient_key.clone();
+                let message = Message {
+                    sender: public_key.clone(),
+                    message_type: MessageType::Consensus(ConsensusMessage::VidShare(proposal)),
+                };
+                if let Err(err) = network.unicast(view, &recipient, &message) {
+                    if err.is_critical() {
+                        return Err(VidDisperseError::Net(err));
+                    } else {
+                        warn!(%err, "network error while sending vid share")
+                    }
                 }
-            }
-        }
+                Ok(())
+            })?;
 
         Ok(VidDisperseOutput {
             view,
