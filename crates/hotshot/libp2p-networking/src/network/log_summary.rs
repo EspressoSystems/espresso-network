@@ -88,9 +88,7 @@ pub fn spawn_summary_task() {
 mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock, atomic::Ordering};
 
-    use tracing_test::traced_test;
-
-    use super::{COUNTERS, LogEvent, drain_and_format, emit_summary};
+    use super::{COUNTERS, LogEvent, drain_and_format};
 
     fn test_lock() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -106,12 +104,10 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn emits_only_nonzero_and_skips_when_idle() {
         let _g = test_lock();
         reset();
-        emit_summary();
-        assert!(!logs_contain("libp2p"));
+        assert!(drain_and_format().is_none());
 
         for _ in 0..3 {
             LogEvent::DialFailure.record();
@@ -119,11 +115,10 @@ mod tests {
         for _ in 0..5 {
             LogEvent::AuthFailure.record();
         }
-        emit_summary();
-        assert!(logs_contain("libp2p 60s summary:"));
-        assert!(logs_contain("auth_failures=5"));
-        assert!(logs_contain("dial_failures=3"));
-        assert!(!logs_contain("verify_failures"));
+        let summary = drain_and_format().expect("expected a summary");
+        assert!(summary.contains("auth_failures=5"));
+        assert!(summary.contains("dial_failures=3"));
+        assert!(!summary.contains("verify_failures"));
         assert!(drain_and_format().is_none());
     }
 
