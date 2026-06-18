@@ -128,7 +128,7 @@
 <a href=#128 id=128 data-nosnippet>128</a>    <span class="doccomment">/// Messages relating to sharing data between nodes
 <a href=#129 id=129 data-nosnippet>129</a>    </span>Data(DataMessage&lt;TYPES&gt;),
 <a href=#130 id=130 data-nosnippet>130</a>    <span class="doccomment">/// A (still serialized) message to be passed through to external listeners
-<a href=#131 id=131 data-nosnippet>131</a>    </span>External(Vec&lt;u8&gt;),
+<a href=#131 id=131 data-nosnippet>131</a>    </span>External(<span class="attr">#[serde(with = <span class="string">"serde_bytes"</span>)] </span>Vec&lt;u8&gt;),
 <a href=#132 id=132 data-nosnippet>132</a>}
 <a href=#133 id=133 data-nosnippet>133</a>
 <a href=#134 id=134 data-nosnippet>134</a><span class="doccomment">/// List of keys to send a message to, or broadcast to all known keys

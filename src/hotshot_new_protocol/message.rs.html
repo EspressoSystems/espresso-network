@@ -247,7 +247,7 @@
 <a href=#247 id=247 data-nosnippet>247</a>    Consensus(ConsensusMessage&lt;T, S&gt;),
 <a href=#248 id=248 data-nosnippet>248</a>    Block(BlockMessage&lt;T&gt;),
 <a href=#249 id=249 data-nosnippet>249</a>    ProposalFetch(ProposalFetchMessage&lt;T&gt;),
-<a href=#250 id=250 data-nosnippet>250</a>    External(Vec&lt;u8&gt;),
+<a href=#250 id=250 data-nosnippet>250</a>    External(<span class="attr">#[serde(with = <span class="string">"serde_bytes"</span>)] </span>Vec&lt;u8&gt;),
 <a href=#251 id=251 data-nosnippet>251</a>}
 <a href=#252 id=252 data-nosnippet>252</a>
 <a href=#253 id=253 data-nosnippet>253</a><span class="kw">impl</span>&lt;T: NodeType, S&gt; MessageType&lt;T, S&gt; {
