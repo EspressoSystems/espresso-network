@@ -12,9 +12,10 @@ use hotshot_query_service_types::{
     node::BlockId,
 };
 use hotshot_types::data::EpochNumber;
+use serde::{Serialize, de::DeserializeOwned};
 use surf_disco::Url;
 use tokio::time::sleep;
-use vbs::version::StaticVersion;
+use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 use crate::{
     consensus::{
@@ -105,9 +106,36 @@ pub trait Client: Send + Sync + 'static {
         &self,
         height: u64,
     ) -> impl Send + Future<Output = Result<Option<Certificate2<SeqTypes>>>>;
+
+    /// Serialize a payload for submission to the Espresso API, using the current protocol version.
+    fn serialize<T>(&self, data: &T) -> Result<Vec<u8>>
+    where
+        T: Serialize,
+    {
+        Serializer::<ApiVersion>::serialize(data)
+    }
+
+    /// Parse a binary payload from the Espresso API, using the current protocol version.
+    fn deserialize<T>(&self, bytes: &[u8]) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        Serializer::<ApiVersion>::deserialize(bytes)
+    }
 }
 
-type HttpClient = surf_disco::Client<hotshot_query_service_types::Error, StaticVersion<0, 1>>;
+/// The current binary serialization version used by the Espresso API.
+///
+/// Currently, the API version is hard-coded in the Espresso node, so it's fair to hard-code it
+/// here too: an upgrade to the Espresso network that changes the API version would require a
+/// corresponding upgrade to the light client to handle the new protocol version regardless.
+///
+/// In the future, it would be better to make the API version part of the Espresso chain config, so
+/// that normal upgrade handling could dynamically adjust the current API version without requiring
+/// an upgrade or restart of the light client.
+type ApiVersion = StaticVersion<0, 1>;
+
+type HttpClient = surf_disco::Client<hotshot_query_service_types::Error, ApiVersion>;
 
 /// A [`Client`] connected to the HotShot query service.
 #[derive(Clone, Debug)]
@@ -400,6 +428,7 @@ impl<T> FallbackClient<T> {
 mod test {
     use std::time::Duration;
 
+    use alloy::transports::http::reqwest::{self, header::ACCEPT};
     use committable::Committable;
     use espresso_node::{
         api::{
@@ -417,7 +446,7 @@ mod test {
         availability::{BlockQueryData, LeafQueryData},
     };
     use pretty_assertions::assert_eq;
-    use rand::RngCore;
+    use rand::{RngCore, thread_rng};
     use test_utils;
     use tokio::time::sleep;
     use versions::{EPOCH_VERSION, Upgrade};
@@ -775,5 +804,53 @@ mod test {
                 .unwrap();
             assert_eq!(proof.verify(&header, ns).unwrap(), vec![]);
         }
+    }
+
+    #[tokio::test]
+    #[test_log::test]
+    async fn test_serialize() {
+        let port =
+            test_utils::reserve_tcp_port().expect("OS should have ephemeral ports available");
+        let url: Url = format!("http://localhost:{port}").parse().unwrap();
+
+        let test_config = TestConfigBuilder::default().build();
+        let storage = DataSource::create_storage().await;
+        let persistence =
+            <DataSource as TestableSequencerDataSource>::persistence_options(&storage);
+
+        let config = TestNetworkConfigBuilder::<1, _, _>::with_num_nodes()
+            .api_config(
+                DataSource::options(&storage, Options::with_port(port))
+                    .submit(Default::default())
+                    .light_client(Default::default()),
+            )
+            .persistences([persistence])
+            .network_config(test_config)
+            .build();
+
+        let network = TestNetwork::new(config, Upgrade::trivial(EPOCH_VERSION)).await;
+        let client = client(url.clone());
+
+        // Submit a transaction using the client's serialize interface.
+        let mut events = network.server.event_stream();
+        let tx = Transaction::random(&mut thread_rng());
+        let raw_client = reqwest::Client::new();
+        let res = raw_client
+            .post(url.join("submit/submit").unwrap())
+            .header(ACCEPT, "application/octet-stream")
+            .body(client.serialize(&tx).unwrap())
+            .send()
+            .await
+            .unwrap();
+        assert!(res.status().is_success(), "{}", res.status());
+
+        // Parse the response using the client's deserialize interface.
+        assert_eq!(
+            tx.commit(),
+            client.deserialize(&res.bytes().await.unwrap()).unwrap()
+        );
+
+        // Ensure the transaction was successfully submitted.
+        wait_for_decide_on_handle(&mut events, &tx).await;
     }
 }
