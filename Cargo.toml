@@ -495,3 +495,9 @@ opt-level = 3
 inherits = "test"
 strip = true
 debug = "none"
+
+[profile.profiling]
+inherits = "release"
+debug = "full"
+strip = "none"
+debug-assertions = true

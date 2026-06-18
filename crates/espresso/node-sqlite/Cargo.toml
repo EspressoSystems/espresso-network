@@ -15,3 +15,7 @@ anyhow = { workspace = true }
 espresso-node = { workspace = true, default-features = false, features = ["embedded-db"] }
 espresso-utils = { workspace = true }
 tokio = { workspace = true }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.7", features = ["profiling"] }
+
