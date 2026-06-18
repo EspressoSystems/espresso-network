@@ -60,6 +60,7 @@ demo *args:
 demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
+[private]
 build-sans-docker profile="profiling":
     cargo build --profile {{profile}} -p espresso-node -p builder -p hotshot-state-prover -p node-metrics -p staking-cli
     cargo build --profile {{profile}} -p espresso-node-sqlite

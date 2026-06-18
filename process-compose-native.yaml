@@ -15,14 +15,6 @@ version: "3"
 # you need clean profiles / faithful CDN networking, re-add the keydb/marshal_0/
 # broker_0/broker_1/cdn-whitelist processes (with `keydb-server`, not redis) and
 # their depends_on entries from process-compose.yaml.
-#
-# This demo is built with the `profiling` cargo profile (optimized + full debug
-# info, unstripped), so binaries live in target/profiling. node-0 writes jemalloc
-# heap dumps to ./logs/jeprof-seq0.<pid>.*.heap (logs/ is not deleted on cleanup).
-# Analyse with:
-#   jeprof --svg target/profiling/espresso-node-sqlite logs/jeprof-seq0.*.heap > heap.svg
-# Requires the binaries to be built with the tikv-jemallocator `profiling` feature
-# (already enabled in the node crates' Cargo.toml).
 
 x-availability:
   # terminate process compose if process exits
@@ -258,15 +250,9 @@ processes:
       backoff_seconds: ${ESPRESSO_STATE_PROVER_UPDATE_INTERVAL_SECS}
 
   espresso-node-0:
-    # SQLite (embedded-db) instead of postgres, so no DB server is required.
-    # jemalloc heap profiling is enabled here: profiles are sampled and written
-    # to ./logs/jeprof-seq0.<pid>.*.heap. _RJEM_ is tikv-jemalloc's symbol prefix;
-    # `prof_final:true` guarantees a dump at shutdown, and lg_prof_interval emits
-    # periodic dumps so a slow leak is captured even before exit.
     command: espresso-node-sqlite -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- catchup -- light-client
     log_location: logs/sequencer0.log
     environment:
-      - _RJEM_MALLOC_CONF=prof:true,prof_active:true,prof_prefix:logs/jeprof-seq0,lg_prof_sample:19,lg_prof_interval:31,prof_final:true
       - ESPRESSO_NODE_TELEMETRY_LOGS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_METRICS_ENABLE=true
       - ESPRESSO_NODE_TELEMETRY_ENDPOINT=http://intentionally-unreachable-telemetry-endpoint
