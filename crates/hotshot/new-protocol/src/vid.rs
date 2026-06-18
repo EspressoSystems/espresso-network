@@ -191,6 +191,12 @@ impl<T: NodeType> VidDisperser<T> {
 
         let payload_commitment = disperse.payload_commitment;
 
+        crate::trace_leader_event!(
+            tracer,
+            view,
+            crate::leader_trace::LeaderEvent::NsDisperseEnd
+        );
+
         // ShareSignLoop brackets the per-share signing path: previously in
         // consensus's `send_vid_shares`, now living here in the disperser.
         crate::trace_leader_event!(
@@ -226,9 +232,8 @@ impl<T: NodeType> VidDisperser<T> {
             view,
             crate::leader_trace::LeaderEvent::VidSharesUnicastStart
         );
-        share_proposals
-            .into_par_iter()
-            .try_for_each(|proposal| -> Result<(), VidDisperseError> {
+        share_proposals.into_par_iter().try_for_each(
+            |proposal| -> Result<(), VidDisperseError> {
                 let recipient = proposal.data.recipient_key.clone();
                 let message = Message {
                     sender: public_key.clone(),
@@ -242,7 +247,8 @@ impl<T: NodeType> VidDisperser<T> {
                     }
                 }
                 Ok(())
-            })?;
+            },
+        )?;
         crate::trace_leader_event!(
             tracer,
             view,

@@ -647,15 +647,6 @@ impl<T: NodeType> Consensus<T> {
             },
             ConsensusInput::VidDisperseCreated(view, payload_commitment) => {
                 debug!(%view, "apply: vid disperse created");
-                // Share sending moved into the disperser task (main PR #4517)
-                // — at this point the dispersal has *finished*, so the
-                // NsDisperseEnd trace marks the end of the whole disperse
-                // path from the consensus side.
-                crate::trace_leader_event!(
-                    self.tracer,
-                    view,
-                    crate::leader_trace::LeaderEvent::NsDisperseEnd
-                );
                 self.blocks_reconstructed.insert((view, payload_commitment));
                 Protocol::Continue
             },
