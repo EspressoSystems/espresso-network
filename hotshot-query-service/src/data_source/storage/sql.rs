@@ -1283,7 +1283,7 @@ pub mod testing {
             (
                 path JSONB NOT NULL,
                 created BIGINT NOT NULL,
-                hash_id INT NOT NULL,
+                hash_id BIGINT NOT NULL,
                 children JSONB,
                 children_bitvec {bit_vec},
                 idx JSONB,
