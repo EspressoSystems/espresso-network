@@ -500,4 +500,3 @@ debug = "none"
 inherits = "release"
 debug = "full"
 strip = "none"
-debug-assertions = true

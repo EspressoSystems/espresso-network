@@ -60,8 +60,18 @@ demo *args:
 demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
-demo-native-nodocker *args: (build "profiling")
+build-sans-docker profile="profiling":
+    cargo build --profile {{profile}} -p espresso-node -p builder -p hotshot-state-prover -p node-metrics -p staking-cli
+    cargo build --profile {{profile}} -p espresso-node-sqlite
+
+demo-native-sans-docker *args: build-sans-docker
     ESPRESSO_DEMO_PROFILE_DIR=profiling scripts/demo-native -f process-compose-native.yaml {{args}}
+
+demo-native-sans-docker-ff *args: build-sans-docker
+    ESPRESSO_DEMO_PROFILE_DIR=profiling ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml scripts/demo-native -f process-compose-native.yaml {{args}}
+
+demo-native-sans-docker-ff-upgrade *args: build-sans-docker
+    ESPRESSO_DEMO_PROFILE_DIR=profiling ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-new-protocol-upgrade.toml scripts/demo-native -f process-compose-native.yaml {{args}}
 
 # cargo fmt misses files whose `mod` declarations are produced by macro expansion
 fmt *args:
@@ -95,9 +105,9 @@ check *args:
 
 build profile="dev" features="":
     # postgres
-    cargo build --profile {{profile}} {{features}} -j 8
+    cargo build --profile {{profile}} {{features}}
     # embedded-db
-    cargo build --profile {{profile}} -j 8 -p espresso-node-sqlite -p espresso-dev-node {{features}}
+    cargo build --profile {{profile}} -p espresso-node-sqlite -p espresso-dev-node {{features}}
 
 demo-native-fee *args: (build "test" "--no-default-features")
     ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo.toml scripts/demo-native -f process-compose.yaml {{args}}
