@@ -526,7 +526,7 @@ pub struct PruningOptions {
     /// If the disk usage surpasses this threshold, pruning is initiated for data older than the specified minimum retention period.
     /// Pruning continues until the disk usage drops below the MAX USAGE.
     #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_PRUNING_THRESHOLD", value_parser = parse_size)]
-    pruning_threshold: Option<u64>,
+    pub(crate) pruning_threshold: Option<u64>,
 
     /// Minimum retention period.
     /// Data is retained for at least this duration, even if there's no free disk space.
@@ -535,7 +535,7 @@ pub struct PruningOptions {
         env = "ESPRESSO_SEQUENCER_PRUNER_MINIMUM_RETENTION",
         value_parser = parse_duration,
     )]
-    minimum_retention: Option<Duration>,
+    pub(crate) minimum_retention: Option<Duration>,
 
     /// Target retention period.
     /// Data older than this is pruned to free up space.
@@ -544,12 +544,12 @@ pub struct PruningOptions {
         env = "ESPRESSO_SEQUENCER_PRUNER_TARGET_RETENTION",
         value_parser = parse_duration,
     )]
-    target_retention: Option<Duration>,
+    pub(crate) target_retention: Option<Duration>,
 
     /// Batch size for pruning.
     /// This is the number of blocks data to delete in a single transaction.
     #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_BATCH_SIZE")]
-    batch_size: Option<u64>,
+    pub(crate) batch_size: Option<u64>,
 
     /// Maximum disk usage (in basis points).
     ///
@@ -557,7 +557,7 @@ pub struct PruningOptions {
     /// some data older than the `MINIMUM_RETENTION` remains. Values range
     /// from 0 (0%) to 10000 (100%).
     #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_MAX_USAGE")]
-    max_usage: Option<u16>,
+    pub(crate) max_usage: Option<u16>,
 
     /// Interval for running the pruner.
     #[clap(
@@ -565,13 +565,13 @@ pub struct PruningOptions {
         env = "ESPRESSO_SEQUENCER_PRUNER_INTERVAL",
         value_parser = parse_duration,
     )]
-    interval: Option<Duration>,
+    pub(crate) interval: Option<Duration>,
 
     /// Number of SQLite pages to vacuum from the freelist
     /// during each pruner cycle.
     /// This value corresponds to `N` in the SQLite PRAGMA `incremental_vacuum(N)`,
     #[clap(long, env = "ESPRESSO_SEQUENCER_PRUNER_INCREMENTAL_VACUUM_PAGES")]
-    pages: Option<u64>,
+    pub(crate) pages: Option<u64>,
 }
 
 impl Default for PruningOptions {
@@ -639,7 +639,7 @@ pub struct ConsensusPruningOptions {
         env = "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_TARGET_RETENTION",
         default_value = "302000"
     )]
-    target_retention: u64,
+    pub(crate) target_retention: u64,
 
     /// Minimum number of views to try to retain in consensus storage before data that hasn't been
     /// archived is garbage collected.
@@ -657,7 +657,7 @@ pub struct ConsensusPruningOptions {
         env = "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_MINIMUM_RETENTION",
         default_value = "130000"
     )]
-    minimum_retention: u64,
+    pub(crate) minimum_retention: u64,
 
     /// Amount (in bytes) of data to retain in consensus storage before garbage collecting more
     /// aggressively.
@@ -669,7 +669,7 @@ pub struct ConsensusPruningOptions {
         env = "ESPRESSO_SEQUENCER_CONSENSUS_STORAGE_TARGET_USAGE",
         default_value = "1000000000"
     )]
-    target_usage: u64,
+    pub(crate) target_usage: u64,
 }
 
 impl Default for ConsensusPruningOptions {

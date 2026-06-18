@@ -18,6 +18,7 @@ use hotshot_types::{
     },
     utils::{View, ViewInner},
 };
+use serde::Serialize;
 use tokio::time::{sleep, timeout};
 use tracing::Instrument;
 
@@ -26,7 +27,7 @@ use crate::{
     context::{Consensus, TaskList},
 };
 
-#[derive(Clone, Copy, Debug, Parser)]
+#[derive(Clone, Copy, Debug, Parser, Serialize)]
 pub struct ProposalFetcherConfig {
     #[clap(
         long = "proposal-fetcher-num-workers",

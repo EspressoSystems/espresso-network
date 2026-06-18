@@ -152,7 +152,7 @@ impl TimestampMillis {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ratio {
     pub numerator: u64,
     pub denominator: u64,
@@ -238,7 +238,7 @@ pub const BACKOFF_FACTOR: u32 = 2;
 // Exponential backoff jitter as a fraction of the backoff delay, (numerator, denominator).
 pub const BACKOFF_JITTER: (u64, u64) = (1, 10);
 
-#[derive(Clone, Copy, Debug, Parser, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Parser, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BackoffParams {
     /// Exponential backoff exponent.
     #[clap(
