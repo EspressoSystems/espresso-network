@@ -736,7 +736,7 @@ where
         <S as v1::NodeApi>::block_height(&state)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let node_count_txs = |State(state): State<S>| async move {
@@ -744,35 +744,35 @@ where
             .count_transactions(None, None, None)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_count_txs_to = |State(state): State<S>, Path(to): Path<u64>| async move {
         state
             .count_transactions(None, Some(to), None)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_count_txs_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
         state
             .count_transactions(Some(from), Some(to), None)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_count_txs_ns = |State(state): State<S>, Path(namespace): Path<u32>| async move {
         state
             .count_transactions(None, None, Some(namespace))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_count_txs_ns_to = |State(state): State<S>, Path((namespace, to)): Path<(u32, u64)>| async move {
         state
             .count_transactions(None, Some(to), Some(namespace))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_count_txs_ns_from_to =
         |State(state): State<S>, Path((namespace, from, to)): Path<(u32, u64, u64)>| async move {
@@ -780,7 +780,7 @@ where
                 .count_transactions(Some(from), Some(to), Some(namespace))
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let node_payload_size = |State(state): State<S>| async move {
@@ -788,28 +788,28 @@ where
             .payload_size(None, None, None)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_payload_size_to = |State(state): State<S>, Path(to): Path<u64>| async move {
         state
             .payload_size(None, Some(to), None)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_payload_size_from_to = |State(state): State<S>, Path((from, to)): Path<(u64, u64)>| async move {
         state
             .payload_size(Some(from), Some(to), None)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_payload_size_ns = |State(state): State<S>, Path(namespace): Path<u32>| async move {
         state
             .payload_size(None, None, Some(namespace))
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_payload_size_ns_to =
         |State(state): State<S>, Path((namespace, to)): Path<(u32, u64)>| async move {
@@ -817,7 +817,7 @@ where
                 .payload_size(None, Some(to), Some(namespace))
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
     let node_payload_size_ns_from_to =
         |State(state): State<S>, Path((namespace, from, to)): Path<(u32, u64, u64)>| async move {
@@ -825,7 +825,7 @@ where
                 .payload_size(Some(from), Some(to), Some(namespace))
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let node_vid_share_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {
@@ -856,7 +856,7 @@ where
             .sync_status()
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
 
     let node_header_window_time = |State(state): State<S>, Path((start, end)): Path<(u64, u64)>| async move {
@@ -864,7 +864,7 @@ where
             .get_header_window(v1::HeaderWindowStart::Time(start), end)
             .await
             .map(Json)
-            .map_err(ApiError::Internal)
+            .map_err(classify_availability_error)
     };
     let node_header_window_height =
         |State(state): State<S>, Path((height, end)): Path<(u64, u64)>| async move {
@@ -872,7 +872,7 @@ where
                 .get_header_window(v1::HeaderWindowStart::Height(height), end)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
     let node_header_window_hash =
         |State(state): State<S>, Path((hash, end)): Path<(String, u64)>| async move {
@@ -880,7 +880,7 @@ where
                 .get_header_window(v1::HeaderWindowStart::Hash(hash), end)
                 .await
                 .map(Json)
-                .map_err(ApiError::Internal)
+                .map_err(classify_availability_error)
         };
 
     let node_limits = |State(state): State<S>| async move {
