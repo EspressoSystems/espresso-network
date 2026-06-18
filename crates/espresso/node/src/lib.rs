@@ -1,3 +1,6 @@
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
