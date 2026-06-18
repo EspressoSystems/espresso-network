@@ -1594,9 +1594,7 @@ impl SequencerPersistence for Persistence {
         .await
     }
 
-    async fn load_anchor_leaf(
-        &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         serializable_retry!(self, || async {
             let Some(row) = self
                 .db
@@ -1612,6 +1610,9 @@ impl SequencerPersistence for Persistence {
 
             let leaf_bytes: Vec<u8> = row.get("leaf");
             let leaf2: Leaf2 = bincode::deserialize(&leaf_bytes)?;
+
+            let qc_bytes: Vec<u8> = row.get("qc");
+            let qc2: QuorumCertificate2<SeqTypes> = bincode::deserialize(&qc_bytes)?;
 
             let maybe_next_qc_bytes: Option<Vec<u8>> = row.try_get("next_epoch_qc").ok();
             let maybe_next_qc2 = maybe_next_qc_bytes
