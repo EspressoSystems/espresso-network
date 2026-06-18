@@ -881,13 +881,20 @@ mod test {
     fn random_stake_table() -> StakeTableState {
         let validator = random_validator();
         let candidate: RegisteredValidator<PubKey> = validator.clone().into();
+        let candidate_bls = candidate
+            .stake_table_key
+            .expect("random_validator returns authenticated validator");
         StakeTableState::new(
             [(candidate.account, candidate.clone())]
                 .into_iter()
                 .collect(),
             [Address::random()].into_iter().collect(),
-            [candidate.stake_table_key].into_iter().collect(),
-            [candidate.state_ver_key].into_iter().collect(),
+            [candidate_bls].into_iter().collect(),
+            [candidate
+                .state_ver_key
+                .expect("random_validator has valid schnorr key")]
+            .into_iter()
+            .collect(),
         )
     }
 
@@ -895,6 +902,9 @@ mod test {
     fn chain_stake_table(state: &StakeTableState) -> StakeTableState {
         let new_validator = random_validator();
         let new_candidate: RegisteredValidator<PubKey> = new_validator.clone().into();
+        let new_candidate_bls = new_candidate
+            .stake_table_key
+            .expect("random_validator returns authenticated validator");
         let new_exit = Address::random();
         StakeTableState::new(
             state
@@ -912,13 +922,16 @@ mod test {
             state
                 .used_bls_keys()
                 .iter()
-                .chain([&new_candidate.stake_table_key])
+                .chain([&new_candidate_bls])
                 .cloned()
                 .collect(),
             state
                 .used_schnorr_keys()
                 .iter()
-                .chain([&new_candidate.state_ver_key])
+                .chain([new_candidate
+                    .state_ver_key
+                    .as_ref()
+                    .expect("random_validator has valid schnorr key")])
                 .cloned()
                 .collect(),
         )
