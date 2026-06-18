@@ -986,6 +986,15 @@ async fn test_vote2_gated_on_vid_storage() {
         ConsensusInput::Stored(StorageOutput::Vid(view)),
         &mut outbox,
     );
+    assert!(
+        !any(&outbox, is_vote2),
+        "vote2 must wait for the locked QC to be persisted"
+    );
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::HighQc(view)),
+        &mut outbox,
+    );
     assert_eq!(count_matching(&outbox, is_vote2), 1);
     assert_eq!(
         count_matching(&outbox, is_record_action),

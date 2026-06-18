@@ -294,6 +294,10 @@ impl Inner {
         self.path.join("eqc")
     }
 
+    fn high_qc2(&self) -> PathBuf {
+        self.path.join("high_qc2")
+    }
+
     fn libp2p_dht_path(&self) -> PathBuf {
         self.path.join("libp2p_dht")
     }
@@ -1262,6 +1266,35 @@ impl SequencerPersistence for Persistence {
         let bytes = fs::read(&path).ok()?;
 
         bincode::deserialize(&bytes).ok()
+    }
+
+    async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let path = &inner.high_qc2();
+        inner.replace(
+            path,
+            |_| {
+                // Always overwrite the previous file.
+                Ok(true)
+            },
+            |mut file| {
+                let bytes = bincode::serialize(&high_qc).context("serializing high_qc2")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let path = inner.high_qc2();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path).context("reading high_qc2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserializing high_qc2")?,
+        ))
     }
 
     async fn append_da2(

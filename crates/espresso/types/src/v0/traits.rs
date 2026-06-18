@@ -9,7 +9,10 @@ use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::{message::Certificate2, storage::NewProtocolStorage};
+use hotshot_new_protocol::{
+    message::{Certificate1, Certificate2},
+    storage::NewProtocolStorage,
+};
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
@@ -994,6 +997,17 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
+    /// Persist the new protocol's locked QC (high QC). Written before each
+    /// phase-2 vote so the lock can be restored on restart.
+    async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted locked QC, if any.
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
+
     /// Update the current eQC in storage.
     async fn store_eqc(
         &self,
@@ -1241,6 +1255,22 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
         cert: Certificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).append_cert2(view, cert).await
+    }
+
+    async fn append_high_qc2(&self, high_qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        // The lock advances monotonically, but persistence writes are spawned
+        // concurrently and retried, so a stale write can land after a newer
+        // one. Skip writes that would regress the stored view.
+        if let Some(existing) = (**self).load_high_qc2().await?
+            && existing.view_number() >= high_qc.view_number()
+        {
+            return Ok(());
+        }
+        (**self).append_high_qc2(high_qc).await
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_high_qc2().await
     }
 }
 
