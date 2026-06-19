@@ -340,6 +340,24 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Seed a proposal saved by a prior run into `self.proposals`.
+    ///
+    /// On restart the node holds only the anchor proposal, but `maybe_vote_1`
+    /// and `maybe_propose` need the *parent* proposal of whatever the next
+    /// proposal builds on — typically the restored lock — and there is no
+    /// consensus-internal fetch for a missing parent. Re-seeding the proposals
+    /// this node had already validated lets it vote on the first proposal after
+    /// a restart instead of stalling until the parent is re-received. Does not
+    /// overwrite a proposal already present (e.g. the anchor from
+    /// [`seed_parent`]).
+    ///
+    /// [`seed_parent`]: Self::seed_parent
+    pub fn seed_proposal(&mut self, proposal: Proposal<T>) {
+        self.proposals
+            .entry(proposal.view_number)
+            .or_insert(proposal);
+    }
+
     /// Restore a locked QC persisted by [`append_high_qc2`] on a prior run.
     ///
     /// Called after [`seed_parent`] on restart: the persisted lock can be newer
@@ -375,6 +393,29 @@ impl<T: NodeType> Consensus<T> {
     /// phase-2 vote relying on it may be released.
     fn high_qc_durable(&self, required: ViewNumber) -> bool {
         self.stored_high_qc.is_some_and(|stored| stored >= required)
+    }
+
+    /// Whether the parent block at `parent_view` counts as reconstructed for
+    /// voting: either we hold its reconstructed payload, or our locked QC
+    /// certifies exactly this parent leaf. A node only ever locks on a block it
+    /// reconstructed (see [`maybe_vote_2_and_update_lock`]), and a persisted
+    /// lock is only written for such a view, so a lock matching the parent is
+    /// itself proof of reconstruction. This lets a restarted node vote on the
+    /// first proposal built on its restored lock without re-fetching VID shares
+    /// to re-reconstruct the parent.
+    ///
+    /// [`maybe_vote_2_and_update_lock`]: Self::maybe_vote_2_and_update_lock
+    fn parent_reconstructed(
+        &self,
+        parent_view: ViewNumber,
+        parent_block_commitment: VidCommitment2,
+        parent_leaf: Commitment<Leaf2<T>>,
+    ) -> bool {
+        self.blocks_reconstructed
+            .contains(&(parent_view, parent_block_commitment))
+            || self.locked_cert.as_ref().is_some_and(|lock| {
+                lock.view_number() == parent_view && lock.data().leaf_commit == parent_leaf
+            })
     }
 
     /// Seed a state certificate loaded from storage on restart, so a leader
@@ -1824,12 +1865,16 @@ impl<T: NodeType> Consensus<T> {
                     }
                     return;
                 };
-                // Verify we have a reconstructed block for the parent whose
-                // commitment matches the parent proposal's payload commitment.
-                if !self
-                    .blocks_reconstructed
-                    .contains(&(parent_view, prev_block_commitment))
-                {
+                // Verify the parent block is reconstructed — we either hold its
+                // payload, or our locked QC certifies it (a lock is only ever
+                // taken on a reconstructed block), the latter letting a
+                // restarted node vote on the first proposal built on its
+                // restored lock.
+                if !self.parent_reconstructed(
+                    parent_view,
+                    prev_block_commitment,
+                    proposal_commitment(prev_proposal),
+                ) {
                     debug!(
                         %view, block = %block_number, %epoch,
                         %parent_view, %parent_block, %parent_epoch,
@@ -2207,17 +2252,12 @@ impl<T: NodeType> Consensus<T> {
             if parent_view != ViewNumber::genesis()
                 && !is_last_block(block_number.saturating_sub(1), *self.epoch_height)
             {
-                let reconstructed = self
-                    .proposals
-                    .get(&parent_view)
-                    .and_then(|p| {
-                        if let VidCommitment::V2(c) = p.block_header.payload_commitment() {
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    })
-                    .is_some_and(|c| self.blocks_reconstructed.contains(&(parent_view, c)));
+                let reconstructed = self.proposals.get(&parent_view).is_some_and(|p| {
+                    let VidCommitment::V2(c) = p.block_header.payload_commitment() else {
+                        return false;
+                    };
+                    self.parent_reconstructed(parent_view, c, proposal_commitment(p))
+                });
                 if !reconstructed {
                     missing.push("parent_block_reconstructed");
                 }

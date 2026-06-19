@@ -214,6 +214,13 @@ where
         // re-enters a view it may have voted or proposed in before it went
         // down.
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
+        // Re-seed the proposals this node had already validated. Their blocks
+        // are marked reconstructed above; seeding the proposals themselves lets
+        // `maybe_vote_1` find the parent of the first proposal built on the
+        // restored lock, which is otherwise never re-fetched.
+        for proposal in initializer.saved_proposals.values() {
+            consensus.seed_proposal(Proposal::from(proposal.data.clone()));
+        }
         // Restore the locked QC persisted before the last phase-2 vote. It can
         // be newer than the decided-anchor QC `seed_parent` installed, so this
         // must run after it.
