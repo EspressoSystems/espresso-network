@@ -33,8 +33,8 @@ circuit that encodes the state update logic. See [zk-rollups integration](doc/zk
 
 # Running the demo
 
-Refer to [espresso-example-l2](https://github.com/EspressoSystems/espresso-example-l2) for instructions on how to run
-a dockerized Espresso Network with an example Layer 2 rollup application.
+Refer to [espresso-example-l2](https://github.com/EspressoSystems/espresso-example-l2) for instructions on how to run a
+dockerized Espresso Network with an example Layer 2 rollup application.
 
 # Development
 
@@ -46,8 +46,9 @@ a dockerized Espresso Network with an example Layer 2 rollup application.
 
 ## Documentation
 
-The rust code documentation can be found at [espresso-network.docs.espressosys.com](https://espresso-network.docs.espressosys.com).
-Please note the disclaimer about API stability at the end of the readme.
+The rust code documentation can be found at
+[espresso-network.docs.espressosys.com](https://espresso-network.docs.espressosys.com). Please note the disclaimer about
+API stability at the end of the readme.
 
 To generate the documentation locally and view it in the browser, run
 
@@ -68,50 +69,17 @@ just test
 make doc
 ```
 
-## Building and running
+## Running a local network
 
-Docker images and the [docker-compose-demo.yaml](docker-compose-demo.yaml) file are provided for convenience. The
-Docker-based demo fetches the images from the `ghcr` repository, where they are updated with every push to `main` on
-GitHub. For testing uncommitted changes, you can also run the binaries by manually building and running the services.
+A full local network is run two ways:
 
-Build all executables with `cargo build --release`. You may then start an Espresso network. First, start an
-orchestrator. Choose a port `$PORT` to run it on and decide how many Espresso nodes `$N` you will use, then run
-`target/release/orchestrator -p $PORT -n $N`.
-
-The Espresso Network will distribute a HotShot configuration to all the nodes which connect to it, which specifies
-consensus parameters like view timers. There is a default config, but you can override any parameters you want by
-passing additional options to the `orchestrator` executable. Run `target/release/orchestrator --help` to see a list of
-available options.
-
-Next, you must launch a `cdn` instance, which is necessary to facilitate consensus.
-
-```bash
-just dev-cdn -- -p 1738
+```sh
+just demo         # Docker Compose, images from ghcr (updated on every push to main)
+just demo-native  # process-compose, building and running the binaries locally
 ```
 
-In this case, we run it on port 1738.
-
-Once you have started the orchestrator and the CDN, you must connect `$N` Espresso nodes to them, after which the
-network will start up automatically. To start one node, run
-
-```bash
-target/release/espresso-node \
-    --orchestrator-url http://localhost:$PORT \
-    --cdn-endpoint "127.0.0.1:1738"  \
-    -- http --port 8083 -- query --storage-path storage -- submit
-```
-
-A useful Bash snippet for running `$N` nodes simultaneously in the background of your shell is:
-
-```bash
-for i in `seq $N`; do
-    target/release/espresso-node \
-        --orchestrator-url http://localhost:$PORT \
-        --cdn-endpoint "127.0.0.1:1738"  \
-done
-```
-
-For running a full demo natively run `just demo-native`.
+`just demo-native` builds the binaries first, so it picks up uncommitted changes. Genesis and process variants are
+available as additional recipes (`just --list` shows `demo-native-*`).
 
 ### Contracts
 
