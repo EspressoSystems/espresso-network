@@ -1,5 +1,4 @@
 mod external_event_handler;
-mod global_alloc;
 mod message_compat_tests;
 mod proposal_fetcher;
 mod request_response;

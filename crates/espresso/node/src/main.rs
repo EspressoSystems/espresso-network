@@ -1,3 +1,5 @@
+mod global_alloc;
+
 // NOTE: due to nextest eagerly compiling binaries we allow the build if we're
 // not building with --release (without debug_assertions). There is
 // unfortunately no good way to detect if a build is performed by nextest
