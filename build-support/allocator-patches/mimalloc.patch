@@ -1,3 +1,13 @@
+diff --git a/crates/espresso/node-sqlite/src/global_alloc.rs b/crates/espresso/node-sqlite/src/global_alloc.rs
+index 63c7887347..fb5374d86c 100644
+--- a/crates/espresso/node-sqlite/src/global_alloc.rs
++++ b/crates/espresso/node-sqlite/src/global_alloc.rs
+@@ -1,2 +1,5 @@
+ //! Global allocator override point. Empty by default (system allocator); CI replaces this
+ //! file via build-support/allocator-patches/<allocator>.patch for soak comparison builds.
++
++#[global_allocator]
++static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 diff --git a/crates/espresso/node/src/global_alloc.rs b/crates/espresso/node/src/global_alloc.rs
 index 63c7887347..fb5374d86c 100644
 --- a/crates/espresso/node/src/global_alloc.rs

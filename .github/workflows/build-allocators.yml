@@ -61,7 +61,9 @@ jobs:
             protobuf-compiler cmake clang libclang-dev
 
       - name: Add allocator crate
-        run: cargo add ${{ matrix.dep }} --package espresso-node
+        run: |
+          cargo add ${{ matrix.dep }} --package espresso-node
+          cargo add ${{ matrix.dep }} --package espresso-node-sqlite
 
       - name: Apply allocator override
         run: git apply build-support/allocator-patches/${{ matrix.allocator }}.patch
