@@ -754,7 +754,7 @@ mod test {
         }
         async fn count_transactions_in_range(
             &self,
-            range: impl RangeBounds<usize> + Send,
+            range: impl RangeBounds<usize> + Send + Sync + Clone,
             namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
             self.hotshot_qs
@@ -763,7 +763,7 @@ mod test {
         }
         async fn payload_size_in_range(
             &self,
-            range: impl RangeBounds<usize> + Send,
+            range: impl RangeBounds<usize> + Send + Sync + Clone,
             namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
             self.hotshot_qs
