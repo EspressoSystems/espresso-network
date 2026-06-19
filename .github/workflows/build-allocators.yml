@@ -1,18 +1,13 @@
-name: Build (allocators)
-# Builds the espresso-node / espresso-node-sqlite docker image with alternative global
-# allocators (jemalloc, mimalloc, snmalloc, tcmalloc) for memory soak comparison.
-#
+name: Build (alternative allocators)
 # Binaries are compiled on the runner (no Rust cache, so builds are slow) and overlaid onto the
 # production espresso-node image. Native amd64 + arm64 builds are merged into one multiplatform
 # image per allocator and pushed to a dedicated experimental repo, tagged `<version>-<allocator>`.
 on:
-  # Temporary: kept while validating the workflow. Remove once green; runs only when the
-  # workflow / Dockerfile / patch script change.
   pull_request:
     paths:
       - .github/workflows/build-allocators.yml
       - docker/espresso-node-alloc.Dockerfile
-      - scripts/allocator-patches/**
+      - build-support/allocator-patches/**
   workflow_dispatch:
   push:
     tags:
@@ -58,11 +53,9 @@ jobs:
             protobuf-compiler cmake clang libclang-dev
 
       - name: Patch allocator
-        run: git apply scripts/allocator-patches/${{ matrix.allocator }}.patch
+        run: git apply build-support/allocator-patches/${{ matrix.allocator }}.patch
 
       - name: Build binaries
-        # Separate invocations: building espresso-node-sqlite together with the postgres binary
-        # would unify the espresso-node `embedded-db` feature into both. See `just build`.
         # No --locked: the allocator patch adds dependencies not present in Cargo.lock.
         run: |
           cargo build --release -p espresso-node --bin espresso-node
