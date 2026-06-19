@@ -1,7 +1,9 @@
 use std::{
     cmp::max,
     collections::{BTreeMap, HashMap},
-    path::Path,
+    fmt::{self, Display, Formatter},
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use alloy::primitives::Address;
@@ -11,9 +13,48 @@ use espresso_types::{
     v0_3::ChainConfig,
 };
 use hotshot_types::{VersionedDaCommittee, version_ser};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use url::Url;
 use vbs::version::Version;
 use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION};
+
+/// A location from which to load the genesis file.
+///
+/// Accepts a plain filesystem path (e.g. `/etc/espresso/genesis.toml`) or an `http://` /
+/// `https://` URL.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GenesisSource {
+    Path(PathBuf),
+    Http(Url),
+}
+
+impl FromStr for GenesisSource {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> anyhow::Result<Self> {
+        if s.starts_with("http://") || s.starts_with("https://") {
+            let url = Url::parse(s).with_context(|| format!("invalid genesis URL: {s}"))?;
+            Ok(Self::Http(url))
+        } else {
+            Ok(Self::Path(PathBuf::from(s)))
+        }
+    }
+}
+
+impl Display for GenesisSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Path(p) => write!(f, "{}", p.display()),
+            Self::Http(u) => write!(f, "{u}"),
+        }
+    }
+}
+
+impl Serialize for GenesisSource {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
 
 /// Initial configuration of an Espresso stake table.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -313,7 +354,28 @@ impl Genesis {
         let path = path.as_ref();
         let bytes = std::fs::read(path).context(format!("genesis file {}", path.display()))?;
         let text = std::str::from_utf8(&bytes).context("genesis file must be UTF-8")?;
+        Self::from_toml(text)
+    }
 
+    /// Load a genesis configuration from a local file or HTTP(S) URL.
+    pub async fn load(source: &GenesisSource) -> anyhow::Result<Self> {
+        match source {
+            GenesisSource::Path(p) => Self::from_file(p),
+            GenesisSource::Http(url) => {
+                let text = reqwest::get(url.clone())
+                    .await
+                    .with_context(|| format!("fetching genesis from {url}"))?
+                    .error_for_status()
+                    .with_context(|| format!("fetching genesis from {url}"))?
+                    .text()
+                    .await
+                    .with_context(|| format!("reading genesis response from {url}"))?;
+                Self::from_toml(&text)
+            },
+        }
+    }
+
+    fn from_toml(text: &str) -> anyhow::Result<Self> {
         let genesis: Self = toml::from_str(text).context("malformed genesis file")?;
         genesis.validate().context("validating genesis")?;
         Ok(genesis)
