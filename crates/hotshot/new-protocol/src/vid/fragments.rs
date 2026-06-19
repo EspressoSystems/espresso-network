@@ -9,10 +9,10 @@ use hotshot_types::{
     vid::avidm_gf2::{AvidmGf2Common, AvidmGf2Param},
 };
 
-#[derive(Default)]
 pub struct VidFragmentAccumulator<T: NodeType> {
     pending: BTreeMap<ViewNumber, PendingShare<T>>,
     completed: BTreeSet<ViewNumber>,
+    lower_bound: ViewNumber,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -41,19 +41,33 @@ struct PendingShare<T: NodeType> {
     pieces: BTreeMap<usize, AvidmGf2NamespacePiece>,
 }
 
+impl<T: NodeType> Default for VidFragmentAccumulator<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: NodeType> VidFragmentAccumulator<T> {
+    pub fn new() -> Self {
+        Self {
+            pending: BTreeMap::new(),
+            completed: BTreeSet::new(),
+            lower_bound: ViewNumber::genesis(),
+        }
+    }
+
     /// Buffer a `fragment` addressed to this node.
     ///
     /// Returns `Ok(None)` while namespaces are still outstanding,
     /// `Ok(Some(share))` once the final namespace completes the view, and
     /// `Err` if the fragment is malformed or inconsistent with the view's
     /// already-pinned metadata.
-    pub(crate) fn accept(
+    pub fn accept(
         &mut self,
         fragment: AvidmGf2DisperseShareFragment<T>,
     ) -> Result<Option<VidDisperseShare2<T>>, VidFragmentError> {
         let view = fragment.view_number;
-        if self.completed.contains(&view) {
+        if view < self.lower_bound || self.completed.contains(&view) {
             return Ok(None);
         }
         if fragment.num_namespaces == 0 {
@@ -121,8 +135,9 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
         }))
     }
 
-    pub(crate) fn gc(&mut self, view_number: ViewNumber) {
+    pub fn gc(&mut self, view_number: ViewNumber) {
         self.pending = self.pending.split_off(&view_number);
         self.completed = self.completed.split_off(&view_number);
+        self.lower_bound = view_number;
     }
 }

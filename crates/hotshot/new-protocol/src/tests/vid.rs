@@ -611,7 +611,7 @@ async fn fragment_accumulator_reassembles_share() {
     fragments.reverse();
     let last = fragments.len() - 1;
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     let mut reassembled = None;
     for (i, fragment) in fragments.into_iter().enumerate() {
         let out = accumulator.accept(fragment).expect("fragment accepted");
@@ -637,7 +637,7 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
         .collect::<Vec<_>>()
         .remove(0);
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
 
     // Out-of-range index.
     let mut out_of_range = template.clone();
@@ -726,7 +726,7 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
     whole.namespaces = vid_fragments(&original)
         .flat_map(|f| f.namespaces)
         .collect();
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     assert_eq!(
         accumulator.accept(whole).expect("accepted"),
         Some(original.clone())
@@ -743,7 +743,7 @@ async fn fragment_accumulator_reassembles_multi_piece_fragments() {
     let mut second = template;
     second.namespaces = pieces[2..].to_vec();
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     assert!(accumulator.accept(second).expect("accepted").is_none());
     assert_eq!(accumulator.accept(first).expect("accepted"), Some(original));
 }
@@ -763,7 +763,7 @@ async fn fragment_accumulator_rejects_intra_fragment_duplicate() {
     let mut fragment = vid_fragments(&original).next().unwrap();
     fragment.namespaces = vec![pieces[0].clone(), pieces[0].clone()];
 
-    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::new();
     assert!(matches!(
         accumulator.accept(fragment),
         Err(VidFragmentError::DuplicateIndex(0))
