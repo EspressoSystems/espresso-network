@@ -1,0 +1,69 @@
+name: staking-ui-service Demo
+
+on:
+  push:
+    branches:
+      - main
+      - release-*
+    tags:
+      # YYYYMMDD
+      - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+  pull_request:
+    paths:
+      - "crates/staking-ui-service/**"
+      - ".github/workflows/staking-ui-service-demo.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: crates/staking-ui-service
+
+jobs:
+  demo:
+    name: demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main'  }}
+          shared-key: staking-ui-service-test-demo
+      - uses: extractions/setup-just@v3
+      - uses: docker/setup-compose-action@v1
+
+      - name: Build
+        run: just build
+
+      - name: Pull Docker images
+        run: just demo::pull
+
+      - name: Start dependency services
+        run: just demo::up l1 espresso-dev-node
+
+      - name: Start demo
+        run: |
+          just run \
+            --stake-table-address 0xefdc2a236dba7a8f60726b49abc79ee6b22ed445 \
+            --reward-contract-address 0x0000000000000000000000000000000000000000 \
+            --http-providers http://localhost:8545 \
+            --l1-ws-provider ws://localhost:8546 \
+            --espresso-url http://localhost:24000/v1 \
+            2>&1 >/tmp/demo-log.txt &
+
+      - name: Smoketest
+        run: scripts/smoketest-demo.sh
+
+      - name: Dump Logs
+        if: ${{ failure() }}
+        run: |
+          just demo::logs
+          cat /tmp/demo-log.txt
+
+      - name: Stop Demo
+        if: ${{ always() }}
+        run: just demo::down
