@@ -337,13 +337,16 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Seed a proposal saved by a prior run so `maybe_vote_1`/`maybe_propose`
-    /// can find the parent of the first post-restart proposal (otherwise never
-    /// re-fetched). Does not overwrite a proposal already present.
-    pub fn seed_proposal(&mut self, proposal: Proposal<T>) {
-        self.proposals
-            .entry(proposal.view_number)
-            .or_insert(proposal);
+    /// Seed proposals loaded from storage on restart so the decide chain-walk
+    /// can follow `justify_qc` back through views the node had already seen,
+    /// and so `maybe_vote_1`/`maybe_propose` can find the parent of the first
+    /// post-restart proposal (otherwise never re-fetched).
+    pub fn seed_proposals(&mut self, proposals: impl IntoIterator<Item = Proposal<T>>) {
+        for proposal in proposals {
+            let view = proposal.view_number;
+            self.leaves.insert(view, proposal.clone().into());
+            self.proposals.insert(view, proposal);
+        }
     }
 
     /// Restore the locked QC persisted on a prior run. Called after

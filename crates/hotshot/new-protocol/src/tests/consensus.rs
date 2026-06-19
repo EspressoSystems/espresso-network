@@ -120,7 +120,7 @@ async fn test_vote1_with_seeded_parent_proposal() {
     // Restart: re-seed the validated view-1 proposal and mark its block reconstructed.
     harness
         .consensus
-        .seed_proposal(test_data.views[0].proposal.data.clone());
+        .seed_proposals([test_data.views[0].proposal.data.clone()]);
     harness
         .apply(test_data.views[0].block_reconstructed_input())
         .await;
@@ -148,7 +148,7 @@ async fn test_vote1_parent_reconstruction_from_lock() {
     // it, but do NOT mark its block reconstructed.
     harness
         .consensus
-        .seed_proposal(test_data.views[0].proposal.data.clone());
+        .seed_proposals([test_data.views[0].proposal.data.clone()]);
     harness
         .consensus
         .seed_locked_cert(test_data.views[0].cert1.clone());
@@ -1147,5 +1147,44 @@ async fn test_proposal_release_follows_storage() {
     assert!(
         action < send,
         "propose action must be recorded before sending"
+    );
+}
+
+/// Seeded proposals land in `self.proposals` and surface as undecided leaves.
+#[tokio::test]
+async fn test_seed_proposals_populates_undecided_chain() {
+    let test_data = TestData::new(4).await;
+    let mut harness = ConsensusHarness::new(0).await;
+
+    harness
+        .consensus
+        .seed_proposals(test_data.views.iter().map(|v| v.proposal.data.clone()));
+
+    for view in &test_data.views {
+        let seeded = harness
+            .consensus
+            .proposal_at(view.view_number)
+            .expect("seeded proposal available");
+        assert_eq!(
+            proposal_commitment(seeded),
+            proposal_commitment(&view.proposal.data),
+            "seeded proposal at view {} differs from the persisted proposal",
+            view.view_number
+        );
+    }
+
+    let undecided: Vec<_> = harness
+        .consensus
+        .undecided_leaves()
+        .map(|leaf| leaf.view_number())
+        .collect();
+    assert_eq!(
+        undecided,
+        test_data
+            .views
+            .iter()
+            .map(|v| v.view_number)
+            .collect::<Vec<_>>(),
+        "every seeded proposal should surface as an undecided leaf"
     );
 }

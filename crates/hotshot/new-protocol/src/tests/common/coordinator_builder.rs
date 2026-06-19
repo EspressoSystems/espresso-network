@@ -174,12 +174,16 @@ pub async fn build_test_coordinator(
                     }
                 })
                 .collect();
+        // Seed persisted proposals before `seed_parent` so its authoritative
+        // anchor wins (mirrors `Coordinator::maker`).
+        consensus.seed_proposals(
+            storage
+                .proposals_cloned()
+                .await
+                .into_iter()
+                .map(|(_, p)| Proposal::from(p.data.clone())),
+        );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
-        // Re-seed validated proposals (mirrors `Coordinator::maker`) so
-        // `maybe_vote_1` can find the first post-restart parent.
-        for (_, p) in storage.proposals_cloned().await {
-            consensus.seed_proposal(Proposal::from(p.data.clone()));
-        }
         anchor_view
     } else {
         // The synthetic genesis proposal carries the genesis cert1 as its

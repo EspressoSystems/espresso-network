@@ -208,16 +208,17 @@ where
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
                 });
+        // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
+        let saved_proposals = initializer
+            .saved_proposals
+            .values()
+            .map(|p| message::Proposal::from(p.data.clone()));
+        consensus.seed_proposals(saved_proposals);
         // `seed_parent` sets the current epoch from the anchor proposal;
         // `resume_from_restart` positions the view so the node never
         // re-enters a view it may have voted or proposed in before it went
         // down.
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
-        // Re-seed already-validated proposals so `maybe_vote_1` can find the
-        // parent of the first post-restart proposal (never re-fetched otherwise).
-        for proposal in initializer.saved_proposals.values() {
-            consensus.seed_proposal(Proposal::from(proposal.data.clone()));
-        }
         // Restore the persisted lock; it can be newer than the anchor QC, so
         // this must run after `seed_parent`.
         if let Some(locked_qc) = locked_qc {
