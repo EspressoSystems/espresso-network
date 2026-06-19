@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, mem, ops::Range};
+use std::{collections::BTreeMap, mem, ops::Range, sync::LazyLock};
 
 use hotshot::traits::BlockPayload;
 use hotshot_types::{
@@ -21,6 +21,8 @@ use crate::{
     network::{NetworkError, Sender},
 };
 
+static NUM_THREADS: LazyLock<usize> = LazyLock::new(|| rayon::current_num_threads().max(1));
+
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub struct VidDisperseRequest<T: NodeType> {
     pub view: ViewNumber,
@@ -41,7 +43,6 @@ pub struct VidDisperser<T: NodeType> {
     network: Sender<T>,
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
-    bucket_threshold: usize,
     tasks: JoinSet<Result<VidDisperseOutput, VidDisperseError>>,
 }
 
@@ -58,14 +59,8 @@ impl<T: NodeType> VidDisperser<T> {
             network,
             public_key,
             private_key,
-            bucket_threshold: 128 * 1024,
             tasks: JoinSet::new(),
         }
-    }
-
-    pub fn with_bucket_threshold(mut self, len: usize) -> Self {
-        self.bucket_threshold = len;
-        self
     }
 
     pub fn request_vid_disperse(&mut self, vid_disperse_request: VidDisperseRequest<T>) {
@@ -80,7 +75,6 @@ impl<T: NodeType> VidDisperser<T> {
         let network = self.network.clone();
         let public_key = self.public_key.clone();
         let private_key = self.private_key.clone();
-        let bucket_threshold = self.bucket_threshold;
         let handle = self.tasks.spawn_blocking(move || {
             handle_vid_disperse_request(
                 membership,
@@ -88,7 +82,6 @@ impl<T: NodeType> VidDisperser<T> {
                 public_key,
                 private_key,
                 vid_disperse_request,
-                bucket_threshold,
             )
         });
         self.calculations.insert(key, handle);
@@ -126,7 +119,6 @@ fn handle_vid_disperse_request<T: NodeType>(
     public_key: T::SignatureKey,
     private_key: <T::SignatureKey as SignatureKey>::PrivateKey,
     vid_disperse_request: VidDisperseRequest<T>,
-    bucket_threshold: usize,
 ) -> Result<VidDisperseOutput, VidDisperseError> {
     let view = vid_disperse_request.view;
     let epoch = vid_disperse_request.epoch;
@@ -145,11 +137,18 @@ fn handle_vid_disperse_request<T: NodeType>(
 
     let num_namespaces = params.ns_table.len();
 
-    // Coalesce small namespaces into balanced buckets so a block of many
-    // tiny namespaces is sent as a few messages per recipient rather than
-    // one tiny message each. Each bucket is one parallel unit and one
-    // message per recipient.
-    let buckets: Vec<Vec<usize>> = bucketize(&params.ns_table, bucket_threshold);
+    // Coalesce namespaces into size-balanced buckets, roughly one per core,
+    // but never below the minimum size, so a block of many tiny namespaces
+    // goes out as a few balanced messages per recipient instead of one tiny
+    // message each. Each bucket is one parallel unit and one message per
+    // recipient.
+    let buckets: Vec<Vec<usize>> = {
+        // We want buckets to be at least 256 KiB, otherwise the per-message
+        // overhead is too large. Larger payloads are divided by the number
+        // of available threads to fully utilise rayon.
+        let threshold = params.payload.len().div_ceil(*NUM_THREADS).max(256 * 1024);
+        bucketize(&params.ns_table, threshold)
+    };
 
     buckets.par_iter().try_for_each_with(
         network,
