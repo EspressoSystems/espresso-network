@@ -678,3 +678,94 @@ async fn fragment_accumulator_rejects_malformed_fragments() {
         Err(VidFragmentError::Inconsistent)
     ));
 }
+
+/// Build storage node `slot`'s share of a payload split into `ns_count`
+/// namespaces, using the view's VID params and weights so the structure matches
+/// a real dispersal. `TestView`'s blocks are single-namespace, so this is how
+/// the multi-piece fragment paths get exercised.
+fn multi_namespace_share(
+    view: &TestView,
+    slot: usize,
+    ns_count: usize,
+) -> VidDisperseShare2<TestTypes> {
+    let template = &view.vid_shares[0];
+    let param = template.common.param.clone();
+    let weights: Vec<u32> = view
+        .vid_shares
+        .iter()
+        .map(|s| s.share.weight() as u32)
+        .collect();
+    // A few bytes per namespace; the contents are irrelevant to the accumulator.
+    let ns_len = 16usize;
+    let payload: Vec<u8> = (0..ns_count * ns_len).map(|i| i as u8).collect();
+    let ns_table = (0..ns_count).map(|i| i * ns_len..(i + 1) * ns_len);
+    let (payload_commitment, common, shares) =
+        AvidmGf2Scheme::ns_disperse(&param, &weights, &payload, ns_table).unwrap();
+    VidDisperseShare2 {
+        view_number: template.view_number,
+        epoch: template.epoch,
+        target_epoch: template.target_epoch,
+        payload_commitment,
+        share: shares[slot].clone(),
+        recipient_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], slot as u64).0,
+        common,
+    }
+}
+
+/// A fragment carrying several pieces (a bucket) reassembles them, whether the
+/// whole share arrives in one fragment or is split across multi-piece fragments
+/// delivered out of order.
+#[tokio::test]
+async fn fragment_accumulator_reassembles_multi_piece_fragments() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let original = multi_namespace_share(view, 0, 4);
+
+    // All four namespaces in one bucket → completes on the single fragment.
+    let mut whole = vid_fragments(&original).next().expect("at least one piece");
+    whole.namespaces = vid_fragments(&original)
+        .flat_map(|f| f.namespaces)
+        .collect();
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    assert_eq!(
+        accumulator.accept(whole).expect("accepted"),
+        Some(original.clone())
+    );
+
+    // Split into two multi-piece fragments — pieces [0, 1] and [2, 3] — and feed
+    // them out of order; the share completes on the second.
+    let pieces: Vec<_> = vid_fragments(&original)
+        .flat_map(|f| f.namespaces)
+        .collect();
+    let template = vid_fragments(&original).next().unwrap();
+    let mut first = template.clone();
+    first.namespaces = pieces[..2].to_vec();
+    let mut second = template;
+    second.namespaces = pieces[2..].to_vec();
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    assert!(accumulator.accept(second).expect("accepted").is_none());
+    assert_eq!(accumulator.accept(first).expect("accepted"), Some(original));
+}
+
+/// Two pieces for the same namespace index within a single fragment are
+/// rejected as a duplicate (the existing case splits the duplicate across two
+/// fragments; this exercises the intra-fragment path).
+#[tokio::test]
+async fn fragment_accumulator_rejects_intra_fragment_duplicate() {
+    let test_data = TestData::new(1).await;
+    let view = &test_data.views[0];
+    let original = multi_namespace_share(view, 0, 2);
+    let pieces: Vec<_> = vid_fragments(&original)
+        .flat_map(|f| f.namespaces)
+        .collect();
+
+    let mut fragment = vid_fragments(&original).next().unwrap();
+    fragment.namespaces = vec![pieces[0].clone(), pieces[0].clone()];
+
+    let mut accumulator = VidFragmentAccumulator::<TestTypes>::default();
+    assert!(matches!(
+        accumulator.accept(fragment),
+        Err(VidFragmentError::DuplicateIndex(0))
+    ));
+}

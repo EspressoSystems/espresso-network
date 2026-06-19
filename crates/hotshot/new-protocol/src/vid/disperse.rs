@@ -258,3 +258,79 @@ impl VidDisperseError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Range;
+
+    use quickcheck::{TestResult, quickcheck};
+
+    use super::bucketize;
+
+    /// Build a contiguous namespace table from per-namespace byte lengths.
+    /// Only the lengths matter to `bucketize`; the offsets are incidental.
+    fn ns_ranges(lens: &[u8]) -> Vec<Range<usize>> {
+        let mut start = 0;
+        lens.iter()
+            .map(|&len| {
+                let range = start..start + usize::from(len);
+                start += usize::from(len);
+                range
+            })
+            .collect()
+    }
+
+    /// Total payload bytes of the namespaces at `indices`.
+    fn bytes(indices: &[usize], ns_table: &[Range<usize>]) -> usize {
+        indices.iter().map(|&i| ns_table[i].len()).sum()
+    }
+
+    quickcheck! {
+        /// The buckets partition the namespace indices: every index appears
+        /// exactly once, contiguously, and in namespace-table order. This pins
+        /// completeness, disjointness, and ordering in a single property.
+        fn prop_buckets_partition(lens: Vec<u8>, threshold: u16) -> bool {
+            let ns_table = ns_ranges(&lens);
+            bucketize(&ns_table, threshold.into())
+                .into_iter()
+                .flatten()
+                .eq(0..ns_table.len())
+        }
+
+        /// No bucket is ever empty.
+        fn prop_buckets_non_empty(lens: Vec<u8>, threshold: u16) -> bool {
+            let ns_table = ns_ranges(&lens);
+            bucketize(&ns_table, threshold.into())
+                .iter()
+                .all(|bucket| !bucket.is_empty())
+        }
+
+        /// Every bucket except the last reaches the threshold: small namespaces
+        /// are coalesced until the bucket is large enough.
+        fn prop_non_last_buckets_meet_threshold(lens: Vec<u8>, threshold: u16) -> bool {
+            let ns_table = ns_ranges(&lens);
+            let buckets = bucketize(&ns_table, threshold.into());
+            let non_last = buckets.len().saturating_sub(1);
+            buckets
+                .iter()
+                .take(non_last)
+                .all(|bucket| bytes(bucket, &ns_table) >= usize::from(threshold))
+        }
+
+        /// Buckets are minimal: dropping a non-last bucket's final namespace
+        /// leaves it below the threshold, so the disperser seals as soon as it
+        /// reaches the cutoff rather than over-coalescing. (Vacuous at
+        /// `threshold == 0`, where every namespace is its own bucket.)
+        fn prop_non_last_buckets_are_minimal(lens: Vec<u8>, threshold: u16) -> TestResult {
+            if threshold == 0 {
+                return TestResult::discard();
+            }
+            let ns_table = ns_ranges(&lens);
+            let buckets = bucketize(&ns_table, threshold.into());
+            let non_last = buckets.len().saturating_sub(1);
+            TestResult::from_bool(buckets.iter().take(non_last).all(|bucket| {
+                bytes(&bucket[..bucket.len() - 1], &ns_table) < usize::from(threshold)
+            }))
+        }
+    }
+}
