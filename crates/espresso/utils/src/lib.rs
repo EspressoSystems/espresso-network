@@ -18,6 +18,7 @@ pub mod build_info;
 pub mod env_compat;
 pub mod logging;
 pub mod ser;
+pub mod shutdown;
 pub mod test_utils;
 
 pub async fn wait_for_http(
