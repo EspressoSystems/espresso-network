@@ -998,6 +998,10 @@ pub trait SequencerPersistence:
     }
 
     /// Persist the new protocol's locked QC, written before each phase-2 vote.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set: a
+    /// write whose view is not newer than the stored one is a no-op. This lets
+    /// concurrent, retried writes race without ever regressing the persisted lock.
     async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
     }
@@ -1257,13 +1261,10 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
     }
 
     async fn append_high_qc2(&self, high_qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
-        // Writes are spawned concurrently and retried, so a stale write can
-        // land after a newer one. Skip writes that would regress the stored view.
-        if let Some(existing) = (**self).load_high_qc2().await?
-            && existing.view_number() >= high_qc.view_number()
-        {
-            return Ok(());
-        }
+        // Writes are spawned concurrently and retried, so a stale write can land
+        // after a newer one. The backend applies a monotonic compare-and-set
+        // atomically, so such a stale write is a no-op and never regresses the
+        // persisted view.
         (**self).append_high_qc2(high_qc).await
     }
 

@@ -1271,11 +1271,18 @@ impl SequencerPersistence for Persistence {
     async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let path = &inner.high_qc2();
+        let view = high_qc.view_number();
         inner.replace(
             path,
-            |_| {
-                // Always overwrite the previous file.
-                Ok(true)
+            |mut file| {
+                // Overwrite only when the new lock is newer. The whole replace
+                // runs under the inner write lock, so this compare-and-set is
+                // atomic and a stale concurrent write cannot regress the lock.
+                let mut bytes = vec![];
+                file.read_to_end(&mut bytes)?;
+                let existing: QuorumCertificate2<SeqTypes> =
+                    bincode::deserialize(&bytes).context("deserializing existing high_qc2")?;
+                Ok(existing.view_number() < view)
             },
             |mut file| {
                 let bytes = bincode::serialize(&high_qc).context("serializing high_qc2")?;
