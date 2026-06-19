@@ -102,9 +102,11 @@ async fn main() -> Result<()> {
     let broker_jh = spawn(broker.start());
     let marshal_jh = spawn(marshal.start());
 
-    // Await on both
-    let _ = broker_jh.await;
-    let _ = marshal_jh.await;
+    tokio::select! {
+        _ = broker_jh => {},
+        _ = marshal_jh => {},
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
+    }
 
     Ok(())
 }

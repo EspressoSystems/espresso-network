@@ -5,7 +5,6 @@ use clap::Parser;
 use espresso_node::{Genesis, L1Params};
 use espresso_types::{eth_signature_key::EthKeyPair, parse_duration};
 use espresso_utils::logging;
-use futures::future::pending;
 use hotshot::traits::ValidatedState;
 use hotshot_types::data::ViewNumber;
 use url::Url;
@@ -153,8 +152,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     )
     .await?;
 
-    // Sleep forever
-    pending::<()>().await;
+    espresso_utils::shutdown::wait_for_shutdown_signal().await;
 
     Ok(())
 }

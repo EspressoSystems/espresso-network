@@ -147,10 +147,11 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) {
     config.config.da_staked_committee_size = args.num_nodes.get();
     config.config.builder_urls = Vec1::try_from_vec(args.builder_urls).unwrap();
     config.config.builder_timeout = args.builder_timeout;
-    run_orchestrator(
-        config,
-        format!("http://0.0.0.0:{}", args.port).parse().unwrap(),
-    )
-    .await
-    .unwrap();
+    tokio::select! {
+        res = run_orchestrator(
+            config,
+            format!("http://0.0.0.0:{}", args.port).parse().unwrap(),
+        ) => res.unwrap(),
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
+    }
 }

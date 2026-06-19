@@ -98,8 +98,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     // Create new `Marshal` from the config
     let marshal = Marshal::<ProductionDef<SeqTypes>>::new(config).await?;
 
-    // Start the main loop, consuming it
-    marshal.start().await?;
+    tokio::select! {
+        res = marshal.start() => res?,
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
+    }
 
     Ok(())
 }
