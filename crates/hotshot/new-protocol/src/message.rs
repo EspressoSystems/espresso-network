@@ -65,8 +65,7 @@ impl<T: NodeType, S> HasViewNumber for ProposalMessage<T, S> {
     }
 }
 
-/// A reassembled, signed VID share .
-/// [`VidShareFragmentMessage`]s; never sent on the wire directly.
+/// A reassembled, signed VID share.
 pub type VidShareMessage<T> = SignedProposal<T, VidDisperseShare2<T>>;
 
 /// A signed per-namespace VID share fragment.

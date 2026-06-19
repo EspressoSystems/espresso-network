@@ -122,7 +122,6 @@ impl TestView {
         )
         .expect("sign vid share commitment");
         vid_fragments(&share)
-            .into_iter()
             .map(|fragment| Message {
                 sender: self.leader_public_key,
                 message_type: MessageType::Consensus(ConsensusMessage::VidShareFragment(
@@ -851,7 +850,7 @@ pub(crate) fn vid_fragments(
         epoch: share.epoch,
         target_epoch: share.target_epoch,
         payload_commitment: share.payload_commitment,
-        recipient_key: share.recipient_key.clone(),
+        recipient_key: share.recipient_key,
         param: share.common.param.clone(),
         num_namespaces,
         namespaces: vec![AvidmGf2NamespacePiece {
