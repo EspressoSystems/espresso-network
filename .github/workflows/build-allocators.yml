@@ -42,6 +42,14 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
             platform: linux/arm64
+          - allocator: jemalloc
+            dep: tikv-jemallocator@0.7.0 --features profiling
+          - allocator: mimalloc
+            dep: mimalloc@0.1.52
+          - allocator: snmalloc
+            dep: snmalloc-rs@0.7.4
+          - allocator: tcmalloc
+            dep: tcmalloc-better@0.1 --features extension
     steps:
       - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
@@ -52,7 +60,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             protobuf-compiler cmake clang libclang-dev
 
-      - name: Patch allocator
+      - name: Add allocator crate
+        run: cargo add ${{ matrix.dep }} --package espresso-node
+
+      - name: Apply allocator override
         run: git apply build-support/allocator-patches/${{ matrix.allocator }}.patch
 
       - name: Build binaries
