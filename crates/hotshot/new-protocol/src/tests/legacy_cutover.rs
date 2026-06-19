@@ -221,6 +221,7 @@ async fn build_cutover_coordinator(
 
     use crate::{
         block::{BlockBuilder, BlockBuilderConfig},
+        cert_verifier::CertVerifiers,
         consensus::Consensus,
         epoch::EpochManager,
         epoch_root_vote_collector::EpochRootVoteCollector,
@@ -305,6 +306,7 @@ async fn build_cutover_coordinator(
             membership.clone(),
             upgrade_lock.clone(),
         ))
+        .cert_verifiers(CertVerifiers::new(membership.clone(), upgrade_lock.clone()))
         .vid_disperser(vid_disperser)
         .vid_reconstructor(VidReconstructor::new())
         .epoch_manager(EpochManager::new(epoch_height, membership.clone()))

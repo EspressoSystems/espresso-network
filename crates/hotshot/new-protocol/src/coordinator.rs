@@ -34,6 +34,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     block::{BlockAndHeaderRequest, BlockBuilder, BlockBuilderConfig},
+    cert_verifier::CertVerifiers,
     client::{ClientApi, ClientRequest, CoordinatorClient, QueryError},
     consensus::{Consensus, ConsensusInput, ConsensusOutput},
     coordinator::{
@@ -102,6 +103,8 @@ pub struct Coordinator<T: NodeType, S> {
     timeout_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutCertificate2<T>>,
     timeout_one_honest_collector: VoteCollector<T, TimeoutVote2<T>, TimeoutOneHonest<T>>,
     epoch_root_collector: EpochRootVoteCollector<T>,
+    /// Verify certificates received from the network off the consensus thread.
+    cert_verifiers: CertVerifiers<T>,
     epoch_manager: EpochManager<T>,
     block_builder: BlockBuilder<T>,
     proposal_validator: ProposalValidator<T>,
@@ -252,8 +255,9 @@ where
             ))
             .epoch_root_collector(EpochRootVoteCollector::new(
                 membership_coordinator.clone(),
-                lock,
+                lock.clone(),
             ))
+            .cert_verifiers(CertVerifiers::new(membership_coordinator.clone(), lock))
             .epoch_manager(EpochManager::new(
                 initializer.epoch_height,
                 membership_coordinator.clone(),
@@ -422,6 +426,18 @@ where
                     finish_measurement(next_input);
                     return Ok(ConsensusInput::Certificate2(cert2))
                 }
+                Some(cert1) = self.cert_verifiers.cert1.next() => {
+                    finish_measurement(next_input);
+                    return Ok(ConsensusInput::Certificate1(cert1))
+                }
+                Some(cert2) = self.cert_verifiers.cert2.next() => {
+                    finish_measurement(next_input);
+                    return Ok(ConsensusInput::Certificate2(cert2))
+                }
+                Some(tc) = self.cert_verifiers.timeout.next() => {
+                    finish_measurement(next_input);
+                    return Ok(ConsensusInput::TimeoutCertificate(tc))
+                }
                 Some((cert1, state_cert)) = self.epoch_root_collector.next() => {
                     finish_measurement(next_input);
                     self.storage.append_state_cert(
@@ -568,12 +584,17 @@ where
                 Some(result) = self.epoch_manager.next() => match result {
                     Ok(EpochRootResult::DrbResult(epoch, drb_result)) => {
                         finish_measurement(next_input);
-                        // New epoch data available — retry votes that were
-                        // buffered because their membership wasn't ready.
+                        // New epoch data available — retry votes and network
+                        // certificates buffered because their membership wasn't
+                        // ready. Certs still missing their epoch keep driving
+                        // that epoch's catchup.
                         self.vote1_collector.retry_pending_votes();
                         self.vote2_collector.retry_pending_votes();
                         self.timeout_collector.retry_pending_votes();
                         self.timeout_one_honest_collector.retry_pending_votes();
+                        for epoch in self.cert_verifiers.retry_pending() {
+                            self.epoch_manager.request_drb_result(epoch);
+                        }
                         return Ok(ConsensusInput::DrbResult(epoch, drb_result))
                     }
                     Ok(EpochRootResult::EpochRootAdded(epoch)) => {
@@ -1004,7 +1025,15 @@ where
                         epoch = ?certificate1.epoch().map(|e| *e),
                         "recv certificate1"
                     );
-                    Some(ConsensusInput::Certificate1(certificate1))
+                    // Verify the QC off-thread, then feed it to consensus. A
+                    // node catching up to lead a view needs the parent QC, and
+                    // the network certificate is its only source. If the cert's
+                    // epoch membership isn't ready the verifier holds it and
+                    // returns the epoch so we drive that epoch's catchup.
+                    if let Some(epoch) = self.cert_verifiers.cert1.verify(certificate1) {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
                 ConsensusMessage::Certificate2(certificate2, _key) => {
                     debug!(
@@ -1013,7 +1042,11 @@ where
                         epoch = ?certificate2.epoch().map(|e| *e),
                         "recv certificate2"
                     );
-                    Some(ConsensusInput::Certificate2(certificate2))
+                    // Like Certificate1: verified off-thread, then fed to consensus.
+                    if let Some(epoch) = self.cert_verifiers.cert2.verify(certificate2) {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
                 ConsensusMessage::TimeoutVote(timeout_msg) => {
                     let view = timeout_msg.vote.view_number();
@@ -1047,7 +1080,10 @@ where
                         epoch = ?tc.epoch().map(|e| *e),
                         "recv timeout certificate"
                     );
-                    Some(ConsensusInput::TimeoutCertificate(tc))
+                    if let Some(epoch) = self.cert_verifiers.timeout.verify(tc) {
+                        self.epoch_manager.request_drb_result(epoch);
+                    }
+                    None
                 },
                 ConsensusMessage::EpochChange(epoch_change) => {
                     debug!(
@@ -1584,6 +1620,11 @@ where
             GcScope::Decided(view) => {
                 self.epoch_manager.gc(epoch);
                 self.epoch_root_collector.gc(view, epoch);
+                // GC the verifiers at the decided view, not the local view: a
+                // catching-up node's local view races ahead of its decided view,
+                // and GC-ing at the local view would drop pending verifications
+                // for certs it still needs.
+                self.cert_verifiers.gc(view);
                 self.pending_proposal_fetches.gc(view);
                 self.state_manager.gc(view);
                 self.storage
