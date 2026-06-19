@@ -188,9 +188,7 @@ pub struct Consensus<T: NodeType> {
     stored_vids: BTreeSet<ViewNumber>,
     stored_actions: BTreeSet<(ViewNumber, ActionKind)>,
     requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
-    /// Highest locked-QC view confirmed durable. A phase-2 vote is held until
-    /// the lock it relies on (the locked QC at the time of voting) is at or
-    /// below this watermark.
+    /// Highest locked-QC view confirmed durable; gates release of phase-2 votes.
     stored_high_qc: Option<ViewNumber>,
 
     /// Messages constructed and accounted for in `voted_*_views` /
@@ -329,8 +327,7 @@ impl<T: NodeType> Consensus<T> {
         reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
     ) {
         self.current_epoch = Some(proposal.epoch);
-        // The seed certificate comes from durable storage (the decided anchor
-        // QC), so the lock it installs is already persisted.
+        // The seed cert comes from durable storage, so its lock is already persisted.
         self.bump_stored_high_qc(cert1.view_number());
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
@@ -340,35 +337,20 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Seed a proposal saved by a prior run into `self.proposals`.
-    ///
-    /// On restart the node holds only the anchor proposal, but `maybe_vote_1`
-    /// and `maybe_propose` need the *parent* proposal of whatever the next
-    /// proposal builds on — typically the restored lock — and there is no
-    /// consensus-internal fetch for a missing parent. Re-seeding the proposals
-    /// this node had already validated lets it vote on the first proposal after
-    /// a restart instead of stalling until the parent is re-received. Does not
-    /// overwrite a proposal already present (e.g. the anchor from
-    /// [`seed_parent`]).
-    ///
-    /// [`seed_parent`]: Self::seed_parent
+    /// Seed a proposal saved by a prior run so `maybe_vote_1`/`maybe_propose`
+    /// can find the parent of the first post-restart proposal (otherwise never
+    /// re-fetched). Does not overwrite a proposal already present.
     pub fn seed_proposal(&mut self, proposal: Proposal<T>) {
         self.proposals
             .entry(proposal.view_number)
             .or_insert(proposal);
     }
 
-    /// Restore a locked QC persisted by [`append_high_qc2`] on a prior run.
-    ///
-    /// Called after [`seed_parent`] on restart: the persisted lock can be newer
-    /// than the decided-anchor QC `seed_parent` installs, and restoring it
-    /// preserves the safety invariant that the node never votes for a proposal
-    /// conflicting with one it had already locked before going down. The value
-    /// loaded from storage is itself durable, so it also advances the
+    /// Restore the locked QC persisted on a prior run. Called after
+    /// `seed_parent`: the persisted lock can be newer than the decided-anchor
+    /// QC, and restoring it keeps the node from voting against a block it had
+    /// already locked. The loaded value is durable, so it also advances the
     /// durability watermark.
-    ///
-    /// [`append_high_qc2`]: crate::storage::NewProtocolStorage::append_high_qc2
-    /// [`seed_parent`]: Self::seed_parent
     pub fn seed_locked_cert(&mut self, cert1: Certificate1<T>) {
         let view = cert1.view_number();
         self.bump_stored_high_qc(view);
@@ -389,22 +371,16 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
-    /// Whether the locked QC at `required` view is durably persisted, so a
-    /// phase-2 vote relying on it may be released.
+    /// Whether the locked QC at `required` view is durably persisted.
     fn high_qc_durable(&self, required: ViewNumber) -> bool {
         self.stored_high_qc.is_some_and(|stored| stored >= required)
     }
 
-    /// Whether the parent block at `parent_view` counts as reconstructed for
-    /// voting: either we hold its reconstructed payload, or our locked QC
-    /// certifies exactly this parent leaf. A node only ever locks on a block it
-    /// reconstructed (see [`maybe_vote_2_and_update_lock`]), and a persisted
-    /// lock is only written for such a view, so a lock matching the parent is
-    /// itself proof of reconstruction. This lets a restarted node vote on the
-    /// first proposal built on its restored lock without re-fetching VID shares
-    /// to re-reconstruct the parent.
-    ///
-    /// [`maybe_vote_2_and_update_lock`]: Self::maybe_vote_2_and_update_lock
+    /// Whether the parent block counts as reconstructed for voting: either we
+    /// hold its payload, or our locked QC certifies exactly this parent leaf.
+    /// A lock is only ever taken on a reconstructed block, so a lock matching
+    /// the parent is itself proof of reconstruction — letting a restarted node
+    /// vote on the first proposal built on its restored lock.
     fn parent_reconstructed(
         &self,
         parent_view: ViewNumber,
@@ -1706,8 +1682,7 @@ impl<T: NodeType> Consensus<T> {
             },
             StorageOutput::HighQc(view) => {
                 self.bump_stored_high_qc(view);
-                // A higher durable lock can unblock phase-2 votes across many
-                // views, not just `view`, so re-check every pending vote2.
+                // A higher durable lock can unblock vote2 across many views; re-check all.
                 let pending: Vec<ViewNumber> = self.pending_vote2.keys().copied().collect();
                 for view in pending {
                     self.release_vote2(view, outbox);
@@ -1865,11 +1840,7 @@ impl<T: NodeType> Consensus<T> {
                     }
                     return;
                 };
-                // Verify the parent block is reconstructed — we either hold its
-                // payload, or our locked QC certifies it (a lock is only ever
-                // taken on a reconstructed block), the latter letting a
-                // restarted node vote on the first proposal built on its
-                // restored lock.
+                // Parent must be reconstructed (see `parent_reconstructed`).
                 if !self.parent_reconstructed(
                     parent_view,
                     prev_block_commitment,
@@ -2019,9 +1990,7 @@ impl<T: NodeType> Consensus<T> {
             self.current_epoch = Some(proposal_epoch);
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
-            // Persist the new lock before the matching phase-2 vote can be
-            // sent; `release_vote2` gates on the resulting durability
-            // confirmation.
+            // Persist the new lock; `release_vote2` gates the phase-2 vote on it.
             outbox.push_back(ConsensusOutput::PersistHighQc(cert1.clone()));
         }
 
@@ -2047,9 +2016,7 @@ impl<T: NodeType> Consensus<T> {
             },
         };
         self.voted_2_views.insert(view);
-        // The lock is set above (this point is unreachable with no lock), and
-        // is at or above `view`. The vote may only go out once that lock is
-        // durable.
+        // Lock is set above and >= view; the vote waits until it is durable.
         let required = self
             .locked_view()
             .expect("locked_cert is set before voting in phase 2");

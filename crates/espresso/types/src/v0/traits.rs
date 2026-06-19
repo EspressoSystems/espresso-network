@@ -997,8 +997,7 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
-    /// Persist the new protocol's locked QC (high QC). Written before each
-    /// phase-2 vote so the lock can be restored on restart.
+    /// Persist the new protocol's locked QC, written before each phase-2 vote.
     async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
         Ok(())
     }
@@ -1258,9 +1257,8 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
     }
 
     async fn append_high_qc2(&self, high_qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
-        // The lock advances monotonically, but persistence writes are spawned
-        // concurrently and retried, so a stale write can land after a newer
-        // one. Skip writes that would regress the stored view.
+        // Writes are spawned concurrently and retried, so a stale write can
+        // land after a newer one. Skip writes that would regress the stored view.
         if let Some(existing) = (**self).load_high_qc2().await?
             && existing.view_number() >= high_qc.view_number()
         {

@@ -109,19 +109,15 @@ async fn test_vote1_for_sequential_views() {
     );
 }
 
-/// On restart the parent proposal is re-seeded (not re-received over the
-/// network), and the node can still vote1 on the child built on it. This
-/// mirrors `Coordinator::maker` re-seeding `initializer.saved_proposals`;
-/// without it `maybe_vote_1` would stall on the missing parent, for which there
-/// is no consensus-internal fetch.
+/// A re-seeded parent proposal (not re-received over the network) lets the node
+/// vote1 on the child built on it, mirroring `Coordinator::maker`.
 #[tokio::test]
 async fn test_vote1_with_seeded_parent_proposal() {
     let mut harness = ConsensusHarness::new(0).await;
     let test_data = TestData::new(3).await;
     let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
 
-    // Restart: the view-1 proposal was validated before the crash. Re-seed it
-    // and mark its block reconstructed, without ever receiving it again.
+    // Restart: re-seed the validated view-1 proposal and mark its block reconstructed.
     harness
         .consensus
         .seed_proposal(test_data.views[0].proposal.data.clone());
@@ -140,10 +136,8 @@ async fn test_vote1_with_seeded_parent_proposal() {
     );
 }
 
-/// On restart the lock is restored but the parent block's payload is not
-/// re-reconstructed. Because a lock is only ever taken on a reconstructed
-/// block, a restored lock certifying the parent lets the node vote without
-/// re-fetching VID shares — even with nothing in `blocks_reconstructed`.
+/// A restored lock certifying the parent lets the node vote1 without
+/// re-reconstructing the parent block (nothing in `blocks_reconstructed`).
 #[tokio::test]
 async fn test_vote1_parent_reconstruction_from_lock() {
     let mut harness = ConsensusHarness::new(0).await;
@@ -169,9 +163,8 @@ async fn test_vote1_parent_reconstruction_from_lock() {
     );
 }
 
-/// Control for `test_vote1_with_seeded_parent_proposal`: with the parent block
-/// marked reconstructed but the parent proposal absent, `maybe_vote_1` bails on
-/// the missing parent and no vote is produced.
+/// Control for `test_vote1_with_seeded_parent_proposal`: parent block
+/// reconstructed but proposal absent, so `maybe_vote_1` bails and no vote fires.
 #[tokio::test]
 async fn test_vote1_blocked_without_parent_proposal() {
     let mut harness = ConsensusHarness::new(0).await;

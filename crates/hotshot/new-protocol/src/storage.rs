@@ -34,12 +34,8 @@ const RETRY_DELAY: Duration = Duration::from_millis(300);
 pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
     async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()>;
 
-    /// Persist the locked QC (the high QC the node has voted to lock on).
-    ///
-    /// Written before each phase-2 vote so the lock survives a restart: on
-    /// recovery the persisted value is restored as the locked QC instead of
-    /// regressing to the (older) decided-anchor QC, which could otherwise let
-    /// the node vote for a proposal conflicting with one it already locked.
+    /// Persist the locked QC, written before each phase-2 vote so the lock
+    /// survives a restart instead of regressing to the decided-anchor QC.
     async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()>;
 
     /// Load the persisted locked QC, if any.
@@ -177,9 +173,8 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
         self.handles.entry(view).or_default().push(handle);
     }
 
-    /// Persist the locked QC. On success emits [`StorageOutput::HighQc`] for
-    /// the QC's view, which gates the matching phase-2 vote: the vote is only
-    /// sent once the lock it relies on is durable.
+    /// Persist the locked QC; on success emits [`StorageOutput::HighQc`], which
+    /// gates the matching phase-2 vote.
     pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
         let view = high_qc.view_number();
         let storage = self.storage.clone();
@@ -322,8 +317,7 @@ impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
     }
 
     async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()> {
-        // `Certificate1<T>` is a `QuorumCertificate2<T>`; reuse the legacy
-        // high_qc slot, whose update is already monotonic by view.
+        // `Certificate1<T>` is a `QuorumCertificate2<T>`; reuse the monotonic legacy slot.
         StorageTrait::update_high_qc2(self, high_qc).await
     }
 

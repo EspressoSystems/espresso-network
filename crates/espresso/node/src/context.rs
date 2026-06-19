@@ -200,9 +200,8 @@ where
             tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }
 
-        // Restore the locked QC persisted before the last phase-2 vote so the
-        // new protocol resumes with the lock it actually held, rather than
-        // regressing to the decided-anchor QC.
+        // Restore the persisted lock so the new protocol resumes with the lock
+        // it actually held, not the older decided-anchor QC.
         let locked_qc = persistence
             .load_high_qc2()
             .await

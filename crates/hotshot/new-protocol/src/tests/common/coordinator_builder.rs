@@ -175,9 +175,8 @@ pub async fn build_test_coordinator(
                 })
                 .collect();
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
-        // Re-seed the validated proposals, mirroring `Coordinator::maker`, so
-        // `maybe_vote_1` can find the parent of the first proposal built on the
-        // restored anchor/lock instead of stalling on a missing parent.
+        // Re-seed validated proposals (mirrors `Coordinator::maker`) so
+        // `maybe_vote_1` can find the first post-restart parent.
         for (_, p) in storage.proposals_cloned().await {
             consensus.seed_proposal(Proposal::from(p.data.clone()));
         }
