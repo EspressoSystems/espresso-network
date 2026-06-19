@@ -362,7 +362,12 @@ impl Genesis {
         match source {
             GenesisSource::Path(p) => Self::from_file(p),
             GenesisSource::Http(url) => {
-                let text = reqwest::get(url.clone())
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .context("building HTTP client")?;
+                let text = client
+                    .get(url.clone())
                     .await
                     .with_context(|| format!("fetching genesis from {url}"))?
                     .error_for_status()
