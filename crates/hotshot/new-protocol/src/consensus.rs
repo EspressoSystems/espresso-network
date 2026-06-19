@@ -1491,12 +1491,20 @@ impl<T: NodeType> Consensus<T> {
             parent_view = proposal.justify_qc.view_number();
             parent_commit = proposal.justify_qc.data.leaf_commit;
         }
-        self.last_decided_view = new_decided_view;
-        self.last_decided_leaf = last_decided_leaf;
+        // Look up the QC for the decided view before advancing
+        // `last_decided_view`. Certificates are verified off the consensus
+        // thread, so a view's Cert2 can reach consensus before its Cert1;
+        // advancing the decided view here and then bailing on a missing Cert1
+        // would orphan the leaf forever — the `LeafDecided` below never fires,
+        // and the next view's decide skips it because its chain-walk stops at
+        // `last_decided_view`. Defer instead: a later `maybe_decide` for this
+        // view re-runs once the Cert1 arrives.
         let Some(cert1) = self.certs.get(&view).cloned() else {
             debug!(%view, "cert1 missing");
             return;
         };
+        self.last_decided_view = new_decided_view;
+        self.last_decided_leaf = last_decided_leaf;
         outbox.push_back(ConsensusOutput::LeafDecided {
             leaves: decided,
             cert1,
