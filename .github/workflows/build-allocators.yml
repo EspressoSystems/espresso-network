@@ -43,13 +43,13 @@ jobs:
             runner: ubuntu-24.04-arm
             platform: linux/arm64
           - allocator: jemalloc
-            dep: tikv-jemallocator@0.7.0 --features profiling
+            dep: tikv-jemallocator --features profiling
           - allocator: mimalloc
-            dep: mimalloc@0.1.52
+            dep: mimalloc
           - allocator: snmalloc
-            dep: snmalloc-rs@0.7.4
+            dep: snmalloc-rs
           - allocator: tcmalloc
-            dep: tcmalloc-better@0.1 --features extension
+            dep: tcmalloc-better --features extension
     steps:
       - uses: actions/checkout@v6
       - uses: rui314/setup-mold@v1
