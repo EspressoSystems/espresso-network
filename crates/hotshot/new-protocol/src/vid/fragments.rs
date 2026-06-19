@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet};
 
 use hotshot_types::{
     data::{
@@ -59,30 +59,24 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
         if fragment.num_namespaces == 0 {
             return Err(VidFragmentError::Empty);
         }
-        let pending = match self.pending.entry(view) {
-            Entry::Vacant(slot) => slot.insert(PendingShare {
-                epoch: fragment.epoch,
-                target_epoch: fragment.target_epoch,
-                payload_commitment: fragment.payload_commitment,
-                recipient_key: fragment.recipient_key.clone(),
-                param: fragment.param.clone(),
-                num_namespaces: fragment.num_namespaces,
-                pieces: BTreeMap::new(),
-            }),
-            Entry::Occupied(slot) => {
-                let pending = slot.into_mut();
-                if pending.num_namespaces != fragment.num_namespaces
-                    || pending.epoch != fragment.epoch
-                    || pending.target_epoch != fragment.target_epoch
-                    || pending.payload_commitment != fragment.payload_commitment
-                    || pending.recipient_key != fragment.recipient_key
-                    || pending.param != fragment.param
-                {
-                    return Err(VidFragmentError::Inconsistent);
-                }
-                pending
-            },
-        };
+        let pending = self.pending.entry(view).or_insert_with(|| PendingShare {
+            epoch: fragment.epoch,
+            target_epoch: fragment.target_epoch,
+            payload_commitment: fragment.payload_commitment,
+            recipient_key: fragment.recipient_key.clone(),
+            param: fragment.param.clone(),
+            num_namespaces: fragment.num_namespaces,
+            pieces: BTreeMap::new(),
+        });
+        if pending.num_namespaces != fragment.num_namespaces
+            || pending.epoch != fragment.epoch
+            || pending.target_epoch != fragment.target_epoch
+            || pending.payload_commitment != fragment.payload_commitment
+            || pending.recipient_key != fragment.recipient_key
+            || pending.param != fragment.param
+        {
+            return Err(VidFragmentError::Inconsistent);
+        }
         for piece in fragment.namespaces {
             let ns_index = piece.ns_index;
             if ns_index >= pending.num_namespaces {
