@@ -330,6 +330,16 @@ impl<T: NodeType> Consensus<T> {
         }
     }
 
+    /// Seed proposals loaded from storage on restart so the decide chain-walk
+    /// can follow `justify_qc` back through views the node had already seen.
+    pub fn seed_proposals(&mut self, proposals: impl IntoIterator<Item = Proposal<T>>) {
+        for proposal in proposals {
+            let view = proposal.view_number;
+            self.leaves.insert(view, proposal.clone().into());
+            self.proposals.insert(view, proposal);
+        }
+    }
+
     /// Seed a state certificate loaded from storage on restart, so a leader
     /// proposing on an epoch-root parent QC right after a restart does not
     /// stall on a missing state_cert.
