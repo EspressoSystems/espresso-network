@@ -368,6 +368,7 @@ impl Genesis {
                     .context("building HTTP client")?;
                 let text = client
                     .get(url.clone())
+                    .send()
                     .await
                     .with_context(|| format!("fetching genesis from {url}"))?
                     .error_for_status()
