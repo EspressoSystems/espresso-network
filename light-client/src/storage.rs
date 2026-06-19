@@ -14,6 +14,7 @@ use hotshot_query_service_types::{
     availability::{BlockId, LeafId, LeafQueryData},
 };
 use hotshot_types::{data::EpochNumber, light_client::StateVerKey, x25519};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{QueryBuilder, SqlitePool, query, query_as, sqlite::SqlitePoolOptions};
 use tempfile::{Builder, TempDir};
@@ -117,7 +118,7 @@ pub trait Storage: Sized + Send + Sync + 'static {
     ) -> impl Send + Future<Output = Result<()>>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::Parser))]
 pub struct LightClientSqliteOptions {
     /// Maximum number of simultaneous DB connections to allow.
@@ -634,7 +635,7 @@ mod test {
     use pretty_assertions::assert_eq;
     use sqlx::sqlite::SqliteConnectOptions;
     use tempfile::tempdir;
-    use versions::{CLIQUENET_VERSION, EPOCH_VERSION};
+    use versions::{EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
     use super::*;
     use crate::testing::{leaf_chain, random_validator};
@@ -1120,14 +1121,14 @@ mod test {
 
         let epoch = EpochNumber::new(1);
         let state = random_stake_table();
-        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, EPOCH_VERSION)
+        db.insert_stake_table(epoch, &state, NEW_PROTOCOL_VERSION, EPOCH_VERSION)
             .await
             .unwrap();
         let (loaded_epoch, loaded_state, loaded_version, loaded_next_version) =
             db.stake_table_lower_bound(epoch).await.unwrap().unwrap();
         assert_eq!(loaded_epoch, epoch);
         assert_eq!(loaded_state, state);
-        assert_eq!(loaded_version, CLIQUENET_VERSION);
+        assert_eq!(loaded_version, NEW_PROTOCOL_VERSION);
         assert_eq!(loaded_next_version, EPOCH_VERSION);
     }
 
@@ -1147,7 +1148,7 @@ mod test {
             "random_stake_table must populate used_x25519_keys for this test to be meaningful"
         );
 
-        db.insert_stake_table(epoch, &state, CLIQUENET_VERSION, CLIQUENET_VERSION)
+        db.insert_stake_table(epoch, &state, NEW_PROTOCOL_VERSION, NEW_PROTOCOL_VERSION)
             .await
             .unwrap();
         let (_, loaded, ..) = db.stake_table_lower_bound(epoch).await.unwrap().unwrap();

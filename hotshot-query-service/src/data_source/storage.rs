@@ -195,9 +195,6 @@ where
         &mut self,
         hash: TransactionHash<Types>,
     ) -> QueryResult<BlockQueryData<Types>>;
-
-    /// Get the first leaf which is available in the database with height >= `from`.
-    async fn first_available_leaf(&mut self, from: u64) -> QueryResult<LeafQueryData<Types>>;
 }
 
 pub trait UpdateAvailabilityStorage<Types>: Send

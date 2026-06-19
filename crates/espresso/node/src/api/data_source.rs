@@ -282,9 +282,9 @@ pub(crate) trait CatchupDataSource: Sync {
         height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
 
-    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    /// Load the cert2 stored at exactly `height`, if one exists.
     ///
-    /// Returns `None` when no cert2 height >= `height` is locally available
+    /// Returns `None` when no cert2 is stored at exactly `height`.
     fn get_cert2(
         &self,
         _height: u64,

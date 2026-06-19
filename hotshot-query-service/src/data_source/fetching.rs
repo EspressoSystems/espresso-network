@@ -858,6 +858,51 @@ where
 
         Ok(())
     }
+
+    /// Append a payload for a block whose leaf was already decided without one.
+    ///
+    /// In the new protocol, decide events can arrive before VID reconstruction
+    /// has produced the block payload, so [`append`](Self::append) may persist
+    /// a leaf with no payload attached. The payload is then back-filled here
+    /// once it becomes available, leaving the rest of the block info untouched.
+    ///
+    /// Reconstruction runs on views that are not yet (and may never be)
+    /// decided, so the block is only stored if it matches the decided leaf at
+    /// the same height. If that leaf hasn't been ingested yet the payload is
+    /// dropped: when the decide arrives, [`append`](Self::append) spawns a
+    /// fetch that back-fills the payload from a peer.
+    async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
+        let height = block.height();
+        let leaf = {
+            let mut tx = self.read().await.context("opening read transaction")?;
+            match tx.get_leaf(LeafId::Number(height as usize)).await {
+                Ok(leaf) => leaf,
+                Err(QueryError::Missing | QueryError::NotFound) => {
+                    tracing::info!(
+                        height,
+                        "dropping reconstructed payload; leaf not yet available"
+                    );
+                    return Ok(());
+                },
+                Err(err) => {
+                    return Err(err).context(format!(
+                        "loading leaf {height} to verify reconstructed payload"
+                    ));
+                },
+            }
+        };
+        if leaf.block_hash() != block.hash() {
+            tracing::warn!(
+                height,
+                decided = %leaf.block_hash(),
+                reconstructed = %block.hash(),
+                "reconstructed payload does not match decided block; discarding"
+            );
+            return Ok(());
+        }
+        self.fetcher.store_and_notify(&block).await;
+        Ok(())
+    }
 }
 
 impl<Types, S, P> VersionedDataSource for FetchingDataSource<Types, S, P>
@@ -1498,15 +1543,7 @@ where
 
                     // Break the range into manageable, aligned chunks (which improves cacheability
                     // for the upstream server).
-                    //
-                    // We iterate in reverse order because leaves are inherently fetched in reverse,
-                    // since we cannot (actively) fetch a leaf until we have the subsequent leaf,
-                    // which tells us what the hash of its parent should be.
-                    for chunk in range_chunks_aligned_rev(
-                        Bound::Included(range.start),
-                        range.end - 1,
-                        chunk_size,
-                    ) {
+                    for chunk in range_chunks_aligned(range.start..range.end, chunk_size) {
                         tracing::info!(?chunk, "fetching missing block chunk");
 
                         // Fetching the payload metadata is enough to trigger an active fetch of the
@@ -1534,11 +1571,7 @@ where
                     }
 
                     tracing::info!(?range, "fetching missing VID range");
-                    for chunk in range_chunks_aligned_rev(
-                        Bound::Included(range.start),
-                        range.end - 1,
-                        chunk_size,
-                    ) {
+                    for chunk in range_chunks_aligned(range.start..range.end, chunk_size) {
                         tracing::info!(?chunk, "fetching missing VID chunk");
                         self.get::<NonEmptyRange<VidCommonQueryData<Types>>>(RangeRequest {
                             start: chunk.start as u64,
@@ -2103,8 +2136,8 @@ where
 
 /// A provider which can be used as a fetcher by the availability service.
 pub trait AvailabilityProvider<Types: NodeType>:
-    Provider<Types, request::LeafRequest<Types>>
-    + Provider<Types, request::LeafRangeRequest<Types>>
+    Provider<Types, request::LeafRequest>
+    + Provider<Types, request::LeafRangeRequest>
     + Provider<Types, request::PayloadRequest>
     + Provider<Types, request::BlockRangeRequest>
     + Provider<Types, request::VidCommonRequest>
@@ -2115,8 +2148,8 @@ pub trait AvailabilityProvider<Types: NodeType>:
 {
 }
 impl<Types: NodeType, P> AvailabilityProvider<Types> for P where
-    P: Provider<Types, request::LeafRequest<Types>>
-        + Provider<Types, request::LeafRangeRequest<Types>>
+    P: Provider<Types, request::LeafRequest>
+        + Provider<Types, request::LeafRangeRequest>
         + Provider<Types, request::PayloadRequest>
         + Provider<Types, request::BlockRangeRequest>
         + Provider<Types, request::VidCommonRequest>
@@ -2310,7 +2343,6 @@ where
 /// Each chunk is of size `alignment`, and starts on a multiple of `alignment`, with the possible
 /// exception of the first chunk (which may be misaligned and small) and the last (which may be
 /// small).
-#[allow(dead_code)]
 fn range_chunks_aligned<R>(range: R, alignment: usize) -> impl Iterator<Item = Range<usize>>
 where
     R: RangeBounds<usize>,
@@ -2384,56 +2416,6 @@ fn range_chunks_rev(
         end = chunk_start;
         Some(chunk)
     })
-}
-
-/// Break a range into fixed-alignment chunks, starting from the end and moving towards the start.
-///
-/// Each chunk is of size `alignment`, and starts on a multiple of `alignment` (that is, the lower
-/// bound an _exclusive_ upper bound of each chunk are multiples of `alignment`), with the possible
-/// exception of the first chunk (the last chunk in numerical order, which may be small) and the
-/// last (which may be misaligned and small).
-///
-/// While the chunks are yielded in reverse order, from `end` to `start`, each individual chunk is
-/// in the usual ascending order. That is, the first chunk ends with `end` and the last chunk starts
-/// with `start`.
-///
-/// Note that unlike [`range_chunks_aligned`], which accepts any range and yields an infinite
-/// iterator if the range has no upper bound, this function requires there to be a defined upper
-/// bound, otherwise we don't know where the reversed iterator should _start_. The `end` bound given
-/// here is inclusive; i.e. the end of the first chunk yielded by the stream will be exactly `end`.
-fn range_chunks_aligned_rev(
-    start: Bound<usize>,
-    end: usize,
-    alignment: usize,
-) -> impl Iterator<Item = Range<usize>> {
-    // Transform the start bound to be inclusive.
-    let start = match start {
-        Bound::Included(i) => i,
-        Bound::Excluded(i) => i + 1,
-        Bound::Unbounded => 0,
-    };
-    // Transform the end bound to be exclusive.
-    let mut end = end + 1;
-
-    // If necessary, generate a partial first chunk to force the remaining chunks into alignment.
-    let first = if end.is_multiple_of(alignment) {
-        None
-    } else {
-        // The partial first chunk starts at the previous multiple of the alignment, or at the start
-        // of the overall range, whichever comes first.
-        let next_multiple = end.next_multiple_of(alignment);
-        let prev_multiple = next_multiple - alignment;
-        let chunk_start = max(prev_multiple, start);
-        let chunk = chunk_start..end;
-
-        // Start the reverse series of aligned chunks at the start of the partial first chunk.
-        end = chunk_start;
-        Some(chunk)
-    };
-
-    first
-        .into_iter()
-        .chain(range_chunks_rev(Bound::Included(start), end - 1, alignment))
 }
 
 trait ResultExt<T, E> {
@@ -2746,29 +2728,6 @@ mod test {
         assert_eq!(
             range_chunks_rev(Bound::Excluded(0), 4, 2).collect::<Vec<_>>(),
             [3..5, 1..3]
-        );
-    }
-
-    #[test]
-    fn test_range_chunks_aligned_rev() {
-        #![allow(clippy::single_range_in_vec_init)]
-
-        // Aligned first chunk, partial last chunk.
-        assert_eq!(
-            range_chunks_aligned_rev(Bound::Included(1), 3, 2).collect::<Vec<_>>(),
-            [2..4, 1..2]
-        );
-
-        // Misaligned first chunk, complete last chunk.
-        assert_eq!(
-            range_chunks_aligned_rev(Bound::Included(0), 2, 2).collect::<Vec<_>>(),
-            [2..3, 0..2]
-        );
-
-        // Incomplete chunk.
-        assert_eq!(
-            range_chunks_aligned_rev(Bound::Excluded(0), 3, 10).collect::<Vec<_>>(),
-            [1..4]
         );
     }
 

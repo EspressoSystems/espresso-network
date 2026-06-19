@@ -57,7 +57,7 @@ impl MetricsCollector {
         let ts = Self::now_ns();
         match input {
             // Leader: block building pipeline
-            ConsensusInput::HeaderCreated(view, _) => {
+            ConsensusInput::HeaderCreated(view, ..) => {
                 let v = **view;
                 self.view_mut(v).header_created_ns = Some(ts);
             },
@@ -70,7 +70,7 @@ impl MetricsCollector {
                 self.view_mut(v).vid_disperse_ns = Some(ts);
             },
             // Replica: proposal processing
-            ConsensusInput::Proposal(_sender, p) => {
+            ConsensusInput::ProposalWithVidShare(_sender, p, _) => {
                 let v = *p.view_number();
                 self.view_mut(v).proposal_recv_ns = Some(ts);
             },
@@ -107,7 +107,7 @@ impl MetricsCollector {
         let ts = Self::now_ns();
         match output {
             // Leader: proposal ready to send (before network I/O)
-            ConsensusOutput::SendProposal(proposal, _) => {
+            ConsensusOutput::SendProposal(proposal) => {
                 let v = *proposal.data.view_number;
                 let m = self.view_mut(v);
                 m.proposal_sent_ns = Some(ts);

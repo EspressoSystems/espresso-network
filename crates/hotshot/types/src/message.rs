@@ -20,7 +20,7 @@ use hotshot_utils::anytrace::*;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use vbs::version::Version;
-use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, Upgrade, VID2_UPGRADE_VERSION};
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION, Upgrade};
 
 /// The version we should expect for external messages
 pub const EXTERNAL_MESSAGE_VERSION: Version = Version { major: 0, minor: 0 };
@@ -46,7 +46,7 @@ use crate::{
         ViewSyncPreCommitVote2,
     },
     traits::{
-        election::Membership,
+        election::{Membership, NonEpochMembershipSnapshot},
         network::{DataRequest, ResponseMessage, ViewMessage},
         node_implementation::NodeType,
         signature_key::SignatureKey,
@@ -128,7 +128,7 @@ pub enum MessageKind<TYPES: NodeType> {
     /// Messages relating to sharing data between nodes
     Data(DataMessage<TYPES>),
     /// A (still serialized) message to be passed through to external listeners
-    External(Vec<u8>),
+    External(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 /// List of keys to send a message to, or broadcast to all known keys
@@ -575,21 +575,18 @@ where
     /// Checks that the signature of the quorum proposal is valid.
     /// # Errors
     /// Returns an error when the proposal signature is invalid.
-    pub async fn validate_signature(
+    pub fn validate_signature(
         &self,
         membership: &TYPES::Membership,
         _epoch_height: u64,
         upgrade_lock: &UpgradeLock<TYPES>,
     ) -> Result<()> {
         let view_number = self.data.view_number();
-        let view_leader_key = membership.leader(view_number, None)?;
+        let view_leader_key = membership.non_epoch_snapshot().leader(view_number)?;
         let proposed_leaf = Leaf::from_quorum_proposal(&self.data);
 
         ensure!(
-            view_leader_key.validate(
-                &self.signature,
-                proposed_leaf.commit(upgrade_lock).await.as_ref()
-            ),
+            view_leader_key.validate(&self.signature, proposed_leaf.commit(upgrade_lock).as_ref()),
             "Proposal signature is invalid."
         );
 
@@ -604,9 +601,9 @@ where
     /// Checks that the signature of the quorum proposal is valid.
     /// # Errors
     /// Returns an error when the proposal signature is invalid.
-    pub async fn validate_signature(&self, membership: &EpochMembership<TYPES>) -> Result<()> {
+    pub fn validate_signature(&self, membership: &EpochMembership<TYPES>) -> Result<()> {
         let view_number = self.data.proposal.view_number();
-        let view_leader_key = membership.leader(view_number).await?;
+        let view_leader_key = membership.leader(view_number)?;
         let proposed_leaf = Leaf2::from_quorum_proposal(&self.data);
 
         ensure!(
@@ -622,16 +619,14 @@ impl<TYPES> Proposal<TYPES, QuorumProposal2<TYPES>>
 where
     TYPES: NodeType,
 {
-    pub async fn validate_signature(
+    pub fn validate_signature(
         &self,
         membership_coordinator: &EpochMembershipCoordinator<TYPES>,
     ) -> Result<()> {
         let view_number = self.data.view_number();
         let epoch = self.data.epoch().ok_or(error!("Epoch is not set"))?;
-        let membership = membership_coordinator
-            .membership_for_epoch(Some(epoch))
-            .await?;
-        let view_leader_key = membership.leader(view_number).await?;
+        let membership = membership_coordinator.membership_for_epoch(Some(epoch))?;
+        let view_leader_key = membership.leader(view_number)?;
         let proposed_leaf =
             Leaf2::from_quorum_proposal(&QuorumProposalWrapper::from(self.data.clone()));
 
@@ -760,7 +755,17 @@ impl<TYPES: NodeType> UpgradeLock<TYPES> {
     }
 
     pub fn upgraded_vid2(&self, view: ViewNumber) -> bool {
-        self.version_infallible(view) >= VID2_UPGRADE_VERSION
+        self.version_infallible(view) >= NEW_PROTOCOL_VERSION
+    }
+
+    /// Return whether the new protocol (HotShot 0.8) is active for the given view.
+    ///
+    /// Once true for any view, all consensus messages tagged with versions strictly
+    /// less than `NEW_PROTOCOL_VERSION` should be ignored at the legacy task layer
+    /// for that view onward. The wire-level deserialize already rejects
+    /// version-mismatched messages via [`Self::version`].
+    pub fn new_protocol_active(&self, view: ViewNumber) -> bool {
+        self.version_infallible(view) >= NEW_PROTOCOL_VERSION
     }
 
     /// Serialize a message with a version number, using `message.view_number()`

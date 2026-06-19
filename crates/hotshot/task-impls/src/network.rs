@@ -5,7 +5,7 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     hash::{DefaultHasher, Hash},
     sync::Arc,
 };
@@ -938,10 +938,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(vote.epoch())
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -971,10 +969,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(vote.epoch())
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1088,10 +1084,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(vote.epoch())
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1134,10 +1128,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1166,10 +1158,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1198,10 +1188,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1272,10 +1260,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1311,10 +1297,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1490,11 +1474,10 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
         let Ok(mem) = self
             .membership_coordinator
             .stake_table_for_epoch(self.epoch)
-            .await
         else {
             return;
         };
-        let da_committee = mem.da_committee_members(view_number).await;
+        let da_committee: BTreeSet<_> = mem.da_committee_members(view_number).cloned().collect();
         let network = Arc::clone(&self.network);
         let storage = self.storage.clone();
         let storage_metrics = Arc::clone(&self.storage_metrics);
@@ -1629,7 +1612,7 @@ pub mod test {
                     &mut sender,
                     &mut message_kind,
                     &mut transmit,
-                    &*self.membership_coordinator.membership().read().await,
+                    self.membership_coordinator.membership(),
                 );
 
                 self.spawn_transmit_task(message_kind, maybe_action, transmit, sender)

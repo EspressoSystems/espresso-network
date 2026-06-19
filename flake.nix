@@ -261,6 +261,7 @@
             uv
             ruff
             ty
+            uv
 
             go
             golangci-lint

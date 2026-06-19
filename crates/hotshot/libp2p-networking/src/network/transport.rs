@@ -237,10 +237,12 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
 struct AuthMessage<S: SignatureKey> {
     /// The encoded (stake table) public key of the sender. This, along with the peer ID, is
     /// signed. It is still encoded here to enable easy verification.
+    #[serde(with = "serde_bytes")]
     public_key_bytes: Vec<u8>,
 
     /// The encoded peer ID of the sender. This is appended to the public key before signing.
     /// It is still encoded here to enable easy verification.
+    #[serde(with = "serde_bytes")]
     peer_id_bytes: Vec<u8>,
 
     /// The signature on the public key

@@ -71,7 +71,7 @@ pub struct TestView {
 }
 
 impl TestView {
-    async fn find_leader_key_pair(
+    fn find_leader_key_pair(
         membership: &EpochMembership<TestTypes>,
         node_key_map: &Arc<TestNodeKeyMap>,
         view_number: ViewNumber,
@@ -81,7 +81,6 @@ impl TestView {
     ) {
         let leader = membership
             .leader(view_number)
-            .await
             .expect("expected Membership::leader to succeed");
 
         let sk = node_key_map
@@ -115,13 +114,10 @@ impl TestView {
             &block_payload,
             &metadata,
         );
-        let epoch_membership = membership
-            .membership_for_epoch(genesis_epoch)
-            .await
-            .unwrap();
+        let epoch_membership = membership.membership_for_epoch(genesis_epoch).unwrap();
         //let (private_key, public_key) = key_pair_for_id::<TestTypes>(*genesis_view);
         let (private_key, public_key) =
-            Self::find_leader_key_pair(&epoch_membership, &node_key_map, genesis_view).await;
+            Self::find_leader_key_pair(&epoch_membership, &node_key_map, genesis_view);
 
         let leader_public_key = public_key;
 
@@ -156,7 +152,6 @@ impl TestView {
             &private_key,
             &upgrade_lock,
         )
-        .await
         .unwrap();
 
         let block_header = TestBlockHeader::new(
@@ -270,27 +265,21 @@ impl TestView {
 
         //let (old_private_key, old_public_key) = key_pair_for_id::<TestTypes>(*old_view);
         let (old_private_key, old_public_key) = Self::find_leader_key_pair(
-            &self
-                .membership
-                .membership_for_epoch(old_epoch)
-                .await
-                .unwrap(),
+            &self.membership.membership_for_epoch(old_epoch).unwrap(),
             &self.node_key_map,
             old_view,
-        )
-        .await;
+        );
+
+        // One snapshot for the next-view epoch, reused for leader-key
+        // lookup, payload commitment, VID proposal, and DA cert below.
+        let membership = self
+            .membership
+            .membership_for_epoch(self.epoch_number)
+            .unwrap();
 
         //let (private_key, public_key) = key_pair_for_id::<TestTypes>(*next_view);
-        let (private_key, public_key) = Self::find_leader_key_pair(
-            &self
-                .membership
-                .membership_for_epoch(self.epoch_number)
-                .await
-                .unwrap(),
-            &self.node_key_map,
-            next_view,
-        )
-        .await;
+        let (private_key, public_key) =
+            Self::find_leader_key_pair(&membership, &self.node_key_map, next_view);
 
         let leader_public_key = public_key;
 
@@ -308,11 +297,6 @@ impl TestView {
         );
 
         let version = self.upgrade_lock.version_infallible(next_view);
-        let membership = self
-            .membership
-            .membership_for_epoch(self.epoch_number)
-            .await
-            .unwrap();
         let payload_commitment = da_payload_commitment::<TestTypes>(
             &membership,
             transactions.clone(),
@@ -342,7 +326,6 @@ impl TestView {
             &private_key,
             &self.upgrade_lock,
         )
-        .await
         .unwrap();
 
         let quorum_certificate = build_cert::<
@@ -357,8 +340,7 @@ impl TestView {
             &old_public_key,
             &old_private_key,
             &self.upgrade_lock,
-        )
-        .await;
+        );
 
         let upgrade_certificate = if let Some(ref data) = self.upgrade_data {
             let cert = build_cert::<
@@ -373,8 +355,7 @@ impl TestView {
                 &public_key,
                 &private_key,
                 &self.upgrade_lock,
-            )
-            .await;
+            );
 
             Some(cert)
         } else {
@@ -394,8 +375,7 @@ impl TestView {
                 &public_key,
                 &private_key,
                 &self.upgrade_lock,
-            )
-            .await;
+            );
 
             Some(cert)
         } else {
@@ -415,8 +395,7 @@ impl TestView {
                 &public_key,
                 &private_key,
                 &self.upgrade_lock,
-            )
-            .await;
+            );
 
             Some(cert)
         } else {

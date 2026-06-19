@@ -16,25 +16,25 @@ detected once at startup and logged at `info`.
 
 ### Process (`/proc/self/*`)
 
-| Name                            | Type    | Unit    | Source                                        |
-| ------------------------------- | ------- | ------- | --------------------------------------------- |
-| `process_resident_memory_bytes` | gauge   | bytes   | `sysinfo::Process::memory()`                  |
-| `process_virtual_memory_bytes`  | gauge   | bytes   | `sysinfo::Process::virtual_memory()`          |
-| `process_open_fds`              | gauge   | -       | `/proc/self/fd` entry count                   |
-| `process_threads`               | gauge   | -       | `/proc/self/task` entry count                 |
-| `process_uptime_seconds`        | gauge   | seconds | wall clock since startup                      |
-| `process_cpu_seconds_total`     | counter | seconds | `/proc/self/stat` `utime + stime` / `CLK_TCK` |
-| `process_read_bytes_total`      | counter | bytes   | `/proc/self/io` `read_bytes`                  |
-| `process_write_bytes_total`     | counter | bytes   | `/proc/self/io` `write_bytes`                 |
+| Name                            | Type    | Unit    | Source                                          |
+| ------------------------------- | ------- | ------- | ----------------------------------------------- |
+| `process_resident_memory_bytes` | gauge   | bytes   | `sysinfo::Process::memory()`                    |
+| `process_virtual_memory_bytes`  | gauge   | bytes   | `sysinfo::Process::virtual_memory()`            |
+| `process_open_fds`              | gauge   | -       | `/proc/self/fd` entry count                     |
+| `process_threads`               | gauge   | -       | `/proc/self/task` entry count                   |
+| `process_uptime_seconds`        | gauge   | seconds | wall clock since startup                        |
+| `process_cpu_seconds_total`     | counter | seconds | `/proc/self/stat` `utime + stime` / `CLK_TCK`   |
+| `process_read_bytes_total`      | counter | bytes   | `/proc/self/io` `read_bytes`                    |
+| `process_write_bytes_total`     | counter | bytes   | `/proc/self/io` `write_bytes`                   |
 
 ### Host
 
-| Name                | Type  | Unit | Source                                                |
-| ------------------- | ----- | ---- | ----------------------------------------------------- |
-| `node_cpu_count`    | gauge | -    | `sysinfo::System::cpus().len()` (set once at startup) |
-| `node_load1_milli`  | gauge | -    | `/proc/loadavg` 1-min average ×1000 (so 1.25=1250)    |
-| `node_load5_milli`  | gauge | -    | `/proc/loadavg` 5-min average ×1000                   |
-| `node_load15_milli` | gauge | -    | `/proc/loadavg` 15-min average ×1000                  |
+| Name               | Type  | Unit | Source                                                |
+| ------------------ | ----- | ---- | ----------------------------------------------------- |
+| `node_cpu_count`   | gauge | -    | `sysinfo::System::cpus().len()` (set once at startup) |
+| `node_load1_milli` | gauge | -    | `/proc/loadavg` 1-min average ×1000 (so 1.25=1250)    |
+| `node_load5_milli` | gauge | -    | `/proc/loadavg` 5-min average ×1000                   |
+| `node_load15_milli`| gauge | -    | `/proc/loadavg` 15-min average ×1000                  |
 
 `node_load*_milli` reports the loadavg multiplied by 1000 because the HotShot `Gauge` trait stores `usize`. Divide by
 1000 when graphing.
@@ -46,13 +46,13 @@ PSI requires Linux 4.20+ with `CONFIG_PSI=y`. At startup, cgroup v2 pressure fil
 `/proc/pressure/{cpu,memory,io}` is used. If neither exists, these counters stay at zero. Kernel `total` is in
 microseconds; counters accumulate whole-second deltas while preserving sub-second remainder across ticks.
 
-| Name                                         | Type    | Unit    | Source            |
-| -------------------------------------------- | ------- | ------- | ----------------- |
-| `node_pressure_cpu_waiting_seconds_total`    | counter | seconds | PSI `some total=` |
-| `node_pressure_memory_waiting_seconds_total` | counter | seconds | PSI `some total=` |
-| `node_pressure_memory_stalled_seconds_total` | counter | seconds | PSI `full total=` |
-| `node_pressure_io_waiting_seconds_total`     | counter | seconds | PSI `some total=` |
-| `node_pressure_io_stalled_seconds_total`     | counter | seconds | PSI `full total=` |
+| Name                                            | Type    | Unit    | Source             |
+| ----------------------------------------------- | ------- | ------- | ------------------ |
+| `node_pressure_cpu_waiting_seconds_total`       | counter | seconds | PSI `some total=`  |
+| `node_pressure_memory_waiting_seconds_total`    | counter | seconds | PSI `some total=`  |
+| `node_pressure_memory_stalled_seconds_total`    | counter | seconds | PSI `full total=`  |
+| `node_pressure_io_waiting_seconds_total`        | counter | seconds | PSI `some total=`  |
+| `node_pressure_io_stalled_seconds_total`        | counter | seconds | PSI `full total=`  |
 
 ### Cgroup v2 (only emitted when detected)
 
@@ -60,13 +60,13 @@ Requires `/sys/fs/cgroup/cpu.stat` and `/sys/fs/cgroup/memory.current` to be rea
 emitted when `memory.max` is finite (skipped entirely when the file reads the literal `max`, i.e. unlimited) and is set
 once at startup since container memory limits don't change at runtime.
 
-| Name                                 | Type    | Unit    | Source                                  |
-| ------------------------------------ | ------- | ------- | --------------------------------------- |
-| `cgroup_cpu_periods_total`           | counter | -       | `cpu.stat` `nr_periods`                 |
-| `cgroup_cpu_throttled_periods_total` | counter | -       | `cpu.stat` `nr_throttled`               |
-| `cgroup_cpu_throttled_seconds_total` | counter | seconds | `cpu.stat` `throttled_usec` / 1_000_000 |
-| `cgroup_memory_current_bytes`        | gauge   | bytes   | `memory.current`                        |
-| `cgroup_memory_max_bytes`            | gauge   | bytes   | `memory.max` (only when finite)         |
+| Name                                  | Type    | Unit    | Source                                  |
+| ------------------------------------- | ------- | ------- | --------------------------------------- |
+| `cgroup_cpu_periods_total`            | counter | -       | `cpu.stat` `nr_periods`                 |
+| `cgroup_cpu_throttled_periods_total`  | counter | -       | `cpu.stat` `nr_throttled`               |
+| `cgroup_cpu_throttled_seconds_total`  | counter | seconds | `cpu.stat` `throttled_usec` / 1_000_000 |
+| `cgroup_memory_current_bytes`         | gauge   | bytes   | `memory.current`                        |
+| `cgroup_memory_max_bytes`             | gauge   | bytes   | `memory.max` (only when finite)         |
 
 ## Library usage
 

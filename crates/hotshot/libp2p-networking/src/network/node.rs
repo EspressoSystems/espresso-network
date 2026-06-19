@@ -49,6 +49,7 @@ use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    task::JoinHandle,
 };
 use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
@@ -80,6 +81,9 @@ use crate::network::{
     log_summary::LogEvent,
 };
 
+/// Join handle for the spawned swarm event-loop task.
+pub type SwarmTaskHandle = JoinHandle<Result<(), NetworkError>>;
+
 /// Maximum size of a message
 pub const MAX_GOSSIP_MSG_SIZE: usize = 2_000_000_000;
 
@@ -88,6 +92,11 @@ pub const ESTABLISHED_LIMIT: NonZeroU32 = NonZeroU32::new(ESTABLISHED_LIMIT_UNWR
 /// Number of connections to a single peer before logging an error
 pub const ESTABLISHED_LIMIT_UNWR: u32 = 10;
 
+/// AutoNAT confidence at which we treat a Private status as definitive enough
+/// to escalate from a transient warning to a loud operator-facing error.
+/// Matches libp2p-autonat's default `confidence_max`.
+const AUTONAT_CONFIDENCE_MAX: usize = 3;
+
 /// Mainnet libp2p protocol identifiers. The snapshot tests below lock these down so a
 /// change that would partition mainnet (e.g. a stray `protocol_id_prefix` call) is caught.
 /// `None` for gossipsub means "do not call `protocol_id_prefix`" — libp2p's defaults
@@ -95,11 +104,9 @@ pub const ESTABLISHED_LIMIT_UNWR: u32 = 10;
 pub(crate) fn mainnet_gossipsub_prefix() -> Option<&'static str> {
     None
 }
-
 pub(crate) fn mainnet_kad_protocol() -> StreamProtocol {
     StreamProtocol::new("/ipfs/kad/1.0.0")
 }
-
 pub(crate) fn mainnet_direct_message_protocol() -> StreamProtocol {
     StreamProtocol::new("/HotShot/direct_message/1.0")
 }
@@ -166,6 +173,9 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     dht_handler: DHTBehaviour<T::SignatureKey, D>,
     /// Channel to resend requests, set to Some when we call `spawn_listeners`
     resend_tx: Option<UnboundedSender<ClientRequest>>,
+    /// Whether we've already emitted the loud "not publicly reachable" error for the
+    /// current Private episode. Reset whenever AutoNAT leaves Private status.
+    autonat_private_logged: bool,
 }
 
 impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
@@ -428,6 +438,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     .unwrap_or(NonZeroUsize::new(4).unwrap()),
             ),
             resend_tx: None,
+            autonat_private_logged: false,
         })
     }
 
@@ -762,16 +773,46 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                                     peer,
                                     error,
                                 } => {
-                                    warn!(
-                                        "AutoNAT Probe failed to peer {peer:?} with error: \
-                                         {error:?}"
-                                    );
+                                    debug!("AutoNAT outbound probe to {peer:?} failed: {error:?}");
                                 },
                             },
-                            autonat::Event::StatusChanged { old, new } => {
-                                debug!("AutoNAT Status changed. Old: {old:?}, New: {new:?}");
+                            autonat::Event::StatusChanged { old, new } => match &new {
+                                autonat::NatStatus::Public(addr) => {
+                                    info!(
+                                        "AutoNAT: this node is publicly reachable at {addr} (was \
+                                         {old:?})"
+                                    );
+                                    self.autonat_private_logged = false;
+                                },
+                                autonat::NatStatus::Private => {
+                                    warn!(
+                                        "AutoNAT: probe reports this node may not be publicly \
+                                         reachable (was {old:?}). Treating as transient until \
+                                         confirmed by repeated probes."
+                                    );
+                                },
+                                autonat::NatStatus::Unknown => {
+                                    debug!("AutoNAT status: {old:?} -> Unknown");
+                                    self.autonat_private_logged = false;
+                                },
                             },
                         };
+                        let autonat = &self.swarm.behaviour().autonat;
+                        if matches!(autonat.nat_status(), autonat::NatStatus::Private)
+                            && autonat.confidence() >= AUTONAT_CONFIDENCE_MAX
+                            && !self.autonat_private_logged
+                        {
+                            error!(
+                                "AutoNAT: this node is NOT publicly reachable (confirmed by \
+                                 repeated probes). Peers cannot direct-message us, so leader \
+                                 views may fail and we may accumulate missed slots. Verify \
+                                 --libp2p-advertise-address (env \
+                                 ESPRESSO_NODE_LIBP2P_ADVERTISE_ADDRESS) is set a publicly \
+                                 reachable host:port, and ensure inbound UDP at that port is open \
+                                 from the public internet (firewall/NAT/security group)."
+                            );
+                            self.autonat_private_logged = true;
+                        }
                         None
                     },
                 };
@@ -839,6 +880,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         (
             UnboundedSender<ClientRequest>,
             UnboundedReceiver<NetworkEvent>,
+            SwarmTaskHandle,
         ),
         NetworkError,
     > {
@@ -849,7 +891,9 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         self.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
 
         DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
-        spawn(
+        // Keep the task's `JoinHandle` so callers can await the swarm loop
+        // ending on shutdown, ensuring the listening socket is released.
+        let task = spawn(
             async move {
                 loop {
                     select! {
@@ -870,11 +914,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         }
                     }
                 }
+                drop(self.swarm);
                 Ok::<(), NetworkError>(())
             }
             .instrument(info_span!("Libp2p NetworkBehaviour Handler")),
         );
-        Ok((s_input, r_output))
+        Ok((s_input, r_output, task))
     }
 
     /// Get a reference to the network node's peer id.

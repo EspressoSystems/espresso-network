@@ -46,6 +46,7 @@ use crate::{
     api::{LightClientProvider, endpoints::RewardMerkleTreeVersion},
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
+    options::PublicNodeConfig,
     persistence,
     request_response::data_source::Storage as RequestResponseStorage,
     state::update_state_storage_loop,
@@ -64,6 +65,7 @@ pub struct Options {
     pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
+    pub public_node_config: Option<Box<PublicNodeConfig>>,
 }
 
 impl From<Http> for Options {
@@ -80,6 +82,7 @@ impl From<Http> for Options {
             light_client: None,
             storage_fs: None,
             storage_sql: None,
+            public_node_config: None,
         }
     }
 }
@@ -125,6 +128,14 @@ impl Options {
     /// Add a config API module.
     pub fn config(mut self, opt: Config) -> Self {
         self.config = Some(opt);
+        self
+    }
+
+    /// Set the merged runtime configuration exposed via `GET /config/runtime`.
+    ///
+    /// If unset, the `/config/runtime` route returns 404.
+    pub fn public_node_config(mut self, c: PublicNodeConfig) -> Self {
+        self.public_node_config = Some(Box::new(c));
         self
     }
 
@@ -347,8 +358,10 @@ impl Options {
         })?;
 
         if self.config.is_some() {
+            let node_cfg = self.public_node_config.as_deref().cloned();
             register_api("config", &mut app, move |ver| {
-                endpoints::config(bind_version, ver).context("failed to define config api")
+                endpoints::config(bind_version, ver, node_cfg.clone())
+                    .context("failed to define config api")
             })?;
         }
         Ok((metrics, ds, app))
@@ -438,7 +451,6 @@ impl Options {
         // missing from the query service from ephemeral consensus storage.
         let db_provider = mod_opt.clone().create().await?;
         provider = provider
-            .with_leaf_provider(db_provider.clone())
             .with_block_provider(db_provider.clone())
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
@@ -602,8 +614,10 @@ impl Options {
         })?;
 
         if self.config.is_some() {
+            let node_cfg = self.public_node_config.as_deref().cloned();
             register_api("config", app, move |ver| {
-                endpoints::config(bind_version, ver).context("failed to define config api")
+                endpoints::config(bind_version, ver, node_cfg.clone())
+                    .context("failed to define config api")
             })?;
         }
 

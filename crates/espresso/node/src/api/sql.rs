@@ -33,6 +33,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
+    traits::election::MembershipSnapshot,
     utils::{epoch_from_block_number, is_last_block},
     vote::HasViewNumber,
 };
@@ -354,7 +355,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
             let row = sqlx::query(
                 r#"
-                SELECT proof 
+                SELECT proof
                 FROM reward_merkle_tree_v2_proofs
                 WHERE account = $1
                 ORDER BY height DESC
@@ -788,7 +789,7 @@ impl CatchupStorage for SqlStorage {
             .clone();
 
         // New protocol: cert2 alone proves finality. Return the leaf range up to the finalizing
-        // cert2's height
+        // cert2's height.
         if leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
             let cert2: espresso_types::Certificate2<SeqTypes> =
                 tx.load_earliest_cert2(height).await?.context(format!(
@@ -844,7 +845,7 @@ impl CatchupStorage for SqlStorage {
         Ok(chain)
     }
 
-    async fn load_earliest_cert2(
+    async fn load_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
@@ -852,7 +853,7 @@ impl CatchupStorage for SqlStorage {
             .read()
             .await
             .context("opening transaction to fetch cert2")?;
-        Ok(tx.load_earliest_cert2(height).await?)
+        Ok(tx.load_cert2(height).await?)
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
@@ -1004,11 +1005,11 @@ impl CatchupStorage for DataSource {
         self.as_ref().get_leaf_chain(height).await
     }
 
-    async fn load_earliest_cert2(
+    async fn load_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
-        self.as_ref().load_earliest_cert2(height).await
+        self.as_ref().load_cert2(height).await
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
@@ -1687,9 +1688,7 @@ async fn reward_header_dependencies(
     };
 
     let coordinator = instance.coordinator.clone();
-    let membership_lock = coordinator.membership().read().await;
-    let first_epoch = membership_lock.first_epoch();
-    drop(membership_lock);
+    let first_epoch = coordinator.membership().first_epoch();
     // add all the chain configs needed to apply STF to headers to the catchup
     for proposal in leaves {
         let header = proposal.block_header();
@@ -1713,7 +1712,7 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)).await {
+        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)) {
             Ok(e) => e,
             Err(err) => {
                 tracing::info!(
@@ -1727,10 +1726,11 @@ async fn reward_header_dependencies(
             },
         };
 
-        let leader = epoch_membership.leader(proposal.view_number()).await?;
-        let membership_lock = coordinator.membership().read().await;
-        let validator = membership_lock.get_validator_config(&proposal_epoch, leader)?;
-        drop(membership_lock);
+        let snapshot = epoch_membership
+            .snapshot()
+            .with_context(|| format!("no committee for epoch={proposal_epoch}"))?;
+        let leader = snapshot.lookup_leader(proposal.view_number())?;
+        let validator = snapshot.validator_config(&leader)?;
 
         reward_accounts.insert(RewardAccountV2(validator.account));
 

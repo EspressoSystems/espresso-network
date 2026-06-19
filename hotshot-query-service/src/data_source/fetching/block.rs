@@ -481,9 +481,10 @@ where
     }
 }
 
-pub(super) fn fetch_block_range_with_headers<Types, S, P>(
+pub(super) fn fetch_block_range<Types, S, P>(
     fetcher: Arc<Fetcher<Types, S, P>>,
-    headers: NonEmptyRange<Header<Types>>,
+    start: u64,
+    end: u64,
 ) where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
@@ -497,14 +498,9 @@ pub(super) fn fetch_block_range_with_headers<Types, S, P>(
         return;
     };
 
-    // Now that we have the header, we only need to retrieve the payload.
-    tracing::info!(
-        "spawned active fetch for payload range {}..{}",
-        headers.start(),
-        headers.end()
-    );
+    tracing::info!("spawned active fetch for payload range {start}..{end}");
     payload_range_fetcher.spawn_fetch(
-        BlockRangeRequest::from_headers(&headers),
+        BlockRangeRequest { start, end },
         fetcher.provider.clone(),
         once(BlockRangeCallback {
             fetcher: fetcher.clone(),

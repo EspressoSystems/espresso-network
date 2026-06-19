@@ -12,10 +12,12 @@ path = "bin/mnemonic.rs"
 
 [features]
 gpu-vid = ["jf-advz/gpu-vid"]
+rlp = ["alloy-rlp"]
 test-srs = ["jf-advz/test-srs"]
 
 [dependencies]
 alloy = { workspace = true }
+alloy-rlp = { workspace = true, optional = true }
 anyhow = { workspace = true }
 ark-bn254 = { workspace = true }
 ark-ed-on-bn254 = { workspace = true }
@@ -65,6 +67,7 @@ test-utils = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 typenum = { workspace = true }
@@ -76,6 +79,8 @@ vid = { workspace = true }
 
 [dev-dependencies]
 quickcheck.workspace = true
+test-log.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

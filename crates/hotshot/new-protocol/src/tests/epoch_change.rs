@@ -1,7 +1,7 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
-    data::EpochNumber,
+    data::{EpochNumber, ViewNumber},
     message::Proposal as SignedProposal,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_transition,
@@ -247,6 +247,42 @@ async fn test_handle_epoch_change_stale() {
     );
 }
 
+/// An otherwise-valid EpochChangeMessage for an epoch boundary the node has
+/// already crossed is rejected, even when the lock does not catch it (here:
+/// no locked cert at all). Regression test: replayed boundary messages must
+/// not emit a backwards `ViewChanged` and regress a caught-up node to a
+/// long-past view.
+#[tokio::test]
+async fn test_handle_epoch_change_replay_of_crossed_boundary() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    // Simulate a node already deep in epoch 3 — e.g. freshly restarted and
+    // seeded from its anchor — with no locked cert (genesis safety), so the
+    // locked-cert staleness check cannot reject the replay.
+    harness
+        .consensus
+        .set_view(ViewNumber::new(25), EpochNumber::new(3));
+
+    // Replay the epoch 1 → 2 boundary (view 10, block 10).
+    let epoch_view = &test_data.views[9];
+    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    let epoch_change = EpochChangeMessage {
+        cert1: epoch_view.cert1.clone(),
+        cert2: epoch_view.cert2.clone(),
+        proposal,
+    };
+
+    harness
+        .apply(ConsensusInput::EpochChange(epoch_change))
+        .await;
+
+    assert!(
+        !any(harness.outputs(), is_view_changed),
+        "replayed epoch change for a crossed boundary must not change the view"
+    );
+}
+
 /// Verify that exactly one SendEpochChange is emitted when processing
 /// views through a single epoch boundary.
 #[tokio::test]
@@ -394,9 +430,10 @@ async fn test_epoch_change_votes() {
         .clone();
 
     harness
-        .apply(ConsensusInput::Proposal(
+        .apply(ConsensusInput::ProposalWithVidShare(
             first_view.leader_public_key,
-            ProposalMessage::validated(signed_proposal, vid_share),
+            ProposalMessage::validated(signed_proposal),
+            vid_share,
         ))
         .await;
 
@@ -492,9 +529,10 @@ async fn test_second_epoch_leader_proposes_without_drb() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::Proposal(
+        .apply(ConsensusInput::ProposalWithVidShare(
             first_e2_view.leader_public_key,
-            ProposalMessage::validated(signed, vid_share),
+            ProposalMessage::validated(signed),
+            vid_share,
         ))
         .await;
     harness
@@ -579,9 +617,10 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::Proposal(
+        .apply(ConsensusInput::ProposalWithVidShare(
             first_e2_view.leader_public_key,
-            ProposalMessage::validated(signed, vid_share),
+            ProposalMessage::validated(signed),
+            vid_share,
         ))
         .await;
     harness
@@ -623,9 +662,10 @@ async fn test_epoch3_transition_requests_drb_for_future_epoch() {
         .expect("VID share not found")
         .clone();
     harness
-        .apply(ConsensusInput::Proposal(
+        .apply(ConsensusInput::ProposalWithVidShare(
             v17.leader_public_key,
-            ProposalMessage::validated(signed, vid_share),
+            ProposalMessage::validated(signed),
+            vid_share,
         ))
         .await;
 

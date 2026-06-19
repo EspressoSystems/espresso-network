@@ -99,7 +99,7 @@ pub struct UpgradeTaskState<TYPES: NodeType> {
 
 impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
     /// Check if we have decided on an upgrade certificate
-    async fn upgraded(&self) -> bool {
+    fn upgraded(&self) -> bool {
         self.upgrade_lock.decided_upgrade_cert().is_some()
     }
 
@@ -119,7 +119,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
 
                 // Skip voting if the version has already been upgraded.
                 ensure!(
-                    !self.upgraded().await,
+                    !self.upgraded(),
                     info!("Already upgraded to {upgrade:?}; not voting.")
                 );
 
@@ -231,10 +231,8 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 // We then validate that the proposal was issued by the leader for the view.
                 let view_leader_key = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
-                    .leader(view)
-                    .await?;
+                    .membership_for_epoch(self.cur_epoch)?
+                    .leader(view)?;
                 ensure!(
                     view_leader_key == *sender,
                     info!(
@@ -279,14 +277,13 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                 let view = vote.view_number();
                 let epoch_membership = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?;
+                    .membership_for_epoch(self.cur_epoch)?;
                 ensure!(
-                    epoch_membership.leader(view).await? == self.public_key,
+                    epoch_membership.leader(view)? == self.public_key,
                     debug!(
                         "We are not the leader for view {} are we leader for next view? {}",
                         *view,
-                        epoch_membership.leader(view + 1).await? == self.public_key
+                        epoch_membership.leader(view + 1)? == self.public_key
                     )
                 );
 
@@ -322,12 +319,10 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
 
                 let leader = self
                     .membership_coordinator
-                    .membership_for_epoch(self.cur_epoch)
-                    .await?
+                    .membership_for_epoch(self.cur_epoch)?
                     .leader(ViewNumber::new(
                         view + TYPES::UPGRADE_CONSTANTS.propose_offset,
-                    ))
-                    .await?;
+                    ))?;
 
                 let old_version_last_view = view + TYPES::UPGRADE_CONSTANTS.begin_offset;
                 let new_version_first_view = view + TYPES::UPGRADE_CONSTANTS.finish_offset;
@@ -376,7 +371,7 @@ impl<TYPES: NodeType> UpgradeTaskState<TYPES> {
                     && view < self.stop_proposing_view
                     && time >= self.start_proposing_time
                     && time < self.stop_proposing_time
-                    && !self.upgraded().await
+                    && !self.upgraded()
                     && epoch_upgrade_checks
                     && leader == self.public_key
                 {

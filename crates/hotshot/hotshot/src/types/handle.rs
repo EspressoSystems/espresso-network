@@ -310,10 +310,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES> + 'static> SystemContextHandl
     ) -> Result<TYPES::SignatureKey> {
         self.hotshot
             .membership_coordinator
-            .membership_for_epoch(epoch_number)
-            .await?
+            .membership_for_epoch(epoch_number)?
             .leader(view_number)
-            .await
             .context("Failed to lookup leader")
     }
 

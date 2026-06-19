@@ -32,12 +32,10 @@ pub trait Quorum: Sync {
                 (0, 4) => self.verify_static::<StaticVersion<0, 4>>(cert).await,
                 (0, 5) => self.verify_static::<StaticVersion<0, 5>>(cert).await,
                 (0, 6) => self.verify_static::<StaticVersion<0, 6>>(cert).await,
-                (0, 7) => self.verify_static::<StaticVersion<0, 7>>(cert).await,
-                (0, 8) => self.verify_static::<StaticVersion<0, 8>>(cert).await,
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 6);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -65,12 +63,10 @@ pub trait Quorum: Sync {
                 (0, 4) => self.verify_cert2_static::<StaticVersion<0, 4>>(cert2).await,
                 (0, 5) => self.verify_cert2_static::<StaticVersion<0, 5>>(cert2).await,
                 (0, 6) => self.verify_cert2_static::<StaticVersion<0, 6>>(cert2).await,
-                (0, 7) => self.verify_cert2_static::<StaticVersion<0, 7>>(cert2).await,
-                (0, 8) => self.verify_cert2_static::<StaticVersion<0, 8>>(cert2).await,
                 _ => {
                     const {
                         assert!(MAX_SUPPORTED_VERSION.major == 0);
-                        assert!(MAX_SUPPORTED_VERSION.minor == 8);
+                        assert!(MAX_SUPPORTED_VERSION.minor == 6);
                     }
                     bail!("unsupported version {version}");
                 },
@@ -208,7 +204,7 @@ impl FromIterator<StakeTableEntry<PubKey>> for StakeTable {
 impl StakeTable {
     /// Get a stake table from a particular epoch's quorum membership.
     pub async fn from_membership(membership: &EpochMembership<SeqTypes>) -> Self {
-        membership.stake_table().await.into()
+        HSStakeTable::from_iter(membership.stake_table()).into()
     }
 
     /// Verify that a certificate is signed by a quorum of this stake table.
@@ -241,7 +237,7 @@ impl StakeTablePair for EpochMembership<SeqTypes> {
     }
 
     async fn next_epoch_stake_table(&self) -> Result<Arc<StakeTable>> {
-        let membership = self.next_epoch_stake_table().await?;
+        let membership = self.next_epoch_stake_table()?;
         Ok(Arc::new(StakeTable::from_membership(&membership).await))
     }
 }

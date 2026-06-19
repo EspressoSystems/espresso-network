@@ -5,19 +5,26 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 //! The election trait, used to decide which node is the leader and determine if a vote is valid.
-use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
+//!
+//! Reads of per-epoch state go through a [`MembershipSnapshot`] obtained from
+//! [`Membership::snapshot`]. Reads of pre-epoch state go through a
+//! [`NonEpochMembershipSnapshot`] obtained from [`Membership::non_epoch_snapshot`].
+//! Each snapshot is a consistent point-in-time view; its accessors observe
+//! one moment of the membership state, so derived values from the same
+//! snapshot are guaranteed to come from one logical instant.
+
+use std::fmt::Debug;
 
 use alloy::primitives::U256;
-use async_lock::RwLock;
 use committable::{Commitment, Committable};
-use hotshot_utils::anytrace::Result;
+use hotshot_utils::anytrace;
 
 use super::node_implementation::NodeType;
 use crate::{
     PeerConfig,
     data::{EpochNumber, Leaf2, ViewNumber},
     drb::DrbResult,
-    stake_table::{HSStakeTable, supermajority_threshold},
+    stake_table::supermajority_threshold,
     traits::signature_key::StakeTableEntryType,
 };
 
@@ -29,196 +36,249 @@ impl Committable for NoStakeTableHash {
     }
 }
 
-/// A protocol for determining membership in and participating in a committee.
-pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
-    /// The error type returned by methods like `lookup_leader`.
-    type Error: std::fmt::Display;
-
+/// A consistent per-epoch view of a [`Membership`].
+pub trait MembershipSnapshot<T: NodeType>: Clone + Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static;
     type StakeTableHash: Committable;
 
-    /// Create a committee
-    fn new(
-        // Note: eligible_leaders is currently a hack because the DA leader == the quorum leader
-        // but they should not have voting power.
-        stake_committee_members: Vec<PeerConfig<TYPES>>,
-        da_committee_members: Vec<PeerConfig<TYPES>>,
-        public_key: TYPES::SignatureKey,
-        epoch_height: u64,
-    ) -> Self;
+    /// The epoch this snapshot is bound to.
+    fn epoch(&self) -> EpochNumber;
 
-    fn total_stake(&self, epoch: Option<EpochNumber>) -> U256 {
-        self.stake_table(epoch)
-            .iter()
-            .fold(U256::ZERO, |acc, entry| {
-                acc + entry.stake_table_entry.stake()
-            })
-    }
+    /// The first epoch known to the membership (cached at snapshot creation).
+    fn first_epoch(&self) -> Option<EpochNumber>;
 
-    fn total_da_stake(&self, epoch: Option<EpochNumber>) -> U256 {
-        self.da_stake_table(epoch)
-            .iter()
-            .fold(U256::ZERO, |acc, entry| {
-                acc + entry.stake_table_entry.stake()
-            })
-    }
+    /// Whether a randomized stake table (DRB result) was available for this
+    /// epoch at the time the snapshot was captured.
+    fn has_drb(&self) -> bool;
 
-    /// Get all participants in the committee (including their stake) for a specific epoch
-    fn stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<TYPES>;
+    /// The (non-DA) stake table for this epoch.
+    ///
+    /// Iteration order is the stake-table position order — the position
+    /// of a key in this iterator equals the value returned by the
+    /// implementation's `get_validator_index` (where applicable) and is
+    /// part of the per-epoch consensus contract.
+    fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send;
 
-    /// Get all participants in the committee (including their stake) for a specific epoch
-    fn da_stake_table(&self, epoch: Option<EpochNumber>) -> HSStakeTable<TYPES>;
+    /// The DA stake table for this epoch.
+    fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send;
 
-    /// Get all participants in the committee for a specific view for a specific epoch
+    /// The set of public keys with stake in this epoch, in stake-table order.
     fn committee_members(
         &self,
-        view_number: ViewNumber,
-        epoch: Option<EpochNumber>,
-    ) -> BTreeSet<TYPES::SignatureKey>;
+        view: ViewNumber,
+    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send;
 
-    /// Get all participants in the committee for a specific view for a specific epoch
+    /// The set of public keys in the DA committee for this epoch.
     fn da_committee_members(
         &self,
-        view_number: ViewNumber,
-        epoch: Option<EpochNumber>,
-    ) -> BTreeSet<TYPES::SignatureKey>;
-
-    /// Get the stake table entry for a public key, returns `None` if the
-    /// key is not in the table for a specific epoch
-    fn stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-        epoch: Option<EpochNumber>,
-    ) -> Option<PeerConfig<TYPES>>;
-
-    /// Get the DA stake table entry for a public key, returns `None` if the
-    /// key is not in the table for a specific epoch
-    fn da_stake(
-        &self,
-        pub_key: &TYPES::SignatureKey,
-        epoch: Option<EpochNumber>,
-    ) -> Option<PeerConfig<TYPES>>;
-
-    /// See if a node has stake in the committee in a specific epoch
-    fn has_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<EpochNumber>) -> bool;
-
-    /// See if a node has stake in the committee in a specific epoch
-    fn has_da_stake(&self, pub_key: &TYPES::SignatureKey, epoch: Option<EpochNumber>) -> bool;
-
-    /// The leader of the committee for view `view_number` in `epoch`.
-    ///
-    /// Note: this function uses a HotShot-internal error type.
-    /// You should implement `lookup_leader`, rather than implementing this function directly.
-    ///
-    /// # Errors
-    /// Returns an error if the leader cannot be calculated.
-    fn leader(&self, view: ViewNumber, epoch: Option<EpochNumber>) -> Result<TYPES::SignatureKey> {
-        use hotshot_utils::anytrace::*;
-
-        self.lookup_leader(view, epoch).wrap().context(info!(
-            "Failed to get leader for view {view} in epoch {epoch:?}"
-        ))
-    }
-
-    /// The leader of the committee for view `view_number` in `epoch`.
-    ///
-    /// Note: There is no such thing as a DA leader, so any consumer
-    /// requiring a leader should call this.
-    ///
-    /// # Errors
-    /// Returns an error if the leader cannot be calculated
-    fn lookup_leader(
-        &self,
         view: ViewNumber,
-        epoch: Option<EpochNumber>,
-    ) -> std::result::Result<TYPES::SignatureKey, Self::Error>;
+    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send;
 
-    /// Returns the number of total nodes in the committee in an epoch `epoch`
-    fn total_nodes(&self, epoch: Option<EpochNumber>) -> usize;
+    /// The stake-table entry for `key`, or `None` if the key is not in the
+    /// committee for this epoch.
+    fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>>;
 
-    /// Returns the number of total DA nodes in the committee in an epoch `epoch`
-    fn da_total_nodes(&self, epoch: Option<EpochNumber>) -> usize;
+    /// The DA stake-table entry for `key`, or `None`.
+    fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>>;
 
-    /// Returns the threshold for a specific `Membership` implementation
-    fn success_threshold(&self, epoch: Option<EpochNumber>) -> U256 {
-        let total_stake = self.total_stake(epoch);
-        supermajority_threshold(total_stake)
+    /// Whether `key` has stake in this epoch.
+    fn has_stake(&self, key: &T::SignatureKey) -> bool;
+
+    /// Whether `key` has DA stake in this epoch.
+    fn has_da_stake(&self, key: &T::SignatureKey) -> bool;
+
+    /// The leader for `view` in this epoch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the leader cannot be calculated.
+    fn lookup_leader(&self, view: ViewNumber) -> Result<T::SignatureKey, Self::Error>;
+
+    /// The commitment of the stake table for this epoch, if available.
+    fn stake_table_hash(&self) -> Option<Commitment<Self::StakeTableHash>> {
+        None
     }
 
-    /// Returns the DA threshold for a specific `Membership` implementation
-    fn da_success_threshold(&self, epoch: Option<EpochNumber>) -> U256 {
-        let total_stake = self.total_da_stake(epoch);
+    /// Number of members in this epoch's stake table.
+    fn total_nodes(&self) -> usize {
+        self.stake_table().len()
+    }
+
+    /// Number of members in this epoch's DA committee.
+    fn da_total_nodes(&self) -> usize {
+        self.da_stake_table().len()
+    }
+
+    /// Sum of all stake in this epoch.
+    fn total_stake(&self) -> U256 {
+        self.stake_table()
+            .fold(U256::ZERO, |acc, e| acc + e.stake_table_entry.stake())
+    }
+
+    /// Sum of all DA stake in this epoch.
+    fn total_da_stake(&self) -> U256 {
+        self.da_stake_table()
+            .fold(U256::ZERO, |acc, e| acc + e.stake_table_entry.stake())
+    }
+
+    /// Quorum (supermajority) threshold for this epoch.
+    fn success_threshold(&self) -> U256 {
+        supermajority_threshold(self.total_stake())
+    }
+
+    /// DA quorum threshold for this epoch.
+    fn da_success_threshold(&self) -> U256 {
+        let total = self.total_da_stake();
         let one = U256::ONE;
         let two = U256::from(2);
         let three = U256::from(3);
-
-        if total_stake < U256::MAX / two {
-            ((total_stake * two) / three) + one
+        if total < U256::MAX / two {
+            ((total * two) / three) + one
         } else {
-            ((total_stake / three) * two) + two
+            ((total / three) * two) + two
         }
     }
 
-    /// Returns the threshold for a specific `Membership` implementation
-    fn failure_threshold(&self, epoch: Option<EpochNumber>) -> U256 {
-        let total_stake = self.total_stake(epoch);
-        let one = U256::ONE;
-        let three = U256::from(3);
-
-        (total_stake / three) + one
+    /// Failure threshold (1/3 + 1) for this epoch.
+    fn failure_threshold(&self) -> U256 {
+        let total = self.total_stake();
+        (total / U256::from(3)) + U256::ONE
     }
 
-    /// Returns the threshold required to upgrade the network protocol
-    fn upgrade_threshold(&self, epoch: Option<EpochNumber>) -> U256 {
-        let total_stake = self.total_stake(epoch);
+    /// Threshold required for a protocol upgrade.
+    fn upgrade_threshold(&self) -> U256 {
+        let total = self.total_stake();
         let nine = U256::from(9);
         let ten = U256::from(10);
-
-        let normal_threshold = self.success_threshold(epoch);
-        let higher_threshold = if total_stake < U256::MAX / nine {
-            (total_stake * nine) / ten
+        let normal = self.success_threshold();
+        let higher = if total < U256::MAX / nine {
+            (total * nine) / ten
         } else {
-            (total_stake / ten) * nine
+            (total / ten) * nine
         };
-
-        std::cmp::max(higher_threshold, normal_threshold)
+        std::cmp::max(higher, normal)
     }
 
-    /// Returns if the stake table is available for the given epoch
-    fn has_stake_table(&self, epoch: EpochNumber) -> bool;
+    /// The leader for `view` in this epoch, returning a HotShot-internal
+    /// error type. Default impl wraps [`Self::lookup_leader`].
+    fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
+        use hotshot_utils::anytrace::*;
+        let epoch = self.epoch();
+        self.lookup_leader(view).wrap().context(info!(
+            "Failed to get leader for view {view} in epoch {epoch}"
+        ))
+    }
+}
 
-    /// Returns if the randomized stake table is available for the given epoch
-    fn has_randomized_stake_table(&self, epoch: EpochNumber) -> anyhow::Result<bool>;
+/// A consistent view of the pre-epoch [`Membership`] state.
+///
+/// Used when consensus is operating before epochs are enabled (the
+/// `epoch == None` path in the legacy API).
+pub trait NonEpochMembershipSnapshot<T: NodeType>: Clone + Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Gets the validated block header and epoch number of the epoch root
-    /// at the given block height
-    fn get_epoch_root(
-        _membership: Arc<RwLock<Self>>,
-        _epoch: EpochNumber,
-    ) -> impl std::future::Future<Output = anyhow::Result<Leaf2<TYPES>>> + Send;
+    fn stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_;
+    fn da_stake_table(&self) -> impl ExactSizeIterator<Item = &PeerConfig<T>> + Send + '_;
+    fn committee_members(
+        &self,
+        view: ViewNumber,
+    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_;
+    fn da_committee_members(
+        &self,
+        view: ViewNumber,
+    ) -> impl ExactSizeIterator<Item = &T::SignatureKey> + Send + '_;
+    fn stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>>;
+    fn da_stake(&self, key: &T::SignatureKey) -> Option<PeerConfig<T>>;
+    fn has_stake(&self, key: &T::SignatureKey) -> bool;
+    fn has_da_stake(&self, key: &T::SignatureKey) -> bool;
+    fn lookup_leader(&self, view: ViewNumber) -> Result<T::SignatureKey, Self::Error>;
 
-    /// Gets the DRB result for the given epoch
-    fn get_epoch_drb(
-        _membership: Arc<RwLock<Self>>,
-        _epoch: EpochNumber,
-    ) -> impl std::future::Future<Output = anyhow::Result<DrbResult>> + Send;
+    fn total_nodes(&self) -> usize {
+        self.stake_table().len()
+    }
 
-    /// Handles notifications that a new epoch root has been created.
-    fn add_epoch_root(
-        _membership: Arc<RwLock<Self>>,
-        _block_header: TYPES::BlockHeader,
-    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    fn da_total_nodes(&self) -> usize {
+        self.da_stake_table().len()
+    }
 
-    /// Called to notify the Membership when a new DRB result has been calculated.
-    /// Observes the same semantics as add_epoch_root
-    fn add_drb_result(&mut self, _epoch: EpochNumber, _drb_result: DrbResult);
+    fn total_stake(&self) -> U256 {
+        self.stake_table()
+            .fold(U256::ZERO, |acc, e| acc + e.stake_table_entry.stake())
+    }
 
-    /// Called to notify the Membership that Epochs are enabled.
-    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
-    /// when this is called. The value of initial_drb_result should be used for DRB
-    /// calculations for epochs (epoch+1) and earlier.
-    fn set_first_epoch(&mut self, _epoch: EpochNumber, _initial_drb_result: DrbResult);
+    fn total_da_stake(&self) -> U256 {
+        self.da_stake_table()
+            .fold(U256::ZERO, |acc, e| acc + e.stake_table_entry.stake())
+    }
 
-    /// Get first epoch if epochs are enabled, `None` otherwise
+    fn success_threshold(&self) -> U256 {
+        supermajority_threshold(self.total_stake())
+    }
+
+    fn da_success_threshold(&self) -> U256 {
+        let total = self.total_da_stake();
+        let one = U256::ONE;
+        let two = U256::from(2);
+        let three = U256::from(3);
+        if total < U256::MAX / two {
+            ((total * two) / three) + one
+        } else {
+            ((total / three) * two) + two
+        }
+    }
+
+    fn failure_threshold(&self) -> U256 {
+        let total = self.total_stake();
+        (total / U256::from(3)) + U256::ONE
+    }
+
+    fn upgrade_threshold(&self) -> U256 {
+        let total = self.total_stake();
+        let nine = U256::from(9);
+        let ten = U256::from(10);
+        let normal = self.success_threshold();
+        let higher = if total < U256::MAX / nine {
+            (total * nine) / ten
+        } else {
+            (total / ten) * nine
+        };
+        std::cmp::max(higher, normal)
+    }
+
+    fn leader(&self, view: ViewNumber) -> anytrace::Result<T::SignatureKey> {
+        use hotshot_utils::anytrace::*;
+        self.lookup_leader(view)
+            .wrap()
+            .context(info!("Failed to get leader for view {view} (non-epoch)"))
+    }
+}
+
+/// A protocol for determining membership in and participating in a committee.
+///
+/// All read access goes through one of two snapshot types:
+/// - [`Self::snapshot`] for per-epoch reads
+/// - [`Self::non_epoch_snapshot`] for pre-epoch reads
+///
+/// Each snapshot is a consistent point-in-time view; derived values read from
+/// the same snapshot are guaranteed to come from one logical moment.
+pub trait Membership<T: NodeType>: Debug + Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// A consistent per-epoch view, returned by [`Self::snapshot`].
+    type Snapshot: MembershipSnapshot<T, Error = Self::Error>;
+
+    /// A consistent pre-epoch view, returned by [`Self::non_epoch_snapshot`].
+    type NonEpochSnapshot: NonEpochMembershipSnapshot<T, Error = Self::Error>;
+
+    /// Capture a consistent per-epoch view.
+    ///
+    /// Returns `None` if no committee is loaded for `epoch`.
+    fn snapshot(&self, epoch: EpochNumber) -> Option<Self::Snapshot>;
+
+    /// Capture a consistent pre-epoch view.
+    fn non_epoch_snapshot(&self) -> Self::NonEpochSnapshot;
+
+    /// Get first epoch if epochs are enabled, `None` otherwise.
     fn first_epoch(&self) -> Option<EpochNumber>;
 
     /// Get the highest epoch for which a stake table is currently in memory,
@@ -228,11 +288,34 @@ pub trait Membership<TYPES: NodeType>: Debug + Send + Sync {
         None
     }
 
-    /// Returns the commitment of the stake table for the given epoch,
-    /// Errors if the stake table is not available for the given epoch
-    fn stake_table_hash(&self, _epoch: EpochNumber) -> Option<Commitment<Self::StakeTableHash>> {
-        None
-    }
+    /// Gets the validated block header and epoch number of the epoch root
+    /// at the given block height.
+    fn get_epoch_root(
+        &self,
+        e: EpochNumber,
+    ) -> impl Future<Output = Result<Leaf2<T>, Self::Error>> + Send;
 
-    fn add_da_committee(&mut self, _first_epoch: u64, _da_committee: Vec<PeerConfig<TYPES>>);
+    /// Gets the DRB result for the given epoch.
+    fn get_epoch_drb(
+        &self,
+        e: EpochNumber,
+    ) -> impl Future<Output = Result<DrbResult, Self::Error>> + Send;
+
+    /// Handles notifications that a new epoch root has been created.
+    fn add_epoch_root(
+        &self,
+        h: T::BlockHeader,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Called to notify the Membership when a new DRB result has been calculated.
+    fn add_drb_result(&self, e: EpochNumber, d: DrbResult);
+
+    /// Called to notify the Membership that Epochs are enabled.
+    /// Implementations should copy the pre-epoch stake table into epoch and epoch+1
+    /// when this is called. The value of initial_drb_result should be used for DRB
+    /// calculations for epochs (epoch+1) and earlier.
+    fn set_first_epoch(&self, e: EpochNumber, r: DrbResult);
+
+    /// Register a DA committee that takes effect starting at `first_epoch`.
+    fn add_da_committee(&self, first_epoch: EpochNumber, da_committee: Vec<PeerConfig<T>>);
 }

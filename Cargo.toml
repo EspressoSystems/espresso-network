@@ -14,6 +14,7 @@ members = [
     "crates/cliquenet",
     "crates/espresso/api",
     "crates/espresso/dev-node",
+    "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/node-sqlite",
     "crates/espresso/telemetry",
@@ -96,6 +97,7 @@ default-members = [
     "sdks/crypto-helper",
     "crates/serialization/api",
     "crates/espresso/api",
+    "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/telemetry",
     "slow-tests",
@@ -115,7 +117,13 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2024"
 
 [workspace.dependencies]
-aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
+aide = { version = "0.15.1", features = [
+    "axum",
+    "axum-json",
+    "scalar",
+    "swagger",
+    "redoc",
+] }
 alloy = { version = "1.0", features = [
     "eips",
     "provider-ws",
@@ -126,6 +134,7 @@ alloy = { version = "1.0", features = [
     "signer-ledger",
 ] }
 alloy-compat = { path = "alloy-compat" }
+alloy-rlp = "0.3"
 anyhow = "1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"
@@ -145,7 +154,7 @@ async-trait = "0.1"
 atomic = "0.6"
 atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5" }
 automod = "1.0.14"
-axum = "0.8.8"
+axum = { version = "0.8.8", features = ["ws"] }
 backoff = "0.4"
 base64 = "0.22"
 base64-bytes = "0.1"
@@ -197,6 +206,7 @@ either = "1"
 es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
 escargot = "0.5.10"
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
+espresso-keyset = { path = "crates/espresso/keyset" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 espresso-node = { path = "crates/espresso/node", default-features = false }
 espresso-safe-tx-builder = { path = "contracts/rust/safe-tx-builder" }
@@ -243,7 +253,7 @@ jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "
     "parallel",
 ] }
 jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.2.0" }
-jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.4.0" }
+jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.4.2" }
 jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.3.1", features = [
     "std",
 ] }

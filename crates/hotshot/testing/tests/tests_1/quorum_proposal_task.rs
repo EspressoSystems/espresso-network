@@ -46,7 +46,6 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
         .membership_for_epoch(Some(EpochNumber::new(1)))
-        .await
         .unwrap();
     let version = handle
         .hotshot
@@ -86,7 +85,7 @@ async fn test_quorum_proposal_task_quorum_proposal_view_1() {
     }
 
     // We must send the genesis cert here to initialize hotshot successfully.
-    let num_storage_node = epoch_1_mem.total_nodes().await;
+    let num_storage_node = epoch_1_mem.total_nodes();
     let genesis_cert = proposals[0].data.justify_qc().clone();
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
     let builder_fee =
@@ -137,9 +136,8 @@ async fn test_quorum_proposal_task_quorum_proposal_view_gt_1() {
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
         .membership_for_epoch(Some(EpochNumber::new(1)))
-        .await
         .unwrap();
-    let num_storage_node = epoch_1_mem.total_nodes().await;
+    let num_storage_node = epoch_1_mem.total_nodes();
 
     let mut generator =
         TestViewGenerator::generate(membership.clone(), node_key_map, TEST_VERSIONS.test);
@@ -284,7 +282,6 @@ async fn test_quorum_proposal_task_qc_timeout() {
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
         .membership_for_epoch(Some(EpochNumber::new(1)))
-        .await
         .unwrap();
     let version = handle
         .hotshot
@@ -330,7 +327,7 @@ async fn test_quorum_proposal_task_qc_timeout() {
         _ => panic!("Found a View Sync Cert when there should have been a Timeout cert"),
     };
 
-    let num_storage_nodes = epoch_1_mem.total_nodes().await;
+    let num_storage_nodes = epoch_1_mem.total_nodes();
     let inputs = vec![random![
         Qc2Formed(either::Right(cert.clone())),
         SendPayloadCommitmentAndMetadata(
@@ -373,7 +370,6 @@ async fn test_quorum_proposal_task_view_sync() {
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
         .membership_for_epoch(Some(EpochNumber::new(1)))
-        .await
         .unwrap();
     let version = handle
         .hotshot
@@ -421,7 +417,7 @@ async fn test_quorum_proposal_task_view_sync() {
         _ => panic!("Found a TC when there should have been a view sync cert"),
     };
 
-    let num_storage_nodes = epoch_1_mem.total_nodes().await;
+    let num_storage_nodes = epoch_1_mem.total_nodes();
     let inputs = vec![random![
         ViewSyncFinalizeCertificateRecv(cert.clone()),
         SendPayloadCommitmentAndMetadata(
@@ -461,7 +457,6 @@ async fn test_quorum_proposal_task_liveness_check() {
     let membership = handle.hotshot.membership_coordinator.clone();
     let epoch_1_mem = membership
         .membership_for_epoch(Some(EpochNumber::new(1)))
-        .await
         .unwrap();
 
     let mut generator =
@@ -493,7 +488,7 @@ async fn test_quorum_proposal_task_liveness_check() {
     }
     drop(consensus_writer);
 
-    let num_storage_nodes = epoch_1_mem.total_nodes().await;
+    let num_storage_nodes = epoch_1_mem.total_nodes();
     let builder_commitment = BuilderCommitment::from_raw_digest(sha2::Sha256::new().finalize());
     let builder_fee =
         null_block::builder_fee::<TestTypes>(num_storage_nodes, TEST_VERSIONS.test.base).unwrap();

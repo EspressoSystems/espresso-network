@@ -127,7 +127,11 @@ async fn slow_test_epoch_reward_restart() {
         }
     }
 
-    let decided_state = network.server.decided_state().await;
+    let decided_state = network
+        .server
+        .decided_state()
+        .await
+        .expect("decided state must be available");
     let decided_leaf = network.server.decided_leaf().await;
     let num_leaves_before_restart = decided_state.reward_merkle_tree_v2.num_leaves();
     let rewards_before_restart = decided_leaf
@@ -246,6 +250,7 @@ async fn slow_test_epoch_reward_restart() {
         peer.consensus_handle()
             .decided_state()
             .await
+            .unwrap()
             .reward_merkle_tree_v2
             .commitment()
     }))
@@ -254,6 +259,7 @@ async fn slow_test_epoch_reward_restart() {
         .server
         .decided_state()
         .await
+        .unwrap()
         .reward_merkle_tree_v2
         .commitment();
     for root in &roots {

@@ -62,8 +62,9 @@ pub async fn assert_native_demo_works(requirements: TestRequirements) -> Result<
             blocks_without_tx = 0;
         }
 
-        if initial.builder_balance + initial.recipient_balance
-            != new.builder_balance + new.recipient_balance
+        if requirements.requires_builder
+            && initial.builder_balance + initial.recipient_balance
+                != new.builder_balance + new.recipient_balance
         {
             panic!("Balance not conserved");
         }

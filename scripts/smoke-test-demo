@@ -11,8 +11,16 @@ error_handler() {
   echo "Failed at line $lineno: msg: $msg"
 }
 
-# load env vars in .env
-set -a; source .env; set +a;
+# Load .env with only-if-unset semantics so caller-provided env wins.
+while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+        ''|\#*) continue;;
+    esac
+    key="${line%%=*}"
+    case "$key" in *[!A-Za-z0-9_]*|[0-9]*) continue;; esac
+    [ "${!key+x}" = x ] && continue
+    eval "export $line"
+done < .env
 
 # Backward compat for renamed env vars
 if [ -z "${ESPRESSO_L1_PORT:-}" ] && [ -n "${ESPRESSO_SEQUENCER_L1_PORT:-}" ]; then
@@ -22,6 +30,10 @@ fi
 if [ -z "${ESPRESSO_NODE_1_API_PORT:-}" ] && [ -n "${ESPRESSO_SEQUENCER1_API_PORT:-}" ]; then
     echo "ERROR: ESPRESSO_SEQUENCER1_API_PORT is deprecated, use ESPRESSO_NODE_1_API_PORT instead" >&2
     ESPRESSO_NODE_1_API_PORT="$ESPRESSO_SEQUENCER1_API_PORT"
+fi
+if [ -z "${ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS:-}" ] && [ -n "${ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS:-}" ]; then
+    echo "ERROR: ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS is deprecated, use ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS instead" >&2
+    ESPRESSO_LIGHT_CLIENT_PROXY_ADDRESS="$ESPRESSO_SEQUENCER_LIGHT_CLIENT_PROXY_ADDRESS"
 fi
 
 LOAD_GENERATOR=http://localhost:$ESPRESSO_SUBMIT_TRANSACTIONS_PRIVATE_PORT
@@ -60,7 +72,7 @@ function get_balance() {
         )
     else
         # Otherwise, use Docker.
-        docker run --network="host" -e RUST_LOG=off ghcr.io/espressosystems/espresso-network/bridge:${DOCKER_TAG:-main} \
+        docker run --rm --network="host" -e RUST_LOG=off ghcr.io/espressosystems/espresso-network/bridge:${DOCKER_TAG:-main} \
             bridge balance -e $ESPRESSO_API -a $1 -b $2
     fi
 }
@@ -105,60 +117,48 @@ echo "  light_client_updated: $light_client_updated"
 # Bash magic to get the current time in seconds since start of this shell
 START=$SECONDS
 
-# Check blocks and transactions are increasing
-# Every second until timeout after $TIMEOUT seconds
+# Wait until block height, transaction count, light client updates, and fee
+# recipient balance have all advanced.
 while true; do
-    new_block_height=`curl -sL $ESPRESSO_API/node/block-height`
-    new_num_tx=`curl -sL $ESPRESSO_API/node/transactions/count`
-    new_light_client_updated=`last_light_client_update`
-    if [[ $new_block_height -gt $block_height && $new_num_tx -gt $num_tx && $new_light_client_updated -gt $light_client_updated ]]; then
-        new_builder_balance=`get_balance 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f $new_block_height`
-        new_recipient_balance=`get_balance 0x0000000000000000000000000000000000000000 $new_block_height`
+    new_block_height=$(curl -sL $ESPRESSO_API/node/block-height)
+    new_num_tx=$(curl -sL $ESPRESSO_API/node/transactions/count)
+    new_light_client_updated=$(last_light_client_update)
+    new_builder_balance=$(get_balance 0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f $new_block_height)
+    new_recipient_balance=$(get_balance 0x0000000000000000000000000000000000000000 $new_block_height)
 
-        echo "Final state:"
-        echo "  block_height: $new_block_height"
-        echo "  transactions: $new_num_tx"
-        echo "  builder_balance: $new_builder_balance"
-        echo "  recipient_balance: $new_recipient_balance"
-        echo "  light_client_updated: $new_light_client_updated"
-        echo "Block height, transaction count, and light client updates are increasing. Great!"
-
-        if ! [[ $new_recipient_balance -gt $recipient_balance ]]; then
-            echo "Fee recipient balance is not increasing!"
-            exit 1
-        fi
-        if ! [[ $new_builder_balance -lt $builder_balance ]]; then
-            echo "Builder balance is not decreasing!"
-            exit 1
-        fi
-        if [[ $((builder_balance + recipient_balance)) != $((new_builder_balance + new_recipient_balance)) ]]; then
-            echo "Balance not conserved!"
-            exit 1
-        fi
-
+    if [[ $new_block_height -gt $block_height \
+       && $new_num_tx -gt $num_tx \
+       && $new_light_client_updated -gt $light_client_updated \
+       && $new_recipient_balance -gt $recipient_balance ]]; then
         break
     fi
-    sleep 1
-    if [[ $((SECONDS - START)) -gt $ESPRESSO_BLOCKS_TIMEOUT ]]; then
-        echo "Timeout waiting for block height, transaction count, and light client updates to increase"
-        echo "Final state:"
-        echo "  block_height: $new_block_height"
-        echo "  transactions: $new_num_tx"
-        echo "  light_client_updated: $new_light_client_updated"
-
-        if ! [[ $new_block_height -gt $block_height ]]; then
-            echo "Block height is not increasing!"
-        fi
-        if ! [[ $new_num_tx -gt $num_tx ]]; then
-            echo "Transaction count is not increasing!"
-        fi
-        if ! [[ $new_light_client_updated -gt $light_client_updated ]]; then
-            echo "Light client is not being updated!"
-        fi
-
+    if (( SECONDS - START > ESPRESSO_BLOCKS_TIMEOUT )); then
+        echo "Timeout after ${ESPRESSO_BLOCKS_TIMEOUT}s; metrics did not all advance:"
+        echo "  block_height:         $block_height -> $new_block_height"
+        echo "  transactions:         $num_tx -> $new_num_tx"
+        echo "  light_client_updated: $light_client_updated -> $new_light_client_updated"
+        echo "  recipient_balance:    $recipient_balance -> $new_recipient_balance"
         exit 1
     fi
+    sleep 1
 done
+
+echo "Final state:"
+echo "  block_height:         $new_block_height"
+echo "  transactions:         $new_num_tx"
+echo "  builder_balance:      $new_builder_balance"
+echo "  recipient_balance:    $new_recipient_balance"
+echo "  light_client_updated: $new_light_client_updated"
+echo "Block height, transaction count, light client updates, and fee recipient balance are all increasing. Great!"
+
+if ! [[ $new_builder_balance -lt $builder_balance ]]; then
+    echo "Builder balance is not decreasing!"
+    exit 1
+fi
+if [[ $((builder_balance + recipient_balance)) != $((new_builder_balance + new_recipient_balance)) ]]; then
+    echo "Balance not conserved!"
+    exit 1
+fi
 
 
 BUILDER_URL="http://localhost:$ESPRESSO_BUILDER_SERVER_PORT/healthcheck"

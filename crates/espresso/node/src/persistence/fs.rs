@@ -123,7 +123,7 @@ fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
 pub struct Options {
     /// Storage path for persistent data.
     #[clap(long, env = "ESPRESSO_NODE_STORAGE_PATH")]
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 
     /// Number of views to retain in consensus storage before data that hasn't been archived is
     /// garbage collected.
@@ -317,6 +317,24 @@ impl Inner {
         self.path.join("decided_cert2")
     }
 
+    /// cert2 is only persisted for the view that is directly finalized
+    /// (the newest leaf in a decided chain). Ancestor views finalized
+    /// indirectly have no cert2 file on disk
+    /// for those, this returns `Ok(None)`
+    fn load_cert2(&self, view: ViewNumber) -> anyhow::Result<Option<Certificate2<SeqTypes>>> {
+        let file_path = self
+            .decided_cert2_dir_path()
+            .join(view.u64().to_string())
+            .with_extension("bin");
+        if !file_path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&file_path).context("read cert2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserialize cert2")?,
+        ))
+    }
+
     fn update_migration(&mut self) -> anyhow::Result<()> {
         let path = self.migration();
         let bytes = bincode::serialize(&self.migrated)?;
@@ -483,10 +501,11 @@ impl Inner {
             let (mut leaf, cert) = self.parse_decided_leaf(&bytes)?;
 
             // Include the VID share if available.
-            let vid_share = self.load_vid_share(v)?.map(|proposal| proposal.data);
-            if vid_share.is_none() {
+            let vid_proposal = self.load_vid_share(v)?;
+            if vid_proposal.is_none() {
                 tracing::debug!(?v, "VID share not available at decide");
             }
+            let vid_share = vid_proposal.as_ref().map(|proposal| proposal.data.clone());
 
             // Move the state cert to the finalized dir if it exists.
             let state_cert = self.store_finalized_state_cert(v)?;
@@ -531,12 +550,23 @@ impl Inner {
         for (view, (leaf, cert)) in leaves {
             let height = leaf.leaf.block_header().block_number();
 
-            let deciding_qc = deciding_qc
-                .as_ref()
-                .filter(|qc| qc.view_number() == cert.view_number() + 1)
-                .cloned();
-            consumer
-                .handle_event(&CoordinatorEvent::LegacyEvent(Event {
+            let event = if leaf.leaf.block_header().version() >= versions::NEW_PROTOCOL_VERSION {
+                let cert2 = self.load_cert2(view)?;
+                // One event per view. cert2 is only stored for the
+                // directly finalized view
+                // ancestors get `cert2: None`,
+                // which is what update() expects for indirectly decided leaves.
+                CoordinatorEvent::NewDecide {
+                    leaf_infos: vec![leaf],
+                    cert1: cert.qc().clone(),
+                    cert2,
+                }
+            } else {
+                let deciding_qc = deciding_qc
+                    .as_ref()
+                    .filter(|qc| qc.view_number() == cert.view_number() + 1)
+                    .cloned();
+                CoordinatorEvent::LegacyEvent(Event {
                     view_number: view,
                     event: EventType::Decide {
                         committing_qc: Arc::new(cert),
@@ -544,8 +574,9 @@ impl Inner {
                         leaf_chain: Arc::new(vec![leaf]),
                         block_size: None,
                     },
-                }))
-                .await?;
+                })
+            };
+            consumer.handle_event(&event).await?;
 
             if let Some((start, end, current_height)) = current_interval.as_mut() {
                 if height == *current_height + 1 {
@@ -759,12 +790,12 @@ impl SequencerPersistence for Persistence {
         Ok(Some(ViewNumber::new(u64::from_le_bytes(bytes))))
     }
 
-    async fn append_decided_leaves(
+    async fn persist_decided_leaves(
         &self,
-        view: ViewNumber,
+        _view: ViewNumber,
         leaf_chain: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
-        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
+        _deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        _consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let mut inner = self.inner.write().await;
         let path = inner.decided_leaf2_path();
@@ -819,27 +850,34 @@ impl SequencerPersistence for Persistence {
             )?;
         }
 
-        match inner
-            .generate_decide_events(view, deciding_qc, consumer)
+        Ok(())
+    }
+
+    async fn process_decided_events(
+        &self,
+        view: ViewNumber,
+        deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
+        consumer: &(impl EventConsumer + 'static),
+    ) -> anyhow::Result<Option<ViewNumber>> {
+        // On error, GC does not run over the failed range, so the leaves stay on disk and are
+        // retried; no data is lost.
+        let intervals = self
+            .inner
+            .write()
             .await
-        {
-            Err(err) => {
-                // Event processing failure is not an error, since by this point we have at least
-                // managed to persist the decided leaves successfully, and the event processing will
-                // just run again at the next decide.
-                tracing::warn!(?view, "event processing failed: {err:#}");
-            },
-            Ok(intervals) => {
-                if let Err(err) = inner.collect_garbage(view, &intervals) {
-                    // Similarly, garbage collection is not an error. We have done everything we
-                    // strictly needed to do, and GC will run again at the next decide. Log the
-                    // error but do not return it.
-                    tracing::warn!(?view, "GC failed: {err:#}");
-                }
-            },
+            .generate_decide_events(view, deciding_qc, consumer)
+            .await?;
+
+        // Highest view we generated an event for; unprocessed leaves stay on disk (the cursor).
+        let processed = intervals.iter().map(|i| *i.end()).max();
+
+        // Best-effort GC; runs again at the next decide.
+        let res = self.inner.write().await.collect_garbage(view, &intervals);
+        if let Err(err) = res {
+            tracing::warn!(?view, "GC failed: {err:#}");
         }
 
-        Ok(())
+        Ok(processed)
     }
 
     async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {

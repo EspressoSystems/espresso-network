@@ -1,0 +1,68 @@
+# Backports onto BASE composes that pre-date current main:
+# 1. Persistent storage on nodes 2, 3, 4 so recreated containers keep their
+#    orchestrator-cached config (avoids 403 "no longer registering new keys").
+# 2. Hub topology (all non-archival peers catch up via 0, 1) + light-client
+#    module on the archival pair, since UPGRADE's query fetcher hits
+#    /light-client/leaf/N which doesn't exist on non-archival peers
+#    (backport of b9702a786f).
+
+services:
+  espresso-node-0:
+    command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- light-client
+    environment:
+      # Without this the light-client SQLite is :memory: per connection and
+      # serves empty results, so wiped peers can't fetch historical leaves.
+      LIGHT_CLIENT_DB_PATH: /store/lc
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+
+  espresso-node-1:
+    command: espresso-node -- storage-sql -- http -- query -- explorer -- light-client
+    environment:
+      LIGHT_CLIENT_DB_PATH: /store/lc
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+      # OLD-name vars; UPGRADE aliases OLD->NEW via env_compat.
+      # Multiple peers: node-0 (often the proposer) lags consensus slightly,
+      # so a single-peer catchup chases a moving target. Including 3, 4 gives
+      # the wiped node a faster-indexing fallback so it converges.
+      ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT,http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT
+      ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-3:$ESPRESSO_SEQUENCER3_API_PORT,http://espresso-node-4:$ESPRESSO_SEQUENCER4_API_PORT
+
+  # Add `status` (only requires `http`) so roll_node can poll node 2's block
+  # height; it has no `query` module to expose /node/block-height.
+  espresso-node-2:
+    command: espresso-node -- http -- storage-fs -- status
+    environment:
+      ESPRESSO_SEQUENCER_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+    volumes:
+      - espresso-node-2-storage:/var/lib/espresso
+
+  espresso-node-3:
+    environment:
+      ESPRESSO_SEQUENCER_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+    volumes:
+      - espresso-node-3-storage:/var/lib/espresso
+
+  espresso-node-4:
+    environment:
+      ESPRESSO_SEQUENCER_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_SEQUENCER_STATE_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_SEQUENCER_API_PEERS: http://espresso-node-0:$ESPRESSO_SEQUENCER0_API_PORT,http://espresso-node-1:$ESPRESSO_SEQUENCER1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+    volumes:
+      - espresso-node-4-storage:/var/lib/espresso
+
+volumes:
+  espresso-node-2-storage:
+    name: espresso-node-2-storage
+  espresso-node-3-storage:
+    name: espresso-node-3-storage
+  espresso-node-4-storage:
+    name: espresso-node-4-storage

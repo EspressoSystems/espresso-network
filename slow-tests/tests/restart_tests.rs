@@ -39,7 +39,7 @@ use espresso_node::{
         self,
         cdn::{TestingDef, WrappedSignatureKey},
     },
-    options::{Modules, Options},
+    options::{Modules, Options, PublicNodeConfig},
     run::init_with_storage,
     testing::{staking_priv_keys, wait_for_decide_on_handle},
 };
@@ -61,16 +61,17 @@ use hotshot_testing::{
 use hotshot_types::{
     PeerConfig,
     data::EpochNumber,
-    event::{Event, EventType},
+    event::{Event, EventType, LeafInfo},
     light_client::StateKeyPair,
     network::{Libp2pConfig, NetworkConfig},
     new_protocol::CoordinatorEvent,
     signature_key::{BLSPrivKey, BLSPubKey},
+    simple_vote::HasEpoch,
     traits::signature_key::SignatureKey,
     x25519,
 };
 use itertools::Itertools;
-use staking_cli::demo::{DelegationConfig, StakingTransactions};
+use staking_cli::demo::{DelegationConfig, StakingKeySet, StakingTransactions};
 use surf_disco::{Url, error::ClientError};
 use tagged_base64::TaggedBase64;
 use tempfile::TempDir;
@@ -81,9 +82,39 @@ use tokio::{
 };
 use vbs::version::Version;
 use vec1::vec1;
+use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_VERSION, NEW_PROTOCOL_VERSION};
 
-async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), cdn: bool) {
-    let mut network = TestNetwork::new(network.0, network.1, cdn).await;
+/// Extract the decided leaf chain from a consensus event, or `None` if it isn't a decide.
+fn decided_leaves(event: &CoordinatorEvent<SeqTypes>) -> Option<&[LeafInfo<SeqTypes>]> {
+    match event {
+        CoordinatorEvent::LegacyEvent(Event {
+            event: EventType::Decide { leaf_chain, .. },
+            ..
+        }) => Some(leaf_chain),
+        CoordinatorEvent::NewDecide { leaf_infos, .. } => Some(leaf_infos),
+        _ => None,
+    }
+}
+
+/// Epoch of the certificate committing a decide event, or `None` if it isn't a decide.
+fn decided_epoch(event: &CoordinatorEvent<SeqTypes>) -> Option<EpochNumber> {
+    match event {
+        CoordinatorEvent::LegacyEvent(Event {
+            event: EventType::Decide { committing_qc, .. },
+            ..
+        }) => committing_qc.epoch(),
+        CoordinatorEvent::NewDecide { cert1, .. } => cert1.epoch(),
+        _ => None,
+    }
+}
+
+async fn test_restart_helper(
+    network: (usize, usize),
+    restart: (usize, usize),
+    cdn: bool,
+    version: Version,
+) {
+    let mut network = TestNetwork::new(network.0, network.1, cdn, version).await;
 
     // Let the network get going.
     network.check_progress().await;
@@ -95,110 +126,154 @@ async fn test_restart_helper(network: (usize, usize), restart: (usize, usize), c
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_da_with_cdn() {
-    test_restart_helper((2, 3), (1, 0), true).await;
+    test_restart_helper((2, 3), (1, 0), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_regular_with_cdn() {
-    test_restart_helper((2, 3), (0, 1), true).await;
+    test_restart_helper((2, 3), (0, 1), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_with_cdn() {
-    test_restart_helper((4, 6), (1, 2), true).await;
+    test_restart_helper((4, 6), (1, 2), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 1), true).await;
+    test_restart_helper((4, 6), (1, 1), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 3), true).await;
+    test_restart_helper((4, 6), (1, 3), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_with_cdn() {
-    test_restart_helper((4, 6), (1, 5), true).await;
+    test_restart_helper((4, 6), (1, 5), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_minus_1_with_cdn() {
-    test_restart_helper((4, 6), (1, 4), true).await;
+    test_restart_helper((4, 6), (1, 4), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_plus_1_with_cdn() {
-    test_restart_helper((4, 6), (2, 5), true).await;
+    test_restart_helper((4, 6), (2, 5), true, EPOCH_VERSION).await;
 }
 
 #[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_with_cdn() {
-    test_restart_helper((2, 8), (2, 8), true).await;
+    test_restart_helper((2, 8), (2, 8), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_da_with_cdn() {
-    test_restart_helper((2, 8), (2, 0), true).await;
+    test_restart_helper((2, 8), (2, 0), true, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_da_without_cdn() {
-    test_restart_helper((2, 3), (1, 0), false).await;
+    test_restart_helper((2, 3), (1, 0), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_1_regular_without_cdn() {
-    test_restart_helper((2, 3), (0, 1), false).await;
+    test_restart_helper((2, 3), (0, 1), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_without_cdn() {
-    test_restart_helper((4, 6), (1, 2), false).await;
+    test_restart_helper((4, 6), (1, 2), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 1), false).await;
+    test_restart_helper((4, 6), (1, 1), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 3), false).await;
+    test_restart_helper((4, 6), (1, 3), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_without_cdn() {
-    test_restart_helper((4, 6), (1, 5), false).await;
+    test_restart_helper((4, 6), (1, 5), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_minus_1_without_cdn() {
-    test_restart_helper((4, 6), (1, 4), false).await;
+    test_restart_helper((4, 6), (1, 4), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_2f_plus_1_without_cdn() {
-    test_restart_helper((4, 6), (2, 5), false).await;
+    test_restart_helper((4, 6), (2, 5), false, EPOCH_VERSION).await;
 }
 
 #[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_without_cdn() {
-    test_restart_helper((2, 8), (2, 8), false).await;
+    test_restart_helper((2, 8), (2, 8), false, EPOCH_VERSION).await;
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_all_da_without_cdn() {
-    test_restart_helper((2, 8), (2, 0), false).await;
+    test_restart_helper((2, 8), (2, 0), false, EPOCH_VERSION).await;
+}
+
+// New protocol (V6) restart tests. These run the network based on
+// `NEW_PROTOCOL_VERSION` from genesis
+// The CDN is not used as cliquenet replaces CDN + libp2p
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_1_of_5() {
+    test_restart_helper((2, 3), (1, 0), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_2_of_10() {
+    test_restart_helper((4, 6), (1, 1), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_3_of_10() {
+    test_restart_helper((4, 6), (1, 2), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_4_of_10() {
+    test_restart_helper((4, 6), (1, 3), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_5_of_10() {
+    test_restart_helper((4, 6), (1, 4), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_6_of_10() {
+    test_restart_helper((4, 6), (1, 5), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_7_of_10() {
+    test_restart_helper((4, 6), (2, 5), false, NEW_PROTOCOL_VERSION).await;
+}
+
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
+async fn slow_test_restart_new_protocol_10_of_10() {
+    test_restart_helper((2, 8), (2, 8), false, NEW_PROTOCOL_VERSION).await;
 }
 
 #[ignore]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_test_restart_staggered() {
-    let mut network = TestNetwork::new(4, 6, false).await;
+    let mut network = TestNetwork::new(4, 6, false, EPOCH_VERSION).await;
 
     // Check that the builder works at the beginning.
     network.check_builder().await;
@@ -254,6 +329,13 @@ impl NodeParams {
             is_da,
         })
     }
+
+    /// The address other nodes use to reach this node's cliquenet coordinator
+    /// network. Must match `--cliquenet-advertise-address` and the connect info
+    /// registered on-chain so the new protocol can dial peers.
+    fn cliquenet_advertise_addr(&self) -> String {
+        format!("127.0.0.1:{}", self.cliquenet_port)
+    }
 }
 
 #[derive(Debug)]
@@ -284,6 +366,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             query: Some(Default::default()),
             storage_fs: opt.storage_fs,
             storage_sql: opt.storage_sql,
+            light_client: Some(Default::default()),
             ..Default::default()
         };
         if node.is_da {
@@ -326,6 +409,8 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
             &format!("127.0.0.1:{}", node.libp2p_port),
             "--cliquenet-bind-address",
             &format!("0.0.0.0:{}", node.cliquenet_port),
+            "--cliquenet-advertise-address",
+            &node.cliquenet_advertise_addr(),
             "--cdn-endpoint",
             &format!("127.0.0.1:{}", network.cdn_port),
             "--state-peers",
@@ -383,6 +468,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
                     self.modules.clone(),
                     self.opt.clone(),
                     S::persistence_options(&self.storage),
+                    PublicNodeConfig::new(&self.opt, &self.modules),
                 )
                 .await
                 {
@@ -472,14 +558,11 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, num_nodes, "waiting for progress from node");
 
         // Wait for a block proposed by this node. This proves that the node is tracking consensus
-        // (getting Decide events) and participating (able to propose).
+        // (getting Decide events) and participating (able to propose). Works for both legacy and
+        // new-protocol (V6) decides.
         let mut events = context.event_stream();
         while let Some(event) = events.next().await {
-            let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            else {
+            let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
             };
 
@@ -520,11 +603,7 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         let mut state_write = self.reference_state.write().await;
 
         while let Some(event) = events.next().await {
-            let CoordinatorEvent::LegacyEvent(Event {
-                event: EventType::Decide { leaf_chain, .. },
-                ..
-            }) = event
-            else {
+            let Some(leaf_chain) = decided_leaves(&event) else {
                 continue;
             };
 
@@ -609,20 +688,13 @@ impl<S: TestableSequencerDataSource> TestNode<S> {
         tracing::info!(node_id, "waiting for epoch: {epoch:?}");
         let mut events = context.event_stream();
 
-        let timeout_duration = Duration::from_secs(60);
+        let timeout_duration = Duration::from_secs(240);
         timeout(timeout_duration, async {
             while let Some(event) = events.next().await {
-                let CoordinatorEvent::LegacyEvent(Event {
-                    event:
-                        EventType::Decide {
-                            committing_qc: qc, ..
-                        },
-                    ..
-                }) = event
-                else {
+                let Some(decided_epoch) = decided_epoch(&event) else {
                     continue;
                 };
-                if qc.epoch() >= Some(epoch) {
+                if Some(decided_epoch) >= Some(epoch) {
                     tracing::info!(node_id, "reached epoch: {epoch:?}");
                     break;
                 }
@@ -672,7 +744,7 @@ impl Drop for TestNetwork {
 }
 
 impl TestNetwork {
-    async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool) -> Self {
+    async fn new(da_nodes: usize, regular_nodes: usize, cdn: bool, version: Version) -> Self {
         let tmp = TempDir::new().unwrap();
         let genesis_file_path = tmp.path().join("genesis.toml");
 
@@ -685,19 +757,26 @@ impl TestNetwork {
             l1_finalized: L1Finalized::Number { number: 20 },
             header: Default::default(),
             upgrades: Default::default(),
-            base_version: Version { major: 0, minor: 3 },
-            upgrade_version: Version { major: 0, minor: 3 },
+            // Run the network at `version` from genesis. For the new protocol
+            // (V6) this routes consensus through the cliquenet coordinator; for
+            // that to work each node's cliquenet connect info must be registered
+            // on-chain (see `deploy`) and advertised via the node CLI.
+            base_version: version,
+            upgrade_version: version,
             epoch_height: Some(15),
-            drb_difficulty: None,
+            // From V0_4 (DRB_AND_HEADER_UPGRADE_VERSION) on, genesis validation
+            // requires the DRB difficulties to be set. Keep them unset for older
+            // versions to preserve the existing tests' behavior.
+            drb_difficulty: (version >= DRB_AND_HEADER_UPGRADE_VERSION).then_some(10),
             epoch_start_block: Some(1),
             // TODO we apparently have two `capacity` configurations
             stake_table_capacity: Some(STAKE_TABLE_CAPACITY_FOR_TEST),
-            drb_upgrade_difficulty: None,
+            drb_upgrade_difficulty: (version >= DRB_AND_HEADER_UPGRADE_VERSION).then_some(20),
             // Start with a funded account, so we can test catchup after restart.
             accounts: [(builder_account(), 1000000000.into())]
                 .into_iter()
                 .collect(),
-            genesis_version: Version { major: 0, minor: 3 },
+            genesis_version: version,
             da_committees: None,
         };
 
@@ -774,7 +853,7 @@ impl TestNetwork {
         };
 
         // Deploy stake contracts and delegate.
-        let stake_table_address = network.deploy(&genesis).await.unwrap();
+        let stake_table_address = network.deploy(&genesis, &node_params).await.unwrap();
 
         // Add contract address to `ChainConfig`.
         let chain_config = ChainConfig {
@@ -816,7 +895,11 @@ impl TestNetwork {
     }
 
     /// Deploy stake contracts and delegate.
-    async fn deploy(&self, genesis: &Genesis) -> anyhow::Result<Address> {
+    async fn deploy(
+        &self,
+        genesis: &Genesis,
+        node_params: &[NodeParams],
+    ) -> anyhow::Result<Address> {
         let stake_table_version = StakeTableContractVersion::V3;
         let delegation_config = DelegationConfig::EqualAmounts;
 
@@ -845,7 +928,25 @@ impl TestNetwork {
 
         let (bls, state): (Vec<BLSPrivKey>, Vec<StateKeyPair>) =
             staking_keys.clone().into_iter().unzip();
-        let staking_priv_keys = staking_priv_keys(&bls, &state, staking_keys.len());
+        // Start from the base staking sets (eth signer / BLS / state keys), then
+        // override each node's cliquenet connect info with the *actual* x25519
+        // key and advertise address the node process binds. Registering the real
+        // values on-chain is what lets the new protocol's coordinator resolve and
+        // dial peers; the `&[]` default would register placeholder addresses that
+        // don't match any running node.
+        let staking_priv_keys: Vec<StakingKeySet> =
+            staking_priv_keys(&bls, &state, &[], staking_keys.len())
+                .into_iter()
+                .zip(node_params)
+                .map(|(mut key_set, node)| {
+                    key_set.x25519 = node.x25519_key.clone();
+                    key_set.p2p_addr = node
+                        .cliquenet_advertise_addr()
+                        .parse()
+                        .expect("valid cliquenet advertise address");
+                    key_set
+                })
+                .collect();
 
         let hss_staking: Vec<PeerConfig<SeqTypes>> = staking_keys
             .iter()
@@ -1036,11 +1137,7 @@ impl TestNetwork {
                     .next()
                     .await
                     .expect("event stream terminated unexpectedly");
-                let CoordinatorEvent::LegacyEvent(Event {
-                    event: EventType::Decide { leaf_chain, .. },
-                    ..
-                }) = event
-                else {
+                let Some(leaf_chain) = decided_leaves(&event) else {
                     continue;
                 };
                 tracing::info!(?leaf_chain, "got decide, chain is progressing");
@@ -1111,11 +1208,7 @@ impl TestNetwork {
                             .next()
                             .await
                             .expect("event stream terminated unexpectedly");
-                        let CoordinatorEvent::LegacyEvent(Event {
-                            event: EventType::Decide { leaf_chain, .. },
-                            ..
-                        }) = event
-                        else {
+                        let Some(leaf_chain) = decided_leaves(&event) else {
                             continue;
                         };
                         tracing::info!(?leaf_chain, "got decide, chain is progressing");

@@ -42,8 +42,6 @@ pub enum DevNodeVersion {
     V0_4,
     #[value(name = "0.5")]
     V0_5,
-    #[value(name = "0.6")]
-    V0_6,
 }
 
 impl fmt::Display for DevNodeVersion {
@@ -52,7 +50,6 @@ impl fmt::Display for DevNodeVersion {
             DevNodeVersion::V0_3 => write!(f, "0.3"),
             DevNodeVersion::V0_4 => write!(f, "0.4"),
             DevNodeVersion::V0_5 => write!(f, "0.5"),
-            DevNodeVersion::V0_6 => write!(f, "0.6"),
         }
     }
 }

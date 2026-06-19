@@ -4,6 +4,7 @@ use espresso_telemetry as telemetry;
 use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
+use tokio::signal::unix::{SignalKind, signal};
 use url::Url;
 
 use super::{
@@ -11,7 +12,7 @@ use super::{
     api::{self, data_source::DataSourceOptions},
     context::SequencerContext,
     init_node, network,
-    options::{Modules, Options},
+    options::{Modules, Options, PublicNodeConfig},
     persistence,
 };
 use crate::{default_telemetry_endpoint, keyset::KeySet};
@@ -74,12 +75,30 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
 
+    let public_node_config = PublicNodeConfig::new(&opt, &modules);
+
     tracing::warn!(?genesis, "genesis");
 
     let result = if let Some(storage) = modules.storage_fs.take() {
-        run_with_storage(genesis, modules, opt, storage, telemetry_handle.as_mut()).await
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     } else if let Some(storage) = modules.storage_sql.take() {
-        run_with_storage(genesis, modules, opt, storage, telemetry_handle.as_mut()).await
+        run_with_storage(
+            genesis,
+            modules,
+            opt,
+            storage,
+            public_node_config,
+            telemetry_handle.as_mut(),
+        )
+        .await
     } else {
         // Persistence is required. If none is provided, just use the local file system.
         run_with_storage(
@@ -87,6 +106,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
             modules,
             opt,
             persistence::fs::Options::default(),
+            public_node_config,
             telemetry_handle.as_mut(),
         )
         .await
@@ -103,12 +123,20 @@ async fn run_with_storage<S>(
     modules: Modules,
     opt: Options,
     storage_opt: S,
+    public_node_config: PublicNodeConfig,
     telemetry_handle: Option<&mut telemetry::TelemetryHandle>,
 ) -> anyhow::Result<()>
 where
     S: DataSourceOptions,
 {
-    let ctx = init_with_storage(genesis, modules, opt, storage_opt).await?;
+    let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
+
+    // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
+    // (if the HTTP module was configured). Attach the metrics push task now,
+    // before consensus starts churning.
+    if let (Some(handle), Some(registry)) = (telemetry_handle, telemetry::registry()) {
+        handle.attach_metrics_push(registry);
+    }
 
     // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
     // (if the HTTP module was configured). Attach the metrics push task now,
@@ -119,9 +147,29 @@ where
 
     // Start doing consensus.
     ctx.start_consensus().await;
-    ctx.join().await;
+
+    // Run until consensus stops on its own or we receive a shutdown signal. On a signal, shut down
+    // gracefully
+    tokio::select! {
+        () = ctx.join() => tracing::warn!("consensus stopped; exiting"),
+        signal = wait_for_shutdown_signal() => {
+            tracing::warn!(signal, "received shutdown signal; shutting down gracefully");
+            ctx.shut_down().await;
+        },
+    }
 
     Ok(())
+}
+
+/// Wait for a shutdown signal
+async fn wait_for_shutdown_signal() -> &'static str {
+    let mut interrupt = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+    let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+
+    tokio::select! {
+        _ = interrupt.recv() => "SIGINT",
+        _ = terminate.recv() => "SIGTERM",
+    }
 }
 
 pub async fn init_with_storage<S>(
@@ -129,6 +177,7 @@ pub async fn init_with_storage<S>(
     modules: Modules,
     opt: Options,
     mut storage_opt: S,
+    public_node_config: PublicNodeConfig,
 ) -> anyhow::Result<SequencerContext<network::Production, S::Persistence>>
 where
     S: DataSourceOptions,
@@ -224,7 +273,9 @@ where
                 http_opt = http_opt.light_client(light_client);
             }
             if let Some(config) = modules.config {
-                http_opt = http_opt.config(config);
+                http_opt = http_opt
+                    .config(config)
+                    .public_node_config(public_node_config);
             }
 
             http_opt
@@ -323,6 +374,7 @@ mod test {
             http: Some(Http::with_port(port1)),
             query: Some(Default::default()),
             storage_fs: Some(fs::Options::new(tmp.path().into())),
+            config: Some(Default::default()),
             ..Default::default()
         };
         let opt = Options::parse_from([
@@ -354,9 +406,16 @@ mod test {
         // be waiting for the orchestrator, but it should at least start up the API server and
         // populate some metrics.
         tracing::info!(port = %port1, "starting sequencer");
+        let public_node_config = PublicNodeConfig::new(&opt, &modules);
         let task = spawn(async move {
-            if let Err(err) =
-                init_with_storage(genesis, modules, opt, fs::Options::new(tmp.path().into())).await
+            if let Err(err) = init_with_storage(
+                genesis,
+                modules,
+                opt,
+                fs::Options::new(tmp.path().into()),
+                public_node_config,
+            )
+            .await
             {
                 tracing::error!("failed to start sequencer: {err:#}");
             }
@@ -414,6 +473,41 @@ mod test {
             build_info_line.contains("testing"),
             "expected testing in features: {lines:#?}"
         );
+
+        // The /config/runtime endpoint should be available and reflect CLI overrides. Use a raw
+        // reqwest client to fetch JSON, since surf-disco defaults to bincode encoding which can't
+        // round-trip arbitrary JSON via `serde_json::Value`.
+        let res = reqwest::Client::new()
+            .get(url.join("/config/runtime").unwrap())
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            res.status().is_success(),
+            "config/runtime status: {}",
+            res.status()
+        );
+        let node_cfg: serde_json::Value = res.json().await.expect("config/runtime returns JSON");
+        assert_eq!(
+            node_cfg["cliquenet_bind_address"],
+            serde_json::Value::String(format!("127.0.0.1:{port2}")),
+            "cliquenet_bind_address mismatch: {node_cfg}"
+        );
+        assert_eq!(
+            node_cfg["is_da"],
+            serde_json::Value::Bool(false),
+            "is_da mismatch: {node_cfg}"
+        );
+        let top_level = node_cfg
+            .as_object()
+            .expect("config/runtime returns a JSON object");
+        for key in top_level.keys() {
+            assert!(
+                !key.to_lowercase().contains("private"),
+                "top-level key '{key}' contains 'private': {node_cfg}"
+            );
+        }
 
         task.abort();
     }

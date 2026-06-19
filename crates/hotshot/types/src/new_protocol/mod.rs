@@ -3,5 +3,5 @@
 pub mod event;
 pub mod proposal;
 
-pub use event::{CoordinatorEvent, NewDecideEvent};
+pub use event::CoordinatorEvent;
 pub use proposal::Proposal;
