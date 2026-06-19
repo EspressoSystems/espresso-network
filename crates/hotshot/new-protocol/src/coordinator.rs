@@ -951,7 +951,25 @@ where
                     let view = fragment.data.view_number();
                     debug!(%node, %sender, %view, "received vid share fragment");
                     if fragment.data.recipient_key != self.public_key {
-                        warn!(%node, %sender, %view, "ignoring vid share fragment not addressed to this node");
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            "ignoring vid share fragment not addressed to this node"
+                        );
+                        return None;
+                    }
+                    let leader = fragment
+                        .data
+                        .epoch
+                        .and_then(|epoch| self.leader(view, epoch));
+                    if leader.as_ref() != Some(&message.sender) {
+                        warn!(
+                            %node,
+                            %sender,
+                            %view,
+                            "ignoring vid share fragment not from the view leader"
+                        );
                         return None;
                     }
                     if self.consensus.wants_proposal_for_view(&view) {
@@ -962,7 +980,12 @@ where
                                 .validate(SignedProposal::new(share, signature)),
                             Ok(None) => {}, // Still missing some fragments.
                             Err(err) => {
-                                warn!(%node, %sender, %view, %err, "rejecting malformed vid share fragment");
+                                warn!(
+                                    %node,
+                                    %sender,
+                                    %view,
+                                    %err, "rejecting malformed vid share fragment"
+                                );
                             },
                         }
                     }
