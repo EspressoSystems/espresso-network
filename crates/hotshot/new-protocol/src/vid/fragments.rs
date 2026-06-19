@@ -19,10 +19,15 @@ pub struct VidFragmentAccumulator<T: NodeType> {
 pub enum VidFragmentError {
     #[error("fragment disagrees with the view's pinned metadata")]
     Inconsistent,
+
     #[error("namespace index {index} out of range for {num_namespaces} namespaces")]
     IndexOutOfRange { index: usize, num_namespaces: usize },
+
     #[error("duplicate fragment for namespace index {0}")]
     DuplicateIndex(usize),
+
+    #[error("fragment contains no namespaces")]
+    Empty,
 }
 
 /// A view's partially-collected namespace pieces, keyed by namespace index.
@@ -52,10 +57,7 @@ impl<T: NodeType> VidFragmentAccumulator<T> {
             return Ok(None);
         }
         if fragment.num_namespaces == 0 {
-            return Err(VidFragmentError::IndexOutOfRange {
-                index: 0,
-                num_namespaces: 0,
-            });
+            return Err(VidFragmentError::Empty);
         }
         let pending = match self.pending.entry(view) {
             Entry::Vacant(slot) => slot.insert(PendingShare {
