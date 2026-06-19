@@ -754,7 +754,7 @@
 <a href=#754 id=754 data-nosnippet>754</a>        </span>}
 <a href=#755 id=755 data-nosnippet>755</a>        <span class="kw">async fn </span>count_transactions_in_range(
 <a href=#756 id=756 data-nosnippet>756</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#757 id=757 data-nosnippet>757</a>            range: <span class="kw">impl </span>RangeBounds&lt;usize&gt; + Send,
+<a href=#757 id=757 data-nosnippet>757</a>            range: <span class="kw">impl </span>RangeBounds&lt;usize&gt; + Send + Sync + Clone,
 <a href=#758 id=758 data-nosnippet>758</a>            namespace: <span class="prelude-ty">Option</span>&lt;NamespaceId&lt;MockTypes&gt;&gt;,
 <a href=#759 id=759 data-nosnippet>759</a>        ) -&gt; QueryResult&lt;usize&gt; {
 <a href=#760 id=760 data-nosnippet>760</a>            <span class="self">self</span>.hotshot_qs
@@ -763,7 +763,7 @@
 <a href=#763 id=763 data-nosnippet>763</a>        </span>}
 <a href=#764 id=764 data-nosnippet>764</a>        <span class="kw">async fn </span>payload_size_in_range(
 <a href=#765 id=765 data-nosnippet>765</a>            <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#766 id=766 data-nosnippet>766</a>            range: <span class="kw">impl </span>RangeBounds&lt;usize&gt; + Send,
+<a href=#766 id=766 data-nosnippet>766</a>            range: <span class="kw">impl </span>RangeBounds&lt;usize&gt; + Send + Sync + Clone,
 <a href=#767 id=767 data-nosnippet>767</a>            namespace: <span class="prelude-ty">Option</span>&lt;NamespaceId&lt;MockTypes&gt;&gt;,
 <a href=#768 id=768 data-nosnippet>768</a>        ) -&gt; QueryResult&lt;usize&gt; {
 <a href=#769 id=769 data-nosnippet>769</a>            <span class="self">self</span>.hotshot_qs
