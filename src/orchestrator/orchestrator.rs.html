@@ -147,11 +147,12 @@
 <a href=#147 id=147 data-nosnippet>147</a>    config.config.da_staked_committee_size = args.num_nodes.get();
 <a href=#148 id=148 data-nosnippet>148</a>    config.config.builder_urls = Vec1::try_from_vec(args.builder_urls).unwrap();
 <a href=#149 id=149 data-nosnippet>149</a>    config.config.builder_timeout = args.builder_timeout;
-<a href=#150 id=150 data-nosnippet>150</a>    run_orchestrator(
-<a href=#151 id=151 data-nosnippet>151</a>        config,
-<a href=#152 id=152 data-nosnippet>152</a>        <span class="macro">format!</span>(<span class="string">"http://0.0.0.0:{}"</span>, args.port).parse().unwrap(),
-<a href=#153 id=153 data-nosnippet>153</a>    )
-<a href=#154 id=154 data-nosnippet>154</a>    .<span class="kw">await
-<a href=#155 id=155 data-nosnippet>155</a>    </span>.unwrap();
-<a href=#156 id=156 data-nosnippet>156</a>}
+<a href=#150 id=150 data-nosnippet>150</a>    <span class="macro">tokio::select!</span> {
+<a href=#151 id=151 data-nosnippet>151</a>        res = run_orchestrator(
+<a href=#152 id=152 data-nosnippet>152</a>            config,
+<a href=#153 id=153 data-nosnippet>153</a>            <span class="macro">format!</span>(<span class="string">"http://0.0.0.0:{}"</span>, args.port).parse().unwrap(),
+<a href=#154 id=154 data-nosnippet>154</a>        ) =&gt; res.unwrap(),
+<a href=#155 id=155 data-nosnippet>155</a>        <span class="kw">_ </span>= espresso_utils::shutdown::wait_for_shutdown_signal() =&gt; {},
+<a href=#156 id=156 data-nosnippet>156</a>    }
+<a href=#157 id=157 data-nosnippet>157</a>}
 </code></pre></div></section></main></body></html>

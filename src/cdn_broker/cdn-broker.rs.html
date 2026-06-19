@@ -149,9 +149,11 @@
 <a href=#149 id=149 data-nosnippet>149</a>    // Uses TCP from broker connections and Quic for user connections.
 <a href=#150 id=150 data-nosnippet>150</a>    </span><span class="kw">let </span>broker = Broker::new(broker_config).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#151 id=151 data-nosnippet>151</a>
-<a href=#152 id=152 data-nosnippet>152</a>    <span class="comment">// Start the main loop, consuming it
-<a href=#153 id=153 data-nosnippet>153</a>    </span>broker.start().<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#154 id=154 data-nosnippet>154</a>
-<a href=#155 id=155 data-nosnippet>155</a>    <span class="prelude-val">Ok</span>(())
-<a href=#156 id=156 data-nosnippet>156</a>}
+<a href=#152 id=152 data-nosnippet>152</a>    <span class="macro">tokio::select!</span> {
+<a href=#153 id=153 data-nosnippet>153</a>        res = broker.start() =&gt; res<span class="question-mark">?</span>,
+<a href=#154 id=154 data-nosnippet>154</a>        <span class="kw">_ </span>= espresso_utils::shutdown::wait_for_shutdown_signal() =&gt; {},
+<a href=#155 id=155 data-nosnippet>155</a>    }
+<a href=#156 id=156 data-nosnippet>156</a>
+<a href=#157 id=157 data-nosnippet>157</a>    <span class="prelude-val">Ok</span>(())
+<a href=#158 id=158 data-nosnippet>158</a>}
 </code></pre></div></section></main></body></html>

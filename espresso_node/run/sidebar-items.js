@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["init_with_storage","main","run_with_storage","wait_for_shutdown_signal"]};
+window.SIDEBAR_ITEMS = {"fn":["init_with_storage","main","run_with_storage"]};
