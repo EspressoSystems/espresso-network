@@ -1,20 +1,22 @@
-diff --git a/crates/espresso/node-sqlite/src/global_alloc.rs b/crates/espresso/node-sqlite/src/global_alloc.rs
-index 63c7887347..fb5374d86c 100644
---- a/crates/espresso/node-sqlite/src/global_alloc.rs
-+++ b/crates/espresso/node-sqlite/src/global_alloc.rs
-@@ -1,2 +1,5 @@
- //! Global allocator override point. Empty by default (system allocator); CI replaces this
- //! file via build-support/allocator-patches/<allocator>.patch for soak comparison builds.
-+
+diff --git a/crates/espresso/node-sqlite/src/main.rs b/crates/espresso/node-sqlite/src/main.rs
+index c7d35e2730..d1af0f1d97 100644
+--- a/crates/espresso/node-sqlite/src/main.rs
++++ b/crates/espresso/node-sqlite/src/main.rs
+@@ -1,3 +1,6 @@
 +#[global_allocator]
 +static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
-diff --git a/crates/espresso/node/src/global_alloc.rs b/crates/espresso/node/src/global_alloc.rs
-index 63c7887347..fb5374d86c 100644
---- a/crates/espresso/node/src/global_alloc.rs
-+++ b/crates/espresso/node/src/global_alloc.rs
-@@ -1,2 +1,5 @@
- //! Global allocator override point. Empty by default (system allocator); CI replaces this
- //! file via build-support/allocator-patches/<allocator>.patch for soak comparison builds.
 +
+ pub fn main() -> anyhow::Result<()> {
+     let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
+     tokio::runtime::Runtime::new()?.block_on(espresso_node::main(migrated_envs))
+diff --git a/crates/espresso/node/src/main.rs b/crates/espresso/node/src/main.rs
+index 5e7c3062c1..23995dfa84 100644
+--- a/crates/espresso/node/src/main.rs
++++ b/crates/espresso/node/src/main.rs
+@@ -1,3 +1,6 @@
 +#[global_allocator]
 +static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
++
+ // NOTE: due to nextest eagerly compiling binaries we allow the build if we're
+ // not building with --release (without debug_assertions). There is
+ // unfortunately no good way to detect if a build is performed by nextest
