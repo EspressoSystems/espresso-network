@@ -1064,3 +1064,42 @@ async fn test_proposal_release_follows_storage() {
         "propose action must be recorded before sending"
     );
 }
+
+/// Seeded proposals land in `self.proposals` and surface as undecided leaves.
+#[tokio::test]
+async fn test_seed_proposals_populates_undecided_chain() {
+    let test_data = TestData::new(4).await;
+    let mut harness = ConsensusHarness::new(0).await;
+
+    harness
+        .consensus
+        .seed_proposals(test_data.views.iter().map(|v| v.proposal.data.clone()));
+
+    for view in &test_data.views {
+        let seeded = harness
+            .consensus
+            .proposal_at(view.view_number)
+            .expect("seeded proposal available");
+        assert_eq!(
+            proposal_commitment(seeded),
+            proposal_commitment(&view.proposal.data),
+            "seeded proposal at view {} differs from the persisted proposal",
+            view.view_number
+        );
+    }
+
+    let undecided: Vec<_> = harness
+        .consensus
+        .undecided_leaves()
+        .map(|leaf| leaf.view_number())
+        .collect();
+    assert_eq!(
+        undecided,
+        test_data
+            .views
+            .iter()
+            .map(|v| v.view_number)
+            .collect::<Vec<_>>(),
+        "every seeded proposal should surface as an undecided leaf"
+    );
+}

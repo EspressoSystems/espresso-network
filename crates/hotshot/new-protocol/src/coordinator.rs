@@ -206,6 +206,12 @@ where
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
                 });
+        // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
+        let saved_proposals = initializer
+            .saved_proposals
+            .values()
+            .map(|p| message::Proposal::from(p.data.clone()));
+        consensus.seed_proposals(saved_proposals);
         // `seed_parent` sets the current epoch from the anchor proposal;
         // `resume_from_restart` positions the view so the node never
         // re-enters a view it may have voted or proposed in before it went
