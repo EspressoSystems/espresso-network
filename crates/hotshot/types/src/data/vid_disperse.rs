@@ -971,7 +971,7 @@ impl<T: NodeType> HasEpoch for AvidmGf2DisperseShareFragment<T> {
 /// VID share fragments hold pieces.
 ///
 /// A piece is the smallest unit. Fragments group multiple pieces together,
-/// depending on the cumulative length of their payload lenghts.
+/// depending on the cumulative length of their payload lengths.
 #[derive(Debug, Serialize, Deserialize, Clone, Eq, PartialEq, Hash)]
 pub struct AvidmGf2NamespacePiece {
     /// This namespace's index in the namespace table, in `0..num_namespaces`.
