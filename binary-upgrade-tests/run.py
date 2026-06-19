@@ -41,6 +41,15 @@ WIPE_PG_NODE = 1
 NEW_NODE_INDEX = 5
 NEW_NODE_API_PORT = 24005
 
+# Matches the demo genesis epoch height.
+EPOCH_HEIGHT = 30
+# Stops are only allowed when height % EPOCH_HEIGHT is in this inclusive
+# window, so a ~10-20s stop+restart cannot overlap the epoch root
+# (position 25) or transition blocks (27, 28, 29, 0). The pg wipe's db
+# recreate can exceed that downtime; the window only shrinks the overlap
+# odds there.
+SAFE_STOP_WINDOW = (2, 10)
+
 
 # Services NOT touched by the binary upgrade test:
 #   - one-shots that already ran in phase 1 (deploy-*, fund-builder,
@@ -49,6 +58,7 @@ NEW_NODE_API_PORT = 24005
 #     L1 anvil, block-explorer)
 NOUPGRADE_SERVICES = (
     "block-explorer",
+    "cdn-open",
     "cdn-whitelist",
     "demo-l1-network",
     "deploy-espresso-contracts",
@@ -150,12 +160,17 @@ SCENARIOS: dict[str, list[Action]] = {
     ],
     "new-from-old-pg": [
         SmokeTest(tag_source="base"),
+        # Wipe node-1 while the rest of the network still runs the old binary;
+        # that is the point of new-from-old. Roll node-0 (node-1's archival
+        # peer) last: node-1's historical backfill continues in the background
+        # after the Wipe step passes, and node-0 must stay fully indexed to
+        # serve it.
         Roll(WIPE_PG_NODE),
         Wipe(WIPE_PG_NODE, backend="pg"),
-        Roll(0),
         Roll(2),
         Roll(3),
         Roll(4),
+        Roll(0),
         UpgradeSupportServices(),
         AssertImagesUpgraded(),
         SmokeTest(),
@@ -268,6 +283,22 @@ class Compose:
             self, extra_overlays=self.extra_overlays + tuple(paths)
         )
 
+    def compose_env(self, docker_tag: str | None = None) -> dict[str, str]:
+        # The base network is configured by --env-file base/.env. Drop any
+        # ESPRESSO_*/ESP_* key the base .env defines so REPO_ROOT/.env's renamed
+        # values (loaded into os.environ) don't win via shell precedence and
+        # point base services at the wrong addresses (e.g. the prover's
+        # light-client proxy). Compose then resolves these from --env-file.
+        # Harness-only extras (node-5 port, genesis) aren't in the base .env,
+        # so they survive.
+        env = os.environ.copy()
+        for key in env_file_keys(self.base_dir / ".env"):
+            if key.startswith(("ESPRESSO_", "ESP_")):
+                env.pop(key, None)
+        if docker_tag is not None:
+            env["DOCKER_TAG"] = docker_tag
+        return env
+
     def run(
         self,
         *args: str,
@@ -275,13 +306,10 @@ class Compose:
         check: bool = True,
         capture: bool = False,
     ) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
-        if docker_tag is not None:
-            env["DOCKER_TAG"] = docker_tag
         return subprocess.run(
             self.base_args + list(args),
             cwd=REPO_ROOT,
-            env=env,
+            env=self.compose_env(docker_tag),
             check=check,
             capture_output=capture,
             text=True,
@@ -348,7 +376,7 @@ class Compose:
             subprocess.run(
                 self.base_args + ["ps", "-a"],
                 cwd=REPO_ROOT,
-                env=os.environ.copy(),
+                env=self.compose_env(),
                 stdout=f,
                 stderr=subprocess.STDOUT,
                 check=False,
@@ -358,7 +386,7 @@ class Compose:
                 subprocess.run(
                     self.base_args + ["logs", "--no-color", service],
                     cwd=REPO_ROOT,
-                    env=os.environ.copy(),
+                    env=self.compose_env(),
                     stdout=f,
                     stderr=subprocess.STDOUT,
                     check=False,
@@ -371,15 +399,10 @@ class Compose:
         return [s for s in self.services() if s not in NOUPGRADE_SERVICES]
 
     def pull(self, *tags: str, retries: int = 4, backoff: float = 10.0) -> None:
-        # ghcr.io occasionally returns "context deadline exceeded" on manifest
-        # HEADs when many parallel CI jobs pull at once. `--policy missing`
-        # makes retries cheap: already-pulled images are skipped.
         for tag in tags:
             log.info(f"Pulling images (DOCKER_TAG={tag})")
             for attempt in range(1, retries + 1):
-                result = self.run(
-                    "pull", "--policy", "missing", docker_tag=tag, check=False
-                )
+                result = self.run("pull", docker_tag=tag, check=False)
                 if result.returncode == 0:
                     break
                 if attempt == retries:
@@ -544,6 +567,10 @@ class Node:
         code, _ = _get(f"{self.api_url}/availability/leaf/{index}")
         return code == 200
 
+    def aggregator_caught_up(self, height: int) -> bool:
+        code, _ = _get(f"{self.api_url}/node/transactions/count/{height}")
+        return code == 200
+
     def wait_consensus(
         self,
         target: int,
@@ -617,13 +644,32 @@ class Node:
             missing = [i for i in leaves if not self.leaf_available(i)]
             if not missing:
                 log.info(f"{self} availability/leaf {leaves} ok")
-                return
+                break
             if abort and (msg := abort()):
                 raise RuntimeError(f"Aborted waiting for {self} leaf {missing}: {msg}")
             if time.monotonic() >= leaf_deadline:
                 raise TimeoutError(
                     f"{self} leaf {missing} not available after 30s"
                     f" (storage_height={last_stor})"
+                )
+            time.sleep(2.0)
+
+        if not backfill:
+            return
+
+        # The transactions/count endpoint reads the aggregate table, which a
+        # background aggregator builds contiguously from height 0. Wait for it
+        # so the tx index finishes while peers are still up.
+        while True:
+            if self.aggregator_caught_up(target - 1):
+                log.info(f"{self} aggregator caught up to {target - 1}")
+                return
+            if abort and (msg := abort()):
+                raise RuntimeError(f"Aborted waiting for {self} aggregator: {msg}")
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"{self} aggregator did not catch up to {target - 1}"
+                    f" after {int(timeout)}s"
                 )
             time.sleep(2.0)
 
@@ -681,17 +727,22 @@ def extract_base_files(base_tag: str, base_dir: Path) -> None:
         (base_dir / name).write_text(content)
 
 
+def env_file_keys(path: Path) -> set[str]:
+    """Variable names assigned in a dotenv file (ignoring comments/blanks)."""
+    keys: set[str] = set()
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            keys.add(line.split("=", 1)[0].strip())
+    return keys
+
+
 def load_project_env() -> None:
     """Source the repo .env via bash so ${VAR} interpolation works, then copy
     .env-defined keys into os.environ without clobbering existing values
     (so callers can override individual keys from the outer shell)."""
     path = REPO_ROOT / ".env"
-    keys: set[str] = set()
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        keys.add(line.split("=", 1)[0].strip())
+    keys = env_file_keys(path)
 
     result = subprocess.run(
         ["bash", "-c", f"set -a; . {shlex.quote(str(path))}; env -0"],
@@ -744,16 +795,40 @@ def _boot_network(compose: Compose, config: Config) -> None:
         subprocess.Popen(
             compose.base_args + ["up", "-d"],
             cwd=REPO_ROOT,
-            env=os.environ | {"DOCKER_TAG": config.base_tag},
+            env=compose.compose_env(config.base_tag),
             stdout=f,
             stderr=subprocess.STDOUT,
         )
     log.info(f"compose up -d running in background; log at {compose_up_log}")
 
 
+def _wait_safe_stop_position(ref: Node, timeout: float = 180.0) -> None:
+    deadline = time.monotonic() + timeout
+    last_h: int | None = None
+    while time.monotonic() < deadline:
+        h = ref.consensus_height()
+        if h is not None:
+            last_h = h
+            pos = h % EPOCH_HEIGHT
+            if SAFE_STOP_WINDOW[0] <= pos <= SAFE_STOP_WINDOW[1]:
+                log.info(f"Safe stop position reached: height={h}, position={pos}")
+                return
+        time.sleep(1.0)
+    pos = last_h % EPOCH_HEIGHT if last_h is not None else None
+    raise TimeoutError(
+        f"No safe stop position on {ref} after {int(timeout)}s "
+        f"(height={last_h}, position={pos})"
+    )
+
+
+def _peer_idx(idx: int) -> int:
+    return 1 if idx == 0 else 0
+
+
 def _roll(compose: Compose, idx: int, upgrade_tag: str) -> None:
     nodes = [Node.from_index(i) for i in NODE_INDICES]
-    ref = nodes[1] if idx == 0 else nodes[0]
+    ref = nodes[_peer_idx(idx)]
+    _wait_safe_stop_position(ref)
     initial: int | None = None
     for _ in range(5):
         initial = ref.storage_height()
@@ -785,7 +860,7 @@ def _roll(compose: Compose, idx: int, upgrade_tag: str) -> None:
 
 
 def _restart_with_config_peer(compose: Compose, idx: int, tag: str) -> None:
-    peer_idx = 1 if idx == 0 else 0
+    peer_idx = _peer_idx(idx)
     peer_port_var = f"ESPRESSO_NODE_{peer_idx}_API_PORT"
     peer_port = os.environ.get(peer_port_var)
     if not peer_port:
@@ -837,6 +912,7 @@ def _execute(action: Action, compose: Compose, config: Config) -> None:
             _roll(compose, idx, config.upgrade_tag)
 
         case Wipe(idx=idx, backend=backend):
+            _wait_safe_stop_position(Node.from_index(_peer_idx(idx)))
             if backend == "fs":
                 compose.wipe_fs_node(idx)
             else:
@@ -909,9 +985,6 @@ def main() -> int:
 
     config = Config.from_env()
     log.info(f"BASE_TAG={config.base_tag} UPGRADE_TAG={config.upgrade_tag}")
-    os.environ.setdefault(
-        "ESPRESSO_SEQUENCER_GENESIS_FILE", "genesis/demo-drb-header.toml"
-    )
     os.environ.setdefault("ESPRESSO_NODE_GENESIS_FILE", "genesis/demo-drb-header.toml")
     load_project_env()
 
