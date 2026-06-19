@@ -138,13 +138,6 @@ where
         handle.attach_metrics_push(registry);
     }
 
-    // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
-    // (if the HTTP module was configured). Attach the metrics push task now,
-    // before consensus starts churning.
-    if let (Some(handle), Some(registry)) = (telemetry_handle, telemetry::registry()) {
-        handle.attach_metrics_push(registry);
-    }
-
     // Start doing consensus.
     ctx.start_consensus().await;
 
