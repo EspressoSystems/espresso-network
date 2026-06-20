@@ -14,6 +14,7 @@ use hotshot_types::{
     simple_certificate::LightClientStateUpdateCertificateV2,
     traits::{EncodeBytes, node_implementation::NodeType, storage::Storage as StorageTrait},
     utils::EpochTransitionIndicator,
+    vote::HasViewNumber,
 };
 use tokio::{
     task::{AbortHandle, JoinSet},
@@ -23,7 +24,7 @@ use tracing::{error, warn};
 
 use crate::{
     helpers::proposal_commitment,
-    message::{Certificate2, Proposal},
+    message::{Certificate1, Certificate2, Proposal},
 };
 
 const RETRY_DELAY: Duration = Duration::from_millis(300);
@@ -32,6 +33,13 @@ const RETRY_DELAY: Duration = Duration::from_millis(300);
 #[async_trait]
 pub trait NewProtocolStorage<T: NodeType>: StorageTrait<T> {
     async fn append_cert2(&self, view: ViewNumber, cert: Certificate2<T>) -> anyhow::Result<()>;
+
+    /// Persist the locked QC, written before each phase-2 vote so the lock
+    /// survives a restart instead of regressing to the decided-anchor QC.
+    async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()>;
+
+    /// Load the persisted locked QC, if any.
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -54,12 +62,17 @@ pub enum StorageOutput<T: NodeType> {
     Proposal(ViewNumber, Commitment<Leaf2<T>>),
     Vid(ViewNumber),
     Action(ViewNumber, ActionKind),
+    /// The locked QC for the given view has been durably persisted.
+    HighQc(ViewNumber),
 }
 
 impl<T: NodeType> StorageOutput<T> {
     pub fn view_number(&self) -> ViewNumber {
         match self {
-            Self::Proposal(view, _) | Self::Vid(view) | Self::Action(view, _) => *view,
+            Self::Proposal(view, _)
+            | Self::Vid(view)
+            | Self::Action(view, _)
+            | Self::HighQc(view) => *view,
         }
     }
 }
@@ -152,6 +165,25 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
                     Ok(()) => return None,
                     Err(err) => {
                         warn!(%err, %view, "failed to append cert2, retrying");
+                        sleep(RETRY_DELAY).await;
+                    },
+                }
+            }
+        });
+        self.handles.entry(view).or_default().push(handle);
+    }
+
+    /// Persist the locked QC; on success emits [`StorageOutput::HighQc`], which
+    /// gates the matching phase-2 vote.
+    pub fn append_high_qc2(&mut self, high_qc: Certificate1<T>) {
+        let view = high_qc.view_number();
+        let storage = self.storage.clone();
+        let handle = self.tasks.spawn(async move {
+            loop {
+                match storage.append_high_qc2(high_qc.clone()).await {
+                    Ok(()) => return Some(StorageOutput::HighQc(view)),
+                    Err(err) => {
+                        warn!(%err, %view, "failed to append high qc, retrying");
                         sleep(RETRY_DELAY).await;
                     },
                 }
@@ -268,5 +300,14 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
 impl<T: NodeType> NewProtocolStorage<T> for TestStorage<T> {
     async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn append_high_qc2(&self, high_qc: Certificate1<T>) -> anyhow::Result<()> {
+        // `Certificate1<T>` is a `QuorumCertificate2<T>`; reuse the monotonic legacy slot.
+        StorageTrait::update_high_qc2(self, high_qc).await
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
+        Ok(self.high_qc_cloned().await)
     }
 }
