@@ -124,9 +124,34 @@ jobs:
           for pr in ${{ steps.resolve.outputs.needs_claude }}; do
             branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
             git checkout "$branch"
+
+            # Claude must have committed its resolution. The conflict markers
+            # are committed into the files, so Claude's edits are unstaged; if it
+            # forgot to `git add` before committing, the resolution lives only in
+            # the working tree and would be silently lost on push. Fail loudly
+            # rather than marking a still-conflicted PR ready for review.
+            if ! git diff --quiet || ! git diff --cached --quiet; then
+              echo "::error::PR #$pr has uncommitted changes after Claude resolution; Claude likely committed without staging. Refusing to push." >&2
+              git status --short >&2
+              exit 1
+            fi
+            if git grep -lnE '^(<<<<<<< |>>>>>>> )' HEAD -- >/dev/null 2>&1; then
+              echo "::error::PR #$pr still contains conflict markers after resolution; refusing to push." >&2
+              git grep -nE '^(<<<<<<< |>>>>>>> )' HEAD -- >&2 || true
+              exit 1
+            fi
+            git fetch origin "$branch"
+            if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ]; then
+              echo "::error::PR #$pr has no new commits over origin/$branch; Claude did not commit a resolution. Refusing to mark ready." >&2
+              exit 1
+            fi
+
             cargo check --tests --examples
-            git push origin "$branch"
+
+            # Label before pushing: the push triggers downstream CI, so tag the
+            # PR first to guarantee it is marked even if a later step fails.
             gh pr edit "$pr" --add-label claude-resolved
+            git push origin "$branch"
             gh pr ready "$pr"
             if [ -f "claude-summaries/$pr.md" ]; then
               gh pr comment "$pr" --body-file "claude-summaries/$pr.md"
