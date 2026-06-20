@@ -120,29 +120,35 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Comment the failure on the PR, then exit non-zero.
+          fail() {
+            local pr="$1" msg="$2" body
+            echo "::error::PR #$pr: $msg" >&2
+            body=$(printf '⚠️ Automated backport conflict resolution failed: %s\n\nSee the [workflow run](%s) for details. This PR needs to be resolved manually.' "$msg" "$run_url")
+            gh pr comment "$pr" --body "$body" || true
+            exit 1
+          }
+
           gh label create claude-resolved --color FF6B35 --description "Backport conflicts resolved by Claude" 2>/dev/null || true
           for pr in ${{ steps.resolve.outputs.needs_claude }}; do
             branch=$(gh pr view "$pr" --json headRefName -q .headRefName)
             git checkout "$branch"
 
-            # Fail if Claude left uncommitted changes, conflict markers, or no new commit.
             if ! git diff --quiet || ! git diff --cached --quiet; then
-              echo "::error::PR #$pr has uncommitted changes after Claude resolution; refusing to push." >&2
-              git status --short >&2
-              exit 1
+              fail "$pr" "Claude left uncommitted changes after resolution."
             fi
             if git grep -lnE '^(<<<<<<< |>>>>>>> )' HEAD -- >/dev/null 2>&1; then
-              echo "::error::PR #$pr still contains conflict markers; refusing to push." >&2
-              git grep -nE '^(<<<<<<< |>>>>>>> )' HEAD -- >&2 || true
-              exit 1
+              fail "$pr" "conflict markers are still present after resolution."
             fi
             git fetch origin "$branch"
             if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ]; then
-              echo "::error::PR #$pr has no new commits over origin/$branch; refusing to mark ready." >&2
-              exit 1
+              fail "$pr" "Claude produced no new commits over origin/$branch."
             fi
-
-            cargo check --tests --examples
+            if ! cargo check --tests --examples; then
+              fail "$pr" "\`cargo check --tests --examples\` failed after resolution."
+            fi
 
             # Label before pushing so the PR is tagged even if a later step fails.
             gh pr edit "$pr" --add-label claude-resolved
@@ -150,5 +156,7 @@ jobs:
             gh pr ready "$pr"
             if [ -f "claude-summaries/$pr.md" ]; then
               gh pr comment "$pr" --body-file "claude-summaries/$pr.md"
+            else
+              gh pr comment "$pr" --body "⚠️ No resolution summary was produced for this backport. Claude may not have completed the resolution as expected; please review carefully." || true
             fi
           done
