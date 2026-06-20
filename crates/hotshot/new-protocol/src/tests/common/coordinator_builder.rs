@@ -180,8 +180,8 @@ pub async fn build_test_coordinator(
             storage
                 .proposals_cloned()
                 .await
-                .into_iter()
-                .map(|(_, p)| Proposal::from(p.data.clone())),
+                .into_values()
+                .map(|p| Proposal::from(p.data.clone())),
         );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
         anchor_view
