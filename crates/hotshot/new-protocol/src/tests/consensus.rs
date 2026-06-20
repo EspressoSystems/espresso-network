@@ -109,6 +109,82 @@ async fn test_vote1_for_sequential_views() {
     );
 }
 
+/// A re-seeded parent proposal (not re-received over the network) lets the node
+/// vote1 on the child built on it, mirroring `Coordinator::maker`.
+#[tokio::test]
+async fn test_vote1_with_seeded_parent_proposal() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Restart: re-seed the validated view-1 proposal and mark its block reconstructed.
+    harness
+        .consensus
+        .seed_proposals([test_data.views[0].proposal.data.clone()]);
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+
+    // The view-2 proposal arrives and builds on the re-seeded parent.
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
+    assert!(
+        any(harness.outputs(), is_vote1),
+        "vote1 should fire on the child using the re-seeded parent proposal"
+    );
+}
+
+/// A restored lock certifying the parent lets the node vote1 without
+/// re-reconstructing the parent block (nothing in `blocks_reconstructed`).
+#[tokio::test]
+async fn test_vote1_parent_reconstruction_from_lock() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    // Restart: re-seed the parent proposal and restore the lock that certifies
+    // it, but do NOT mark its block reconstructed.
+    harness
+        .consensus
+        .seed_proposals([test_data.views[0].proposal.data.clone()]);
+    harness
+        .consensus
+        .seed_locked_cert(test_data.views[0].cert1.clone());
+
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
+    assert!(
+        any(harness.outputs(), is_vote1),
+        "vote1 should fire when the restored lock certifies the parent block"
+    );
+}
+
+/// Control for `test_vote1_with_seeded_parent_proposal`: parent block
+/// reconstructed but proposal absent, so `maybe_vote_1` bails and no vote fires.
+#[tokio::test]
+async fn test_vote1_blocked_without_parent_proposal() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new(3).await;
+    let node_key = BLSPubKey::generated_from_seed_indexed([0; 32], 0).0;
+
+    harness
+        .apply(test_data.views[0].block_reconstructed_input())
+        .await;
+
+    harness
+        .apply(test_data.views[1].proposal_input_consensus(&node_key))
+        .await;
+
+    assert!(
+        !any(harness.outputs(), is_vote1),
+        "vote1 must not fire when the parent proposal is unavailable"
+    );
+}
+
 /// Vote1 fires for view 1 (genesis parent) — parent checks are skipped.
 #[tokio::test]
 async fn test_vote1_genesis_parent() {
@@ -984,6 +1060,15 @@ async fn test_vote2_gated_on_vid_storage() {
 
     consensus.apply(
         ConsensusInput::Stored(StorageOutput::Vid(view)),
+        &mut outbox,
+    );
+    assert!(
+        !any(&outbox, is_vote2),
+        "vote2 must wait for the locked QC to be persisted"
+    );
+
+    consensus.apply(
+        ConsensusInput::Stored(StorageOutput::HighQc(view)),
         &mut outbox,
     );
     assert_eq!(count_matching(&outbox, is_vote2), 1);
