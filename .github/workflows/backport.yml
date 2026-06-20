@@ -96,9 +96,11 @@ jobs:
           set -euo pipefail
           curl -fsSL https://claude.ai/install.sh | bash
           export PATH="$HOME/.local/bin:$PATH"
-          # Prompt body lives in .github/claude/backport-resolve.md.
+          # Read the prompt from the triggering commit: the working tree is now on
+          # the backport branch, which may predate this file.
+          prompt_body=$(git show "$GITHUB_SHA:.github/claude/backport-resolve.md")
           prompt=$(printf 'Mergiraf left conflict markers in these backport PRs:\n%s\n\n%s' \
-            "$NEEDS_CLAUDE" "$(cat .github/claude/backport-resolve.md)")
+            "$NEEDS_CLAUDE" "$prompt_body")
           claude -p "$prompt" --model claude-opus-4-8 --dangerously-skip-permissions
 
       - name: Install protoc
