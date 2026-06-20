@@ -39,16 +39,9 @@ use hotshot_query_service::{
             SerializableRetry,
             pruning::PrunerCfg,
             sql::{
-<<<<<<< HEAD
-                Config, Db, Read, SqlStorage, StorageConnectionType, Transaction, TransactionMode,
-                Write, include_migrations, query_as, syntax_helpers::MAX_FN,
-||||||| parent of f11caa84e5 (Retry harness for Postgres serialization error (#4450))
-                Config, Db, Read, SqlStorage, StorageConnectionType, Transaction, Write,
-                include_migrations, query_as, syntax_helpers::MAX_FN,
-=======
                 Config, Db, Read, SerializableRetryConfig, SqlStorage, StorageConnectionType,
-                Transaction, Write, include_migrations, query_as, syntax_helpers::MAX_FN,
->>>>>>> f11caa84e5 (Retry harness for Postgres serialization error (#4450))
+                Transaction, TransactionMode, Write, include_migrations, query_as,
+                syntax_helpers::MAX_FN,
             },
         },
     },
@@ -952,43 +945,9 @@ impl Persistence {
                 mut vid_shares,
                 mut da_proposals,
                 state_certs,
-                cert2,
             )) = serializable_retry!(self, || async {
                 let mut tx = self.db.read().await?;
 
-<<<<<<< HEAD
-            let mut parent = None;
-            let mut rows = query(
-                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view",
-            )
-            .bind(from_view)
-            .fetch(tx.as_mut());
-            let mut leaves = vec![];
-            let mut final_qc = None;
-            while let Some(row) = rows.next().await {
-                let row = match row {
-                    Ok(row) => row,
-                    Err(err) => {
-                        // If there's an error getting a row, try generating an event with the rows
-                        // we do have.
-                        tracing::warn!("error loading row: {err:#}");
-||||||| parent of f11caa84e5 (Retry harness for Postgres serialization error (#4450))
-            let mut parent = None;
-            let mut rows = query(
-                "SELECT leaf, qc, next_epoch_qc FROM anchor_leaf2 WHERE view >= $1 ORDER BY view",
-            )
-            .bind(from_view)
-            .fetch(tx.as_mut());
-            let mut leaves: Vec<(Leaf2, CertificatePair<SeqTypes>)> = vec![];
-            let mut final_qc = None;
-            while let Some(row) = rows.next().await {
-                let row = match row {
-                    Ok(row) => row,
-                    Err(err) => {
-                        // If there's an error getting a row, try generating an event with the rows
-                        // we do have.
-                        tracing::warn!("error loading row: {err:#}");
-=======
                 // Collect a chain of consecutive leaves, starting from the first view after the
                 // last decide. This will correspond to a decide event, and defines a range of
                 // views which can be garbage collected. This may even include views for which
@@ -1007,7 +966,7 @@ impl Persistence {
                 )
                 .bind(from_view)
                 .fetch(tx.as_mut());
-                let mut leaves: Vec<(Leaf2, CertificatePair<SeqTypes>)> = vec![];
+                let mut leaves = vec![];
                 let mut final_qc = None;
                 while let Some(row) = rows.next().await {
                     let row = match row {
@@ -1049,30 +1008,13 @@ impl Persistence {
                             parent,
                             "ending decide event at non-consecutive leaf"
                         );
->>>>>>> f11caa84e5 (Retry harness for Postgres serialization error (#4450))
                         break;
                     }
                     parent = Some(height);
-                    let cert = CertificatePair::new(qc, next_epoch_qc);
-                    final_qc = Some(cert.clone());
-                    leaves.push((leaf, cert));
+                    leaves.push(leaf);
+                    final_qc = Some(CertificatePair::new(qc, next_epoch_qc));
                 }
-<<<<<<< HEAD
-                parent = Some(height);
-                leaves.push(leaf);
-                final_qc = Some(CertificatePair::new(qc, next_epoch_qc));
-            }
-            drop(rows);
-||||||| parent of f11caa84e5 (Retry harness for Postgres serialization error (#4450))
-                parent = Some(height);
-                let cert = CertificatePair::new(qc, next_epoch_qc);
-                final_qc = Some(cert.clone());
-                leaves.push((leaf, cert));
-            }
-            drop(rows);
-=======
                 drop(rows);
->>>>>>> f11caa84e5 (Retry harness for Postgres serialization error (#4450))
 
                 let Some(final_qc) = final_qc else {
                     // End event processing when there are no more decided views.
@@ -1080,10 +1022,10 @@ impl Persistence {
                     return Ok(None);
                 };
 
-                // Find the range of views encompassed by this leaf chain. All data in this range can be
-                // processed by the consumer and then deleted.
-                let from_view = leaves[0].0.view_number();
-                let to_view = leaves[leaves.len() - 1].0.view_number();
+                // Find the range of views encompassed by this leaf chain. All data in this range
+                // can be processed by the consumer and then deleted.
+                let from_view = leaves[0].view_number();
+                let to_view = leaves[leaves.len() - 1].view_number();
 
                 // Collect VID shares for the decide event.
                 let vid_rows = tx
@@ -1101,7 +1043,7 @@ impl Persistence {
                         let vid_proposal = bincode::deserialize::<
                             Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
                         >(&data)?;
-                        Ok((view as u64, vid_proposal))
+                        Ok((view as u64, vid_proposal.data))
                     })
                     .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
@@ -1133,20 +1075,6 @@ impl Persistence {
                     .with_context(|| {
                         format!("load_state_certs from_view={from_view:?} to_view={to_view:?}")
                     })?;
-
-                let cert2_row = tx
-                    .fetch_optional(
-                        query("SELECT data FROM decided_cert2 WHERE view = $1")
-                            .bind(to_view.u64() as i64),
-                    )
-                    .await?;
-                let cert2 = cert2_row
-                    .map(|row| {
-                        let bytes: Vec<u8> = row.get("data");
-                        bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
-                            .context("deserializing decided cert2")
-                    })
-                    .transpose()?;
                 drop(tx);
                 Ok(Some((
                     from_view,
@@ -1156,139 +1084,12 @@ impl Persistence {
                     vid_shares,
                     da_proposals,
                     state_certs,
-                    cert2,
                 )))
             })
             .await?
             else {
                 return Ok(());
             };
-<<<<<<< HEAD
-
-            // Find the range of views encompassed by this leaf chain. All data in this range can be
-            // processed by the consumer and then deleted.
-            let from_view = leaves[0].view_number();
-            let to_view = leaves[leaves.len() - 1].view_number();
-
-            // Collect VID shares for the decide event.
-            let mut vid_shares = tx
-                .fetch_all(
-                    query("SELECT view, data FROM vid_share2 where view >= $1 AND view <= $2")
-                        .bind(from_view.u64() as i64)
-                        .bind(to_view.u64() as i64),
-                )
-                .await?
-                .into_iter()
-                .map(|row| {
-                    let view: i64 = row.get("view");
-                    let data: Vec<u8> = row.get("data");
-                    let vid_proposal = bincode::deserialize::<
-                        Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-                    >(&data)?;
-                    Ok((view as u64, vid_proposal.data))
-                })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-
-            // Collect DA proposals for the decide event.
-            let mut da_proposals = tx
-                .fetch_all(
-                    query("SELECT view, data FROM da_proposal2 where view >= $1 AND view <= $2")
-                        .bind(from_view.u64() as i64)
-                        .bind(to_view.u64() as i64),
-                )
-                .await?
-                .into_iter()
-                .map(|row| {
-                    let view: i64 = row.get("view");
-                    let data: Vec<u8> = row.get("data");
-                    let da_proposal =
-                        bincode::deserialize::<Proposal<SeqTypes, DaProposal2<SeqTypes>>>(&data)?;
-                    Ok((view as u64, da_proposal.data))
-                })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-
-            // Collect state certs for the decide event.
-            let state_certs = Self::load_state_certs(&mut tx, from_view, to_view)
-                .await
-                .inspect_err(|err| {
-                    tracing::error!(
-                        ?from_view,
-                        ?to_view,
-                        "failed to load state certificates. error={err:#}"
-                    );
-                })?;
-
-            drop(tx);
-||||||| parent of f11caa84e5 (Retry harness for Postgres serialization error (#4450))
-
-            // Find the range of views encompassed by this leaf chain. All data in this range can be
-            // processed by the consumer and then deleted.
-            let from_view = leaves[0].0.view_number();
-            let to_view = leaves[leaves.len() - 1].0.view_number();
-
-            // Collect VID shares for the decide event.
-            let mut vid_shares = tx
-                .fetch_all(
-                    query("SELECT view, data FROM vid_share2 where view >= $1 AND view <= $2")
-                        .bind(from_view.u64() as i64)
-                        .bind(to_view.u64() as i64),
-                )
-                .await?
-                .into_iter()
-                .map(|row| {
-                    let view: i64 = row.get("view");
-                    let data: Vec<u8> = row.get("data");
-                    let vid_proposal = bincode::deserialize::<
-                        Proposal<SeqTypes, VidDisperseShare<SeqTypes>>,
-                    >(&data)?;
-                    Ok((view as u64, vid_proposal))
-                })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-
-            // Collect DA proposals for the decide event.
-            let mut da_proposals = tx
-                .fetch_all(
-                    query("SELECT view, data FROM da_proposal2 where view >= $1 AND view <= $2")
-                        .bind(from_view.u64() as i64)
-                        .bind(to_view.u64() as i64),
-                )
-                .await?
-                .into_iter()
-                .map(|row| {
-                    let view: i64 = row.get("view");
-                    let data: Vec<u8> = row.get("data");
-                    let da_proposal =
-                        bincode::deserialize::<Proposal<SeqTypes, DaProposal2<SeqTypes>>>(&data)?;
-                    Ok((view as u64, da_proposal.data))
-                })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
-
-            // Collect state certs for the decide event.
-            let state_certs = Self::load_state_certs(&mut tx, from_view, to_view)
-                .await
-                .inspect_err(|err| {
-                    tracing::error!(
-                        ?from_view,
-                        ?to_view,
-                        "failed to load state certificates. error={err:#}"
-                    );
-                })?;
-
-            let cert2 = tx
-                .fetch_optional(
-                    query("SELECT data FROM decided_cert2 WHERE view = $1")
-                        .bind(to_view.u64() as i64),
-                )
-                .await?
-                .map(|row| {
-                    let bytes: Vec<u8> = row.get("data");
-                    bincode::deserialize::<Certificate2<SeqTypes>>(&bytes)
-                        .context("deserializing decided cert2")
-                })
-                .transpose()?;
-            drop(tx);
-=======
->>>>>>> f11caa84e5 (Retry harness for Postgres serialization error (#4450))
 
             // Collate all the information by view number and construct a chain of leaves.
             let leaf_chain = leaves
