@@ -1226,7 +1226,6 @@ mod test {
             genesis.clone(),
             LightClientOptions {
                 num_stake_tables_in_memory: 2,
-                ..Default::default()
             },
         );
 
