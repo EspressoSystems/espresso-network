@@ -35,6 +35,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block},
     vote::{self, Certificate, HasViewNumber},
 };
+use hotshot_utils::anytrace;
 use tracing::{debug, info, instrument, warn};
 
 use crate::{
@@ -239,6 +240,28 @@ enum CertVerification {
     Invalid,
     /// The epoch's stake table is not yet available (catchup in progress).
     EpochUnavailable,
+}
+
+/// Reason a proposal failed the safety/liveness rule.
+#[derive(Debug, thiserror::Error)]
+enum SafetyError {
+    #[error("leaf commitment at locked view does not match locked certificate")]
+    LockedViewCommitmentMismatch {
+        view: ViewNumber,
+        locked_commit: String,
+        proposal_commit: String,
+    },
+    #[error("justify qc neither extends nor is newer than the locked certificate")]
+    UnsafeProposal {
+        qc_view: ViewNumber,
+        locked_view: ViewNumber,
+        parent_commit: String,
+        locked_commit: String,
+    },
+    #[error("failed to compute justify qc data commitment: {0}")]
+    JustifyQcCommitment(#[source] anytrace::Error),
+    #[error("failed to compute locked certificate data commitment: {0}")]
+    LockedCertCommitment(#[source] anytrace::Error),
 }
 
 impl<T: NodeType> Consensus<T> {
@@ -840,9 +863,9 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
 
-        if !self.is_safe(&proposal) {
+        if let Err(err) = self.is_safe(&proposal) {
             warn!(
-                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch, ?err,
                 "proposal not safe"
             );
             return Protocol::Abort;
@@ -1948,37 +1971,47 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "trace", skip_all)]
-    fn is_safe(&self, proposal: &Proposal<T>) -> bool {
+    fn is_safe(&self, proposal: &Proposal<T>) -> Result<(), SafetyError> {
         let Some(locked_cert) = self.locked_cert.as_ref() else {
             // Locked certificate is not set which means it is at genesis
             debug!("at genesis");
-            return true;
+            return Ok(());
         };
 
         // cert1 + block arrived before proposal
         if locked_cert.view_number() == proposal.view_number() {
-            return locked_cert.data.leaf_commit == proposal_commitment(proposal);
+            let locked_commit = locked_cert.data.leaf_commit;
+            let proposal_commit = proposal_commitment(proposal);
+            if locked_commit != proposal_commit {
+                return Err(SafetyError::LockedViewCommitmentMismatch {
+                    view: proposal.view_number(),
+                    locked_commit: locked_commit.to_string(),
+                    proposal_commit: proposal_commit.to_string(),
+                });
+            }
+            return Ok(());
         }
 
-        let liveness_check = proposal.justify_qc.view_number() > locked_cert.view_number();
-        let parent_commit = match proposal.justify_qc.data_commitment(&self.upgrade_lock) {
-            Ok(c) => c,
-            Err(err) => {
-                warn!(%err, "failed to compute justify qc data commitment");
-                return false;
-            },
-        };
-        let locked_commit = match locked_cert.data_commitment(&self.upgrade_lock) {
-            Ok(c) => c,
-            Err(err) => {
-                warn!(%err, "failed to compute locked certificate data");
-                return false;
-            },
-        };
+        let parent_commit = proposal
+            .justify_qc
+            .data_commitment(&self.upgrade_lock)
+            .map_err(SafetyError::JustifyQcCommitment)?;
+        let locked_commit = locked_cert
+            .data_commitment(&self.upgrade_lock)
+            .map_err(SafetyError::LockedCertCommitment)?;
 
-        let safety_check = parent_commit == locked_commit;
+        let safety = parent_commit == locked_commit;
+        let liveness = proposal.justify_qc.view_number() > locked_cert.view_number();
+        if safety || liveness {
+            return Ok(());
+        }
 
-        safety_check || liveness_check
+        Err(SafetyError::UnsafeProposal {
+            qc_view: proposal.justify_qc.view_number(),
+            locked_view: locked_cert.view_number(),
+            parent_commit: parent_commit.to_string(),
+            locked_commit: locked_commit.to_string(),
+        })
     }
 
     #[instrument(level = "trace", skip_all)]
