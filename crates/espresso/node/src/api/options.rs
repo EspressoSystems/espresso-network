@@ -5,6 +5,7 @@ use std::sync::Arc;
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
+use espresso_telemetry as telemetry;
 use espresso_types::{
     BlockMerkleTree, PubKey, SeqTypes,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
@@ -18,13 +19,14 @@ use futures::{
 use hotshot_query_service::{
     ApiState as AppState, Error,
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{self, UpdateStatusData},
+    status::{self, HasMetrics, UpdateStatusData},
 };
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
     network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
+use process_metrics::ProcessMetrics;
 use tide_disco::{Api, App, Url, listener::RateLimitListener, method::ReadState};
 use vbs::version::StaticVersionType;
 
@@ -221,6 +223,8 @@ impl Options {
             // storage.
             let ds = MetricsDataSource::default();
             let metrics = ds.populate_metrics();
+            telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
+            tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
             let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
                 ds,
                 state.clone(),
@@ -303,6 +307,9 @@ impl Options {
         D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
     {
         let metrics = ds.populate_metrics();
+        // Deposit the underlying prometheus::Registry for the in-process
+        // telemetry push task. Idempotent; safe to call multiple times.
+        telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
         let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
         let api_state: endpoints::AvailState<N, P, D> = ds.clone().into();
         let mut app = App::<_, Error>::with_state(api_state);
@@ -392,6 +399,8 @@ impl Options {
         // Get the inner storage from the data source
         let inner_storage = ds.inner();
 
+        tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
+
         let (metrics, ds, mut app) = self
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;
@@ -458,6 +467,7 @@ impl Options {
 
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
         let inner_storage = ds.inner();
+        tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
         let (metrics, ds, mut app) = self
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;

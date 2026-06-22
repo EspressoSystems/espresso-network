@@ -1,5 +1,6 @@
 mod hotshot
 mod py "scripts/py.just"
+mod soak "crates/process-metrics/justfile"
 
 default:
     just --list

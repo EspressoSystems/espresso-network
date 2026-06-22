@@ -7,7 +7,7 @@ use either::Either;
 use espresso_types::{
     BlockMerkleTree, EpochRewardsCalculator, FeeAccount, FeeMerkleTree, Leaf2, ValidatedState,
     traits::StateCatchup,
-    v0_3::{ChainConfig, RewardAccountV1, RewardMerkleTreeV1},
+    v0_3::{ChainConfig, RewardMerkleTreeV1},
     v0_4::Delta,
 };
 use futures::{StreamExt, future::Future};
@@ -135,20 +135,16 @@ pub(crate) async fn compute_state_update(
 async fn store_state_update(
     tx: &mut impl SequencerStateUpdate,
     block_number: u64,
-    version: Version,
+    _version: Version,
     state: &ValidatedState,
     delta: &Delta,
 ) -> anyhow::Result<()> {
     let ValidatedState {
         fee_merkle_tree,
         block_merkle_tree,
-        reward_merkle_tree_v1,
         ..
     } = state;
-    let Delta {
-        fees_delta,
-        rewards_delta,
-    } = delta;
+    let Delta { fees_delta, .. } = delta;
 
     // Collect fee merkle tree proofs for batch insertion
     let fee_proofs: Vec<_> = fees_delta
@@ -193,41 +189,6 @@ async fn store_state_update(
         )
         .await
         .context("failed to store block merkle nodes")?;
-    }
-
-    if version <= EPOCH_VERSION {
-        // Collect reward merkle tree v1 proofs for batch insertion
-        let reward_proofs: Vec<_> = rewards_delta
-            .iter()
-            .map(|delta| {
-                let key = RewardAccountV1::from(*delta);
-                let proof = match reward_merkle_tree_v1.universal_lookup(key) {
-                    LookupResult::Ok(_, proof) => proof,
-                    LookupResult::NotFound(proof) => proof,
-                    LookupResult::NotInMemory => {
-                        bail!("missing merkle path for reward account {delta}")
-                    },
-                };
-                let path = <RewardAccountV1 as ToTraversalPath<
-                        { RewardMerkleTreeV1::ARITY },
-                    >>::to_traversal_path(
-                        &key, reward_merkle_tree_v1.height()
-                    );
-                Ok((proof, path))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-
-        tracing::debug!(
-            count = reward_proofs.len(),
-            "inserting v1 reward accounts in batch"
-        );
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV1, { RewardMerkleTreeV1::ARITY }>::insert_merkle_nodes_batch(
-            tx,
-            reward_proofs,
-            block_number,
-        )
-        .await
-        .context("failed to store reward merkle nodes")?;
     }
 
     Ok(())
@@ -472,6 +433,53 @@ where
     // ready yet and another task needs a mutable lock on the state to produce the parent leaf.
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
+
+    // Seed the parent's reward tree from storage.
+    //
+    // `from_header` starts the reward tree empty, and the epoch boundary only
+    // repopulates it when the previous epoch actually distributed rewards. If the
+    // previous epoch predates rewards (e.g. the first boundary after a V4→V5
+    // upgrade, where the previous epoch is pre-V5), `handle_epoch_rewards` returns
+    // zero and passes the empty tree through unchanged. So after a restart in such
+    // an epoch the tree stays empty until the next boundary, where the save in
+    // `update_state_storage` fails as it serializes the tree as full key-value pairs
+    // and bails because the accounts are missing.
+    //
+    // Load the parent's tree from storage to avoid this. Doing it once is enough
+    // every later iteration carries the tree forward in `parent_state`.
+    if parent_leaf.header().version() > EPOCH_VERSION && parent_leaf.height() > 0 {
+        // The tree is only written at epoch boundaries, so the parent height
+        // usually has no row; fall back to the most recent tree at or below it.
+        let reward_merkle_tree_v2 = match storage
+            .load_reward_merkle_tree_v2(parent_leaf.height())
+            .await
+        {
+            Ok(tree) => tree,
+            Err(_) => storage
+                .load_latest_reward_merkle_tree_v2(parent_leaf.height())
+                .await
+                .context(
+                    "Error starting the state storage update loop: failed to load \
+                     RewardMerkleTreeV2 for the previous height",
+                )?,
+        };
+
+        // The fallback returns the latest tree at or below the parent height,
+        // which is the parent's tree only if their roots match (they do within an
+        // epoch). Verify against the root the parent header commits to.
+        let parent_reward_root = parent_leaf
+            .header()
+            .reward_merkle_tree_root()
+            .right()
+            .context("V5+ parent header must have a v2 reward root")?;
+        ensure!(
+            reward_merkle_tree_v2.tree.commitment() == parent_reward_root,
+            "loaded reward tree root {} does not match parent header {parent_reward_root}",
+            reward_merkle_tree_v2.tree.commitment(),
+        );
+
+        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.tree;
+    }
 
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is

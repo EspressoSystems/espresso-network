@@ -23,7 +23,9 @@ use parking_lot::Mutex;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
-use tracing::warn;
+use tracing::debug;
+
+use crate::network::log_summary::LogEvent;
 
 /// The maximum size of an authentication message. This is used to prevent
 /// DoS attacks by sending large messages.
@@ -176,7 +178,8 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
                         Self::authenticate_with_remote_peer(&mut substream, auth_message)
                             .await
                             .map_err(|e| {
-                                warn!("Failed to authenticate with remote peer: {e:?}");
+                                LogEvent::AuthFailure.record();
+                                debug!("Failed to authenticate with remote peer: {e:?}");
                                 IoError::other(e)
                             })?;
 
@@ -188,7 +191,8 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
                         )
                         .await
                         .map_err(|e| {
-                            warn!("Failed to verify remote peer: {e:?}");
+                            LogEvent::VerifyFailure.record();
+                            debug!("Failed to verify remote peer: {e:?}");
                             IoError::other(e)
                         })?;
                     } else {
@@ -200,7 +204,8 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
                         )
                         .await
                         .map_err(|e| {
-                            warn!("Failed to verify remote peer: {e:?}");
+                            LogEvent::VerifyFailure.record();
+                            debug!("Failed to verify remote peer: {e:?}");
                             IoError::other(e)
                         })?;
 
@@ -208,7 +213,8 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
                         Self::authenticate_with_remote_peer(&mut substream, auth_message)
                             .await
                             .map_err(|e| {
-                                warn!("Failed to authenticate with remote peer: {e:?}");
+                                LogEvent::AuthFailure.record();
+                                debug!("Failed to authenticate with remote peer: {e:?}");
                                 IoError::other(e)
                             })?;
                     }
@@ -218,7 +224,8 @@ impl<T: Transport, S: SignatureKey + 'static, C: StreamMuxer + Unpin>
             })
             .await
             .map_err(|e| {
-                warn!("Timed out performing authentication handshake: {e:?}");
+                LogEvent::AuthHandshakeTimeout.record();
+                debug!("Timed out performing authentication handshake: {e:?}");
                 IoError::new(IoErrorKind::TimedOut, e)
             })?
         })

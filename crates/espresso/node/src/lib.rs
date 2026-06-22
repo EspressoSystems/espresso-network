@@ -32,8 +32,27 @@ use espresso_types::{
     SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
+    v0_1::ChainId,
     v0_3::Fetcher,
 };
+
+pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
+pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
+pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
+    "https://telemetry.decaf.testnet.espresso.network";
+
+/// Default telemetry endpoint for known networks. Unknown chains have no
+/// default; operators set `ESPRESSO_NODE_TELEMETRY_ENDPOINT` explicitly.
+pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static str> {
+    if chain_id == MAINNET_CHAIN_ID {
+        Some(MAINNET_TELEMETRY_ENDPOINT)
+    } else if chain_id == ChainId(U256::from(0xdecafu64)) {
+        Some(DECAF_TELEMETRY_ENDPOINT)
+    } else {
+        None
+    }
+}
+
 pub use genesis::Genesis;
 use genesis::L1Finalized;
 use hotshot::{
@@ -208,6 +227,8 @@ pub struct NetworkParams {
 
     /// Minimum number of Libp2p peers to emit gossip to during a heartbeat
     pub libp2p_gossip_lazy: usize,
+
+    pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
 }
 
 pub struct L1Params {
@@ -758,6 +779,9 @@ where
 
     let combined_network = {
         info!("Initializing Libp2p network");
+        // Mainnet keeps today's libp2p protocol strings byte-identical.
+        let chain_id = genesis.chain_config.chain_id;
+        let network_discriminator = (chain_id != MAINNET_CHAIN_ID).then_some(chain_id.0);
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
@@ -770,6 +794,8 @@ where
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
             &validator_config.private_key,
             hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
+            network_discriminator,
+            network_params.libp2p_dht_put_quorum,
         )
         .await
         .with_context(|| {
@@ -946,7 +972,7 @@ pub mod testing {
     };
     use espresso_types::{
         EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
-        Upgrade, UpgradeMap,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -1276,6 +1302,31 @@ pub mod testing {
 
         pub fn epoch_start_block(mut self, start_block: u64) -> Self {
             self.config.epoch_start_block = start_block;
+            self
+        }
+
+        pub fn builder_timeout(mut self, timeout: Duration) -> Self {
+            self.config.builder_timeout = timeout;
+            self
+        }
+
+        /// Override the base next-view (failure) timeout. Raise it when using a large
+        /// [`Self::builder_timeout`] so a slow-but-healthy view isn't mistaken for a failed one.
+        pub fn next_view_timeout(mut self, timeout: Duration) -> Self {
+            self.config.next_view_timeout = timeout.as_millis() as u64;
+            self
+        }
+
+        /// Override the views during which the upgrade is proposed. Call after `set_upgrades`.
+        pub fn upgrade_proposing_views(mut self, start: u64, stop: u64) -> Self {
+            for upgrade in self.upgrades.values_mut() {
+                if let UpgradeMode::View(v) = &mut upgrade.mode {
+                    v.start_proposing_view = start;
+                    v.stop_proposing_view = stop;
+                }
+            }
+            self.config.start_proposing_view = start;
+            self.config.stop_proposing_view = stop;
             self
         }
 
@@ -1759,6 +1810,28 @@ mod test {
         traits::block_contents::{BlockHeader, BlockPayload},
     };
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
+
+    #[test]
+    fn telemetry_endpoint_defaults_by_chain() {
+        use super::{
+            ChainId, DECAF_TELEMETRY_ENDPOINT, MAINNET_CHAIN_ID, MAINNET_TELEMETRY_ENDPOINT, U256,
+            default_telemetry_endpoint,
+        };
+
+        assert_eq!(
+            default_telemetry_endpoint(MAINNET_CHAIN_ID),
+            Some(MAINNET_TELEMETRY_ENDPOINT)
+        );
+        assert_eq!(
+            default_telemetry_endpoint(ChainId(U256::from(0xdecafu64))),
+            Some(DECAF_TELEMETRY_ENDPOINT)
+        );
+        // Unknown chains (e.g. the demo chain) get no default.
+        assert_eq!(
+            default_telemetry_endpoint(ChainId(U256::from(999999999u64))),
+            None
+        );
+    }
 
     use self::testing::run_test_builder;
     use super::*;

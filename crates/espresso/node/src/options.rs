@@ -12,6 +12,7 @@ use std::{
 
 use clap::{Args, FromArgMatches, Parser, error::ErrorKind};
 use derivative::Derivative;
+use espresso_telemetry::TelemetryOptions;
 use espresso_types::{BackoffParams, L1ClientOptions, parse_duration};
 use espresso_utils::logging;
 use hotshot_types::addr::NetAddr;
@@ -208,6 +209,10 @@ pub struct Options {
     )]
     pub libp2p_max_direct_transmit_size: u64,
 
+    /// Only for the decaf network unmerge migration. Do not set unless specifically requested.
+    #[clap(long, env = "ESPRESSO_NODE_LIBP2P_DHT_PUT_QUORUM")]
+    pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
+
     /// The URL we advertise to other nodes as being for our public API.
     /// Should be supplied in `http://host:port` form.
     #[clap(long, env = "ESPRESSO_NODE_PUBLIC_API_URL")]
@@ -345,6 +350,9 @@ pub struct Options {
 
     #[clap(flatten)]
     pub identity: Identity,
+
+    #[clap(flatten)]
+    pub telemetry: TelemetryOptions,
 
     #[clap(flatten)]
     pub proposal_fetcher_config: ProposalFetcherConfig,

@@ -541,3 +541,113 @@ jobs:
             echo "No jobs passed. Failing."
             exit 1
           fi
+
+  memory-soak-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [build-dockers-amd]
+    strategy:
+      fail-fast: false
+      matrix:
+        genesis: [demo-drb-header, demo-epoch-reward]
+    env:
+      DOCKER_TAG: pr-${{ github.event.pull_request.number }}
+      ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
+      DURATION_SECONDS: 3600
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: taiki-e/install-action@just
+
+      - name: Download docker image artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/docker-images
+          pattern: "*-docker-image"
+
+      - name: Load docker images
+        run: |
+          for file in $(find ${{ runner.temp }}/docker-images -name "*.tar"); do
+            docker load --input $file
+          done
+
+      - name: Start demo + smoke test
+        run: just soak::up
+
+      - name: Sample
+        run: just soak::sample
+
+      - name: Render summary + chart
+        if: always()
+        run: just soak::render
+
+      - name: Dump compose logs
+        if: always()
+        run: just soak::logs
+
+      - name: Upload soak samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}
+          path: ./soak-samples
+          retention-days: 90
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}-logs
+          path: ./soak-logs
+          retention-days: 1
+
+  memory-soak-non-pr:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    needs: [build-dockers-amd, create-multiplatform-docker-image]
+    strategy:
+      fail-fast: false
+      matrix:
+        genesis: [demo-drb-header, demo-epoch-reward]
+    env:
+      ESPRESSO_NODE_GENESIS_FILE: genesis/${{ matrix.genesis }}.toml
+      DURATION_SECONDS: 3600
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: taiki-e/install-action@just
+
+      - name: Set docker tag
+        run: echo "DOCKER_TAG=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> $GITHUB_ENV
+
+      - name: Start demo + smoke test
+        run: just soak::up
+
+      - name: Sample
+        run: just soak::sample
+
+      - name: Render summary + chart
+        if: always()
+        run: just soak::render
+
+      - name: Dump compose logs
+        if: always()
+        run: just soak::logs
+
+      - name: Upload soak samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}
+          path: ./soak-samples
+          retention-days: 90
+
+      - name: Upload soak logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: memory-soak-${{ matrix.genesis }}-logs
+          path: ./soak-logs
+          retention-days: 1

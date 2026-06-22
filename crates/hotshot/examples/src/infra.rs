@@ -769,6 +769,8 @@ where
             public_key,
             private_key,
             Libp2pMetricsValue::default(),
+            None,
+            None,
         )
         .await
         .expect("failed to create libp2p network");
