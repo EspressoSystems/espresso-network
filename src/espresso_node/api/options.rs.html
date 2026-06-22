@@ -744,53 +744,47 @@
 <a href=#744 id=744 data-nosnippet>744</a><span class="attr">#[cfg(test)]
 <a href=#745 id=745 data-nosnippet>745</a></span><span class="kw">impl </span>Query {
 <a href=#746 id=746 data-nosnippet>746</a>    <span class="kw">pub fn </span>test() -&gt; <span class="self">Self </span>{
-<a href=#747 id=747 data-nosnippet>747</a>        <span class="self">Self </span>{
-<a href=#748 id=748 data-nosnippet>748</a>            light_client: LightClientOptions {
-<a href=#749 id=749 data-nosnippet>749</a>                decaf: <span class="bool-val">true</span>,
-<a href=#750 id=750 data-nosnippet>750</a>                ..Default::default()
-<a href=#751 id=751 data-nosnippet>751</a>            },
-<a href=#752 id=752 data-nosnippet>752</a>            ..Default::default()
-<a href=#753 id=753 data-nosnippet>753</a>        }
-<a href=#754 id=754 data-nosnippet>754</a>    }
-<a href=#755 id=755 data-nosnippet>755</a>}
-<a href=#756 id=756 data-nosnippet>756</a>
-<a href=#757 id=757 data-nosnippet>757</a><span class="doccomment">/// Options for the state API module.
-<a href=#758 id=758 data-nosnippet>758</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug, Default)]
-<a href=#759 id=759 data-nosnippet>759</a></span><span class="kw">pub struct </span>State;
-<a href=#760 id=760 data-nosnippet>760</a>
-<a href=#761 id=761 data-nosnippet>761</a><span class="doccomment">/// Options for the Hotshot events streaming API module.
-<a href=#762 id=762 data-nosnippet>762</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug, Default)]
-<a href=#763 id=763 data-nosnippet>763</a></span><span class="kw">pub struct </span>HotshotEvents;
-<a href=#764 id=764 data-nosnippet>764</a>
-<a href=#765 id=765 data-nosnippet>765</a><span class="doccomment">/// Options for the explorer API module.
-<a href=#766 id=766 data-nosnippet>766</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug, Default)]
-<a href=#767 id=767 data-nosnippet>767</a></span><span class="kw">pub struct </span>Explorer;
-<a href=#768 id=768 data-nosnippet>768</a>
-<a href=#769 id=769 data-nosnippet>769</a><span class="doccomment">/// Options for the light client API module.
-<a href=#770 id=770 data-nosnippet>770</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug, Default)]
-<a href=#771 id=771 data-nosnippet>771</a></span><span class="kw">pub struct </span>LightClient;
-<a href=#772 id=772 data-nosnippet>772</a>
-<a href=#773 id=773 data-nosnippet>773</a><span class="doccomment">/// Registers two versions (v0 and v1) of the same API module under the given path.
-<a href=#774 id=774 data-nosnippet>774</a></span><span class="kw">fn </span>register_api&lt;E, S, F, ModuleError, ModuleVersion&gt;(
-<a href=#775 id=775 data-nosnippet>775</a>    path: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
-<a href=#776 id=776 data-nosnippet>776</a>    app: <span class="kw-2">&amp;mut </span>App&lt;S, E&gt;,
-<a href=#777 id=777 data-nosnippet>777</a>    f: F,
-<a href=#778 id=778 data-nosnippet>778</a>) -&gt; anyhow::Result&lt;()&gt;
-<a href=#779 id=779 data-nosnippet>779</a><span class="kw">where
-<a href=#780 id=780 data-nosnippet>780</a>    </span>S: <span class="lifetime">'static </span>+ Send + Sync,
-<a href=#781 id=781 data-nosnippet>781</a>    E: Send + Sync + <span class="lifetime">'static </span>+ tide_disco::Error + From&lt;ModuleError&gt;,
-<a href=#782 id=782 data-nosnippet>782</a>    ModuleError: Send + Sync + <span class="lifetime">'static</span>,
-<a href=#783 id=783 data-nosnippet>783</a>    ModuleVersion: StaticVersionType + <span class="lifetime">'static</span>,
-<a href=#784 id=784 data-nosnippet>784</a>    F: Fn(semver::Version) -&gt; anyhow::Result&lt;Api&lt;S, ModuleError, ModuleVersion&gt;&gt;,
-<a href=#785 id=785 data-nosnippet>785</a>{
-<a href=#786 id=786 data-nosnippet>786</a>    <span class="kw">let </span>v0 = <span class="string">"0.0.1"</span>.parse().unwrap();
-<a href=#787 id=787 data-nosnippet>787</a>    <span class="kw">let </span>v1 = <span class="string">"1.1.0"</span>.parse().unwrap();
-<a href=#788 id=788 data-nosnippet>788</a>    <span class="kw">let </span>result1 = f(v0)<span class="question-mark">?</span>;
-<a href=#789 id=789 data-nosnippet>789</a>    <span class="kw">let </span>result2 = f(v1)<span class="question-mark">?</span>;
-<a href=#790 id=790 data-nosnippet>790</a>
-<a href=#791 id=791 data-nosnippet>791</a>    app.register_module(path, result1)<span class="question-mark">?</span>;
-<a href=#792 id=792 data-nosnippet>792</a>    app.register_module(path, result2)<span class="question-mark">?</span>;
-<a href=#793 id=793 data-nosnippet>793</a>
-<a href=#794 id=794 data-nosnippet>794</a>    <span class="prelude-val">Ok</span>(())
-<a href=#795 id=795 data-nosnippet>795</a>}
+<a href=#747 id=747 data-nosnippet>747</a>        <span class="self">Self</span>::default()
+<a href=#748 id=748 data-nosnippet>748</a>    }
+<a href=#749 id=749 data-nosnippet>749</a>}
+<a href=#750 id=750 data-nosnippet>750</a>
+<a href=#751 id=751 data-nosnippet>751</a><span class="doccomment">/// Options for the state API module.
+<a href=#752 id=752 data-nosnippet>752</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug, Default)]
+<a href=#753 id=753 data-nosnippet>753</a></span><span class="kw">pub struct </span>State;
+<a href=#754 id=754 data-nosnippet>754</a>
+<a href=#755 id=755 data-nosnippet>755</a><span class="doccomment">/// Options for the Hotshot events streaming API module.
+<a href=#756 id=756 data-nosnippet>756</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug, Default)]
+<a href=#757 id=757 data-nosnippet>757</a></span><span class="kw">pub struct </span>HotshotEvents;
+<a href=#758 id=758 data-nosnippet>758</a>
+<a href=#759 id=759 data-nosnippet>759</a><span class="doccomment">/// Options for the explorer API module.
+<a href=#760 id=760 data-nosnippet>760</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug, Default)]
+<a href=#761 id=761 data-nosnippet>761</a></span><span class="kw">pub struct </span>Explorer;
+<a href=#762 id=762 data-nosnippet>762</a>
+<a href=#763 id=763 data-nosnippet>763</a><span class="doccomment">/// Options for the light client API module.
+<a href=#764 id=764 data-nosnippet>764</a></span><span class="attr">#[derive(Parser, Clone, Copy, Debug, Default)]
+<a href=#765 id=765 data-nosnippet>765</a></span><span class="kw">pub struct </span>LightClient;
+<a href=#766 id=766 data-nosnippet>766</a>
+<a href=#767 id=767 data-nosnippet>767</a><span class="doccomment">/// Registers two versions (v0 and v1) of the same API module under the given path.
+<a href=#768 id=768 data-nosnippet>768</a></span><span class="kw">fn </span>register_api&lt;E, S, F, ModuleError, ModuleVersion&gt;(
+<a href=#769 id=769 data-nosnippet>769</a>    path: <span class="kw-2">&amp;</span><span class="lifetime">'static </span>str,
+<a href=#770 id=770 data-nosnippet>770</a>    app: <span class="kw-2">&amp;mut </span>App&lt;S, E&gt;,
+<a href=#771 id=771 data-nosnippet>771</a>    f: F,
+<a href=#772 id=772 data-nosnippet>772</a>) -&gt; anyhow::Result&lt;()&gt;
+<a href=#773 id=773 data-nosnippet>773</a><span class="kw">where
+<a href=#774 id=774 data-nosnippet>774</a>    </span>S: <span class="lifetime">'static </span>+ Send + Sync,
+<a href=#775 id=775 data-nosnippet>775</a>    E: Send + Sync + <span class="lifetime">'static </span>+ tide_disco::Error + From&lt;ModuleError&gt;,
+<a href=#776 id=776 data-nosnippet>776</a>    ModuleError: Send + Sync + <span class="lifetime">'static</span>,
+<a href=#777 id=777 data-nosnippet>777</a>    ModuleVersion: StaticVersionType + <span class="lifetime">'static</span>,
+<a href=#778 id=778 data-nosnippet>778</a>    F: Fn(semver::Version) -&gt; anyhow::Result&lt;Api&lt;S, ModuleError, ModuleVersion&gt;&gt;,
+<a href=#779 id=779 data-nosnippet>779</a>{
+<a href=#780 id=780 data-nosnippet>780</a>    <span class="kw">let </span>v0 = <span class="string">"0.0.1"</span>.parse().unwrap();
+<a href=#781 id=781 data-nosnippet>781</a>    <span class="kw">let </span>v1 = <span class="string">"1.1.0"</span>.parse().unwrap();
+<a href=#782 id=782 data-nosnippet>782</a>    <span class="kw">let </span>result1 = f(v0)<span class="question-mark">?</span>;
+<a href=#783 id=783 data-nosnippet>783</a>    <span class="kw">let </span>result2 = f(v1)<span class="question-mark">?</span>;
+<a href=#784 id=784 data-nosnippet>784</a>
+<a href=#785 id=785 data-nosnippet>785</a>    app.register_module(path, result1)<span class="question-mark">?</span>;
+<a href=#786 id=786 data-nosnippet>786</a>    app.register_module(path, result2)<span class="question-mark">?</span>;
+<a href=#787 id=787 data-nosnippet>787</a>
+<a href=#788 id=788 data-nosnippet>788</a>    <span class="prelude-val">Ok</span>(())
+<a href=#789 id=789 data-nosnippet>789</a>}
 </code></pre></div></section></main></body></html>

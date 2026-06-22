@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["BlockSize","ChainConfig","ChainId","ResolvableChainConfig"]};
+window.SIDEBAR_ITEMS = {"constant":["DECAF_CHAIN_ID"],"struct":["BlockSize","ChainConfig","ChainId","ResolvableChainConfig"]};
