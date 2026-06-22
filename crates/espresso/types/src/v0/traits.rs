@@ -688,7 +688,9 @@ pub trait SequencerPersistence:
                     )
                 );
                 ensure!(
-                    epoch_height == 0 || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
+                    epoch_height == 0
+                        || cert_pair.block_number().is_none()
+                        || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
                     format!(
                         "Next epoch QC is required but it's not present or doesn't match primary \
                          QC\nPrimary QC: {:?}\nNext epoch QC: {:?}",
