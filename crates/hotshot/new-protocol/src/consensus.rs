@@ -10,8 +10,8 @@ use hotshot::traits::BlockPayload;
 use hotshot_contract_adapter::light_client::derive_signed_state_digest;
 use hotshot_types::{
     data::{
-        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperse2,
-        VidDisperseShare2, ViewChangeEvidence2, ViewNumber,
+        BlockNumber, EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2,
+        ViewChangeEvidence2, ViewNumber,
     },
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
@@ -35,6 +35,7 @@ use hotshot_types::{
     utils::{epoch_from_block_number, is_epoch_root, is_epoch_transition, is_last_block},
     vote::{self, Certificate, HasViewNumber},
 };
+use hotshot_utils::anytrace;
 use tracing::{debug, info, instrument, warn};
 
 use crate::{
@@ -44,7 +45,7 @@ use crate::{
     logging::KeyPrefix,
     message::{
         Certificate1, Certificate2, EpochChangeMessage, Proposal, ProposalFetchRequest,
-        ProposalMessage, Validated, VidShareMessage, Vote1, Vote2,
+        ProposalMessage, Validated, Vote1, Vote2,
     },
     outbox::Outbox,
     state::{StateRequest, StateResponse},
@@ -108,7 +109,7 @@ pub enum ConsensusInput<T: NodeType> {
     Timeout(ViewNumber, EpochNumber),
     TimeoutCertificate(TimeoutCertificate2<T>),
     TimeoutOneHonest(ViewNumber, EpochNumber),
-    VidDisperseCreated(ViewNumber, VidDisperse2<T>),
+    VidDisperseCreated(ViewNumber, VidCommitment2),
     DrbResult(EpochNumber, DrbResult),
 }
 
@@ -120,7 +121,6 @@ pub enum ConsensusOutput<T: NodeType> {
     RecordAction(ViewNumber, Option<EpochNumber>, ActionKind),
     PersistProposal(SignedProposal<T, Proposal<T>>),
     SendProposal(SignedProposal<T, Proposal<T>>),
-    SendVidShares(Vec<VidShareMessage<T>>),
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
@@ -245,6 +245,32 @@ enum CertVerification {
     Invalid,
     /// The epoch's stake table is not yet available (catchup in progress).
     EpochUnavailable,
+}
+
+/// Reason a proposal failed the safety/liveness rule.
+#[derive(Debug, thiserror::Error)]
+enum SafetyError {
+    #[error(
+        "leaf commitment at locked view does not match locked certificate \
+         locked_commit={locked_commit} proposal_commit={proposal_commit}"
+    )]
+    LockedViewCommitmentMismatch {
+        locked_commit: String,
+        proposal_commit: String,
+    },
+    #[error(
+        "justify qc neither extends nor is newer than the locked certificate \
+         locked_view={locked_view} parent_commit={parent_commit} locked_commit={locked_commit}"
+    )]
+    UnsafeProposal {
+        locked_view: ViewNumber,
+        parent_commit: String,
+        locked_commit: String,
+    },
+    #[error("failed to compute justify qc data commitment: {0}")]
+    JustifyQcCommitment(#[source] anytrace::Error),
+    #[error("failed to compute locked certificate data commitment: {0}")]
+    LockedCertCommitment(#[source] anytrace::Error),
 }
 
 impl<T: NodeType> Consensus<T> {
@@ -687,14 +713,9 @@ impl<T: NodeType> Consensus<T> {
                 }
                 Protocol::Continue
             },
-            ConsensusInput::VidDisperseCreated(view, vid_disperse) => {
+            ConsensusInput::VidDisperseCreated(view, payload_commitment) => {
                 debug!(%view, "apply: vid disperse created");
-                // Directly send the VID shares before making a proposal.
-                // As leader we already have the payload; record the commitment so
-                // voting doesn't have to wait on the (skipped) reconstruction path.
-                self.blocks_reconstructed
-                    .insert((view, vid_disperse.payload_commitment));
-                self.send_vid_shares(&view, vid_disperse, outbox);
+                self.blocks_reconstructed.insert((view, payload_commitment));
                 Protocol::Continue
             },
             ConsensusInput::DrbResult(epoch, drb_result) => {
@@ -914,9 +935,9 @@ impl<T: NodeType> Consensus<T> {
             return Protocol::Abort;
         };
 
-        if !self.is_safe(&proposal) {
+        if let Err(err) = self.is_safe(&proposal) {
             warn!(
-                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch,
+                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch, %err,
                 "proposal not safe"
             );
             return Protocol::Abort;
@@ -1365,31 +1386,6 @@ impl<T: NodeType> Consensus<T> {
         self.certs.insert(cert1.view_number(), cert1);
         self.certs2.insert(cert2.view_number(), cert2);
         Protocol::Continue
-    }
-
-    // The leader's own share is also unicast back to itself (cliquenet
-    // self-loopback): it is the only way the leader's `handle_proposal_and_vid_share`
-    // path runs for its own proposal, populating `proposals`, `leaves`,
-    // `states_verified`, and seeding the VID reconstructor's metadata.
-    #[instrument(level = "debug", skip_all)]
-    fn send_vid_shares(
-        &self,
-        view: &ViewNumber,
-        vid_disperse: VidDisperse2<T>,
-        outbox: &mut Outbox<ConsensusOutput<T>>,
-    ) {
-        let vid_messages = vid_disperse
-            .to_shares()
-            .into_iter()
-            .filter_map(|share| {
-                let Some(proposal) = share.to_proposal(&self.private_key) else {
-                    warn!(%view, "failed to sign VID share proposal");
-                    return None;
-                };
-                Some(proposal)
-            })
-            .collect::<Vec<_>>();
-        outbox.push_back(ConsensusOutput::SendVidShares(vid_messages));
     }
 
     #[instrument(level = "debug", skip_all)]
@@ -2066,37 +2062,45 @@ impl<T: NodeType> Consensus<T> {
     }
 
     #[instrument(level = "trace", skip_all)]
-    fn is_safe(&self, proposal: &Proposal<T>) -> bool {
+    fn is_safe(&self, proposal: &Proposal<T>) -> Result<(), SafetyError> {
         let Some(locked_cert) = self.locked_cert.as_ref() else {
             // Locked certificate is not set which means it is at genesis
             debug!("at genesis");
-            return true;
+            return Ok(());
         };
 
         // cert1 + block arrived before proposal
         if locked_cert.view_number() == proposal.view_number() {
-            return locked_cert.data.leaf_commit == proposal_commitment(proposal);
+            let locked_commit = locked_cert.data.leaf_commit;
+            let proposal_commit = proposal_commitment(proposal);
+            if locked_commit != proposal_commit {
+                return Err(SafetyError::LockedViewCommitmentMismatch {
+                    locked_commit: locked_commit.to_string(),
+                    proposal_commit: proposal_commit.to_string(),
+                });
+            }
+            return Ok(());
         }
 
-        let liveness_check = proposal.justify_qc.view_number() > locked_cert.view_number();
-        let parent_commit = match proposal.justify_qc.data_commitment(&self.upgrade_lock) {
-            Ok(c) => c,
-            Err(err) => {
-                warn!(%err, "failed to compute justify qc data commitment");
-                return false;
-            },
-        };
-        let locked_commit = match locked_cert.data_commitment(&self.upgrade_lock) {
-            Ok(c) => c,
-            Err(err) => {
-                warn!(%err, "failed to compute locked certificate data");
-                return false;
-            },
-        };
+        let parent_commit = proposal
+            .justify_qc
+            .data_commitment(&self.upgrade_lock)
+            .map_err(SafetyError::JustifyQcCommitment)?;
+        let locked_commit = locked_cert
+            .data_commitment(&self.upgrade_lock)
+            .map_err(SafetyError::LockedCertCommitment)?;
 
-        let safety_check = parent_commit == locked_commit;
+        let safety = parent_commit == locked_commit;
+        let liveness = proposal.justify_qc.view_number() > locked_cert.view_number();
+        if safety || liveness {
+            return Ok(());
+        }
 
-        safety_check || liveness_check
+        Err(SafetyError::UnsafeProposal {
+            locked_view: locked_cert.view_number(),
+            parent_commit: parent_commit.to_string(),
+            locked_commit: locked_commit.to_string(),
+        })
     }
 
     #[instrument(level = "trace", skip_all)]

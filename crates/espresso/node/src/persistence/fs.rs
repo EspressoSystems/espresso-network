@@ -50,7 +50,9 @@ use hotshot_types::{
 };
 use itertools::Itertools;
 
-use super::RegisteredValidatorNoX25519;
+use super::{
+    RegisteredValidatorNoX25519, RegisteredValidatorPreOption, RegisteredValidatorPreSchnorrOption,
+};
 use crate::{
     RECENT_STAKE_TABLES_LIMIT, ViewNumber,
     persistence::{migrate_network_config, persistence_metrics::PersistenceMetricsValue},
@@ -59,12 +61,44 @@ use crate::{
 /// Deserialize a stake table from bytes, trying current and legacy formats.
 /// Returns (stake_tuple, needs_rewrite) where needs_rewrite=true means legacy format was used.
 fn deserialize_stake_table(bytes: &[u8]) -> anyhow::Result<(StakeTuple, bool)> {
-    // Try current format (RegisteredValidator with x25519 fields).
+    // Try current format (both keys as Option<KEY>).
     if let Ok(stake) = bincode::deserialize::<StakeTuple>(bytes) {
         return Ok((stake, false));
     }
 
-    // Legacy: RegisteredValidator without x25519_key/p2p_addr.
+    // Pre-Schnorr-Option: stake_table_key as Option<KEY>, state_ver_key as raw KEY.
+    type PreSchnorrMap = indexmap::IndexMap<Address, RegisteredValidatorPreSchnorrOption>;
+    type PreSchnorrTuple = (PreSchnorrMap, Option<RewardAmount>, Option<StakeTableHash>);
+    if let Ok(pre_schnorr) = bincode::deserialize::<PreSchnorrTuple>(bytes) {
+        let migrated: AuthenticatedValidatorMap = pre_schnorr
+            .0
+            .into_iter()
+            .map(|(addr, v)| {
+                let registered = v.migrate();
+                let authenticated = AuthenticatedValidator::try_from(registered)?;
+                Ok((addr, authenticated))
+            })
+            .collect::<anyhow::Result<_>>()?;
+        return Ok(((migrated, pre_schnorr.1, pre_schnorr.2), true));
+    }
+
+    // Pre-Option: both keys raw, x25519/p2p fields present.
+    type PreOptionMap = indexmap::IndexMap<Address, RegisteredValidatorPreOption>;
+    type PreOptionTuple = (PreOptionMap, Option<RewardAmount>, Option<StakeTableHash>);
+    if let Ok(pre_option) = bincode::deserialize::<PreOptionTuple>(bytes) {
+        let migrated: AuthenticatedValidatorMap = pre_option
+            .0
+            .into_iter()
+            .map(|(addr, v)| {
+                let registered = v.migrate();
+                let authenticated = AuthenticatedValidator::try_from(registered)?;
+                Ok((addr, authenticated))
+            })
+            .collect::<anyhow::Result<_>>()?;
+        return Ok(((migrated, pre_option.1, pre_option.2), true));
+    }
+
+    // Pre-x25519: RegisteredValidator without x25519_key/p2p_addr.
     type LegacyMap = indexmap::IndexMap<Address, RegisteredValidatorNoX25519>;
     type LegacyTuple = (LegacyMap, Option<RewardAmount>, Option<StakeTableHash>);
     let legacy: LegacyTuple = bincode::deserialize(bytes)
@@ -608,10 +642,10 @@ impl Inner {
         Ok(Some(vid_share))
     }
 
-    fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         tracing::info!("Checking `Leaf2` to load the anchor leaf.");
         if self.decided_leaf2_path().is_dir() {
-            let mut anchor: Option<(Leaf2, QuorumCertificate2<SeqTypes>)> = None;
+            let mut anchor: Option<(Leaf2, CertificatePair<SeqTypes>)> = None;
 
             // Return the latest decided leaf.
             for (_, path) in view_files(self.decided_leaf2_path())? {
@@ -620,10 +654,10 @@ impl Inner {
                 let (leaf, cert) = self.parse_decided_leaf(&bytes)?;
                 if let Some((anchor_leaf, _)) = &anchor {
                     if leaf.view_number() > anchor_leaf.view_number() {
-                        anchor = Some((leaf, cert.qc().clone()));
+                        anchor = Some((leaf, cert));
                     }
                 } else {
-                    anchor = Some((leaf, cert.qc().clone()));
+                    anchor = Some((leaf, cert));
                 }
             }
 
@@ -645,7 +679,10 @@ impl Inner {
                 .bytes()
                 .collect::<Result<Vec<_>, _>>()
                 .context("read")?;
-            return Ok(Some(bincode::deserialize(&bytes).context("deserialize")?));
+            let (leaf2, qc2): (Leaf2, QuorumCertificate2<SeqTypes>) =
+                bincode::deserialize(&bytes).context("deserialize")?;
+            let cert_pair = CertificatePair::new(qc2, None);
+            return Ok(Some((leaf2, cert_pair)));
         }
 
         Ok(None)
@@ -847,9 +884,7 @@ impl SequencerPersistence for Persistence {
         Ok(processed)
     }
 
-    async fn load_anchor_leaf(
-        &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         self.inner.read().await.load_anchor_leaf()
     }
 
@@ -1978,7 +2013,7 @@ impl MembershipPersistence for Persistence {
             format!("failed to read stake table file at {}", file_path.display())
         })?;
 
-        let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
+        let (stake, _needs_rewrite) = deserialize_stake_table(&bytes).with_context(|| {
             format!(
                 "failed to deserialize stake table at {}",
                 file_path.display()
@@ -2001,7 +2036,7 @@ impl MembershipPersistence for Persistence {
                 format!("failed to read stake table file at {}", file_path.display())
             })?;
 
-            let stake: StakeTuple = bincode::deserialize(&bytes).with_context(|| {
+            let (stake, _needs_rewrite) = deserialize_stake_table(&bytes).with_context(|| {
                 format!(
                     "failed to deserialize stake table at {}",
                     file_path.display()
@@ -3064,6 +3099,130 @@ mod test {
         assert!(result2.is_ok());
     }
 
+    fn write_legacy_stake_file(
+        path: &std::path::Path,
+        epoch: u64,
+        validator: RegisteredValidatorPreOption,
+    ) {
+        use indexmap::IndexMap;
+
+        let mut map: IndexMap<Address, RegisteredValidatorPreOption> = IndexMap::new();
+        map.insert(validator.account, validator);
+        type PreOptionTuple = (
+            IndexMap<Address, RegisteredValidatorPreOption>,
+            Option<RewardAmount>,
+            Option<StakeTableHash>,
+        );
+        let data: PreOptionTuple = (map, None, None);
+        let bytes = bincode::serialize(&data).unwrap();
+        fs::create_dir_all(path).unwrap();
+        fs::write(path.join(format!("{epoch}.txt")), &bytes).unwrap();
+    }
+
+    fn pre_option_validator(seed: u8, stake: u64) -> RegisteredValidatorPreOption {
+        use std::collections::HashMap;
+
+        use alloy::primitives::U256;
+
+        RegisteredValidatorPreOption {
+            account: Address::random(),
+            stake_table_key: BLSPubKey::generated_from_seed_indexed([seed; 32], 0).0,
+            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            stake: U256::from(stake),
+            commission: 0,
+            delegators: HashMap::new(),
+            authenticated: true,
+            x25519_key: None,
+            p2p_addr: None,
+        }
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_legacy_storage() {
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let v1 = pre_option_validator(1, 100);
+        let v2 = pre_option_validator(2, 200);
+        let v1_addr = v1.account;
+        let v2_addr = v2.account;
+
+        let path = {
+            let inner = storage.inner.read().await;
+            inner.stake_table_dir_path()
+        };
+        write_legacy_stake_file(&path, 1, v1);
+        write_legacy_stake_file(&path, 2, v2);
+
+        let (loaded1, ..) = storage
+            .load_stake(EpochNumber::new(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded1.len(), 1);
+        assert!(loaded1.get(&v1_addr).unwrap().stake_table_key.is_some());
+
+        let (loaded2, ..) = storage
+            .load_stake(EpochNumber::new(2))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded2.len(), 1);
+        assert!(loaded2.get(&v2_addr).unwrap().stake_table_key.is_some());
+
+        let latest = storage.load_latest_stake(10).await.unwrap().unwrap();
+        assert_eq!(latest.len(), 2);
+        let epochs: Vec<_> = latest.iter().map(|(e, ..)| *e).collect();
+        assert!(epochs.contains(&EpochNumber::new(1)));
+        assert!(epochs.contains(&EpochNumber::new(2)));
+    }
+
+    #[test_log::test(tokio::test(flavor = "multi_thread"))]
+    async fn test_load_stake_mixed_storage() {
+        use indexmap::IndexMap;
+
+        let tmp = Persistence::tmp_storage().await;
+        let mut opt = Persistence::options(&tmp);
+        let storage = opt.create().await.unwrap();
+
+        let legacy_v = pre_option_validator(3, 300);
+        let legacy_addr = legacy_v.account;
+        let path = {
+            let inner = storage.inner.read().await;
+            inner.stake_table_dir_path()
+        };
+        write_legacy_stake_file(&path, 5, legacy_v);
+
+        let current_v = espresso_types::v0_3::AuthenticatedValidator::mock();
+        let current_addr = current_v.account;
+        let mut current_map = IndexMap::new();
+        current_map.insert(current_addr, current_v);
+        storage
+            .store_stake(EpochNumber::new(6), current_map, None, None)
+            .await
+            .unwrap();
+
+        let latest = storage.load_latest_stake(10).await.unwrap().unwrap();
+        assert_eq!(latest.len(), 2);
+        let by_epoch: std::collections::HashMap<_, _> = latest
+            .into_iter()
+            .map(|(e, (map, _), _)| (e, map))
+            .collect();
+        assert!(
+            by_epoch
+                .get(&EpochNumber::new(5))
+                .unwrap()
+                .contains_key(&legacy_addr)
+        );
+        assert!(
+            by_epoch
+                .get(&EpochNumber::new(6))
+                .unwrap()
+                .contains_key(&current_addr)
+        );
+    }
+
     #[test_log::test(tokio::test(flavor = "multi_thread"))]
     async fn test_migrate_x25519_keys_no_stake_dir() {
         let tmp = Persistence::tmp_storage().await;
@@ -3099,8 +3258,8 @@ mod test {
         // Create an authenticated validator
         let authenticated_validator = RegisteredValidator {
             account: Address::random(),
-            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0,
-            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 0).0),
+            state_ver_key: Some(hotshot_types::light_client::StateVerKey::default()),
             stake: U256::from(1000),
             commission: 100,
             delegators: HashMap::new(),
@@ -3112,8 +3271,8 @@ mod test {
         // Create an unauthenticated validator
         let unauthenticated_validator = RegisteredValidator {
             account: Address::random(),
-            stake_table_key: BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0,
-            state_ver_key: hotshot_types::light_client::StateVerKey::default(),
+            stake_table_key: Some(BLSPubKey::generated_from_seed_indexed([0u8; 32], 1).0),
+            state_ver_key: Some(hotshot_types::light_client::StateVerKey::default()),
             stake: U256::from(2000),
             commission: 200,
             delegators: HashMap::new(),

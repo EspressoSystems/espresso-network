@@ -20,7 +20,7 @@ use tokio::{
     task::{AbortHandle, JoinSet},
     time::sleep,
 };
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     helpers::proposal_commitment,
@@ -293,6 +293,20 @@ impl<T: NodeType, S: NewProtocolStorage<T>> Storage<T, S> {
             }
         }
         self.handles = keep;
+    }
+
+    /// Wait for all current storage writes to complete.
+    pub async fn flush(mut self) {
+        info!(
+            tasks = self.tasks.len(),
+            "flushing storage tasks during shutdown"
+        );
+        while let Some(result) = self.tasks.join_next().await {
+            if let Err(err) = result {
+                warn!(%err, "storage task failed during shutdown");
+            }
+        }
+        info!("storage flush complete");
     }
 }
 

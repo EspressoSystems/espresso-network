@@ -20,7 +20,7 @@ use super::{
     v0_3::{EventKey, IndexedStake, StakeTableEvent},
 };
 use crate::{
-    AuthenticatedValidatorMap, EpochCommittees, PubKey, RegisteredValidatorMap,
+    AuthenticatedValidatorMap, PubKey, RegisteredValidatorMap,
     v0::{
         GenesisHeader, L1BlockInfo, L1Client, Timestamp, Upgrade, UpgradeMode,
         impls::{StakeTableHash, fetch_and_calculate_block_reward, reward::EpochRewardsCalculator},
@@ -273,7 +273,7 @@ impl NodeState {
         use hotshot_example_types::storage_types::TestStorage;
         use versions::version;
 
-        use crate::v0_3::Fetcher;
+        use crate::{EpochCommittees, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -300,7 +300,7 @@ impl NodeState {
         use hotshot_example_types::storage_types::TestStorage;
         use versions::version;
 
-        use crate::v0_3::Fetcher;
+        use crate::{EpochCommittees, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
@@ -327,7 +327,7 @@ impl NodeState {
         use hotshot_example_types::storage_types::TestStorage;
         use versions::version;
 
-        use crate::v0_3::Fetcher;
+        use crate::{EpochCommittees, v0_3::Fetcher};
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])
             .expect("Failed to create L1 client");
 
@@ -415,7 +415,7 @@ impl Default for NodeState {
         use hotshot_example_types::storage_types::TestStorage;
         use versions::version;
 
-        use crate::v0_3::Fetcher;
+        use crate::{EpochCommittees, v0_3::Fetcher};
 
         let chain_config = ChainConfig::default();
         let l1 = L1Client::new(vec!["http://localhost:3331".parse().unwrap()])

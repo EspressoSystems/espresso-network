@@ -275,11 +275,13 @@ fn write_length_prefixed<W: Write>(writer: &mut W, value: &[u8]) -> Result<()> {
 /// A helper function to read a length-prefixed value from a reader
 fn read_length_prefixed<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
     // Read the length of the value as a u32
-    let length = reader.read_u32::<LittleEndian>()?;
+    let length = u64::from(reader.read_u32::<LittleEndian>()?);
 
-    // Read the value
-    let mut value = vec![0; length as usize];
-    reader.read_exact(&mut value)?;
+    let mut value = Vec::with_capacity(length.min(64 * 1024) as usize);
+    let read = reader.take(length).read_to_end(&mut value)?;
+    if read as u64 != length {
+        return Err(anyhow::anyhow!("length prefix exceeds available data"));
+    }
     Ok(value)
 }
 

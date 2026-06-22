@@ -63,7 +63,7 @@ pub enum Response {
     /// A response for a state certificate at a given epoch
     StateCert(LightClientStateUpdateCertificateV2<SeqTypes>),
     /// A response with data to reconstruct the reward merkle tree at a given height
-    RewardMerkleTreeV2(Vec<u8>),
+    RewardMerkleTreeV2(#[serde(with = "serde_bytes")] Vec<u8>),
     /// A response with the earliest cert2 (fast finality protocol)
     Cert2(Certificate2<SeqTypes>),
 }

@@ -1,11 +1,10 @@
-use std::{num::NonZeroUsize, path::PathBuf, time::Duration};
+use std::{num::NonZeroUsize, time::Duration};
 
 use builder::non_permissioned::{BuilderConfig, build_instance_state};
 use clap::Parser;
-use espresso_node::{Genesis, L1Params};
+use espresso_node::{Genesis, GenesisSource, L1Params};
 use espresso_types::{eth_signature_key::EthKeyPair, parse_duration};
 use espresso_utils::logging;
-use futures::future::pending;
 use hotshot::traits::ValidatedState;
 use hotshot_types::data::ViewNumber;
 use url::Url;
@@ -89,9 +88,11 @@ struct NonPermissionedBuilderOptions {
     )]
     tx_status_cache_size: usize,
 
-    /// Path to TOML file containing genesis state.
+    /// Location of the TOML file containing genesis state.
+    ///
+    /// Accepts a plain filesystem path or an `http(s)://` URL.
     #[clap(long, name = "GENESIS_FILE", env = "ESPRESSO_BUILDER_GENESIS_FILE")]
-    genesis_file: PathBuf,
+    genesis_file: GenesisSource,
 
     #[clap(flatten)]
     logging: logging::Config,
@@ -109,7 +110,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     opt.logging.init();
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
+    let genesis = Genesis::load(&opt.genesis_file).await?;
     tracing::info!(?genesis, "genesis");
 
     let l1_params = L1Params {
@@ -153,8 +154,7 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     )
     .await?;
 
-    // Sleep forever
-    pending::<()>().await;
+    espresso_utils::shutdown::wait_for_shutdown_signal().await;
 
     Ok(())
 }

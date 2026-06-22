@@ -161,7 +161,7 @@ base64-bytes = "0.1"
 bigdecimal = "0.4.8"
 bimap = "0.6.3"
 bincode = "1.3.3"
-bitvec = { version = "1", features = ["serde"] }
+bitvec = { git = "https://github.com/EspressoSystems/bitvec-patch.git", features = ["serde"] }
 blake3 = "1"
 bon = "3.8.2"
 bs58 = "0.5.1"

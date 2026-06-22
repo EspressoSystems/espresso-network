@@ -12,7 +12,10 @@ use bon::{Builder, bon};
 use committable::Commitment;
 use hotshot::{HotShotInitializer, traits::BlockPayload, types::SignatureKey};
 use hotshot_types::{
-    data::{EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber},
+    data::{
+        EpochNumber, Leaf2, VidCommitment, VidCommitment2, VidDisperseShare2, ViewNumber,
+        vid_disperse::vid_total_weight,
+    },
     epoch_membership::EpochMembershipCoordinator,
     message::{Proposal as SignedProposal, UpgradeLock},
     simple_certificate::{QuorumCertificate2, TimeoutCertificate2},
@@ -22,6 +25,7 @@ use hotshot_types::{
         signature_key::StateSignatureKey,
     },
     utils::{epoch_from_block_number, is_epoch_root},
+    vid::avidm_gf2::{AvidmGf2Param, init_avidm_gf2_param},
     vote::HasViewNumber,
 };
 use metrics::Measurement;
@@ -46,7 +50,7 @@ use crate::{
         Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage,
         Unchecked, Vote2,
     },
-    network::Network,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, ValidatedProposal, VidShareValidator},
     state::{HeaderRequest, StateEntry, StateManager, StateManagerOutput},
@@ -84,10 +88,10 @@ pub enum CoordinatorOutput<T: NodeType> {
 }
 
 #[derive(Builder)]
-pub struct Coordinator<T: NodeType, N, S> {
+pub struct Coordinator<T: NodeType, S> {
     membership_coordinator: EpochMembershipCoordinator<T>,
     consensus: Consensus<T>,
-    network: N,
+    network: Cliquenet<T>,
     state_manager: StateManager<T>,
     #[builder(default)]
     client: CoordinatorClient<T>,
@@ -123,17 +127,16 @@ pub struct Coordinator<T: NodeType, N, S> {
 }
 
 #[bon]
-impl<T, N, S> Coordinator<T, N, S>
+impl<T, S> Coordinator<T, S>
 where
     T: NodeType,
-    N: Network<T>,
     S: NewProtocolStorage<T>,
 {
     #[builder(builder_type = CoordinatorMaker, finish_fn = make)]
     #[allow(clippy::too_many_arguments)]
     pub fn maker(
         membership_coordinator: EpochMembershipCoordinator<T>,
-        network: N,
+        network: Cliquenet<T>,
         initializer: &HotShotInitializer<T>,
         upgrade_lock: UpgradeLock<T>,
         public_key: T::SignatureKey,
@@ -185,6 +188,11 @@ where
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
         );
+        // Seed `from_header` stubs for restored undecided proposals so a child
+        // proposal can be validated; anchor seeded last so its state wins.
+        for p in initializer.saved_proposals.values() {
+            state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
+        }
         state_manager.seed_state(
             anchor_view,
             initializer.anchor_state.clone(),
@@ -230,12 +238,19 @@ where
             consensus.seed_state_cert(state_cert);
         }
 
+        let vid_disperser = VidDisperser::new(
+            membership_coordinator.clone(),
+            network.sender().clone(),
+            public_key.clone(),
+            private_key.clone(),
+        );
+
         let lock = upgrade_lock.clone();
         Self::builder()
             .consensus(consensus)
             .network(network)
             .state_manager(state_manager)
-            .vid_disperser(VidDisperser::new(membership_coordinator.clone()))
+            .vid_disperser(vid_disperser)
             .vid_reconstructor(VidReconstructor::new())
             .vote1_collector(VoteCollector::new(
                 membership_coordinator.clone(),
@@ -351,7 +366,7 @@ where
     }
 
     pub async fn stop(mut self) {
-        self.network.shutdown().await
+        futures::join!(self.network.shutdown(), self.storage.flush());
     }
 
     pub async fn next_consensus_input(&mut self) -> Result<ConsensusInput<T>, CoordinatorError> {
@@ -520,11 +535,11 @@ where
                 Some(item) = self.vid_disperser.next() => match item {
                     Ok(out) => {
                         finish_measurement(next_input);
-                        return Ok(ConsensusInput::VidDisperseCreated(out.view, out.disperse))
+                        return Ok(ConsensusInput::VidDisperseCreated(out.view, out.payload_commitment))
                     }
-                    Err(()) => {
+                    Err(err) => {
                         finish_measurement(next_input);
-                        return Err(CoordinatorError::unspecified().context("vid disperse"))
+                        return Err(CoordinatorError::from(err).context("vid disperse"))
                     }
                 },
                 Some(item) = self.vid_reconstructor.next() => match item {
@@ -559,9 +574,9 @@ where
                         }
                         return Ok(ConsensusInput::BlockReconstructed(out.view, out.payload_commitment))
                     }
-                    Err(()) => {
+                    Err(err) => {
                         finish_measurement(next_input);
-                        return Err(CoordinatorError::unspecified().context("vid reconstruction"))
+                        return Err(CoordinatorError::regular(err).context("vid reconstruction"))
                     }
                 },
                 Some(stored) = self.storage.next() => {
@@ -663,6 +678,9 @@ where
                     leaves = leaves.len(),
                     "leaves decided"
                 );
+                if let Some(m) = &self.metrics {
+                    m.leaf_decided_view.set(*cert1.view_number() as usize);
+                }
                 if let Some(cert2) = cert2 {
                     self.storage.append_cert2(cert2.view_number, cert2.clone());
                 }
@@ -731,6 +749,7 @@ where
                 };
                 if let Err(err) = self
                     .network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                 {
                     let err = CoordinatorError::from(err).context("proposal broadcast");
@@ -738,27 +757,6 @@ where
                         return Err(err);
                     } else {
                         warn!(%node, %err, "network error while broadcasting proposal")
-                    }
-                }
-            },
-            ConsensusOutput::SendVidShares(vid_shares) => {
-                debug!(%node, count = vid_shares.len(), "send vid shares");
-                for share in vid_shares {
-                    let recipient = share.data.recipient_key.clone();
-                    let message = Message {
-                        sender: self.public_key.clone(),
-                        message_type: MessageType::Consensus(ConsensusMessage::VidShare(share)),
-                    };
-                    if let Err(err) =
-                        self.network
-                            .unicast(self.consensus.current_view(), &recipient, &message)
-                    {
-                        let err = CoordinatorError::from(err).context("vid share unicast");
-                        if err.severity == Severity::Critical {
-                            return Err(err);
-                        } else {
-                            warn!(%node, %err, "network error while sending vid share")
-                        }
                     }
                 }
             },
@@ -772,6 +770,7 @@ where
                     )),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast timeout vote"))?
             },
@@ -789,6 +788,7 @@ where
                         )),
                     };
                     self.network
+                        .sender()
                         .unicast(self.consensus.current_view(), &leader, &message)
                         .map_err(|e| CoordinatorError::from(e).context("timeout certificate"))?;
                 }
@@ -805,6 +805,7 @@ where
                     message_type: MessageType::Consensus(ConsensusMessage::Vote1(vote1)),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote1"))?
             },
@@ -815,6 +816,7 @@ where
                     message_type: MessageType::Consensus(ConsensusMessage::Vote2(vote2)),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
             },
@@ -836,6 +838,7 @@ where
                     )),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast epoch change"))?
             },
@@ -854,6 +857,7 @@ where
                     )),
                 };
                 self.network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast certificate1"))?
             },
@@ -969,6 +973,13 @@ where
                 ConsensusMessage::VidShare(share) => {
                     let view = share.data.view_number();
                     debug!(%node, %sender, %view, "recv vid share");
+                    // The leader unicasts each node only its own share. A share
+                    // addressed to anyone else is bogus and could otherwise
+                    // displace our own in the unpaired-share cache.
+                    if share.data.recipient_key != self.public_key {
+                        warn!(%node, %sender, %view, "ignoring vid share not addressed to this node");
+                        return None;
+                    }
                     if self.consensus.wants_proposal_for_view(&view) {
                         self.share_validator.validate(share);
                     }
@@ -998,7 +1009,7 @@ where
                         self.vote1_collector.accumulate_vote(vote1.vote.clone());
                     }
                     self.vid_reconstructor
-                        .handle_vid_share(vote1.vid_share, None);
+                        .handle_vid_share(message.sender.clone(), vote1.vid_share);
                     None
                 },
                 ConsensusMessage::Vote2(vote2) => {
@@ -1120,7 +1131,7 @@ where
                             Box::new(proposal),
                         )),
                     };
-                    if let Err(err) = self.network.unicast(
+                    if let Err(err) = self.network.sender().unicast(
                         self.consensus.current_view(),
                         &message.sender,
                         &response,
@@ -1187,6 +1198,19 @@ where
         }
     }
 
+    /// The VID erasure parameters the committee fixes for `target_epoch`,
+    /// matching what an honest disperser derives. Used to reject shares whose
+    /// `common.param` is forged (the commitment binds `ns_commits`, not
+    /// `param`). `None` if the committee cannot be resolved.
+    fn expected_vid_param(&self, target_epoch: Option<EpochNumber>) -> Option<AvidmGf2Param> {
+        let membership = self
+            .membership_coordinator
+            .stake_table_for_epoch(target_epoch)
+            .ok()?;
+        let total_weight = vid_total_weight::<T, _>(membership.stake_table(), target_epoch);
+        init_avidm_gf2_param(total_weight).ok()
+    }
+
     fn on_proposal_and_vid_share(
         &mut self,
         validated: ValidatedProposal<T>,
@@ -1207,15 +1231,19 @@ where
             );
         }
 
-        let m = validated
-            .message
-            .proposal
-            .data
-            .block_header
-            .metadata()
-            .clone();
+        let expected_param = self.expected_vid_param(vid_share.target_epoch);
+        let proposal = &validated.message.proposal.data;
+        self.vid_reconstructor.handle_proposal(
+            proposal.view_number(),
+            vid_share.payload_commitment,
+            proposal.block_header.metadata().clone(),
+            proposal.epoch,
+            expected_param,
+        );
+        // This is our own share, addressed to us by the leader and already
+        // verified by the share validator.
         self.vid_reconstructor
-            .handle_vid_share(vid_share.clone(), m);
+            .handle_vid_share(self.public_key.clone(), vid_share.clone());
 
         // GC for the cache
         let view = validated.message.proposal.data.view_number();
@@ -1248,6 +1276,7 @@ where
             message_type: MessageType::Block(msg),
         };
         self.network
+            .sender()
             .unicast(self.consensus.current_view(), &leader, &message)
             .map_err(|e| CoordinatorError::from(e).context("leader unicast"))
     }
@@ -1333,6 +1362,7 @@ where
                     };
 
                     self.network
+                        .sender()
                         .broadcast(self.consensus.current_view(), &message)
                         .map_err(|err| {
                             CoordinatorError::from(err).context("broadcast proposal request")
@@ -1352,6 +1382,7 @@ where
                 };
                 let result = self
                     .network
+                    .sender()
                     .unicast(self.consensus.current_view(), &recipient, &message)
                     .map_err(|err| {
                         CoordinatorError::from(err)
@@ -1466,6 +1497,7 @@ where
                 };
                 if let Err(err) = self
                     .network
+                    .sender()
                     .broadcast(self.consensus.current_view(), &message)
                 {
                     warn!(%err, "failed to rebroadcast bridged timeout vote");

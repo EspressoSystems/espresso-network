@@ -22,7 +22,7 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     // Genesis carries the chain ID, which selects the default telemetry
     // endpoint. Load it before telemetry init; the genesis log line is emitted
     // later, once the subscriber is installed.
-    let genesis = Genesis::from_file(&opt.genesis_file)?;
+    let genesis = Genesis::load(&opt.genesis_file).await?;
     let telemetry_endpoint: Option<Url> = opt.telemetry.endpoint.clone().or_else(|| {
         default_telemetry_endpoint(genesis.chain_config.chain_id).map(|s| {
             s.parse()
@@ -128,7 +128,7 @@ async fn run_with_storage<S>(
 where
     S: DataSourceOptions,
 {
-    let ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
+    let mut ctx = init_with_storage(genesis, modules, opt, storage_opt, public_node_config).await?;
 
     // The API setup deposited the prometheus Registry into `telemetry::REGISTRY`
     // (if the HTTP module was configured). Attach the metrics push task now,
@@ -139,7 +139,11 @@ where
 
     // Start doing consensus.
     ctx.start_consensus().await;
-    ctx.join().await;
+
+    tokio::select! {
+        () = ctx.join() => tracing::warn!("consensus stopped; exiting"),
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => ctx.shut_down().await,
+    }
 
     Ok(())
 }
@@ -205,6 +209,7 @@ where
         libp2p_heartbeat_initial_delay: opt.libp2p_heartbeat_initial_delay,
         libp2p_gossip_factor: opt.libp2p_gossip_factor,
         libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
+        libp2p_dht_put_quorum: opt.libp2p_dht_put_quorum,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;

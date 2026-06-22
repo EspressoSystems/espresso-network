@@ -97,6 +97,7 @@ rstest = { workspace = true }
 rstest_reuse = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 serde_json = { workspace = true }
 serialization-api = { path = "../../serialization/api" }
 sha2 = { workspace = true }
