@@ -156,7 +156,7 @@ impl<T: NodeType> StateManager<T> {
 
     /// Seed a commitment-only (`from_header`) state so a child proposal can be
     /// validated against this leaf via catchup instead of being dropped.
-    pub fn seed_from_header(&mut self, proposal: Proposal<T>) {
+    pub(crate) fn seed_from_header(&mut self, proposal: Proposal<T>) {
         self.insert_empty_state(proposal);
     }
 
