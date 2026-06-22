@@ -294,6 +294,10 @@ impl Inner {
         self.path.join("eqc")
     }
 
+    fn high_qc2(&self) -> PathBuf {
+        self.path.join("high_qc2")
+    }
+
     fn libp2p_dht_path(&self) -> PathBuf {
         self.path.join("libp2p_dht")
     }
@@ -638,10 +642,10 @@ impl Inner {
         Ok(Some(vid_share))
     }
 
-    fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         tracing::info!("Checking `Leaf2` to load the anchor leaf.");
         if self.decided_leaf2_path().is_dir() {
-            let mut anchor: Option<(Leaf2, QuorumCertificate2<SeqTypes>)> = None;
+            let mut anchor: Option<(Leaf2, CertificatePair<SeqTypes>)> = None;
 
             // Return the latest decided leaf.
             for (_, path) in view_files(self.decided_leaf2_path())? {
@@ -650,10 +654,10 @@ impl Inner {
                 let (leaf, cert) = self.parse_decided_leaf(&bytes)?;
                 if let Some((anchor_leaf, _)) = &anchor {
                     if leaf.view_number() > anchor_leaf.view_number() {
-                        anchor = Some((leaf, cert.qc().clone()));
+                        anchor = Some((leaf, cert));
                     }
                 } else {
-                    anchor = Some((leaf, cert.qc().clone()));
+                    anchor = Some((leaf, cert));
                 }
             }
 
@@ -675,7 +679,10 @@ impl Inner {
                 .bytes()
                 .collect::<Result<Vec<_>, _>>()
                 .context("read")?;
-            return Ok(Some(bincode::deserialize(&bytes).context("deserialize")?));
+            let (leaf2, qc2): (Leaf2, QuorumCertificate2<SeqTypes>) =
+                bincode::deserialize(&bytes).context("deserialize")?;
+            let cert_pair = CertificatePair::new(qc2, None);
+            return Ok(Some((leaf2, cert_pair)));
         }
 
         Ok(None)
@@ -877,9 +884,7 @@ impl SequencerPersistence for Persistence {
         Ok(processed)
     }
 
-    async fn load_anchor_leaf(
-        &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         self.inner.read().await.load_anchor_leaf()
     }
 
@@ -1261,6 +1266,42 @@ impl SequencerPersistence for Persistence {
         let bytes = fs::read(&path).ok()?;
 
         bincode::deserialize(&bytes).ok()
+    }
+
+    async fn append_high_qc2(&self, high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        let mut inner = self.inner.write().await;
+        let path = &inner.high_qc2();
+        let view = high_qc.view_number();
+        inner.replace(
+            path,
+            |mut file| {
+                // Overwrite only when the new lock is newer. The whole replace
+                // runs under the inner write lock, so this compare-and-set is
+                // atomic and a stale concurrent write cannot regress the lock.
+                let mut bytes = vec![];
+                file.read_to_end(&mut bytes)?;
+                let existing: QuorumCertificate2<SeqTypes> =
+                    bincode::deserialize(&bytes).context("deserializing existing high_qc2")?;
+                Ok(existing.view_number() < view)
+            },
+            |mut file| {
+                let bytes = bincode::serialize(&high_qc).context("serializing high_qc2")?;
+                file.write_all(&bytes)?;
+                Ok(())
+            },
+        )
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        let inner = self.inner.read().await;
+        let path = inner.high_qc2();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&path).context("reading high_qc2")?;
+        Ok(Some(
+            bincode::deserialize(&bytes).context("deserializing high_qc2")?,
+        ))
     }
 
     async fn append_da2(

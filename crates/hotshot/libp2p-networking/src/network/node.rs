@@ -49,6 +49,7 @@ use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    task::JoinHandle,
 };
 use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
@@ -80,6 +81,9 @@ use crate::network::{
     log_summary::LogEvent,
 };
 
+/// Join handle for the spawned swarm event-loop task.
+pub type SwarmTaskHandle = JoinHandle<Result<(), NetworkError>>;
+
 /// Maximum size of a message
 pub const MAX_GOSSIP_MSG_SIZE: usize = 2_000_000_000;
 
@@ -106,6 +110,9 @@ pub(crate) fn mainnet_kad_protocol() -> StreamProtocol {
 pub(crate) fn mainnet_direct_message_protocol() -> StreamProtocol {
     StreamProtocol::new("/HotShot/direct_message/1.0")
 }
+pub(crate) fn mainnet_identify_protocol() -> &'static str {
+    "HotShot/identify/1.0"
+}
 
 /// Resolve the gossipsub `protocol_id_prefix` for the given network discriminator.
 /// `None` returns the mainnet value (the libp2p default).
@@ -125,6 +132,14 @@ pub(crate) fn kad_protocol(discriminator: Option<U256>) -> Result<StreamProtocol
     }
 }
 
+/// Resolve the identify protocol string for the given network discriminator.
+pub(crate) fn identify_protocol(discriminator: Option<U256>) -> String {
+    match discriminator {
+        None => mainnet_identify_protocol().to_string(),
+        Some(d) => format!("HotShot/identify/1.0/{d:#x}"),
+    }
+}
+
 /// Resolve the direct-message stream protocol for the given network discriminator.
 pub(crate) fn direct_message_protocol(
     discriminator: Option<U256>,
@@ -136,6 +151,16 @@ pub(crate) fn direct_message_protocol(
                 NetworkError::ConfigError(format!("invalid direct_message protocol: {err}"))
             }),
     }
+}
+
+fn resolve_put_quorum(
+    quorum_override: Option<NonZeroUsize>,
+    replication_factor: NonZeroUsize,
+) -> NonZeroUsize {
+    quorum_override.unwrap_or_else(|| {
+        NonZeroUsize::new(replication_factor.get() / 2)
+            .expect("replication factor should be bigger than 0")
+    })
 }
 
 /// Network definition
@@ -161,6 +186,7 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     /// Whether we've already emitted the loud "not publicly reachable" error for the
     /// current Private episode. Reset whenever AutoNAT leaves Private status.
     autonat_private_logged: bool,
+    dht_put_quorum: Option<NonZeroUsize>,
 }
 
 impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
@@ -316,8 +342,10 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             //   node connection information
             //   E.g. this will answer the question: how are other nodes
             //   seeing the peer from behind a NAT
-            let identify_cfg =
-                IdentifyConfig::new("HotShot/identify/1.0".to_string(), keypair.public());
+            let identify_cfg = IdentifyConfig::new(
+                identify_protocol(config.network_discriminator),
+                keypair.public(),
+            );
             let identify = IdentifyBehaviour::new(identify_cfg);
 
             // - Build DHT needed for peer discovery
@@ -422,6 +450,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             ),
             resend_tx: None,
             autonat_private_logged: false,
+            dht_put_quorum: config.dht_put_quorum,
         })
     }
 
@@ -436,13 +465,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         // Set the record's expiration time to the proper time
         record.expires = Some(Instant::now() + self.kademlia_record_ttl);
 
-        match self.swarm.behaviour_mut().dht.put_record(
-            record,
-            libp2p::kad::Quorum::N(
-                NonZeroUsize::try_from(self.dht_handler.replication_factor().get() / 2)
-                    .expect("replication factor should be bigger than 0"),
-            ),
-        ) {
+        let quorum = resolve_put_quorum(self.dht_put_quorum, self.dht_handler.replication_factor());
+        match self
+            .swarm
+            .behaviour_mut()
+            .dht
+            .put_record(record, libp2p::kad::Quorum::N(quorum))
+        {
             Err(e) => {
                 // failed try again later
                 query.progress = DHTProgress::NotStarted;
@@ -863,6 +892,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         (
             UnboundedSender<ClientRequest>,
             UnboundedReceiver<NetworkEvent>,
+            SwarmTaskHandle,
         ),
         NetworkError,
     > {
@@ -873,7 +903,9 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         self.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
 
         DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
-        spawn(
+        // Keep the task's `JoinHandle` so callers can await the swarm loop
+        // ending on shutdown, ensuring the listening socket is released.
+        let task = spawn(
             async move {
                 loop {
                     select! {
@@ -894,11 +926,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         }
                     }
                 }
+                drop(self.swarm);
                 Ok::<(), NetworkError>(())
             }
             .instrument(info_span!("Libp2p NetworkBehaviour Handler")),
         );
-        Ok((s_input, r_output))
+        Ok((s_input, r_output, task))
     }
 
     /// Get a reference to the network node's peer id.
@@ -909,14 +942,20 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
 #[cfg(test)]
 mod tests {
-    use super::{U256, direct_message_protocol, gossipsub_prefix, kad_protocol};
+    use std::num::NonZeroUsize;
+
+    use super::{
+        U256, direct_message_protocol, gossipsub_prefix, identify_protocol, kad_protocol,
+        resolve_put_quorum,
+    };
 
     fn snapshot_for(discriminator: Option<U256>) -> String {
         format!(
-            "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}",
+            "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}\nidentify: {}",
             gossipsub_prefix(discriminator),
             kad_protocol(discriminator).unwrap(),
             direct_message_protocol(discriminator).unwrap(),
+            identify_protocol(discriminator),
         )
     }
 
@@ -931,5 +970,21 @@ mod tests {
             "decaf_libp2p_protocol_identifiers",
             snapshot_for(Some(U256::from(0xdecafu64)))
         );
+    }
+
+    #[test]
+    fn put_quorum_override() {
+        let nz = |n| NonZeroUsize::new(n).unwrap();
+
+        // default path: quorum = replication_factor / 2
+        assert_eq!(resolve_put_quorum(None, nz(20)), nz(10));
+        assert_eq!(resolve_put_quorum(None, nz(2)), nz(1));
+
+        // override below default
+        assert_eq!(resolve_put_quorum(Some(nz(1)), nz(20)), nz(1));
+        // override independent of replication factor
+        assert_eq!(resolve_put_quorum(Some(nz(7)), nz(20)), nz(7));
+        // resolver does not clamp; kad caps separately at min(n, rf)
+        assert_eq!(resolve_put_quorum(Some(nz(50)), nz(20)), nz(50));
     }
 }

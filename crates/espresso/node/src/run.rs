@@ -4,7 +4,6 @@ use espresso_telemetry as telemetry;
 use espresso_types::traits::{NullEventConsumer, SequencerPersistence};
 use futures::future::FutureExt;
 use hotshot_types::traits::metrics::NoMetrics;
-use tokio::signal::unix::{SignalKind, signal};
 use url::Url;
 
 use super::{
@@ -141,28 +140,12 @@ where
     // Start doing consensus.
     ctx.start_consensus().await;
 
-    // Run until consensus stops on its own or we receive a shutdown signal. On a signal, shut down
-    // gracefully
     tokio::select! {
         () = ctx.join() => tracing::warn!("consensus stopped; exiting"),
-        signal = wait_for_shutdown_signal() => {
-            tracing::warn!(signal, "received shutdown signal; shutting down gracefully");
-            ctx.shut_down().await;
-        },
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => ctx.shut_down().await,
     }
 
     Ok(())
-}
-
-/// Wait for a shutdown signal
-async fn wait_for_shutdown_signal() -> &'static str {
-    let mut interrupt = signal(SignalKind::interrupt()).expect("install SIGINT handler");
-    let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
-
-    tokio::select! {
-        _ = interrupt.recv() => "SIGINT",
-        _ = terminate.recv() => "SIGTERM",
-    }
 }
 
 pub async fn init_with_storage<S>(
@@ -226,6 +209,7 @@ where
         libp2p_heartbeat_initial_delay: opt.libp2p_heartbeat_initial_delay,
         libp2p_gossip_factor: opt.libp2p_gossip_factor,
         libp2p_gossip_lazy: opt.libp2p_gossip_lazy,
+        libp2p_dht_put_quorum: opt.libp2p_dht_put_quorum,
     };
 
     let proposal_fetcher_config = opt.proposal_fetcher_config;

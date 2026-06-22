@@ -73,11 +73,11 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
                     self.completed.insert(view);
                     return Some((cert1, state_cert));
                 },
-                Some(Err(e)) if e.is_cancelled() => {
-                    debug!("Epoch-root vote collection task cancelled: {e}");
+                Some(Err(err)) if err.is_cancelled() => {
+                    debug!(%err, "Epoch-root vote collection task cancelled");
                 },
-                Some(Err(e)) => {
-                    warn!("Error in epoch-root vote collection task: {e}");
+                Some(Err(err)) => {
+                    warn!(%err, "Error in epoch-root vote collection task");
                 },
                 None => return None,
             }
@@ -172,8 +172,8 @@ impl<T: NodeType> EpochRootVoteCollector<T> {
                             Ok(()) => {
                                 quorum_cert = Some(cert);
                             },
-                            Err(e) => {
-                                warn!("Invalid quorum certificate formed at epoch-root view: {e}");
+                            Err(err) => {
+                                warn!(%err, "Invalid quorum certificate formed at epoch-root view");
                                 // Retry from previously-seen votes (mirror VoteCollector recovery).
                                 quorum_votes.push(vote1.vote.clone());
                                 quorum_votes.retain(|v| {
@@ -241,8 +241,8 @@ fn generate_vote_commitment<T: NodeType, V: Vote<T>>(
 ) -> Option<committable::Commitment<VersionedVoteData<T, V::Commitment>>> {
     match VersionedVoteData::new(vote.date().clone(), vote.view_number(), upgrade_lock) {
         Ok(data) => Some(data.commit()),
-        Err(e) => {
-            tracing::warn!("Failed to generate versioned vote data: {e}");
+        Err(err) => {
+            tracing::warn!(%err, "Failed to generate versioned vote data");
             None
         },
     }

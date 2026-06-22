@@ -888,7 +888,12 @@ impl<TYPES: NodeType> AvidmGf2DisperseShare<TYPES> {
     }
 
     /// Internally verify the share given necessary information
-    pub fn verify(&self, _total_weight: usize) -> bool {
-        self.is_consistent() && self.verify_with_verified_common()
+    pub fn verify(&self, total_weight: usize) -> bool {
+        // A share's commitment hash-binds its `ns_commits` (via `is_consistent`)
+        // but not its `param`, so check `param` against the committee-derived
+        // expectation; otherwise a forged param would pass verification.
+        init_avidm_gf2_param(total_weight).is_ok_and(|expected| self.common.param == expected)
+            && self.is_consistent()
+            && self.verify_with_verified_common()
     }
 }

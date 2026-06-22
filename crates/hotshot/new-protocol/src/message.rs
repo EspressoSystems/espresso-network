@@ -247,7 +247,7 @@ pub enum MessageType<T: NodeType, S> {
     Consensus(ConsensusMessage<T, S>),
     Block(BlockMessage<T>),
     ProposalFetch(ProposalFetchMessage<T>),
-    External(Vec<u8>),
+    External(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 impl<T: NodeType, S> MessageType<T, S> {

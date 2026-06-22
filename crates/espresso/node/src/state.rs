@@ -434,6 +434,53 @@ where
     let mut parent_leaf = parent_leaf.await;
     let mut parent_state = ValidatedState::from_header(parent_leaf.header());
 
+    // Seed the parent's reward tree from storage.
+    //
+    // `from_header` starts the reward tree empty, and the epoch boundary only
+    // repopulates it when the previous epoch actually distributed rewards. If the
+    // previous epoch predates rewards (e.g. the first boundary after a V4→V5
+    // upgrade, where the previous epoch is pre-V5), `handle_epoch_rewards` returns
+    // zero and passes the empty tree through unchanged. So after a restart in such
+    // an epoch the tree stays empty until the next boundary, where the save in
+    // `update_state_storage` fails as it serializes the tree as full key-value pairs
+    // and bails because the accounts are missing.
+    //
+    // Load the parent's tree from storage to avoid this. Doing it once is enough
+    // every later iteration carries the tree forward in `parent_state`.
+    if parent_leaf.header().version() > EPOCH_VERSION && parent_leaf.height() > 0 {
+        // The tree is only written at epoch boundaries, so the parent height
+        // usually has no row; fall back to the most recent tree at or below it.
+        let reward_merkle_tree_v2 = match storage
+            .load_reward_merkle_tree_v2(parent_leaf.height())
+            .await
+        {
+            Ok(tree) => tree,
+            Err(_) => storage
+                .load_latest_reward_merkle_tree_v2(parent_leaf.height())
+                .await
+                .context(
+                    "Error starting the state storage update loop: failed to load \
+                     RewardMerkleTreeV2 for the previous height",
+                )?,
+        };
+
+        // The fallback returns the latest tree at or below the parent height,
+        // which is the parent's tree only if their roots match (they do within an
+        // epoch). Verify against the root the parent header commits to.
+        let parent_reward_root = parent_leaf
+            .header()
+            .reward_merkle_tree_root()
+            .right()
+            .context("V5+ parent header must have a v2 reward root")?;
+        ensure!(
+            reward_merkle_tree_v2.tree.commitment() == parent_reward_root,
+            "loaded reward tree root {} does not match parent header {parent_reward_root}",
+            reward_merkle_tree_v2.tree.commitment(),
+        );
+
+        parent_state.reward_merkle_tree_v2 = reward_merkle_tree_v2.tree;
+    }
+
     if last_height == 0 {
         // If the last height is 0, we need to insert the genesis state, since this state is
         // never the result of a state update and thus is not inserted in the loop below.

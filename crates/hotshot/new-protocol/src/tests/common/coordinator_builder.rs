@@ -28,7 +28,7 @@ use crate::{
     epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::test_upgrade_lock,
     message::{Certificate1, Proposal},
-    network::Network,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -37,16 +37,16 @@ use crate::{
 };
 
 #[allow(clippy::too_many_arguments)]
-pub async fn build_test_coordinator<N: Network<TestTypes>>(
+pub async fn build_test_coordinator(
     node_index: u64,
-    network: N,
+    network: Cliquenet<TestTypes>,
     membership: EpochMembershipCoordinator<TestTypes>,
     storage: TestStorage<TestTypes>,
     client: CoordinatorClient<TestTypes>,
     epoch_height: u64,
     view_timeout: Duration,
     pre_cutover_seed: Option<PreCutoverSeed<TestTypes>>,
-) -> Coordinator<TestTypes, N, TestStorage<TestTypes>> {
+) -> Coordinator<TestTypes, TestStorage<TestTypes>> {
     let (public_key, private_key) = BLSPubKey::generated_from_seed_indexed([0; 32], node_index);
     let state_key_pair = StateKeyPair::generate_from_seed_indexed([0u8; 32], node_index);
     let state_private_key = state_key_pair.sign_key_ref().clone();
@@ -87,7 +87,12 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
         epoch_height,
     );
 
-    let vid_disperser = VidDisperser::new(membership.clone());
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
     let vid_reconstructor = VidReconstructor::new();
 
     let block_builder = BlockBuilder::new(
@@ -169,6 +174,15 @@ pub async fn build_test_coordinator<N: Network<TestTypes>>(
                     }
                 })
                 .collect();
+        // Seed persisted proposals before `seed_parent` so its authoritative
+        // anchor wins (mirrors `Coordinator::maker`).
+        consensus.seed_proposals(
+            storage
+                .proposals_cloned()
+                .await
+                .into_values()
+                .map(|p| Proposal::from(p.data.clone())),
+        );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
         anchor_view
     } else {

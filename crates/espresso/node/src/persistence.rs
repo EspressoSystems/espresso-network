@@ -371,6 +371,47 @@ mod tests {
     }
 
     #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_high_qc2_monotonic<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        // Initially there is no persisted lock.
+        assert_eq!(storage.load_high_qc2().await.unwrap(), None);
+
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+
+        // Persist a lock at view 5.
+        qc.view_number = ViewNumber::new(5);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(5)
+        );
+
+        // A newer lock advances the stored view.
+        qc.view_number = ViewNumber::new(6);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(6)
+        );
+
+        // A stale (older) lock is a no-op: the compare-and-set never regresses
+        // the persisted view, even though the file/row write is unconditional.
+        qc.view_number = ViewNumber::new(4);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(6)
+        );
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
     pub async fn test_restart_view<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
@@ -851,10 +892,10 @@ mod tests {
         final_qc.view_number += 1;
         final_qc.data.leaf_commit = Committable::commit(&leaf);
         let qcs = [
-            leaves[1].justify_qc(),
-            leaves[2].justify_qc(),
-            leaves[3].justify_qc(),
-            final_qc,
+            CertificatePair::non_epoch_change(leaves[1].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[2].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[3].justify_qc()),
+            CertificatePair::non_epoch_change(final_qc),
         ];
 
         assert_eq!(
@@ -873,9 +914,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(2),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change((*qc).clone()))),
+                leaf_chain.iter().map(|(leaf, qc)| (leaf, (*qc).clone())),
                 None,
                 &consumer,
             )
@@ -937,10 +976,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(3),
-                vec![(
-                    &leaf_info(leaves[3].clone()),
-                    CertificatePair::non_epoch_change(qcs[3].clone()),
-                )],
+                vec![(&leaf_info(leaves[3].clone()), qcs[3].clone())],
                 None,
                 &consumer,
             )
@@ -963,7 +999,7 @@ mod tests {
         else {
             panic!("expected decide event, got {:?}", events[0]);
         };
-        assert_eq!(*committing_qc.qc(), qcs[3]);
+        assert_eq!(**committing_qc, qcs[3]);
         assert_eq!(leaf_chain.len(), 1);
         let info = &leaf_chain[0];
         assert_eq!(info.leaf, leaves[3]);
@@ -1917,7 +1953,7 @@ mod tests {
             .map(|i| StateKeyPair::generate_from_seed_indexed([2; 32], i as u64))
             .collect::<Vec<_>>();
 
-        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 20);
+        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, &[], 20);
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))

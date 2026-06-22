@@ -136,6 +136,7 @@ pub struct SerializableRecord {
     /// The key of the record
     pub key: libp2p::kad::RecordKey,
     /// The value of the record
+    #[serde(with = "serde_bytes")]
     pub value: Vec<u8>,
     /// The (original) publisher of the record.
     pub publisher: Option<libp2p::PeerId>,
