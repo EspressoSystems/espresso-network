@@ -53,8 +53,8 @@ pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static s
     }
 }
 
-pub use genesis::Genesis;
 use genesis::L1Finalized;
+pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
     traits::implementations::{
         CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
