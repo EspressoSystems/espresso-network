@@ -745,13 +745,7 @@ pub struct Query {
 #[cfg(test)]
 impl Query {
     pub fn test() -> Self {
-        Self {
-            light_client: LightClientOptions {
-                decaf: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+        Self::default()
     }
 }
 
