@@ -656,7 +656,8 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     .config(Default::default())
     .explorer(Default::default())
     .query_sql(Default::default(), sql)
-    .hotshot_events(Default::default());
+    .hotshot_events(Default::default())
+    .light_client(Default::default());
 
     let config = TestNetworkConfigBuilder::<NUM_NODES, _, _>::with_num_nodes()
         .api_config(api_options)
@@ -745,10 +746,12 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     ));
     handles.push(dev_node_handle);
 
-    // if any of the async task is complete then dev node binary exits
-    if let Some(item) = handles.next().await {
-        tracing::error!("exiting dev node: {item:?}");
-        drop(network);
+    tokio::select! {
+        Some(item) = handles.next() => {
+            tracing::error!("exiting dev node: {item:?}");
+            drop(network);
+        },
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => drop(network),
     }
 
     Ok(())

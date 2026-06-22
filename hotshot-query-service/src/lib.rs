@@ -421,8 +421,11 @@ pub mod explorer;
 pub mod fetching;
 pub mod merklized_state;
 pub mod metrics;
+pub mod migration;
 pub mod node;
 mod resolvable;
+#[cfg(feature = "sqlite-options")]
+pub mod sqlite_options;
 pub mod status;
 pub mod task;
 pub mod testing;
@@ -751,7 +754,7 @@ mod test {
         }
         async fn count_transactions_in_range(
             &self,
-            range: impl RangeBounds<usize> + Send,
+            range: impl RangeBounds<usize> + Send + Sync + Clone,
             namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
             self.hotshot_qs
@@ -760,7 +763,7 @@ mod test {
         }
         async fn payload_size_in_range(
             &self,
-            range: impl RangeBounds<usize> + Send,
+            range: impl RangeBounds<usize> + Send + Sync + Clone,
             namespace: Option<NamespaceId<MockTypes>>,
         ) -> QueryResult<usize> {
             self.hotshot_qs

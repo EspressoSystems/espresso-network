@@ -417,8 +417,8 @@ impl InnerTestClient {
             let stake = U256::from(self.quorum.len() + 1) * U256::from(1_000_000_000u128);
             let validator: AuthenticatedValidator<PubKey> = RegisteredValidator {
                 account: Address::random(),
-                stake_table_key,
-                state_ver_key,
+                stake_table_key: Some(stake_table_key),
+                state_ver_key: Some(state_ver_key),
                 stake,
                 commission: 1,
                 delegators: [(Address::random(), stake)].into_iter().collect(),
@@ -441,8 +441,8 @@ impl InnerTestClient {
         let mut used_schnorr_keys = HashSet::default();
         for (_, validator) in quorum {
             validators.insert(validator.account, validator.clone().into());
-            used_bls_keys.insert(validator.stake_table_key);
-            used_schnorr_keys.insert(validator.state_ver_key.clone());
+            used_bls_keys.insert(*validator.stake_table_key());
+            used_schnorr_keys.insert(validator.state_ver_key().clone());
         }
 
         let state = StakeTableState::new(
@@ -463,7 +463,7 @@ impl InnerTestClient {
         let mut total_stake = U256::ZERO;
         for validator in &stake_table {
             stake_entries.push(StakeTableEntry {
-                stake_key: validator.stake_table_key,
+                stake_key: *validator.stake_table_key(),
                 stake_amount: validator.stake,
             });
             total_stake += validator.stake;
@@ -530,7 +530,7 @@ impl InnerTestClient {
                 let mut next_total = U256::ZERO;
                 for validator in &next_validators {
                     next_entries.push(StakeTableEntry {
-                        stake_key: validator.stake_table_key,
+                        stake_key: *validator.stake_table_key(),
                         stake_amount: validator.stake,
                     });
                     next_total += validator.stake;
@@ -705,7 +705,7 @@ impl TestClient {
                 .quorum_for_epoch(1)
                 .iter()
                 .map(|(_, validator)| StakeTableEntry {
-                    stake_key: validator.stake_table_key,
+                    stake_key: *validator.stake_table_key(),
                     stake_amount: validator.stake,
                 })
                 .collect(),
@@ -761,7 +761,7 @@ impl TestClient {
             .quorum_for_epoch(*epoch)
             .iter()
             .map(|(_, validator)| StakeTableEntry {
-                stake_key: validator.stake_table_key,
+                stake_key: *validator.stake_table_key(),
                 stake_amount: validator.stake,
             })
             .collect()
@@ -1047,8 +1047,8 @@ fn register_validator_events(
 ) {
     events.push(StakeTableEvent::Register(ValidatorRegistered {
         account: validator.account,
-        blsVk: validator.stake_table_key.into(),
-        schnorrVk: validator.state_ver_key.clone().into(),
+        blsVk: (*validator.stake_table_key()).into(),
+        schnorrVk: validator.state_ver_key().clone().into(),
         commission: validator.commission,
     }));
     for (&delegator, &amount) in &validator.delegators {
@@ -1067,8 +1067,8 @@ pub fn random_validator() -> AuthenticatedValidator<PubKey> {
     let stake = U256::from(rand::thread_rng().next_u64());
     RegisteredValidator {
         account,
-        stake_table_key: PubKey::generated_from_seed_indexed(seed, 0).0,
-        state_ver_key: SchnorrPubKey::generated_from_seed_indexed(seed, 0).0,
+        stake_table_key: Some(PubKey::generated_from_seed_indexed(seed, 0).0),
+        state_ver_key: Some(SchnorrPubKey::generated_from_seed_indexed(seed, 0).0),
         stake,
         commission: 1,
         delegators: [(Address::random(), stake)].into_iter().collect(),

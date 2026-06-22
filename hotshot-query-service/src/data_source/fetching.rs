@@ -90,8 +90,8 @@ use super::{
     notifier::Notifier,
     storage::{
         Aggregate, AggregatesStorage, AvailabilityStorage, ExplorerStorage,
-        MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, UpdateAggregatesStorage,
-        UpdateAvailabilityStorage,
+        MerklizedStateHeightStorage, MerklizedStateStorage, NodeStorage, SerializableRetry,
+        UpdateAggregatesStorage, UpdateAvailabilityStorage,
         pruning::{PruneStorage, PrunedHeightDataSource, PrunedHeightStorage},
     },
 };
@@ -114,6 +114,7 @@ use crate::{
         NodeDataSource, SyncStatus, SyncStatusQueryData, SyncStatusRange, TimeWindowQueryData,
         WindowStart,
     },
+    serializable_retry,
     status::{HasMetrics, StatusDataSource},
     task::BackgroundTask,
     types::HeightIndexed,
@@ -563,15 +564,18 @@ impl<Types, S, P> StatusDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + HasMetrics + Send + Sync + 'static,
+    S: VersionedDataSource + HasMetrics + SerializableRetry + Send + Sync + 'static,
     for<'a> S::ReadOnly<'a>: NodeStorage<Types>,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.block_height().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.block_height().await
+        })
+        .await
     }
 }
 
@@ -579,13 +583,16 @@ where
 impl<Types, S, P> PrunedHeightDataSource for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
-    S: VersionedDataSource + HasMetrics + Send + Sync + 'static,
+    S: VersionedDataSource + HasMetrics + SerializableRetry + Send + Sync + 'static,
     for<'a> S::ReadOnly<'a>: PrunedHeightStorage,
     P: Send + Sync,
 {
     async fn load_pruned_height(&self) -> anyhow::Result<Option<u64>> {
-        let mut tx = self.read().await?;
-        tx.load_pruned_height().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await?;
+            tx.load_pruned_height().await
+        })
+        .await
     }
 }
 
@@ -865,10 +872,42 @@ where
     /// has produced the block payload, so [`append`](Self::append) may persist
     /// a leaf with no payload attached. The payload is then back-filled here
     /// once it becomes available, leaving the rest of the block info untouched.
+    ///
+    /// Reconstruction runs on views that are not yet (and may never be)
+    /// decided, so the block is only stored if it matches the decided leaf at
+    /// the same height. If that leaf hasn't been ingested yet the payload is
+    /// dropped: when the decide arrives, [`append`](Self::append) spawns a
+    /// fetch that back-fills the payload from a peer.
     async fn append_payload(&self, block: BlockQueryData<Types>) -> anyhow::Result<()> {
-        // Write to storage and notify any pending fetchers waiting on this height.
-        self.fetcher.store(&block).await;
-        block.notify(&self.fetcher.notifiers).await;
+        let height = block.height();
+        let leaf = {
+            let mut tx = self.read().await.context("opening read transaction")?;
+            match tx.get_leaf(LeafId::Number(height as usize)).await {
+                Ok(leaf) => leaf,
+                Err(QueryError::Missing | QueryError::NotFound) => {
+                    tracing::info!(
+                        height,
+                        "dropping reconstructed payload; leaf not yet available"
+                    );
+                    return Ok(());
+                },
+                Err(err) => {
+                    return Err(err).context(format!(
+                        "loading leaf {height} to verify reconstructed payload"
+                    ));
+                },
+            }
+        };
+        if leaf.block_hash() != block.hash() {
+            tracing::warn!(
+                height,
+                decided = %leaf.block_hash(),
+                reconstructed = %block.hash(),
+                "reconstructed payload does not match decided block; discarding"
+            );
+            return Ok(());
+        }
+        self.fetcher.store_and_notify(&block).await;
         Ok(())
     }
 }
@@ -1933,15 +1972,18 @@ where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
     Payload<Types>: QueryablePayload<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + SerializableRetry + 'static,
     for<'a> S::ReadOnly<'a>: MerklizedStateHeightStorage,
     P: Send + Sync,
 {
     async fn get_last_state_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_last_state_height().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_last_state_height().await
+        })
+        .await
     }
 }
 
@@ -1950,47 +1992,61 @@ impl<Types, S, P> NodeDataSource<Types> for FetchingDataSource<Types, S, P>
 where
     Types: NodeType,
     Header<Types>: QueryableHeader<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + SerializableRetry + 'static,
     for<'a> S::ReadOnly<'a>: NodeStorage<Types> + PrunedHeightStorage,
     P: Send + Sync,
 {
     async fn block_height(&self) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.block_height().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.block_height().await
+        })
+        .await
     }
 
     async fn count_transactions_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.count_transactions_in_range(range, namespace).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.count_transactions_in_range(range.clone(), namespace)
+                .await
+        })
+        .await
     }
 
     async fn payload_size_in_range(
         &self,
-        range: impl RangeBounds<usize> + Send,
+        range: impl RangeBounds<usize> + Send + Sync + Clone,
         namespace: Option<NamespaceId<Types>>,
     ) -> QueryResult<usize> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.payload_size_in_range(range, namespace).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.payload_size_in_range(range.clone(), namespace).await
+        })
+        .await
     }
 
     async fn vid_share<ID>(&self, id: ID) -> QueryResult<VidShare>
     where
         ID: Into<BlockId<Types>> + Send + Sync,
     {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.vid_share(id).await
+        let id: BlockId<Types> = id.into();
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.vid_share(id).await
+        })
+        .await
     }
 
     async fn sync_status(&self) -> QueryResult<SyncStatusQueryData> {
@@ -2008,10 +2064,14 @@ where
         end: u64,
         limit: usize,
     ) -> QueryResult<TimeWindowQueryData<Header<Types>>> {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_header_window(start, end, limit).await
+        let start: WindowStart<Types> = start.into();
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_header_window(start, end, limit).await
+        })
+        .await
     }
 }
 
@@ -2022,7 +2082,7 @@ where
     Payload<Types>: QueryablePayload<Types>,
     Header<Types>: QueryableHeader<Types> + explorer::traits::ExplorerHeader<Types>,
     crate::Transaction<Types>: explorer::traits::ExplorerTransaction<Types>,
-    S: VersionedDataSource + 'static,
+    S: VersionedDataSource + SerializableRetry + 'static,
     for<'a> S::ReadOnly<'a>: ExplorerStorage<Types>,
     P: Send + Sync,
 {
@@ -2033,10 +2093,13 @@ where
         Vec<explorer::query_data::BlockSummary<Types>>,
         explorer::query_data::GetBlockSummariesError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_block_summaries(request).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_block_summaries(request.clone()).await
+        })
+        .await
     }
 
     async fn get_block_detail(
@@ -2044,10 +2107,13 @@ where
         request: explorer::query_data::BlockIdentifier<Types>,
     ) -> Result<explorer::query_data::BlockDetail<Types>, explorer::query_data::GetBlockDetailError>
     {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_block_detail(request).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_block_detail(request.clone()).await
+        })
+        .await
     }
 
     async fn get_transaction_summaries(
@@ -2057,10 +2123,13 @@ where
         Vec<explorer::query_data::TransactionSummary<Types>>,
         explorer::query_data::GetTransactionSummariesError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_transaction_summaries(request).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_transaction_summaries(request.clone()).await
+        })
+        .await
     }
 
     async fn get_transaction_detail(
@@ -2070,10 +2139,13 @@ where
         explorer::query_data::TransactionDetailResponse<Types>,
         explorer::query_data::GetTransactionDetailError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_transaction_detail(request).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_transaction_detail(request.clone()).await
+        })
+        .await
     }
 
     async fn get_explorer_summary(
@@ -2082,10 +2154,13 @@ where
         explorer::query_data::ExplorerSummary<Types>,
         explorer::query_data::GetExplorerSummaryError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_explorer_summary().await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_explorer_summary().await
+        })
+        .await
     }
 
     async fn get_search_results(
@@ -2095,10 +2170,13 @@ where
         explorer::query_data::SearchResult<Types>,
         explorer::query_data::GetSearchResultsError,
     > {
-        let mut tx = self.read().await.map_err(|err| QueryError::Error {
-            message: err.to_string(),
-        })?;
-        tx.get_search_results(query).await
+        serializable_retry!(self.fetcher.storage, || async {
+            let mut tx = self.read().await.map_err(|err| QueryError::Error {
+                message: err.to_string(),
+            })?;
+            tx.get_search_results(query.clone()).await
+        })
+        .await
     }
 }
 

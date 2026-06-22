@@ -70,6 +70,16 @@ impl NsAvidmGf2Share {
     pub fn inner_ns_share(&self, ns_index: usize) -> Option<AvidmGf2Share> {
         self.0.get(ns_index).cloned()
     }
+
+    /// The shard range this share covers, identical across all namespaces.
+    /// `None` if the share is empty or its namespaces disagree on the range.
+    pub fn range(&self) -> Option<&Range<usize>> {
+        let first = self.0.first()?.range();
+        self.0
+            .iter()
+            .all(|share| share.range() == first)
+            .then_some(first)
+    }
 }
 
 impl NsAvidmGf2Scheme {
@@ -140,6 +150,52 @@ impl NsAvidmGf2Scheme {
 
         let (ns_commits, disperses): (Vec<_>, Vec<_>) = per_ns.into_iter().unzip();
 
+        let common = NsAvidmGf2Common {
+            param: param.clone(),
+            ns_commits,
+            ns_lens,
+        };
+        let commit = NsAvidmGf2Commit {
+            commit: MerkleTree::from_elems(None, common.ns_commits.iter().map(|c| c.commit))
+                .map_err(|err| VidError::Internal(err.into()))?
+                .commitment(),
+        };
+        let mut shares = vec![NsAvidmGf2Share::default(); num_storage_nodes];
+        disperses.into_iter().for_each(|ns_disperse| {
+            shares
+                .iter_mut()
+                .zip(ns_disperse)
+                .for_each(|(share, ns_share)| share.0.push(ns_share))
+        });
+        Ok((commit, common, shares))
+    }
+
+    /// Test-only: like [`Self::ns_disperse`] but commits to a non-codeword in
+    /// every namespace (see [`AvidmGf2Scheme::disperse_non_codeword`]). Every
+    /// returned share verifies against the returned common, yet no
+    /// threshold-covering subset recovers a payload that re-commits to the
+    /// returned commitment.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn ns_disperse_non_codeword(
+        param: &NsAvidmGf2Param,
+        distribution: &[u32],
+        payload: &[u8],
+        ns_table: impl IntoIterator<Item = Range<usize>>,
+    ) -> VidResult<(NsAvidmGf2Commit, NsAvidmGf2Common, Vec<NsAvidmGf2Share>)> {
+        let num_storage_nodes = distribution.len();
+        let ns_ranges: Vec<Range<usize>> = ns_table.into_iter().collect();
+        let ns_lens: Vec<usize> = ns_ranges.iter().map(|r| r.len()).collect();
+        let per_ns: Vec<(AvidmGf2Commit, Vec<AvidmGf2Share>)> = ns_ranges
+            .iter()
+            .map(|ns_range| {
+                AvidmGf2Scheme::disperse_non_codeword(
+                    param,
+                    distribution,
+                    &payload[ns_range.clone()],
+                )
+            })
+            .collect::<VidResult<Vec<_>>>()?;
+        let (ns_commits, disperses): (Vec<_>, Vec<_>) = per_ns.into_iter().unzip();
         let common = NsAvidmGf2Common {
             param: param.clone(),
             ns_commits,

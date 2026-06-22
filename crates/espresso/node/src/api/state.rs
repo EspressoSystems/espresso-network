@@ -2257,7 +2257,7 @@ where
         let ds = &*self.data_source;
         let h = hotshot_query_service::node::NodeDataSource::block_height(ds)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .map_err(classify_query_error)?;
         Ok(h as u64)
     }
 
@@ -2281,7 +2281,7 @@ where
         let count = ds
             .count_transactions_in_range((from, to), ns)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .map_err(classify_query_error)?;
         Ok(count as u64)
     }
 
@@ -2305,7 +2305,7 @@ where
         let size = ds
             .payload_size_in_range((from, to), ns)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            .map_err(classify_query_error)?;
         Ok(size as u64)
     }
 
@@ -2327,14 +2327,14 @@ where
         };
         hotshot_query_service::node::NodeDataSource::vid_share(ds, node_id)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(classify_query_error)
     }
 
     async fn sync_status(&self) -> anyhow::Result<Self::SyncStatus> {
         let ds = &*self.data_source;
         hotshot_query_service::node::NodeDataSource::sync_status(ds)
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(classify_query_error)
     }
 
     async fn get_header_window(
@@ -2349,12 +2349,12 @@ where
             espresso_api::v1::HeaderWindowStart::Height(h) => WindowStart::Height(h),
             espresso_api::v1::HeaderWindowStart::Hash(h) => WindowStart::Hash(
                 h.parse()
-                    .map_err(|_| anyhow::anyhow!("invalid block hash: {h}"))?,
+                    .map_err(|err| bad_request(format!("invalid block hash {h}: {err}")))?,
             ),
         };
         ds.get_header_window(start, end, node_window_limit())
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(classify_query_error)
     }
 
     async fn limits(&self) -> anyhow::Result<Self::Limits> {

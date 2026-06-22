@@ -488,9 +488,14 @@ pub(crate) async fn handle_timeout<TYPES: NodeType, I: NodeImplementation<TYPES>
     // Forward the same vote to any external listener so the espresso bridge
     // can submit it to the new-protocol coordinator at the legacy → 0.8
     // upgrade boundary. Only emit when a target upgrade is decided (i.e.
-    // we know a cutover is coming) to avoid spurious events in normal
-    // operation. The check is cheap; the event payload is small.
-    if task_state.upgrade_lock.decided_upgrade_cert().is_some() {
+    // we know a cutover is coming) and the view is not past the cutover,
+    // to avoid spurious events in normal operation. The check is cheap;
+    // the event payload is small.
+    if task_state
+        .upgrade_lock
+        .decided_upgrade_cert()
+        .is_some_and(|cert| view_number <= cert.data.new_version_first_view)
+    {
         broadcast_event(
             Event {
                 view_number,

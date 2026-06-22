@@ -49,6 +49,7 @@ use rand::{prelude::SliceRandom, thread_rng};
 use tokio::{
     select, spawn,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+    task::JoinHandle,
 };
 use tracing::{Instrument, debug, error, info, info_span, instrument, warn};
 
@@ -80,6 +81,9 @@ use crate::network::{
     log_summary::LogEvent,
 };
 
+/// Join handle for the spawned swarm event-loop task.
+pub type SwarmTaskHandle = JoinHandle<Result<(), NetworkError>>;
+
 /// Maximum size of a message
 pub const MAX_GOSSIP_MSG_SIZE: usize = 2_000_000_000;
 
@@ -106,6 +110,9 @@ pub(crate) fn mainnet_kad_protocol() -> StreamProtocol {
 pub(crate) fn mainnet_direct_message_protocol() -> StreamProtocol {
     StreamProtocol::new("/HotShot/direct_message/1.0")
 }
+pub(crate) fn mainnet_identify_protocol() -> &'static str {
+    "HotShot/identify/1.0"
+}
 
 /// Resolve the gossipsub `protocol_id_prefix` for the given network discriminator.
 /// `None` returns the mainnet value (the libp2p default).
@@ -122,6 +129,14 @@ pub(crate) fn kad_protocol(discriminator: Option<U256>) -> Result<StreamProtocol
         None => Ok(mainnet_kad_protocol()),
         Some(d) => StreamProtocol::try_from_owned(format!("/ipfs/kad/1.0.0/{d:#x}"))
             .map_err(|err| NetworkError::ConfigError(format!("invalid kademlia protocol: {err}"))),
+    }
+}
+
+/// Resolve the identify protocol string for the given network discriminator.
+pub(crate) fn identify_protocol(discriminator: Option<U256>) -> String {
+    match discriminator {
+        None => mainnet_identify_protocol().to_string(),
+        Some(d) => format!("HotShot/identify/1.0/{d:#x}"),
     }
 }
 
@@ -316,8 +331,10 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             //   node connection information
             //   E.g. this will answer the question: how are other nodes
             //   seeing the peer from behind a NAT
-            let identify_cfg =
-                IdentifyConfig::new("HotShot/identify/1.0".to_string(), keypair.public());
+            let identify_cfg = IdentifyConfig::new(
+                identify_protocol(config.network_discriminator),
+                keypair.public(),
+            );
             let identify = IdentifyBehaviour::new(identify_cfg);
 
             // - Build DHT needed for peer discovery
@@ -863,6 +880,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         (
             UnboundedSender<ClientRequest>,
             UnboundedReceiver<NetworkEvent>,
+            SwarmTaskHandle,
         ),
         NetworkError,
     > {
@@ -873,7 +891,9 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         self.dht_handler.set_bootstrap_sender(bootstrap_tx.clone());
 
         DHTBootstrapTask::run(bootstrap_rx, s_input.clone());
-        spawn(
+        // Keep the task's `JoinHandle` so callers can await the swarm loop
+        // ending on shutdown, ensuring the listening socket is released.
+        let task = spawn(
             async move {
                 loop {
                     select! {
@@ -894,11 +914,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         }
                     }
                 }
+                drop(self.swarm);
                 Ok::<(), NetworkError>(())
             }
             .instrument(info_span!("Libp2p NetworkBehaviour Handler")),
         );
-        Ok((s_input, r_output))
+        Ok((s_input, r_output, task))
     }
 
     /// Get a reference to the network node's peer id.
@@ -909,14 +930,15 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
 #[cfg(test)]
 mod tests {
-    use super::{U256, direct_message_protocol, gossipsub_prefix, kad_protocol};
+    use super::{U256, direct_message_protocol, gossipsub_prefix, identify_protocol, kad_protocol};
 
     fn snapshot_for(discriminator: Option<U256>) -> String {
         format!(
-            "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}",
+            "gossipsub_prefix: {:?}\nkad: {}\ndirect_message: {}\nidentify: {}",
             gossipsub_prefix(discriminator),
             kad_protocol(discriminator).unwrap(),
             direct_message_protocol(discriminator).unwrap(),
+            identify_protocol(discriminator),
         )
     }
 

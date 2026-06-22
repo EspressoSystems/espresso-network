@@ -17,7 +17,11 @@ use jf_signature::{
     schnorr,
 };
 
-use crate::sol_types::{StakeTableV3, *};
+use crate::{
+    field_to_u256,
+    sol_types::{StakeTableV3, *},
+    u256_to_field,
+};
 
 // Allows us to implement From on existing Bytes type
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,15 +52,22 @@ impl TryFrom<StakeTableV3::getVersionReturn> for StakeTableContractVersion {
     }
 }
 
-impl From<G2PointSol> for BLSPubKey {
-    fn from(value: G2PointSol) -> Self {
+/// Fallible because Solidity accepts the all-zero G2 point `(0,0,0,0)` as
+/// the identity and emits it in stake-table events, but arkworks'
+/// `deserialize_uncompressed` runs an on-curve + subgroup check
+/// (`ark-ec` `short_weierstrass::Affine::check`) that rejects it as not on
+/// the curve. Callers must skip the offending L1 event rather than panic.
+impl TryFrom<G2PointSol> for BLSPubKey {
+    type Error = StakeTableSolError;
+
+    fn try_from(value: G2PointSol) -> Result<Self, Self::Error> {
         let point: G2Affine = value.into();
         let mut bytes = vec![];
         point
             .into_group()
             .serialize_uncompressed(&mut bytes)
             .unwrap();
-        Self::deserialize_uncompressed(&bytes[..]).unwrap()
+        Self::deserialize_uncompressed(&bytes[..]).map_err(|_| StakeTableSolError::InvalidBlsKey)
     }
 }
 
@@ -66,10 +77,26 @@ impl From<BLSPubKey> for G2PointSol {
     }
 }
 
-impl From<EdOnBN254PointSol> for StateVerKey {
-    fn from(value: EdOnBN254PointSol) -> Self {
-        let point: ark_ed_on_bn254::EdwardsAffine = value.into();
-        Self::from(point)
+impl TryFrom<EdOnBN254PointSol> for StateVerKey {
+    type Error = StakeTableSolError;
+
+    fn try_from(value: EdOnBN254PointSol) -> Result<Self, Self::Error> {
+        // 1) Coordinates must be canonical field elements. `u256_to_field` silently
+        // reduces mod p, so reject anything that isn't already its own reduced form.
+        let x: ark_ed_on_bn254::Fq = u256_to_field(value.x);
+        let y: ark_ed_on_bn254::Fq = u256_to_field(value.y);
+        if field_to_u256(x) != value.x || field_to_u256(y) != value.y {
+            return Err(StakeTableSolError::InvalidSchnorrKey);
+        }
+        // 2) on curve, 3) in the prime-order subgroup, 4) not the identity.
+        let point = ark_ed_on_bn254::EdwardsAffine::new_unchecked(x, y);
+        if point.is_zero()
+            || !point.is_on_curve()
+            || !point.is_in_correct_subgroup_assuming_on_curve()
+        {
+            return Err(StakeTableSolError::InvalidSchnorrKey);
+        }
+        Ok(Self::from(point))
     }
 }
 
@@ -138,17 +165,8 @@ fn authenticate_stake_table_validator_event(
     schnorr_vk: EdOnBN254PointSol,
     bls_sig: G1PointSol,
     schnorr_sig: &[u8],
-) -> Result<(), StakeTableSolError> {
-    // TODO(alex): simplify this once jellyfish has `VerKey::from_affine()`
-    let bls_vk = {
-        let bls_vk_inner: ark_bn254::G2Affine = bls_vk.into();
-        let bls_vk_inner = bls_vk_inner.into_group();
-
-        // the two unwrap are safe since it's BLSPubKey is just a wrapper around G2Projective
-        let mut ser_bytes: Vec<u8> = Vec::new();
-        bls_vk_inner.serialize_uncompressed(&mut ser_bytes).unwrap();
-        BLSPubKey::deserialize_uncompressed(&ser_bytes[..]).unwrap()
-    };
+) -> Result<(BLSPubKey, StateVerKey), StakeTableSolError> {
+    let bls_vk = BLSPubKey::try_from(bls_vk)?;
     let bls_sig_jellyfish = {
         let sigma_affine: ark_bn254::G1Affine = bls_sig.into();
         BLSSignature {
@@ -157,11 +175,11 @@ fn authenticate_stake_table_validator_event(
     };
     authenticate_bls_sig(&bls_vk, account, &bls_sig_jellyfish)?;
 
-    let schnorr_vk: StateVerKey = schnorr_vk.into();
+    let schnorr_vk = StateVerKey::try_from(schnorr_vk)?;
     let schnorr_sig_jellyfish =
         schnorr::Signature::<EdwardsConfig>::deserialize_compressed(schnorr_sig)?;
     authenticate_schnorr_sig(&schnorr_vk, account, &schnorr_sig_jellyfish)?;
-    Ok(())
+    Ok((bls_vk, schnorr_vk))
 }
 
 /// Errors encountered when processing stake table events
@@ -173,11 +191,15 @@ pub enum StakeTableSolError {
     InvalidBlsSignature,
     #[error("Schnorr signature invalid")]
     InvalidSchnorrSignature(#[from] jf_signature::SignatureError),
+    #[error("Invalid BLS key")]
+    InvalidBlsKey,
+    #[error("Invalid Schnorr key")]
+    InvalidSchnorrKey,
 }
 
 impl StakeTableV3::ValidatorRegisteredV3 {
-    /// Verify the BLS and Schnorr signatures in the event
-    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+    /// Verify the BLS and Schnorr signatures in the event and return the parsed keys.
+    pub fn authenticate(&self) -> Result<(BLSPubKey, StateVerKey), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
             self.blsVK,
@@ -189,7 +211,8 @@ impl StakeTableV3::ValidatorRegisteredV3 {
 }
 
 impl StakeTableV3::ValidatorRegisteredV2 {
-    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+    /// Verify the BLS and Schnorr signatures in the event and return the parsed keys.
+    pub fn authenticate(&self) -> Result<(BLSPubKey, StateVerKey), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
             self.blsVK,
@@ -201,7 +224,8 @@ impl StakeTableV3::ValidatorRegisteredV2 {
 }
 
 impl StakeTableV3::ConsensusKeysUpdatedV2 {
-    pub fn authenticate(&self) -> Result<(), StakeTableSolError> {
+    /// Verify the BLS and Schnorr signatures in the event and return the parsed keys.
+    pub fn authenticate(&self) -> Result<(BLSPubKey, StateVerKey), StakeTableSolError> {
         authenticate_stake_table_validator_event(
             self.account,
             self.blsVK,
@@ -214,21 +238,21 @@ impl StakeTableV3::ConsensusKeysUpdatedV2 {
 
 #[cfg(test)]
 mod test {
-    use alloy::primitives::Address;
+    use alloy::primitives::{Address, U256};
     use hotshot_types::{
-        light_client::StateKeyPair,
+        light_client::{StateKeyPair, StateVerKey},
         signature_key::{BLSKeyPair, BLSPrivKey, BLSPubKey},
     };
 
     use super::{StateSignatureSol, sign_address_bls, sign_address_schnorr};
     use crate::sol_types::{
-        G1PointSol, G2PointSol,
+        EdOnBN254PointSol, G1PointSol, G2PointSol,
         StakeTableV3::{ConsensusKeysUpdatedV2, ValidatorRegisteredV2},
     };
 
     fn check_round_trip(pk: BLSPubKey) {
         let g2 = G2PointSol::from(pk);
-        let pk2 = BLSPubKey::from(g2);
+        let pk2 = BLSPubKey::try_from(g2).expect("valid BLS key roundtrip");
         assert_eq!(pk2, pk, "Failed to roundtrip G2PointSol to BLSPubKey: {pk}");
     }
 
@@ -284,6 +308,39 @@ mod test {
     }
 
     #[test]
+    fn test_zero_g2_bls_pubkey_conversion_is_err() {
+        let zero_g2 = G2PointSol {
+            x0: U256::ZERO,
+            x1: U256::ZERO,
+            y0: U256::ZERO,
+            y1: U256::ZERO,
+        };
+        assert!(BLSPubKey::try_from(zero_g2).is_err());
+    }
+
+    #[test]
+    fn test_zero_g2_authenticate_returns_err_not_panic() {
+        use alloy::primitives::Bytes;
+        let event = ConsensusKeysUpdatedV2 {
+            account: Address::random(),
+            blsVK: G2PointSol {
+                x0: U256::ZERO,
+                x1: U256::ZERO,
+                y0: U256::ZERO,
+                y1: U256::ZERO,
+            },
+            schnorrVK: StateKeyPair::generate().ver_key().into(),
+            blsSig: G1PointSol {
+                x: U256::ZERO,
+                y: U256::ZERO,
+            }
+            .into(),
+            schnorrSig: Bytes::from(vec![0u8; 64]),
+        };
+        assert!(event.authenticate().is_err());
+    }
+
+    #[test]
     fn test_consensus_keys_updated_event_authentication() {
         for _ in 0..10 {
             let bls_key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
@@ -300,7 +357,9 @@ mod test {
                 blsSig: G1PointSol::from(bls_sig.clone()).into(),
                 schnorrSig: StateSignatureSol::from(schnorr_sig.clone()).into(),
             };
-            assert!(valid_event.authenticate().is_ok());
+            let (bls, schnorr) = valid_event.authenticate().expect("valid keys parse");
+            assert_eq!(bls, bls_key_pair.ver_key());
+            assert_eq!(schnorr, schnorr_key_pair.ver_key());
 
             let wrong_bls_sig =
                 sign_address_bls(&BLSKeyPair::generate(&mut rand::thread_rng()), address);
@@ -313,6 +372,69 @@ mod test {
             bad_schnorr_event.schnorrSig = StateSignatureSol::from(wrong_schnorr_sig).into();
             assert!(bad_schnorr_event.authenticate().is_err());
         }
+    }
+
+    #[test]
+    fn test_zero_schnorr_verkey_conversion_is_err() {
+        let zero_ed = EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::ZERO,
+        };
+        assert!(StateVerKey::try_from(zero_ed).is_err());
+    }
+
+    #[test]
+    fn test_zero_schnorr_authenticate_returns_err_not_panic() {
+        use alloy::primitives::Bytes;
+        let bls_key_pair = BLSKeyPair::generate(&mut rand::thread_rng());
+        let address = Address::random();
+        let bls_sig = sign_address_bls(&bls_key_pair, address);
+        let event = ValidatorRegisteredV2 {
+            account: address,
+            blsVK: bls_key_pair.ver_key().into(),
+            schnorrVK: EdOnBN254PointSol {
+                x: U256::ZERO,
+                y: U256::ZERO,
+            },
+            commission: 0,
+            blsSig: G1PointSol::from(bls_sig).into(),
+            schnorrSig: Bytes::from(vec![0u8; 64]),
+            metadataUri: String::new(),
+        };
+        assert!(event.authenticate().is_err());
+    }
+
+    /// Coordinates outside the base field must be rejected; `u256_to_field`
+    /// would otherwise silently reduce them mod p.
+    #[test]
+    fn test_schnorr_verkey_out_of_range_is_err() {
+        let out_of_range = EdOnBN254PointSol {
+            x: U256::MAX,
+            y: U256::from(1),
+        };
+        assert!(StateVerKey::try_from(out_of_range).is_err());
+    }
+
+    /// The twisted Edwards identity (0, 1) is on-curve and in the prime-order
+    /// subgroup but is not a valid verification key and must be rejected.
+    #[test]
+    fn test_schnorr_identity_point_is_err() {
+        let identity = EdOnBN254PointSol {
+            x: U256::ZERO,
+            y: U256::from(1),
+        };
+        let point: ark_ed_on_bn254::EdwardsAffine = identity.into();
+        assert!(point.is_on_curve());
+        assert!(point.is_in_correct_subgroup_assuming_on_curve());
+        assert!(StateVerKey::try_from(identity).is_err());
+    }
+
+    /// A validly generated Schnorr key must round-trip through the conversion.
+    #[test]
+    fn test_valid_schnorr_verkey_roundtrips() {
+        let vk = StateKeyPair::generate().ver_key();
+        let sol: EdOnBN254PointSol = vk.clone().into();
+        assert_eq!(StateVerKey::try_from(sol).expect("valid key"), vk);
     }
 }
 

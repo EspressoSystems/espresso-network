@@ -16,7 +16,7 @@ use hotshot_new_protocol::{
     epoch::EpochManager,
     epoch_root_vote_collector::EpochRootVoteCollector,
     helpers::proposal_commitment,
-    network::cliquenet::Cliquenet,
+    network::Cliquenet,
     outbox::Outbox,
     proposal::{ProposalValidator, VidShareValidator},
     state::StateManager,
@@ -37,7 +37,7 @@ use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
 use crate::{config::NodeConfig, membership::make_membership, metrics::MetricsCollector};
 
-type BenchCoordinator = Coordinator<TestTypes, Cliquenet<TestTypes>, TestStorage<TestTypes>>;
+type BenchCoordinator = Coordinator<TestTypes, TestStorage<TestTypes>>;
 
 /// Build and run a single benchmark node.
 pub async fn run(cfg: NodeConfig) -> Result<()> {
@@ -142,7 +142,13 @@ async fn build_coordinator(
 
     let epoch_manager = EpochManager::new(epoch_height, membership.clone());
 
-    let vid_disperser = VidDisperser::new(membership.clone());
+    let vid_disperser = VidDisperser::new(
+        membership.clone(),
+        network.sender().clone(),
+        public_key,
+        private_key.clone(),
+    );
+
     let vid_reconstructor = VidReconstructor::new();
 
     let block_config = BlockBuilderConfig::default();
@@ -175,7 +181,7 @@ async fn build_coordinator(
         genesis_state,
         Leaf2::from(genesis_proposal.clone()),
     );
-    consensus.seed_parent(genesis_cert1, genesis_proposal);
+    consensus.seed_parent(genesis_cert1, genesis_proposal, std::iter::empty());
 
     let proposal_validator =
         ProposalValidator::new(membership.clone(), epoch_height, upgrade_lock.clone());
@@ -286,6 +292,7 @@ async fn run_instrumented(mut coordinator: BenchCoordinator, cfg: &NodeConfig) -
                     epoch: req.epoch,
                     payload: block.block,
                     metadata: block.metadata,
+                    payload_commitment: block.payload_commitment,
                 };
                 metrics.on_input(&block_input);
                 coordinator.apply_consensus(block_input);

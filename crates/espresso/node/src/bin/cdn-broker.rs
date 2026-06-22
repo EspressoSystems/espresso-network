@@ -149,8 +149,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     // Uses TCP from broker connections and Quic for user connections.
     let broker = Broker::new(broker_config).await?;
 
-    // Start the main loop, consuming it
-    broker.start().await?;
+    tokio::select! {
+        res = broker.start() => res?,
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
+    }
 
     Ok(())
 }

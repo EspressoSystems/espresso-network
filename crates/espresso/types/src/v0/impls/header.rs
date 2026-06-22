@@ -12,7 +12,6 @@ use hotshot_query_service_types::{
 use hotshot_types::{
     data::{EpochNumber, VidCommitment, ViewNumber, vid_commitment},
     light_client::LightClientState,
-    stake_table::HSStakeTable,
     traits::{
         BlockPayload, EncodeBytes, ValidatedState as _,
         block_contents::{BlockHeader, BuilderFee, GENESIS_VID_NUM_STORAGE_NODES},
@@ -53,7 +52,7 @@ use crate::{
     },
     v0_4::{self, RewardAccountV2, RewardMerkleCommitmentV2},
     v0_5::{self, LeaderCounts, MAX_VALIDATORS},
-    v0_6::{self, REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2},
+    v0_6::{self},
 };
 
 impl v0_1::Header {
@@ -859,9 +858,10 @@ impl Header {
     ///   validation.
     ///
     /// If the previous epoch's result is missing at the boundary (e.g. after a
-    /// restart or catchup), the function fetches the epoch's leaf, recovers the
-    /// leader counts and stake table, computes rewards synchronously, and applies
-    /// them before proceeding.
+    /// restart), the function spawns the calculation and awaits it before
+    /// applying. The background task fetches the epoch's leaf and recovers the
+    /// leader counts and stake table itself, returning zero rewards for epochs
+    /// whose header version is < V5
     ///
     /// # Returns
     /// `(total_rewards_applied, changed_accounts)` — the total reward amount
@@ -912,9 +912,11 @@ impl Header {
 
         tracing::info!(%height, %epoch, %prev_epoch, "epoch boundary: applying rewards");
 
-        let (epoch_rewards_applied, changed_accounts) = if let Some(result) =
-            reward_calculator.get_result(prev_epoch).await
-        {
+        // Take the result. A failed task propagates its
+        // error here rather than retrying
+        let result = reward_calculator.get_result(prev_epoch).await.transpose()?;
+
+        let (epoch_rewards_applied, changed_accounts) = if let Some(result) = result {
             tracing::info!(
                 %epoch,
                 prev_epoch = %result.epoch,
@@ -927,95 +929,39 @@ impl Header {
             // Previous epoch is too early to have rewards.
             (RewardAmount::default(), HashSet::new())
         } else {
-            // the background result is missing
-            // Fetch the previous epoch's leaf and compute rewards synchronously.
-            let prev_epoch_last_block = *prev_epoch * epoch_height;
-            if let Err(err) = coordinator.membership_for_epoch(Some(prev_epoch)) {
-                tracing::info!(%prev_epoch, "stake table missing for prev_epoch, triggering catchup: {err:#}");
-                coordinator
-                    .wait_for_catchup(prev_epoch)
-                    .await
-                    .context(format!("failed to catch up for prev_epoch={prev_epoch}"))?;
-            }
+            // The background result is missing so compute
+            tracing::warn!(
+                %epoch,
+                %prev_epoch,
+                "missing epoch rewards at boundary, spawning calculation now"
+            );
 
-            let prev_snapshot = coordinator
-                .membership()
-                .snapshot(prev_epoch)
-                .with_context(|| format!("no committee for prev_epoch={prev_epoch}"))?;
+            reward_calculator.spawn_background_task(
+                prev_epoch,
+                epoch_height,
+                validated_state.reward_merkle_tree_v2.clone(),
+                instance_state.clone(),
+                coordinator.clone(),
+                None,
+            );
 
-            let stake_table = HSStakeTable::from_iter(prev_snapshot.stake_table());
-            let success_threshold = prev_snapshot.success_threshold();
-
-            let prev_epoch_leaf = instance_state
-                .state_catchup
-                .as_ref()
-                .fetch_leaf(prev_epoch_last_block, stake_table, success_threshold)
+            let result = reward_calculator
+                .get_result(prev_epoch)
                 .await
-                .with_context(|| {
-                    format!(
-                        "failed to fetch leaf at height {prev_epoch_last_block} for prev_epoch \
-                         {prev_epoch}"
-                    )
-                })?;
-            let prev_epoch_header = prev_epoch_leaf.block_header();
+                .context(format!("no pending reward task for epoch {prev_epoch}"))?
+                .context(format!(
+                    "failed to calculate missing rewards for epoch {prev_epoch}"
+                ))?;
 
-            if prev_epoch_header.version() >= EPOCH_REWARD_VERSION {
-                tracing::warn!(
-                    %epoch,
-                    %prev_epoch,
-                    "missing epoch rewards at boundary, spawning calculation now"
-                );
+            tracing::info!(
+                %epoch,
+                %prev_epoch,
+                total = %result.total_distributed.0,
+                "applied delayed epoch rewards"
+            );
 
-                if !reward_calculator.is_calculating(prev_epoch) {
-                    // Pick the reward tree to build on
-                    // use the local tree if its
-                    // root matches what the previous epoch's header committed to,
-                    // otherwise start from an empty tree because catchup will fill it
-                    let expected_root = prev_epoch_header.reward_merkle_tree_root().right();
-                    let actual_root = validated_state.reward_merkle_tree_v2.commitment();
-                    let reward_tree = if expected_root == Some(actual_root) {
-                        validated_state.reward_merkle_tree_v2.clone()
-                    } else {
-                        tracing::warn!(
-                            %epoch,
-                            %prev_epoch,
-                            ?expected_root,
-                            ?actual_root,
-                            "reward merkle tree root mismatch, using empty tree for catchup"
-                        );
-                        RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT)
-                    };
-
-                    reward_calculator.spawn_background_task(
-                        prev_epoch,
-                        epoch_height,
-                        reward_tree,
-                        instance_state.clone(),
-                        coordinator.clone(),
-                        prev_epoch_header.leader_counts().copied(),
-                    );
-                }
-
-                let result = reward_calculator
-                    .get_result(prev_epoch)
-                    .await
-                    .context(format!(
-                        "failed to calculate missing rewards for epoch {prev_epoch}"
-                    ))?;
-
-                tracing::info!(
-                    %epoch,
-                    %prev_epoch,
-                    total = %result.total_distributed.0,
-                    "applied delayed epoch rewards"
-                );
-
-                validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
-                (result.total_distributed, result.changed_accounts)
-            } else {
-                tracing::info!(%epoch, %prev_epoch, "no rewards for pre-V5 epoch");
-                (RewardAmount::default(), HashSet::new())
-            }
+            validated_state.reward_merkle_tree_v2 = result.reward_tree.clone();
+            (result.total_distributed, result.changed_accounts)
         };
 
         // Verify the reward tree root matches the proposed header, if available.

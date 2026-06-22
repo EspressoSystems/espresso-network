@@ -19,6 +19,7 @@ use espresso_types::{
 };
 
 pub mod fs;
+pub mod migrations;
 pub mod no_storage;
 mod persistence_metrics;
 pub mod sql;
@@ -40,14 +41,78 @@ impl RegisteredValidatorNoX25519 {
     pub fn migrate(self) -> RegisteredValidator<PubKey> {
         RegisteredValidator {
             account: self.account,
-            stake_table_key: self.stake_table_key,
-            state_ver_key: self.state_ver_key,
+            stake_table_key: Some(self.stake_table_key),
+            state_ver_key: Some(self.state_ver_key),
             stake: self.stake,
             commission: self.commission,
             delegators: self.delegators,
             authenticated: self.authenticated,
             x25519_key: None,
             p2p_addr: None,
+        }
+    }
+}
+
+// TODO: replace with a proper data migration if it is ever deemed worthwhile.
+// Field order must match `RegisteredValidator<KEY>` in v0_3::stake_table exactly (bincode is order-sensitive).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegisteredValidatorPreOption {
+    pub account: Address,
+    pub stake_table_key: PubKey,
+    pub state_ver_key: hotshot_types::light_client::StateVerKey,
+    pub stake: U256,
+    pub commission: u16,
+    pub delegators: HashMap<Address, U256>,
+    pub authenticated: bool,
+    pub x25519_key: Option<hotshot_types::x25519::PublicKey>,
+    pub p2p_addr: Option<hotshot_types::addr::NetAddr>,
+}
+
+impl RegisteredValidatorPreOption {
+    pub fn migrate(self) -> RegisteredValidator<PubKey> {
+        RegisteredValidator {
+            account: self.account,
+            stake_table_key: Some(self.stake_table_key),
+            state_ver_key: Some(self.state_ver_key),
+            stake: self.stake,
+            commission: self.commission,
+            delegators: self.delegators,
+            authenticated: self.authenticated,
+            x25519_key: self.x25519_key,
+            p2p_addr: self.p2p_addr,
+        }
+    }
+}
+
+// TODO: replace with a proper data migration if it is ever deemed worthwhile.
+// Layout written after BLS fix (381b0f9207) but before Schnorr Option fix.
+// stake_table_key is Option<KEY>, state_ver_key is raw StateVerKey.
+// Field order must match exactly (bincode is order-sensitive).
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegisteredValidatorPreSchnorrOption {
+    pub account: Address,
+    pub stake_table_key: Option<PubKey>,
+    pub state_ver_key: hotshot_types::light_client::StateVerKey,
+    pub stake: U256,
+    pub commission: u16,
+    pub delegators: HashMap<Address, U256>,
+    pub authenticated: bool,
+    pub x25519_key: Option<hotshot_types::x25519::PublicKey>,
+    pub p2p_addr: Option<hotshot_types::addr::NetAddr>,
+}
+
+impl RegisteredValidatorPreSchnorrOption {
+    pub fn migrate(self) -> RegisteredValidator<PubKey> {
+        RegisteredValidator {
+            account: self.account,
+            stake_table_key: self.stake_table_key,
+            state_ver_key: Some(self.state_ver_key),
+            stake: self.stake,
+            commission: self.commission,
+            delegators: self.delegators,
+            authenticated: self.authenticated,
+            x25519_key: self.x25519_key,
+            p2p_addr: self.p2p_addr,
         }
     }
 }
@@ -786,10 +851,10 @@ mod tests {
         final_qc.view_number += 1;
         final_qc.data.leaf_commit = Committable::commit(&leaf);
         let qcs = [
-            leaves[1].justify_qc(),
-            leaves[2].justify_qc(),
-            leaves[3].justify_qc(),
-            final_qc,
+            CertificatePair::non_epoch_change(leaves[1].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[2].justify_qc()),
+            CertificatePair::non_epoch_change(leaves[3].justify_qc()),
+            CertificatePair::non_epoch_change(final_qc),
         ];
 
         assert_eq!(
@@ -808,9 +873,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(2),
-                leaf_chain
-                    .iter()
-                    .map(|(leaf, qc)| (leaf, CertificatePair::non_epoch_change((*qc).clone()))),
+                leaf_chain.iter().map(|(leaf, qc)| (leaf, (*qc).clone())),
                 None,
                 &consumer,
             )
@@ -872,10 +935,7 @@ mod tests {
         storage
             .append_decided_leaves(
                 ViewNumber::new(3),
-                vec![(
-                    &leaf_info(leaves[3].clone()),
-                    CertificatePair::non_epoch_change(qcs[3].clone()),
-                )],
+                vec![(&leaf_info(leaves[3].clone()), qcs[3].clone())],
                 None,
                 &consumer,
             )
@@ -898,7 +958,7 @@ mod tests {
         else {
             panic!("expected decide event, got {:?}", events[0]);
         };
-        assert_eq!(*committing_qc.qc(), qcs[3]);
+        assert_eq!(**committing_qc, qcs[3]);
         assert_eq!(leaf_chain.len(), 1);
         let info = &leaf_chain[0];
         assert_eq!(info.leaf, leaves[3]);
@@ -1852,7 +1912,7 @@ mod tests {
             .map(|i| StateKeyPair::generate_from_seed_indexed([2; 32], i as u64))
             .collect::<Vec<_>>();
 
-        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, 20);
+        let validators = staking_priv_keys(&priv_keys, &state_key_pairs, &[], 20);
 
         let deployer = ProviderBuilder::new()
             .wallet(EthereumWallet::from(network_config.signer().clone()))

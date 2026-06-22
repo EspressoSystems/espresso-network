@@ -77,6 +77,7 @@ impl<T: NodeType> ProposalValidator<T> {
         self.tasks.spawn(async move {
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
+            v.view_change_evidence(&p.proposal.data).await?;
             v.state_cert(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
                 sender,
@@ -207,6 +208,37 @@ impl<T: NodeType> Validator<T> {
         }
     }
 
+    /// Validate the proposal's view-change evidence (timeout certificate).
+    async fn view_change_evidence(&self, proposal: &Proposal<T>) -> Result<()> {
+        let view = proposal.view_number();
+
+        // If proposal chains directly off the immediately preceding view, no evidence is required.
+        if proposal.justify_qc.view_number() + 1 == view {
+            return Ok(());
+        }
+
+        let Some(tc) = proposal.view_change_evidence.as_ref() else {
+            return Err(ValidationError::MissingViewChangeEvidence(view));
+        };
+
+        // The timeout certificate must certify the immediately preceding view.
+        if tc.data().view + 1 != view {
+            return Err(ValidationError::ViewChangeEvidenceWrongView {
+                proposal_view: view,
+                evidence_view: tc.data().view,
+            });
+        }
+
+        let Some(tc_epoch) = tc.epoch() else {
+            return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
+        };
+        let membership = self.membership(tc_epoch).await?;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let threshold = membership.success_threshold();
+        tc.is_valid_cert(&entries, threshold, &self.upgrade_lock)
+            .map_err(ValidationError::InvalidViewChangeEvidence)
+    }
+
     /// Validate the state_cert on an epoch-root proposal.
     ///
     /// If the justify_qc points at an epoch-root block, the proposal MUST
@@ -287,4 +319,19 @@ pub enum ValidationError {
 
     #[error("invalid vid share proposal signature")]
     InvalidVidShareProposalSignature,
+
+    #[error("proposal at view {0} skips views but carries no view-change evidence")]
+    MissingViewChangeEvidence(ViewNumber),
+
+    #[error(
+        "view-change evidence for proposal view {proposal_view} certifies view {evidence_view}, \
+         not the immediately preceding view"
+    )]
+    ViewChangeEvidenceWrongView {
+        proposal_view: ViewNumber,
+        evidence_view: ViewNumber,
+    },
+
+    #[error("view-change evidence (timeout certificate) is invalid: {0}")]
+    InvalidViewChangeEvidence(#[source] anytrace::Error),
 }

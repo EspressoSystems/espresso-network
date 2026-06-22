@@ -17,7 +17,7 @@ use async_lock::RwLock;
 use async_trait::async_trait;
 use hotshot_types::{
     data::{
-        DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
+        DaProposal, DaProposal2, EpochNumber, Leaf2, QuorumProposal, QuorumProposal2,
         QuorumProposalWrapper, VidCommitment, VidDisperseShare, ViewNumber,
     },
     drb::{DrbInput, DrbResult},
@@ -54,12 +54,14 @@ pub struct TestStorageState<TYPES: NodeType> {
     next_epoch_high_qc2:
         Option<hotshot_types::simple_certificate::NextEpochQuorumCertificate2<TYPES>>,
     action: ViewNumber,
+    action_log: Vec<(ViewNumber, HotShotAction)>,
     epoch: Option<EpochNumber>,
     state_certs: BTreeMap<EpochNumber, LightClientStateUpdateCertificateV2<TYPES>>,
     drb_results: BTreeMap<EpochNumber, DrbResult>,
     drb_inputs: BTreeMap<u64, DrbInput>,
     epoch_roots: BTreeMap<EpochNumber, TYPES::BlockHeader>,
     restart_view: ViewNumber,
+    anchor_leaf: Option<(Leaf2<TYPES>, QuorumCertificate2<TYPES>)>,
 }
 
 impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
@@ -76,12 +78,14 @@ impl<TYPES: NodeType> Default for TestStorageState<TYPES> {
             eqc: None,
             next_epoch_high_qc2: None,
             action: ViewNumber::genesis(),
+            action_log: Vec::new(),
             epoch: None,
             state_certs: BTreeMap::new(),
             drb_results: BTreeMap::new(),
             drb_inputs: BTreeMap::new(),
             epoch_roots: BTreeMap::new(),
             restart_view: ViewNumber::genesis(),
+            anchor_leaf: None,
         }
     }
 }
@@ -139,8 +143,32 @@ impl<TYPES: NodeType> TestStorage<TYPES> {
         self.inner.read().await.action
     }
 
+    /// Every action successfully recorded, in call order.
+    pub async fn action_log(&self) -> Vec<(ViewNumber, HotShotAction)> {
+        self.inner.read().await.action_log.clone()
+    }
+
     pub async fn restart_view(&self) -> ViewNumber {
         self.inner.read().await.restart_view
+    }
+
+    /// Record the newest decided leaf and the QC certifying it, keeping the
+    /// pair with the highest view. Plays the role of the application-level
+    /// anchor persistence (e.g. `append_decided_leaves` in the sequencer);
+    /// the anchor is what a restarted node resumes consensus from.
+    pub async fn update_anchor_leaf(&self, leaf: Leaf2<TYPES>, qc: QuorumCertificate2<TYPES>) {
+        let mut inner = self.inner.write().await;
+        if inner
+            .anchor_leaf
+            .as_ref()
+            .is_none_or(|(anchor, _)| leaf.view_number() > anchor.view_number())
+        {
+            inner.anchor_leaf = Some((leaf, qc));
+        }
+    }
+
+    pub async fn anchor_leaf(&self) -> Option<(Leaf2<TYPES>, QuorumCertificate2<TYPES>)> {
+        self.inner.read().await.anchor_leaf.clone()
     }
 
     pub async fn last_actioned_epoch(&self) -> Option<EpochNumber> {
@@ -264,6 +292,7 @@ impl<TYPES: NodeType> Storage<TYPES> for TestStorage<TYPES> {
             bail!("Failed to append Action to storage");
         }
         let mut inner = self.inner.write().await;
+        inner.action_log.push((view, action));
         if matches!(
             action,
             HotShotAction::Vote | HotShotAction::Propose | HotShotAction::TimeoutVote
