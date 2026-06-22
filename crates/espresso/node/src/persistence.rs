@@ -307,6 +307,47 @@ mod tests {
     }
 
     #[rstest_reuse::apply(persistence_types)]
+    pub async fn test_high_qc2_monotonic<P: TestablePersistence>(_p: PhantomData<P>) {
+        let tmp = P::tmp_storage().await;
+        let storage = P::connect(&tmp).await;
+
+        // Initially there is no persisted lock.
+        assert_eq!(storage.load_high_qc2().await.unwrap(), None);
+
+        let mut qc = QuorumCertificate2::genesis(
+            &ValidatedState::default(),
+            &NodeState::mock(),
+            TEST_VERSIONS.test,
+        )
+        .await;
+
+        // Persist a lock at view 5.
+        qc.view_number = ViewNumber::new(5);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(5)
+        );
+
+        // A newer lock advances the stored view.
+        qc.view_number = ViewNumber::new(6);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(6)
+        );
+
+        // A stale (older) lock is a no-op: the compare-and-set never regresses
+        // the persisted view, even though the file/row write is unconditional.
+        qc.view_number = ViewNumber::new(4);
+        storage.append_high_qc2(qc.clone()).await.unwrap();
+        assert_eq!(
+            storage.load_high_qc2().await.unwrap().unwrap().view_number,
+            ViewNumber::new(6)
+        );
+    }
+
+    #[rstest_reuse::apply(persistence_types)]
     pub async fn test_restart_view<P: TestablePersistence>(_p: PhantomData<P>) {
         let tmp = P::tmp_storage().await;
         let storage = P::connect(&tmp).await;
