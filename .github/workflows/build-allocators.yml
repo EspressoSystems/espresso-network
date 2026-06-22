@@ -1,0 +1,193 @@
+name: Build (alternative allocators)
+# Binaries are compiled on the runner (no Rust cache, so builds are slow) and overlaid onto the
+# production espresso-node image. Native amd64 + arm64 builds are merged into one multiplatform
+# image per allocator and pushed to a dedicated experimental repo, tagged `<version>-<allocator>`.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/build-allocators.yml
+      - docker/espresso-node-alloc.Dockerfile
+      - build-support/allocator-patches/**
+  workflow_dispatch:
+  push:
+    tags:
+      # YYYYMMDD
+      - "20[0-9][0-9][0-1][0-9][0-3][0-9]*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/espressosystems/espresso-network/espresso-node-alloc
+
+jobs:
+  build:
+    name: build ${{ matrix.allocator }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator: [jemalloc, mimalloc, snmalloc, tcmalloc]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+          - allocator: jemalloc
+            dep: tikv-jemallocator --features profiling
+          - allocator: mimalloc
+            dep: mimalloc
+          - allocator: snmalloc
+            dep: snmalloc-rs
+          - allocator: tcmalloc
+            dep: tcmalloc-better --features extension
+    steps:
+      - uses: actions/checkout@v6
+      - uses: rui314/setup-mold@v1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler cmake clang libclang-dev
+
+      - name: Add allocator crate
+        run: |
+          cargo add ${{ matrix.dep }} --package espresso-node
+          cargo add ${{ matrix.dep }} --package espresso-node-sqlite
+
+      - name: Apply allocator override
+        run: git apply build-support/allocator-patches/${{ matrix.allocator }}.patch
+
+      - name: Build binaries
+        # No --locked: the allocator patch adds dependencies not present in Cargo.lock.
+        run: |
+          cargo build --release -p espresso-node --bin espresso-node
+          cargo build --release -p espresso-node-sqlite
+
+      - name: Sanity-check allocator linkage
+        run: |
+          for bin in target/release/espresso-node target/release/espresso-node-sqlite; do
+            count=$(nm "$bin" | grep -icE '_rjem_|mi_malloc|snmalloc|sn_rust_|tcmalloc' || true)
+            echo "$bin: $count ${{ matrix.allocator }} symbols"
+          done
+
+      - name: Setup Docker BuildKit (buildx)
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/setup-buildx-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
+
+      - name: Login to Github Container Repo
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/login-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            registry: ghcr.io
+            username: ${{ github.repository_owner }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image by digest
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 30
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            scripts/ci-docker-buildx \
+              --file ./docker/espresso-node-alloc.Dockerfile \
+              --platform ${{ matrix.platform }} \
+              --output type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true \
+              --metadata-file ${{ runner.temp }}/metadata.json \
+              .
+
+      - name: Export docker image digest
+        shell: bash
+        run: |
+          set -x
+          digest_dir="${{ runner.temp }}/digests"
+          mkdir -p "${digest_dir}"
+          digest=$(jq -r '."containerimage.digest"' "${{ runner.temp }}/metadata.json")
+          touch "${digest_dir}/${digest#sha256:}"
+          ls -lah "${digest_dir}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: "digests-${{ matrix.allocator }}-${{ matrix.arch }}"
+          path: "${{ runner.temp }}/digests/*"
+          if-no-files-found: error
+          retention-days: 1
+
+  # Merge the amd64 + arm64 images into one multiplatform image per allocator.
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator: [jemalloc, mimalloc, snmalloc, tcmalloc]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/setup-buildx-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
+
+      - name: Login to Github Container Repo
+        uses: Wandalen/wretry.action@v3.8.0
+        with:
+          action: docker/login-action@v3
+          attempt_limit: 3
+          attempt_delay: 10000
+          with: |
+            registry: ghcr.io
+            username: ${{ github.repository_owner }}
+            password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: "digests-${{ matrix.allocator }}-*"
+          path: "${{ runner.temp }}/digests"
+          merge-multiple: true
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            suffix=-${{ matrix.allocator }},onlatest=true
+
+      - name: Create manifest list and push
+        working-directory: "${{ runner.temp }}/digests"
+        run: |
+          file_count=$(find . -type f | wc -l)
+          if [ "$file_count" -ne 2 ]; then
+            echo "Should have exactly 2 digests to combine, something went wrong"
+            ls -lah
+            exit 1
+          fi
+
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}

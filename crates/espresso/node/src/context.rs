@@ -200,6 +200,13 @@ where
             tracing::warn!(%current_epoch, %err, "coordinator network apply_epoch failed at startup");
         }
 
+        // Restore the persisted lock so the new protocol resumes with the lock
+        // it actually held, not the older decided-anchor QC.
+        let locked_qc = persistence
+            .load_high_qc2()
+            .await
+            .context("loading persisted locked QC")?;
+
         let coordinator = Coordinator::maker()
             .membership_coordinator(membership_coordinator.clone())
             .network(coordinator_network)
@@ -212,6 +219,7 @@ where
             .timeout_duration(Duration::from_secs(10))
             .storage(Arc::clone(&persistence))
             .metrics(metrics)
+            .maybe_locked_qc(locked_qc)
             .make();
 
         let legacy_event_rx = handle.event_stream_known_impl().deactivate();

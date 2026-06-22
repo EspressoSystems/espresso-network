@@ -47,6 +47,7 @@ use hotshot_types::{
         BuilderCommitment, epoch_from_block_number, is_epoch_root, is_epoch_transition,
         is_last_block,
     },
+    vote::HasViewNumber,
 };
 
 use crate::{
@@ -933,6 +934,12 @@ impl ConsensusHarness {
             ConsensusOutput::RecordAction(view, _, kind) => {
                 self.consensus.apply(
                     ConsensusInput::Stored(StorageOutput::Action(*view, *kind)),
+                    outbox,
+                );
+            },
+            ConsensusOutput::PersistHighQc(high_qc) => {
+                self.consensus.apply(
+                    ConsensusInput::Stored(StorageOutput::HighQc(high_qc.view_number())),
                     outbox,
                 );
             },
