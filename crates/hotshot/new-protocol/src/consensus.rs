@@ -123,6 +123,8 @@ pub enum ConsensusOutput<T: NodeType> {
     SendTimeoutVote(TimeoutVote2<T>, Option<Certificate1<T>>),
     SendVote1(Vote1<T>),
     SendVote2(Vote2<T>),
+    /// Persist the locked QC before the matching phase-2 vote is released.
+    PersistHighQc(Certificate1<T>),
     SendTimeoutCertificate(TimeoutCertificate2<T>, ViewNumber, EpochNumber),
     SendCertificate1(Certificate1<T>),
     SendEpochChange(EpochChangeMessage<T>),
@@ -186,11 +188,14 @@ pub struct Consensus<T: NodeType> {
     stored_vids: BTreeSet<ViewNumber>,
     stored_actions: BTreeSet<(ViewNumber, ActionKind)>,
     requested_actions: BTreeSet<(ViewNumber, ActionKind)>,
+    /// Highest locked-QC view confirmed durable; gates release of phase-2 votes.
+    stored_high_qc: Option<ViewNumber>,
 
     /// Messages constructed and accounted for in `voted_*_views` /
-    /// `proposed_views`, awaiting their storage confirmations.
+    /// `proposed_views`, awaiting their storage confirmations. A pending vote2
+    /// also records the locked-QC view it must see persisted before release.
     pending_vote1: BTreeMap<ViewNumber, Vote1<T>>,
-    pending_vote2: BTreeMap<ViewNumber, Vote2<T>>,
+    pending_vote2: BTreeMap<ViewNumber, (Vote2<T>, ViewNumber)>,
     pending_proposal: BTreeMap<ViewNumber, SignedProposal<T, Proposal<T>>>,
 
     /// Skipped by `maybe_vote_2_and_update_lock` (V1 AvidM dispersal).
@@ -284,6 +289,7 @@ impl<T: NodeType> Consensus<T> {
             stored_vids: BTreeSet::new(),
             stored_actions: BTreeSet::new(),
             requested_actions: BTreeSet::new(),
+            stored_high_qc: None,
             pending_vote1: BTreeMap::new(),
             pending_vote2: BTreeMap::new(),
             pending_proposal: BTreeMap::new(),
@@ -321,12 +327,74 @@ impl<T: NodeType> Consensus<T> {
         reconstructed: impl IntoIterator<Item = (ViewNumber, VidCommitment2)>,
     ) {
         self.current_epoch = Some(proposal.epoch);
+        // The seed cert comes from durable storage, so its lock is already persisted.
+        self.bump_stored_high_qc(cert1.view_number());
         self.certs.insert(cert1.view_number(), cert1.clone());
         self.locked_cert = Some(cert1);
         self.proposals.insert(proposal.view_number, proposal);
         for (view, commitment) in reconstructed {
             self.blocks_reconstructed.insert((view, commitment));
         }
+    }
+
+    /// Seed proposals loaded from storage on restart so the decide chain-walk
+    /// can follow `justify_qc` back through views the node had already seen,
+    /// and so `maybe_vote_1`/`maybe_propose` can find the parent of the first
+    /// post-restart proposal (otherwise never re-fetched).
+    pub fn seed_proposals(&mut self, proposals: impl IntoIterator<Item = Proposal<T>>) {
+        for proposal in proposals {
+            let view = proposal.view_number;
+            self.leaves.insert(view, proposal.clone().into());
+            self.proposals.insert(view, proposal);
+        }
+    }
+
+    /// Restore the locked QC persisted on a prior run. Called after
+    /// `seed_parent`: the persisted lock can be newer than the decided-anchor
+    /// QC, and restoring it keeps the node from voting against a block it had
+    /// already locked. The loaded value is durable, so it also advances the
+    /// durability watermark.
+    pub fn seed_locked_cert(&mut self, cert1: Certificate1<T>) {
+        let view = cert1.view_number();
+        self.bump_stored_high_qc(view);
+        self.certs.entry(view).or_insert_with(|| cert1.clone());
+        if self
+            .locked_cert
+            .as_ref()
+            .is_none_or(|locked| locked.view_number() < view)
+        {
+            self.locked_cert = Some(cert1);
+        }
+    }
+
+    /// Advance the locked-QC durability watermark to `view` if it is newer.
+    fn bump_stored_high_qc(&mut self, view: ViewNumber) {
+        if self.stored_high_qc.is_none_or(|cur| cur < view) {
+            self.stored_high_qc = Some(view);
+        }
+    }
+
+    /// Whether the locked QC at `required` view is durably persisted.
+    fn high_qc_durable(&self, required: ViewNumber) -> bool {
+        self.stored_high_qc.is_some_and(|stored| stored >= required)
+    }
+
+    /// Whether the parent block counts as reconstructed for voting: either we
+    /// hold its payload, or our locked QC certifies exactly this parent leaf.
+    /// A lock is only ever taken on a reconstructed block, so a lock matching
+    /// the parent is itself proof of reconstruction — letting a restarted node
+    /// vote on the first proposal built on its restored lock.
+    fn parent_reconstructed(
+        &self,
+        parent_view: ViewNumber,
+        parent_block_commitment: VidCommitment2,
+        parent_leaf: Commitment<Leaf2<T>>,
+    ) -> bool {
+        self.blocks_reconstructed
+            .contains(&(parent_view, parent_block_commitment))
+            || self.locked_cert.as_ref().is_some_and(|lock| {
+                lock.view_number() == parent_view && lock.data().leaf_commit == parent_leaf
+            })
     }
 
     /// Seed a state certificate loaded from storage on restart, so a leader
@@ -1615,6 +1683,15 @@ impl<T: NodeType> Consensus<T> {
             StorageOutput::Action(view, kind) => {
                 self.stored_actions.insert((view, kind));
             },
+            StorageOutput::HighQc(view) => {
+                self.bump_stored_high_qc(view);
+                // A higher durable lock can unblock vote2 across many views; re-check all.
+                let pending: Vec<ViewNumber> = self.pending_vote2.keys().copied().collect();
+                for view in pending {
+                    self.release_vote2(view, outbox);
+                }
+                return;
+            },
         }
         self.release_vote1(view, outbox);
         self.release_vote2(view, outbox);
@@ -1639,14 +1716,17 @@ impl<T: NodeType> Consensus<T> {
     }
 
     fn release_vote2(&mut self, view: ViewNumber, outbox: &mut Outbox<ConsensusOutput<T>>) {
+        let Some((_, required)) = self.pending_vote2.get(&view) else {
+            return;
+        };
+        let required = *required;
         if !self.stored_actions.contains(&(view, ActionKind::Vote))
             || !self.stored_vids.contains(&view)
+            || !self.high_qc_durable(required)
         {
             return;
         }
-        let Some(vote2) = self.pending_vote2.remove(&view) else {
-            return;
-        };
+        let (vote2, _) = self.pending_vote2.remove(&view).expect("checked above");
         outbox.push_back(ConsensusOutput::SendVote2(vote2));
     }
 
@@ -1763,12 +1843,12 @@ impl<T: NodeType> Consensus<T> {
                     }
                     return;
                 };
-                // Verify we have a reconstructed block for the parent whose
-                // commitment matches the parent proposal's payload commitment.
-                if !self
-                    .blocks_reconstructed
-                    .contains(&(parent_view, prev_block_commitment))
-                {
+                // Parent must be reconstructed (see `parent_reconstructed`).
+                if !self.parent_reconstructed(
+                    parent_view,
+                    prev_block_commitment,
+                    proposal_commitment(prev_proposal),
+                ) {
                     debug!(
                         %view, block = %block_number, %epoch,
                         %parent_view, %parent_block, %parent_epoch,
@@ -1913,6 +1993,8 @@ impl<T: NodeType> Consensus<T> {
             self.current_epoch = Some(proposal_epoch);
             outbox.push_back(ConsensusOutput::ViewChanged(view + 1, proposal_epoch));
             outbox.push_back(ConsensusOutput::SendCertificate1(cert1.clone()));
+            // Persist the new lock; `release_vote2` gates the phase-2 vote on it.
+            outbox.push_back(ConsensusOutput::PersistHighQc(cert1.clone()));
         }
 
         if !self.staked_in_epoch(proposal_epoch) {
@@ -1937,13 +2019,18 @@ impl<T: NodeType> Consensus<T> {
             },
         };
         self.voted_2_views.insert(view);
+        // Lock is set above and >= view; the vote waits until it is durable.
+        let required = self
+            .locked_view()
+            .expect("locked_cert is set before voting in phase 2");
         if self.stored_actions.contains(&(view, ActionKind::Vote))
             && self.stored_vids.contains(&view)
+            && self.high_qc_durable(required)
         {
             outbox.push_back(ConsensusOutput::SendVote2(vote));
         } else {
             self.request_action(view, Some(proposal_epoch), ActionKind::Vote, outbox);
-            self.pending_vote2.insert(view, vote);
+            self.pending_vote2.insert(view, (vote, required));
         }
     }
 
@@ -2135,17 +2222,12 @@ impl<T: NodeType> Consensus<T> {
             if parent_view != ViewNumber::genesis()
                 && !is_last_block(block_number.saturating_sub(1), *self.epoch_height)
             {
-                let reconstructed = self
-                    .proposals
-                    .get(&parent_view)
-                    .and_then(|p| {
-                        if let VidCommitment::V2(c) = p.block_header.payload_commitment() {
-                            Some(c)
-                        } else {
-                            None
-                        }
-                    })
-                    .is_some_and(|c| self.blocks_reconstructed.contains(&(parent_view, c)));
+                let reconstructed = self.proposals.get(&parent_view).is_some_and(|p| {
+                    let VidCommitment::V2(c) = p.block_header.payload_commitment() else {
+                        return false;
+                    };
+                    self.parent_reconstructed(parent_view, c, proposal_commitment(p))
+                });
                 if !reconstructed {
                     missing.push("parent_block_reconstructed");
                 }

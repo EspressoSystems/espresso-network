@@ -9,7 +9,10 @@ use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::{message::Certificate2, storage::NewProtocolStorage};
+use hotshot_new_protocol::{
+    message::{Certificate1, Certificate2},
+    storage::NewProtocolStorage,
+};
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
@@ -994,6 +997,20 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
+    /// Persist the new protocol's locked QC, written before each phase-2 vote.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set: a
+    /// write whose view is not newer than the stored one is a no-op. This lets
+    /// concurrent, retried writes race without ever regressing the persisted lock.
+    async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted locked QC, if any.
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
+
     /// Update the current eQC in storage.
     async fn store_eqc(
         &self,
@@ -1241,6 +1258,18 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
         cert: Certificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).append_cert2(view, cert).await
+    }
+
+    async fn append_high_qc2(&self, high_qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        // Writes are spawned concurrently and retried, so a stale write can land
+        // after a newer one. The backend applies a monotonic compare-and-set
+        // atomically, so such a stale write is a no-op and never regresses the
+        // persisted view.
+        (**self).append_high_qc2(high_qc).await
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_high_qc2().await
     }
 }
 
