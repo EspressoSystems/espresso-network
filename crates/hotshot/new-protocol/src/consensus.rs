@@ -246,20 +246,18 @@ enum CertVerification {
 #[derive(Debug, thiserror::Error)]
 enum SafetyError {
     #[error(
-        "leaf commitment at locked view does not match locked certificate view={view} \
+        "leaf commitment at locked view does not match locked certificate \
          locked_commit={locked_commit} proposal_commit={proposal_commit}"
     )]
     LockedViewCommitmentMismatch {
-        view: ViewNumber,
         locked_commit: String,
         proposal_commit: String,
     },
     #[error(
-        "justify qc neither extends nor is newer than the locked certificate qc_view={qc_view} \
+        "justify qc neither extends nor is newer than the locked certificate \
          locked_view={locked_view} parent_commit={parent_commit} locked_commit={locked_commit}"
     )]
     UnsafeProposal {
-        qc_view: ViewNumber,
         locked_view: ViewNumber,
         parent_commit: String,
         locked_commit: String,
@@ -1990,7 +1988,6 @@ impl<T: NodeType> Consensus<T> {
             let proposal_commit = proposal_commitment(proposal);
             if locked_commit != proposal_commit {
                 return Err(SafetyError::LockedViewCommitmentMismatch {
-                    view: proposal.view_number(),
                     locked_commit: locked_commit.to_string(),
                     proposal_commit: proposal_commit.to_string(),
                 });
@@ -2013,7 +2010,6 @@ impl<T: NodeType> Consensus<T> {
         }
 
         Err(SafetyError::UnsafeProposal {
-            qc_view: proposal.justify_qc.view_number(),
             locked_view: locked_cert.view_number(),
             parent_commit: parent_commit.to_string(),
             locked_commit: locked_commit.to_string(),
