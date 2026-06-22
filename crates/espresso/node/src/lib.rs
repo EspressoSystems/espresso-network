@@ -227,6 +227,8 @@ pub struct NetworkParams {
 
     /// Minimum number of Libp2p peers to emit gossip to during a heartbeat
     pub libp2p_gossip_lazy: usize,
+
+    pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
 }
 
 pub struct L1Params {
@@ -793,6 +795,7 @@ where
             &validator_config.private_key,
             hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
             network_discriminator,
+            network_params.libp2p_dht_put_quorum,
         )
         .await
         .with_context(|| {
