@@ -473,6 +473,16 @@ impl<T: NodeType> NetworkNodeHandle<T> {
         Ok(r.await.unwrap())
     }
 
+    /// Return the set of peer IDs in the Kademlia routing table.
+    /// # Errors
+    /// If the channel is closed somehow
+    pub async fn kad_routing_peers(&self) -> Result<HashSet<PeerId>, NetworkError> {
+        let (s, r) = futures::channel::oneshot::channel();
+        let req = ClientRequest::GetKadRoutingPeers(s);
+        self.send_request(req)?;
+        Ok(r.await.unwrap())
+    }
+
     /// Get a reference to the network node handle's id.
     #[must_use]
     pub fn id(&self) -> usize {
