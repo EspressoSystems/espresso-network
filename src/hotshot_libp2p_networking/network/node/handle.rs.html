@@ -490,22 +490,32 @@
 <a href=#490 id=490 data-nosnippet>490</a>        <span class="prelude-val">Ok</span>(r.<span class="kw">await</span>.unwrap())
 <a href=#491 id=491 data-nosnippet>491</a>    }
 <a href=#492 id=492 data-nosnippet>492</a>
-<a href=#493 id=493 data-nosnippet>493</a>    <span class="doccomment">/// Get a reference to the network node handle's id.
-<a href=#494 id=494 data-nosnippet>494</a>    </span><span class="attr">#[must_use]
-<a href=#495 id=495 data-nosnippet>495</a>    </span><span class="kw">pub fn </span>id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
-<a href=#496 id=496 data-nosnippet>496</a>        <span class="self">self</span>.id
-<a href=#497 id=497 data-nosnippet>497</a>    }
-<a href=#498 id=498 data-nosnippet>498</a>
-<a href=#499 id=499 data-nosnippet>499</a>    <span class="doccomment">/// Get a reference to the network node handle's peer id.
-<a href=#500 id=500 data-nosnippet>500</a>    </span><span class="attr">#[must_use]
-<a href=#501 id=501 data-nosnippet>501</a>    </span><span class="kw">pub fn </span>peer_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PeerId {
-<a href=#502 id=502 data-nosnippet>502</a>        <span class="self">self</span>.peer_id
-<a href=#503 id=503 data-nosnippet>503</a>    }
-<a href=#504 id=504 data-nosnippet>504</a>
-<a href=#505 id=505 data-nosnippet>505</a>    <span class="doccomment">/// Return a reference to the network config
-<a href=#506 id=506 data-nosnippet>506</a>    </span><span class="attr">#[must_use]
-<a href=#507 id=507 data-nosnippet>507</a>    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>NetworkNodeConfig {
-<a href=#508 id=508 data-nosnippet>508</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.network_config
-<a href=#509 id=509 data-nosnippet>509</a>    }
-<a href=#510 id=510 data-nosnippet>510</a>}
+<a href=#493 id=493 data-nosnippet>493</a>    <span class="doccomment">/// Return the set of peer IDs in the Kademlia routing table.
+<a href=#494 id=494 data-nosnippet>494</a>    /// # Errors
+<a href=#495 id=495 data-nosnippet>495</a>    /// If the channel is closed somehow
+<a href=#496 id=496 data-nosnippet>496</a>    </span><span class="kw">pub async fn </span>kad_routing_peers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;HashSet&lt;PeerId&gt;, NetworkError&gt; {
+<a href=#497 id=497 data-nosnippet>497</a>        <span class="kw">let </span>(s, r) = futures::channel::oneshot::channel();
+<a href=#498 id=498 data-nosnippet>498</a>        <span class="kw">let </span>req = ClientRequest::GetKadRoutingPeers(s);
+<a href=#499 id=499 data-nosnippet>499</a>        <span class="self">self</span>.send_request(req)<span class="question-mark">?</span>;
+<a href=#500 id=500 data-nosnippet>500</a>        <span class="prelude-val">Ok</span>(r.<span class="kw">await</span>.unwrap())
+<a href=#501 id=501 data-nosnippet>501</a>    }
+<a href=#502 id=502 data-nosnippet>502</a>
+<a href=#503 id=503 data-nosnippet>503</a>    <span class="doccomment">/// Get a reference to the network node handle's id.
+<a href=#504 id=504 data-nosnippet>504</a>    </span><span class="attr">#[must_use]
+<a href=#505 id=505 data-nosnippet>505</a>    </span><span class="kw">pub fn </span>id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; usize {
+<a href=#506 id=506 data-nosnippet>506</a>        <span class="self">self</span>.id
+<a href=#507 id=507 data-nosnippet>507</a>    }
+<a href=#508 id=508 data-nosnippet>508</a>
+<a href=#509 id=509 data-nosnippet>509</a>    <span class="doccomment">/// Get a reference to the network node handle's peer id.
+<a href=#510 id=510 data-nosnippet>510</a>    </span><span class="attr">#[must_use]
+<a href=#511 id=511 data-nosnippet>511</a>    </span><span class="kw">pub fn </span>peer_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; PeerId {
+<a href=#512 id=512 data-nosnippet>512</a>        <span class="self">self</span>.peer_id
+<a href=#513 id=513 data-nosnippet>513</a>    }
+<a href=#514 id=514 data-nosnippet>514</a>
+<a href=#515 id=515 data-nosnippet>515</a>    <span class="doccomment">/// Return a reference to the network config
+<a href=#516 id=516 data-nosnippet>516</a>    </span><span class="attr">#[must_use]
+<a href=#517 id=517 data-nosnippet>517</a>    </span><span class="kw">pub fn </span>config(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>NetworkNodeConfig {
+<a href=#518 id=518 data-nosnippet>518</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.network_config
+<a href=#519 id=519 data-nosnippet>519</a>    }
+<a href=#520 id=520 data-nosnippet>520</a>}
 </code></pre></div></section></main></body></html>
