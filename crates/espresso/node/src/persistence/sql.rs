@@ -31,7 +31,6 @@ use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::{
 };
 use hotshot_new_protocol::message::Certificate2;
 use hotshot_query_service::{
-    availability::LeafQueryData,
     data_source::{
         Transaction as _, VersionedDataSource,
         storage::{
