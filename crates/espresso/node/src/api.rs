@@ -1825,6 +1825,7 @@ impl LightClientProvider {
         let client = FallbackClient::new(peers.into_iter().map(QueryServiceClient::new).collect())?;
         let init_light_client = async move {
             let config = state.network_config().await;
+            let chain_id = state.node_state().await.genesis_chain_config.chain_id;
             let epoch_height = config.config.epoch_height;
             let first_epoch =
                 epoch_from_block_number(config.config.epoch_start_block, epoch_height);
@@ -1842,6 +1843,8 @@ impl LightClientProvider {
                     .into_iter()
                     .map(|peer| peer.stake_table_entry)
                     .collect(),
+
+                chain_id,
             };
             LightClient::from_genesis_with_options(db, client, genesis, opt)
         };
@@ -5970,10 +5973,6 @@ mod test {
         let opt = Options::with_port(node_0_port).query_sql(
             Query {
                 peers: vec![format!("http://localhost:{api_port}").parse().unwrap()],
-                light_client: LightClientOptions {
-                    decaf: true,
-                    ..Default::default()
-                },
                 ..Default::default()
             },
             tmp_options(node_0_storage),
