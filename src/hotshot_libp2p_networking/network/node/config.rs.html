@@ -75,138 +75,142 @@
 <a href=#75 id=75 data-nosnippet>75</a>    <span class="doccomment">/// `None` is the legacy value, used for mainnet.
 <a href=#76 id=76 data-nosnippet>76</a>    </span><span class="attr">#[builder(default)]
 <a href=#77 id=77 data-nosnippet>77</a>    </span><span class="kw">pub </span>network_discriminator: <span class="prelude-ty">Option</span>&lt;U256&gt;,
-<a href=#78 id=78 data-nosnippet>78</a>}
-<a href=#79 id=79 data-nosnippet>79</a>
-<a href=#80 id=80 data-nosnippet>80</a><span class="kw">impl </span>Clone <span class="kw">for </span>NetworkNodeConfig {
-<a href=#81 id=81 data-nosnippet>81</a>    <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
-<a href=#82 id=82 data-nosnippet>82</a>        <span class="self">Self </span>{
-<a href=#83 id=83 data-nosnippet>83</a>            keypair: <span class="self">self</span>.keypair.clone(),
-<a href=#84 id=84 data-nosnippet>84</a>            bind_address: <span class="self">self</span>.bind_address.clone(),
-<a href=#85 id=85 data-nosnippet>85</a>            announce_addresses: <span class="self">self</span>.announce_addresses.clone(),
-<a href=#86 id=86 data-nosnippet>86</a>            replication_factor: <span class="self">self</span>.replication_factor,
-<a href=#87 id=87 data-nosnippet>87</a>            gossip_config: <span class="self">self</span>.gossip_config.clone(),
-<a href=#88 id=88 data-nosnippet>88</a>            request_response_config: <span class="self">self</span>.request_response_config.clone(),
-<a href=#89 id=89 data-nosnippet>89</a>            to_connect_addrs: <span class="self">self</span>.to_connect_addrs.clone(),
-<a href=#90 id=90 data-nosnippet>90</a>            republication_interval: <span class="self">self</span>.republication_interval,
-<a href=#91 id=91 data-nosnippet>91</a>            ttl: <span class="self">self</span>.ttl,
-<a href=#92 id=92 data-nosnippet>92</a>            dht_file_path: <span class="self">self</span>.dht_file_path.clone(),
-<a href=#93 id=93 data-nosnippet>93</a>            auth_message: <span class="self">self</span>.auth_message.clone(),
-<a href=#94 id=94 data-nosnippet>94</a>            dht_timeout: <span class="self">self</span>.dht_timeout,
-<a href=#95 id=95 data-nosnippet>95</a>            network_discriminator: <span class="self">self</span>.network_discriminator,
-<a href=#96 id=96 data-nosnippet>96</a>        }
-<a href=#97 id=97 data-nosnippet>97</a>    }
-<a href=#98 id=98 data-nosnippet>98</a>}
-<a href=#99 id=99 data-nosnippet>99</a>
-<a href=#100 id=100 data-nosnippet>100</a><span class="doccomment">/// Configuration for Libp2p's Gossipsub
-<a href=#101 id=101 data-nosnippet>101</a></span><span class="attr">#[derive(Clone, Debug)]
-<a href=#102 id=102 data-nosnippet>102</a>#[allow(missing_docs)]
-<a href=#103 id=103 data-nosnippet>103</a></span><span class="kw">pub struct </span>GossipConfig {
-<a href=#104 id=104 data-nosnippet>104</a>    <span class="doccomment">/// The heartbeat interval
-<a href=#105 id=105 data-nosnippet>105</a>    </span><span class="kw">pub </span>heartbeat_interval: Duration,
-<a href=#106 id=106 data-nosnippet>106</a>
-<a href=#107 id=107 data-nosnippet>107</a>    <span class="doccomment">/// The number of past heartbeats to gossip about
-<a href=#108 id=108 data-nosnippet>108</a>    </span><span class="kw">pub </span>history_gossip: usize,
-<a href=#109 id=109 data-nosnippet>109</a>    <span class="doccomment">/// The number of past heartbeats to remember the full messages for
-<a href=#110 id=110 data-nosnippet>110</a>    </span><span class="kw">pub </span>history_length: usize,
-<a href=#111 id=111 data-nosnippet>111</a>
-<a href=#112 id=112 data-nosnippet>112</a>    <span class="doccomment">/// The target number of peers in the mesh
-<a href=#113 id=113 data-nosnippet>113</a>    </span><span class="kw">pub </span>mesh_n: usize,
-<a href=#114 id=114 data-nosnippet>114</a>    <span class="doccomment">/// The maximum number of peers in the mesh
-<a href=#115 id=115 data-nosnippet>115</a>    </span><span class="kw">pub </span>mesh_n_high: usize,
-<a href=#116 id=116 data-nosnippet>116</a>    <span class="doccomment">/// The minimum number of peers in the mesh
-<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">pub </span>mesh_n_low: usize,
-<a href=#118 id=118 data-nosnippet>118</a>    <span class="doccomment">/// The minimum number of mesh peers that must be outbound
-<a href=#119 id=119 data-nosnippet>119</a>    </span><span class="kw">pub </span>mesh_outbound_min: usize,
-<a href=#120 id=120 data-nosnippet>120</a>
-<a href=#121 id=121 data-nosnippet>121</a>    <span class="doccomment">/// The maximum gossip message size
-<a href=#122 id=122 data-nosnippet>122</a>    </span><span class="kw">pub </span>max_transmit_size: usize,
-<a href=#123 id=123 data-nosnippet>123</a>
-<a href=#124 id=124 data-nosnippet>124</a>    <span class="doccomment">/// The maximum number of messages in an IHAVE message
-<a href=#125 id=125 data-nosnippet>125</a>    </span><span class="kw">pub </span>max_ihave_length: usize,
-<a href=#126 id=126 data-nosnippet>126</a>
-<a href=#127 id=127 data-nosnippet>127</a>    <span class="doccomment">/// Maximum number of IHAVE messages to accept from a peer within a heartbeat
-<a href=#128 id=128 data-nosnippet>128</a>    </span><span class="kw">pub </span>max_ihave_messages: usize,
-<a href=#129 id=129 data-nosnippet>129</a>
-<a href=#130 id=130 data-nosnippet>130</a>    <span class="doccomment">/// Cache duration for published message IDs
-<a href=#131 id=131 data-nosnippet>131</a>    </span><span class="kw">pub </span>published_message_ids_cache_time: Duration,
-<a href=#132 id=132 data-nosnippet>132</a>
-<a href=#133 id=133 data-nosnippet>133</a>    <span class="doccomment">/// Time to wait for a message requested through IWANT following an IHAVE advertisement
-<a href=#134 id=134 data-nosnippet>134</a>    </span><span class="kw">pub </span>iwant_followup_time: Duration,
-<a href=#135 id=135 data-nosnippet>135</a>
-<a href=#136 id=136 data-nosnippet>136</a>    <span class="doccomment">/// The maximum number of messages we will process in a given RPC
-<a href=#137 id=137 data-nosnippet>137</a>    </span><span class="kw">pub </span>max_messages_per_rpc: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#138 id=138 data-nosnippet>138</a>
-<a href=#139 id=139 data-nosnippet>139</a>    <span class="doccomment">/// Controls how many times we will allow a peer to request the same message id through IWANT gossip before we start ignoring them.
-<a href=#140 id=140 data-nosnippet>140</a>    </span><span class="kw">pub </span>gossip_retransmission: u32,
-<a href=#141 id=141 data-nosnippet>141</a>
-<a href=#142 id=142 data-nosnippet>142</a>    <span class="doccomment">/// If enabled newly created messages will always be sent to all peers that are subscribed to the topic and have a good enough score.
-<a href=#143 id=143 data-nosnippet>143</a>    </span><span class="kw">pub </span>flood_publish: bool,
-<a href=#144 id=144 data-nosnippet>144</a>
-<a href=#145 id=145 data-nosnippet>145</a>    <span class="doccomment">/// The time period that messages are stored in the cache
-<a href=#146 id=146 data-nosnippet>146</a>    </span><span class="kw">pub </span>duplicate_cache_time: Duration,
-<a href=#147 id=147 data-nosnippet>147</a>
-<a href=#148 id=148 data-nosnippet>148</a>    <span class="doccomment">/// Time to live for fanout peers
-<a href=#149 id=149 data-nosnippet>149</a>    </span><span class="kw">pub </span>fanout_ttl: Duration,
-<a href=#150 id=150 data-nosnippet>150</a>
-<a href=#151 id=151 data-nosnippet>151</a>    <span class="doccomment">/// Initial delay in each heartbeat
-<a href=#152 id=152 data-nosnippet>152</a>    </span><span class="kw">pub </span>heartbeat_initial_delay: Duration,
-<a href=#153 id=153 data-nosnippet>153</a>
-<a href=#154 id=154 data-nosnippet>154</a>    <span class="doccomment">/// Affects how many peers we will emit gossip to at each heartbeat
-<a href=#155 id=155 data-nosnippet>155</a>    </span><span class="kw">pub </span>gossip_factor: f64,
-<a href=#156 id=156 data-nosnippet>156</a>
-<a href=#157 id=157 data-nosnippet>157</a>    <span class="doccomment">/// Minimum number of peers to emit gossip to during a heartbeat
-<a href=#158 id=158 data-nosnippet>158</a>    </span><span class="kw">pub </span>gossip_lazy: usize,
-<a href=#159 id=159 data-nosnippet>159</a>}
+<a href=#78 id=78 data-nosnippet>78</a>
+<a href=#79 id=79 data-nosnippet>79</a>    <span class="attr">#[builder(default)]
+<a href=#80 id=80 data-nosnippet>80</a>    </span><span class="kw">pub </span>dht_put_quorum: <span class="prelude-ty">Option</span>&lt;NonZeroUsize&gt;,
+<a href=#81 id=81 data-nosnippet>81</a>}
+<a href=#82 id=82 data-nosnippet>82</a>
+<a href=#83 id=83 data-nosnippet>83</a><span class="kw">impl </span>Clone <span class="kw">for </span>NetworkNodeConfig {
+<a href=#84 id=84 data-nosnippet>84</a>    <span class="kw">fn </span>clone(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="self">Self </span>{
+<a href=#85 id=85 data-nosnippet>85</a>        <span class="self">Self </span>{
+<a href=#86 id=86 data-nosnippet>86</a>            keypair: <span class="self">self</span>.keypair.clone(),
+<a href=#87 id=87 data-nosnippet>87</a>            bind_address: <span class="self">self</span>.bind_address.clone(),
+<a href=#88 id=88 data-nosnippet>88</a>            announce_addresses: <span class="self">self</span>.announce_addresses.clone(),
+<a href=#89 id=89 data-nosnippet>89</a>            replication_factor: <span class="self">self</span>.replication_factor,
+<a href=#90 id=90 data-nosnippet>90</a>            gossip_config: <span class="self">self</span>.gossip_config.clone(),
+<a href=#91 id=91 data-nosnippet>91</a>            request_response_config: <span class="self">self</span>.request_response_config.clone(),
+<a href=#92 id=92 data-nosnippet>92</a>            to_connect_addrs: <span class="self">self</span>.to_connect_addrs.clone(),
+<a href=#93 id=93 data-nosnippet>93</a>            republication_interval: <span class="self">self</span>.republication_interval,
+<a href=#94 id=94 data-nosnippet>94</a>            ttl: <span class="self">self</span>.ttl,
+<a href=#95 id=95 data-nosnippet>95</a>            dht_file_path: <span class="self">self</span>.dht_file_path.clone(),
+<a href=#96 id=96 data-nosnippet>96</a>            auth_message: <span class="self">self</span>.auth_message.clone(),
+<a href=#97 id=97 data-nosnippet>97</a>            dht_timeout: <span class="self">self</span>.dht_timeout,
+<a href=#98 id=98 data-nosnippet>98</a>            network_discriminator: <span class="self">self</span>.network_discriminator,
+<a href=#99 id=99 data-nosnippet>99</a>            dht_put_quorum: <span class="self">self</span>.dht_put_quorum,
+<a href=#100 id=100 data-nosnippet>100</a>        }
+<a href=#101 id=101 data-nosnippet>101</a>    }
+<a href=#102 id=102 data-nosnippet>102</a>}
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a><span class="doccomment">/// Configuration for Libp2p's Gossipsub
+<a href=#105 id=105 data-nosnippet>105</a></span><span class="attr">#[derive(Clone, Debug)]
+<a href=#106 id=106 data-nosnippet>106</a>#[allow(missing_docs)]
+<a href=#107 id=107 data-nosnippet>107</a></span><span class="kw">pub struct </span>GossipConfig {
+<a href=#108 id=108 data-nosnippet>108</a>    <span class="doccomment">/// The heartbeat interval
+<a href=#109 id=109 data-nosnippet>109</a>    </span><span class="kw">pub </span>heartbeat_interval: Duration,
+<a href=#110 id=110 data-nosnippet>110</a>
+<a href=#111 id=111 data-nosnippet>111</a>    <span class="doccomment">/// The number of past heartbeats to gossip about
+<a href=#112 id=112 data-nosnippet>112</a>    </span><span class="kw">pub </span>history_gossip: usize,
+<a href=#113 id=113 data-nosnippet>113</a>    <span class="doccomment">/// The number of past heartbeats to remember the full messages for
+<a href=#114 id=114 data-nosnippet>114</a>    </span><span class="kw">pub </span>history_length: usize,
+<a href=#115 id=115 data-nosnippet>115</a>
+<a href=#116 id=116 data-nosnippet>116</a>    <span class="doccomment">/// The target number of peers in the mesh
+<a href=#117 id=117 data-nosnippet>117</a>    </span><span class="kw">pub </span>mesh_n: usize,
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="doccomment">/// The maximum number of peers in the mesh
+<a href=#119 id=119 data-nosnippet>119</a>    </span><span class="kw">pub </span>mesh_n_high: usize,
+<a href=#120 id=120 data-nosnippet>120</a>    <span class="doccomment">/// The minimum number of peers in the mesh
+<a href=#121 id=121 data-nosnippet>121</a>    </span><span class="kw">pub </span>mesh_n_low: usize,
+<a href=#122 id=122 data-nosnippet>122</a>    <span class="doccomment">/// The minimum number of mesh peers that must be outbound
+<a href=#123 id=123 data-nosnippet>123</a>    </span><span class="kw">pub </span>mesh_outbound_min: usize,
+<a href=#124 id=124 data-nosnippet>124</a>
+<a href=#125 id=125 data-nosnippet>125</a>    <span class="doccomment">/// The maximum gossip message size
+<a href=#126 id=126 data-nosnippet>126</a>    </span><span class="kw">pub </span>max_transmit_size: usize,
+<a href=#127 id=127 data-nosnippet>127</a>
+<a href=#128 id=128 data-nosnippet>128</a>    <span class="doccomment">/// The maximum number of messages in an IHAVE message
+<a href=#129 id=129 data-nosnippet>129</a>    </span><span class="kw">pub </span>max_ihave_length: usize,
+<a href=#130 id=130 data-nosnippet>130</a>
+<a href=#131 id=131 data-nosnippet>131</a>    <span class="doccomment">/// Maximum number of IHAVE messages to accept from a peer within a heartbeat
+<a href=#132 id=132 data-nosnippet>132</a>    </span><span class="kw">pub </span>max_ihave_messages: usize,
+<a href=#133 id=133 data-nosnippet>133</a>
+<a href=#134 id=134 data-nosnippet>134</a>    <span class="doccomment">/// Cache duration for published message IDs
+<a href=#135 id=135 data-nosnippet>135</a>    </span><span class="kw">pub </span>published_message_ids_cache_time: Duration,
+<a href=#136 id=136 data-nosnippet>136</a>
+<a href=#137 id=137 data-nosnippet>137</a>    <span class="doccomment">/// Time to wait for a message requested through IWANT following an IHAVE advertisement
+<a href=#138 id=138 data-nosnippet>138</a>    </span><span class="kw">pub </span>iwant_followup_time: Duration,
+<a href=#139 id=139 data-nosnippet>139</a>
+<a href=#140 id=140 data-nosnippet>140</a>    <span class="doccomment">/// The maximum number of messages we will process in a given RPC
+<a href=#141 id=141 data-nosnippet>141</a>    </span><span class="kw">pub </span>max_messages_per_rpc: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#142 id=142 data-nosnippet>142</a>
+<a href=#143 id=143 data-nosnippet>143</a>    <span class="doccomment">/// Controls how many times we will allow a peer to request the same message id through IWANT gossip before we start ignoring them.
+<a href=#144 id=144 data-nosnippet>144</a>    </span><span class="kw">pub </span>gossip_retransmission: u32,
+<a href=#145 id=145 data-nosnippet>145</a>
+<a href=#146 id=146 data-nosnippet>146</a>    <span class="doccomment">/// If enabled newly created messages will always be sent to all peers that are subscribed to the topic and have a good enough score.
+<a href=#147 id=147 data-nosnippet>147</a>    </span><span class="kw">pub </span>flood_publish: bool,
+<a href=#148 id=148 data-nosnippet>148</a>
+<a href=#149 id=149 data-nosnippet>149</a>    <span class="doccomment">/// The time period that messages are stored in the cache
+<a href=#150 id=150 data-nosnippet>150</a>    </span><span class="kw">pub </span>duplicate_cache_time: Duration,
+<a href=#151 id=151 data-nosnippet>151</a>
+<a href=#152 id=152 data-nosnippet>152</a>    <span class="doccomment">/// Time to live for fanout peers
+<a href=#153 id=153 data-nosnippet>153</a>    </span><span class="kw">pub </span>fanout_ttl: Duration,
+<a href=#154 id=154 data-nosnippet>154</a>
+<a href=#155 id=155 data-nosnippet>155</a>    <span class="doccomment">/// Initial delay in each heartbeat
+<a href=#156 id=156 data-nosnippet>156</a>    </span><span class="kw">pub </span>heartbeat_initial_delay: Duration,
+<a href=#157 id=157 data-nosnippet>157</a>
+<a href=#158 id=158 data-nosnippet>158</a>    <span class="doccomment">/// Affects how many peers we will emit gossip to at each heartbeat
+<a href=#159 id=159 data-nosnippet>159</a>    </span><span class="kw">pub </span>gossip_factor: f64,
 <a href=#160 id=160 data-nosnippet>160</a>
-<a href=#161 id=161 data-nosnippet>161</a><span class="kw">impl </span>Default <span class="kw">for </span>GossipConfig {
-<a href=#162 id=162 data-nosnippet>162</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#163 id=163 data-nosnippet>163</a>        <span class="self">Self </span>{
-<a href=#164 id=164 data-nosnippet>164</a>            heartbeat_interval: Duration::from_secs(<span class="number">1</span>), <span class="comment">// Default of Libp2p
-<a href=#165 id=165 data-nosnippet>165</a>
-<a href=#166 id=166 data-nosnippet>166</a>            // The following are slightly modified defaults of Libp2p
-<a href=#167 id=167 data-nosnippet>167</a>            </span>history_gossip: <span class="number">6</span>, <span class="comment">// The number of past heartbeats to gossip about
-<a href=#168 id=168 data-nosnippet>168</a>            </span>history_length: <span class="number">8</span>, <span class="comment">// The number of past heartbeats to remember the full messages for
+<a href=#161 id=161 data-nosnippet>161</a>    <span class="doccomment">/// Minimum number of peers to emit gossip to during a heartbeat
+<a href=#162 id=162 data-nosnippet>162</a>    </span><span class="kw">pub </span>gossip_lazy: usize,
+<a href=#163 id=163 data-nosnippet>163</a>}
+<a href=#164 id=164 data-nosnippet>164</a>
+<a href=#165 id=165 data-nosnippet>165</a><span class="kw">impl </span>Default <span class="kw">for </span>GossipConfig {
+<a href=#166 id=166 data-nosnippet>166</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#167 id=167 data-nosnippet>167</a>        <span class="self">Self </span>{
+<a href=#168 id=168 data-nosnippet>168</a>            heartbeat_interval: Duration::from_secs(<span class="number">1</span>), <span class="comment">// Default of Libp2p
 <a href=#169 id=169 data-nosnippet>169</a>
-<a href=#170 id=170 data-nosnippet>170</a>            // The mesh parameters are borrowed from Ethereum:
-<a href=#171 id=171 data-nosnippet>171</a>            // https://github.com/ethereum/consensus-specs/blob/dev/specs/phase0/p2p-interface.md#the-gossip-domain-gossipsub
-<a href=#172 id=172 data-nosnippet>172</a>            </span>mesh_n: <span class="number">8</span>,            <span class="comment">// The target number of peers in the mesh
-<a href=#173 id=173 data-nosnippet>173</a>            </span>mesh_n_high: <span class="number">12</span>,      <span class="comment">// The maximum number of peers in the mesh
-<a href=#174 id=174 data-nosnippet>174</a>            </span>mesh_n_low: <span class="number">6</span>,        <span class="comment">// The minimum number of peers in the mesh
-<a href=#175 id=175 data-nosnippet>175</a>            </span>mesh_outbound_min: <span class="number">2</span>, <span class="comment">// The minimum number of mesh peers that must be outbound
-<a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a>            </span>max_ihave_length: <span class="number">5000</span>,
-<a href=#178 id=178 data-nosnippet>178</a>            max_ihave_messages: <span class="number">10</span>,
-<a href=#179 id=179 data-nosnippet>179</a>            published_message_ids_cache_time: Duration::from_secs(<span class="number">60 </span>* <span class="number">20</span>), <span class="comment">// 20 minutes
-<a href=#180 id=180 data-nosnippet>180</a>            </span>iwant_followup_time: Duration::from_secs(<span class="number">3</span>),
-<a href=#181 id=181 data-nosnippet>181</a>            max_messages_per_rpc: <span class="prelude-val">None</span>,
-<a href=#182 id=182 data-nosnippet>182</a>            gossip_retransmission: <span class="number">3</span>,
-<a href=#183 id=183 data-nosnippet>183</a>            flood_publish: <span class="bool-val">true</span>,
-<a href=#184 id=184 data-nosnippet>184</a>            duplicate_cache_time: Duration::from_secs(<span class="number">60</span>),
-<a href=#185 id=185 data-nosnippet>185</a>            fanout_ttl: Duration::from_secs(<span class="number">60</span>),
-<a href=#186 id=186 data-nosnippet>186</a>            heartbeat_initial_delay: Duration::from_secs(<span class="number">5</span>),
-<a href=#187 id=187 data-nosnippet>187</a>            gossip_factor: <span class="number">0.25</span>,
-<a href=#188 id=188 data-nosnippet>188</a>            gossip_lazy: <span class="number">6</span>,
-<a href=#189 id=189 data-nosnippet>189</a>
-<a href=#190 id=190 data-nosnippet>190</a>            max_transmit_size: MAX_GOSSIP_MSG_SIZE, <span class="comment">// The maximum gossip message size
-<a href=#191 id=191 data-nosnippet>191</a>        </span>}
-<a href=#192 id=192 data-nosnippet>192</a>    }
-<a href=#193 id=193 data-nosnippet>193</a>}
-<a href=#194 id=194 data-nosnippet>194</a>
-<a href=#195 id=195 data-nosnippet>195</a><span class="doccomment">/// Configuration for Libp2p's request-response
-<a href=#196 id=196 data-nosnippet>196</a></span><span class="attr">#[derive(Clone, Debug)]
-<a href=#197 id=197 data-nosnippet>197</a></span><span class="kw">pub struct </span>RequestResponseConfig {
-<a href=#198 id=198 data-nosnippet>198</a>    <span class="doccomment">/// The maximum request size in bytes
-<a href=#199 id=199 data-nosnippet>199</a>    </span><span class="kw">pub </span>request_size_maximum: u64,
-<a href=#200 id=200 data-nosnippet>200</a>    <span class="doccomment">/// The maximum response size in bytes
-<a href=#201 id=201 data-nosnippet>201</a>    </span><span class="kw">pub </span>response_size_maximum: u64,
-<a href=#202 id=202 data-nosnippet>202</a>}
-<a href=#203 id=203 data-nosnippet>203</a>
-<a href=#204 id=204 data-nosnippet>204</a><span class="kw">impl </span>Default <span class="kw">for </span>RequestResponseConfig {
-<a href=#205 id=205 data-nosnippet>205</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#206 id=206 data-nosnippet>206</a>        <span class="self">Self </span>{
-<a href=#207 id=207 data-nosnippet>207</a>            request_size_maximum: <span class="number">20 </span>* <span class="number">1024 </span>* <span class="number">1024</span>,
-<a href=#208 id=208 data-nosnippet>208</a>            response_size_maximum: <span class="number">20 </span>* <span class="number">1024 </span>* <span class="number">1024</span>,
-<a href=#209 id=209 data-nosnippet>209</a>        }
-<a href=#210 id=210 data-nosnippet>210</a>    }
-<a href=#211 id=211 data-nosnippet>211</a>}
+<a href=#170 id=170 data-nosnippet>170</a>            // The following are slightly modified defaults of Libp2p
+<a href=#171 id=171 data-nosnippet>171</a>            </span>history_gossip: <span class="number">6</span>, <span class="comment">// The number of past heartbeats to gossip about
+<a href=#172 id=172 data-nosnippet>172</a>            </span>history_length: <span class="number">8</span>, <span class="comment">// The number of past heartbeats to remember the full messages for
+<a href=#173 id=173 data-nosnippet>173</a>
+<a href=#174 id=174 data-nosnippet>174</a>            // The mesh parameters are borrowed from Ethereum:
+<a href=#175 id=175 data-nosnippet>175</a>            // https://github.com/ethereum/consensus-specs/blob/dev/specs/phase0/p2p-interface.md#the-gossip-domain-gossipsub
+<a href=#176 id=176 data-nosnippet>176</a>            </span>mesh_n: <span class="number">8</span>,            <span class="comment">// The target number of peers in the mesh
+<a href=#177 id=177 data-nosnippet>177</a>            </span>mesh_n_high: <span class="number">12</span>,      <span class="comment">// The maximum number of peers in the mesh
+<a href=#178 id=178 data-nosnippet>178</a>            </span>mesh_n_low: <span class="number">6</span>,        <span class="comment">// The minimum number of peers in the mesh
+<a href=#179 id=179 data-nosnippet>179</a>            </span>mesh_outbound_min: <span class="number">2</span>, <span class="comment">// The minimum number of mesh peers that must be outbound
+<a href=#180 id=180 data-nosnippet>180</a>
+<a href=#181 id=181 data-nosnippet>181</a>            </span>max_ihave_length: <span class="number">5000</span>,
+<a href=#182 id=182 data-nosnippet>182</a>            max_ihave_messages: <span class="number">10</span>,
+<a href=#183 id=183 data-nosnippet>183</a>            published_message_ids_cache_time: Duration::from_secs(<span class="number">60 </span>* <span class="number">20</span>), <span class="comment">// 20 minutes
+<a href=#184 id=184 data-nosnippet>184</a>            </span>iwant_followup_time: Duration::from_secs(<span class="number">3</span>),
+<a href=#185 id=185 data-nosnippet>185</a>            max_messages_per_rpc: <span class="prelude-val">None</span>,
+<a href=#186 id=186 data-nosnippet>186</a>            gossip_retransmission: <span class="number">3</span>,
+<a href=#187 id=187 data-nosnippet>187</a>            flood_publish: <span class="bool-val">true</span>,
+<a href=#188 id=188 data-nosnippet>188</a>            duplicate_cache_time: Duration::from_secs(<span class="number">60</span>),
+<a href=#189 id=189 data-nosnippet>189</a>            fanout_ttl: Duration::from_secs(<span class="number">60</span>),
+<a href=#190 id=190 data-nosnippet>190</a>            heartbeat_initial_delay: Duration::from_secs(<span class="number">5</span>),
+<a href=#191 id=191 data-nosnippet>191</a>            gossip_factor: <span class="number">0.25</span>,
+<a href=#192 id=192 data-nosnippet>192</a>            gossip_lazy: <span class="number">6</span>,
+<a href=#193 id=193 data-nosnippet>193</a>
+<a href=#194 id=194 data-nosnippet>194</a>            max_transmit_size: MAX_GOSSIP_MSG_SIZE, <span class="comment">// The maximum gossip message size
+<a href=#195 id=195 data-nosnippet>195</a>        </span>}
+<a href=#196 id=196 data-nosnippet>196</a>    }
+<a href=#197 id=197 data-nosnippet>197</a>}
+<a href=#198 id=198 data-nosnippet>198</a>
+<a href=#199 id=199 data-nosnippet>199</a><span class="doccomment">/// Configuration for Libp2p's request-response
+<a href=#200 id=200 data-nosnippet>200</a></span><span class="attr">#[derive(Clone, Debug)]
+<a href=#201 id=201 data-nosnippet>201</a></span><span class="kw">pub struct </span>RequestResponseConfig {
+<a href=#202 id=202 data-nosnippet>202</a>    <span class="doccomment">/// The maximum request size in bytes
+<a href=#203 id=203 data-nosnippet>203</a>    </span><span class="kw">pub </span>request_size_maximum: u64,
+<a href=#204 id=204 data-nosnippet>204</a>    <span class="doccomment">/// The maximum response size in bytes
+<a href=#205 id=205 data-nosnippet>205</a>    </span><span class="kw">pub </span>response_size_maximum: u64,
+<a href=#206 id=206 data-nosnippet>206</a>}
+<a href=#207 id=207 data-nosnippet>207</a>
+<a href=#208 id=208 data-nosnippet>208</a><span class="kw">impl </span>Default <span class="kw">for </span>RequestResponseConfig {
+<a href=#209 id=209 data-nosnippet>209</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#210 id=210 data-nosnippet>210</a>        <span class="self">Self </span>{
+<a href=#211 id=211 data-nosnippet>211</a>            request_size_maximum: <span class="number">20 </span>* <span class="number">1024 </span>* <span class="number">1024</span>,
+<a href=#212 id=212 data-nosnippet>212</a>            response_size_maximum: <span class="number">20 </span>* <span class="number">1024 </span>* <span class="number">1024</span>,
+<a href=#213 id=213 data-nosnippet>213</a>        }
+<a href=#214 id=214 data-nosnippet>214</a>    }
+<a href=#215 id=215 data-nosnippet>215</a>}
 </code></pre></div></section></main></body></html>
