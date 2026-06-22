@@ -246,8 +246,8 @@ enum CertVerification {
 #[derive(Debug, thiserror::Error)]
 enum SafetyError {
     #[error(
-        "leaf commitment at locked view does not match locked certificate \
-         view={view} locked_commit={locked_commit} proposal_commit={proposal_commit}"
+        "leaf commitment at locked view does not match locked certificate view={view} \
+         locked_commit={locked_commit} proposal_commit={proposal_commit}"
     )]
     LockedViewCommitmentMismatch {
         view: ViewNumber,
@@ -255,9 +255,8 @@ enum SafetyError {
         proposal_commit: String,
     },
     #[error(
-        "justify qc neither extends nor is newer than the locked certificate \
-         qc_view={qc_view} locked_view={locked_view} parent_commit={parent_commit} \
-         locked_commit={locked_commit}"
+        "justify qc neither extends nor is newer than the locked certificate qc_view={qc_view} \
+         locked_view={locked_view} parent_commit={parent_commit} locked_commit={locked_commit}"
     )]
     UnsafeProposal {
         qc_view: ViewNumber,
