@@ -5912,6 +5912,8 @@ mod test {
         // 4. Allow the network to progress 3 more epochs (query node remains offline).
         // 5. Restart the query node.
         //    - The node is expected to reconstruct or catch up on its own
+        use espresso_types::{DECAF_CHAIN_ID, v0_3::ChainConfig};
+
         const EPOCH_HEIGHT: u64 = 10;
 
         let network_config = TestConfigBuilder::default()
@@ -5931,6 +5933,18 @@ mod test {
             .try_into()
             .unwrap();
 
+        // The light client skips epoch-root stake-table-hash verification for pre-DRB headers only
+        // on the Decaf chain id, so use it to keep the V3->V4 catchup path covered. Must be set
+        // before `pos_hook`, which preserves the chain id from `state[0]`.
+        let decaf_state = ValidatedState {
+            chain_config: ChainConfig {
+                chain_id: DECAF_CHAIN_ID,
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        };
+
         let config = TestNetworkConfigBuilder::with_num_nodes()
             .api_config(SqlDataSource::options(
                 &storage[0],
@@ -5940,6 +5954,7 @@ mod test {
             ))
             .network_config(network_config)
             .persistences(persistence.clone())
+            .states(std::array::from_fn(|_| decaf_state.clone()))
             .catchups(std::array::from_fn(|_| {
                 StatePeers::<StaticVersion<0, 1>>::from_urls(
                     vec![format!("http://localhost:{api_port}").parse().unwrap()],
