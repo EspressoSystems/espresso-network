@@ -183,6 +183,9 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     autonat_private_logged: bool,
     /// Kademlia `StreamProtocol` expected from same-network peers.
     expected_kad_protocol: StreamProtocol,
+    /// Peers confirmed via identify to share our network discriminator. Gates
+    /// `NewExternalAddrOfPeer`, whose event carries no protocols to check directly.
+    same_network_peers: HashSet<PeerId>,
 }
 
 impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
@@ -449,12 +452,14 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             resend_tx: None,
             autonat_private_logged: false,
             expected_kad_protocol,
+            same_network_peers: HashSet::new(),
         })
     }
 
     /// Identify is the first point a peer's network is detectable; drop other networks.
     fn on_identify_received(&mut self, peer_id: PeerId, info: IdentifyInfo) {
         if should_keep_peer(&self.expected_kad_protocol, &info.protocols) {
+            self.same_network_peers.insert(peer_id);
             let behaviour = self.swarm.behaviour_mut();
             // Deduplicate before inserting (duplicates are common in practice).
             for addr in info.listen_addrs.iter().collect::<HashSet<_>>() {
@@ -465,6 +470,8 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 "Dropping peer {peer_id}: its kad protocol does not match ours ({})",
                 self.expected_kad_protocol
             );
+            self.same_network_peers.remove(&peer_id);
+            self.swarm.behaviour_mut().dht.remove_peer(&peer_id);
             let _ = self.swarm.disconnect_peer_id(peer_id);
         }
     }
@@ -556,6 +563,20 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     ClientRequest::GetConnectedPeers(s) => {
                         if s.send(self.connected_pids()).is_err() {
                             error!("error sending peer set to client");
+                        }
+                    },
+                    ClientRequest::GetKadRoutingPeers(s) => {
+                        let peers: HashSet<PeerId> = self
+                            .swarm
+                            .behaviour_mut()
+                            .dht
+                            .kbuckets()
+                            .flat_map(|b| {
+                                b.iter().map(|e| *e.node.key.preimage()).collect::<Vec<_>>()
+                            })
+                            .collect();
+                        if s.send(peers).is_err() {
+                            error!("error sending kad routing peers to client");
                         }
                     },
                     ClientRequest::GetDHT {
@@ -690,10 +711,12 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                 }
 
                 // If we are no longer connected to the peer, remove the consensus key from the map
+                // and reset verified status so reconnecting peers are re-verified via identify.
                 if num_established == 0 {
                     self.consensus_key_to_pid_map
                         .lock()
                         .remove_by_right(&peer_id);
+                    self.same_network_peers.remove(&peer_id);
                 }
 
                 // Send the number of connected peers to the client
@@ -869,10 +892,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                     .add_address(&my_id, address.clone());
             },
             SwarmEvent::NewExternalAddrOfPeer { peer_id, address } => {
-                self.swarm
-                    .behaviour_mut()
-                    .dht
-                    .add_address(&peer_id, address.clone());
+                // Only same-network peers; foreign peers carry no protocols on this event.
+                if self.same_network_peers.contains(&peer_id) {
+                    self.swarm
+                        .behaviour_mut()
+                        .dht
+                        .add_address(&peer_id, address.clone());
+                }
             },
             _ => {
                 debug!("Unhandled swarm event {event:?}");
@@ -1039,6 +1065,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Cross-network peer must not persist in a's Kademlia routing table after identify-triggered
+    /// disconnect.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn evicts_cross_network_peer_from_routing_table() {
+        tokio::time::timeout(Duration::from_secs(90), async {
+            let a = spawn_node(Some(U256::from(1u64)), HashSet::new(), 0).await;
+
+            let hub = HashSet::from([(a.peer_id(), a.listen_addr())]);
+            let b = spawn_node(Some(U256::from(1u64)), hub.clone(), 1).await;
+            let x = spawn_node(Some(U256::from(2u64)), hub, 2).await;
+
+            b.begin_bootstrap().expect("begin_bootstrap b");
+            x.begin_bootstrap().expect("begin_bootstrap x");
+
+            let b_pid = b.peer_id();
+            let x_pid = x.peer_id();
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            let mut consecutive = 0usize;
+            loop {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "steady state not reached",
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let kad_peers = a.kad_routing_peers().await.expect("kad_routing_peers");
+                if kad_peers.contains(&b_pid) && !kad_peers.contains(&x_pid) {
+                    consecutive += 1;
+                    if consecutive >= 3 {
+                        break;
+                    }
+                } else {
+                    consecutive = 0;
+                }
+            }
+
+            x.shutdown().await.expect("shutdown x");
+            b.shutdown().await.expect("shutdown b");
+            a.shutdown().await.expect("shutdown a");
+        })
+        .await
+        .expect("test timed out");
     }
 
     /// Hub `a` keeps same-network peer `b` and drops foreign peer `x`; proves selective,
