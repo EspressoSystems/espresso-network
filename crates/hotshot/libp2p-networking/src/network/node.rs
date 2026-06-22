@@ -158,6 +158,16 @@ fn should_keep_peer(expected: &StreamProtocol, peer_protocols: &[StreamProtocol]
     peer_protocols.contains(expected)
 }
 
+fn resolve_put_quorum(
+    quorum_override: Option<NonZeroUsize>,
+    replication_factor: NonZeroUsize,
+) -> NonZeroUsize {
+    quorum_override.unwrap_or_else(|| {
+        NonZeroUsize::new(replication_factor.get() / 2)
+            .expect("replication factor should be bigger than 0")
+    })
+}
+
 /// Network definition
 #[derive(derive_more::Debug)]
 pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
@@ -186,6 +196,7 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     /// Peers confirmed via identify to share our network discriminator. Gates
     /// `NewExternalAddrOfPeer`, whose event carries no protocols to check directly.
     same_network_peers: HashSet<PeerId>,
+    dht_put_quorum: Option<NonZeroUsize>,
 }
 
 impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
@@ -453,6 +464,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             autonat_private_logged: false,
             expected_kad_protocol,
             same_network_peers: HashSet::new(),
+            dht_put_quorum: config.dht_put_quorum,
         })
     }
 
@@ -487,13 +499,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
         // Set the record's expiration time to the proper time
         record.expires = Some(Instant::now() + self.kademlia_record_ttl);
 
-        match self.swarm.behaviour_mut().dht.put_record(
-            record,
-            libp2p::kad::Quorum::N(
-                NonZeroUsize::try_from(self.dht_handler.replication_factor().get() / 2)
-                    .expect("replication factor should be bigger than 0"),
-            ),
-        ) {
+        let quorum = resolve_put_quorum(self.dht_put_quorum, self.dht_handler.replication_factor());
+        match self
+            .swarm
+            .behaviour_mut()
+            .dht
+            .put_record(record, libp2p::kad::Quorum::N(quorum))
+        {
             Err(e) => {
                 // failed try again later
                 query.progress = DHTProgress::NotStarted;
@@ -968,14 +980,14 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, sync::Arc, time::Duration};
+    use std::{collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
     use hotshot_example_types::node_types::TestTypes;
     use parking_lot::Mutex;
 
     use super::{
         U256, direct_message_protocol, gossipsub_prefix, identify_protocol, kad_protocol,
-        should_keep_peer,
+        resolve_put_quorum, should_keep_peer,
     };
     use crate::network::{
         NetworkNodeConfigBuilder, behaviours::dht::store::persistent::DhtNoPersistence,
@@ -1156,5 +1168,21 @@ mod tests {
         })
         .await
         .expect("test timed out");
+    }
+
+    #[test]
+    fn put_quorum_override() {
+        let nz = |n| NonZeroUsize::new(n).unwrap();
+
+        // default path: quorum = replication_factor / 2
+        assert_eq!(resolve_put_quorum(None, nz(20)), nz(10));
+        assert_eq!(resolve_put_quorum(None, nz(2)), nz(1));
+
+        // override below default
+        assert_eq!(resolve_put_quorum(Some(nz(1)), nz(20)), nz(1));
+        // override independent of replication factor
+        assert_eq!(resolve_put_quorum(Some(nz(7)), nz(20)), nz(7));
+        // resolver does not clamp; kad caps separately at min(n, rf)
+        assert_eq!(resolve_put_quorum(Some(nz(50)), nz(20)), nz(50));
     }
 }

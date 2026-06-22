@@ -409,6 +409,7 @@ impl<T: NodeType> Libp2pNetwork<T> {
         priv_key: &<T::SignatureKey as SignatureKey>::PrivateKey,
         metrics: Libp2pMetricsValue,
         network_discriminator: Option<U256>,
+        dht_put_quorum: Option<NonZeroUsize>,
     ) -> anyhow::Result<Self> {
         // Try to take our Libp2p config from our broader network config
         let libp2p_config = config
@@ -459,7 +460,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
             .replication_factor(replication_factor)
             .bind_address(Some(bind_address.clone()))
             .announce_addresses(announce_addresses)
-            .network_discriminator(network_discriminator);
+            .network_discriminator(network_discriminator)
+            .dht_put_quorum(dht_put_quorum);
 
         // Connect to the provided bootstrap nodes
         config_builder.to_connect_addrs(HashSet::from_iter(libp2p_config.bootstrap_nodes.clone()));
