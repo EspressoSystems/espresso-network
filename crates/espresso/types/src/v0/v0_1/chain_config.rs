@@ -8,8 +8,15 @@ use serde::{Deserialize, Serialize};
 use crate::{FeeAccount, FeeAmount};
 
 #[derive(Default, Hash, Copy, Clone, Debug, Display, PartialEq, Eq, From, Into)]
+#[cfg_attr(
+    feature = "rlp",
+    derive(alloy_rlp::RlpEncodableWrapper, alloy_rlp::RlpDecodableWrapper)
+)]
 #[display("{_0}")]
 pub struct ChainId(pub U256);
+
+/// Chain id of the Decaf testnet. Used to gate Decaf-specific light-client behavior.
+pub const DECAF_CHAIN_ID: ChainId = ChainId(U256::from_limbs([0xdecaf, 0, 0, 0]));
 
 #[derive(Hash, Copy, Clone, Debug, Default, Display, PartialEq, Eq, From, Into, Deref)]
 #[display("{_0}")]
