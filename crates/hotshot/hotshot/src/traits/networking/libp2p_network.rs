@@ -460,8 +460,8 @@ impl<T: NodeType> Libp2pNetwork<T> {
             .replication_factor(replication_factor)
             .bind_address(Some(bind_address.clone()))
             .announce_addresses(announce_addresses)
-            .network_discriminator(network_discriminator);
-        config_builder.dht_put_quorum(dht_put_quorum);
+            .network_discriminator(network_discriminator)
+            .dht_put_quorum(dht_put_quorum);
 
         // Connect to the provided bootstrap nodes
         config_builder.to_connect_addrs(HashSet::from_iter(libp2p_config.bootstrap_nodes.clone()));
