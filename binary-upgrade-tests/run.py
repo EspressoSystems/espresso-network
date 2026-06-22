@@ -284,13 +284,11 @@ class Compose:
         )
 
     def compose_env(self, docker_tag: str | None = None) -> dict[str, str]:
-        # The base network is configured by --env-file base/.env. Drop any
-        # ESPRESSO_*/ESP_* key the base .env defines so REPO_ROOT/.env's renamed
-        # values (loaded into os.environ) don't win via shell precedence and
-        # point base services at the wrong addresses (e.g. the prover's
-        # light-client proxy). Compose then resolves these from --env-file.
-        # Harness-only extras (node-5 port, genesis) aren't in the base .env,
-        # so they survive.
+        # Compose ranks process env above --env-file, so the current checkout's
+        # .env (in os.environ) would override the base-tag .env. Each tag's .env
+        # carries its own deployed addresses/keys, so drop the keys the base .env
+        # defines and let compose resolve them from --env-file. Harness-only
+        # extras (DOCKER_TAG, node-5 port, genesis) aren't in the base .env.
         env = os.environ.copy()
         for key in env_file_keys(self.base_dir / ".env"):
             if key.startswith(("ESPRESSO_", "ESP_")):
@@ -474,11 +472,9 @@ class Compose:
             raise
 
     def smoke_test(self, tag: str) -> None:
-        # cwd=base_dir so the script's only-if-unset .env loader picks up the
-        # extracted base-tag .env. Scrub ESPRESSO_*/ESP_* from the subprocess
-        # env: REPO_ROOT/.env (loaded into os.environ by load_project_env)
-        # carries main's renamed vars, which would otherwise override
-        # base-tag values and point the smoke test at the wrong addresses.
+        # cwd=base_dir lets the script's only-if-unset .env loader pick up the
+        # base-tag .env. Scrub ESPRESSO_*/ESP_* so os.environ (current checkout's
+        # .env) doesn't override the base-tag addresses/keys.
         env = {
             k: v
             for k, v in os.environ.items()
