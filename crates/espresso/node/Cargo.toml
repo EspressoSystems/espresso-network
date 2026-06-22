@@ -82,6 +82,7 @@ jf-rescue = { workspace = true }
 jf-signature = { workspace = true }
 libp2p = { workspace = true }
 light-client = { workspace = true }
+mimalloc = "0.1.52"
 moka = { workspace = true }
 num_enum = { workspace = true }
 parking_lot = { workspace = true }

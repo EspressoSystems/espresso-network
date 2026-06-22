@@ -1,3 +1,6 @@
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod external_event_handler;
 mod message_compat_tests;
 mod proposal_fetcher;
