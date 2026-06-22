@@ -47,14 +47,24 @@ impl Drop for BackgroundProcess {
 #[rstest::rstest]
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn slow_dev_node_test(
-    #[values(DevNodeVersion::V0_3, DevNodeVersion::V0_4, DevNodeVersion::V0_5)]
+    #[values(
+        DevNodeVersion::V0_3,
+        DevNodeVersion::V0_4,
+        DevNodeVersion::V0_5,
+        DevNodeVersion::V0_6
+    )]
     version: DevNodeVersion,
 ) {
     let builder_port = reserve_tcp_port().unwrap();
     let api_port = reserve_tcp_port().unwrap();
     let dev_node_port = reserve_tcp_port().unwrap();
 
-    let instance = Anvil::new().spawn();
+    let instance = Anvil::new()
+        .arg("--slots-in-an-epoch")
+        .arg("0")
+        .arg("--block-time")
+        .arg("1")
+        .spawn();
     let l1_url = instance.endpoint_url();
 
     let tmp_dir = tempfile::tempdir().unwrap();
