@@ -245,13 +245,20 @@ enum CertVerification {
 /// Reason a proposal failed the safety/liveness rule.
 #[derive(Debug, thiserror::Error)]
 enum SafetyError {
-    #[error("leaf commitment at locked view does not match locked certificate")]
+    #[error(
+        "leaf commitment at locked view does not match locked certificate \
+         view={view} locked_commit={locked_commit} proposal_commit={proposal_commit}"
+    )]
     LockedViewCommitmentMismatch {
         view: ViewNumber,
         locked_commit: String,
         proposal_commit: String,
     },
-    #[error("justify qc neither extends nor is newer than the locked certificate")]
+    #[error(
+        "justify qc neither extends nor is newer than the locked certificate \
+         qc_view={qc_view} locked_view={locked_view} parent_commit={parent_commit} \
+         locked_commit={locked_commit}"
+    )]
     UnsafeProposal {
         qc_view: ViewNumber,
         locked_view: ViewNumber,
@@ -865,7 +872,7 @@ impl<T: NodeType> Consensus<T> {
 
         if let Err(err) = self.is_safe(&proposal) {
             warn!(
-                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch, ?err,
+                %view, %proposer, block = %block_number, %epoch, %qc_view, %qc_epoch, %err,
                 "proposal not safe"
             );
             return Protocol::Abort;
