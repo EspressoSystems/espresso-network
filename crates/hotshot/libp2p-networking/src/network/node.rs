@@ -153,6 +153,11 @@ pub(crate) fn direct_message_protocol(
     }
 }
 
+/// A peer's network is identifiable only by its advertised kademlia `StreamProtocol`.
+fn should_keep_peer(expected: &StreamProtocol, peer_protocols: &[StreamProtocol]) -> bool {
+    peer_protocols.contains(expected)
+}
+
 /// Network definition
 #[derive(derive_more::Debug)]
 pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
@@ -176,6 +181,8 @@ pub struct NetworkNode<T: NodeType, D: DhtPersistentStorage> {
     /// Whether we've already emitted the loud "not publicly reachable" error for the
     /// current Private episode. Reset whenever AutoNAT leaves Private status.
     autonat_private_logged: bool,
+    /// Kademlia `StreamProtocol` expected from same-network peers.
+    expected_kad_protocol: StreamProtocol,
 }
 
 impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
@@ -275,6 +282,8 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             .ttl
             .unwrap_or(16 * kademlia_record_republication_interval);
 
+        let expected_kad_protocol = kad_protocol(config.network_discriminator)?;
+
         // Generate the swarm
         let mut swarm: Swarm<NetworkDef<T::SignatureKey, D>> = {
             // Use the `Blake3` hash of the message's contents as the ID
@@ -338,7 +347,7 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             let identify = IdentifyBehaviour::new(identify_cfg);
 
             // - Build DHT needed for peer discovery
-            let mut kconfig = Config::new(kad_protocol(config.network_discriminator)?);
+            let mut kconfig = Config::new(expected_kad_protocol.clone());
             kconfig
                 .set_parallelism(NonZeroUsize::new(5).unwrap())
                 .set_provider_publication_interval(Some(kademlia_record_republication_interval))
@@ -439,7 +448,25 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
             ),
             resend_tx: None,
             autonat_private_logged: false,
+            expected_kad_protocol,
         })
+    }
+
+    /// Identify is the first point a peer's network is detectable; drop other networks.
+    fn on_identify_received(&mut self, peer_id: PeerId, info: IdentifyInfo) {
+        if should_keep_peer(&self.expected_kad_protocol, &info.protocols) {
+            let behaviour = self.swarm.behaviour_mut();
+            // Deduplicate before inserting (duplicates are common in practice).
+            for addr in info.listen_addrs.iter().collect::<HashSet<_>>() {
+                behaviour.dht.add_address(&peer_id, addr.clone());
+            }
+        } else {
+            debug!(
+                "Dropping peer {peer_id}: its kad protocol does not match ours ({})",
+                self.expected_kad_protocol
+            );
+            let _ = self.swarm.disconnect_peer_id(peer_id);
+        }
     }
 
     /// Publish a key/value to the record store.
@@ -706,28 +733,13 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
                         .dht_handler
                         .dht_handle_event(e, self.swarm.behaviour_mut().dht.store_mut()),
                     NetworkEventInternal::IdentifyEvent(e) => {
-                        // NOTE feed identified peers into kademlia's routing table for peer discovery.
                         if let IdentifyEvent::Received {
                             peer_id,
-                            info:
-                                IdentifyInfo {
-                                    listen_addrs,
-                                    protocols: _,
-                                    public_key: _,
-                                    protocol_version: _,
-                                    agent_version: _,
-                                    observed_addr: _,
-                                    signed_peer_record: _,
-                                },
+                            info,
                             connection_id: _,
                         } = *e
                         {
-                            let behaviour = self.swarm.behaviour_mut();
-
-                            // into hashset to delete duplicates (I checked: there are duplicates)
-                            for addr in listen_addrs.iter().collect::<HashSet<_>>() {
-                                behaviour.dht.add_address(&peer_id, addr.clone());
-                            }
+                            self.on_identify_received(peer_id, info);
                         }
                         None
                     },
@@ -930,7 +942,56 @@ impl<T: NodeType, D: DhtPersistentStorage> NetworkNode<T, D> {
 
 #[cfg(test)]
 mod tests {
-    use super::{U256, direct_message_protocol, gossipsub_prefix, identify_protocol, kad_protocol};
+    use std::{collections::HashSet, sync::Arc, time::Duration};
+
+    use hotshot_example_types::node_types::TestTypes;
+    use parking_lot::Mutex;
+
+    use super::{
+        U256, direct_message_protocol, gossipsub_prefix, identify_protocol, kad_protocol,
+        should_keep_peer,
+    };
+    use crate::network::{
+        NetworkNodeConfigBuilder, behaviours::dht::store::persistent::DhtNoPersistence,
+        node::handle::spawn_network_node,
+    };
+
+    /// Spawn a node with the given discriminator and initial peer set. Returns the handle and
+    /// a background task draining the event receiver so the swarm loop never stalls on backpressure.
+    async fn spawn_node(
+        discriminator: Option<U256>,
+        connect_to: HashSet<(libp2p_identity::PeerId, libp2p::Multiaddr)>,
+        id: usize,
+    ) -> crate::network::node::handle::NetworkNodeHandle<TestTypes> {
+        use bimap::BiMap;
+
+        let config = NetworkNodeConfigBuilder::default()
+            .network_discriminator(discriminator)
+            .to_connect_addrs(connect_to)
+            .build()
+            .expect("config build");
+
+        let key_map = Arc::new(Mutex::new(BiMap::default()));
+        let (mut receiver, handle) = spawn_network_node::<TestTypes, DhtNoPersistence>(
+            config,
+            DhtNoPersistence,
+            key_map,
+            id,
+        )
+        .await
+        .expect("spawn node");
+
+        // Drain events so the swarm loop is never blocked on a full channel.
+        tokio::spawn(async move {
+            loop {
+                if receiver.recv().await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        handle
+    }
 
     fn snapshot_for(discriminator: Option<U256>) -> String {
         format!(
@@ -953,5 +1014,77 @@ mod tests {
             "decaf_libp2p_protocol_identifiers",
             snapshot_for(Some(U256::from(0xdecafu64)))
         );
+    }
+
+    #[test]
+    fn should_keep_peer_empty_protocols() {
+        let expected = kad_protocol(None).unwrap();
+        assert!(!should_keep_peer(&expected, &[]));
+    }
+
+    #[test]
+    fn should_keep_peer_discriminator_matrix() {
+        let discriminators = [None, Some(U256::from(1u64)), Some(U256::from(2u64))];
+        for ours in discriminators {
+            for theirs in discriminators {
+                let expected = kad_protocol(ours).unwrap();
+                let peer_protocols = [
+                    direct_message_protocol(theirs).unwrap(),
+                    kad_protocol(theirs).unwrap(),
+                ];
+                assert_eq!(
+                    should_keep_peer(&expected, &peer_protocols),
+                    ours == theirs,
+                    "ours={ours:?} theirs={theirs:?}",
+                );
+            }
+        }
+    }
+
+    /// Hub `a` keeps same-network peer `b` and drops foreign peer `x`; proves selective,
+    /// not wholesale, disconnection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn drops_cross_network_peer() {
+        tokio::time::timeout(Duration::from_secs(90), async {
+            let a = spawn_node(Some(U256::from(1u64)), HashSet::new(), 0).await;
+
+            let hub = HashSet::from([(a.peer_id(), a.listen_addr())]);
+            let b = spawn_node(Some(U256::from(1u64)), hub.clone(), 1).await;
+            let x = spawn_node(Some(U256::from(2u64)), hub, 2).await;
+
+            b.begin_bootstrap().expect("begin_bootstrap b");
+            x.begin_bootstrap().expect("begin_bootstrap x");
+
+            let b_pid = b.peer_id();
+            let expected = HashSet::from([b_pid]);
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            // Require N consecutive 1s-apart checks to avoid transient matches.
+            let mut consecutive = 0usize;
+            loop {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "steady state not reached; a.connected_pids()={:?}",
+                    a.connected_pids().await,
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let a_pids = a.connected_pids().await.expect("connected_pids");
+                let x_conn = x.num_connected().await.expect("num_connected");
+                if a_pids == expected && x_conn == 0 {
+                    consecutive += 1;
+                    if consecutive >= 3 {
+                        break;
+                    }
+                } else {
+                    consecutive = 0;
+                }
+            }
+
+            x.shutdown().await.expect("shutdown x");
+            b.shutdown().await.expect("shutdown b");
+            a.shutdown().await.expect("shutdown a");
+        })
+        .await
+        .expect("test timed out");
     }
 }
