@@ -1594,7 +1594,7 @@ dependencies = [
  "num-traits",
  "rusticata-macros",
  "thiserror 1.0.69",
- "time 0.3.47",
+ "time 0.3.51",
 ]
 
 [[package]]
@@ -1610,7 +1610,7 @@ dependencies = [
  "num-traits",
  "rusticata-macros",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
 ]
 
 [[package]]
@@ -4140,7 +4140,6 @@ version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
- "powerfmt",
  "serde_core",
 ]
 
@@ -4906,7 +4905,7 @@ dependencies = [
  "test-utils",
  "thiserror 2.0.18",
  "tide-disco",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tokio-tungstenite 0.28.0",
  "tokio-util",
@@ -5051,7 +5050,7 @@ dependencies = [
  "test-utils",
  "thiserror 2.0.18",
  "tide-disco",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tower-service",
  "tracing",
@@ -6124,7 +6123,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "test-utils",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
@@ -6356,7 +6355,7 @@ dependencies = [
  "sha2 0.10.9",
  "sha3 0.10.9",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tracing",
  "url",
@@ -6391,7 +6390,7 @@ dependencies = [
  "sha2 0.10.9",
  "surf-disco",
  "test-utils",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "toml",
  "tracing",
@@ -6469,7 +6468,7 @@ dependencies = [
  "serde_bytes",
  "test-utils",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tokio-util",
  "tracing",
@@ -6500,7 +6499,7 @@ dependencies = [
  "serde",
  "tempfile",
  "test-utils",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tracing",
  "versions",
@@ -6583,7 +6582,7 @@ dependencies = [
  "test-log",
  "test-utils",
  "tide-disco",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "toml",
  "tracing",
@@ -6619,7 +6618,7 @@ dependencies = [
  "surf-disco",
  "tagged-base64",
  "tide-disco",
- "time 0.3.47",
+ "time 0.3.51",
  "vbs",
  "versions",
 ]
@@ -6665,7 +6664,7 @@ dependencies = [
  "surf-disco",
  "test-log",
  "tide-disco",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "toml",
  "tracing",
@@ -6715,7 +6714,7 @@ dependencies = [
  "surf-disco",
  "tagged-base64",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tracing",
  "url",
@@ -6822,7 +6821,7 @@ dependencies = [
  "test-log",
  "test-utils",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tokio-util",
  "toml",
@@ -9192,7 +9191,7 @@ dependencies = [
  "surf-disco",
  "test-log",
  "tide-disco",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "toml",
  "tracing",
@@ -10840,7 +10839,7 @@ dependencies = [
  "pem",
  "ring 0.17.14",
  "rustls-pki-types",
- "time 0.3.47",
+ "time 0.3.51",
  "x509-parser 0.16.0",
  "yasna",
 ]
@@ -10970,7 +10969,7 @@ dependencies = [
  "serde",
  "siphasher",
  "thiserror 1.0.69",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tokio-postgres",
  "toml",
@@ -12055,7 +12054,7 @@ dependencies = [
  "serde_core",
  "serde_json",
  "serde_with_macros",
- "time 0.3.47",
+ "time 0.3.51",
 ]
 
 [[package]]
@@ -12585,7 +12584,7 @@ dependencies = [
  "sha2 0.10.9",
  "smallvec",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -12670,7 +12669,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
  "tracing",
  "whoami 1.6.1",
 ]
@@ -12710,7 +12709,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
  "tracing",
  "whoami 1.6.1",
 ]
@@ -12735,7 +12734,7 @@ dependencies = [
  "serde",
  "serde_urlencoded",
  "sqlx-core",
- "time 0.3.47",
+ "time 0.3.51",
  "tracing",
  "url",
 ]
@@ -13438,26 +13437,25 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.47"
+version = "0.3.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "743bd48c283afc0388f9b8827b976905fb217ad9e647fae3a379a9283c4def2c"
+checksum = "85c17d80feb7334b40c484e45ed1a5273dfd8bfda537c3be2e74a06a6686f327"
 dependencies = [
  "deranged",
- "itoa",
  "libc",
  "num-conv",
  "num_threads",
  "powerfmt",
  "serde_core",
  "time-core",
- "time-macros 0.2.27",
+ "time-macros 0.2.30",
 ]
 
 [[package]]
 name = "time-core"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7694e1cfe791f8d31026952abf09c69ca6f6fa4e1a1229e18988f06a04a12dca"
+checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
 name = "time-macros"
@@ -13471,9 +13469,9 @@ dependencies = [
 
 [[package]]
 name = "time-macros"
-version = "0.2.27"
+version = "0.2.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e70e4c5a0e0a8a4823ad65dfe1a6930e4f4d756dcd9dd7939022b5e8c501215"
+checksum = "dcef1a61bdb119096e153208ec5cbec23944ce8bca13be5c7f60c634f7403935"
 dependencies = [
  "num-conv",
  "time-core",
@@ -14405,7 +14403,7 @@ dependencies = [
  "anyhow",
  "derive_builder",
  "rustversion",
- "time 0.3.47",
+ "time 0.3.51",
  "vergen",
  "vergen-lib",
 ]
@@ -15417,7 +15415,7 @@ dependencies = [
  "ring 0.17.14",
  "rusticata-macros",
  "thiserror 1.0.69",
- "time 0.3.47",
+ "time 0.3.51",
 ]
 
 [[package]]
@@ -15434,7 +15432,7 @@ dependencies = [
  "oid-registry 0.8.1",
  "rusticata-macros",
  "thiserror 2.0.18",
- "time 0.3.47",
+ "time 0.3.51",
 ]
 
 [[package]]
@@ -15475,7 +15473,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
 dependencies = [
- "time 0.3.47",
+ "time 0.3.51",
 ]
 
 [[package]]
