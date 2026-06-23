@@ -8737,13 +8737,14 @@ mod test {
                     &format!("catchup/{height}/{decided_view}/blocks"),
                 )
                 .await?;
-                // chain-config: invalid commitment yields 404 from both servers.
+                // chain-config: a malformed TaggedBase64 commitment (bad checksum) parses-fails
+                // on the request path and yields 400 from both servers.
                 compare_error_endpoints(
                     &http,
                     api_port,
                     axum_port,
                     "catchup/chain-config/CHAINCONFIG~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                    404,
+                    400,
                 )
                 .await?;
                 // leafchain: undecided height returns 404 from both.
