@@ -1203,17 +1203,21 @@ pub(crate) async fn validate_proposal_view_and_certs<
     Ok(())
 }
 
-/// Helper function to send events and log errors
-pub async fn broadcast_event<E: Clone + std::fmt::Debug>(event: E, sender: &Sender<E>) {
+/// Helper function to send events and log errors.
+pub async fn broadcast_event<E: Clone + std::fmt::Display>(event: E, sender: &Sender<E>) {
+    let broadcasting = sender.is_full().then(|| event.to_string());
     match sender.broadcast_direct(event).await {
         Ok(None) => (),
         Ok(Some(overflowed)) => {
             tracing::error!(
-                "Event sender queue overflow, Oldest event removed form queue: {overflowed:?}"
+                broadcasting = broadcasting.as_deref().unwrap_or("<queue not full when checked>"),
+                dropped = %overflowed,
+                capacity = sender.capacity(),
+                "Event sender queue overflow, oldest event dropped",
             );
         },
         Err(SendError(e)) => {
-            tracing::warn!("Event: {e:?}\n Sending failed, event stream probably shutdown");
+            tracing::warn!(event = %e, "Sending failed, event stream probably shutdown");
         },
     }
 }
@@ -1355,4 +1359,47 @@ pub async fn broadcast_view_change<TYPES: NodeType>(
         sender,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::broadcast_event;
+
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    enum Ev {
+        A,
+        B,
+    }
+
+    impl std::fmt::Display for Ev {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Ev::A => write!(f, "A"),
+                Ev::B => write!(f, "B"),
+            }
+        }
+    }
+
+    /// On overflow, `broadcast_event` drops the oldest event and retains the newest
+    /// without panicking. Regression guard for the `is_full()`-gated diagnostics path.
+    #[tokio::test]
+    async fn broadcast_event_overflow_retains_newest() {
+        let (tx, mut rx) = async_broadcast::broadcast::<Ev>(1);
+        rx.set_overflow(true);
+
+        broadcast_event(Ev::A, &tx).await; // queue: [A], now full
+        broadcast_event(Ev::B, &tx).await; // full -> drops oldest (A), queue: [B]
+
+        // The receiver is first notified that exactly one message was dropped, ...
+        assert!(matches!(
+            rx.recv_direct().await,
+            Err(async_broadcast::RecvError::Overflowed(1))
+        ));
+        // ... then it observes only the newest event.
+        assert_eq!(rx.recv_direct().await.unwrap(), Ev::B);
+        assert!(
+            rx.try_recv().is_err(),
+            "only the newest event should remain"
+        );
+    }
 }

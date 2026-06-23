@@ -121,6 +121,14 @@ pub enum TestEvent {
     Shutdown,
 }
 
+impl std::fmt::Display for TestEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TestEvent::Shutdown => write!(f, "Shutdown"),
+        }
+    }
+}
+
 impl<S: TestTaskState + Send + 'static> TestTask<S> {
     /// Create a new task
     pub fn new(
