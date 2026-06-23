@@ -196,7 +196,7 @@ async fn try_connect(conf: &Config, peer: &PublicKey, addr: &str) -> Result<Conn
 
     debug!(name = %conf.name, %node, %peer, %addr, "tcp connection established");
 
-    configure_socket(&conf, &node, &addr, &stream);
+    configure_socket(conf, &node, &addr, &stream);
 
     until(conf.handshake_timeout, async move {
         let (version, prologue) = select_version(&node, &addr, conf, &mut stream, true).await?;
