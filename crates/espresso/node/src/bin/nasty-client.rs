@@ -1400,9 +1400,12 @@ async fn serve(port: u16, metrics: PrometheusMetrics) {
 
 fn main() {
     let migrated_envs = espresso_utils::env_compat::migrate_legacy_env_vars();
-    tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(async_main(migrated_envs))
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        tokio::select! {
+            _ = async_main(migrated_envs) => {},
+            _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
+        }
+    })
 }
 
 async fn async_main(migrated_envs: Vec<(&str, &str)>) {

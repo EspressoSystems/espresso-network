@@ -712,6 +712,7 @@ impl TestClient {
             first_epoch_with_dynamic_stake_table: EpochNumber::new(
                 inner.first_epoch_with_dynamic_stake_table,
             ),
+            chain_id: NodeState::mock_v3().chain_config.chain_id,
         }
     }
 

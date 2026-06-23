@@ -174,6 +174,15 @@ pub async fn build_test_coordinator(
                     }
                 })
                 .collect();
+        // Seed persisted proposals before `seed_parent` so its authoritative
+        // anchor wins (mirrors `Coordinator::maker`).
+        consensus.seed_proposals(
+            storage
+                .proposals_cloned()
+                .await
+                .into_values()
+                .map(|p| Proposal::from(p.data.clone())),
+        );
         consensus.seed_parent(anchor_cert, anchor_proposal, reconstructed);
         anchor_view
     } else {

@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Instant};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::{error, info, warn};
 use vbs::version::Version;
 use versions::DRB_AND_HEADER_UPGRADE_VERSION;
 
@@ -105,15 +106,17 @@ pub async fn compute_drb_result(
     store_drb_progress: StoreDrbProgressFn,
     load_drb_progress: LoadDrbProgressFn,
 ) -> DrbResult {
-    tracing::warn!("Beginning DRB calculation with input {:?}", drb_input);
+    info!(target: "announce::drb", ?drb_input, "beginning drb calculation");
     let mut drb_input = drb_input;
 
     if let Ok(loaded_drb_input) = load_drb_progress(drb_input.epoch).await {
         if loaded_drb_input.difficulty_level != drb_input.difficulty_level {
-            tracing::error!(
-                "We are calculating the DRB result with input {drb_input:?}, but we had \
-                 previously stored {loaded_drb_input:?} with a different difficulty level for \
-                 this epoch. Discarding the value from storage"
+            error!(
+                ?drb_input,
+                ?loaded_drb_input,
+                "we are calculating the drb result with input that has a different difficulty \
+                 level for this epoch than a previously stored one => discarding the value from \
+                 storage"
             );
         } else if loaded_drb_input.iteration >= drb_input.iteration {
             drb_input = loaded_drb_input;
@@ -169,15 +172,15 @@ pub async fn compute_drb_result(
 
         let store_drb_progress = store_drb_progress.clone();
         tokio::spawn(async move {
-            tracing::warn!(
-                "Storing partial DRB progress: {:?}. Time elapsed since the previous iteration of \
-                 {:?}: {:?}",
-                updated_drb_input,
-                last_iteration,
-                elapsed_time
+            info!(
+                target: "announce::drb",
+                ?updated_drb_input,
+                %last_iteration,
+                %elapsed_time,
+                "storing partial drb progress"
             );
-            if let Err(e) = store_drb_progress(updated_drb_input).await {
-                tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+            if let Err(err) = store_drb_progress(updated_drb_input).await {
+                warn!(%err, "failed to store drb progress during calculation");
             }
         });
 
@@ -212,12 +215,12 @@ pub async fn compute_drb_result(
         difficulty_level: drb_input.difficulty_level,
     };
 
-    tracing::warn!("Completed DRB calculation. Result: {:?}", final_drb_input);
+    info!(target: "announce::drb", ?final_drb_input, "completed drb calculation");
 
     let store_drb_progress = store_drb_progress.clone();
     tokio::spawn(async move {
-        if let Err(e) = store_drb_progress(final_drb_input).await {
-            tracing::warn!("Failed to store DRB progress during calculation: {}", e);
+        if let Err(err) = store_drb_progress(final_drb_input).await {
+            warn!(%err, "failed to store drb progress during calculation");
         }
     });
 

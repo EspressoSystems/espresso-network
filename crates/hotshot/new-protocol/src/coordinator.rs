@@ -46,9 +46,9 @@ use crate::{
     helpers::proposal_commitment,
     logging::KeyPrefix,
     message::{
-        self, BlockMessage, Certificate2, ConsensusMessage, Message, MessageType, Proposal,
-        ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage, Unchecked,
-        Vote2,
+        self, BlockMessage, Certificate1, Certificate2, ConsensusMessage, Message, MessageType,
+        Proposal, ProposalFetchMessage, ProposalMessage, TimeoutOneHonest, TransactionMessage,
+        Unchecked, Vote2,
     },
     network::Cliquenet,
     outbox::Outbox,
@@ -146,6 +146,8 @@ where
         timeout_duration: Duration,
         storage: S,
         metrics: &dyn Metrics,
+        /// Locked QC persisted on a prior run; restored so the lock survives restart.
+        locked_qc: Option<Certificate1<T>>,
     ) -> Self {
         let mut consensus = Consensus::new(
             membership_coordinator.clone(),
@@ -186,6 +188,11 @@ where
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
         );
+        // Seed `from_header` stubs for restored undecided proposals so a child
+        // proposal can be validated; anchor seeded last so its state wins.
+        for p in initializer.saved_proposals.values() {
+            state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
+        }
         state_manager.seed_state(
             anchor_view,
             initializer.anchor_state.clone(),
@@ -206,11 +213,22 @@ where
                     VidCommitment::V2(commitment) => Some((view, commitment)),
                     _ => None,
                 });
+        // Seed every persisted proposal before `seed_parent` so its authoritative anchor wins.
+        let saved_proposals = initializer
+            .saved_proposals
+            .values()
+            .map(|p| message::Proposal::from(p.data.clone()));
+        consensus.seed_proposals(saved_proposals);
         // `seed_parent` sets the current epoch from the anchor proposal;
         // `resume_from_restart` positions the view so the node never
         // re-enters a view it may have voted or proposed in before it went
         // down.
         consensus.seed_parent(cert1, parent_proposal, reconstructed_blocks);
+        // Restore the persisted lock; it can be newer than the anchor QC, so
+        // this must run after `seed_parent`.
+        if let Some(locked_qc) = locked_qc {
+            consensus.seed_locked_cert(locked_qc);
+        }
         consensus.resume_from_restart(
             anchor_view,
             initializer.start_view,
@@ -660,6 +678,9 @@ where
                     leaves = leaves.len(),
                     "leaves decided"
                 );
+                if let Some(m) = &self.metrics {
+                    m.leaf_decided_view.set(*cert1.view_number() as usize);
+                }
                 if let Some(cert2) = cert2 {
                     self.storage.append_cert2(cert2.view_number, cert2.clone());
                 }
@@ -798,6 +819,10 @@ where
                     .sender()
                     .broadcast(self.consensus.current_view(), &message)
                     .map_err(|e| CoordinatorError::from(e).context("broadcast vote2"))?
+            },
+            ConsensusOutput::PersistHighQc(high_qc) => {
+                debug!(%node, view = %high_qc.view_number(), "persist high qc");
+                self.storage.append_high_qc2(high_qc);
             },
             ConsensusOutput::SendEpochChange(epoch_change) => {
                 info!(

@@ -9,7 +9,10 @@ use committable::Commitment;
 use futures::{FutureExt, TryFutureExt};
 use hotshot::{HotShotInitializer, InitializerEpochInfo, types::EventType};
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::{message::Certificate2, storage::NewProtocolStorage};
+use hotshot_new_protocol::{
+    message::{Certificate1, Certificate2},
+    storage::NewProtocolStorage,
+};
 use hotshot_types::{
     data::{
         DaProposal, DaProposal2, EpochNumber, QuorumProposal, QuorumProposal2,
@@ -661,10 +664,13 @@ pub trait SequencerPersistence:
             },
         };
         let config = self.load_config().await.context("loading config")?;
-        let epoch_height = config
-            .as_ref()
-            .map(|c| c.config.epoch_height)
-            .unwrap_or_default();
+        // Use epoch height from node state. Node state gets the epoch height from the genesis file.
+        let epoch_height = state.epoch_height.unwrap_or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.config.epoch_height)
+                .unwrap_or_default()
+        });
         let (leaf, cert_pair, anchor_view) = match self
             .load_anchor_leaf()
             .await
@@ -682,7 +688,9 @@ pub trait SequencerPersistence:
                     )
                 );
                 ensure!(
-                    epoch_height == 0 || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
+                    epoch_height == 0
+                        || cert_pair.block_number().is_none()
+                        || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
                     format!(
                         "Next epoch QC is required but it's not present or doesn't match primary \
                          QC\nPrimary QC: {:?}\nNext epoch QC: {:?}",
@@ -737,10 +745,8 @@ pub trait SequencerPersistence:
         // TODO:
         let epoch = genesis_epoch_from_version(upgrade.base);
 
-        let epoch_start_block = config
-            .as_ref()
-            .map(|c| c.config.epoch_start_block)
-            .unwrap_or_default();
+        // Use epoch start block from node state. Node state gets it from the genesis file.
+        let epoch_start_block = state.epoch_start_block;
 
         let saved_proposals = self
             .load_quorum_proposals()
@@ -994,6 +1000,20 @@ pub trait SequencerPersistence:
         Ok(None)
     }
 
+    /// Persist the new protocol's locked QC, written before each phase-2 vote.
+    ///
+    /// Implementations must apply this as an atomic monotonic compare-and-set: a
+    /// write whose view is not newer than the stored one is a no-op. This lets
+    /// concurrent, retried writes race without ever regressing the persisted lock.
+    async fn append_high_qc2(&self, _high_qc: QuorumCertificate2<SeqTypes>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Load the persisted locked QC, if any.
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<QuorumCertificate2<SeqTypes>>> {
+        Ok(None)
+    }
+
     /// Update the current eQC in storage.
     async fn store_eqc(
         &self,
@@ -1241,6 +1261,18 @@ impl<P: SequencerPersistence> NewProtocolStorage<SeqTypes> for Arc<P> {
         cert: Certificate2<SeqTypes>,
     ) -> anyhow::Result<()> {
         (**self).append_cert2(view, cert).await
+    }
+
+    async fn append_high_qc2(&self, high_qc: Certificate1<SeqTypes>) -> anyhow::Result<()> {
+        // Writes are spawned concurrently and retried, so a stale write can land
+        // after a newer one. The backend applies a monotonic compare-and-set
+        // atomically, so such a stale write is a no-op and never regresses the
+        // persisted view.
+        (**self).append_high_qc2(high_qc).await
+    }
+
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<SeqTypes>>> {
+        (**self).load_high_qc2().await
     }
 }
 
