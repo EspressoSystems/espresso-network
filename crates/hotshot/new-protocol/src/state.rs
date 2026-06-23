@@ -154,6 +154,12 @@ impl<T: NodeType> StateManager<T> {
         self.insert_state(view, state, None, leaf);
     }
 
+    /// Seed a commitment-only (`from_header`) state so a child proposal can be
+    /// validated against this leaf via catchup instead of being dropped.
+    pub(crate) fn seed_from_header(&mut self, proposal: Proposal<T>) {
+        self.insert_empty_state(proposal);
+    }
+
     pub fn request_state(&mut self, request: StateRequest<T>) {
         let commitment = proposal_commitment(&request.proposal);
         if self.state_requests.contains_key(&commitment) {
@@ -173,6 +179,15 @@ impl<T: NodeType> StateManager<T> {
             .get(&request.parent_commitment)
             .cloned()
         else {
+            warn!(
+                view = %request.view,
+                parent_view = %request.parent_view,
+                epoch = %request.epoch,
+                block = %request.block,
+                parent_commitment = %request.parent_commitment,
+                "parent state unavailable; deferring state validation (from_header stub inserted). \
+                 If this persists, the node cannot vote until the parent state is recovered."
+            );
             self.insert_empty_state(request.proposal);
             self.start_pending(commitment);
             return;

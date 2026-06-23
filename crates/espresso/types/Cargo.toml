@@ -13,10 +13,12 @@ doctest = false
 
 [features]
 testing = ["hotshot-query-service-types/testing"]
+rlp = ["alloy-rlp"]
 
 [dependencies]
 alloy = { workspace = true }
 alloy-compat = { workspace = true }
+alloy-rlp = { workspace = true, optional = true }
 anyhow = { workspace = true }
 ark-ec = { workspace = true }
 ark-serialize = { workspace = true }

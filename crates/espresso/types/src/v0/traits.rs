@@ -664,10 +664,13 @@ pub trait SequencerPersistence:
             },
         };
         let config = self.load_config().await.context("loading config")?;
-        let epoch_height = config
-            .as_ref()
-            .map(|c| c.config.epoch_height)
-            .unwrap_or_default();
+        // Use epoch height from node state. Node state gets the epoch height from the genesis file.
+        let epoch_height = state.epoch_height.unwrap_or_else(|| {
+            config
+                .as_ref()
+                .map(|c| c.config.epoch_height)
+                .unwrap_or_default()
+        });
         let (leaf, cert_pair, anchor_view) = match self
             .load_anchor_leaf()
             .await
@@ -685,7 +688,9 @@ pub trait SequencerPersistence:
                     )
                 );
                 ensure!(
-                    epoch_height == 0 || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
+                    epoch_height == 0
+                        || cert_pair.block_number().is_none()
+                        || cert_pair.verify_next_epoch_qc(epoch_height).is_ok(),
                     format!(
                         "Next epoch QC is required but it's not present or doesn't match primary \
                          QC\nPrimary QC: {:?}\nNext epoch QC: {:?}",
@@ -740,10 +745,8 @@ pub trait SequencerPersistence:
         // TODO:
         let epoch = genesis_epoch_from_version(upgrade.base);
 
-        let epoch_start_block = config
-            .as_ref()
-            .map(|c| c.config.epoch_start_block)
-            .unwrap_or_default();
+        // Use epoch start block from node state. Node state gets it from the genesis file.
+        let epoch_start_block = state.epoch_start_block;
 
         let saved_proposals = self
             .load_quorum_proposals()

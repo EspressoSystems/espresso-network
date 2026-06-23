@@ -188,6 +188,11 @@ where
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
         );
+        // Seed `from_header` stubs for restored undecided proposals so a child
+        // proposal can be validated; anchor seeded last so its state wins.
+        for p in initializer.saved_proposals.values() {
+            state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
+        }
         state_manager.seed_state(
             anchor_view,
             initializer.anchor_state.clone(),
