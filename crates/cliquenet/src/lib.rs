@@ -151,6 +151,9 @@ impl fmt::Debug for Config {
             .field("handshake_timeout", &self.handshake_timeout)
             .field("receive_timeout", &self.receive_timeout)
             .field("backoff_duration", &self.backoff_duration)
+            .field("keepalive_after", &self.keep_alive_after)
+            .field("keepalive_interval", &self.keep_alive_interval)
+            .field("keepalive_retries", &self.keep_alive_retries)
             .finish()
     }
 }
