@@ -5,8 +5,8 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = ["decaf"]
-decaf = []
+default = ["rlp"]
+rlp = ["alloy-rlp", "hotshot-types/rlp", "espresso-types/rlp"]
 testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand"]
 
 [dependencies]
@@ -36,6 +36,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
+
+# RLP dependencies
+alloy-rlp = { workspace = true, optional = true }
 
 # Testing dependencies
 bitvec = { workspace = true, optional = true }

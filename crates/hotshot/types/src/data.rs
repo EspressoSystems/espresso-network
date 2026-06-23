@@ -145,6 +145,10 @@ impl_u64_wrapper!(ViewNumber, 0u64);
 #[derive(
     Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
+#[cfg_attr(
+    feature = "rlp",
+    derive(alloy_rlp::RlpEncodableWrapper, alloy_rlp::RlpDecodableWrapper)
+)]
 pub struct EpochNumber(u64);
 
 impl Committable for EpochNumber {

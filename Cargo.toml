@@ -115,7 +115,13 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2024"
 
 [workspace.dependencies]
-aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
+aide = { version = "0.15.1", features = [
+    "axum",
+    "axum-json",
+    "scalar",
+    "swagger",
+    "redoc",
+] }
 alloy = { version = "1.0", features = [
     "eips",
     "provider-ws",
@@ -126,6 +132,7 @@ alloy = { version = "1.0", features = [
     "signer-ledger",
 ] }
 alloy-compat = { path = "alloy-compat" }
+alloy-rlp = "0.3"
 anyhow = "1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"

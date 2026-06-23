@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail, ensure};
 use async_lock::RwLock;
 use committable::Committable;
 use espresso_types::{
-    Certificate2, DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId, PubKey, SeqTypes,
-    StakeTableState, Transaction, ValidatorSet,
+    Certificate2, ChainId, DECAF_CHAIN_ID, DrbAndHeaderUpgradeVersion, Header, Leaf2, NamespaceId,
+    PubKey, SeqTypes, StakeTableState, Transaction, ValidatorSet,
 };
 use futures::future::try_join;
 use hotshot_query_service_types::{
@@ -35,7 +35,11 @@ use crate::{
 /// transitions to subsequent stake tables. Thus, this genesis must be configured correctly (i.e.
 /// matching the genesis state of honest HotShot nodes) or else the light client may not operate
 /// correctly.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(
+    feature = "rlp",
+    derive(alloy_rlp::RlpEncodable, alloy_rlp::RlpDecodable)
+)]
 pub struct Genesis {
     /// The number of blocks in an epoch.
     pub epoch_height: u64,
@@ -46,6 +50,9 @@ pub struct Genesis {
 
     /// The fixed stake table used before epochs begin.
     pub stake_table: Vec<StakeTableEntry<PubKey>>,
+
+    /// Genesis chain id, used to derive Decaf-specific behavior.
+    pub chain_id: ChainId,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -61,26 +68,12 @@ pub struct LightClientOptions {
         )
     )]
     pub num_stake_tables_in_memory: usize,
-
-    /// Enable unsafe behavior for Decaf testnet.
-    ///
-    /// This flag allows the light client to skip certain safety checks that are not possible to
-    /// evaluate on Decaf. It is NOT SAFE to provide this flag in a Mainnet environment.
-    #[cfg(feature = "decaf")]
-    #[cfg_attr(
-        feature = "clap",
-        clap(long = "light-client-decaf", env = "LIGHT_CLIENT_DECAF")
-    )]
-    pub decaf: bool,
 }
 
 impl Default for LightClientOptions {
     fn default() -> Self {
         Self {
             num_stake_tables_in_memory: 100,
-
-            #[cfg(feature = "decaf")]
-            decaf: false,
         }
     }
 }
@@ -98,6 +91,7 @@ pub struct LightClient<P, S> {
     server: S,
     opt: LightClientOptions,
 
+    chain_id: ChainId,
     epoch_height: u64,
     first_epoch_with_dynamic_stake_table: EpochNumber,
     genesis_stake_table: Arc<StakeTable>,
@@ -137,6 +131,7 @@ where
             db,
             server,
             opt,
+            chain_id: genesis.chain_id,
             epoch_height: genesis.epoch_height,
             genesis_stake_table: Arc::new(genesis.stake_table.into()),
             first_epoch_with_dynamic_stake_table: genesis.first_epoch_with_dynamic_stake_table,
@@ -782,11 +777,7 @@ where
     }
 
     fn decaf(&self) -> bool {
-        #[cfg(feature = "decaf")]
-        return self.opt.decaf;
-
-        #[cfg(not(feature = "decaf"))]
-        return false;
+        self.chain_id == DECAF_CHAIN_ID
     }
 }
 
@@ -1235,7 +1226,6 @@ mod test {
             genesis.clone(),
             LightClientOptions {
                 num_stake_tables_in_memory: 2,
-                ..Default::default()
             },
         );
 
@@ -1684,5 +1674,38 @@ mod test {
             err.to_string().contains("invalid namespace proof"),
             "{err:#}"
         );
+    }
+}
+
+#[cfg(all(test, feature = "rlp"))]
+mod rlp_test {
+    use alloy::primitives::U256;
+    use alloy_rlp::{Decodable, Encodable};
+    use hotshot_types::traits::signature_key::SignatureKey;
+
+    use super::*;
+
+    #[test_log::test]
+    fn rlp_genesis_round_trip() {
+        let genesis = Genesis {
+            epoch_height: 1000,
+            first_epoch_with_dynamic_stake_table: EpochNumber::new(3),
+            stake_table: vec![StakeTableEntry {
+                stake_key: PubKey::generated_from_seed_indexed(
+                    Default::default(),
+                    Default::default(),
+                )
+                .0,
+                stake_amount: U256::MAX,
+            }],
+            chain_id: DECAF_CHAIN_ID,
+        };
+
+        let mut buf = vec![];
+        genesis.encode(&mut buf);
+
+        let mut buf = buf.as_slice();
+        assert_eq!(genesis, Genesis::decode(&mut buf).unwrap());
+        assert!(buf.is_empty());
     }
 }
