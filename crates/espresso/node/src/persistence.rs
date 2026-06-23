@@ -166,6 +166,7 @@ mod tests {
         sol_types::StakeTableV3::Delegated, stake_table::StakeTableContractVersion,
     };
     use hotshot_example_types::node_types::TEST_VERSIONS;
+    use hotshot_new_protocol::message::Certificate2;
     use hotshot_query_service::{availability::BlockQueryData, testing::mocks::MOCK_UPGRADE};
     use hotshot_types::{
         data::{
@@ -180,7 +181,9 @@ mod tests {
             CertificatePair, NextEpochQuorumCertificate2, QuorumCertificate, QuorumCertificate2,
             UpgradeCertificate,
         },
-        simple_vote::{NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData},
+        simple_vote::{
+            NextEpochQuorumData2, QuorumData2, UpgradeProposalData, VersionedVoteData, Vote2Data,
+        },
         traits::{EncodeBytes, block_contents::BlockHeader},
         utils::EpochTransitionIndicator,
         vid::avidm::{AvidMScheme, init_avidm_param},
@@ -1621,6 +1624,20 @@ mod tests {
             _pd: Default::default(),
         };
 
+        let leaf2: Leaf2 = leaf.clone().into();
+        let vote_data = Vote2Data {
+            leaf_commit: leaf2.commit(),
+            epoch: EpochNumber::new(0),
+            block_number: leaf2.height(),
+        };
+        let cert2 = Certificate2::new(
+            vote_data.clone(),
+            vote_data.commit(),
+            ViewNumber::new(0),
+            None,
+            PhantomData,
+        );
+
         storage
             .append_da2(&da_proposal, VidCommitment::V1(payload_commitment))
             .await
@@ -1628,6 +1645,10 @@ mod tests {
         storage.append_vid(&vid_share).await.unwrap();
         storage
             .append_quorum_proposal2(&quorum_proposal)
+            .await
+            .unwrap();
+        storage
+            .append_cert2(ViewNumber::new(0), cert2)
             .await
             .unwrap();
 
@@ -1662,6 +1683,13 @@ mod tests {
                 .unwrap(),
             quorum_proposal
         );
+        assert!(
+            storage
+                .load_cert2(ViewNumber::new(0))
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         // Decide an even newer view, triggering GC of the old data.
         storage
@@ -1687,6 +1715,13 @@ mod tests {
                 .load_quorum_proposal(ViewNumber::new(0))
                 .await
                 .is_err()
+        );
+        assert!(
+            storage
+                .load_cert2(ViewNumber::new(0))
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 
