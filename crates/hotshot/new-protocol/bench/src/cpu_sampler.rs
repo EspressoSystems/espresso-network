@@ -79,8 +79,8 @@ struct NetRow {
 ///   * `rss_anon_kb`   — anonymous portion of RSS (heap + stacks)
 ///   * `rss_file_kb`   — file-backed portion of RSS (mmap, code segments)
 ///   * `mem_total_kb`  — total physical RAM (constant per node — included on
-///                      every row so analysis scripts can compute pressure
-///                      ratios without joining an extra capacity file)
+///     every row so analysis scripts can compute pressure
+///     ratios without joining an extra capacity file)
 ///   * `mem_avail_kb`  — kernel's estimate of how much RAM is still claimable
 #[derive(Serialize)]
 struct MemRow {
