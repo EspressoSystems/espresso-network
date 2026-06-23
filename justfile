@@ -60,6 +60,15 @@ demo *args:
 demo-native *args: (build "test")
     scripts/demo-native {{args}}
 
+demo-native-sans-docker *args:
+    cargo build --release -p espresso-node -p builder -p hotshot-state-prover -p node-metrics -p staking-cli
+    cargo build --release -p espresso-node-sqlite
+    ESPRESSO_HEAP_DUMP_DIR=profiling \
+    ESPRESSO_HEAP_DUMP_FREQ=600 \
+    ESPRESSO_DEMO_PROFILE_DIR=debug \
+        ESPRESSO_NODE_GENESIS_FILE=data/genesis/demo-ff.toml \
+        scripts/demo-native -f process-compose-native.yaml {{args}}
+
 # cargo fmt misses files whose `mod` declarations are produced by macro expansion
 fmt *args:
     #!/usr/bin/env bash

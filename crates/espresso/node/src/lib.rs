@@ -9,6 +9,8 @@ pub mod catchup;
 pub mod consensus_handle;
 pub mod context;
 pub mod genesis;
+#[cfg(not(target_env = "msvc"))]
+pub mod heap_profile;
 pub use espresso_keyset as keyset;
 pub mod network;
 pub mod options;

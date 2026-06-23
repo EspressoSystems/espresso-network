@@ -10,8 +10,10 @@ if [ -z "${IN_NIX_SHELL-}" ]; then
     REPO_ROOT="$(dirname "$(dirname "$(readlink -fm "$0")")")"
     # Default to CARGO_TARGET_DIR if set, otherwise use the default target directory.
     TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
-    echo -e "Appending ${TARGET_DIR}/debug to PATH.\n"
-    export "PATH=${TARGET_DIR}/debug:$PATH"
+    # Which build profile's output dir to find binaries in.
+    PROFILE_DIR="${ESPRESSO_DEMO_PROFILE_DIR:-debug}"
+    echo -e "Appending ${TARGET_DIR}/${PROFILE_DIR} to PATH.\n"
+    export "PATH=${TARGET_DIR}/${PROFILE_DIR}:$PATH"
 fi
 
 ESPRESSO_BASE_STORAGE_PATH=$(mktemp -d -t espresso-XXXXXXXX)
