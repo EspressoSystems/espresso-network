@@ -1465,4 +1465,106 @@ pub mod tests {
         let leader_commission = rewards.leader_commission();
         assert_eq!(*leader_commission, distributor.block_reward);
     }
+
+    /// Sum the balances of `accounts` in a reward tree.
+    fn tree_total(tree: &RewardMerkleTreeV2, accounts: impl Iterator<Item = Address>) -> U256 {
+        accounts.fold(U256::ZERO, |acc, address| {
+            let balance = RewardAccountProofV2::prove(tree, address)
+                .map(|(_, balance)| balance)
+                .unwrap_or(U256::ZERO);
+            acc + balance
+        })
+    }
+
+    /// The V0_4 reward scheme distributes one `block_reward` to the block leader on every block,
+    /// applying the distribution (and its rounding) once per block. The V0_5 scheme batches an
+    /// epoch: each validator that led `count` blocks receives `count * block_reward` in a single
+    /// distribution at epoch end.
+    ///
+    /// The invariant the upgrade must preserve is that the *total* amount minted is identical. The
+    /// per-account split can differ by rounding dust because V5 rounds once per epoch instead of
+    /// once per block, so we also pin down the direction of that dust: V5 never shortchanges a
+    /// delegator, and the leader commission absorbs the remainder.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_v4_v5_reward_distribution_equivalence() {
+        let block_reward = RewardAmount(U256::from(1902000000000000000_u128));
+        let epoch = EpochNumber::new(7);
+
+        // Validators with a spread of commissions and leader counts, including a count of 0 which
+        // must contribute nothing under either scheme.
+        let validators = vec![
+            (AuthenticatedValidator::mock_with_commission(0), 3u16),
+            (AuthenticatedValidator::mock_with_commission(300), 5u16),
+            (AuthenticatedValidator::mock_with_commission(10000), 1u16),
+            (AuthenticatedValidator::mock_with_commission(500), 0u16),
+        ];
+
+        // The exact total both schemes must mint: sum of count * block_reward.
+        let expected_total = validators
+            .iter()
+            .fold(U256::ZERO, |acc, (_, count)| {
+                acc + block_reward.0 * U256::from(*count)
+            });
+
+        // V5 path: run the real per-epoch calculator.
+        let leader_counts = ValidatorLeaderCounts(validators.clone());
+        let v5 = EpochRewardsCalculator::calculate_all_rewards(
+            epoch,
+            leader_counts,
+            RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT),
+            block_reward,
+        )
+        .await
+        .unwrap();
+        let v5_tree = v5.reward_tree;
+
+        // V4 path: apply one block_reward distribution per led block.
+        let mut v4_tree = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
+        for (validator, count) in &validators {
+            for _ in 0..*count {
+                let distributor =
+                    RewardDistributor::new(validator.clone(), block_reward, U256::ZERO.into());
+                for (address, reward) in distributor.compute_rewards().unwrap().all_rewards() {
+                    RewardDistributor::update_reward_balance(
+                        &mut v4_tree,
+                        &RewardAccountV2(address),
+                        reward,
+                    )
+                    .unwrap();
+                }
+            }
+        }
+
+        // The headline equivalence: identical total minted, exactly equal to count * block_reward.
+        assert_eq!(v5.total_distributed.0, expected_total);
+        let all_accounts = || {
+            validators.iter().flat_map(|(validator, _)| {
+                once(validator.account).chain(validator.delegators.keys().copied())
+            })
+        };
+        assert_eq!(tree_total(&v4_tree, all_accounts()), expected_total);
+        assert_eq!(tree_total(&v5_tree, all_accounts()), expected_total);
+
+        // Per-account, the only difference is rounding dust, in a known direction: batching to the
+        // end of the epoch rounds delegator shares up (or equal), and the leader absorbs the rest.
+        for (validator, count) in &validators {
+            let balance = |tree: &RewardMerkleTreeV2, address: Address| {
+                RewardAccountProofV2::prove(tree, address)
+                    .map(|(_, b)| b)
+                    .unwrap_or(U256::ZERO)
+            };
+
+            for delegator in validator.delegators.keys() {
+                assert!(
+                    balance(&v5_tree, *delegator) >= balance(&v4_tree, *delegator),
+                    "V5 must not pay a delegator less than V4 (count={count})"
+                );
+            }
+
+            assert!(
+                balance(&v4_tree, validator.account) >= balance(&v5_tree, validator.account),
+                "leader absorbs the rounding remainder under V4 (count={count})"
+            );
+        }
+    }
 }
