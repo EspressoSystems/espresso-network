@@ -104,6 +104,18 @@ pub struct Config {
     #[builder(default = Duration::from_secs(30))]
     backoff_duration: Duration,
 
+    /// When to start sending TCP keep alive probes on an idle connection.
+    #[builder(default = Duration::from_secs(30))]
+    keep_alive_after: Duration,
+
+    /// Time between sending TCP keep alive probes.
+    #[builder(default = Duration::from_secs(5))]
+    keep_alive_interval: Duration,
+
+    /// Number of times to send TCP keep alive probes before dropping the connection.
+    #[builder(default = 6)]
+    keep_alive_retries: u8,
+
     /// Optional metrics implementation.
     metrics: Option<Arc<dyn Metrics>>,
 }
