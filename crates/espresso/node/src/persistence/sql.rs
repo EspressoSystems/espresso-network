@@ -111,14 +111,14 @@ pub struct PostgresOptions {
 
     /// Disable `DEFERRABLE` on read transactions for the query service.
     ///
-    /// When true, read transactions on Postgres start with `SERIALIZABLE READ ONLY` (no
-    /// `DEFERRABLE`), so they begin immediately rather than waiting for a safe serializable
-    /// snapshot. This trades start-up latency for the chance of a serialization-error retry,
-    /// and is opt-in.
+    /// When true (the default), read transactions on Postgres start with `SERIALIZABLE READ ONLY`
+    /// (no `DEFERRABLE`), so they begin immediately rather than waiting for a safe serializable
+    /// snapshot. This trades start-up latency for the chance of a serialization-error retry.
+    /// Set to false to restore `DEFERRABLE`.
     #[clap(
         long,
         env = "ESPRESSO_NODE_POSTGRES_NO_DEFERRABLE",
-        default_value_t = false
+        default_value_t = true
     )]
     pub(crate) no_deferrable: bool,
 }
