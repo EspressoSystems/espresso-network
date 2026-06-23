@@ -129,5 +129,15 @@ PATH = ["/namespace/:start/:end/:namespace"]
 ":end" = "Integer"
 ":namespace" = "Integer"
 DOC = """
-Fetch a list of namespace proofs for each block in the rang `[:start, end)`.
+Fetch a list of namespace proofs for each block in the range `[:start, end)`.
+"""
+
+[route.namespaces_range]
+PATH = ["/namespaces/:start/:end"]
+":start" = "Integer"
+":end" = "Integer"
+METHOD = "POST"
+DOC = """
+Fetch namespace proofs for each block in the range `[:start, :end)`, restricted to the namespaces in
+the request body (a JSON array of namespace IDs). Namespaces not present in a block are omitted.
 """

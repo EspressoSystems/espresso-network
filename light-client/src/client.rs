@@ -1,4 +1,4 @@
-use std::{fmt::Debug, future::Future, pin::pin, time::Duration};
+use std::{collections::HashMap, fmt::Debug, future::Future, pin::pin, time::Duration};
 
 use anyhow::{Context, Result};
 use derive_builder::Builder;
@@ -87,6 +87,14 @@ pub trait Client: Send + Sync + 'static {
         end: u64,
         namespace: NamespaceId,
     ) -> impl Send + Future<Output = Result<Vec<NamespaceProof>>>;
+
+    /// Get proofs for the requested namespaces for each block in `[start, end)`.
+    fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> impl Send + Future<Output = Result<Vec<HashMap<NamespaceId, NamespaceProof>>>>;
 
     /// Get stake table events for the given epoch.
     ///
@@ -203,6 +211,20 @@ impl Client for QueryServiceClient {
             .await?)
     }
 
+    async fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
+        Ok(self
+            .client
+            .post(&format!("/light-client/namespaces/{start}/{end}"))
+            .body_binary(&namespaces.to_vec())?
+            .send()
+            .await?)
+    }
+
     async fn stake_table_events(&self, epoch: EpochNumber) -> Result<Vec<StakeTableEvent>> {
         Ok(self
             .client
@@ -307,6 +329,18 @@ where
     ) -> Result<Vec<NamespaceProof>> {
         self.get_any(&self.clients, |client| {
             client.namespace_proofs_in_range(start, end, namespace)
+        })
+        .await
+    }
+
+    async fn namespaces_proofs_in_range(
+        &self,
+        start: u64,
+        end: u64,
+        namespaces: &[NamespaceId],
+    ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
+        self.get_any(&self.clients, |client| {
+            client.namespaces_proofs_in_range(start, end, namespaces)
         })
         .await
     }

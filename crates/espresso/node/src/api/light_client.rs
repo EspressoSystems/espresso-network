@@ -1,8 +1,8 @@
-use std::{fmt::Display, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use committable::Committable;
-use espresso_types::{BlockMerkleTree, NsProof, SeqTypes};
+use espresso_types::{BlockMerkleTree, Header, NsIndex, NsProof, SeqTypes};
 use futures::{
     TryStreamExt,
     future::{FutureExt, join, try_join},
@@ -10,7 +10,9 @@ use futures::{
 };
 use hotshot_query_service::{
     Error,
-    availability::{self, AvailabilityDataSource, LeafId, LeafQueryData},
+    availability::{
+        self, AvailabilityDataSource, LeafId, LeafQueryData, PayloadQueryData, VidCommonQueryData,
+    },
     data_source::{VersionedDataSource, storage::NodeStorage},
     merklized_state::{MerklizedStateDataSource, Snapshot},
     node::BlockId,
@@ -22,7 +24,7 @@ use jf_merkle_tree_compat::MerkleTreeScheme;
 use light_client::consensus::{
     header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
 };
-use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
+use tide_disco::{Api, Error as _, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -227,14 +229,20 @@ where
     Ok(HeaderProof::new(header, path))
 }
 
-async fn get_namespace_proof_range<State>(
+async fn fetch_block_data_range<State>(
     state: &State,
     start: usize,
     end: usize,
-    namespace: u64,
     fetch_timeout: Duration,
     large_object_range_limit: usize,
-) -> Result<Vec<NamespaceProof>, Error>
+) -> Result<
+    Vec<(
+        Header,
+        PayloadQueryData<SeqTypes>,
+        VidCommonQueryData<SeqTypes>,
+    )>,
+    Error,
+>
 where
     State: AvailabilityDataSource<SeqTypes>,
 {
@@ -307,19 +315,76 @@ where
     let (headers, (payloads, vid_commons)) =
         try_join(fetch_headers, try_join(fetch_payloads, fetch_vid_commons)).await?;
 
-    izip!(headers, payloads, vid_commons)
+    Ok(izip!(headers, payloads, vid_commons).collect())
+}
+
+async fn get_namespace_proof_range<State>(
+    state: &State,
+    start: usize,
+    end: usize,
+    namespace: u64,
+    fetch_timeout: Duration,
+    large_object_range_limit: usize,
+) -> Result<Vec<NamespaceProof>, Error>
+where
+    State: AvailabilityDataSource<SeqTypes>,
+{
+    fetch_block_data_range(state, start, end, fetch_timeout, large_object_range_limit)
+        .await?
+        .into_iter()
         .map(|(header, payload, vid_common)| {
             let Some(ns_index) = header.ns_table().find_ns_id(&namespace.into()) else {
                 return Ok(NamespaceProof::not_present());
             };
-            let ns_proof = NsProof::new(payload.data(), &ns_index, vid_common.common())
-                .ok_or_else(|| Error::Custom {
-                    message: "failed to construct namespace proof".into(),
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                })?;
-            Ok(NamespaceProof::new(ns_proof, vid_common.common().clone()))
+            let ns_proof = build_namespace_proof(&payload, &ns_index, &vid_common)?;
+            Ok(ns_proof)
         })
         .collect()
+}
+
+async fn get_namespaces_proof_range<State>(
+    state: &State,
+    start: usize,
+    end: usize,
+    namespaces: &[u64],
+    fetch_timeout: Duration,
+    large_object_range_limit: usize,
+) -> Result<Vec<HashMap<u64, NamespaceProof>>, Error>
+where
+    State: AvailabilityDataSource<SeqTypes>,
+{
+    fetch_block_data_range(state, start, end, fetch_timeout, large_object_range_limit)
+        .await?
+        .into_iter()
+        .map(|(header, payload, vid_common)| {
+            namespaces
+                .iter()
+                .filter_map(|&namespace| {
+                    let ns_index = header.ns_table().find_ns_id(&namespace.into())?;
+                    Some(
+                        build_namespace_proof(&payload, &ns_index, &vid_common)
+                            .map(|proof| (namespace, proof)),
+                    )
+                })
+                .collect::<Result<HashMap<_, _>, _>>()
+        })
+        .collect()
+}
+
+/// Construct a [`NamespaceProof`] for the namespace at `ns_index` of the given block.
+fn build_namespace_proof(
+    payload: &PayloadQueryData<SeqTypes>,
+    ns_index: &NsIndex,
+    vid_common: &VidCommonQueryData<SeqTypes>,
+) -> Result<NamespaceProof, Error> {
+    let ns_proof =
+        NsProof::new(payload.data(), ns_index, vid_common.common()).ok_or_else(|| {
+            Error::Custom {
+                message: "failed to construct namespace proof".into(),
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+            }
+        })?;
+    Ok(NamespaceProof::new(ns_proof, vid_common.common().clone()))
 }
 
 #[derive(Debug)]
@@ -601,6 +666,32 @@ where
                 large_object_range_limit,
             )
             .await
+        }
+        .boxed()
+    })?
+    .at("namespaces_range", move |req, state| {
+        async move {
+            let start = req.integer_param("start").map_err(bad_param("start"))?;
+            let end = req.integer_param("end").map_err(bad_param("end"))?;
+            let namespaces = req
+                .body_auto::<Vec<u64>, ApiVer>(ApiVer::instance())
+                .map_err(Error::from_request_error)?;
+            state
+                .read(|state| {
+                    async move {
+                        get_namespaces_proof_range(
+                            state,
+                            start,
+                            end,
+                            &namespaces,
+                            fetch_timeout,
+                            large_object_range_limit,
+                        )
+                        .await
+                    }
+                    .boxed()
+                })
+                .await
         }
         .boxed()
     })?;
