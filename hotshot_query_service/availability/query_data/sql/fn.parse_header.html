@@ -4,7 +4,7 @@
     Types: <a class="trait" href="../../../../hotshot_types/traits/node_implementation/trait.NodeType.html" title="trait hotshot_types::traits::node_implementation::NodeType">NodeType</a>,
     R: Row,
     &amp;'a <a class="primitive" href="https://doc.rust-lang.org/1.96.0/std/primitive.str.html">str</a>: for&lt;'a&gt; ColumnIndex&lt;R&gt;,
-    <a class="enum" href="https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html" title="enum serde_json::value::Value">Value</a>: for&lt;'a&gt; Type&lt;&lt;R as Row&gt;::Database&gt; + for&lt;'a&gt; Decode&lt;'a, &lt;R as Row&gt;::Database&gt;,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Extract a <a href="../../../type.Header.html" title="type hotshot_query_service::Header"><code>Header</code></a> from a row.</p>
+    <a class="enum" href="https://docs.rs/serde_json/1.0.150/serde_json/value/enum.Value.html" title="enum serde_json::value::Value">Value</a>: for&lt;'a&gt; Type&lt;&lt;R as Row&gt;::Database&gt; + for&lt;'a&gt; Decode&lt;'a, &lt;R as Row&gt;::Database&gt;,</div></code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Extract a <a href="../../../type.Header.html" title="type hotshot_query_service::Header"><code>Header</code></a> from a row.</p>
 <p>We can’t implement [<code>FromRow</code>] for <code>Header&lt;Types&gt;</code> since <code>Header&lt;Types&gt;</code> is not actually a type
 defined in this crate; it’s just an alias for <code>Types::BlockHeader</code>. So this standalone function
 will have to do.</p>
