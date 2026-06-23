@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+# Run the light-client-query-service on Decaf testnet with hardcoded defaults.
+# Mirrors the decaf network preset pattern: all configuration is baked in, not
+# passed piecemeal. Override any value via the env var shown in parentheses.
+
+# ---------- hardcoded decaf defaults ----------
+BIN="${BIN:-light-client-query-service}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+GENESIS="$REPO_ROOT/light-client-query-service/genesis/decaf.toml"
+ESPRESSO_URL="https://query.decaf.testnet.espresso.network"
+PORT="${PORT:-8080}"
+DATA_DIR="${DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/espresso/light-client-decaf}"
+POLL_INTERVAL="${POLL_INTERVAL:-1s}"
+RETRY_DELAY="${RETRY_DELAY:-1s}"
+MAX_LEAVES="${MAX_LEAVES_PER_UPDATE:-10}"
+NUM_STAKE_TABLES="${LIGHT_CLIENT_NUM_STAKE_TABLES:-100}"
+DB_CONNECTIONS="${LIGHT_CLIENT_DB_NUM_CONNECTIONS:-5}"
+DB_LEAVES="${LIGHT_CLIENT_DB_NUM_LEAVES:-100}"
+DB_STAKE_TABLES="${LIGHT_CLIENT_DB_NUM_STAKE_TABLES:-100}"
+LC_DB_PATH="${LC_DB_PATH:-$DATA_DIR/lc.sqlite}"
+# ---------------------------------------------
+
+mkdir -p "$DATA_DIR"
+
+exec "$BIN" \
+    --light-client-genesis "$GENESIS" \
+    --light-client-espresso-url "$ESPRESSO_URL" \
+    --api-port "$PORT" \
+    --poll-interval "$POLL_INTERVAL" \
+    --retry-delay "$RETRY_DELAY" \
+    --max-leaves-per-update "$MAX_LEAVES" \
+    --light-client-num-stake-tables "$NUM_STAKE_TABLES" \
+    --light-client-db-num-connections "$DB_CONNECTIONS" \
+    --light-client-db-num-leaves "$DB_LEAVES" \
+    --light-client-db-num-stake-tables "$DB_STAKE_TABLES" \
+    --path "$DATA_DIR" \
+    --light-client-db-path "$LC_DB_PATH"

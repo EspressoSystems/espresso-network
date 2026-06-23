@@ -16,7 +16,7 @@ genesis = ["hotshot-types", "surf-disco"]
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
-espresso-node = { workspace = true, default-features = false }
+espresso-node = { workspace = true, default-features = false, features = ["embedded-db"] }
 espresso-types = { workspace = true }
 hotshot-query-service = { workspace = true }
 
