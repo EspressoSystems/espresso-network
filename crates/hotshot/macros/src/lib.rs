@@ -202,7 +202,7 @@ impl TestData {
         quote! {
             #[cfg(test)]
             #slow_attribute
-            #[test_log::test(tokio::test(flavor = "multi_thread"))]
+            #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
             #[tracing::instrument]
             async fn #test_name() {
                 let mut __metadata = #metadata;
