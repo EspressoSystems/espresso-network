@@ -111,14 +111,14 @@
 <a href=#111 id=111 data-nosnippet>111</a>
 <a href=#112 id=112 data-nosnippet>112</a>    <span class="doccomment">/// Disable `DEFERRABLE` on read transactions for the query service.
 <a href=#113 id=113 data-nosnippet>113</a>    ///
-<a href=#114 id=114 data-nosnippet>114</a>    /// When true, read transactions on Postgres start with `SERIALIZABLE READ ONLY` (no
-<a href=#115 id=115 data-nosnippet>115</a>    /// `DEFERRABLE`), so they begin immediately rather than waiting for a safe serializable
-<a href=#116 id=116 data-nosnippet>116</a>    /// snapshot. This trades start-up latency for the chance of a serialization-error retry,
-<a href=#117 id=117 data-nosnippet>117</a>    /// and is opt-in.
+<a href=#114 id=114 data-nosnippet>114</a>    /// When true (the default), read transactions on Postgres start with `SERIALIZABLE READ ONLY`
+<a href=#115 id=115 data-nosnippet>115</a>    /// (no `DEFERRABLE`), so they begin immediately rather than waiting for a safe serializable
+<a href=#116 id=116 data-nosnippet>116</a>    /// snapshot. This trades start-up latency for the chance of a serialization-error retry.
+<a href=#117 id=117 data-nosnippet>117</a>    /// Set to false to restore `DEFERRABLE`.
 <a href=#118 id=118 data-nosnippet>118</a>    </span><span class="attr">#[clap(
 <a href=#119 id=119 data-nosnippet>119</a>        long,
 <a href=#120 id=120 data-nosnippet>120</a>        env = <span class="string">"ESPRESSO_NODE_POSTGRES_NO_DEFERRABLE"</span>,
-<a href=#121 id=121 data-nosnippet>121</a>        default_value_t = <span class="bool-val">false
+<a href=#121 id=121 data-nosnippet>121</a>        default_value_t = <span class="bool-val">true
 <a href=#122 id=122 data-nosnippet>122</a>    </span>)]
 <a href=#123 id=123 data-nosnippet>123</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) no_deferrable: bool,
 <a href=#124 id=124 data-nosnippet>124</a>}

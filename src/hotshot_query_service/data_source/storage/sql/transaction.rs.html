@@ -73,13 +73,13 @@
 <a href=#73 id=73 data-nosnippet>73</a>/// so they start immediately instead of waiting for a safe serializable snapshot.
 <a href=#74 id=74 data-nosnippet>74</a></span><span class="attr">#[cfg(not(feature = <span class="string">"embedded-db"</span>))]
 <a href=#75 id=75 data-nosnippet>75</a></span><span class="kw">static </span>NO_DEFERRABLE_ON_READ: std::sync::atomic::AtomicBool =
-<a href=#76 id=76 data-nosnippet>76</a>    std::sync::atomic::AtomicBool::new(<span class="bool-val">false</span>);
+<a href=#76 id=76 data-nosnippet>76</a>    std::sync::atomic::AtomicBool::new(<span class="bool-val">true</span>);
 <a href=#77 id=77 data-nosnippet>77</a>
 <a href=#78 id=78 data-nosnippet>78</a><span class="doccomment">/// Configure whether read transactions on Postgres should omit `DEFERRABLE`.
 <a href=#79 id=79 data-nosnippet>79</a>///
 <a href=#80 id=80 data-nosnippet>80</a>/// When `true`, `Read::begin` issues `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY`
 <a href=#81 id=81 data-nosnippet>81</a>/// (no `DEFERRABLE`) so the transaction starts immediately rather than waiting for a safe
-<a href=#82 id=82 data-nosnippet>82</a>/// serializable snapshot. Default: `false`. Call this once at startup based on the operator's
+<a href=#82 id=82 data-nosnippet>82</a>/// serializable snapshot. Default: `true`. Call this once at startup based on the operator's
 <a href=#83 id=83 data-nosnippet>83</a>/// chosen configuration.
 <a href=#84 id=84 data-nosnippet>84</a></span><span class="attr">#[cfg(not(feature = <span class="string">"embedded-db"</span>))]
 <a href=#85 id=85 data-nosnippet>85</a></span><span class="kw">pub fn </span>set_no_deferrable_on_read(value: bool) {
