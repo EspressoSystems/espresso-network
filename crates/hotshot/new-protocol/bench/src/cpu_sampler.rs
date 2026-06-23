@@ -1,10 +1,17 @@
 //! Periodic CPU usage sampler.
 //!
 //! Spawns one tokio task that reads `/proc` every `tick`, computes deltas
-//! against the previous tick, and writes two CSVs alongside the leader trace:
+//! against the previous tick, and writes per-node CSVs alongside the leader
+//! trace:
 //!
 //!   * `cpu_node{N}.csv`  — per-process + per-thread user/sys microseconds
-//!   * `core_node{N}.csv` — per-core user/sys/iowait/idle utilisation (0..1)
+//!   * `net_node{N}.csv`  — per-interface rx/tx byte deltas
+//!   * `mem_node{N}.csv`  — VmRSS / VmHWM / MemAvailable snapshots
+//!
+//! Per-core utilisation used to be recorded as `core_node{N}.csv` but was
+//! removed: scanning `/proc/stat` for ~192 CPUs on a c8g.48xlarge cost a
+//! meaningful slice of each tick.  CPU load can still be derived from the
+//! aggregate `cpu_node{N}.csv` (process-wide user+sys).
 //!
 //! On non-Linux targets this is a no-op stub so local development on macOS
 //! still compiles and runs.
@@ -31,7 +38,6 @@ struct Inner {
     node_id: u64,
     out_dir: PathBuf,
     cpu_rows: Mutex<Vec<CpuRow>>,
-    core_rows: Mutex<Vec<CoreRow>>,
     net_rows: Mutex<Vec<NetRow>>,
     /// Memory snapshots from `/proc/self/status` + `/proc/meminfo`, one row
     /// per sampler tick.  Designed for **leak detection** over a long bench:
@@ -47,16 +53,6 @@ struct CpuRow {
     id: i64,            // -1 for proc; tid for thread
     user_us: u64,
     sys_us: u64,
-}
-
-#[derive(Serialize)]
-struct CoreRow {
-    t_ns: i128,
-    cpu_id: u32,
-    user_pct: f64,
-    sys_pct: f64,
-    iowait_pct: f64,
-    idle_pct: f64,
 }
 
 /// Per-interface byte deltas since the previous tick. Loopback (`lo`) is
@@ -115,7 +111,6 @@ impl CpuSampler {
             node_id,
             out_dir,
             cpu_rows: Mutex::new(Vec::with_capacity(4096)),
-            core_rows: Mutex::new(Vec::with_capacity(4096)),
             net_rows: Mutex::new(Vec::with_capacity(4096)),
             mem_rows: Mutex::new(Vec::with_capacity(4096)),
         });
@@ -151,7 +146,6 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
 
     let mut prev_proc: Option<(u64, u64)> = None;
     let mut prev_threads: HashMap<i64, (u64, u64)> = HashMap::new();
-    let mut prev_cores: HashMap<u32, CoreTicks> = HashMap::new();
     let mut prev_net: HashMap<String, (u64, u64)> = HashMap::new();
     let clk_tck = clk_tck();
     let mut ticker = tokio::time::interval(tick);
@@ -201,31 +195,6 @@ async fn run_sampler(inner: Arc<Inner>, tick: Duration) {
                     }
                     prev_threads.insert(tid, (utime, stime));
                 }
-            }
-        }
-
-        // ---- per-core /proc/stat ----
-        if let Some(cores) = read_proc_stat_cores() {
-            for (cpu_id, ticks) in cores {
-                let prev = prev_cores.get(&cpu_id).copied();
-                if let Some(p) = prev {
-                    let dt = ticks.total().saturating_sub(p.total());
-                    if dt > 0 {
-                        let user = (ticks.user.saturating_sub(p.user)) as f64 / dt as f64;
-                        let sys_ = (ticks.system.saturating_sub(p.system)) as f64 / dt as f64;
-                        let iow = (ticks.iowait.saturating_sub(p.iowait)) as f64 / dt as f64;
-                        let idl = (ticks.idle.saturating_sub(p.idle)) as f64 / dt as f64;
-                        inner.core_rows.lock().push(CoreRow {
-                            t_ns,
-                            cpu_id,
-                            user_pct: user,
-                            sys_pct: sys_,
-                            iowait_pct: iow,
-                            idle_pct: idl,
-                        });
-                    }
-                }
-                prev_cores.insert(cpu_id, ticks);
             }
         }
 
@@ -289,19 +258,6 @@ fn flush(inner: &Inner) -> std::io::Result<()> {
         wtr.flush()?;
     }
 
-    let core_rows = std::mem::take(&mut *inner.core_rows.lock());
-    if !core_rows.is_empty() {
-        let path = inner
-            .out_dir
-            .join(format!("core_node{}.csv", inner.node_id));
-        let mut wtr = csv::Writer::from_path(&path)?;
-        for r in core_rows {
-            wtr.serialize(r)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-        }
-        wtr.flush()?;
-    }
-
     let net_rows = std::mem::take(&mut *inner.net_rows.lock());
     if !net_rows.is_empty() {
         let path = inner.out_dir.join(format!("net_node{}.csv", inner.node_id));
@@ -327,33 +283,6 @@ fn flush(inner: &Inner) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy, Default)]
-struct CoreTicks {
-    user: u64,
-    nice: u64,
-    system: u64,
-    idle: u64,
-    iowait: u64,
-    irq: u64,
-    softirq: u64,
-    steal: u64,
-}
-
-#[cfg(target_os = "linux")]
-impl CoreTicks {
-    fn total(&self) -> u64 {
-        self.user
-            + self.nice
-            + self.system
-            + self.idle
-            + self.iowait
-            + self.irq
-            + self.softirq
-            + self.steal
-    }
-}
-
-#[cfg(target_os = "linux")]
 fn read_self_stat() -> Option<(u64, u64)> {
     read_stat_file(Path::new("/proc/self/stat"))
 }
@@ -371,38 +300,6 @@ fn read_stat_file(path: &Path) -> Option<(u64, u64)> {
     let utime: u64 = fields.get(11)?.parse().ok()?;
     let stime: u64 = fields.get(12)?.parse().ok()?;
     Some((utime, stime))
-}
-
-#[cfg(target_os = "linux")]
-fn read_proc_stat_cores() -> Option<Vec<(u32, CoreTicks)>> {
-    let s = std::fs::read_to_string("/proc/stat").ok()?;
-    let mut out = Vec::new();
-    for line in s.lines() {
-        if !line.starts_with("cpu") || line.starts_with("cpu ") {
-            continue;
-        }
-        let mut it = line.split_whitespace();
-        let label = it.next()?;
-        let cpu_id: u32 = label.strip_prefix("cpu")?.parse().ok()?;
-        let nums: Vec<u64> = it.filter_map(|f| f.parse().ok()).collect();
-        if nums.len() < 8 {
-            continue;
-        }
-        out.push((
-            cpu_id,
-            CoreTicks {
-                user: nums[0],
-                nice: nums[1],
-                system: nums[2],
-                idle: nums[3],
-                iowait: nums[4],
-                irq: nums[5],
-                softirq: nums[6],
-                steal: nums[7],
-            },
-        ));
-    }
-    Some(out)
 }
 
 /// Read `/proc/net/dev` and return cumulative `(iface, rx_bytes, tx_bytes)`

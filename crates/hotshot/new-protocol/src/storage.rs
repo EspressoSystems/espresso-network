@@ -447,4 +447,10 @@ impl<T: NodeType> NewProtocolStorage<T> for NullStorage<T> {
     async fn append_cert2(&self, _view: ViewNumber, _cert: Certificate2<T>) -> anyhow::Result<()> {
         Ok(())
     }
+    async fn append_high_qc2(&self, _high_qc: Certificate1<T>) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn load_high_qc2(&self) -> anyhow::Result<Option<Certificate1<T>>> {
+        Ok(None)
+    }
 }
