@@ -719,7 +719,7 @@ where
                 .leaf_proof(id, known_finalized.map(Leaf2::height))
                 .await?;
             let quorum;
-            let hint = match proof.proof().epoch() {
+            let hint = match proof.epoch(self.epoch_height)? {
                 Some(epoch) => {
                     quorum = make_quorum(epoch);
                     LeafProofHint::Quorum(&quorum)
