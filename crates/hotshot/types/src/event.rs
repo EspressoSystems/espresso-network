@@ -264,6 +264,12 @@ pub enum EventType<TYPES: NodeType> {
     },
 }
 
+impl<TYPES: NodeType> std::fmt::Display for Event<TYPES> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} (view {})", self.event, self.view_number)
+    }
+}
+
 impl<TYPES: NodeType> std::fmt::Display for EventType<TYPES> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

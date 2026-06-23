@@ -64,7 +64,7 @@ pub struct NetworkMessageTaskState<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> NetworkMessageTaskState<TYPES> {
-    #[instrument(skip_all, name = "Network message task", fields(id = self.id), level = "trace")]
+    #[instrument(skip_all, name = "Network message task", fields(id = self.id), level = "error")]
     /// Handles a (deserialized) message from the network
     pub async fn handle_message(&mut self, message: Message<TYPES>) {
         match &message.kind {

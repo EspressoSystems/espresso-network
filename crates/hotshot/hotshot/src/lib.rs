@@ -78,7 +78,7 @@ use hotshot_utils::warn;
 /// Reexport rand crate
 pub use rand;
 use tokio::{spawn, time::sleep};
-use tracing::{debug, instrument, trace};
+use tracing::{Instrument, debug, error_span, instrument, trace};
 
 // -- Rexports
 // External
@@ -517,7 +517,7 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
 
         // Spawn a task that will sleep for the next view timeout and then send a timeout event
         // if not cancelled
-        spawn({
+        spawn(
             async move {
                 sleep(Duration::from_millis(next_view_timeout)).await;
                 broadcast_event(
@@ -526,7 +526,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> SystemContext<TYPES, I> {
                 )
                 .await;
             }
-        });
+            .instrument(error_span!("initial timeout", view = *start_view)),
+        );
         #[allow(clippy::panic)]
         self.internal_event_stream
             .0
