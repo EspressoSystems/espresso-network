@@ -71,6 +71,25 @@ pub async fn main(migrated_envs: Vec<(&str, &str)>) -> anyhow::Result<()> {
     }
     espresso_utils::env_compat::log_migrated_env_vars(&migrated_envs);
 
+    #[cfg(not(target_env = "msvc"))]
+    {
+        let dir: std::path::PathBuf = std::env::var("ESPRESSO_HEAP_DUMP_DIR")
+            .context("ESPRESSO_HEAP_DUMP_DIR environment variable not set")?
+            .into();
+
+        tokio::fs::create_dir_all(&dir).await?;
+
+        let freq: u64 = std::env::var("ESPRESSO_HEAP_DUMP_FREQ")
+            .context("ESPRESSO_HEAP_DUMP_FREQ environment variable not set")?
+            .parse()
+            .context("Invalid ESPRESSO_HEAP_DUMP_FREQ environment variable")?;
+
+        tokio::spawn(async move {
+            let freq = std::time::Duration::from_secs(freq);
+            crate::heap_profile::dump_every(freq, &dir).await
+        });
+    }
+
     let mut modules = opt.modules();
     tracing::warn!(?modules, "sequencer starting up");
 
