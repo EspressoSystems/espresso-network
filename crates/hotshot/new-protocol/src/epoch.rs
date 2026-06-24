@@ -16,7 +16,6 @@ use tracing::error;
 
 pub enum EpochRootResult {
     DrbResult(EpochNumber, DrbResult),
-    EpochRootAdded(EpochNumber),
 }
 
 /// Epoch + error for the Err path so retries can re-kick the task.
@@ -73,9 +72,6 @@ impl<T: NodeType> EpochManager<T> {
                             self.completed_drb_requests.insert(epoch);
                             return Some(Ok(root));
                         },
-                        Ok(root @ EpochRootResult::EpochRootAdded(_)) => {
-                            return Some(Ok(root));
-                        },
                         Err(error) => {
                             // Clear the guard so a subsequent call can retry.
                             self.pending_drb_requests.remove(&epoch);
@@ -104,23 +100,35 @@ impl<T: NodeType> EpochManager<T> {
                 return;
             };
 
-            // Push the epoch root into membership directly from the decided
-            // header
             let target_epoch = epoch + 2;
+            if self.completed_drb_requests.contains(&target_epoch)
+                || self.pending_drb_requests.contains(&target_epoch)
+            {
+                return;
+            }
+            self.pending_drb_requests.insert(target_epoch);
+
             let membership_coordinator = self.membership_coordinator.clone();
-            let header = leaf.block_header().clone();
+            let root_leaf = leaf.clone();
             let handles = self.handles.entry(target_epoch).or_default();
             handles.push(self.tasks.spawn(async move {
-                let result = membership_coordinator
-                    .membership()
-                    .add_epoch_root(header)
-                    .await
-                    .map(|()| EpochRootResult::EpochRootAdded(target_epoch))
-                    .map_err(|e| EpochManagerError::EpochRoot(anyhow::anyhow!("{e}")));
+                let result = async {
+                    membership_coordinator
+                        .membership()
+                        .add_epoch_root(root_leaf.block_header().clone())
+                        .await
+                        .map_err(|e| EpochManagerError::EpochRoot(anyhow::anyhow!("{e}")))?;
+
+                    // Compute the DRB from the decided root leaf.
+                    let drb = membership_coordinator
+                        .compute_drb_result(target_epoch, root_leaf)
+                        .await
+                        .map_err(EpochManagerError::DrbCompute)?;
+                    Ok(EpochRootResult::DrbResult(target_epoch, drb))
+                }
+                .await;
                 (target_epoch, result)
             }));
-
-            self.request_drb_result(target_epoch);
         }
 
         // If this is the transition block of an epoch feed the DRB result to the coordinator.
