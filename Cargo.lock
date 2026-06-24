@@ -4690,6 +4690,7 @@ dependencies = [
  "tower 0.4.13",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "vbs",
 ]
 
 [[package]]

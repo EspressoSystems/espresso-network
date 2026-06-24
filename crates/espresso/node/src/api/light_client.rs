@@ -28,7 +28,7 @@ use versions::NEW_PROTOCOL_VERSION;
 
 use crate::api::data_source::{NodeStateDataSource, StakeTableDataSource};
 
-async fn get_leaf_proof_with_qc_chain<State>(
+pub(crate) async fn get_leaf_proof_with_qc_chain<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
     fetch_timeout: Duration,
@@ -79,7 +79,7 @@ where
 /// the proof contains only that leaf plus cert2. Otherwise, the proof includes the chain from the
 /// requested leaf through the directly committed descendant; the verifier checks parent commitments
 /// to prove the requested leaf is on that finalized chain.
-async fn get_leaf_proof_with_cert2<State>(
+pub(crate) async fn get_leaf_proof_with_cert2<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
     fetch_timeout: Duration,
@@ -148,7 +148,7 @@ where
     Err(not_found("missing cert2 leaf"))
 }
 
-async fn get_leaf_proof_with_finalized_assumption<State>(
+pub(crate) async fn get_leaf_proof_with_finalized_assumption<State>(
     state: &State,
     requested_leaf: LeafQueryData<SeqTypes>,
     finalized: usize,
@@ -188,7 +188,7 @@ where
     Ok(proof)
 }
 
-async fn get_header_proof<State>(
+pub(crate) async fn get_header_proof<State>(
     state: &State,
     root: u64,
     requested: BlockId<SeqTypes>,
@@ -227,7 +227,7 @@ where
     Ok(HeaderProof::new(header, path))
 }
 
-async fn get_namespace_proof_range<State>(
+pub(crate) async fn get_namespace_proof_range<State>(
     state: &State,
     start: usize,
     end: usize,
