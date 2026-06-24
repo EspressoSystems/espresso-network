@@ -17,6 +17,7 @@ import argparse
 import dataclasses
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -86,7 +87,8 @@ NODE_5_PG_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.node-5-pg.yaml
 LC_GATING_OVERLAY = REPO_ROOT / "binary-upgrade-tests" / "compose.lc-gating.yaml"
 
 
-YYYYMMDD_TAG_PATTERN = "20[0-9][0-9][0-1][0-9][0-3][0-9]"
+RELEASE_TAG_GLOB = "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
+RELEASE_TAG_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 
 # ---------------------------------------------------------------------------
 # Action types
@@ -202,24 +204,30 @@ SCENARIOS: dict[str, list[Action]] = {
 }
 
 
-def yyyymmdd_tags() -> list[str]:
+def release_tags() -> list[str]:
+    """Return all X.Y.Z.N release tags, sorted by version (lowest first)."""
     out = subprocess.check_output(
-        ["git", "tag", "-l", YYYYMMDD_TAG_PATTERN], cwd=REPO_ROOT, text=True
+        ["git", "tag", "-l", RELEASE_TAG_GLOB], cwd=REPO_ROOT, text=True
     )
-    return sorted(out.strip().splitlines())
+    tags = [t for t in out.strip().splitlines() if RELEASE_TAG_RE.match(t)]
+
+    def key(t: str) -> tuple[int, ...]:
+        return tuple(int(p) for p in t.split("."))
+
+    return sorted(tags, key=key)
 
 
 def default_base_tag() -> str:
-    """Pick the YYYYMMDD tag to upgrade from.
+    """Pick the X.Y.Z.N tag to upgrade from.
 
-    On a tagged release build (HEAD points at a YYYYMMDD tag), use the
+    On a tagged release build (HEAD points at an X.Y.Z.N tag), use the
     previous tag so we test the new release against the prior one. Otherwise
-    use the latest YYYYMMDD tag.
+    use the latest X.Y.Z.N tag.
     """
-    tags = yyyymmdd_tags()
+    tags = release_tags()
     if not tags:
         raise RuntimeError(
-            f"No tags matching {YYYYMMDD_TAG_PATTERN}; run with --tags fetched."
+            "No tags matching X.Y.Z.N; run with --tags fetched."
         )
     head_tag = subprocess.run(
         ["git", "describe", "--tags", "--exact-match"],
@@ -232,7 +240,7 @@ def default_base_tag() -> str:
         idx = tags.index(head_tag)
         if idx == 0:
             raise RuntimeError(
-                f"HEAD is at {head_tag}, the oldest YYYYMMDD tag; no previous to upgrade from."
+                f"HEAD is at {head_tag}, the oldest X.Y.Z.N tag; no previous to upgrade from."
             )
         return tags[idx - 1]
     return tags[-1]

@@ -1,0 +1,162 @@
+# Keep the release tracker issue body in sync, and handle /skip /unskip
+# /promote commands posted as comments.
+#
+# The actual logic lives in scripts/release-tracker.py; this workflow is the
+# event wiring.
+
+name: Update Release Tracker
+
+on:
+  push:
+    branches:
+      - main
+      - "release-*"
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+.[0-9]+"
+  pull_request_target:
+    types: [closed]
+    branches:
+      - main
+      - "release-*"
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows: ["Promote Docker Tag"]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+  pull-requests: read
+  packages: read
+
+jobs:
+  # ----- Refresh on repo events (push, PR close, tag push) -------------------
+  refresh:
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refresh every open tracker issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          issues=$(gh issue list --label release-tracker --state open --json number -q '.[].number')
+          for issue in $issues; do
+            python3 scripts/release-tracker.py --issue "$issue" refresh || \
+              echo "::warning::refresh failed for issue #$issue"
+          done
+
+  # ----- Handle slash-commands on tracker issues -----------------------------
+  command:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      contains(github.event.issue.labels.*.name, 'release-tracker') &&
+      (startsWith(github.event.comment.body, '/skip') ||
+       startsWith(github.event.comment.body, '/unskip') ||
+       startsWith(github.event.comment.body, '/promote'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on author association
+        env:
+          ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          set -euo pipefail
+          case "$ASSOC" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *)
+              echo "::error::commenter (${ASSOC}) lacks write access"
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dispatch command
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          BODY: ${{ github.event.comment.body }}
+          ACTOR: ${{ github.event.comment.user.login }}
+          CREATED_AT: ${{ github.event.comment.created_at }}
+        run: |
+          set -euo pipefail
+          # First token = command; rest = args (one line only).
+          first_line=$(printf '%s' "$BODY" | head -n1)
+          cmd=$(printf '%s' "$first_line" | awk '{print $1}')
+          rest=$(printf '%s' "$first_line" | cut -s -d ' ' -f2-)
+          case "$cmd" in
+            /skip)
+              sha=$(printf '%s' "$rest" | awk '{print $1}')
+              reason=$(printf '%s' "$rest" | cut -s -d ' ' -f2-)
+              python3 scripts/release-tracker.py --issue "$ISSUE" skip \
+                --sha "$sha" --reason "${reason:-(no reason)}" \
+                --actor "$ACTOR" --timestamp "$CREATED_AT"
+              ;;
+            /unskip)
+              sha=$(printf '%s' "$rest" | awk '{print $1}')
+              python3 scripts/release-tracker.py --issue "$ISSUE" unskip --sha "$sha"
+              ;;
+            /promote)
+              stage=$(printf '%s' "$rest" | awk '{print $1}')
+              python3 scripts/release-tracker.py --issue "$ISSUE" promote \
+                --stage "$stage" --actor "$ACTOR"
+              ;;
+          esac
+
+  # ----- Refresh promotion state when promote-docker-tag.yml finishes --------
+  on-promotion:
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refresh promotion state across all open trackers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          issues=$(gh issue list --label release-tracker --state open --json number -q '.[].number')
+          for issue in $issues; do
+            python3 scripts/release-tracker.py --issue "$issue" refresh || \
+              echo "::warning::refresh failed for issue #$issue"
+          done

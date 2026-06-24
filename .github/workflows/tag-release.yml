@@ -1,0 +1,131 @@
+# Cut the next X.Y.Z.N tag on a release-X.Y.Z branch.
+#
+# Triggers:
+#   1. `/tag` comment on a release tracker issue (issue body must contain
+#      <!-- release-branch: release-X.Y.Z -->).
+#   2. workflow_dispatch with explicit branch ref (e.g. `gh workflow run
+#      tag-release.yml --ref release-0.4.0`). The current ref is used.
+#
+# Commenter must have repo write access (OWNER/MEMBER/COLLABORATOR).
+# Validation branches like `release-0.4.0/exp` are rejected.
+
+name: Tag Release
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request == null &&
+       contains(github.event.issue.labels.*.name, 'release-tracker') &&
+       startsWith(github.event.comment.body, '/tag'))
+    steps:
+      - name: Gate on author association (issue_comment only)
+        if: github.event_name == 'issue_comment'
+        env:
+          ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          set -euo pipefail
+          case "$ASSOC" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *)
+              echo "::error::commenter (${ASSOC}) lacks write access"
+              exit 1
+              ;;
+          esac
+
+      - name: Resolve release branch
+        id: branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            branch="${REF#refs/heads/}"
+          else
+            body=$(gh issue view "$ISSUE_NUMBER" --json body -q .body)
+            branch=$(printf '%s' "$body" | grep -oE 'release-branch: release-[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | sed 's|release-branch: ||')
+            if [ -z "$branch" ]; then
+              echo "::error::tracker issue body missing <!-- release-branch: release-X.Y.Z --> marker"
+              exit 1
+            fi
+          fi
+          if ! echo "$branch" | grep -qE '^release-[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::branch '$branch' is not a canonical release-X.Y.Z branch"
+            exit 1
+          fi
+          version="${branch#release-}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.branch.outputs.branch }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next tag
+        id: next
+        env:
+          VERSION: ${{ steps.branch.outputs.version }}
+        run: |
+          set -euo pipefail
+          highest=$(git tag --list "${VERSION}.*" \
+            | awk -F. -v v="$VERSION" '
+                {
+                  prefix = $1"."$2"."$3
+                  if (prefix == v) print $4
+                }' \
+            | grep -E '^[0-9]+$' \
+            | sort -n \
+            | tail -n1 || true)
+          if [ -z "$highest" ]; then
+            next=0
+          else
+            next=$((highest + 1))
+          fi
+          tag="${VERSION}.${next}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Create and push tag
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "refs/tags/$TAG"
+
+      - name: Comment on tracker issue
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          TAG: ${{ steps.next.outputs.tag }}
+          SHA: ${{ steps.next.outputs.sha }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" --body \
+            "Tagged \`$TAG\` at [\`${SHA:0:8}\`](https://github.com/${GH_REPO}/commit/${SHA}) on \`${BRANCH}\` (requested by @${ACTOR})."

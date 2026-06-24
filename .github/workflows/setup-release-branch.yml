@@ -1,0 +1,152 @@
+# Bootstrap (and tear down) automation for canonical release-X.Y.Z branches:
+#   - On branch create: open backport label and tracker issue.
+#   - On branch delete: close tracker issue with final snapshot.
+#
+# Validation branches like `release-0.4.0/exp` are ignored.
+
+name: Setup Release Branch
+
+on:
+  create:
+  delete:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  on-create:
+    if: |
+      github.event_name == 'create' &&
+      github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch name matches release-X.Y.Z exactly
+        id: check
+        env:
+          BRANCH: ${{ github.event.ref }}
+        run: |
+          set -euo pipefail
+          if echo "$BRANCH" | grep -qE '^release-[0-9]+\.[0-9]+\.[0-9]+$'; then
+            version="${BRANCH#release-}"
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create backport label
+        if: steps.check.outputs.match == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.check.outputs.branch }}
+        run: |
+          set -euo pipefail
+          label="backport-to-${BRANCH}"
+          gh label create "$label" \
+            --color 1D76DB \
+            --description "Backport this PR to ${BRANCH} when it merges" \
+            2>/dev/null || true
+
+      - name: Create release-tracker label (idempotent)
+        if: steps.check.outputs.match == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create release-tracker \
+            --color 0E8A16 \
+            --description "Automated release tracker issue" \
+            2>/dev/null || true
+          gh label create release-scrapped \
+            --color B60205 \
+            --description "Release branch was deleted before completion" \
+            2>/dev/null || true
+
+      - uses: actions/checkout@v6
+        if: steps.check.outputs.match == 'true'
+
+      - name: Open tracker issue
+        if: steps.check.outputs.match == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.check.outputs.branch }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label release-tracker --state open --search "Release $VERSION in:title" --json number,title -q ".[] | select(.title == \"Release $VERSION\") | .number" | head -n1)
+          if [ -n "$existing" ]; then
+            echo "tracker issue #$existing already exists; skipping"
+            exit 0
+          fi
+          body=$(sed "s|__VERSION__|$VERSION|g; s|__BRANCH__|$BRANCH|g" .github/ISSUE_TEMPLATE/release-tracker.md \
+            | awk 'BEGIN{p=0} /^---$/{p++; next} p>=2{print}')
+          gh issue create \
+            --title "Release $VERSION" \
+            --label release-tracker \
+            --body "$body"
+
+  on-delete:
+    if: |
+      github.event_name == 'delete' &&
+      github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch name matches release-X.Y.Z exactly
+        id: check
+        env:
+          BRANCH: ${{ github.event.ref }}
+        run: |
+          set -euo pipefail
+          if echo "$BRANCH" | grep -qE '^release-[0-9]+\.[0-9]+\.[0-9]+$'; then
+            version="${BRANCH#release-}"
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.check.outputs.match == 'true'
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Close tracker issue with final snapshot
+        if: steps.check.outputs.match == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.check.outputs.version }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          issue=$(gh issue list --label release-tracker --state open --search "Release $VERSION in:title" --json number,title -q ".[] | select(.title == \"Release $VERSION\") | .number" | head -n1)
+          if [ -z "$issue" ]; then
+            echo "no open tracker issue for Release $VERSION"
+            exit 0
+          fi
+          tags=$(git tag --list "${VERSION}.*" | sort -V)
+          if [ -z "$tags" ]; then
+            tag_list="(none)"
+          else
+            tag_list=$(printf '%s\n' "$tags" | sed 's/^/- `/' | sed 's/$/`/')
+          fi
+          today=$(date -u +%Y-%m-%d)
+          body=$(cat <<EOF
+Branch \`release-${VERSION}\` was deleted by @${ACTOR} on ${today} — release scrapped.
+
+Final tag snapshot:
+${tag_list}
+
+Tags above remain in the registry and can still be promoted via \`promote-docker-tag.yml\` directly.
+EOF
+          )
+          gh issue comment "$issue" --body "$body"
+          gh issue edit "$issue" --add-label release-scrapped
+          gh issue close "$issue" --reason "not planned"
