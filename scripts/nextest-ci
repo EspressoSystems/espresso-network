@@ -288,7 +288,10 @@ def _section_lines(
         rows.sort(key=lambda row: (-row[0], row[1]))
         plural = "" if total == 1 else "s"
         lines.append(f"### {name} (last {total} run{plural})")
-        lines.extend(f"- [ ] {strip} {format_id(tid)}" for _, tid, strip in rows)
+        lines.append("")
+        lines.append("```")
+        lines.extend(f"{strip} {tid}" for _, tid, strip in rows)
+        lines.append("```")
         lines.append("")
     if not any_test:
         return ["_None._", ""]
@@ -307,10 +310,7 @@ def build_flaky_issue(
         f"Flaky and failing tests on `main`, aggregated from recent CI runs per "
         f"workflow. Updated {timestamp}.",
         "",
-        'Hover a checkbox item and use "Convert to issue" to open a tracking issue '
-        "for that test.",
-        "",
-        "Each strip is the recent run history, oldest to newest: "
+        "Each row is one test's recent run history, oldest to newest: "
         "⬜ passed, 🟨 flaky (failed then passed on retry), 🟥 failed.",
         "",
         "## Failing tests",
