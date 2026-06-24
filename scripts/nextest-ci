@@ -568,8 +568,12 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
                 "branch=main",
                 "-F",
                 "event=push",
+                # All completed conclusions: a run with a hard test failure is
+                # conclusion=failure, but its stats artifact is exactly what we
+                # want. Runs that died before testing have no artifact and are
+                # skipped below.
                 "-F",
-                "status=success",
+                "status=completed",
                 "-F",
                 f"per_page={args.max_runs}",
             ]
@@ -579,7 +583,7 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         workflow_runs = runs_data.get("workflow_runs", [])
         # Defend against GitHub not guaranteeing newest-first ordering.
         workflow_runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-        log.info("found %d successful main runs", len(workflow_runs))
+        log.info("found %d completed main runs", len(workflow_runs))
 
         with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
             entries = pool.map(
