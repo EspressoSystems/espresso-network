@@ -128,12 +128,13 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             },
             Request::ChainConfig(commitment) => {
                 // Try to get the chain config from memory first, then fall back to storage
-                let chain_config_from_memory =
-                    self.consensus_handle.decided_state().await.chain_config;
-                if chain_config_from_memory.commit() == *commitment
-                    && let Some(chain_config) = chain_config_from_memory.resolve()
-                {
-                    return Ok(Response::ChainConfig(chain_config));
+                if let Some(state) = self.consensus_handle.decided_state().await {
+                    let chain_config_from_memory = state.chain_config;
+                    if chain_config_from_memory.commit() == *commitment
+                        && let Some(chain_config) = chain_config_from_memory.resolve()
+                    {
+                        return Ok(Response::ChainConfig(chain_config));
+                    }
                 }
 
                 // Fall back to storage
@@ -312,7 +313,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
             Request::Cert2(height) => {
                 let cert2 = match &self.storage {
                     Some(Storage::Sql(storage)) => storage
-                        .load_earliest_cert2(*height)
+                        .load_cert2(*height)
                         .await
                         .with_context(|| "failed to load cert2 from sql storage")?,
                     Some(Storage::Fs(_)) => bail!("fs storage not supported for cert2"),
@@ -321,7 +322,7 @@ impl<I: NodeImplementation<SeqTypes>, N: ConnectedNetwork<PubKey>, P: SequencerP
 
                 match cert2 {
                     Some(cert2) => Ok(Response::Cert2(cert2)),
-                    None => bail!("no cert2 available for height {height}"),
+                    None => bail!("no cert2 available at height {height}"),
                 }
             },
             Request::RewardMerkleTreeV2(height, view) => {

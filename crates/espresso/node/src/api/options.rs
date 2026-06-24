@@ -5,6 +5,7 @@ use std::sync::Arc;
 use ::light_client::{state::LightClientOptions, storage::LightClientSqliteOptions};
 use anyhow::{Context, bail};
 use clap::Parser;
+use espresso_telemetry as telemetry;
 use espresso_types::{
     BlockMerkleTree, PubKey, SeqTypes,
     v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, SequencerPersistence},
@@ -18,13 +19,14 @@ use futures::{
 use hotshot_query_service::{
     ApiState as AppState, Error,
     data_source::{ExtensibleDataSource, MetricsDataSource},
-    status::{self, UpdateStatusData},
+    status::{self, HasMetrics, UpdateStatusData},
 };
 use hotshot_types::traits::{
     metrics::{Metrics, NoMetrics},
     network::ConnectedNetwork,
 };
 use jf_merkle_tree_compat::MerkleTreeScheme;
+use process_metrics::ProcessMetrics;
 use tide_disco::{Api, App, Url, listener::RateLimitListener, method::ReadState};
 use vbs::version::StaticVersionType;
 
@@ -44,6 +46,7 @@ use crate::{
     api::{LightClientProvider, endpoints::RewardMerkleTreeVersion},
     catchup::CatchupStorage,
     context::{SequencerContext, TaskList},
+    options::PublicNodeConfig,
     persistence,
     request_response::data_source::Storage as RequestResponseStorage,
     state::update_state_storage_loop,
@@ -62,6 +65,7 @@ pub struct Options {
     pub light_client: Option<LightClient>,
     pub storage_fs: Option<persistence::fs::Options>,
     pub storage_sql: Option<persistence::sql::Options>,
+    pub public_node_config: Option<Box<PublicNodeConfig>>,
 }
 
 impl From<Http> for Options {
@@ -78,6 +82,7 @@ impl From<Http> for Options {
             light_client: None,
             storage_fs: None,
             storage_sql: None,
+            public_node_config: None,
         }
     }
 }
@@ -123,6 +128,14 @@ impl Options {
     /// Add a config API module.
     pub fn config(mut self, opt: Config) -> Self {
         self.config = Some(opt);
+        self
+    }
+
+    /// Set the merged runtime configuration exposed via `GET /config/runtime`.
+    ///
+    /// If unset, the `/config/runtime` route returns 404.
+    pub fn public_node_config(mut self, c: PublicNodeConfig) -> Self {
+        self.public_node_config = Some(Box::new(c));
         self
     }
 
@@ -210,6 +223,8 @@ impl Options {
             // storage.
             let ds = MetricsDataSource::default();
             let metrics = ds.populate_metrics();
+            telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
+            tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
             let mut app = App::<_, Error>::with_state(AppState::from(ExtensibleDataSource::new(
                 ds,
                 state.clone(),
@@ -292,6 +307,9 @@ impl Options {
         D: SequencerDataSource + CatchupStorage + PruningDataSource + Send + Sync + 'static,
     {
         let metrics = ds.populate_metrics();
+        // Deposit the underlying prometheus::Registry for the in-process
+        // telemetry push task. Idempotent; safe to call multiple times.
+        telemetry::set_registry(Arc::new(ds.metrics().registry().clone()));
         let ds = Arc::new(ExtensibleDataSource::new(ds, state.clone()));
         let api_state: endpoints::AvailState<N, P, D> = ds.clone().into();
         let mut app = App::<_, Error>::with_state(api_state);
@@ -340,8 +358,10 @@ impl Options {
         })?;
 
         if self.config.is_some() {
+            let node_cfg = self.public_node_config.as_deref().cloned();
             register_api("config", &mut app, move |ver| {
-                endpoints::config(bind_version, ver).context("failed to define config api")
+                endpoints::config(bind_version, ver, node_cfg.clone())
+                    .context("failed to define config api")
             })?;
         }
         Ok((metrics, ds, app))
@@ -378,6 +398,8 @@ impl Options {
 
         // Get the inner storage from the data source
         let inner_storage = ds.inner();
+
+        tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
 
         let (metrics, ds, mut app) = self
             .init_app_modules(ds, state.clone(), bind_version)
@@ -429,7 +451,6 @@ impl Options {
         // missing from the query service from ephemeral consensus storage.
         let db_provider = mod_opt.clone().create().await?;
         provider = provider
-            .with_leaf_provider(db_provider.clone())
             .with_block_provider(db_provider.clone())
             .with_vid_common_provider(db_provider);
         // If that fails, fetch missing data from peers.
@@ -445,6 +466,7 @@ impl Options {
 
         let ds = sql::DataSource::create(mod_opt.clone(), provider, false).await?;
         let inner_storage = ds.inner();
+        tasks.spawn("process_metrics", ProcessMetrics::new(ds.metrics()).run());
         let (metrics, ds, mut app) = self
             .init_app_modules(ds, state.clone(), bind_version)
             .await?;
@@ -592,8 +614,10 @@ impl Options {
         })?;
 
         if self.config.is_some() {
+            let node_cfg = self.public_node_config.as_deref().cloned();
             register_api("config", app, move |ver| {
-                endpoints::config(bind_version, ver).context("failed to define config api")
+                endpoints::config(bind_version, ver, node_cfg.clone())
+                    .context("failed to define config api")
             })?;
         }
 
@@ -720,13 +744,7 @@ pub struct Query {
 #[cfg(test)]
 impl Query {
     pub fn test() -> Self {
-        Self {
-            light_client: LightClientOptions {
-                decaf: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
+        Self::default()
     }
 }
 

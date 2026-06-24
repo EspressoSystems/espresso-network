@@ -56,10 +56,6 @@ pub struct NoStorage;
 
 #[async_trait]
 impl SequencerPersistence for NoStorage {
-    async fn migrate_reward_merkle_tree_v2(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn load_config(&self) -> anyhow::Result<Option<NetworkConfig>> {
         Ok(None)
     }
@@ -68,12 +64,12 @@ impl SequencerPersistence for NoStorage {
         Ok(())
     }
 
-    async fn append_decided_leaves(
+    async fn persist_decided_leaves(
         &self,
         view_number: ViewNumber,
         leaves: impl IntoIterator<Item = (&LeafInfo<SeqTypes>, CertificatePair<SeqTypes>)> + Send,
         deciding_qc: Option<Arc<CertificatePair<SeqTypes>>>,
-        consumer: &impl EventConsumer,
+        consumer: &(impl EventConsumer + 'static),
     ) -> anyhow::Result<()> {
         let leaves = leaves
             .into_iter()
@@ -111,9 +107,7 @@ impl SequencerPersistence for NoStorage {
         Ok(None)
     }
 
-    async fn load_anchor_leaf(
-        &self,
-    ) -> anyhow::Result<Option<(Leaf2, QuorumCertificate2<SeqTypes>)>> {
+    async fn load_anchor_leaf(&self) -> anyhow::Result<Option<(Leaf2, CertificatePair<SeqTypes>)>> {
         Ok(None)
     }
 

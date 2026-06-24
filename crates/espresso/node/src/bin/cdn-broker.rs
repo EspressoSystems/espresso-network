@@ -33,7 +33,7 @@ struct Args {
     /// The user-facing endpoint in `IP:port` form to advertise
     #[arg(
         long,
-        default_value = "local_ip:1738",
+        default_value = "public_ip:1738",
         env = "ESPRESSO_CDN_BROKER_PUBLIC_ADVERTISE_ENDPOINT"
     )]
     public_advertise_endpoint: String,
@@ -149,8 +149,10 @@ async fn async_main(migrated_envs: Vec<(&str, &str)>) -> Result<()> {
     // Uses TCP from broker connections and Quic for user connections.
     let broker = Broker::new(broker_config).await?;
 
-    // Start the main loop, consuming it
-    broker.start().await?;
+    tokio::select! {
+        res = broker.start() => res?,
+        _ = espresso_utils::shutdown::wait_for_shutdown_signal() => {},
+    }
 
     Ok(())
 }

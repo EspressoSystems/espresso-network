@@ -10,7 +10,7 @@ pub fn proposal_commitment<T: NodeType>(proposal: &Proposal<T>) -> Commitment<Le
 
 #[cfg(test)]
 pub fn test_upgrade_lock<T: NodeType>() -> hotshot_types::message::UpgradeLock<T> {
-    use versions::{CLIQUENET_VERSION, Upgrade};
+    use versions::{NEW_PROTOCOL_VERSION, Upgrade};
 
-    hotshot_types::message::UpgradeLock::new(Upgrade::trivial(CLIQUENET_VERSION))
+    hotshot_types::message::UpgradeLock::new(Upgrade::trivial(NEW_PROTOCOL_VERSION))
 }

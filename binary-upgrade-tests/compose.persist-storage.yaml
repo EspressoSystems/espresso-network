@@ -1,0 +1,83 @@
+# Overlay applied to every scenario:
+# 1. Persistent storage on nodes 2, 3, 4 so recreated containers keep their
+#    orchestrator-cached config (avoids 403 "no longer registering new keys").
+# 2. Hub topology (all non-archival peers catch up via 0, 1) + light-client
+#    module on the archival pair, since UPGRADE's query fetcher hits
+#    /light-client/leaf/N which doesn't exist on non-archival peers
+#    (backport of b9702a786f).
+
+services:
+  espresso-node-0:
+    command: espresso-node -- storage-sql -- http -- query -- submit -- hotshot-events -- config -- light-client
+    environment:
+      # Without this the light-client SQLite is :memory: per connection and
+      # serves empty results, so wiped peers can't fetch historical leaves.
+      LIGHT_CLIENT_DB_PATH: /store/lc
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+
+  espresso-node-1:
+    command: espresso-node -- storage-sql -- http -- query -- explorer -- light-client
+    environment:
+      LIGHT_CLIENT_DB_PATH: /store/lc
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+      # Multiple peers: node-0 (often the proposer) lags consensus slightly,
+      # so a single-peer catchup chases a moving target. Including 3, 4 gives
+      # the wiped node a faster-indexing fallback so it converges.
+      ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-3:$ESPRESSO_NODE_3_API_PORT,http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT
+      ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-3:$ESPRESSO_NODE_3_API_PORT,http://espresso-node-4:$ESPRESSO_NODE_4_API_PORT
+
+  # Add `status` (only requires `http`) so roll_node can poll node 2's block
+  # height; it has no `query` module to expose /node/block-height.
+  espresso-node-2:
+    command: espresso-node -- http -- storage-fs -- status
+    environment:
+      ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+    volumes:
+      - espresso-node-2-storage:/var/lib/espresso
+
+  espresso-node-3:
+    environment:
+      ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
+      ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+    volumes:
+      - espresso-node-3-storage:/var/lib/espresso
+
+  espresso-node-4:
+    environment:
+      ESPRESSO_NODE_STORAGE_PATH: /var/lib/espresso
+      ESPRESSO_NODE_STATE_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
+      ESPRESSO_NODE_API_PEERS: http://espresso-node-0:$ESPRESSO_NODE_0_API_PORT,http://espresso-node-1:$ESPRESSO_NODE_1_API_PORT
+      ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT: ${ESPRESSO_NODE_BOOTSTRAP_EPOCH_CATCHUP_TIMEOUT}
+    volumes:
+      - espresso-node-4-storage:/var/lib/espresso
+
+  # node-5 (old-from-new scenarios) joins after boot and is never in the
+  # orchestrator's known_nodes_with_stake, so the boot cdn-whitelist run leaves
+  # it out of the CDN whitelist and the marshal rejects it ("not in whitelist").
+  # The whitelist is just a keydb set; the marshal treats an empty set as "allow
+  # all" (cdn-proto check_whitelist: SCARD==0 => true). Clear it after the boot
+  # whitelist runs so the late-joining node-5 is admitted. No orchestrator and no
+  # cdn-whitelist binary change needed; the CDN is being replaced by cliquenet.
+  cdn-open:
+    image: docker.io/eqalpha/keydb:latest
+    entrypoint: ["sh", "-c"]
+    command: ['keydb-cli -h keydb -a "$$KEYDB_PASSWORD" DEL whitelist']
+    environment:
+      KEYDB_PASSWORD: changemeplease!!
+    depends_on:
+      keydb:
+        condition: service_healthy
+      cdn-whitelist:
+        condition: service_completed_successfully
+
+volumes:
+  espresso-node-2-storage:
+    name: espresso-node-2-storage
+  espresso-node-3-storage:
+    name: espresso-node-3-storage
+  espresso-node-4-storage:
+    name: espresso-node-4-storage

@@ -20,12 +20,12 @@ use tokio::{
 use tracing::{debug, info, instrument};
 
 use crate::network::{
-    ClientRequest, NetworkEvent, NetworkNode, NetworkNodeConfig,
+    ClientRequest, NetworkEvent, NetworkNode, NetworkNodeConfig, SwarmTaskHandle,
     behaviours::dht::{
         record::{Namespace, RecordKey, RecordValue},
         store::persistent::DhtPersistentStorage,
     },
-    gen_multiaddr,
+    gen_multiaddr, log_summary,
 };
 
 /// A handle containing:
@@ -50,6 +50,9 @@ pub struct NetworkNodeHandle<T: NodeType> {
 
     /// human readable id
     id: usize,
+
+    /// Handle to the spawned swarm event-loop task.
+    swarm_task: Arc<Mutex<Option<SwarmTaskHandle>>>,
 }
 
 /// internal network node receiver
@@ -112,9 +115,10 @@ pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
     })?;
     // pin here to force the future onto the heap since it can be large
     // in the case of flume
-    let (send_chan, recv_chan) = network.spawn_listeners().map_err(|err| {
+    let (send_chan, recv_chan, swarm_task) = network.spawn_listeners().map_err(|err| {
         NetworkError::ListenError(format!("failed to spawn listeners for Libp2p: {err}"))
     })?;
+    log_summary::spawn_summary_task();
     let receiver = NetworkNodeReceiver {
         receiver: recv_chan,
         recv_kill: None,
@@ -127,6 +131,7 @@ pub async fn spawn_network_node<T: NodeType, D: DhtPersistentStorage>(
         listen_addr,
         peer_id,
         id,
+        swarm_task: Arc::new(Mutex::new(Some(swarm_task))),
     };
     Ok((receiver, handle))
 }
@@ -138,6 +143,19 @@ impl<T: NodeType> NetworkNodeHandle<T> {
     #[instrument]
     pub async fn shutdown(&self) -> Result<(), NetworkError> {
         self.send_request(ClientRequest::Shutdown)?;
+
+        // Wait for the swarm event-loop task to actually finish, so its
+        // listening socket is released before we return.
+        let task = self.swarm_task.lock().take();
+        if let Some(task) = task {
+            match timeout(Duration::from_secs(5), task).await {
+                Ok(Ok(_)) => {},
+                Ok(Err(err)) => debug!(%err, "swarm task ended with error during shutdown"),
+                Err(_) => {
+                    debug!("timed out waiting for swarm task to finish during shutdown");
+                },
+            }
+        }
         Ok(())
     }
     /// Notify the network to begin the bootstrap process
@@ -468,6 +486,16 @@ impl<T: NodeType> NetworkNodeHandle<T> {
     pub async fn connected_pids(&self) -> Result<HashSet<PeerId>, NetworkError> {
         let (s, r) = futures::channel::oneshot::channel();
         let req = ClientRequest::GetConnectedPeers(s);
+        self.send_request(req)?;
+        Ok(r.await.unwrap())
+    }
+
+    /// Return the set of peer IDs in the Kademlia routing table.
+    /// # Errors
+    /// If the channel is closed somehow
+    pub async fn kad_routing_peers(&self) -> Result<HashSet<PeerId>, NetworkError> {
+        let (s, r) = futures::channel::oneshot::channel();
+        let req = ClientRequest::GetKadRoutingPeers(s);
         self.send_request(req)?;
         Ok(r.await.unwrap())
     }

@@ -282,9 +282,9 @@ pub(crate) trait CatchupDataSource: Sync {
         height: u64,
     ) -> impl Send + Future<Output = anyhow::Result<Vec<Leaf2>>>;
 
-    /// Load the earliest cert2 whose finalized block height is at or above `height`.
+    /// Load the cert2 stored at exactly `height`, if one exists.
     ///
-    /// Returns `None` when no cert2 height >= `height` is locally available
+    /// Returns `None` when no cert2 is stored at exactly `height`.
     fn get_cert2(
         &self,
         _height: u64,
@@ -388,12 +388,26 @@ pub struct TableSize {
     pub total_size_bytes: Option<i64>,
 }
 
+/// Status of a single deferred background migration.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MigrationStatus {
+    pub name: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_offset: Option<i64>,
+}
+
 /// Data source for database metadata and statistics.
 ///
 /// This trait is only implemented by SQL-based storage backends (PostgreSQL and SQLite).
 pub(crate) trait DatabaseMetadataSource {
     /// Get the sizes of all tables in the database.
     fn get_table_sizes(&self) -> impl Send + Future<Output = anyhow::Result<Vec<TableSize>>>;
+
+    /// Get the status of all deferred background migrations.
+    fn get_migration_status(
+        &self,
+    ) -> impl Send + Future<Output = anyhow::Result<Vec<MigrationStatus>>>;
 }
 
 // ============================================================================

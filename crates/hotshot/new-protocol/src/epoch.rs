@@ -7,8 +7,8 @@ use hotshot_types::{
     data::{BlockNumber, EpochNumber, Leaf2},
     drb::DrbResult,
     epoch_membership::EpochMembershipCoordinator,
-    traits::{block_contents::BlockHeader, node_implementation::NodeType},
-    utils::is_epoch_root,
+    traits::{block_contents::BlockHeader, election::Membership, node_implementation::NodeType},
+    utils::{is_epoch_root, is_transition_block},
 };
 use hotshot_utils::anytrace;
 use tokio::task::{AbortHandle, JoinSet};
@@ -16,6 +16,7 @@ use tracing::error;
 
 pub enum EpochRootResult {
     DrbResult(EpochNumber, DrbResult),
+    EpochRootAdded(EpochNumber),
 }
 
 /// Epoch + error for the Err path so retries can re-kick the task.
@@ -72,6 +73,9 @@ impl<T: NodeType> EpochManager<T> {
                             self.completed_drb_requests.insert(epoch);
                             return Some(Ok(root));
                         },
+                        Ok(root @ EpochRootResult::EpochRootAdded(_)) => {
+                            return Some(Ok(root));
+                        },
                         Err(error) => {
                             // Clear the guard so a subsequent call can retry.
                             self.pending_drb_requests.remove(&epoch);
@@ -99,7 +103,37 @@ impl<T: NodeType> EpochManager<T> {
                 error!("Leaf has no epoch");
                 return;
             };
-            self.request_drb_result(epoch + 2);
+
+            // Push the epoch root into membership directly from the decided
+            // header
+            let target_epoch = epoch + 2;
+            let membership_coordinator = self.membership_coordinator.clone();
+            let header = leaf.block_header().clone();
+            let handles = self.handles.entry(target_epoch).or_default();
+            handles.push(self.tasks.spawn(async move {
+                let result = membership_coordinator
+                    .membership()
+                    .add_epoch_root(header)
+                    .await
+                    .map(|()| EpochRootResult::EpochRootAdded(target_epoch))
+                    .map_err(|e| EpochManagerError::EpochRoot(anyhow::anyhow!("{e}")));
+                (target_epoch, result)
+            }));
+
+            self.request_drb_result(target_epoch);
+        }
+
+        // If this is the transition block of an epoch feed the DRB result to the coordinator.
+        if is_transition_block(block_number, *self.epoch_height)
+            && let Some(epoch) = leaf.epoch(*self.epoch_height)
+            && let Some(drb) = leaf.next_drb_result
+        {
+            let target_epoch = epoch + 1;
+            if !self.completed_drb_requests.contains(&target_epoch) {
+                self.membership_coordinator.supply_drb(target_epoch, drb);
+                self.completed_drb_requests.insert(target_epoch);
+                self.pending_drb_requests.remove(&target_epoch);
+            }
         }
     }
 
@@ -135,10 +169,7 @@ impl<T: NodeType> EpochManager<T> {
                 // spawns a catchup task and returns a "catchup in progress"
                 // error.  Either way, `wait_for_catchup` resolves once the
                 // stake table + DRB are both in place.
-                let membership = match membership_coordinator
-                    .membership_for_epoch(Some(epoch))
-                    .await
-                {
+                let membership = match membership_coordinator.membership_for_epoch(Some(epoch)) {
                     Ok(m) => m,
                     Err(_) => membership_coordinator
                         .wait_for_catchup(epoch)

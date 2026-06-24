@@ -41,12 +41,7 @@ async fn test_da_task() {
     // later calls. We need the VID commitment to be able to propose later.
     let transactions = vec![TestTransaction::new(vec![0])];
     let encoded_transactions: Arc<[u8]> = Arc::from(TestTransaction::encode(&transactions));
-    let num_storage_node = membership
-        .membership_for_epoch(None)
-        .await
-        .unwrap()
-        .total_nodes()
-        .await;
+    let num_storage_node = membership.membership_for_epoch(None).unwrap().total_nodes();
     let payload_commit = hotshot_types::data::vid_commitment(
         &encoded_transactions,
         &[],
@@ -156,12 +151,7 @@ async fn test_da_task_storage_failure() {
     // later calls. We need the VID commitment to be able to propose later.
     let transactions = vec![TestTransaction::new(vec![0])];
     let encoded_transactions: Arc<[u8]> = Arc::from(TestTransaction::encode(&transactions));
-    let num_storage_node = membership
-        .membership_for_epoch(None)
-        .await
-        .unwrap()
-        .total_nodes()
-        .await;
+    let num_storage_node = membership.membership_for_epoch(None).unwrap().total_nodes();
     let payload_commit = hotshot_types::data::vid_commitment(
         &encoded_transactions,
         &[],

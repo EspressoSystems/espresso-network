@@ -5,13 +5,14 @@
 // along with the HotShot repository. If not, see <https://mit-license.org/>.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     hash::{DefaultHasher, Hash},
     sync::Arc,
 };
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
+use hotshot_libp2p_networking::network::log_summary::LogEvent;
 use hotshot_task::task::TaskState;
 use hotshot_types::{
     consensus::OuterConsensus,
@@ -63,7 +64,7 @@ pub struct NetworkMessageTaskState<TYPES: NodeType> {
 }
 
 impl<TYPES: NodeType> NetworkMessageTaskState<TYPES> {
-    #[instrument(skip_all, name = "Network message task", fields(id = self.id), level = "trace")]
+    #[instrument(skip_all, name = "Network message task", fields(id = self.id), level = "error")]
     /// Handles a (deserialized) message from the network
     pub async fn handle_message(&mut self, message: Message<TYPES>) {
         match &message.kind {
@@ -837,7 +838,10 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
             }
             match net.vid_broadcast_message(messages).await {
                 Ok(()) => {},
-                Err(e) => tracing::warn!("Failed to send message from network task: {e:?}"),
+                Err(e) => {
+                    LogEvent::NetworkSendFailure.record();
+                    tracing::debug!("Failed to send message from network task: {e:?}");
+                },
             }
         });
 
@@ -934,10 +938,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(vote.epoch())
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -967,10 +969,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(vote.epoch())
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1084,10 +1084,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(vote.epoch())
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1130,10 +1128,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1162,10 +1158,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1194,10 +1188,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1268,10 +1260,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1307,10 +1297,8 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
                 let leader = match self
                     .membership_coordinator
                     .membership_for_epoch(self.epoch)
-                    .await
                     .ok()?
                     .leader(view_number)
-                    .await
                 {
                     Ok(l) => l,
                     Err(e) => {
@@ -1486,11 +1474,10 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
         let Ok(mem) = self
             .membership_coordinator
             .stake_table_for_epoch(self.epoch)
-            .await
         else {
             return;
         };
-        let da_committee = mem.da_committee_members(view_number).await;
+        let da_committee: BTreeSet<_> = mem.da_committee_members(view_number).cloned().collect();
         let network = Arc::clone(&self.network);
         let storage = self.storage.clone();
         let storage_metrics = Arc::clone(&self.storage_metrics);
@@ -1564,7 +1551,10 @@ impl<TYPES: NodeType, NET: ConnectedNetwork<TYPES::SignatureKey>, S: Storage<TYP
 
             match transmit_result {
                 Ok(()) => {},
-                Err(e) => tracing::warn!("Failed to send message task: {e:?}"),
+                Err(e) => {
+                    LogEvent::NetworkSendFailure.record();
+                    tracing::debug!("Failed to send message task: {e:?}");
+                },
             }
         });
         self.transmit_tasks
@@ -1622,7 +1612,7 @@ pub mod test {
                     &mut sender,
                     &mut message_kind,
                     &mut transmit,
-                    &*self.membership_coordinator.membership().read().await,
+                    self.membership_coordinator.membership(),
                 );
 
                 self.spawn_transmit_task(message_kind, maybe_action, transmit, sender)

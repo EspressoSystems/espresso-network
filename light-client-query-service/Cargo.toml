@@ -8,11 +8,10 @@ default-run = "light-client-query-service"
 [[bin]]
 name = "light-client-genesis"
 path = "src/bin/genesis.rs"
-required-features = ["decaf", "genesis"]
+required-features = ["genesis"]
 
 [features]
-default = ["decaf", "genesis"]
-decaf = ["light-client/decaf"]
+default = ["genesis"]
 genesis = ["hotshot-types", "surf-disco"]
 
 [dependencies]

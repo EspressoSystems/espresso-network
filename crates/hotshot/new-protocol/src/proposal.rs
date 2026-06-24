@@ -77,6 +77,7 @@ impl<T: NodeType> ProposalValidator<T> {
         self.tasks.spawn(async move {
             let sender = v.signature(&p.proposal).await?;
             v.justify_qc(&p.proposal.data).await?;
+            v.view_change_evidence(&p.proposal.data).await?;
             v.state_cert(&p.proposal.data).await?;
             let validated_proposal = ValidatedProposal {
                 sender,
@@ -145,7 +146,7 @@ impl<T: NodeType> Validator<T> {
         let view = proposal.data.view_number();
         let epoch = proposal.data.epoch;
         let membership = self.membership(epoch).await?;
-        let leader = match membership.leader(view).await {
+        let leader = match membership.leader(view) {
             Ok(leader) => leader,
             Err(err) => return Err(ValidationError::NoLeader(view, epoch, err)),
         };
@@ -167,13 +168,13 @@ impl<T: NodeType> Validator<T> {
             .epoch
             .ok_or(ValidationError::MissingEpoch(view, "vid share"))?;
         let membership = self.membership(epoch).await?;
-        let stake_table = membership.stake_table().await;
-        let leader = match membership.leader(view).await {
+        let stake_table = membership.stake_table();
+        let leader = match membership.leader(view) {
             Ok(leader) => leader,
             Err(err) => return Err(ValidationError::NoLeader(view, epoch, err)),
         };
         // TODO(Chengyu): this also check the consistency of vid common and vid commitment.
-        let total_weight = vid_total_weight(&stake_table, Some(epoch));
+        let total_weight = vid_total_weight(stake_table, Some(epoch));
         if !leader.validate(
             &vid_proposal.signature,
             vid_proposal.data.payload_commitment.as_ref(),
@@ -196,8 +197,8 @@ impl<T: NodeType> Validator<T> {
             ));
         };
         let membership = self.membership(epoch).await?;
-        let entries = StakeTableEntries::<T>::from(membership.stake_table().await).0;
-        let threshold = membership.success_threshold().await;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let threshold = membership.success_threshold();
         match proposal
             .justify_qc
             .is_valid_cert(&entries, threshold, &self.upgrade_lock)
@@ -205,6 +206,37 @@ impl<T: NodeType> Validator<T> {
             Ok(()) => Ok(()),
             Err(e) => Err(ValidationError::InvalidJustifyQc(e)),
         }
+    }
+
+    /// Validate the proposal's view-change evidence (timeout certificate).
+    async fn view_change_evidence(&self, proposal: &Proposal<T>) -> Result<()> {
+        let view = proposal.view_number();
+
+        // If proposal chains directly off the immediately preceding view, no evidence is required.
+        if proposal.justify_qc.view_number() + 1 == view {
+            return Ok(());
+        }
+
+        let Some(tc) = proposal.view_change_evidence.as_ref() else {
+            return Err(ValidationError::MissingViewChangeEvidence(view));
+        };
+
+        // The timeout certificate must certify the immediately preceding view.
+        if tc.data().view + 1 != view {
+            return Err(ValidationError::ViewChangeEvidenceWrongView {
+                proposal_view: view,
+                evidence_view: tc.data().view,
+            });
+        }
+
+        let Some(tc_epoch) = tc.epoch() else {
+            return Err(ValidationError::MissingEpoch(view, "view_change_evidence"));
+        };
+        let membership = self.membership(tc_epoch).await?;
+        let entries = StakeTableEntries::from_iter(membership.stake_table()).0;
+        let threshold = membership.success_threshold();
+        tc.is_valid_cert(&entries, threshold, &self.upgrade_lock)
+            .map_err(ValidationError::InvalidViewChangeEvidence)
     }
 
     /// Validate the state_cert on an epoch-root proposal.
@@ -239,7 +271,6 @@ impl<T: NodeType> Validator<T> {
         match self
             .membership_coordinator
             .membership_for_epoch(Some(epoch))
-            .await
         {
             Ok(m) => Ok(m),
             Err(_) => self
@@ -288,4 +319,19 @@ pub enum ValidationError {
 
     #[error("invalid vid share proposal signature")]
     InvalidVidShareProposalSignature,
+
+    #[error("proposal at view {0} skips views but carries no view-change evidence")]
+    MissingViewChangeEvidence(ViewNumber),
+
+    #[error(
+        "view-change evidence for proposal view {proposal_view} certifies view {evidence_view}, \
+         not the immediately preceding view"
+    )]
+    ViewChangeEvidenceWrongView {
+        proposal_view: ViewNumber,
+        evidence_view: ViewNumber,
+    },
+
+    #[error("view-change evidence (timeout certificate) is invalid: {0}")]
+    InvalidViewChangeEvidence(#[source] anytrace::Error),
 }

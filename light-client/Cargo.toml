@@ -5,8 +5,8 @@ authors.workspace = true
 edition.workspace = true
 
 [features]
-default = ["decaf"]
-decaf = []
+default = ["rlp"]
+rlp = ["alloy-rlp", "hotshot-types/rlp", "espresso-types/rlp"]
 testing = ["espresso-types/testing", "bitvec", "hotshot-contract-adapter", "rand"]
 
 [dependencies]
@@ -21,7 +21,7 @@ derive_builder = { workspace = true }
 derive_more = { workspace = true }
 espresso-types = { workspace = true }
 futures = { workspace = true }
-hotshot-query-service = { workspace = true }
+hotshot-query-service = { workspace = true, features = ["sqlite-options"] }
 hotshot-query-service-types = { workspace = true }
 hotshot-types = { workspace = true }
 jf-advz = { workspace = true }
@@ -31,10 +31,14 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 static_assertions = { workspace = true }
 surf-disco = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 vbs = { workspace = true }
 versions = { workspace = true }
+
+# RLP dependencies
+alloy-rlp = { workspace = true, optional = true }
 
 # Testing dependencies
 bitvec = { workspace = true, optional = true }

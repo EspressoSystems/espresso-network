@@ -41,10 +41,10 @@ fn small_config() -> BlockBuilderConfig {
     }
 }
 
-async fn builder() -> BlockBuilder<TestTypes> {
+fn builder() -> BlockBuilder<TestTypes> {
     BlockBuilder::new(
         Arc::new(TestInstanceState::default()),
-        mock_membership().await,
+        mock_membership(),
         small_config(),
         test_upgrade_lock(),
     )
@@ -52,7 +52,7 @@ async fn builder() -> BlockBuilder<TestTypes> {
 
 #[tokio::test]
 async fn test_retry_buffer() {
-    let mut b = builder().await;
+    let mut b = builder();
     let t1 = tx(1);
     let t2 = tx(2);
     b.on_submit_transaction(t1.clone());
@@ -75,7 +75,7 @@ async fn test_retry_buffer() {
 
 #[tokio::test]
 async fn test_leader_buffer_drain() {
-    let mut b = builder().await;
+    let mut b = builder();
     b.on_transactions(tx_msg(view(1), vec![tx(1), tx(2)]));
     let (mut txns, manifest) = b.drain(view(1), epoch());
     txns.sort_by_key(|t| t.bytes().clone());
@@ -95,11 +95,83 @@ async fn test_leader_buffer_drain() {
     );
 }
 
+/// Two paths can emit `RequestBlockAndHeader` for the same view N+1 with
+/// different parents:
+///   1. `handle_proposal_with_vid_share(P_N)` — parent = P_N
+///   2. `handle_timeout_certificate(cert.view = N)` — parent = proposals[locked_view]
+///
+/// Both must produce a block, because `maybe_propose` later picks the
+/// header matching its current `parent_commitment`.  Keying the builder's
+/// `calculations` map by view alone would silently drop one of them;
+/// keying by `(view, parent_commitment)` lets both run.
+#[tokio::test]
+async fn test_request_block_same_view_different_parent_both_produce_output() {
+    use std::collections::HashSet;
+
+    use crate::{
+        block::BlockAndHeaderRequest, helpers::proposal_commitment, tests::common::utils::TestData,
+    };
+
+    let mut b = builder();
+
+    let test_data = TestData::new(3).await;
+    let parent_a = test_data.views[0].proposal.data.clone();
+    let parent_b = test_data.views[1].proposal.data.clone();
+    let a_commit = proposal_commitment(&parent_a);
+    let b_commit = proposal_commitment(&parent_b);
+    assert_ne!(a_commit, b_commit);
+
+    let target_view = ViewNumber::new(5);
+    b.request_block(BlockAndHeaderRequest {
+        view: target_view,
+        epoch: EpochNumber::genesis(),
+        parent_proposal: parent_a.clone(),
+    });
+    b.request_block(BlockAndHeaderRequest {
+        view: target_view,
+        epoch: EpochNumber::genesis(),
+        parent_proposal: parent_b.clone(),
+    });
+
+    let mut got = HashSet::new();
+    for _ in 0..2 {
+        let Some(Ok(output)) = b.next().await else {
+            panic!("expected an Ok block builder output");
+        };
+        assert_eq!(output.view, target_view);
+        got.insert(proposal_commitment(&output.parent_proposal));
+    }
+    assert_eq!(got, HashSet::from([a_commit, b_commit]));
+    assert!(b.next().await.is_none());
+}
+
+/// A duplicate request (same view AND same parent) is still deduped.
+#[tokio::test]
+async fn test_request_block_dedups_same_view_same_parent() {
+    use crate::{block::BlockAndHeaderRequest, tests::common::utils::TestData};
+
+    let mut b = builder();
+    let test_data = TestData::new(2).await;
+    let parent = test_data.views[0].proposal.data.clone();
+
+    let target_view = ViewNumber::new(5);
+    let req = || BlockAndHeaderRequest {
+        view: target_view,
+        epoch: EpochNumber::genesis(),
+        parent_proposal: parent.clone(),
+    };
+    b.request_block(req());
+    b.request_block(req());
+
+    assert!(matches!(b.next().await, Some(Ok(_))));
+    assert!(b.next().await.is_none());
+}
+
 #[tokio::test]
 async fn test_dedup_window() {
     let mut b = BlockBuilder::new(
         Arc::new(TestInstanceState::default()),
-        mock_membership().await,
+        mock_membership(),
         BlockBuilderConfig {
             dedup_window_size: 2,
             ..small_config()

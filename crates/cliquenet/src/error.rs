@@ -40,6 +40,10 @@ pub enum NetworkError {
     #[error("unknown frame type: {0}")]
     UnknownFrameType(u8),
 
+    /// Version negotiation failed.
+    #[error("incompatible versions")]
+    IncompatibleVersions,
+
     /// Generic Noise error.
     #[error("noise error: {0}")]
     Noise(#[from] snow::Error),

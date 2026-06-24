@@ -101,7 +101,7 @@ impl<
 pub trait TestStakeTable<
     PubKey: SignatureKey,
     StatePubKey: StateSignatureKey + LCV1StateSignatureKey + LCV2StateSignatureKey + LCV3StateSignatureKey,
->: Debug + std::marker::Send + std::marker::Sync
+>: Clone + Debug + std::marker::Send + std::marker::Sync
 {
     fn new(
         quorum_members: Vec<TestStakeTableEntry<PubKey, StatePubKey>>,

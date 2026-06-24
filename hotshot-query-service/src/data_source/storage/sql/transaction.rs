@@ -73,13 +73,13 @@ use crate::{
 /// so they start immediately instead of waiting for a safe serializable snapshot.
 #[cfg(not(feature = "embedded-db"))]
 static NO_DEFERRABLE_ON_READ: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+    std::sync::atomic::AtomicBool::new(true);
 
 /// Configure whether read transactions on Postgres should omit `DEFERRABLE`.
 ///
 /// When `true`, `Read::begin` issues `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY`
 /// (no `DEFERRABLE`) so the transaction starts immediately rather than waiting for a safe
-/// serializable snapshot. Default: `false`. Call this once at startup based on the operator's
+/// serializable snapshot. Default: `true`. Call this once at startup based on the operator's
 /// chosen configuration.
 #[cfg(not(feature = "embedded-db"))]
 pub fn set_no_deferrable_on_read(value: bool) {
@@ -193,6 +193,36 @@ impl TransactionMode for Prune {
 
     fn display() -> &'static str {
         "prune"
+    }
+}
+
+/// Marker type indicating a transaction used for deferred-migration batches.
+///
+/// On Postgres this uses READ COMMITTED instead of SERIALIZABLE. Long-running backfill batches
+/// that INSERT into and DELETE from tables consensus is also writing to (e.g. the merkle-tree
+/// tables) trigger Serializable Snapshot Isolation predicate-lock conflicts and abort with
+/// "could not serialize access". Backfill batches are designed to be idempotent (`ON CONFLICT`,
+/// monotonic keyset cursors), so the weaker isolation is acceptable.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Backfill;
+
+impl TransactionMode for Backfill {
+    #[allow(unused_variables)]
+    async fn begin(conn: &mut <Db as Database>::Connection) -> anyhow::Result<()> {
+        // SQLite: same as Write -- acquire an exclusive lock immediately to avoid deadlocks.
+        #[cfg(feature = "embedded-db")]
+        conn.execute("UPDATE pruned_height SET id = id WHERE false")
+            .await?;
+
+        #[cfg(not(feature = "embedded-db"))]
+        conn.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .await?;
+
+        Ok(())
+    }
+
+    fn display() -> &'static str {
+        "backfill"
     }
 }
 
@@ -896,14 +926,14 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
         let hashes: Vec<Vec<u8>> = all_hashes.into_iter().collect();
 
         #[cfg(not(feature = "embedded-db"))]
-        let nodes_hash_ids: HashMap<Vec<u8>, i32> = batch_insert_hashes(hashes, self).await?;
+        let nodes_hash_ids: HashMap<Vec<u8>, i64> = batch_insert_hashes(hashes, self).await?;
 
         #[cfg(feature = "embedded-db")]
-        let nodes_hash_ids: HashMap<Vec<u8>, i32> = {
-            let mut hash_ids: HashMap<Vec<u8>, i32> = HashMap::with_capacity(hashes.len());
+        let nodes_hash_ids: HashMap<Vec<u8>, i64> = {
+            let mut hash_ids: HashMap<Vec<u8>, i64> = HashMap::with_capacity(hashes.len());
             for hash_chunk in hashes.chunks(20) {
                 let (query, sql) = build_hash_batch_insert(hash_chunk)?;
-                let chunk_ids: HashMap<Vec<u8>, i32> = query
+                let chunk_ids: HashMap<Vec<u8>, i64> = query
                     .query_as(&sql)
                     .fetch(self.as_mut())
                     .try_collect()
@@ -923,7 +953,7 @@ impl<Types: NodeType, State: MerklizedState<Types, ARITY>, const ARITY: usize>
                 let children_hashes = children
                     .iter()
                     .map(|c| nodes_hash_ids.get(c).copied())
-                    .collect::<Option<Vec<i32>>>()
+                    .collect::<Option<Vec<i64>>>()
                     .ok_or(QueryError::Error {
                         message: "Missing child hash".to_string(),
                     })?;

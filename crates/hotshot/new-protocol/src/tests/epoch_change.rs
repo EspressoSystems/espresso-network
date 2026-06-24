@@ -1,7 +1,7 @@
 use hotshot::types::BLSPubKey;
 use hotshot_example_types::node_types::TestTypes;
 use hotshot_types::{
-    data::EpochNumber,
+    data::{EpochNumber, ViewNumber},
     message::Proposal as SignedProposal,
     traits::{block_contents::BlockHeader, signature_key::SignatureKey},
     utils::is_epoch_transition,
@@ -244,6 +244,42 @@ async fn test_handle_epoch_change_stale() {
         view_changed_before,
         count_matching(harness.outputs(), is_view_changed),
         "Stale EpochChange should be rejected — no new ViewChanged"
+    );
+}
+
+/// An otherwise-valid EpochChangeMessage for an epoch boundary the node has
+/// already crossed is rejected, even when the lock does not catch it (here:
+/// no locked cert at all). Regression test: replayed boundary messages must
+/// not emit a backwards `ViewChanged` and regress a caught-up node to a
+/// long-past view.
+#[tokio::test]
+async fn test_handle_epoch_change_replay_of_crossed_boundary() {
+    let mut harness = ConsensusHarness::new(0).await;
+    let test_data = TestData::new_with_epoch_height(11, EPOCH_HEIGHT).await;
+
+    // Simulate a node already deep in epoch 3 — e.g. freshly restarted and
+    // seeded from its anchor — with no locked cert (genesis safety), so the
+    // locked-cert staleness check cannot reject the replay.
+    harness
+        .consensus
+        .set_view(ViewNumber::new(25), EpochNumber::new(3));
+
+    // Replay the epoch 1 → 2 boundary (view 10, block 10).
+    let epoch_view = &test_data.views[9];
+    let proposal: Proposal<TestTypes> = epoch_view.proposal.data.clone();
+    let epoch_change = EpochChangeMessage {
+        cert1: epoch_view.cert1.clone(),
+        cert2: epoch_view.cert2.clone(),
+        proposal,
+    };
+
+    harness
+        .apply(ConsensusInput::EpochChange(epoch_change))
+        .await;
+
+    assert!(
+        !any(harness.outputs(), is_view_changed),
+        "replayed epoch change for a crossed boundary must not change the view"
     );
 }
 

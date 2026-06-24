@@ -1,3 +1,13 @@
+[route.get_migration_status]
+PATH = ["migration-status"]
+METHOD = "GET"
+DOC = """
+Get the status of all deferred background migrations.
+
+Returns a list of migrations with their name, when they started, when they completed (if done),
+and the last processed offset (useful for estimating progress).
+"""
+
 [route.get_table_sizes]
 PATH = ["table-sizes"]
 METHOD = "GET"

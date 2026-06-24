@@ -10,9 +10,11 @@ use std::{
 };
 
 use async_broadcast::Sender;
-use async_lock::RwLock;
 use hotshot::traits::implementations::MemoryNetwork;
-use hotshot_example_types::node_types::{MemoryImpl, TEST_VERSIONS, TestTypes};
+use hotshot_example_types::{
+    membership::TestableMembership,
+    node_types::{MemoryImpl, TEST_VERSIONS, TestTypes},
+};
 use hotshot_task::task::{ConsensusTaskRegistry, Task};
 use hotshot_task_impls::{events::HotShotEvent, network::NetworkEventTaskState};
 use hotshot_testing::{
@@ -20,10 +22,8 @@ use hotshot_testing::{
     test_task::add_network_message_test_task, view_generator::TestViewGenerator,
 };
 use hotshot_types::{
-    consensus::OuterConsensus,
-    data::ViewNumber,
-    message::UpgradeLock,
-    traits::{election::Membership, node_implementation::NodeType},
+    consensus::OuterConsensus, data::ViewNumber, message::UpgradeLock,
+    traits::node_implementation::NodeType,
 };
 use tokio::time::timeout;
 
@@ -55,12 +55,12 @@ async fn test_network_task() {
 
     let all_nodes = config.known_nodes_with_stake.clone();
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
+    let membership = <TestTypes as NodeType>::Membership::new(
         all_nodes.clone(),
         all_nodes,
         public_key,
         config.epoch_height,
-    )));
+    );
     let coordinator =
         EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
     let network_state: NetworkEventTaskState<TestTypes, MemoryNetwork<_>, _> =
@@ -230,12 +230,12 @@ async fn test_network_storage_fail() {
     let all_nodes = config.known_nodes_with_stake.clone();
     let upgrade_lock = UpgradeLock::<TestTypes>::new(TEST_VERSIONS.test);
 
-    let membership = Arc::new(RwLock::new(<TestTypes as NodeType>::Membership::new(
+    let membership = <TestTypes as NodeType>::Membership::new(
         all_nodes.clone(),
         all_nodes,
         public_key,
         config.epoch_height,
-    )));
+    );
     let coordinator =
         EpochMembershipCoordinator::new(membership, config.epoch_height, &storage.clone());
     let network_state: NetworkEventTaskState<TestTypes, MemoryNetwork<_>, _> =

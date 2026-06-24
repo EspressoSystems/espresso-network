@@ -33,6 +33,7 @@ use hotshot_query_service::{
 use hotshot_types::{
     data::{EpochNumber, QuorumProposalWrapper, ViewNumber},
     message::Proposal,
+    traits::election::MembershipSnapshot,
     utils::{epoch_from_block_number, is_last_block},
     vote::HasViewNumber,
 };
@@ -354,7 +355,7 @@ impl RewardMerkleTreeDataSource for SqlStorage {
 
             let row = sqlx::query(
                 r#"
-                SELECT proof 
+                SELECT proof
                 FROM reward_merkle_tree_v2_proofs
                 WHERE account = $1
                 ORDER BY height DESC
@@ -502,14 +503,12 @@ impl RewardMerkleTreeDataSource for SqlStorage {
         version: Version,
     ) -> impl Send + Future<Output = anyhow::Result<()>> {
         async move {
-            // For V4 (per-block rewards), only persist proofs every 30th block.
-            // For V5+ (epoch rewards), this is only called at epoch boundaries.
+            // Only attempt to persist proofs every 30th block.
             //
             // In tests, we persist proofs at every block height so
             // reward claim tests can query proofs at arbitrary heights. This can be
             // removed once all reward claim tests are updated
             if !cfg!(any(test, feature = "testing"))
-                && version < EPOCH_REWARD_VERSION
                 && !(height + node_state.node_id).is_multiple_of(30)
             {
                 return Ok(());
@@ -790,7 +789,7 @@ impl CatchupStorage for SqlStorage {
             .clone();
 
         // New protocol: cert2 alone proves finality. Return the leaf range up to the finalizing
-        // cert2's height
+        // cert2's height.
         if leaf.block_header().version() >= NEW_PROTOCOL_VERSION {
             let cert2: espresso_types::Certificate2<SeqTypes> =
                 tx.load_earliest_cert2(height).await?.context(format!(
@@ -846,7 +845,7 @@ impl CatchupStorage for SqlStorage {
         Ok(chain)
     }
 
-    async fn load_earliest_cert2(
+    async fn load_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
@@ -854,7 +853,7 @@ impl CatchupStorage for SqlStorage {
             .read()
             .await
             .context("opening transaction to fetch cert2")?;
-        Ok(tx.load_earliest_cert2(height).await?)
+        Ok(tx.load_cert2(height).await?)
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
@@ -1006,11 +1005,11 @@ impl CatchupStorage for DataSource {
         self.as_ref().get_leaf_chain(height).await
     }
 
-    async fn load_earliest_cert2(
+    async fn load_cert2(
         &self,
         height: u64,
     ) -> anyhow::Result<Option<espresso_types::Certificate2<SeqTypes>>> {
-        self.as_ref().load_earliest_cert2(height).await
+        self.as_ref().load_cert2(height).await
     }
 
     async fn get_leaf(&self, height: u64) -> anyhow::Result<Leaf2> {
@@ -1169,11 +1168,53 @@ impl super::data_source::DatabaseMetadataSource for SqlStorage {
             Ok(table_sizes)
         }
     }
+
+    async fn get_migration_status(
+        &self,
+    ) -> anyhow::Result<Vec<super::data_source::MigrationStatus>> {
+        let mut tx = self
+            .read()
+            .await
+            .context("opening transaction to fetch migration status")?;
+
+        type MigrationStatusRow = (
+            String,
+            chrono::DateTime<chrono::Utc>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<i64>,
+        );
+
+        let rows: Vec<MigrationStatusRow> = sqlx::query_as(
+            "SELECT name, started_at, completed_at, last_offset FROM deferred_migrations ORDER BY \
+             started_at",
+        )
+        .fetch_all(tx.as_mut())
+        .await
+        .context("failed to query deferred_migrations")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(name, started_at, completed_at, last_offset)| {
+                super::data_source::MigrationStatus {
+                    name,
+                    started_at,
+                    completed_at,
+                    last_offset,
+                }
+            })
+            .collect())
+    }
 }
 
 impl super::data_source::DatabaseMetadataSource for DataSource {
     async fn get_table_sizes(&self) -> anyhow::Result<Vec<super::data_source::TableSize>> {
         self.as_ref().get_table_sizes().await
+    }
+
+    async fn get_migration_status(
+        &self,
+    ) -> anyhow::Result<Vec<super::data_source::MigrationStatus>> {
+        self.as_ref().get_migration_status().await
     }
 }
 
@@ -1647,9 +1688,7 @@ async fn reward_header_dependencies(
     };
 
     let coordinator = instance.coordinator.clone();
-    let membership_lock = coordinator.membership().read().await;
-    let first_epoch = membership_lock.first_epoch();
-    drop(membership_lock);
+    let first_epoch = coordinator.membership().first_epoch();
     // add all the chain configs needed to apply STF to headers to the catchup
     for proposal in leaves {
         let header = proposal.block_header();
@@ -1673,7 +1712,7 @@ async fn reward_header_dependencies(
             continue;
         }
 
-        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)).await {
+        let epoch_membership = match coordinator.membership_for_epoch(Some(proposal_epoch)) {
             Ok(e) => e,
             Err(err) => {
                 tracing::info!(
@@ -1687,10 +1726,11 @@ async fn reward_header_dependencies(
             },
         };
 
-        let leader = epoch_membership.leader(proposal.view_number()).await?;
-        let membership_lock = coordinator.membership().read().await;
-        let validator = membership_lock.get_validator_config(&proposal_epoch, leader)?;
-        drop(membership_lock);
+        let snapshot = epoch_membership
+            .snapshot()
+            .with_context(|| format!("no committee for epoch={proposal_epoch}"))?;
+        let leader = snapshot.lookup_leader(proposal.view_number())?;
+        let validator = snapshot.validator_config(&leader)?;
 
         reward_accounts.insert(RewardAccountV2(validator.account));
 
@@ -1728,7 +1768,6 @@ where
 pub(crate) mod impl_testable_data_source {
 
     use hotshot_query_service::data_source::storage::sql::testing::TmpDb;
-    use light_client::state::LightClientOptions;
 
     use super::*;
     use crate::api::{self, data_source::testing::TestableSequencerDataSource, options::Query};
@@ -1776,56 +1815,34 @@ pub(crate) mod impl_testable_data_source {
         }
 
         fn options(storage: &Self::Storage, opt: api::Options) -> api::Options {
-            opt.query_sql(
-                Query {
-                    light_client: LightClientOptions {
-                        // Enable testnet features when running in tests.
-                        decaf: true,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                tmp_options(storage),
-            )
+            opt.query_sql(Query::default(), tmp_options(storage))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::Address;
-    use espresso_types::{
-        v0_3::RewardAmount,
-        v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardAccountV2, RewardMerkleTreeV2},
-    };
+    use espresso_types::v0_4::{REWARD_MERKLE_TREE_V2_HEIGHT, RewardMerkleTreeV2};
     use hotshot_query_service::{
         data_source::{
             Transaction, VersionedDataSource,
             sql::Config,
             storage::{
-                MerklizedStateStorage, UpdateAvailabilityStorage,
+                UpdateAvailabilityStorage,
                 sql::{
                     SqlStorage, StorageConnectionType, Transaction as SqlTransaction, Write,
                     testing::TmpDb,
                 },
             },
         },
-        merklized_state::{MerklizedState, Snapshot, UpdateStateData},
+        merklized_state::MerklizedState,
     };
-    use jf_merkle_tree_compat::{
-        LookupResult, MerkleTreeScheme, ToTraversalPath, UniversalMerkleTreeScheme,
-    };
+    use jf_merkle_tree_compat::MerkleTreeScheme;
     use light_client::testing::{leaf_chain, leaf_chain_with_upgrade};
     use versions::{DRB_AND_HEADER_UPGRADE_VERSION, EPOCH_REWARD_VERSION, Upgrade};
 
     use super::impl_testable_data_source::tmp_options;
-    use crate::{SeqTypes, api::RewardMerkleTreeDataSource};
-
-    fn make_reward_account(i: usize) -> RewardAccountV2 {
-        let mut addr_bytes = [0u8; 20];
-        addr_bytes[16..20].copy_from_slice(&(i as u32).to_be_bytes());
-        RewardAccountV2(Address::from(addr_bytes))
-    }
+    use crate::api::RewardMerkleTreeDataSource;
 
     async fn insert_test_header(
         tx: &mut SqlTransaction<Write>,
@@ -1862,396 +1879,6 @@ mod tests {
         )
         .await
         .unwrap();
-    }
-
-    async fn batch_insert_proofs(
-        tx: &mut SqlTransaction<Write>,
-        reward_tree: &RewardMerkleTreeV2,
-        accounts: &[RewardAccountV2],
-        block_height: u64,
-    ) {
-        let proofs_and_paths: Vec<_> = accounts
-            .iter()
-            .map(|account| {
-                let proof = match reward_tree.universal_lookup(*account) {
-                    LookupResult::Ok(_, proof) => proof,
-                    LookupResult::NotInMemory => panic!("account not in memory"),
-                    LookupResult::NotFound(proof) => proof,
-                };
-                let traversal_path = <RewardAccountV2 as ToTraversalPath<
-                    { RewardMerkleTreeV2::ARITY },
-                >>::to_traversal_path(
-                    account, reward_tree.height()
-                );
-                (proof, traversal_path)
-            })
-            .collect();
-
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::insert_merkle_nodes_batch(
-            tx,
-            proofs_and_paths,
-            block_height,
-        )
-        .await
-        .expect("failed to batch insert proofs");
-    }
-
-    #[test_log::test(tokio::test(flavor = "multi_thread"))]
-    async fn test_reward_accounts_batch_insertion() {
-        // Batch insertion of 1000 accounts at height 1
-        // Balance updates for some accounts at height 2
-        // New accounts added at height 2
-        // More balance updates at height 3
-        // Querying correct balances at each height snapshot
-
-        let db = TmpDb::init().await;
-        let opt = tmp_options(&db);
-        let cfg = Config::try_from(&opt).expect("failed to create config from options");
-        let storage = SqlStorage::connect(cfg, StorageConnectionType::Query)
-            .await
-            .expect("failed to connect to storage");
-
-        let num_initial_accounts = 1000usize;
-
-        let initial_accounts: Vec<RewardAccountV2> =
-            (0..num_initial_accounts).map(make_reward_account).collect();
-
-        tracing::info!(
-            "Height 1: Inserting {} initial accounts",
-            num_initial_accounts
-        );
-
-        let mut reward_tree_h1 = RewardMerkleTreeV2::new(REWARD_MERKLE_TREE_V2_HEIGHT);
-
-        for (i, account) in initial_accounts.iter().enumerate() {
-            let reward_amount = RewardAmount::from(((i + 1) * 1000) as u64);
-            reward_tree_h1.update(*account, reward_amount).unwrap();
-        }
-
-        let mut tx = storage.write().await.unwrap();
-        insert_test_header(&mut tx, 1, &reward_tree_h1).await;
-        batch_insert_proofs(&mut tx, &reward_tree_h1, &initial_accounts, 1).await;
-
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::set_last_state_height(&mut tx, 1)
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-
-        tracing::info!("Height 2: Updating balances and adding new accounts");
-
-        let mut reward_tree_h2 = reward_tree_h1.clone();
-
-        // Update balances for accounts 0-99
-        let updated_accounts_h2: Vec<RewardAccountV2> = (0..100).map(make_reward_account).collect();
-        for (i, account) in updated_accounts_h2.iter().enumerate() {
-            let new_reward = RewardAmount::from(((i + 1) * 2000) as u64);
-            reward_tree_h2.update(*account, new_reward).unwrap();
-        }
-
-        // Add 100 new accounts (1000..1099)
-        let new_accounts_h2: Vec<RewardAccountV2> = (1000..1100).map(make_reward_account).collect();
-        for (i, account) in new_accounts_h2.iter().enumerate() {
-            let reward_amount = RewardAmount::from(((i + 1001) * 500) as u64);
-            reward_tree_h2.update(*account, reward_amount).unwrap();
-        }
-
-        let mut changed_accounts_h2 = updated_accounts_h2.clone();
-        changed_accounts_h2.extend(new_accounts_h2.clone());
-
-        let mut tx = storage.write().await.unwrap();
-        insert_test_header(&mut tx, 2, &reward_tree_h2).await;
-        batch_insert_proofs(&mut tx, &reward_tree_h2, &changed_accounts_h2, 2).await;
-
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::set_last_state_height(&mut tx, 2)
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-
-        tracing::info!("Height 3: More balance updates");
-
-        let mut reward_tree_h3 = reward_tree_h2.clone();
-
-        // Update balances for accounts 500-599
-        let updated_accounts_h3: Vec<RewardAccountV2> =
-            (500..600).map(make_reward_account).collect();
-        for (i, account) in updated_accounts_h3.iter().enumerate() {
-            let new_reward = RewardAmount::from(((500 + i + 1) * 3000) as u64);
-            reward_tree_h3.update(*account, new_reward).unwrap();
-        }
-
-        let mut tx = storage.write().await.unwrap();
-        insert_test_header(&mut tx, 3, &reward_tree_h3).await;
-        batch_insert_proofs(&mut tx, &reward_tree_h3, &updated_accounts_h3, 3).await;
-
-        UpdateStateData::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::set_last_state_height(&mut tx, 3)
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-
-        tracing::info!("Verifying all account proofs at each height");
-
-        // Verify height=1
-        // All 1000 initial accounts
-        let snapshot_h1 =
-            Snapshot::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::Index(1);
-        for i in 0..num_initial_accounts {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h1, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h1: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 1000) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h1.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-        tracing::info!("Verified height=1 {num_initial_accounts} accounts with proofs",);
-
-        // Verify accounts 1000-1099 don't exist at height 1
-        for i in 1000..1100 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h1, account)
-                .await
-                .unwrap();
-            assert!(proof.elem().is_none(),);
-
-            // Verify non-membership proof
-            assert!(
-                RewardMerkleTreeV2::non_membership_verify(
-                    reward_tree_h1.commitment(),
-                    account,
-                    proof
-                )
-                .unwrap(),
-            );
-        }
-        tracing::info!("Height 1: Verified 100 non-membership proofs");
-
-        // Verify height 2
-        let snapshot_h2 =
-            Snapshot::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::Index(2);
-
-        // Accounts 0-99
-        for i in 0..100 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h2, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h2: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 2000) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h2.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-
-        // Accounts 100-999: original rewards
-        for i in 100..1000 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h2, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h2: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 1000) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h2.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-
-        // Accounts 1000-1099
-        // new accounts
-        for i in 1000..1100 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h2, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h2: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 500) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h2.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-        tracing::info!("Height 2: Verified all 1100 accounts with proofs");
-
-        // Verify HEIGHT 3: All accounts
-        let snapshot_h3 =
-            Snapshot::<SeqTypes, RewardMerkleTreeV2, { RewardMerkleTreeV2::ARITY }>::Index(3);
-
-        // Accounts 0-99
-        for i in 0..100 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h3, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h3: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 2000) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h3.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-
-        for i in 100..500 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h3, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h3: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 1000) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h3.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-
-        // Accounts 500-599
-        for i in 500..600 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h3, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h3: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 3000) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h3.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-
-        // Accounts 600-999
-        for i in 600..1000 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h3, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h3: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 1000) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h3.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-
-        // Accounts 1000-1099: new accounts (from h2)
-        for i in 1000..1100 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h3, account)
-                .await
-                .unwrap_or_else(|e| panic!("failed to get path for account {i} at h3: {e}"));
-
-            let expected_reward = RewardAmount::from(((i + 1) * 500) as u64);
-            let actual_reward = proof.elem().expect("account should exist");
-            assert_eq!(*actual_reward, expected_reward,);
-
-            assert!(
-                RewardMerkleTreeV2::verify(reward_tree_h3.commitment(), account, proof)
-                    .unwrap()
-                    .is_ok(),
-            );
-        }
-        tracing::info!("Height 3: Verified all 1100 accounts with proofs");
-
-        // Verify non-membership proofs for accounts that never existed
-        for i in 1100..1110 {
-            let account = make_reward_account(i);
-            let proof = storage
-                .read()
-                .await
-                .unwrap()
-                .get_path(snapshot_h3, account)
-                .await
-                .unwrap();
-
-            assert!(
-                proof.elem().is_none(),
-                "Account {i} should not exist at height 3"
-            );
-
-            assert!(
-                RewardMerkleTreeV2::non_membership_verify(
-                    reward_tree_h3.commitment(),
-                    account,
-                    proof
-                )
-                .unwrap(),
-            );
-        }
-        tracing::info!("Height 3: Verified 10 non-membership proofs");
     }
 
     #[tokio::test]

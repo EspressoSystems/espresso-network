@@ -9,7 +9,7 @@ pub mod catchup;
 pub mod consensus_handle;
 pub mod context;
 pub mod genesis;
-pub mod keyset;
+pub use espresso_keyset as keyset;
 pub mod network;
 pub mod options;
 pub mod persistence;
@@ -23,19 +23,39 @@ use std::{fmt::Debug, marker::PhantomData, sync::Arc, time::Duration};
 
 use alloy::primitives::U256;
 use anyhow::Context;
-use async_lock::{Mutex, RwLock};
+use async_lock::Mutex;
 use catchup::{ParallelStateCatchup, StatePeers};
 use context::SequencerContext;
 use derivative::Derivative;
+use dyn_clone::clone_box;
 use espresso_types::{
     BackoffParams, EpochCommittees, EpochRewardsCalculator, L1ClientOptions, NodeState, PubKey,
     SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
+    v0_1::{ChainId, DECAF_CHAIN_ID},
     v0_3::Fetcher,
 };
-pub use genesis::Genesis;
+
+pub(crate) const MAINNET_CHAIN_ID: ChainId = ChainId(U256::ONE);
+pub(crate) const MAINNET_TELEMETRY_ENDPOINT: &str = "https://telemetry.main.net.espresso.network";
+pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
+    "https://telemetry.decaf.testnet.espresso.network";
+
+/// Default telemetry endpoint for known networks. Unknown chains have no
+/// default; operators set `ESPRESSO_NODE_TELEMETRY_ENDPOINT` explicitly.
+pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static str> {
+    if chain_id == MAINNET_CHAIN_ID {
+        Some(MAINNET_TELEMETRY_ENDPOINT)
+    } else if chain_id == DECAF_CHAIN_ID {
+        Some(DECAF_TELEMETRY_ENDPOINT)
+    } else {
+        None
+    }
+}
+
 use genesis::L1Finalized;
+pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
     traits::implementations::{
         CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
@@ -45,7 +65,7 @@ use hotshot::{
     types::SignatureKey,
 };
 use hotshot_libp2p_networking::network::behaviours::dht::store::persistent::DhtPersistentStorage;
-use hotshot_new_protocol::network::cliquenet::Cliquenet;
+use hotshot_new_protocol::network::Cliquenet;
 use hotshot_orchestrator::client::{OrchestratorClient, get_complete_config};
 use hotshot_types::{
     ValidatorConfig,
@@ -208,6 +228,8 @@ pub struct NetworkParams {
 
     /// Minimum number of Libp2p peers to emit gossip to during a heartbeat
     pub libp2p_gossip_lazy: usize,
+
+    pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
 }
 
 pub struct L1Params {
@@ -461,10 +483,10 @@ where
             );
 
             // Publish our cliquenet `connect_info` into the stake table from
-            // `CLIQUENET_VERSION` on, so peers can dial us. Modify `validator_config`
+            // `NEW_PROTOCOL_VERSION` on, so peers can dial us. Modify `validator_config`
             // in place so the same `connect_info` is sent later when posting to
             // `/ready` (the orchestrator equality-checks against `known_nodes_with_stake`).
-            if genesis.base_version >= versions::CLIQUENET_VERSION {
+            if genesis.base_version >= versions::NEW_PROTOCOL_VERSION {
                 let advertise_addr = network_params.cliquenet_advertise_addr.clone().context(
                     "ESPRESSO_NODE_CLIQUENET_ADVERTISE_ADDRESS must be set when bootstrapping a \
                      Cliquenet network from the orchestrator",
@@ -722,12 +744,11 @@ where
     )
     .await;
 
-    let membership: Arc<RwLock<EpochCommittees>> = Arc::new(RwLock::new(membership));
     let persistence = Arc::new(persistence);
     let coordinator = EpochMembershipCoordinator::new(
         membership,
         network_config.config.epoch_height,
-        &persistence.clone(),
+        &persistence,
     );
 
     let epoch_rewards_calculator = Arc::new(Mutex::new(EpochRewardsCalculator::new()));
@@ -758,6 +779,9 @@ where
 
     let combined_network = {
         info!("Initializing Libp2p network");
+        // Mainnet keeps today's libp2p protocol strings byte-identical.
+        let chain_id = genesis.chain_config.chain_id;
+        let network_discriminator = (chain_id != MAINNET_CHAIN_ID).then_some(chain_id.0);
         let p2p_network = Libp2pNetwork::from_config(
             network_config.clone(),
             persistence.clone(),
@@ -770,6 +794,8 @@ where
             // (using https://docs.rs/blake3/latest/blake3/fn.derive_key.html)
             &validator_config.private_key,
             hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
+            network_discriminator,
+            network_params.libp2p_dht_put_quorum,
         )
         .await
         .with_context(|| {
@@ -795,26 +821,19 @@ where
         CombinedNetworks::new(cdn_network, p2p_network, Some(Duration::from_secs(1)))
     };
 
-    // Legacy HotShot uses CombinedNetworks (CDN + libp2p).
-    // The new Coordinator uses CliqueNet directly.
-    // Each protocol gets its own dedicated network
-    // If we later upgrade to CliqueNet before the Fast Finality upgrade, we can
-    // reintroduce CompatNetwork for legacy and spin up a separate CliqueNet network
-    // for the fast finality consensus upgrade i.e Coordinator.
-    let cliquenet = {
-        // TODO: This creates a separate UpgradeLock from the one HotShot will
-        // use. They should share a single lock so upgrade certificate updates
-        // are visible to both.
-        Cliquenet::create(
-            "espresso",
-            pub_key,
-            network_params.x25519_secret_key.into(),
-            network_params.cliquenet_bind_addr.clone(),
-            vec![], // Initialize with no peers, they are set during init.
-            UpgradeLock::new(version_upgrade),
-        )
-        .await?
-    };
+    // TODO: This creates a separate UpgradeLock from the one HotShot will
+    // use. They should share a single lock so upgrade certificate updates
+    // are visible to both.
+    let cliquenet = Cliquenet::create(
+        &format!("espresso-{}", genesis.chain_config.chain_id),
+        pub_key,
+        network_params.x25519_secret_key.into(),
+        network_params.cliquenet_bind_addr.clone(),
+        [],
+        UpgradeLock::new(version_upgrade),
+        clone_box(&*metrics),
+    )
+    .await?;
 
     let network = Arc::new(combined_network);
 
@@ -860,7 +879,7 @@ async fn check_cliquenet_info_registered(
     stake_table_contract: Option<alloy::primitives::Address>,
     l1_client: &espresso_types::v0::L1Client,
 ) {
-    if current_version != versions::VID2_UPGRADE_VERSION {
+    if current_version != versions::EPOCH_REWARD_VERSION {
         return;
     }
     let Some(addr) = stake_table_contract else {
@@ -937,7 +956,6 @@ pub mod testing {
         },
         signers::{k256::ecdsa::SigningKey, local::LocalSigner},
     };
-    use async_lock::RwLock;
     use catchup::NullStateCatchup;
     use committable::Committable;
     use espresso_contract_deployer::{
@@ -946,7 +964,7 @@ pub mod testing {
     };
     use espresso_types::{
         EpochVersion, Event, FeeAccount, L1Client, NetworkConfig, PubKey, SeqTypes, Transaction,
-        Upgrade, UpgradeMap,
+        Upgrade, UpgradeMap, UpgradeMode,
         eth_signature_key::EthKeyPair,
         v0::traits::{EventConsumer, NullEventConsumer, PersistenceOptions, StateCatchup},
     };
@@ -968,7 +986,7 @@ pub mod testing {
         BuilderTask, SimpleBuilderImplementation, TestBuilderImplementation,
     };
     use hotshot_types::{
-        HotShotConfig, PeerConfig,
+        HotShotConfig, PeerConfig, PeerConnectInfo,
         data::EpochNumber,
         event::LeafInfo,
         light_client::StateKeyPair,
@@ -1115,11 +1133,13 @@ pub mod testing {
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
+        coordinator_addrs: Vec<NetAddr>,
     }
 
     pub fn staking_priv_keys(
         priv_keys: &[BLSPrivKey],
         state_key_pairs: &[StateKeyPair],
+        coordinator_addrs: &[NetAddr],
         num_nodes: usize,
     ) -> Vec<StakingKeySet> {
         let seed = [42u8; 32];
@@ -1128,12 +1148,19 @@ pub mod testing {
         eth_key_pairs
             .zip(priv_keys.iter())
             .zip(state_key_pairs.iter())
-            .map(|((eth, bls), state)| StakingKeySet {
+            .enumerate()
+            .map(|(i, ((eth, bls), state))| StakingKeySet {
                 signer: eth,
                 bls: bls.clone().into(),
                 state: state.clone(),
-                x25519: x25519::Keypair::generate().expect("x25519 keypair"),
-                p2p_addr: "127.0.0.1:8080".parse().unwrap(),
+                // x25519 key derived from the BLS key, matching `init_node`'s
+                // cliquenet bind.
+                x25519: x25519::Keypair::derive_from::<PubKey>(bls)
+                    .expect("x25519 keypair derivation should succeed"),
+                p2p_addr: coordinator_addrs
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| "127.0.0.1:8080".parse().unwrap()),
             })
             .collect()
     }
@@ -1201,8 +1228,12 @@ pub mod testing {
                     )
                     .unwrap();
 
-                    let validators =
-                        staking_priv_keys(&self.priv_keys, &self.state_key_pairs, NUM_NODES);
+                    let validators = staking_priv_keys(
+                        &self.priv_keys,
+                        &self.state_key_pairs,
+                        &self.coordinator_addrs,
+                        NUM_NODES,
+                    );
 
                     let deployer = ProviderBuilder::new()
                         .wallet(EthereumWallet::from(self.signer.clone()))
@@ -1279,6 +1310,31 @@ pub mod testing {
             self
         }
 
+        pub fn builder_timeout(mut self, timeout: Duration) -> Self {
+            self.config.builder_timeout = timeout;
+            self
+        }
+
+        /// Override the base next-view (failure) timeout. Raise it when using a large
+        /// [`Self::builder_timeout`] so a slow-but-healthy view isn't mistaken for a failed one.
+        pub fn next_view_timeout(mut self, timeout: Duration) -> Self {
+            self.config.next_view_timeout = timeout.as_millis() as u64;
+            self
+        }
+
+        /// Override the views during which the upgrade is proposed. Call after `set_upgrades`.
+        pub fn upgrade_proposing_views(mut self, start: u64, stop: u64) -> Self {
+            for upgrade in self.upgrades.values_mut() {
+                if let UpgradeMode::View(v) = &mut upgrade.mode {
+                    v.start_proposing_view = start;
+                    v.stop_proposing_view = stop;
+                }
+            }
+            self.config.start_proposing_view = start;
+            self.config.stop_proposing_view = stop;
+            self
+        }
+
         pub fn build(self) -> TestConfig<NUM_NODES> {
             TestConfig {
                 config: self.config,
@@ -1292,6 +1348,7 @@ pub mod testing {
                 builder_port: self.builder_port,
                 upgrades: self.upgrades,
                 anvil_provider: self.anvil_provider,
+                coordinator_addrs: self.coordinator_addrs,
             }
         }
 
@@ -1313,14 +1370,33 @@ pub mod testing {
             let state_key_pairs = (0..num_nodes)
                 .map(|i| StateKeyPair::generate_from_seed_indexed(seed, i as u64))
                 .collect::<Vec<_>>();
+
+            // Reserve one cliquenet coordinator port per node.
+            let coordinator_addrs: Vec<NetAddr> = (0..num_nodes)
+                .map(|_| {
+                    let port =
+                        reserve_tcp_port().expect("OS should have ephemeral ports available");
+                    NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port)
+                })
+                .collect();
+
             let known_nodes_with_stake = pub_keys
                 .iter()
+                .zip(&priv_keys)
                 .zip(&state_key_pairs)
-                .map(|(pub_key, state_key_pair)| PeerConfig::<SeqTypes> {
-                    stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
-                    state_ver_key: state_key_pair.ver_key(),
-                    connect_info: None,
-                })
+                .zip(&coordinator_addrs)
+                .map(
+                    |(((pub_key, priv_key), state_key_pair), addr)| PeerConfig::<SeqTypes> {
+                        stake_table_entry: pub_key.stake_table_entry(U256::from(1)),
+                        state_ver_key: state_key_pair.ver_key(),
+                        connect_info: Some(PeerConnectInfo {
+                            x25519_key: x25519::Keypair::derive_from::<PubKey>(priv_key)
+                                .expect("x25519 keypair derivation should succeed")
+                                .public_key(),
+                            p2p_addr: addr.clone(),
+                        }),
+                    },
+                )
                 .collect::<Vec<_>>();
 
             let master_map = MasterMap::new();
@@ -1389,6 +1465,7 @@ pub mod testing {
                 state_relay_url: None,
                 builder_port: None,
                 upgrades: Default::default(),
+                coordinator_addrs,
             }
         }
     }
@@ -1406,6 +1483,8 @@ pub mod testing {
         state_relay_url: Option<Url>,
         builder_port: Option<u16>,
         upgrades: BTreeMap<Version, Upgrade>,
+        /// Per-node cliquenet coordinator bind addresses, indexed by node.
+        coordinator_addrs: Vec<NetAddr>,
     }
 
     impl<const NUM_NODES: usize> TestConfig<NUM_NODES> {
@@ -1446,7 +1525,12 @@ pub mod testing {
         }
 
         pub fn staking_priv_keys(&self) -> Vec<StakingKeySet> {
-            staking_priv_keys(&self.priv_keys, &self.state_key_pairs, self.num_nodes())
+            staking_priv_keys(
+                &self.priv_keys,
+                &self.state_key_pairs,
+                &self.coordinator_addrs,
+                self.num_nodes(),
+            )
         }
 
         pub fn validator_providers(
@@ -1509,6 +1593,15 @@ pub mod testing {
             let my_peer_config = &config.known_nodes_with_stake[i];
             let is_da = config.known_da_nodes.contains(my_peer_config);
 
+            // The new-protocol (cliquenet) coordinator network identifies this
+            // node by an x25519 key derived from its BLS key, reachable at its
+            // pre-assigned coordinator address. These must match what is
+            // registered on-chain for this validator (see `staking_priv_keys`),
+            // so peers can resolve and dial each other from the stake table.
+            let x25519_keypair = x25519::Keypair::derive_from::<PubKey>(&self.priv_keys[i])
+                .expect("x25519 keypair derivation should succeed");
+            let coordinator_addr = self.coordinator_addrs[i].clone();
+
             // Create our own (private, local) validator config
             let validator_config = ValidatorConfig {
                 public_key: my_peer_config.stake_table_entry.stake_key,
@@ -1517,8 +1610,8 @@ pub mod testing {
                 state_public_key: self.state_key_pairs[i].ver_key(),
                 state_private_key: self.state_key_pairs[i].sign_key(),
                 is_da,
-                x25519_keypair: None,
-                p2p_addr: None,
+                x25519_keypair: Some(x25519_keypair.clone()),
+                p2p_addr: Some(coordinator_addr.clone()),
             };
 
             let topics = if is_da {
@@ -1592,7 +1685,7 @@ pub mod testing {
             );
             membership.reload_stake(50).await;
 
-            let membership = Arc::new(RwLock::new(membership));
+            let membership = Arc::new(membership);
             let persistence = Arc::new(persistence);
 
             let coordinator = EpochMembershipCoordinator::new(
@@ -1624,19 +1717,15 @@ pub mod testing {
             );
 
             let coordinator_network = {
-                let keypair = x25519::Keypair::derive_from::<PubKey>(&self.priv_keys[i])
-                    .expect("keypair derivation should succeed");
-                let port = test_utils::reserve_tcp_port()
-                    .expect("OS should have ephemeral ports available");
-                let addr = NetAddr::Inet(Ipv4Addr::LOCALHOST.into(), port);
                 let lock = UpgradeLock::<SeqTypes>::new(upgrade);
                 Cliquenet::create(
                     "test-coordinator",
                     my_peer_config.stake_table_entry.stake_key,
-                    keypair,
-                    addr,
-                    vec![],
+                    x25519_keypair,
+                    coordinator_addr,
+                    [],
                     lock,
+                    Box::new(NoMetrics),
                 )
                 .await
                 .expect("cliquenet creation should succeed")
@@ -1759,6 +1848,28 @@ mod test {
         traits::block_contents::{BlockHeader, BlockPayload},
     };
     use testing::{TestConfigBuilder, wait_for_decide_on_handle};
+
+    #[test]
+    fn telemetry_endpoint_defaults_by_chain() {
+        use super::{
+            ChainId, DECAF_TELEMETRY_ENDPOINT, MAINNET_CHAIN_ID, MAINNET_TELEMETRY_ENDPOINT, U256,
+            default_telemetry_endpoint,
+        };
+
+        assert_eq!(
+            default_telemetry_endpoint(MAINNET_CHAIN_ID),
+            Some(MAINNET_TELEMETRY_ENDPOINT)
+        );
+        assert_eq!(
+            default_telemetry_endpoint(DECAF_CHAIN_ID),
+            Some(DECAF_TELEMETRY_ENDPOINT)
+        );
+        // Unknown chains (e.g. the demo chain) get no default.
+        assert_eq!(
+            default_telemetry_endpoint(ChainId(U256::from(999999999u64))),
+            None
+        );
+    }
 
     use self::testing::run_test_builder;
     use super::*;

@@ -16,7 +16,8 @@ use hotshot_contract_adapter::reward::RewardProofSiblings;
 use hotshot_types::{
     data::{EpochNumber, ViewNumber},
     epoch_membership::EpochMembershipCoordinator,
-    traits::election::Membership,
+    stake_table::HSStakeTable,
+    traits::election::{Membership, MembershipSnapshot},
     utils::epoch_from_block_number,
 };
 use jf_merkle_tree_compat::{
@@ -37,7 +38,7 @@ use super::{
     },
 };
 use crate::{
-    EpochCommittees, FeeAccount, SeqTypes,
+    EpochSnapshot, FeeAccount, SeqTypes,
     eth_signature_key::EthKeyPair,
     v0_3::{
         RewardAccountProofV1, RewardAccountV1, RewardMerkleCommitmentV1, RewardMerkleProofV1,
@@ -625,21 +626,17 @@ pub struct ValidatorLeaderCounts(Vec<(AuthenticatedValidator<BLSPubKey>, u16)>);
 impl ValidatorLeaderCounts {
     /// Construct from a sorted validator list and the corresponding leader counts array.
     ///
-    /// Returns an error if any validator in the stake table is missing from `get_validator_config`.
-    /// Validators whose leader count is zero are included so that indexing remains consistent.
-    pub fn new(
-        membership: &EpochCommittees,
-        epoch: &EpochNumber,
-        leader_counts: LeaderCounts,
-    ) -> anyhow::Result<Self> {
-        let entries: Vec<_> = membership
-            .stake_table(Some(*epoch))
-            .iter()
+    /// Reads the stake table and validator records from a single
+    /// `EpochSnapshot`, so all entries come from one consistent
+    /// per-epoch view. Validators whose leader count is zero are
+    /// included so that indexing remains consistent.
+    pub fn new(snapshot: &EpochSnapshot, leader_counts: LeaderCounts) -> anyhow::Result<Self> {
+        let entries: Vec<_> = snapshot
+            .stake_table()
             .zip(leader_counts.iter().copied())
             .map(|(entry, count)| {
-                let validator =
-                    membership.get_validator_config(epoch, entry.stake_table_entry.stake_key)?;
-                Ok((validator, count))
+                let validator = snapshot.validator_config(&entry.stake_table_entry.stake_key)?;
+                Ok((validator.clone(), count))
             })
             .collect::<anyhow::Result<_>>()?;
 
@@ -851,8 +848,6 @@ pub async fn distribute_block_reward(
     let first_epoch = {
         coordinator
             .membership()
-            .read()
-            .await
             .first_epoch()
             .context("The first epoch was not set.")?
     };
@@ -962,19 +957,21 @@ pub async fn get_leader_and_fetch_missing_rewards(
 
     let coordinator = instance_state.coordinator.clone();
 
-    let epoch_membership = coordinator.membership_for_epoch(Some(epoch)).await?;
-    let membership = epoch_membership.coordinator.membership().read().await;
+    let membership = coordinator.membership_for_epoch(Some(epoch))?;
 
-    let leader: BLSPubKey = membership
-        .leader(view, Some(epoch))
+    let snapshot = membership
+        .snapshot()
+        .context(format!("no committee for epoch {epoch:?}"))?;
+
+    let leader: BLSPubKey = snapshot
+        .leader(view)
         .context(format!("leader for epoch {epoch:?} not found"))?;
 
     tracing::debug!("Selected leader: {leader} for view {view} and epoch {epoch}");
 
-    let validator = membership
-        .get_validator_config(&epoch, leader)
+    let validator = snapshot
+        .validator_config(&leader)
         .context("validator not found")?;
-    drop(membership);
 
     let parent_header = parent_leaf.block_header();
 
@@ -1057,7 +1054,7 @@ pub async fn get_leader_and_fetch_missing_rewards(
         }
     }
 
-    Ok(validator)
+    Ok(validator.clone())
 }
 
 /// Result of epoch rewards calculation.
@@ -1093,11 +1090,13 @@ impl EpochRewardsCalculator {
 
     /// Retrieve the completed reward calculation for `epoch`.
     ///
-    /// If a background task is pending for the requested epoch, this awaits its
-    /// completion and returns the result. If the pending task is for a
-    /// *different* epoch, it is left untouched and `None` is returned. Also
-    /// returns `None` when no pending task exists or the task failed/panicked.
-    pub async fn get_result(&mut self, epoch: EpochNumber) -> Option<EpochRewardsResult> {
+    /// Returns `None` when there is no pending task for the requested epoch
+    /// Otherwise awaits the task and returns `Some(Ok(result))` on success or
+    /// `Some(Err(..))` if it failed or panicked
+    pub async fn get_result(
+        &mut self,
+        epoch: EpochNumber,
+    ) -> Option<anyhow::Result<EpochRewardsResult>> {
         let (pending_epoch, handle) = self.pending.take()?;
         if pending_epoch != epoch {
             // Not the epoch we're looking for — put the task back.
@@ -1105,20 +1104,21 @@ impl EpochRewardsCalculator {
             return None;
         }
 
-        match handle.await {
+        let result = match handle.await {
             Ok(Ok(result)) => {
                 tracing::info!(%epoch, total = %result.total_distributed.0, "epoch rewards calculation completed");
-                Some(result)
+                Ok(result)
             },
             Ok(Err(e)) => {
                 tracing::error!(%epoch, error = %e, "epoch rewards calculation failed");
-                None
+                Err(e)
             },
             Err(e) => {
                 tracing::error!(%epoch, error = %e, "epoch rewards task panicked");
-                None
+                Err(anyhow::Error::new(e).context("epoch rewards task panicked"))
             },
-        }
+        };
+        Some(result)
     }
 
     /// Start a background task that calculates epoch rewards.
@@ -1182,7 +1182,7 @@ impl EpochRewardsCalculator {
         );
 
         // Ensure stake table is available for this epoch
-        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)).await {
+        if let Err(err) = coordinator.membership_for_epoch(Some(epoch)) {
             tracing::info!(%epoch, "stake table missing for epoch, triggering catchup: {err:#}");
             coordinator
                 .wait_for_catchup(epoch)
@@ -1196,10 +1196,12 @@ impl EpochRewardsCalculator {
         } else {
             // Fetch the leaf at the last block of the epoch so we can verify
             // the header via QC against the stake table
-            let membership = coordinator.membership().read().await;
-            let stake_table = membership.stake_table(Some(epoch));
-            let success_threshold = membership.success_threshold(Some(epoch));
-            drop(membership);
+            let snapshot = coordinator
+                .membership()
+                .snapshot(epoch)
+                .context(format!("no committee for epoch={epoch}"))?;
+            let stake_table = HSStakeTable::from_iter(snapshot.stake_table());
+            let success_threshold = snapshot.success_threshold();
 
             let leaf = instance_state
                 .state_catchup
@@ -1222,11 +1224,19 @@ impl EpochRewardsCalculator {
                 "fetch_and_calculate: fetched leaf"
             );
 
-            anyhow::ensure!(
-                header.version() >= EPOCH_REWARD_VERSION,
-                "header version {} is pre-V6, cannot calculate rewards",
-                header.version()
-            );
+            if header.version() < EPOCH_REWARD_VERSION {
+                tracing::info!(
+                    %epoch,
+                    header_version = %header.version(),
+                    "no rewards to distribute"
+                );
+                return Ok(EpochRewardsResult {
+                    epoch,
+                    reward_tree,
+                    total_distributed: RewardAmount::default(),
+                    changed_accounts: HashSet::new(),
+                });
+            }
 
             // Validate the reward merkle tree against the header commitment.
             // If they don't match, use an empty tree so the rebuild logic
@@ -1250,13 +1260,14 @@ impl EpochRewardsCalculator {
                 .expect("V6+ header must have leader_counts")
         };
 
-        let membership = coordinator.membership().read().await;
-        let validator_leader_counts =
-            ValidatorLeaderCounts::new(&membership, &epoch, leader_counts)?;
-        let block_reward = membership
-            .epoch_block_reward(epoch)
+        let snapshot = coordinator
+            .membership()
+            .snapshot(epoch)
+            .with_context(|| format!("no committee for epoch={epoch}"))?;
+        let validator_leader_counts = ValidatorLeaderCounts::new(&snapshot, leader_counts)?;
+        let block_reward = snapshot
+            .epoch_block_reward()
             .context("block reward not found for epoch")?;
-        drop(membership);
 
         tracing::info!(
             %epoch,

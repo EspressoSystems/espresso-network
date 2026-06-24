@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use async_lock::RwLock;
 use hotshot::types::{BLSPubKey, SchnorrPubKey};
 use hotshot_example_types::{
     membership::{
@@ -38,25 +37,18 @@ pub async fn make_membership(
     let client = CoordinatorClient::<TestTypes>::default();
     let leaf_fetcher_network = Arc::new(ClientLeafFetcherNetwork::new(client.handle().clone()));
 
-    let mut strict_membership = StrictMembership::<
-        TestTypes,
-        StaticStakeTable<BLSPubKey, SchnorrPubKey>,
-    >::new(members.clone(), members.clone(), public_key, u64::MAX);
+    let membership = StrictMembership::<TestTypes, StaticStakeTable<BLSPubKey, SchnorrPubKey>>::new(
+        members.clone(),
+        members.clone(),
+        public_key,
+        u64::MAX,
+    );
     // Bench doesn't drive catchup events into the fetcher; install a
     // disconnected receiver so the fetcher's listener is wired but idle.
     let (_tx, rx) = async_broadcast::broadcast(1);
-    strict_membership.set_leaf_fetcher(
-        leaf_fetcher_network,
-        TestStorage::default(),
-        public_key,
-        rx,
-    );
-    let membership = Arc::new(RwLock::new(strict_membership));
+    membership.set_leaf_fetcher(leaf_fetcher_network, TestStorage::default(), public_key, rx);
 
-    membership
-        .write()
-        .await
-        .set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
+    membership.set_first_epoch(EpochNumber::genesis(), [0u8; 32]);
 
     let coordinator =
         EpochMembershipCoordinator::new(membership, u64::MAX, &TestStorage::<TestTypes>::default());

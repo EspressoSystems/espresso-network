@@ -15,4 +15,10 @@ ignore = [
     "RUSTSEC-2025-0009",
     # Still here because of `ark-relations` crate.
     "RUSTSEC-2025-0055",
+    # hickory-proto NSEC3 loop. Only reachable via libp2p-mdns; mdns feature is not enabled in our
+    # libp2p config, so not compiled in.
+    "RUSTSEC-2026-0118",
+    # hickory-proto O(n^2) name compression on encode. libp2p does lookups one name at a time, not
+    # vulnerable, no patch release in libp2p available yet
+    "RUSTSEC-2026-0119",
 ]

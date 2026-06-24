@@ -14,8 +14,10 @@ members = [
     "crates/cliquenet",
     "crates/espresso/api",
     "crates/espresso/dev-node",
+    "crates/espresso/keyset",
     "crates/espresso/node",
     "crates/espresso/node-sqlite",
+    "crates/espresso/telemetry",
     "crates/espresso/types",
     "crates/espresso/utils",
     "crates/hotshot-builder/legacy",
@@ -34,6 +36,7 @@ members = [
     "crates/hotshot/testing",
     "crates/hotshot/types",
     "crates/hotshot/utils",
+    "crates/process-metrics",
     "crates/serialization/api",
     "crates/versions",
     "hotshot-events-service",
@@ -89,11 +92,14 @@ default-members = [
     "light-client",
     "light-client-query-service",
     "node-metrics",
+    "crates/process-metrics",
     "request-response",
     "sdks/crypto-helper",
     "crates/serialization/api",
     "crates/espresso/api",
+    "crates/espresso/keyset",
     "crates/espresso/node",
+    "crates/espresso/telemetry",
     "slow-tests",
     "staking-cli",
     "test-utils",
@@ -111,7 +117,13 @@ authors = ["Espresso Systems <hello@espressosys.com>"]
 edition = "2024"
 
 [workspace.dependencies]
-aide = { version = "0.15.1", features = ["axum", "axum-json", "scalar", "swagger", "redoc"] }
+aide = { version = "0.15.1", features = [
+    "axum",
+    "axum-json",
+    "scalar",
+    "swagger",
+    "redoc",
+] }
 alloy = { version = "1.0", features = [
     "eips",
     "provider-ws",
@@ -122,6 +134,7 @@ alloy = { version = "1.0", features = [
     "signer-ledger",
 ] }
 alloy-compat = { path = "alloy-compat" }
+alloy-rlp = "0.3"
 anyhow = "1.0"
 ark-bls12-381 = "0.5"
 ark-bn254 = "0.5"
@@ -141,14 +154,14 @@ async-trait = "0.1"
 atomic = "0.6"
 atomic_store = { git = "https://github.com/EspressoSystems/atomicstore.git", tag = "0.1.5" }
 automod = "1.0.14"
-axum = "0.8.8"
+axum = { version = "0.8.8", features = ["ws"] }
 backoff = "0.4"
 base64 = "0.22"
 base64-bytes = "0.1"
 bigdecimal = "0.4.8"
 bimap = "0.6.3"
 bincode = "1.3.3"
-bitvec = { version = "1", features = ["serde"] }
+bitvec = { git = "https://github.com/EspressoSystems/bitvec-patch.git", features = ["serde"] }
 blake3 = "1.5"
 bon = "3.8.2"
 bs58 = "0.5.1"
@@ -157,11 +170,11 @@ byteorder = { version = "1" }
 bytes = { version = "1.11.0", features = ["serde"] }
 bytesize = "1.3"
 cbor4ii = { version = "1.0", features = ["serde1"] }
-cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-broker", features = [
+cdn-broker = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-broker", features = [
     "global-permits",
 ] }
-cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-client" }
-cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "0.6.2-bcompat-patch2", package = "cdn-marshal" }
+cdn-client = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-client" }
+cdn-marshal = { git = "https://github.com/EspressoSystems/Push-CDN", tag = "20260519-keep-alive", package = "cdn-marshal" }
 chrono = { version = "0.4", features = ["serde"] }
 circular-buffer = "0.1.9"
 clap = { version = "4.5", features = ["derive", "env", "string"] }
@@ -193,9 +206,11 @@ either = "1"
 es-version = { git = "https://github.com/EspressoSystems/es-version.git", branch = "main" }
 escargot = "0.5.10"
 espresso-contract-deployer = { path = "contracts/rust/deployer" }
+espresso-keyset = { path = "crates/espresso/keyset" }
 espresso-macros = { git = "https://github.com/EspressoSystems/espresso-macros.git", tag = "0.1.0" }
 espresso-node = { path = "crates/espresso/node", default-features = false }
 espresso-safe-tx-builder = { path = "contracts/rust/safe-tx-builder" }
+espresso-telemetry = { path = "crates/espresso/telemetry" }
 espresso-types = { path = "crates/espresso/types" }
 espresso-utils = { path = "crates/espresso/utils" }
 ethers = { version = "2.0", features = ["solc", "ws"] }
@@ -238,7 +253,7 @@ jf-advz = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "
     "parallel",
 ] }
 jf-crhf = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-crhf-v0.2.0" }
-jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.4.0" }
+jf-merkle-tree = { git = "https://github.com/EspressoSystems/jellyfish", tag = "jf-merkle-tree-v0.4.2" }
 jf-merkle-tree-compat = { git = "https://github.com/EspressoSystems/jellyfish-compat", tag = "jf-merkle-tree-compat-v0.3.1", features = [
     "std",
 ] }
@@ -314,6 +329,10 @@ num-traits = "0.2"
 num_cpus = "1"
 num_enum = "0.7"
 openssl = { version = "0.10", features = ["vendored"] }
+opentelemetry = "0.32"
+opentelemetry-appender-tracing = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["http-proto", "reqwest-blocking-client", "logs", "gzip-http", "experimental-http-retry"] }
+opentelemetry_sdk = { version = "0.32", default-features = false, features = ["logs"] }
 p3-maybe-rayon = "0.2"
 parking_lot = { version = "0.12", features = ["send_guard"] }
 paste = "1.0"
@@ -324,6 +343,8 @@ pretty_assertions = { version = "1.4", features = ["unstable"] }
 primitive-types = "0.13"
 priority-queue = "2"
 proc-macro2 = "1"
+process-metrics = { path = "crates/process-metrics" }
+procfs = "0.18"
 prometheus = { version = "0.13", default-features = false }
 prometheus-parse = "0.2.5"
 proptest = "1"
@@ -354,9 +375,12 @@ serde_json = "1.0.113"
 sha2 = "0.10"
 sha3 = "0.10.8"
 snafu = "0.8"
+snap = "1"
 snow = { version = "0.10.0", features = ["ring-accelerated"] }
+socket2 = "0.6.4"
 sqlx = { version = "=0.8.3", features = [
     "bit-vec",
+    "chrono",
     "postgres",
     "runtime-tokio",
     "tls-native-tls",

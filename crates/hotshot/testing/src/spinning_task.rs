@@ -34,7 +34,6 @@ use hotshot_types::{
         LightClientStateUpdateCertificateV2, NextEpochQuorumCertificate2, QuorumCertificate2,
     },
     traits::{
-        election::Membership,
         network::{AsyncGenerator, ConnectedNetwork},
         node_implementation::{NodeImplementation, NodeType},
     },
@@ -255,13 +254,12 @@ where
 
                                 let storage = node.handle.storage().clone();
 
-                                let membership =
-                                    Arc::new(RwLock::new(<TYPES as NodeType>::Membership::new(
-                                        node.handle.hotshot.config.known_nodes_with_stake.clone(),
-                                        node.handle.hotshot.config.known_da_nodes.clone(),
-                                        node.handle.public_key().clone(),
-                                        node.handle.hotshot.config.epoch_height,
-                                    )));
+                                let membership = <TYPES as NodeType>::Membership::new(
+                                    node.handle.hotshot.config.known_nodes_with_stake.clone(),
+                                    node.handle.hotshot.config.known_da_nodes.clone(),
+                                    node.handle.public_key().clone(),
+                                    node.handle.hotshot.config.epoch_height,
+                                );
 
                                 let config = node.handle.hotshot.config.clone();
 
@@ -330,7 +328,7 @@ where
                                 // SystemContext spins up, so epoch-root
                                 // catchup is wired against the same external
                                 // channel the network task forwards events to.
-                                membership.write().await.set_leaf_fetcher(
+                                membership.set_leaf_fetcher(
                                     Arc::new(
                                         hotshot_types::traits::leaf_fetcher_network::ConnectedNetworkLeafFetcher::<
                                             TYPES,
@@ -345,7 +343,7 @@ where
                                     TestRunner::<TYPES, I, N>::add_node_with_config_and_channels(
                                         node_id,
                                         generated_network.clone(),
-                                        Arc::clone(&membership),
+                                        membership,
                                         initializer,
                                         config,
                                         self.upgrade,

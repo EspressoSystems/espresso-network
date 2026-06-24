@@ -88,10 +88,8 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> VidTaskState<TYPES, I> {
                 if self
                     .membership_coordinator
                     .membership_for_epoch(epoch)
-                    .await
                     .ok()?
                     .leader(*view_number)
-                    .await
                     .ok()?
                     != self.public_key
                 {
@@ -278,6 +276,9 @@ impl<TYPES: NodeType, I: NodeImplementation<TYPES>> TaskState for VidTaskState<T
         sender: &Sender<Arc<Self::Event>>,
         _receiver: &Receiver<Arc<Self::Event>>,
     ) -> Result<()> {
+        if self.upgrade_lock.new_protocol_active(self.cur_view) {
+            return Ok(());
+        }
         self.handle(event, sender.clone()).await;
         Ok(())
     }

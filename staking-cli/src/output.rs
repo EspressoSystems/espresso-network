@@ -12,7 +12,7 @@ pub(crate) fn format_esp(value: U256) -> String {
 }
 
 pub fn output_success(msg: impl AsRef<str>) {
-    if std::env::var("RUST_LOG_FORMAT") == Ok("json".to_string()) {
+    if std::env::var("RUST_LOG_FORMAT").as_deref() == Ok("json") {
         tracing::info!("{}", msg.as_ref());
     } else {
         println!("{}", msg.as_ref());
@@ -20,7 +20,7 @@ pub fn output_success(msg: impl AsRef<str>) {
 }
 
 pub(crate) fn output_warn(msg: impl AsRef<str>) {
-    if std::env::var("RUST_LOG_FORMAT") == Ok("json".to_string()) {
+    if std::env::var("RUST_LOG_FORMAT").as_deref() == Ok("json") {
         tracing::warn!("{}", msg.as_ref());
     } else {
         eprintln!("{}", msg.as_ref());
@@ -28,7 +28,7 @@ pub(crate) fn output_warn(msg: impl AsRef<str>) {
 }
 
 pub fn output_error(msg: impl AsRef<str>) -> ! {
-    if std::env::var("RUST_LOG_FORMAT") == Ok("json".to_string()) {
+    if std::env::var("RUST_LOG_FORMAT").as_deref() == Ok("json") {
         tracing::error!("{}", msg.as_ref());
     } else {
         eprintln!("{}", msg.as_ref());

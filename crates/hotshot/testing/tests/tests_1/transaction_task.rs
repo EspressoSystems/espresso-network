@@ -36,10 +36,8 @@ async fn test_transaction_task_leader_two_views_in_a_row() {
     let num_storage_nodes = handle
         .membership_coordinator
         .membership_for_epoch(Some(EpochNumber::new(1)))
-        .await
         .unwrap()
-        .total_nodes()
-        .await;
+        .total_nodes();
     let mut exp_packed_bundle = PackedBundle::new(
         vec![].into(),
         TestMetadata {
