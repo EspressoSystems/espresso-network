@@ -247,6 +247,19 @@ FLAKY_ISSUE_MARKER = (
 )
 
 
+def history_strip(tid: str, runs_chrono: list[dict]) -> str:
+    # One square per run, oldest to newest: 🟥 failed, 🟨 flaky, ⬜ passed/absent.
+    cells = []
+    for r in runs_chrono:
+        if tid in r["failed"]:
+            cells.append("🟥")
+        elif tid in r["flaky"]:
+            cells.append("🟨")
+        else:
+            cells.append("⬜")
+    return "".join(cells)
+
+
 def _section_lines(
     sources: list[tuple[str, list[dict]]],
     classify_failing: bool,
@@ -256,6 +269,7 @@ def _section_lines(
     any_test = False
     for name, runs in sources:
         total = len(runs)
+        runs_chrono = sorted(runs, key=lambda r: r["timestamp"])
         rows: list[tuple[int, str, str]] = []
         ids = {tid for r in runs for tid in (*r["failed"], *r["flaky"])}
         for tid in ids:
@@ -267,19 +281,14 @@ def _section_lines(
             is_failing = failed_count > 0
             if is_failing != classify_failing:
                 continue
-            parts = []
-            if failed_count:
-                parts.append(f"failed {failed_count}/{total}")
-            if flaky_count:
-                parts.append(f"flaky {flaky_count}/{total}")
-            rows.append((occurrences, tid, ", ".join(parts)))
+            rows.append((occurrences, tid, history_strip(tid, runs_chrono)))
         if not rows:
             continue
         any_test = True
         rows.sort(key=lambda row: (-row[0], row[1]))
         plural = "" if total == 1 else "s"
         lines.append(f"### {name} (last {total} run{plural})")
-        lines.extend(f"- [ ] {format_id(tid)} {label}" for _, tid, label in rows)
+        lines.extend(f"- [ ] {strip} {format_id(tid)}" for _, tid, strip in rows)
         lines.append("")
     if not any_test:
         return ["_None._", ""]
@@ -300,6 +309,9 @@ def build_flaky_issue(
         "",
         'Hover a checkbox item and use "Convert to issue" to open a tracking issue '
         "for that test.",
+        "",
+        "Each strip is the recent run history, oldest to newest: "
+        "⬜ passed, 🟨 flaky (failed then passed on retry), 🟥 failed.",
         "",
         "## Failing tests",
         "",
