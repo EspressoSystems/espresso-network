@@ -13,6 +13,7 @@ use hotshot_query_service_types::{
 };
 use hotshot_types::data::EpochNumber;
 use surf_disco::Url;
+use tagged_base64::TaggedBase64;
 use tokio::time::sleep;
 use vbs::version::StaticVersion;
 
@@ -22,6 +23,11 @@ use crate::{
     },
     storage::LeafRequest,
 };
+
+/// `TaggedBase64` tag for the namespace set encoded into the `namespaces` range endpoint URL.
+///
+/// Shared between the client (which encodes the parameter) and the server (which validates the tag).
+pub const NAMESPACES_PARAM_TAG: &str = "NS";
 
 /// Interface to a query server providing the light client API.
 pub trait Client: Send + Sync + 'static {
@@ -217,10 +223,10 @@ impl Client for QueryServiceClient {
         end: u64,
         namespaces: &[NamespaceId],
     ) -> Result<Vec<HashMap<NamespaceId, NamespaceProof>>> {
+        let encoded = TaggedBase64::new(NAMESPACES_PARAM_TAG, &serde_json::to_vec(namespaces)?)?;
         Ok(self
             .client
-            .post(&format!("/light-client/namespaces/{start}/{end}"))
-            .body_binary(&namespaces.to_vec())?
+            .get(&format!("/light-client/namespaces/{start}/{end}/{encoded}"))
             .send()
             .await?)
     }
@@ -809,5 +815,50 @@ mod test {
                 .unwrap();
             assert_eq!(proof.verify(&header, ns).unwrap(), vec![]);
         }
+
+        let absent = NamespaceId::from(u64::from(ns) + 1);
+        let start = headers[0].height();
+        let end = headers[1].height() + 1;
+        let blocks = client
+            .namespaces_proofs_in_range(start, end, &[ns, absent])
+            .await
+            .unwrap();
+        assert_eq!(blocks.len() as u64, end - start);
+
+        for (i, block) in blocks.iter().enumerate() {
+            let header: Header = http
+                .get(&format!("availability/header/{}", start + i as u64))
+                .send()
+                .await
+                .unwrap();
+            for queried in [ns, absent] {
+                match (header.ns_table().find_ns_id(&queried), block.get(&queried)) {
+                    (Some(_), Some(proof)) => {
+                        proof.verify(&header, queried).unwrap();
+                    },
+                    (None, None) => {},
+                    (present, returned) => panic!(
+                        "block {} namespace {queried}: header present={}, returned={}",
+                        start + i as u64,
+                        present.is_some(),
+                        returned.is_some()
+                    ),
+                }
+            }
+        }
+
+        // The first and last blocks are the ones we submitted `ns` transactions to.
+        assert_eq!(
+            blocks[0].get(&ns).unwrap().verify(&headers[0], ns).unwrap(),
+            std::slice::from_ref(&txs[0])
+        );
+        assert_eq!(
+            blocks[blocks.len() - 1]
+                .get(&ns)
+                .unwrap()
+                .verify(&headers[1], ns)
+                .unwrap(),
+            std::slice::from_ref(&txs[1])
+        );
     }
 }

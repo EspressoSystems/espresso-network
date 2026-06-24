@@ -1688,7 +1688,7 @@ mod test {
 
     #[tokio::test]
     #[test_log::test]
-    async fn test_fetch_namespace_set() {
+    async fn test_fetch_all_namespaces_in_range() {
         let client = TestClient::default();
         let lc = LightClient::from_genesis(
             SqliteStorage::default().await.unwrap(),

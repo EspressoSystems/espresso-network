@@ -21,10 +21,13 @@ use hotshot_query_service::{
 use hotshot_types::utils::{epoch_from_block_number, root_block_in_epoch};
 use itertools::izip;
 use jf_merkle_tree_compat::MerkleTreeScheme;
-use light_client::consensus::{
-    header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
+use light_client::{
+    client::NAMESPACES_PARAM_TAG,
+    consensus::{
+        header::HeaderProof, leaf::LeafProof, namespace::NamespaceProof, payload::PayloadProof,
+    },
 };
-use tide_disco::{Api, Error as _, RequestParams, StatusCode, method::ReadState};
+use tide_disco::{Api, RequestParams, StatusCode, method::ReadState};
 use vbs::version::StaticVersionType;
 use versions::NEW_PROTOCOL_VERSION;
 
@@ -318,6 +321,7 @@ where
     Ok(izip!(headers, payloads, vid_commons).collect())
 }
 
+/// Single-namespace version of [`get_namespaces_proof_range`].
 async fn get_namespace_proof_range<State>(
     state: &State,
     start: usize,
@@ -329,17 +333,23 @@ async fn get_namespace_proof_range<State>(
 where
     State: AvailabilityDataSource<SeqTypes>,
 {
-    fetch_block_data_range(state, start, end, fetch_timeout, large_object_range_limit)
-        .await?
+    let blocks = get_namespaces_proof_range(
+        state,
+        start,
+        end,
+        &[namespace],
+        fetch_timeout,
+        large_object_range_limit,
+    )
+    .await?;
+    Ok(blocks
         .into_iter()
-        .map(|(header, payload, vid_common)| {
-            let Some(ns_index) = header.ns_table().find_ns_id(&namespace.into()) else {
-                return Ok(NamespaceProof::not_present());
-            };
-            let ns_proof = build_namespace_proof(&payload, &ns_index, &vid_common)?;
-            Ok(ns_proof)
+        .map(|mut block| {
+            block
+                .remove(&namespace)
+                .unwrap_or_else(NamespaceProof::not_present)
         })
-        .collect()
+        .collect())
 }
 
 async fn get_namespaces_proof_range<State>(
@@ -369,6 +379,25 @@ where
                 .collect::<Result<HashMap<_, _>, _>>()
         })
         .collect()
+}
+
+fn parse_namespaces_param(req: &RequestParams) -> Result<Vec<u64>, Error> {
+    let encoded = req
+        .tagged_base64_param("namespaces")
+        .map_err(bad_param("namespaces"))?;
+    if encoded.tag() != NAMESPACES_PARAM_TAG {
+        return Err(Error::Custom {
+            message: format!(
+                "invalid namespaces parameter tag: expected {NAMESPACES_PARAM_TAG}, got {}",
+                encoded.tag()
+            ),
+            status: StatusCode::BAD_REQUEST,
+        });
+    }
+    serde_json::from_slice(&encoded.value()).map_err(|err| Error::Custom {
+        message: format!("invalid namespaces parameter: {err}"),
+        status: StatusCode::BAD_REQUEST,
+    })
 }
 
 /// Construct a [`NamespaceProof`] for the namespace at `ns_index` of the given block.
@@ -669,29 +698,20 @@ where
         }
         .boxed()
     })?
-    .at("namespaces_range", move |req, state| {
+    .get("namespaces_range", move |req, state| {
         async move {
             let start = req.integer_param("start").map_err(bad_param("start"))?;
             let end = req.integer_param("end").map_err(bad_param("end"))?;
-            let namespaces = req
-                .body_auto::<Vec<u64>, ApiVer>(ApiVer::instance())
-                .map_err(Error::from_request_error)?;
-            state
-                .read(|state| {
-                    async move {
-                        get_namespaces_proof_range(
-                            state,
-                            start,
-                            end,
-                            &namespaces,
-                            fetch_timeout,
-                            large_object_range_limit,
-                        )
-                        .await
-                    }
-                    .boxed()
-                })
-                .await
+            let namespaces = parse_namespaces_param(&req)?;
+            get_namespaces_proof_range(
+                state,
+                start,
+                end,
+                &namespaces,
+                fetch_timeout,
+                large_object_range_limit,
+            )
+            .await
         }
         .boxed()
     })?;
