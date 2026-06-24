@@ -295,7 +295,6 @@ def _source_blocks(
 
 def build_flaky_issue(
     sources: list[tuple[str, list[dict]]],
-    title: str,
     timestamp: str,
     min_occurrences: int,
 ) -> str:
@@ -584,11 +583,13 @@ def cmd_stats_fetch(args: argparse.Namespace) -> int:
         log.info("found %d completed main runs", len(workflow_runs))
 
         with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-            entries = pool.map(
-                lambda run: fetch_run_entry(repo, run, args.artifact_name),
-                workflow_runs,
+            # map preserves input order, so history stays newest-first.
+            entries = list(
+                pool.map(
+                    lambda run: fetch_run_entry(repo, run, args.artifact_name),
+                    workflow_runs,
+                )
             )
-        # map preserves input order, so history stays newest-first.
         aggregated = [e for e in entries if e is not None]
 
         args.out.write_text(
@@ -628,7 +629,7 @@ def cmd_flaky_issue(args: argparse.Namespace) -> int:
     timestamp = args.timestamp or datetime.now(timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    body = build_flaky_issue(sources, args.title, timestamp, args.min_occurrences)
+    body = build_flaky_issue(sources, timestamp, args.min_occurrences)
 
     if args.update:
         repo = resolve_repo()
