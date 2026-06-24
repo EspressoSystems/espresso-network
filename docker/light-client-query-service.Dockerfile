@@ -3,7 +3,8 @@ FROM ghcr.io/espressosystems/ubuntu-base:main
 ARG TARGETARCH
 
 COPY target/$TARGETARCH/release/light-client-query-service /bin/light-client-query-service-postgres
-RUN chmod +x /bin/light-client-query-service-postgres
+COPY target/$TARGETARCH/release/light-client-genesis /bin/light-client-genesis
+RUN chmod +x /bin/light-client-query-service-postgres /bin/light-client-genesis
 
 # Install genesis files for all supported configurations. The desired configuration can be chosen by
 # setting `LIGHT_CLIENT_GENESIS`.
