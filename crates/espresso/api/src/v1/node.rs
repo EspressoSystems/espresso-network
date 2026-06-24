@@ -41,14 +41,14 @@ pub trait NodeApi {
         &self,
         from: Option<u64>,
         to: Option<u64>,
-        namespace: Option<u32>,
+        namespace: Option<u64>,
     ) -> anyhow::Result<u64>;
 
     async fn payload_size(
         &self,
         from: Option<u64>,
         to: Option<u64>,
-        namespace: Option<u32>,
+        namespace: Option<u64>,
     ) -> anyhow::Result<u64>;
 
     async fn get_vid_share(&self, id: VidShareId) -> anyhow::Result<Self::VidShare>;

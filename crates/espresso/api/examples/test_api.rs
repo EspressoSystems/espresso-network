@@ -408,7 +408,7 @@ impl v1::NodeApi for TestApi {
         &self,
         _from: Option<u64>,
         _to: Option<u64>,
-        _namespace: Option<u32>,
+        _namespace: Option<u64>,
     ) -> Result<u64> {
         Ok(0)
     }
@@ -416,7 +416,7 @@ impl v1::NodeApi for TestApi {
         &self,
         _from: Option<u64>,
         _to: Option<u64>,
-        _namespace: Option<u32>,
+        _namespace: Option<u64>,
     ) -> Result<u64> {
         Ok(0)
     }
@@ -484,6 +484,9 @@ impl v1::NodeApi for TestApi {
 
 #[async_trait]
 impl v1::CatchupApi for TestApi {
+    type FeeAccount = serde_json::Value;
+    type RewardAccountV1 = serde_json::Value;
+    type RewardAccountV2 = serde_json::Value;
     type AccountQueryData = serde_json::Value;
     type FeeMerkleTree = serde_json::Value;
     type BlocksFrontier = serde_json::Value;
@@ -508,7 +511,7 @@ impl v1::CatchupApi for TestApi {
         &self,
         _height: u64,
         _view: u64,
-        _accounts: Vec<String>,
+        _accounts: Vec<Self::FeeAccount>,
     ) -> Result<Self::FeeMerkleTree> {
         Ok(serde_json::Value::Null)
     }
@@ -536,7 +539,7 @@ impl v1::CatchupApi for TestApi {
         &self,
         _height: u64,
         _view: u64,
-        _accounts: Vec<String>,
+        _accounts: Vec<Self::RewardAccountV1>,
     ) -> Result<Self::RewardMerkleTreeV1> {
         Ok(serde_json::Value::Null)
     }

@@ -11,8 +11,9 @@ use aide::{
 };
 use axum::{
     Extension, Json, Router,
+    body::Bytes,
     extract::{Path, Request, State, ws::WebSocketUpgrade},
-    http::{StatusCode, Uri},
+    http::{HeaderMap, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::get,
@@ -25,16 +26,22 @@ use serialization_api::v2::{
     GetRewardBalanceRequest, GetRewardBalancesRequest, GetRewardClaimInputRequest,
     GetRewardMerkleTreeRequest, GetStakeTableRequest, GetStateCertificateRequest,
 };
+use vbs::{BinarySerializer, Serializer, version::StaticVersion};
 
 use crate::{
     error::{ApiError, AvailabilityError},
     handlers, v1, v2,
 };
 
-/// API error response
+/// API error response — wire-compatible with `tide_disco::error::ServerError`, the default
+/// error type produced by tide-disco endpoints and the type used by all of our surf-disco
+/// clients (`Client::<ServerError, _>`, e.g. peer-catchup in
+/// `crates/espresso/node/src/catchup.rs`). Sending a different shape would force those
+/// clients into surf-disco's catch_all fallback path, losing structured error info.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 struct ErrorResponse {
-    error: String,
+    status: u16,
+    message: String,
 }
 
 impl IntoResponse for ApiError {
@@ -46,10 +53,61 @@ impl IntoResponse for ApiError {
         };
 
         let body = Json(ErrorResponse {
-            error: self.to_string(),
+            status: status.as_u16(),
+            message: self.to_string(),
         });
 
         (status, body).into_response()
+    }
+}
+
+/// Encode a successful response body based on the request's `Accept` header, matching
+/// tide-disco's content negotiation.
+///
+/// surf-disco's default `Accept` is `application/octet-stream`, so production internal clients
+/// (peer-catchup, submit-transactions, light-client provider) expect VBS-encoded responses for
+/// the endpoints that flow large structured data. Falls back to JSON otherwise.
+fn encode_response<T: Serialize>(headers: &HeaderMap, value: T) -> Result<Response, ApiError> {
+    let accept = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if accept.contains("application/octet-stream") {
+        let bytes = Serializer::<StaticVersion<0, 1>>::serialize(&value)
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("vbs serialize: {e}")))?;
+        Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response())
+    } else {
+        Ok(Json(value).into_response())
+    }
+}
+
+/// Decode a request body based on its `Content-Type`, matching tide-disco's `body_auto` behavior.
+///
+/// - `application/octet-stream`: VBS (versioned binary) — what `surf-disco::Request::body_binary`
+///   sends, and what production peer-catchup / submit-transactions clients use.
+/// - `application/json`: serde_json.
+///
+/// All v1 endpoints in this codebase use the V0_1 API version for VBS framing.
+fn decode_body<T: serde::de::DeserializeOwned>(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<T, ApiError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok());
+    match content_type {
+        Some(ct) if ct.starts_with("application/octet-stream") => {
+            Serializer::<StaticVersion<0, 1>>::deserialize(body)
+                .map_err(|e| ApiError::BadRequest(anyhow::anyhow!("invalid binary body: {e}")))
+        },
+        Some(ct) if ct.starts_with("application/json") => serde_json::from_slice(body)
+            .map_err(|e| ApiError::BadRequest(anyhow::anyhow!("invalid json body: {e}"))),
+        Some(other) => Err(ApiError::BadRequest(anyhow::anyhow!(
+            "unsupported Content-Type: {other}"
+        ))),
+        None => Err(ApiError::BadRequest(anyhow::anyhow!(
+            "missing Content-Type header"
+        ))),
     }
 }
 
@@ -146,21 +204,47 @@ impl<T: schemars::JsonSchema> aide::operation::OperationInput for SendQuery<T> {
     }
 }
 
+/// Wire format for a WebSocket stream — negotiated from the upgrade request's `Accept` header
+/// to match tide-disco. surf-disco clients default to `application/octet-stream`, so production
+/// stream consumers expect VBS-encoded `Message::Binary` frames.
+#[derive(Clone, Copy)]
+enum WsFormat {
+    Binary,
+    Json,
+}
+
+fn ws_format(headers: &HeaderMap) -> WsFormat {
+    let accept = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if accept.contains("application/octet-stream") {
+        WsFormat::Binary
+    } else {
+        WsFormat::Json
+    }
+}
+
 async fn drive_ws_stream<T: Serialize>(
     mut socket: axum::extract::ws::WebSocket,
     stream: BoxStream<'static, T>,
+    format: WsFormat,
 ) {
+    use axum::extract::ws::Message;
     use futures::StreamExt as _;
     futures::pin_mut!(stream);
     while let Some(item) = stream.next().await {
-        let Ok(json) = serde_json::to_string(&item) else {
-            break;
+        let msg = match format {
+            WsFormat::Binary => match Serializer::<StaticVersion<0, 1>>::serialize(&item) {
+                Ok(bytes) => Message::Binary(bytes.into()),
+                Err(_) => break,
+            },
+            WsFormat::Json => match serde_json::to_string(&item) {
+                Ok(json) => Message::Text(json.into()),
+                Err(_) => break,
+            },
         };
-        if socket
-            .send(axum::extract::ws::Message::Text(json.into()))
-            .await
-            .is_err()
-        {
+        if socket.send(msg).await.is_err() {
             break;
         }
     }
@@ -559,67 +643,87 @@ where
     };
 
     // WebSocket streaming handlers
-    let stream_leaves =
-        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
-            ws.on_upgrade(move |socket| async move {
-                match state.stream_leaves(height).await {
-                    Ok(stream) => drive_ws_stream(socket, stream).await,
-                    Err(e) => tracing::warn!("stream_leaves: {e}"),
-                }
-            })
-        };
-    let stream_headers =
-        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
-            ws.on_upgrade(move |socket| async move {
-                match state.stream_headers(height).await {
-                    Ok(stream) => drive_ws_stream(socket, stream).await,
-                    Err(e) => tracing::warn!("stream_headers: {e}"),
-                }
-            })
-        };
-    let stream_blocks =
-        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
-            ws.on_upgrade(move |socket| async move {
-                match state.stream_blocks(height).await {
-                    Ok(stream) => drive_ws_stream(socket, stream).await,
-                    Err(e) => tracing::warn!("stream_blocks: {e}"),
-                }
-            })
-        };
-    let stream_payloads =
-        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
-            ws.on_upgrade(move |socket| async move {
-                match state.stream_payloads(height).await {
-                    Ok(stream) => drive_ws_stream(socket, stream).await,
-                    Err(e) => tracing::warn!("stream_payloads: {e}"),
-                }
-            })
-        };
-    let stream_vid_common =
-        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
-            ws.on_upgrade(move |socket| async move {
-                match state.stream_vid_common(height).await {
-                    Ok(stream) => drive_ws_stream(socket, stream).await,
-                    Err(e) => tracing::warn!("stream_vid_common: {e}"),
-                }
-            })
-        };
-    let stream_transactions =
-        |ws: WebSocketUpgrade, State(state): State<S>, Path(height): Path<usize>| async move {
-            ws.on_upgrade(move |socket| async move {
-                match state.stream_transactions(height, None).await {
-                    Ok(stream) => drive_ws_stream(socket, stream).await,
-                    Err(e) => tracing::warn!("stream_transactions: {e}"),
-                }
-            })
-        };
+    let stream_leaves = |ws: WebSocketUpgrade,
+                         State(state): State<S>,
+                         headers: HeaderMap,
+                         Path(height): Path<usize>| async move {
+        let format = ws_format(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_leaves(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_leaves: {e}"),
+            }
+        })
+    };
+    let stream_headers = |ws: WebSocketUpgrade,
+                          State(state): State<S>,
+                          headers: HeaderMap,
+                          Path(height): Path<usize>| async move {
+        let format = ws_format(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_headers(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_headers: {e}"),
+            }
+        })
+    };
+    let stream_blocks = |ws: WebSocketUpgrade,
+                         State(state): State<S>,
+                         headers: HeaderMap,
+                         Path(height): Path<usize>| async move {
+        let format = ws_format(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_blocks(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_blocks: {e}"),
+            }
+        })
+    };
+    let stream_payloads = |ws: WebSocketUpgrade,
+                           State(state): State<S>,
+                           headers: HeaderMap,
+                           Path(height): Path<usize>| async move {
+        let format = ws_format(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_payloads(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_payloads: {e}"),
+            }
+        })
+    };
+    let stream_vid_common = |ws: WebSocketUpgrade,
+                             State(state): State<S>,
+                             headers: HeaderMap,
+                             Path(height): Path<usize>| async move {
+        let format = ws_format(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_vid_common(height).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_vid_common: {e}"),
+            }
+        })
+    };
+    let stream_transactions = |ws: WebSocketUpgrade,
+                               State(state): State<S>,
+                               headers: HeaderMap,
+                               Path(height): Path<usize>| async move {
+        let format = ws_format(&headers);
+        ws.on_upgrade(move |socket| async move {
+            match state.stream_transactions(height, None).await {
+                Ok(stream) => drive_ws_stream(socket, stream, format).await,
+                Err(e) => tracing::warn!("stream_transactions: {e}"),
+            }
+        })
+    };
     let stream_transactions_ns =
         |ws: WebSocketUpgrade,
          State(state): State<S>,
+         headers: HeaderMap,
          Path((height, namespace)): Path<(usize, u32)>| async move {
+            let format = ws_format(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_transactions(height, Some(namespace)).await {
-                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_transactions_ns: {e}"),
                 }
             })
@@ -627,10 +731,12 @@ where
     let stream_namespace_proofs =
         |ws: WebSocketUpgrade,
          State(state): State<S>,
+         headers: HeaderMap,
          Path((height, namespace)): Path<(usize, u32)>| async move {
+            let format = ws_format(&headers);
             ws.on_upgrade(move |socket| async move {
                 match state.stream_namespace_proofs(height, namespace).await {
-                    Ok(stream) => drive_ws_stream(socket, stream).await,
+                    Ok(stream) => drive_ws_stream(socket, stream, format).await,
                     Err(e) => tracing::warn!("stream_namespace_proofs: {e}"),
                 }
             })
@@ -773,14 +879,14 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
-    let node_count_txs_ns = |State(state): State<S>, Path(namespace): Path<u32>| async move {
+    let node_count_txs_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
         state
             .count_transactions(None, None, Some(namespace))
             .await
             .map(Json)
             .map_err(classify_availability_error)
     };
-    let node_count_txs_ns_to = |State(state): State<S>, Path((namespace, to)): Path<(u32, u64)>| async move {
+    let node_count_txs_ns_to = |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
         state
             .count_transactions(None, Some(to), Some(namespace))
             .await
@@ -788,7 +894,7 @@ where
             .map_err(classify_availability_error)
     };
     let node_count_txs_ns_from_to =
-        |State(state): State<S>, Path((namespace, from, to)): Path<(u32, u64, u64)>| async move {
+        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
             state
                 .count_transactions(Some(from), Some(to), Some(namespace))
                 .await
@@ -817,7 +923,7 @@ where
             .map(Json)
             .map_err(classify_availability_error)
     };
-    let node_payload_size_ns = |State(state): State<S>, Path(namespace): Path<u32>| async move {
+    let node_payload_size_ns = |State(state): State<S>, Path(namespace): Path<u64>| async move {
         state
             .payload_size(None, None, Some(namespace))
             .await
@@ -825,7 +931,7 @@ where
             .map_err(classify_availability_error)
     };
     let node_payload_size_ns_to =
-        |State(state): State<S>, Path((namespace, to)): Path<(u32, u64)>| async move {
+        |State(state): State<S>, Path((namespace, to)): Path<(u64, u64)>| async move {
             state
                 .payload_size(None, Some(to), Some(namespace))
                 .await
@@ -833,7 +939,7 @@ where
                 .map_err(classify_availability_error)
         };
     let node_payload_size_ns_from_to =
-        |State(state): State<S>, Path((namespace, from, to)): Path<(u32, u64, u64)>| async move {
+        |State(state): State<S>, Path((namespace, from, to)): Path<(u64, u64, u64)>| async move {
             state
                 .payload_size(Some(from), Some(to), Some(namespace))
                 .await
@@ -1018,12 +1124,14 @@ where
         };
     let catchup_accounts = |State(state): State<S>,
                             Path((height, view)): Path<(u64, u64)>,
-                            Json(body): Json<Vec<String>>| async move {
-        state
-            .get_accounts(height, view, body)
+                            headers: HeaderMap,
+                            body: Bytes| async move {
+        let accounts: Vec<<S as v1::CatchupApi>::FeeAccount> = decode_body(&headers, &body)?;
+        let tree = state
+            .get_accounts(height, view, accounts)
             .await
-            .map(Json)
-            .map_err(classify_availability_error)
+            .map_err(classify_availability_error)?;
+        encode_response(&headers, tree)
     };
     let catchup_blocks = |State(state): State<S>, Path((height, view)): Path<(u64, u64)>| async move {
         state
@@ -1059,16 +1167,17 @@ where
                 .map(Json)
                 .map_err(classify_availability_error)
         };
-    let catchup_reward_accounts =
-        |State(state): State<S>,
-         Path((height, view)): Path<(u64, u64)>,
-         Json(body): Json<Vec<String>>| async move {
-            state
-                .get_reward_accounts_v1(height, view, body)
-                .await
-                .map(Json)
-                .map_err(classify_availability_error)
-        };
+    let catchup_reward_accounts = |State(state): State<S>,
+                                   Path((height, view)): Path<(u64, u64)>,
+                                   headers: HeaderMap,
+                                   body: Bytes| async move {
+        let accounts: Vec<<S as v1::CatchupApi>::RewardAccountV1> = decode_body(&headers, &body)?;
+        let tree = state
+            .get_reward_accounts_v1(height, view, accounts)
+            .await
+            .map_err(classify_availability_error)?;
+        encode_response(&headers, tree)
+    };
     let catchup_reward_account_v2 =
         |State(state): State<S>, Path((height, view, address)): Path<(u64, u64, String)>| async move {
             state
@@ -1103,17 +1212,12 @@ where
             .map_err(classify_availability_error)
     };
 
-    // Submit handler
-    let submit_submit = |State(state): State<S>, body: ::axum::body::Bytes| async move {
-        let tx = match serde_json::from_slice::<<S as v1::SubmitApi>::Transaction>(&body) {
-            Ok(tx) => tx,
-            Err(err) => {
-                return Err(ApiError::BadRequest(anyhow::anyhow!(
-                    "invalid transaction body: {err}"
-                )));
-            },
-        };
-        state.submit(tx).await.map(Json).map_err(ApiError::Internal)
+    // Submit handler — body is decoded as VBS (binary) or JSON based on Content-Type, matching
+    // tide-disco's `body_auto`.
+    let submit_submit = |State(state): State<S>, headers: HeaderMap, body: Bytes| async move {
+        let tx: <S as v1::SubmitApi>::Transaction = decode_body(&headers, &body)?;
+        let hash = state.submit(tx).await.map_err(ApiError::Internal)?;
+        encode_response(&headers, hash)
     };
 
     // State signature handler
@@ -1133,12 +1237,14 @@ where
             .map(Json)
             .map_err(ApiError::Internal)
     };
-    let hotshot_events_stream = |State(state): State<S>, ws: WebSocketUpgrade| async move {
-        match <S as v1::HotShotEventsApi>::events(&state).await {
-            Ok(stream) => ws.on_upgrade(move |socket| drive_ws_stream(socket, stream)),
-            Err(err) => ApiError::Internal(err).into_response(),
-        }
-    };
+    let hotshot_events_stream =
+        |State(state): State<S>, headers: HeaderMap, ws: WebSocketUpgrade| async move {
+            let format = ws_format(&headers);
+            match <S as v1::HotShotEventsApi>::events(&state).await {
+                Ok(stream) => ws.on_upgrade(move |socket| drive_ws_stream(socket, stream, format)),
+                Err(err) => ApiError::Internal(err).into_response(),
+            }
+        };
 
     // Light-client handlers
     let lc_leaf_by_height = |State(state): State<S>, Path(height): Path<u64>| async move {

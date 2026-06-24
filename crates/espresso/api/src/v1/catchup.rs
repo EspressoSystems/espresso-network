@@ -7,6 +7,10 @@ use serde::Serialize;
 
 #[async_trait]
 pub trait CatchupApi {
+    type FeeAccount: serde::de::DeserializeOwned + Send + Sync + 'static;
+    type RewardAccountV1: serde::de::DeserializeOwned + Send + Sync + 'static;
+    type RewardAccountV2: serde::de::DeserializeOwned + Send + Sync + 'static;
+
     type AccountQueryData: Serialize + Send + Sync + 'static;
     type FeeMerkleTree: Serialize + Send + Sync + 'static;
     type BlocksFrontier: Serialize + Send + Sync + 'static;
@@ -30,7 +34,7 @@ pub trait CatchupApi {
         &self,
         height: u64,
         view: u64,
-        accounts: Vec<String>,
+        accounts: Vec<Self::FeeAccount>,
     ) -> anyhow::Result<Self::FeeMerkleTree>;
 
     async fn get_blocks_frontier(
@@ -56,7 +60,7 @@ pub trait CatchupApi {
         &self,
         height: u64,
         view: u64,
-        accounts: Vec<String>,
+        accounts: Vec<Self::RewardAccountV1>,
     ) -> anyhow::Result<Self::RewardMerkleTreeV1>;
 
     async fn get_reward_account_v2(

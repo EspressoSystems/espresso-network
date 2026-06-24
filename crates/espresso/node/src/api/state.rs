@@ -2265,7 +2265,7 @@ where
         &self,
         from: Option<u64>,
         to: Option<u64>,
-        namespace: Option<u32>,
+        namespace: Option<u64>,
     ) -> anyhow::Result<u64> {
         use std::ops::Bound;
         let ds = &*self.data_source;
@@ -2277,7 +2277,7 @@ where
             Some(t) => Bound::Included(t as usize),
             None => Bound::Unbounded,
         };
-        let ns = namespace.map(|n| espresso_types::NamespaceId::from(n as u64));
+        let ns = namespace.map(espresso_types::NamespaceId::from);
         let count = ds
             .count_transactions_in_range((from, to), ns)
             .await
@@ -2289,7 +2289,7 @@ where
         &self,
         from: Option<u64>,
         to: Option<u64>,
-        namespace: Option<u32>,
+        namespace: Option<u64>,
     ) -> anyhow::Result<u64> {
         use std::ops::Bound;
         let ds = &*self.data_source;
@@ -2301,7 +2301,7 @@ where
             Some(t) => Bound::Included(t as usize),
             None => Bound::Unbounded,
         };
-        let ns = namespace.map(|n| espresso_types::NamespaceId::from(n as u64));
+        let ns = namespace.map(espresso_types::NamespaceId::from);
         let size = ds
             .payload_size_in_range((from, to), ns)
             .await
@@ -2465,6 +2465,10 @@ where
         + Send
         + Sync,
 {
+    type FeeAccount = espresso_types::FeeAccount;
+    type RewardAccountV1 = espresso_types::v0_3::RewardAccountV1;
+    type RewardAccountV2 = espresso_types::v0_4::RewardAccountV2;
+
     type AccountQueryData = espresso_types::AccountQueryData;
     type FeeMerkleTree = espresso_types::FeeMerkleTree;
     type BlocksFrontier = super::BlocksFrontier;
@@ -2501,20 +2505,13 @@ where
         &self,
         height: u64,
         view: u64,
-        accounts: Vec<String>,
+        accounts: Vec<Self::FeeAccount>,
     ) -> anyhow::Result<Self::FeeMerkleTree> {
         use super::data_source::{CatchupDataSource as _, NodeStateDataSource as _};
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
-        let parsed: Vec<espresso_types::FeeAccount> = accounts
-            .iter()
-            .map(|a| {
-                a.parse()
-                    .map_err(|err| bad_request(format!("malformed fee account {a}: {err}")))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
         let instance = ds.node_state().await;
-        ds.get_accounts(&instance, height, view, &parsed)
+        ds.get_accounts(&instance, height, view, &accounts)
             .await
             .map_err(|err| not_found(format!("{err:#}")))
     }
@@ -2584,20 +2581,13 @@ where
         &self,
         height: u64,
         view: u64,
-        accounts: Vec<String>,
+        accounts: Vec<Self::RewardAccountV1>,
     ) -> anyhow::Result<Self::RewardMerkleTreeV1> {
         use super::data_source::{CatchupDataSource as _, NodeStateDataSource as _};
         let ds = &*self.data_source;
         let view = hotshot_types::data::ViewNumber::new(view);
-        let parsed: Vec<espresso_types::v0_3::RewardAccountV1> = accounts
-            .iter()
-            .map(|a| {
-                a.parse()
-                    .map_err(|err| bad_request(format!("malformed reward account {a}: {err}")))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
         let instance = ds.node_state().await;
-        ds.get_reward_accounts_v1(&instance, height, view, &parsed)
+        ds.get_reward_accounts_v1(&instance, height, view, &accounts)
             .await
             .map_err(|err| not_found(format!("{err:#}")))
     }

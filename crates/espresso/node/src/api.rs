@@ -7855,6 +7855,92 @@ mod test {
         Ok(())
     }
 
+    /// Verify the response body for an error case deserializes as `ServerError` on both servers.
+    ///
+    /// All our internal surf-disco clients (e.g. peer-catchup) declare `Client::<ServerError, _>`,
+    /// so the axum error envelope must structurally match `{status, message}` to be useful.
+    async fn compare_error_envelope(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+        expected_status: u16,
+    ) -> anyhow::Result<()> {
+        use tide_disco::error::ServerError;
+        let fetch = |port: u16| async move {
+            let resp = http
+                .get(format!("http://localhost:{port}/v1/{path}"))
+                .send()
+                .await?;
+            let status = resp.status().as_u16();
+            let body: ServerError = resp.json().await?;
+            anyhow::Ok((status, body))
+        };
+        let (tide_status, tide_body) = fetch(api_port).await?;
+        let (axum_status, axum_body) = fetch(axum_port).await?;
+        assert_eq!(
+            tide_status, expected_status,
+            "v1/{path}: tide status mismatch"
+        );
+        assert_eq!(
+            axum_status, expected_status,
+            "v1/{path}: axum status mismatch"
+        );
+        assert_eq!(
+            u16::from(tide_body.status),
+            expected_status,
+            "v1/{path}: tide body status mismatch"
+        );
+        assert_eq!(
+            u16::from(axum_body.status),
+            expected_status,
+            "v1/{path}: axum body status mismatch"
+        );
+        Ok(())
+    }
+
+    /// POST a VBS-binary body to both servers and assert their responses are byte-equal.
+    ///
+    /// VBS (Versioned Binary Serialization) is what production peer-catchup and
+    /// `submit-transactions` clients use via `surf-disco::Request::body_binary`. This helper
+    /// catches regressions where the axum handler accepts only JSON.
+    async fn compare_post_binary<B: serde::Serialize>(
+        http: &reqwest::Client,
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<()> {
+        use vbs::{BinarySerializer, Serializer, version::StaticVersion};
+        let payload = Serializer::<StaticVersion<0, 1>>::serialize(body)?;
+        let send = |port: u16| {
+            let payload = payload.clone();
+            http.post(format!("http://localhost:{port}/v1/{path}"))
+                .header("Content-Type", "application/octet-stream")
+                .header("Accept", "application/octet-stream")
+                .body(payload)
+                .send()
+        };
+        let (tide_resp, axum_resp) = tokio::join!(send(api_port), send(axum_port));
+        let tide_resp = tide_resp?;
+        let axum_resp = axum_resp?;
+        assert_eq!(
+            tide_resp.status(),
+            axum_resp.status(),
+            "v1/{path}: tide status {} != axum status {}",
+            tide_resp.status(),
+            axum_resp.status(),
+        );
+        // Compare raw bytes — VBS responses aren't JSON.
+        let tide_body = tide_resp.bytes().await?;
+        let axum_body = axum_resp.bytes().await?;
+        assert_eq!(
+            tide_body, axum_body,
+            "v1/{path}: tide and axum binary POST responses differ"
+        );
+        Ok(())
+    }
+
     /// Connect to both tide-disco and axum WebSocket endpoints, collect up to 10 messages each,
     /// and assert that at least 2 messages appear in both streams.
     async fn compare_ws_endpoints(api_port: u16, axum_port: u16, path: &str) -> anyhow::Result<()> {
@@ -7900,6 +7986,60 @@ mod test {
              got {common}",
             tide_msgs.len(),
             axum_msgs.len(),
+        );
+        Ok(())
+    }
+
+    /// Same as `compare_ws_endpoints` but exercises the binary (`Accept: application/octet-stream`)
+    /// path that surf-disco clients use by default. Asserts both servers send `Message::Binary`
+    /// frames carrying VBS-encoded payloads.
+    async fn compare_ws_endpoints_binary(
+        api_port: u16,
+        axum_port: u16,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        use std::time::Duration;
+
+        use futures::StreamExt as _;
+        use tokio::time::timeout;
+        use tokio_tungstenite::{
+            connect_async,
+            tungstenite::{client::IntoClientRequest, http::HeaderValue, protocol::Message},
+        };
+
+        async fn collect_binary(port: u16, path: &str) -> anyhow::Result<Vec<Vec<u8>>> {
+            let url = format!("ws://localhost:{port}/v1/{path}");
+            let mut req = url.as_str().into_client_request()?;
+            req.headers_mut().insert(
+                "Accept",
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            let (mut ws, _) = connect_async(req).await?;
+            let mut frames = Vec::new();
+            while frames.len() < 3 {
+                match timeout(Duration::from_millis(500), ws.next()).await {
+                    Ok(Some(Ok(Message::Binary(bytes)))) => frames.push(bytes.to_vec()),
+                    _ => break,
+                }
+            }
+            Ok(frames)
+        }
+
+        let (tide_frames, axum_frames) = tokio::join!(
+            collect_binary(api_port, path),
+            collect_binary(axum_port, path)
+        );
+        let tide_frames = tide_frames?;
+        let axum_frames = axum_frames?;
+
+        assert!(
+            !tide_frames.is_empty(),
+            "v1/{path}: tide sent no binary frames (Accept: application/octet-stream)"
+        );
+        assert!(
+            !axum_frames.is_empty(),
+            "v1/{path}: axum sent no binary frames (Accept: application/octet-stream); handler \
+             likely always sends text",
         );
         Ok(())
     }
@@ -8479,6 +8619,16 @@ mod test {
                 )
                 .await?;
 
+                // surf-disco clients default to `Accept: application/octet-stream`, so the
+                // server must emit `Message::Binary` (VBS-encoded) frames on that path.
+                // Verify both servers do so on a representative stream.
+                compare_ws_endpoints_binary(
+                    api_port,
+                    axum_port,
+                    &format!("availability/stream/leaves/{ws_start}"),
+                )
+                .await?;
+
                 // Merklized state parity (block-state and fee-state). Wait for
                 // both backends to have indexed the snapshot we'll query.
                 wait_until_block_height(&client, "block-state/block-height", avail_block).await;
@@ -8769,6 +8919,35 @@ mod test {
                 )
                 .await?;
 
+                // Production peer-catchup posts VBS-binary bodies via surf-disco.
+                // Exercise the bulk-account POST endpoints in that exact wire format so any
+                // regression to "JSON-only body" is caught here.
+                let fee_account_for_post = validated_state
+                    .fee_merkle_tree
+                    .iter()
+                    .next()
+                    .map(|(addr, _)| *addr)
+                    .expect("fee tree should have at least one account");
+                compare_post_binary(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("catchup/{height}/{decided_view}/accounts"),
+                    &vec![fee_account_for_post],
+                )
+                .await?;
+                // reward-accounts V1 takes a Vec<RewardAccountV1>. We send empty since the V2
+                // tree may not have V1-shaped entries in this test, but the wire format is what
+                // we're validating.
+                compare_post_binary(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("catchup/{height}/{decided_view}/reward-accounts"),
+                    &Vec::<espresso_types::v0_3::RewardAccountV1>::new(),
+                )
+                .await?;
+
                 // State signature parity. Heights that have a signature should return matching
                 // JSON; missing heights should 404 from both servers.
                 compare_error_endpoints(
@@ -8777,6 +8956,20 @@ mod test {
                     axum_port,
                     "state-signature/block/999999",
                     404,
+                )
+                .await?;
+
+                // Error envelope parity: both servers must emit `{status, message}` JSON so
+                // surf-disco clients (which all declare `Client::<ServerError, _>`) can decode
+                // structured errors. Use a known 404 path and a known 400 path.
+                compare_error_envelope(&http, api_port, axum_port, "availability/leaf/999999", 404)
+                    .await?;
+                compare_error_envelope(
+                    &http,
+                    api_port,
+                    axum_port,
+                    &format!("availability/block/{avail_block}/{}", avail_block + 200),
+                    400,
                 )
                 .await?;
 
