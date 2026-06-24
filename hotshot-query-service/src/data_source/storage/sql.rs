@@ -836,11 +836,10 @@ fn serialization_conflict_with_diag<E: std::fmt::Display>(
 fn spawn_pg_stat_activity_log(pool: Pool<Db>, op: &'static str) {
     use sqlx::Row as _;
     tokio::spawn(async move {
-        // Log concurrent sessions
         match sqlx::query(
             "SELECT pid, COALESCE(state, 'unknown') AS state, left(COALESCE(query, ''), 200) AS \
              query FROM pg_stat_activity WHERE pid != pg_backend_pid() AND state IS DISTINCT FROM \
-             'idle'",
+             'idle' AND usename = current_user",
         )
         .fetch_all(&pool)
         .await
