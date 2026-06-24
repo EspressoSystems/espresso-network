@@ -7855,46 +7855,34 @@ mod test {
         Ok(())
     }
 
-    /// Verify the response body for an error case deserializes as `ServerError` on both servers.
-    ///
-    /// All our internal surf-disco clients (e.g. peer-catchup) declare `Client::<ServerError, _>`,
-    /// so the axum error envelope must structurally match `{status, message}` to be useful.
-    async fn compare_error_envelope(
+    /// Byte-compare error response bodies between tide and axum for an endpoint that uses
+    /// `Error::catch_all` (which emits `{"Custom":{"message","status"}}` on tide). Axum's
+    /// `ErrorResponse` is shaped to match that envelope, so the JSON bytes are equal modulo
+    /// minor whitespace differences — comparing parsed JSON values neutralizes those.
+    async fn compare_error_body(
         http: &reqwest::Client,
         api_port: u16,
         axum_port: u16,
         path: &str,
         expected_status: u16,
     ) -> anyhow::Result<()> {
-        use tide_disco::error::ServerError;
         let fetch = |port: u16| async move {
             let resp = http
                 .get(format!("http://localhost:{port}/v1/{path}"))
                 .send()
                 .await?;
             let status = resp.status().as_u16();
-            let body: ServerError = resp.json().await?;
+            let body: serde_json::Value = resp.json().await?;
             anyhow::Ok((status, body))
         };
         let (tide_status, tide_body) = fetch(api_port).await?;
         let (axum_status, axum_body) = fetch(axum_port).await?;
+        assert_eq!(tide_status, expected_status, "v1/{path}: tide status");
+        assert_eq!(axum_status, expected_status, "v1/{path}: axum status");
         assert_eq!(
-            tide_status, expected_status,
-            "v1/{path}: tide status mismatch"
-        );
-        assert_eq!(
-            axum_status, expected_status,
-            "v1/{path}: axum status mismatch"
-        );
-        assert_eq!(
-            u16::from(tide_body.status),
-            expected_status,
-            "v1/{path}: tide body status mismatch"
-        );
-        assert_eq!(
-            u16::from(axum_body.status),
-            expected_status,
-            "v1/{path}: axum body status mismatch"
+            tide_body, axum_body,
+            "v1/{path}: tide and axum error bodies differ\n  tide: {tide_body}\n  axum: \
+             {axum_body}"
         );
         Ok(())
     }
@@ -8959,17 +8947,20 @@ mod test {
                 )
                 .await?;
 
-                // Error envelope parity: both servers must emit `{status, message}` JSON so
-                // surf-disco clients (which all declare `Client::<ServerError, _>`) can decode
-                // structured errors. Use a known 404 path and a known 400 path.
-                compare_error_envelope(&http, api_port, axum_port, "availability/leaf/999999", 404)
+                // Error body parity for endpoints that use `Error::catch_all` — both servers
+                // must emit byte-identical `{"Custom":{"message","status"}}` JSON. Availability
+                // endpoints (`availability/leaf/...`, etc.) are excluded because tide-disco
+                // returns specific variants like `{"FetchLeaf":{...}}` there; their status-code
+                // parity is still enforced by `compare_error_endpoints` above.
+                compare_error_body(&http, api_port, axum_port, "catchup/999999/cert2", 404).await?;
+                compare_error_body(&http, api_port, axum_port, "catchup/999999/leafchain", 404)
                     .await?;
-                compare_error_envelope(
+                compare_error_body(
                     &http,
                     api_port,
                     axum_port,
-                    &format!("availability/block/{avail_block}/{}", avail_block + 200),
-                    400,
+                    "state-signature/block/999999",
+                    404,
                 )
                 .await?;
 

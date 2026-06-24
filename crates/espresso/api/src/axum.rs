@@ -33,15 +33,25 @@ use crate::{
     handlers, v1, v2,
 };
 
-/// API error response — wire-compatible with `tide_disco::error::ServerError`, the default
-/// error type produced by tide-disco endpoints and the type used by all of our surf-disco
-/// clients (`Client::<ServerError, _>`, e.g. peer-catchup in
-/// `crates/espresso/node/src/catchup.rs`). Sending a different shape would force those
-/// clients into surf-disco's catch_all fallback path, losing structured error info.
-#[derive(Debug, Serialize, schemars::JsonSchema)]
+/// API error response — wire-compatible with the `Custom` variant of the per-module error enums
+/// (`node::Error::Custom`, `merklized_state::Error::Custom`, etc.) that all of tide-disco's
+/// `Error::catch_all` calls produce. Most of our migrated endpoints (catchup, submit,
+/// state-signature, light-client, node, status, config, token, database) take that path, so this
+/// envelope is byte-identical with tide's error response for them. Endpoints that use a specific
+/// variant directly (e.g. `availability::Error::FetchLeaf`) emit their own shape on tide; those
+/// bytes are not matched here.
+#[derive(Debug, Serialize)]
 struct ErrorResponse {
-    status: u16,
+    #[serde(rename = "Custom")]
+    custom: CustomError,
+}
+
+#[derive(Debug, Serialize)]
+struct CustomError {
+    // Field order matches `node::Error::Custom { message, status }` declaration so serde_json
+    // emits the same key order on the wire.
     message: String,
+    status: u16,
 }
 
 impl IntoResponse for ApiError {
@@ -53,8 +63,10 @@ impl IntoResponse for ApiError {
         };
 
         let body = Json(ErrorResponse {
-            status: status.as_u16(),
-            message: self.to_string(),
+            custom: CustomError {
+                message: self.to_string(),
+                status: status.as_u16(),
+            },
         });
 
         (status, body).into_response()
