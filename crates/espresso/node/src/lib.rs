@@ -33,7 +33,7 @@ use espresso_types::{
     SeqTypes, ValidatedState,
     traits::{EventConsumer, MembershipPersistence},
     v0::traits::SequencerPersistence,
-    v0_1::ChainId,
+    v0_1::{ChainId, DECAF_CHAIN_ID},
     v0_3::Fetcher,
 };
 
@@ -47,15 +47,15 @@ pub(crate) const DECAF_TELEMETRY_ENDPOINT: &str =
 pub(crate) fn default_telemetry_endpoint(chain_id: ChainId) -> Option<&'static str> {
     if chain_id == MAINNET_CHAIN_ID {
         Some(MAINNET_TELEMETRY_ENDPOINT)
-    } else if chain_id == ChainId(U256::from(0xdecafu64)) {
+    } else if chain_id == DECAF_CHAIN_ID {
         Some(DECAF_TELEMETRY_ENDPOINT)
     } else {
         None
     }
 }
 
-pub use genesis::Genesis;
 use genesis::L1Finalized;
+pub use genesis::{Genesis, GenesisSource};
 use hotshot::{
     traits::implementations::{
         CdnMetricsValue, CdnTopic, CombinedNetworks, GossipConfig, KeyPair, Libp2pNetwork,
@@ -228,6 +228,8 @@ pub struct NetworkParams {
 
     /// Minimum number of Libp2p peers to emit gossip to during a heartbeat
     pub libp2p_gossip_lazy: usize,
+
+    pub libp2p_dht_put_quorum: Option<std::num::NonZeroUsize>,
 }
 
 pub struct L1Params {
@@ -793,6 +795,7 @@ where
             &validator_config.private_key,
             hotshot::traits::implementations::Libp2pMetricsValue::new(&*metrics),
             network_discriminator,
+            network_params.libp2p_dht_put_quorum,
         )
         .await
         .with_context(|| {
@@ -1858,7 +1861,7 @@ mod test {
             Some(MAINNET_TELEMETRY_ENDPOINT)
         );
         assert_eq!(
-            default_telemetry_endpoint(ChainId(U256::from(0xdecafu64))),
+            default_telemetry_endpoint(DECAF_CHAIN_ID),
             Some(DECAF_TELEMETRY_ENDPOINT)
         );
         // Unknown chains (e.g. the demo chain) get no default.

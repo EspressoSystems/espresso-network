@@ -188,6 +188,11 @@ where
             Arc::new(initializer.instance_state.clone()),
             upgrade_lock.clone(),
         );
+        // Seed `from_header` stubs for restored undecided proposals so a child
+        // proposal can be validated; anchor seeded last so its state wins.
+        for p in initializer.saved_proposals.values() {
+            state_manager.seed_from_header(message::Proposal::from(p.data.clone()));
+        }
         state_manager.seed_state(
             anchor_view,
             initializer.anchor_state.clone(),
@@ -673,6 +678,9 @@ where
                     leaves = leaves.len(),
                     "leaves decided"
                 );
+                if let Some(m) = &self.metrics {
+                    m.leaf_decided_view.set(*cert1.view_number() as usize);
+                }
                 if let Some(cert2) = cert2 {
                     self.storage.append_cert2(cert2.view_number, cert2.clone());
                 }

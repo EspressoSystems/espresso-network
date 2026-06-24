@@ -15,6 +15,7 @@ ed25519-compact = { workspace = true }
 parking_lot     = { workspace = true }
 rand            = "0.10.0"
 snow            = { workspace = true }
+socket2         = { workspace = true }
 thiserror       = { workspace = true }
 tokio           = { workspace = true, features = ["macros", "net", "rt", "time"] }
 tokio-util      = { workspace = true, features = ["join-map"] }
