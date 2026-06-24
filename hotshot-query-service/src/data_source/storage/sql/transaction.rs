@@ -73,13 +73,13 @@ use crate::{
 /// so they start immediately instead of waiting for a safe serializable snapshot.
 #[cfg(not(feature = "embedded-db"))]
 static NO_DEFERRABLE_ON_READ: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+    std::sync::atomic::AtomicBool::new(true);
 
 /// Configure whether read transactions on Postgres should omit `DEFERRABLE`.
 ///
 /// When `true`, `Read::begin` issues `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY`
 /// (no `DEFERRABLE`) so the transaction starts immediately rather than waiting for a safe
-/// serializable snapshot. Default: `false`. Call this once at startup based on the operator's
+/// serializable snapshot. Default: `true`. Call this once at startup based on the operator's
 /// chosen configuration.
 #[cfg(not(feature = "embedded-db"))]
 pub fn set_no_deferrable_on_read(value: bool) {
