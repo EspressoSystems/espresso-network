@@ -59,12 +59,7 @@ async fn slow_dev_node_test(
     let api_port = reserve_tcp_port().unwrap();
     let dev_node_port = reserve_tcp_port().unwrap();
 
-    let instance = Anvil::new()
-        .arg("--slots-in-an-epoch")
-        .arg("0")
-        .arg("--block-time")
-        .arg("1")
-        .spawn();
+    let instance = Anvil::new().spawn();
     let l1_url = instance.endpoint_url();
 
     let tmp_dir = tempfile::tempdir().unwrap();
