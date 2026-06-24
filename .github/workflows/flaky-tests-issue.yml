@@ -1,0 +1,44 @@
+name: Flaky test tracker
+
+on:
+  workflow_dispatch:
+  # Refresh the flaky-test tracking issue once a day.
+  schedule:
+    - cron: "0 6 * * *"
+
+# Serialize manual and scheduled runs so two upserts cannot both create the issue.
+concurrency:
+  group: flaky-tests-issue
+
+jobs:
+  update-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch main test stats
+        run: |
+          python3 scripts/nextest-ci stats-fetch \
+            --workflow test.yml \
+            --artifact-name test-stats-test \
+            --out main-test-stats.json
+
+      - name: Fetch main hotshot stats
+        run: |
+          python3 scripts/nextest-ci stats-fetch \
+            --workflow hotshot.yml \
+            --artifact-name test-stats-hotshot \
+            --out main-hotshot-stats.json
+
+      - name: Update flaky test issue
+        run: |
+          python3 scripts/nextest-ci flaky-issue \
+            --update \
+            --stats "test:main-test-stats.json" \
+            --stats "hotshot:main-hotshot-stats.json"
