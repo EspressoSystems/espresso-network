@@ -19,7 +19,7 @@ use hotshot_types::{
 };
 use hotshot_utils::anytrace::*;
 use tokio::{spawn, time::sleep};
-use tracing::instrument;
+use tracing::{Instrument, error_span, instrument};
 use versions::EPOCH_VERSION;
 
 use super::ConsensusTaskState;
@@ -391,6 +391,7 @@ pub(crate) async fn handle_view_change<TYPES: NodeType, I: NodeImplementation<TY
             )
             .await;
         }
+        .instrument(error_span!("view timeout", view = *view_number))
     });
 
     // Cancel the old timeout task

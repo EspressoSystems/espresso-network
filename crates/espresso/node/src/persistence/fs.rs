@@ -418,6 +418,12 @@ impl Inner {
             None,
             prune_intervals,
         )?;
+        self.prune_files(
+            self.decided_cert2_dir_path(),
+            prune_view,
+            None,
+            prune_intervals,
+        )?;
 
         // Save the most recent leaf as it will be our anchor point if the node restarts.
         self.prune_files(
@@ -2422,8 +2428,10 @@ fn view_files(
             return None;
         }
         let path = entry.path();
-        if path.extension()? != "txt" {
-            tracing::debug!(%dir, ?entry, "ignoring non-text file in data directory");
+        // Most view-keyed files use a `.txt` extension; cert2 files use `.bin`. Both hold bincode.
+        let ext = path.extension()?;
+        if ext != "txt" && ext != "bin" {
+            tracing::debug!(%dir, ?entry, "ignoring file with unrecognized extension in data directory");
             return None;
         }
         let file_name = path.file_stem()?;
