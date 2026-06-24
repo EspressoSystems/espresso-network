@@ -5,8 +5,13 @@ on:
   # Refresh the flaky-test tracking issue once a day.
   schedule:
     - cron: "0 6 * * *"
+  # Run on PRs that touch the tooling so changes can be exercised end to end.
+  pull_request:
+    paths:
+      - scripts/nextest-ci
+      - .github/workflows/flaky-tests-issue.yml
 
-# Serialize manual and scheduled runs so two upserts cannot both create the issue.
+# Serialize runs so two upserts cannot both create the issue.
 concurrency:
   group: flaky-tests-issue
 
