@@ -45,5 +45,5 @@ jobs:
         run: |
           python3 scripts/nextest-ci flaky-issue \
             --update \
-            --stats "test:main-test-stats.json" \
-            --stats "hotshot:main-hotshot-stats.json"
+            --stats "hotshot:main-hotshot-stats.json" \
+            --stats "espresso:main-test-stats.json"

@@ -32,13 +32,13 @@ Examples:
 
     # Render the flaky/failing issue body to stdout (dry-run, no network).
     scripts/nextest-ci flaky-issue \
-        --stats test:main-test-stats.json \
-        --stats hotshot:main-hotshot-stats.json
+        --stats hotshot:main-hotshot-stats.json \
+        --stats espresso:main-test-stats.json
 
     # Create or update the tracking issue on GitHub.
     scripts/nextest-ci flaky-issue \
-        --stats test:main-test-stats.json \
         --stats hotshot:main-hotshot-stats.json \
+        --stats espresso:main-test-stats.json \
         --update
 """
 
@@ -260,37 +260,32 @@ def history_strip(tid: str, runs_chrono: list[dict]) -> str:
     return "".join(cells)
 
 
-def _section_lines(
+def _source_blocks(
     sources: list[tuple[str, list[dict]]],
-    classify_failing: bool,
     min_occurrences: int,
 ) -> list[str]:
     lines: list[str] = []
     any_test = False
     for name, runs in sources:
-        total = len(runs)
         runs_chrono = sorted(runs, key=lambda r: r["timestamp"])
-        rows: list[tuple[int, str, str]] = []
+        rows: list[tuple[int, int, str, str]] = []
         ids = {tid for r in runs for tid in (*r["failed"], *r["flaky"])}
         for tid in ids:
             failed_count = sum(1 for r in runs if tid in r["failed"])
             flaky_count = sum(1 for r in runs if tid in r["flaky"])
-            occurrences = failed_count + flaky_count
-            if occurrences < min_occurrences:
+            if failed_count + flaky_count < min_occurrences:
                 continue
-            is_failing = failed_count > 0
-            if is_failing != classify_failing:
-                continue
-            rows.append((occurrences, tid, history_strip(tid, runs_chrono)))
+            rows.append(
+                (failed_count, flaky_count, tid, history_strip(tid, runs_chrono))
+            )
         if not rows:
             continue
         any_test = True
-        rows.sort(key=lambda row: (-row[0], row[1]))
-        plural = "" if total == 1 else "s"
-        lines.append(f"### {name} (last {total} run{plural})")
+        rows.sort(key=lambda row: (-row[0], -row[1], row[2]))
+        lines.append(f"### {name}")
         lines.append("")
         lines.append("```")
-        lines.extend(f"{strip} {tid}" for _, tid, strip in rows)
+        lines.extend(f"{strip} {tid}" for _, _, tid, strip in rows)
         lines.append("```")
         lines.append("")
     if not any_test:
@@ -313,17 +308,8 @@ def build_flaky_issue(
         "Each row is one test's recent run history, oldest to newest: "
         "⬜ passed, 🟨 flaky (failed then passed on retry), 🟥 failed.",
         "",
-        "## Failing tests",
-        "",
     ]
-    out.extend(
-        _section_lines(sources, classify_failing=True, min_occurrences=min_occurrences)
-    )
-    out.append("## Flaky tests")
-    out.append("")
-    out.extend(
-        _section_lines(sources, classify_failing=False, min_occurrences=min_occurrences)
-    )
+    out.extend(_source_blocks(sources, min_occurrences))
     return "\n".join(out).rstrip("\n") + "\n"
 
 
